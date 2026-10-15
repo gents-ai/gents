@@ -3,45 +3,39 @@
    module's source, and push it through the loader. A manual Reload re-reads
    every entry (an installer that replaces a folder atomically keeps the
    same path). Rust owns the scan; this owns the lifecycle. */
-import { call } from "@/screens/agent/bridgeCall";
+import type { UxPluginListing, UxPluginSource } from "@source-inc/gents-desktop-client";
 import { loadRuntimeUxPlugin, retireRuntimeUxPlugin } from "./loader";
-import {
-  publishUxPlugin,
-  uxPluginRecords,
-  type UxDeclaredContributions,
-  type UxPluginDoor,
-} from "./plugins-store";
+import { publishUxPlugin, uxPluginRecords } from "./plugins-store";
 
-/** one entry of desktop_ux_plugins_list */
-export interface UxPluginListing {
-  /** `<name>` for a dev plugin, `<ns>/<pack>/<name>` for a pack one */
-  id: string;
-  door: Exclude<UxPluginDoor, "bundled">;
-  producer: "file" | "afb";
-  /** absolute path of the entry file, or of the .afb */
-  file: string;
-  pack?: string | null;
-  description?: string | null;
-  contributes?: UxDeclaredContributions | null;
-  defaultEnabled?: boolean | null;
-}
-
-/** what desktop_ux_plugin_source answers */
-export interface UxPluginSource {
-  source: string;
-  css?: string | null;
-  digest: string;
-}
+/* the listing and the source as the client's adapter types them; the door
+   narrows nothing further */
+export type { UxPluginListing, UxPluginSource };
 
 /* live runtime plugins by listing id -> loaded plugin id (null while broken) */
 const known = new Map<string, string | null>();
 /* the scan in flight; a scan asked for meanwhile runs after it */
 let inFlight: Promise<void> | null = null;
 
+/* the bridge verbs the doors read through, given by the app that owns the
+   client adapter: the inventory on disk and one plugin's module */
+export interface UxDoorApi {
+  list: () => Promise<{ plugins: UxPluginListing[] }>;
+  source: (id: string) => Promise<UxPluginSource>;
+}
+
+let doors: UxDoorApi | null = null;
+
+export function configureUxDoors(api: UxDoorApi): void {
+  doors = api;
+}
+
+function doorApi(): UxDoorApi {
+  if (!doors) throw new Error("UX doors are not configured: no client adapter");
+  return doors;
+}
+
 export async function listRuntimeUxPlugins(): Promise<UxPluginListing[]> {
-  const { plugins } = await call<{ plugins: UxPluginListing[] }>(
-    "desktop_ux_plugins_list",
-  );
+  const { plugins } = await doorApi().list();
   return plugins;
 }
 
@@ -64,7 +58,7 @@ async function loadListing(entry: UxPluginListing): Promise<void> {
   let module: UxPluginSource | null = null;
   let unreadable: unknown = null;
   try {
-    module = await call<UxPluginSource>("desktop_ux_plugin_source", { id: entry.id });
+    module = await doorApi().source(entry.id);
   } catch (error) {
     unreadable = error;
   }

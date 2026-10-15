@@ -35,7 +35,7 @@ pub async fn inspect_retained_requests(
         .context("trial has no retained home")?;
     let trial_dir = retained_trial_dir(runs_dir, hint)?;
     let home_dir = trial_dir.join("home");
-    let did = locator.trial_agent_did.clone();
+    let did = locator.trial_node_did.clone();
     let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
         runtime.block_on(async move {
@@ -97,10 +97,10 @@ async fn read_requests(home: &EmbeddedHome) -> Result<Vec<RetainedRequest>> {
     let access = ConfigAccess::Local(home.node.clone());
     let query = format!(
         r#"{{ AgentRequest(
-            filter: {{ agent_did: {{ _eq: "{}" }} }},
+            filter: {{ node_did: {{ _eq: "{}" }} }},
             order: {{ created_at: ASC }}, limit: {}
         ) {{
-            _docID request_id purpose agent_did requester_did behavior_id session_id
+            _docID request_id purpose node_did requester_did agent_id session_id
             content input lifecycle_state failure_reason created_at execution_origin
             runtime_source_request_id runtime_source_kind
             retry_parent_request retry_parent_request_doc_id retry_root_request
@@ -149,12 +149,12 @@ fn decode_requests(response: serde_json::Value) -> Result<Vec<RetainedRequest>> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AgentIdentity, KeyIdentity};
+    use crate::{KeyIdentity, NodeIdentity};
     use serde_json::json;
 
     fn locator(did: &str, hint: &str) -> TrialLocator {
         TrialLocator {
-            trial_agent_did: did.into(),
+            trial_node_did: did.into(),
             session_id: "session".into(),
             home_hint: Some(hint.into()),
         }
@@ -211,9 +211,9 @@ resources:
         let content = "original \"prompt\"\nwith full content";
         let query = format!(
             r#"mutation {{
-                root: create_AgentRequest(input: {{ request_id: "root", purpose: "normal", agent_did: "{did}", session_id: "session", content: "{}", lifecycle_state: "completed", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }}
-                child: create_AgentRequest(input: {{ request_id: "child", purpose: "normal", agent_did: "{did}", session_id: "child-session", content: "child prompt", lifecycle_state: "completed", created_at: "2026-01-01T00:00:01Z", retry_root_request: "root", retry_parent_request: "root", caused_by_parent_request_id: "root", caused_by_parent_tool_call_id: "call", caused_by_trigger_id: "trigger", caused_by_source_doc_id: "source", runtime_source_request_id: "root", runtime_source_kind: "session_message" }}) {{ _docID }}
-                other: create_AgentRequest(input: {{ request_id: "foreign", purpose: "normal", agent_did: "did:key:other", content: "unrelated" }}) {{ _docID }}
+                root: create_AgentRequest(input: {{ request_id: "root", purpose: "normal", node_did: "{did}", session_id: "session", content: "{}", lifecycle_state: "completed", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }}
+                child: create_AgentRequest(input: {{ request_id: "child", purpose: "normal", node_did: "{did}", session_id: "child-session", content: "child prompt", lifecycle_state: "completed", created_at: "2026-01-01T00:00:01Z", retry_root_request: "root", retry_parent_request: "root", caused_by_parent_request_id: "root", caused_by_parent_tool_call_id: "call", caused_by_trigger_id: "trigger", caused_by_source_doc_id: "source", runtime_source_request_id: "root", runtime_source_kind: "session_message" }}) {{ _docID }}
+                other: create_AgentRequest(input: {{ request_id: "foreign", purpose: "normal", node_did: "did:key:other", content: "unrelated" }}) {{ _docID }}
             }}"#,
             escape_graphql_string(content),
             did = escape_graphql_string(&did),
@@ -223,7 +223,7 @@ resources:
             .unwrap();
         let denied = KeyIdentity::load_or_create(runs.path().join("denied.key"), None).unwrap();
         let original_owner_query = format!(
-            r#"{{ AgentRequest(filter: {{agent_did: {{_eq: "{}"}}}}) {{content}} }}"#,
+            r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}}}) {{content}} }}"#,
             escape_graphql_string(&did)
         );
         let denied_rows = ConfigAccess::transact_local(
@@ -298,7 +298,7 @@ resources:
         );
         assert!(!path.join("node.key").exists());
         let missing =
-            inspect_retained_requests(runs.path(), &locator(&at.trial_agent_did, "missing"))
+            inspect_retained_requests(runs.path(), &locator(&at.trial_node_did, "missing"))
                 .await
                 .unwrap_err();
         assert!(format!("{missing:#}").contains("is missing"), "{missing:#}");

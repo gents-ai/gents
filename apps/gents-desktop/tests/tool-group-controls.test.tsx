@@ -122,12 +122,12 @@ describe("canonical tool selections", () => {
     expect(tools.host.files.mode).toBe("ReadOnly");
   });
 
-  it("creates and selects a local subagent target atomically without granting spawn implicitly", async () => {
+  it("creates and selects a local agent target atomically without granting spawn implicitly", async () => {
     const { api, app } = harness();
     const user = userEvent.setup();
     renderIn(
       app,
-      <ToolsPanel deployment={{ ...deployment, subagentTargets: [] }} item="tools-a" />,
+      <ToolsPanel deployment={{ ...deployment, agentTargets: [] }} item="tools-a" />,
     );
     await user.click(
       screen.getByRole("combobox", { name: "Add a local delegation target" }),
@@ -138,14 +138,14 @@ describe("canonical tool selections", () => {
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalledTimes(1));
     const pack = api.applyConfigComponents.mock.calls[0][0].document;
-    expect(pack.subagent_targets[0]).toMatchObject({
-      agent_did: deployment.agentDid,
-      target_agent_did: deployment.agentDid,
-      behavior_id: "ops",
+    expect(pack.agent_targets[0]).toMatchObject({
+      node_did: deployment.nodeDid,
+      target_node_did: deployment.nodeDid,
+      agent_id: "ops",
       name: "Ops",
     });
-    expect(pack.tools[0].subagents).toEqual({
-      target_ids: [pack.subagent_targets[0].target_id],
+    expect(pack.tools[0].agents).toEqual({
+      target_ids: [pack.agent_targets[0].target_id],
     });
     expect(api.saveToolsConfig).not.toHaveBeenCalled();
   });

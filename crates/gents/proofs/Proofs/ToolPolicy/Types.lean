@@ -65,8 +65,8 @@ structure Surface where
   p2pMutate : Bool
   sessionHistory : Bool
   contextBudget : Bool
-  /-- The agents tool group (`SubagentTools.enabled`): `agent_new` over the
-  `subagentTargets` allowlist, `agent_message`, `agent_interrupt` and
+  /-- The agents tool group (`AgentTools.enabled`): `agent_new` over the
+  `agentTargets` allowlist, `agent_message`, `agent_interrupt` and
   `agent_list`. -/
   sessionMessages : Bool
   skills : Bool
@@ -77,7 +77,7 @@ structure Surface where
   /-- Replication and sync collection grants do not imply generic query access. -/
   p2pCollections : EndpointScope ToolId Unit
   selfConfigCategories : EndpointScope ToolId Unit
-  subagentTargets : EndpointScope (String × String) Unit
+  agentTargets : EndpointScope (String × String) Unit
   backgroundTools : EndpointScope ToolId Unit
   writeTools : EndpointScope (String × String) (Finset String)
   queryTools : EndpointScope (String × String) (Finset String)

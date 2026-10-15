@@ -7,6 +7,7 @@ pub(crate) enum OutputFormat {
     Table,
     Json,
     Tree,
+    Ndjson,
 }
 
 impl OutputFormat {
@@ -16,6 +17,7 @@ impl OutputFormat {
             Self::Table => "table",
             Self::Json => "json",
             Self::Tree => "tree",
+            Self::Ndjson => "ndjson",
         }
     }
 
@@ -45,7 +47,7 @@ mod tests {
             .iter()
             .map(|v| v.to_possible_value().unwrap().get_name().to_string())
             .collect();
-        assert_eq!(names, vec!["text", "table", "json", "tree"]);
+        assert_eq!(names, vec!["text", "table", "json", "tree", "ndjson"]);
     }
 
     #[test]
@@ -62,5 +64,26 @@ mod tests {
             .to_string();
         assert!(err.contains("unsupported --output tree for pack"));
         assert!(err.contains("text, json"));
+    }
+
+    #[test]
+    fn ndjson_is_supported_only_where_declared() {
+        assert_eq!(
+            OutputFormat::Ndjson
+                .ensure_supported(
+                    "graph watch",
+                    &[OutputFormat::Text, OutputFormat::Json, OutputFormat::Ndjson]
+                )
+                .unwrap(),
+            OutputFormat::Ndjson
+        );
+        let err = OutputFormat::Ndjson
+            .ensure_supported("pack", &[OutputFormat::Text, OutputFormat::Json])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("unsupported --output ndjson for pack"),
+            "{err}"
+        );
     }
 }

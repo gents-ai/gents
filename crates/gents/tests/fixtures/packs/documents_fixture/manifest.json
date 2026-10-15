@@ -13,7 +13,7 @@
   "kind": "documents",
   "assets": [
     "README.md",
-    "agent_behaviors/fixture_worker/system_prompt.md",
+    "agents/fixture_worker/system_prompt.md",
     "experiment.json",
     "pack_config.json",
     "schemas/fixture_job.graphql",
@@ -28,7 +28,7 @@
     {
       "name": "worker",
       "description": "Executes the fixture's one task.",
-      "behaviors": [
+      "agents": [
         "fixture-worker"
       ]
     }

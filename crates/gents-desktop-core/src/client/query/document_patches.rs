@@ -32,36 +32,37 @@ pub async fn fetch_doc_patch(
         .join(", ");
 
     let mut rows = ClientStoreRows::default();
+    let mut observed_physical_documents = None;
     match collection_name {
-        AGENT_PRINCIPAL_NAME => {
-            rows.agent_principals = load_rows(
+        NODE_NAME => {
+            rows.nodes = load_rows(
                 node,
-                AGENT_PRINCIPAL_NAME,
-                &format!("query {{ {AGENT_PRINCIPAL_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_PRINCIPAL_FIELDS} }} }}"),
+                NODE_NAME,
+                &format!("query {{ {NODE_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {NODE_FIELDS} }} }}"),
             )
             .await?;
         }
-        AGENT_BEHAVIOR_NAME => {
-            rows.behaviors = load_rows(
+        AGENT_NAME => {
+            rows.agents = load_rows(
                 node,
-                AGENT_BEHAVIOR_NAME,
-                &format!("query {{ {AGENT_BEHAVIOR_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_BEHAVIOR_FIELDS} }} }}"),
+                AGENT_NAME,
+                &format!("query {{ {AGENT_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_FIELDS} }} }}"),
             )
             .await?;
         }
-        AGENT_RUNTIME_NAME => {
+        NODE_RUNTIME_NAME => {
             rows.runtimes = load_rows(
                 node,
-                AGENT_RUNTIME_NAME,
-                &format!("query {{ {AGENT_RUNTIME_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_RUNTIME_FIELDS} }} }}"),
+                NODE_RUNTIME_NAME,
+                &format!("query {{ {NODE_RUNTIME_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {NODE_RUNTIME_FIELDS} }} }}"),
             )
             .await?;
         }
-        AGENT_BEHAVIOR_READINESS_NAME => {
-            rows.behavior_readiness = load_rows(
+        NODE_READINESS_NAME => {
+            rows.node_readiness = load_rows(
                 node,
-                AGENT_BEHAVIOR_READINESS_NAME,
-                &format!("query {{ {AGENT_BEHAVIOR_READINESS_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_BEHAVIOR_READINESS_FIELDS} }} }}"),
+                NODE_READINESS_NAME,
+                &format!("query {{ {NODE_READINESS_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {NODE_READINESS_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -148,18 +149,35 @@ pub async fn fetch_doc_patch(
             .await?;
         }
         TRIGGER_NAME => {
-            rows.triggers = load_rows(
+            let data = execute_local_graphql_query(
                 node,
+                &format!("query {{ {TRIGGER_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {TRIGGER_FIELDS} {TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS} }} }}"),
+                "trigger document patch",
+            ).await?;
+            observed_physical_documents = Some(
+                data.get(TRIGGER_NAME)
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len),
+            );
+            (rows.triggers, rows.trigger_source_node_dids) = parse_projected_query_rows_with_source(
+                &data,
                 TRIGGER_NAME,
-                &format!("query {{ {TRIGGER_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {TRIGGER_FIELDS} }} }}"),
-            )
-            .await?;
-            rows.trigger_observations = load_rows(
-                node,
+                TRIGGER_FIELDS,
+                &format!("{TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS}"),
+                Some("node_did"),
+            )?;
+            (rows.trigger_observations, rows.trigger_observation_source_node_dids) = parse_observation_query_rows_with_source(
+                &data,
                 TRIGGER_NAME,
-                &format!("query {{ {TRIGGER_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {TRIGGER_OBSERVATION_FIELDS} }} }}"),
-            )
-            .await?;
+                TRIGGER_OBSERVATION_FIELDS,
+                Some("node_did"),
+            )?;
+            (rows.schedule_observations, rows.schedule_observation_source_node_dids) = parse_observation_query_rows_with_source(
+                &data,
+                TRIGGER_NAME,
+                SCHEDULE_OBSERVATION_FIELDS,
+                Some("node_did"),
+            )?;
         }
         SKILL_NAME => {
             rows.skills = load_rows(
@@ -178,13 +196,38 @@ pub async fn fetch_doc_patch(
             .await?;
         }
         INFERENCE_BACKEND_NAME => {
-            rows.inference_backends = load_rows(
+            let data = execute_local_graphql_query(
                 node,
+                &format!("query {{ {INFERENCE_BACKEND_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {INFERENCE_BACKEND_FIELDS} {INFERENCE_BACKEND_OBSERVATION_FIELDS} }} }}"),
+                "inference backend document patch",
+            ).await?;
+            observed_physical_documents = Some(
+                data.get(INFERENCE_BACKEND_NAME)
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len),
+            );
+            (rows.inference_backends, rows.inference_backend_source_node_dids) = parse_projected_query_rows_with_source(
+                &data,
                 INFERENCE_BACKEND_NAME,
-                &format!("query {{ {INFERENCE_BACKEND_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {INFERENCE_BACKEND_FIELDS} }} }}"),
-            )
-            .await?;
+                INFERENCE_BACKEND_FIELDS,
+                INFERENCE_BACKEND_OBSERVATION_FIELDS,
+                Some("node_did"),
+            )?;
+            (rows.backend_observations, rows.backend_observation_source_node_dids) = parse_observation_query_rows_with_source(
+                &data,
+                INFERENCE_BACKEND_NAME,
+                INFERENCE_BACKEND_OBSERVATION_FIELDS,
+                Some("node_did"),
+            )?;
         }
+        "AgentContext" => rows.contexts = load_rows(node, "AgentContext", &format!("query {{ AgentContext(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_CONTEXT_FIELDS} }} }}")).await?,
+        "CompactionConfig" => rows.compactions = load_rows(node, "CompactionConfig", &format!("query {{ CompactionConfig(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {COMPACTION_CONFIG_FIELDS} }} }}")).await?,
+        "InferenceSampling" => rows.inference_sampling = load_rows(node, "InferenceSampling", &format!("query {{ InferenceSampling(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {INFERENCE_SAMPLING_FIELDS} }} }}")).await?,
+        "InferenceExecution" => rows.inference_execution = load_rows(node, "InferenceExecution", &format!("query {{ InferenceExecution(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {INFERENCE_EXECUTION_FIELDS} }} }}")).await?,
+        "EventSource" => rows.event_sources = load_rows(node, "EventSource", &format!("query {{ EventSource(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {EVENT_SOURCE_FIELDS} }} }}")).await?,
+        AGENT_TARGET_NAME => rows.agent_targets = load_rows(node, AGENT_TARGET_NAME, &format!("query {{ {AGENT_TARGET_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_TARGET_FIELDS} }} }}")).await?,
+        "DatastoreToolSurface" => rows.datastore_tool_surfaces = load_rows(node, "DatastoreToolSurface", &format!("query {{ DatastoreToolSurface(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {DATASTORE_TOOL_SURFACE_FIELDS} }} }}")).await?,
+        "ChainKeyBinding" => rows.chain_key_bindings = load_rows(node, "ChainKeyBinding", &format!("query {{ ChainKeyBinding(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {CHAIN_KEY_BINDING_FIELDS} }} }}")).await?,
         INFERENCE_PROFILE_NAME => {
             rows.inference_profiles = load_rows(
                 node,
@@ -203,12 +246,62 @@ pub async fn fetch_doc_patch(
         }
         other => bail!("fetch_doc_patch: unknown collection {other}"),
     }
+    rows.context_source_node_dids = rows
+        .contexts
+        .iter()
+        .map(|row| Some(row.node_did.clone()))
+        .collect();
+    rows.compaction_source_node_dids = rows
+        .compactions
+        .iter()
+        .map(|row| Some(row.node_did.clone()))
+        .collect();
+    rows.inference_sampling_source_node_dids = rows
+        .inference_sampling
+        .iter()
+        .map(|row| Some(row.node_did.clone()))
+        .collect();
+    rows.inference_execution_source_node_dids = rows
+        .inference_execution
+        .iter()
+        .map(|row| Some(row.node_did.clone()))
+        .collect();
+    rows.event_source_source_node_dids = rows
+        .event_sources
+        .iter()
+        .map(|row| Some(row.node_did.clone()))
+        .collect();
+    rows.agent_target_source_node_dids = rows
+        .agent_targets
+        .iter()
+        .map(|row| Some(row.node_did.clone()))
+        .collect();
+    rows.datastore_tool_surface_source_node_dids = rows
+        .datastore_tool_surfaces
+        .iter()
+        .map(|row| Some(row.node_did.clone()))
+        .collect();
+    rows.chain_key_binding_source_node_dids = rows
+        .chain_key_bindings
+        .iter()
+        .map(|row| Some(row.node_did.clone()))
+        .collect();
+    rows.tool_service_registry_source_node_dids = rows
+        .tool_service_registries
+        .iter()
+        .map(|row| Some(row.node_did.clone()))
+        .collect();
+    rows.inference_profile_source_node_dids = rows
+        .inference_profiles
+        .iter()
+        .map(|row| Some(row.node_did.clone()))
+        .collect();
     let request_count = rows.requests.len();
     let store = ClientStore::from_rows(rows);
     let observed_documents = if collection_name == AGENT_REQUEST_NAME {
         request_count
     } else {
-        store.row_count()
+        observed_physical_documents.unwrap_or_else(|| store.row_count())
     };
     Ok(DocumentPatch {
         store,
@@ -219,10 +312,10 @@ pub async fn fetch_doc_patch(
 pub(crate) fn supports_doc_patch_collection(collection_name: &str) -> bool {
     matches!(
         collection_name,
-        AGENT_PRINCIPAL_NAME
-            | AGENT_BEHAVIOR_NAME
-            | AGENT_RUNTIME_NAME
-            | AGENT_BEHAVIOR_READINESS_NAME
+        NODE_NAME
+            | AGENT_NAME
+            | NODE_RUNTIME_NAME
+            | NODE_READINESS_NAME
             | AGENT_REQUEST_NAME
             | MAILBOX_ITEM_NAME
             | AGENT_MESSAGE_NAME
@@ -239,6 +332,14 @@ pub(crate) fn supports_doc_patch_collection(collection_name: &str) -> bool {
             | INFERENCE_BACKEND_NAME
             | INFERENCE_PROFILE_NAME
             | TOOL_SERVICE_REGISTRY_NAME
+            | "AgentContext"
+            | "CompactionConfig"
+            | "InferenceSampling"
+            | "InferenceExecution"
+            | "EventSource"
+            | AGENT_TARGET_NAME
+            | "DatastoreToolSurface"
+            | "ChainKeyBinding"
     )
 }
 

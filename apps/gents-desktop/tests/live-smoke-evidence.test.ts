@@ -13,7 +13,7 @@ import {
 const runner = {
   baseUrl: "http://127.0.0.1:9292",
   deploymentLabel: "desktop-live",
-  agentDid: "did:key:zLive",
+  nodeDid: "did:key:zLive",
   toolRoot: "/private/tmp/gents-live",
   /* what the live run measured of the transcript, none of it under test here */
   transcriptQueryCount: 0,
@@ -67,7 +67,7 @@ describe("live smoke evidence summaries", () => {
       error,
       runner,
       submitted: {
-        agentDid: "did:key:zLive",
+        nodeDid: "did:key:zLive",
         sessionId: "session-2",
         requestId: "request-2",
       },

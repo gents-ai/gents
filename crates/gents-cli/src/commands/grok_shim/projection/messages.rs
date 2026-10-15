@@ -250,7 +250,7 @@ async fn project_messages_with_sink<S: QuerySink>(
         .and_then(nonempty)
         .ok_or_else(|| anyhow!("message request physical identity missing"))?;
     let owner = request
-        .agent_did
+        .node_did
         .as_deref()
         .and_then(nonempty)
         .ok_or_else(|| anyhow!("message request principal missing"))?;
@@ -400,7 +400,7 @@ async fn project_messages_with_sink<S: QuerySink>(
                 message_id: message_id.as_deref(),
             },
             messages: &messages,
-            agent_did: owner,
+            node_did: owner,
             requester_did: request.requester_did.as_deref(),
             records: &observed,
             denied_headers: &[],
@@ -588,7 +588,7 @@ mod canonical_selection_tests {
         gents_protocol::row::AgentRequestRow {
             doc_id: Some("request-doc".into()),
             request_id: "request-1".into(),
-            agent_did: Some("did:test:grok".into()),
+            node_did: Some("did:test:grok".into()),
             session_id: Some("session-1".into()),
             lifecycle_state: Some(RequestLifecycleState::Processing),
             execution_generation: Some("generation-1".into()),
@@ -602,7 +602,7 @@ mod canonical_selection_tests {
     fn text_segment(doc_id: &str, turn: u32, text: &str, outcome: Option<&str>) -> Value {
         let mut segment = json!({
             "_docID": doc_id,
-            "agent_did": "did:test:grok",
+            "node_did": "did:test:grok",
             "session_id": "session-1",
             "request_doc_id": "request-doc",
             "source": {"kind":"provider_turn","scope":"inference.0","turn_index":turn,"attempt":0},
@@ -627,7 +627,7 @@ mod canonical_selection_tests {
             "_docID": doc_id,
             "message_key": key,
             "session_id": "session-1",
-            "agent_did": "did:test:grok",
+            "node_did": "did:test:grok",
             "request_doc_id": "request-doc",
             "publication": {"kind":"request_execution","execution_generation":"generation-1"},
             "outcome": "complete",

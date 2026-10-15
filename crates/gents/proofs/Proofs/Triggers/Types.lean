@@ -131,14 +131,14 @@ theorem wellFormed_manual_triggerId_none
 
 end FireIntent
 
-/-- Selected task and lineage; execution resolves the task under the runtime principal. -/
+/-- Selected task and lineage; execution resolves the task under the runtime node. -/
 structure RequestSeed where
   taskId : String
   causedByTriggerId : Option String
   causedByTriggerKind : TriggerKind
   deriving Repr
 
-/-- Logical trigger identity within one runtime principal. Source kind selects a
+/-- Logical trigger identity within one runtime node. Source kind selects a
 source, not a concurrency namespace; TriggerWideKey models explicit owner scoping. -/
 abbrev TriggerKey := String
 

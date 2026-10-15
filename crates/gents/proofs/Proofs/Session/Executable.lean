@@ -6,6 +6,8 @@ inductive Action where
   | appendPending (entry : QueueEntry)
   | coalescePending (entry : QueueEntry)
   | claimNext
+  | claimFolding (admitted : List RequestId)
+  | consumeFolded
   | finishActive
   | drainAutomated (source : QueueSource) (queueKey : Option QueueKey)
   | drainObservedAutomated (source : QueueSource) (queueKey : Option QueueKey)
@@ -17,7 +19,7 @@ def step? (pre : SessionQueueState) : Action → Option SessionQueueState
       if entry.policy = .append ∧
           entry.appendWellFormed ∧
           RequestIdFresh pre entry ∧
-          canAppendAfter pre.pending entry = true then
+          canAppendAfter (pre.folding ++ pre.pending) entry = true then
         some (pre.appendPending entry)
       else
         none
@@ -26,9 +28,10 @@ def step? (pre : SessionQueueState) : Action → Option SessionQueueState
       | none => none
       | some key =>
           if entry.coalesceWellFormed key then
-            if containsCoalescedQueueKey pre.pending entry.source key = true then
+            if containsCoalescedQueueKey (pre.folding ++ pre.pending) entry.source key = true then
               some pre
-            else if RequestIdFresh pre entry ∧ canAppendAfter pre.pending entry = true then
+            else if RequestIdFresh pre entry ∧
+                canAppendAfter (pre.folding ++ pre.pending) entry = true then
               some (pre.appendPending entry)
             else
               none
@@ -37,6 +40,14 @@ def step? (pre : SessionQueueState) : Action → Option SessionQueueState
   | .claimNext =>
       match pre.active, pre.pending with
       | none, entry :: rest => some (pre.claimHead entry rest)
+      | _, _ => none
+  | .claimFolding admitted =>
+      match pre.active, pre.pending with
+      | none, entry :: rest => some (pre.claimFolding entry rest admitted)
+      | _, _ => none
+  | .consumeFolded =>
+      match pre.active, pre.folding with
+      | some _, entry :: rest => some (pre.consumeFolded entry rest)
       | _, _ => none
   | .finishActive =>
       match pre.active with
@@ -68,10 +79,10 @@ def scopedStep? (target : AgentSession.Scope) (pre : SessionQueueState)
   if pre.scope = target then step? pre action else none
 
 theorem foreign_owner_cannot_drain (target : AgentSession.Scope)
-    (pre : SessionQueueState) (h : pre.scope.agent ≠ target.agent)
+    (pre : SessionQueueState) (h : pre.scope.node ≠ target.node)
     (source : QueueSource) (key : Option QueueKey) :
     scopedStep? target pre (.drainAutomated source key) = none := by
-  have hs : pre.scope ≠ target := by intro he; exact h (congrArg AgentSession.Scope.agent he)
+  have hs : pre.scope ≠ target := by intro he; exact h (congrArg AgentSession.Scope.node he)
   simp [scopedStep?, hs]
 
 theorem foreign_requester_cannot_drain (target : AgentSession.Scope)

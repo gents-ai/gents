@@ -2,49 +2,50 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use chrono::Utc;
+use gents::document_config::ToolServiceRegistry;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::{
     run_health_check_cycle, HealthCheckerOptions, McpHealthCheckService, McpPool, ServiceHealthMap,
 };
 use gents_desktop_core::client::ClientCore;
-use gents_protocol::row::{ToolServiceHealthStateRow, ToolServiceRegistryRow};
+use gents_protocol::row::ToolServiceHealthStateRow;
 use gents_protocol::tool_service_health::ToolServiceHealthState;
 
 use super::super::types::{MCPServiceHealthView, McpServiceProbeResult};
 
 /// Read every persisted `ToolServiceHealthState` row scoped to the
-/// desktop's currently selected agent. Bridges directly to the GraphQL
-/// store rather than the in-memory `ServiceHealthMap` because the agent
+/// desktop's currently selected node. Bridges directly to the GraphQL
+/// store rather than the in-memory `ServiceHealthMap` because the node
 /// runtime (and therefore the in-memory state) lives in a separate
 /// process — the persisted collection is the only path the desktop has
 /// to the K-model state.
 ///
-/// Rows are written by an `agent_did`; on a multi-agent node the local
-/// DefraDB sees rows from every replicated agent. The selected-agent
+/// Rows are written by a `node_did`; on a replicated desktop node the local
+/// DefraDB sees rows from every replicated node. The selected-node
 /// filter keeps the rail's view consistent with the rest of the desktop
-/// (the same `selected_agent_did` scopes config, transcripts, and
-/// triggers). Returns an empty Vec when no agent is selected — the rail
+/// (the same `selected_node_did` scopes config, transcripts, and
+/// triggers). Returns an empty Vec when no node is selected — the rail
 /// renders the existing empty state.
 pub async fn load_mcp_services_with_health(core: &ClientCore) -> Result<Vec<MCPServiceHealthView>> {
-    let Some(agent_did) = core.selected_agent_did() else {
+    let Some(node_did) = core.selected_node_did() else {
         return Ok(Vec::new());
     };
-    load_mcp_services_with_health_for_agent(core, &agent_did).await
+    load_mcp_services_with_health_for_node(core, &node_did).await
 }
 
-pub(crate) async fn load_mcp_services_with_health_for_agent(
+pub(crate) async fn load_mcp_services_with_health_for_node(
     core: &ClientCore,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<MCPServiceHealthView>> {
-    let escaped_agent = escape_graphql_string(&agent_did);
+    let escaped_node = escape_graphql_string(&node_did);
     let query = format!(
         r#"{{
             ToolServiceHealthState(
-                filter: {{ agent_did: {{ _eq: "{escaped_agent}" }} }},
+                filter: {{ node_did: {{ _eq: "{escaped_node}" }} }},
                 order: {{ service_id: ASC }}
             ) {{
                 service_id
-                agent_did
+                node_did
                 endpoint
                 status
                 tool_count
@@ -102,7 +103,7 @@ pub(crate) fn view_from_row(row: ToolServiceHealthStateRow) -> Result<MCPService
 
     Ok(MCPServiceHealthView {
         service_id: row.service_id,
-        agent_did: row.agent_did,
+        node_did: row.node_did,
         endpoint: row.endpoint,
         status: row.status,
         display_state,
@@ -120,13 +121,18 @@ pub(crate) fn view_from_row(row: ToolServiceHealthStateRow) -> Result<MCPService
 
 pub async fn probe_mcp_service(
     core: &ClientCore,
+    node_did: &str,
     service_id: &str,
 ) -> Result<McpServiceProbeResult> {
+    let node_did = node_did.trim();
+    if node_did.is_empty() {
+        bail!("node_did must not be empty");
+    }
     let service_id = service_id.trim();
     if service_id.is_empty() {
         bail!("service_id must not be empty");
     }
-    let registry_entry = load_registry_entry(core, service_id).await?;
+    let registry_entry = load_registry_entry(core, node_did, service_id).await?;
     let service = McpHealthCheckService {
         service_id: registry_entry.service_id.clone(),
         hostname: registry_entry.hostname.unwrap_or_default(),
@@ -136,8 +142,8 @@ pub async fn probe_mcp_service(
             .mcp_port
             .and_then(|port| u16::try_from(port).ok()),
         mcp_path: registry_entry.mcp_path.unwrap_or_default(),
-        send_agent_did: registry_entry.send_agent_did,
-        updated_at: registry_entry.updated_at,
+        send_node_did: registry_entry.send_node_did,
+        updated_at: None,
     };
     let health_map = ServiceHealthMap::new();
     let pool = McpPool::new();
@@ -202,26 +208,30 @@ fn one_shot_probe_options() -> HealthCheckerOptions {
 
 async fn load_registry_entry(
     core: &ClientCore,
+    node_did: &str,
     service_id: &str,
-) -> Result<ToolServiceRegistryRow> {
+) -> Result<ToolServiceRegistry> {
     let escaped = escape_graphql_string(service_id);
+    let escaped_node = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
             ToolServiceRegistry(
                 filter: {{ _and: [
-                    {{ status: {{ _eq: "online" }} }},
+                    {{ node_did: {{ _eq: "{escaped_node}" }} }},
+                    {{ enabled: {{ _ne: false }} }},
                     {{ service_id: {{ _eq: "{escaped}" }} }}
                 ] }},
                 limit: 1
             ) {{
+                node_did
                 service_id
                 hostname
                 tailscale_ip
                 lan_ip
                 mcp_port
                 mcp_path
-                status
-                updated_at
+                send_node_did
+                enabled
             }}
         }}"#
     );
@@ -235,6 +245,38 @@ async fn load_registry_entry(
         .and_then(|rows| rows.as_array())
         .and_then(|rows| rows.first())
         .cloned()
-        .ok_or_else(|| anyhow!("no online ToolServiceRegistry row for service_id={service_id}"))?;
+        .ok_or_else(|| anyhow!("no enabled ToolServiceRegistry row for service_id={service_id}"))?;
     serde_json::from_value(row).map_err(Into::into)
+}
+
+#[cfg(test)]
+mod probe_scope_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn registry_probe_resolves_the_node_and_service_compound_key() -> Result<()> {
+        let (core, _tempdir) = crate::tests::support::boot_core().await;
+        gents::config_client::ConfigAccess::write_local(
+            &core.node(),
+            "test.mcp_probe_scope",
+            r#"mutation {
+                create_ToolServiceRegistry(input: {
+                    node_did: "did:test:first", service_id: "shared", hostname: "first", enabled: true
+                }) { _docID }
+                create_ToolServiceRegistry(input: {
+                    node_did: "did:test:second", service_id: "shared", hostname: "second", enabled: true
+                }) { _docID }
+            }"#,
+        ).await?;
+        for (node, hostname) in [("did:test:first", "first"), ("did:test:second", "second")] {
+            let row = load_registry_entry(&core, node, "shared").await?;
+            assert_eq!(row.node_did, node);
+            assert_eq!(row.hostname.as_deref(), Some(hostname));
+        }
+        assert!(load_registry_entry(&core, "did:test:missing", "shared")
+            .await
+            .is_err());
+        core.shutdown().await?;
+        Ok(())
+    }
 }

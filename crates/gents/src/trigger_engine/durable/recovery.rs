@@ -30,7 +30,7 @@ pub(crate) async fn recover_outcomes_in_txn(
         let response = txn
             .execute_local_response(&format!(
                 r#"{{AgentRequest(filter: {{
-            agent_did: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}
+            node_did: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}
         }}) {{request_id lifecycle_state failure_reason}}}}"#,
                 crate::graphql::escape_graphql_string(owner),
                 crate::graphql::escape_graphql_string(&fire.request_id)
@@ -134,7 +134,7 @@ mod tests {
             let state = if terminal { "completed" } else { "pending" };
             let request_mutation = format!(
                 r#"mutation {{create_AgentRequest(input: {{
-                request_id: "{}", agent_did: "{}", session_id: "{}", behavior_id: "behavior",
+                request_id: "{}", node_did: "{}", session_id: "{}", agent_id: "behavior",
                 purpose: "normal", lifecycle_state: "{state}", created_at: "2026-01-01T00:00:00Z"
             }}) {{_docID}} }}"#,
                 crate::graphql::escape_graphql_string(&fire.request_id),
@@ -151,7 +151,7 @@ mod tests {
                         let root = response["data"]["AgentRequest"][0]["_docID"].as_str().unwrap();
                         txn.execute_with_variables("mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}",
                             &serde_json::json!({"input": {
-                                "goal_id": fire.goal_id, "agent_did": fire.identity.owner_did,
+                                "goal_id": fire.goal_id, "node_did": fire.identity.owner_did,
                                 "session_id": fire.session_id, "objective": "finish assignment",
                                 "status": case["pre"]["goals"][0]["status"], "assignment_root_request_doc_id": root,
                             }})).await?;

@@ -5,4 +5,4 @@ import type { SignInView } from "./SignInView.js";
  * A redacted view of a stored credential. Tokens never cross the bridge into
  * the webview — only the metadata the UI needs to confirm the login worked.
  */
-export type CodexLoginResult = { docId: string, credentialId: string, agentDid: string, provider: string, accountId: string | null, chatgptPlanType: string | null, isFedramp: boolean, accessTokenExpiresAt: string, enabled: boolean, signIn: SignInView, };
+export type CodexLoginResult = { docId: string, credentialId: string, nodeDid: string, provider: string, accountId: string | null, chatgptPlanType: string | null, isFedramp: boolean, accessTokenExpiresAt: string, enabled: boolean, signIn: SignInView, };

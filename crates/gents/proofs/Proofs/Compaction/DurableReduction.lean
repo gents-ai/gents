@@ -18,7 +18,7 @@ rather than something recovery is allowed to repair.
 
 namespace Compaction.DurableReduction
 
-abbrev AgentDid := Nat
+abbrev NodeDid := Nat
 abbrev ProducerCallId := Nat
 abbrev RequestDocId := Nat
 abbrev ClaimCommitId := Nat
@@ -26,7 +26,7 @@ abbrev ClaimCommitId := Nat
 /-- One reduction result.  Retry/repair attempts of the summary provider call
 are provenance of `producerCall`, not new reduction identities. -/
 structure ReductionKey where
-  agentDid : AgentDid
+  nodeDid : NodeDid
   sessionId : SessionId
   requestDocId : RequestDocId
   turnIndex : Nat

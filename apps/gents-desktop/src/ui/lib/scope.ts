@@ -23,7 +23,7 @@ export const defaultScope = (view: ScopedView): Scope => ({
 export type ScopeContext = {
   nodes: readonly NodeLike[];
   selectedNodeDid: NodeDid | null;
-  /** the home's agent DID, which marks the working node */
+  /** the home's node DID, which marks the working node */
   homeDid: string | null | undefined;
   /** each node's sessions and mailbox items from the fleet store, which keep
       their identity while unchanged */
@@ -82,7 +82,7 @@ const agentPasses = (scope: Scope, agentId: string | null | undefined) =>
 export function sessionsInScope(scope: Scope, ctx: ScopeContext): SessionSummary[] {
   return nodesInScope(scope, ctx).flatMap((n) =>
     (ctx.fleet.sessionsOf[nodeDidOf(n)] ?? []).filter((s) =>
-      agentPasses(scope, s.behaviorId),
+      agentPasses(scope, s.agentId),
     ),
   );
 }
@@ -91,7 +91,7 @@ export function sessionsInScope(scope: Scope, ctx: ScopeContext): SessionSummary
 export function mailboxInScope(scope: Scope, ctx: ScopeContext): MailboxItemView[] {
   return nodesInScope(scope, ctx).flatMap((n) =>
     (ctx.fleet.mailboxOf[nodeDidOf(n)] ?? []).filter(
-      (m) => m.status === "open" && agentPasses(scope, m.targetBehaviorId),
+      (m) => m.status === "open" && agentPasses(scope, m.targetAgentId),
     ),
   );
 }

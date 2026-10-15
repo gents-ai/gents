@@ -17,7 +17,7 @@ async fn config_apply_updates_backend_from_canonical_bundle_locally() -> Result<
     run_init_json(
         &home,
         &[
-            "--agent-name",
+            "--node-name",
             "local-apply",
             "--model-name",
             &model,
@@ -51,20 +51,20 @@ async fn config_apply_prunes_live_only_task_from_canonical_bundle() -> Result<()
     let home = tempdir.path().join("home");
     let root = tempdir.path().join("config");
     fs::create_dir_all(&home)?;
-    run_init_json(&home, &["--agent-name", "local-prune"])?;
+    run_init_json(&home, &["--node-name", "local-prune"])?;
     run_cli_text(
         &home,
         &["config", "export", "--root", root.to_str().unwrap()],
     )?;
     let path = root.join("pack_config.json");
     let mut config = read_json_file(&path)?;
-    let behavior_id = config["agent_principal"]["default_behavior_id"]
+    let agent_id = config["node"]["default_agent_id"]
         .as_str()
-        .context("default behavior")?
+        .context("default agent")?
         .to_string();
     config["tasks"] = json!([{
         "task_id": "temporary-task",
-        "behavior_id": behavior_id,
+        "agent_id": agent_id,
         "prompt_template": "temporary"
     }]);
     write_json_file(&path, &config)?;
@@ -94,7 +94,7 @@ async fn config_apply_refuses_a_count_field_no_count_can_come_back_through() -> 
     let home = tempdir.path().join("home");
     let root = tempdir.path().join("config");
     fs::create_dir_all(&home)?;
-    run_init_json(&home, &["--agent-name", "event-source-count"])?;
+    run_init_json(&home, &["--node-name", "event-source-count"])?;
     run_cli_text(
         &home,
         &["config", "export", "--root", root.to_str().unwrap()],

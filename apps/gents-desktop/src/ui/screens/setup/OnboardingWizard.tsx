@@ -1,4 +1,4 @@
-/* First run, from the Startup designs: choose where the agent lives,
+/* First run, from the Startup designs: choose where the Node lives,
    name it, watch it come online, then connect one inference provider
    (InferenceSetup). */
 import { useEffect, useReducer, useState } from "react";
@@ -7,6 +7,7 @@ import type {
   DesktopClientSnapshot,
   ManagedServerAuthorityInput,
 } from "@source-inc/gents-desktop-client";
+import { DEFAULT_NODE_NAME } from "@source-inc/gents-desktop-fleet";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
 import { Spinner } from "@gents/ui/components/spinner";
@@ -14,17 +15,12 @@ import {
   projectStartupLoadingStatus,
   type DesktopStartupPhase,
 } from "../../../lib/loadingStatus";
-import {
-  observeManagedServerOperation,
-  type ManagedServerWait,
-} from "../../../lib/managedServerStartup";
 import { SETUP_COMPLETE_DWELL_MS, SetupProgress } from "./SetupProgress";
-import { setupStewardPatches } from "@/lib/setupSteward";
+import { engineerPatches } from "@/lib/engineer";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
-import { AgentAvatar } from "@/screens/AgentAvatar";
+import { NodeAvatar } from "@/screens/AgentAvatar";
 import { Mark } from "@/app/Mark";
-import { setupErrorMessage } from "@/lib/providerLogin";
-import { waitForManagedRuntimePairing } from "@/lib/managedRuntimeReadiness";
+import { setupErrorMessage } from "../../../lib/setupErrors";
 import { ManagedRuntimeAuthorityPicker } from "@/components/ManagedRuntimeAuthority";
 import { authoritiesEqual, authorityForSelection } from "@/lib/managedRuntimeAuthority";
 import { useApp } from "@/app/AppContext";
@@ -103,7 +99,7 @@ function runReducer(run: Run, event: RunEvent): Run {
 }
 
 function shortDid(did: string | null) {
-  if (!did) return "a new agent identity";
+  if (!did) return "a new node identity";
   return did.length > 24 ? `${did.slice(0, 14)}…${did.slice(-6)}` : did;
 }
 
@@ -125,21 +121,19 @@ export function ceilingFromInit(
 export function OnboardingWizard({
   onDone,
   initialStep = "welcome",
-  agentDid,
+  nodeDid,
   onCancel,
   provider,
 }: {
   onDone: (snapshot: DesktopClientSnapshot) => void;
   initialStep?: Step;
-  agentDid?: string;
+  nodeDid?: string;
   onCancel?: () => void;
   provider?: ProviderId;
 }) {
   const bootstrap = useBootstrap();
-  const {
-    api,
-    actions: { initLocalRuntime, refreshSnapshot, changeConfig },
-  } = useApp();
+  const { stores, actions } = useApp();
+  const { initLocalRuntime, refreshSnapshot, changeConfig } = actions;
   const { diagnosticsHint } = useStartup();
   const { incompatibleHome } = useStartup();
   const [run, dispatch] = useReducer(runReducer, {
@@ -157,15 +151,17 @@ export function OnboardingWizard({
   );
   const [address, setAddress] = useState("");
   const existingHome = Boolean(
-    bootstrap?.agentHomeExists && bootstrap?.initAgentDid?.trim(),
+    bootstrap?.nodeHomeExists && bootstrap?.initNodeDid?.trim(),
   );
-  const [name, setName] = useState(bootstrap?.initAgentName?.trim() || "Forge");
+  const [name, setName] = useState(
+    bootstrap?.initNodeName?.trim() || DEFAULT_NODE_NAME,
+  );
   /* An initialized home keeps its identity: provisioning never renames it,
      so its name is shown, not asked for. */
-  const existingName = existingHome ? bootstrap?.initAgentName?.trim() || null : null;
-  const agentName = existingName ?? name;
+  const existingName = existingHome ? bootstrap?.initNodeName?.trim() || null : null;
+  const nodeName = existingName ?? name;
   const [homeRoot, setHomeRoot] = useState<string | null>(
-    api.managedServerStatus ? null : (bootstrap?.initToolRoot ?? null),
+    actions.localServerOffers.status ? null : (bootstrap?.initToolRoot ?? null),
   );
   const [toolCeiling, setToolCeiling] = useState<
     ManagedServerAuthorityInput["toolCeiling"]
@@ -174,7 +170,19 @@ export function OnboardingWizard({
     bootstrap?.initToolRoot ?? undefined,
   );
   const [authorityError, setAuthorityError] = useState<string | null>(null);
-  const [managedWait, setManagedWait] = useState<ManagedServerWait | null>(null);
+  const managedWait = stores.localServer.use.wait();
+  /* the folder the service suggests as the tool root, or why it cannot */
+  const readSuggestedRoot = () =>
+    actions.refreshLocalServer().then((status) => {
+      if (status?.suggestedToolRoot) setHomeRoot(status.suggestedToolRoot);
+      else
+        setAuthorityError(
+          status
+            ? "The user home directory is unavailable."
+            : (stores.localServer.getState().readFailure ??
+                "The user home directory is unavailable."),
+        );
+    });
   useEffect(() => {
     if (provisionedAt === null) return;
     const timer = window.setTimeout(
@@ -183,38 +191,35 @@ export function OnboardingWizard({
     );
     return () => window.clearTimeout(timer);
   }, [provisionedAt]);
-  const root = bootstrap?.defaultAgentHome ?? "~/.gents";
+  const root = bootstrap?.defaultNodeHome ?? "~/.gents";
   const toolRoot = selectedDirectory === undefined ? homeRoot : selectedDirectory;
   const authority = authorityForSelection(toolCeiling, toolRoot);
 
   useEffect(() => {
-    if (step !== "welcome" || !allowLocal || !api.managedServerStatus || homeRoot)
+    if (
+      step !== "welcome" ||
+      !allowLocal ||
+      !actions.localServerOffers.status ||
+      homeRoot
+    )
       return;
-    const pending = api.managedServerStatus();
-    if (!pending) return;
-    void pending
-      .then((status) => {
-        if (status.suggestedToolRoot) setHomeRoot(status.suggestedToolRoot);
-        else setAuthorityError("The user home directory is unavailable.");
-      })
-      .catch((cause) =>
-        setAuthorityError(cause instanceof Error ? cause.message : String(cause)),
-      );
-  }, [api, homeRoot, step, allowLocal]);
+    void readSuggestedRoot();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actions, homeRoot, step, allowLocal]);
 
-  /* the node just set up, as the next read lists it: the local agent's own
+  /* the node just set up, as the next read lists it: the local node's own
      node, which a paired remote node may be listed before; an enrolment's
      node is not listed until its server approves, so it takes the first */
   const finishProvisioning = async (
     setUp: (snapshot: DesktopClientSnapshot) => NodeView | null | undefined,
   ) => {
-    const next = await api.fetchDesktopSnapshot();
+    const next = await actions.readSnapshot();
     const nextDeployment = setUp(next);
-    const steward = nextDeployment ? setupStewardPatches(nextDeployment) : [];
-    if (steward.length && nextDeployment) {
+    const engineer = nextDeployment ? engineerPatches(nextDeployment) : [];
+    if (engineer.length && nextDeployment) {
       await changeConfig("patchConfigComponents", {
-        agentDid: nextDeployment.agentDid,
-        patches: steward,
+        nodeDid: nextDeployment.nodeDid,
+        patches: engineer,
       });
     } else {
       await refreshSnapshot();
@@ -228,8 +233,8 @@ export function OnboardingWizard({
     });
   };
 
-  const createAgent = async () => {
-    const requestedName = agentName.trim();
+  const createNode = async () => {
+    const requestedName = nodeName.trim();
     if (!requestedName) return;
     if (!authority) {
       setAuthorityError(
@@ -243,18 +248,13 @@ export function OnboardingWizard({
     dispatch({ type: "begun", phase: "checking-managed-server" });
     let failedPhase: FailedPhase = "managed-server-error";
     try {
-      if (api.startManagedServer) {
-        const startManagedServer = api.startManagedServer;
-        const status = await observeManagedServerOperation(
-          api,
-          () => startManagedServer(requestedName, authority),
-          setManagedWait,
-        );
-        if (status.agentName && status.agentName !== requestedName) {
-          /* Welcome then shows the existing agent's name. */
+      if (actions.localServerOffers.start) {
+        const status = await actions.startLocalServer(requestedName, authority);
+        if (status.nodeName && status.nodeName !== requestedName) {
+          /* Welcome then shows the existing Node's name. */
           void refreshSnapshot();
           throw new Error(
-            `This computer already has a local agent named ${status.agentName}, so ${requestedName} was not created. Go back to continue with ${status.agentName}.`,
+            `This computer already has a local node named ${status.nodeName}, so ${requestedName} was not created. Go back to continue with ${status.nodeName}.`,
           );
         }
         const confirmed: ManagedServerAuthorityInput | null =
@@ -274,7 +274,7 @@ export function OnboardingWizard({
           phase: "checking-managed-server",
           detail: [
             "managedServer",
-            `${requestedName} is running as ${shortDid(status.agentDid)}, with its identity and data in ${root}`,
+            `${requestedName} is running as ${shortDid(status.nodeDid)}, with its identity and data in ${root}`,
           ],
         });
       }
@@ -287,10 +287,8 @@ export function OnboardingWizard({
         detail: ["configuration", `Saved the local connection to ${requestedName}`],
       });
       failedPhase = "client-error";
-      if (api.commitManagedServerAutoStart) {
-        await api.commitManagedServerAutoStart(requestedName);
-      }
-      await waitForManagedRuntimePairing(api);
+      await actions.commitLocalServerAutoStart(requestedName);
+      await actions.awaitLocalServerPairing();
       await finishProvisioning(nodeSetUp);
     } catch (e) {
       dispatch({ type: "failed", phase: failedPhase, error: setupErrorMessage(e) });
@@ -302,7 +300,7 @@ export function OnboardingWizard({
   const enrol = async () => {
     dispatch({ type: "begun", phase: "starting-client" });
     try {
-      await api.requestStatusEnrollment(address.trim());
+      await actions.requestStatusEnrollment(address.trim());
       await finishProvisioning((snapshot) => snapshot.client?.deployments[0]);
     } catch (e) {
       dispatch({ type: "failed", phase: "client-error", error: setupErrorMessage(e) });
@@ -316,7 +314,7 @@ export function OnboardingWizard({
         purpose="onboarding"
         checkRuntime={initialStep === "inference"}
         onDone={onDone}
-        agentDid={agentDid}
+        nodeDid={nodeDid}
         onCancel={onCancel}
         provider={provider}
         onBack={
@@ -328,7 +326,7 @@ export function OnboardingWizard({
     return (
       <Frame>
         <Mark className="mb-6 h-6 text-ink" />
-        <Title note="Gents keeps a record of every step an agent takes, so you can see what it did and it can pick up where it left off. Start an agent here, or connect to one that already runs.">
+        <Title note="Gents keeps a record of every step an agent takes, so you can see what it did and it can pick up where it left off. Start a node here, or connect to one that already runs.">
           Let’s get set up
         </Title>
         <div className="grid gap-3">
@@ -336,20 +334,20 @@ export function OnboardingWizard({
             <Option
               selected={where === "local"}
               onSelect={() => setWhere("local")}
-              title="Local agent"
+              title="Local node"
               hint={
                 existingHome
-                  ? "Continue the agent already on this computer."
-                  : "Create an agent that runs independently in the background."
+                  ? "Continue the node already on this computer."
+                  : "Create a node that runs independently in the background."
               }
               icon={Server}
             >
               <div className="flex items-end gap-3">
-                <AgentAvatar name={agentName} className="mb-1 size-8 shrink-0" />
+                <NodeAvatar name={nodeName} className="mb-1 size-8 shrink-0" />
                 <div className="min-w-0 flex-1">
-                  <Field label="Agent name">
+                  <Field label="Node name">
                     <Input
-                      value={agentName}
+                      value={nodeName}
                       onChange={(event) => setName(event.target.value)}
                       readOnly={existingName !== null}
                       aria-readonly={existingName !== null}
@@ -364,7 +362,7 @@ export function OnboardingWizard({
                   toolRoot={toolRoot}
                   onCeilingChange={setToolCeiling}
                   onRootChange={setSelectedDirectory}
-                  validateRoot={api.validateManagedServerRoot}
+                  validateRoot={actions.validateLocalServerRoot}
                   error={authorityError}
                   onError={setAuthorityError}
                 />
@@ -379,17 +377,7 @@ export function OnboardingWizard({
                         variant="outline"
                         onClick={() => {
                           setAuthorityError(null);
-                          void api
-                            .managedServerStatus?.()
-                            .then((status) => {
-                              if (status.suggestedToolRoot)
-                                setHomeRoot(status.suggestedToolRoot);
-                              else
-                                setAuthorityError(
-                                  "The user home directory is unavailable.",
-                                );
-                            })
-                            .catch((cause) => setAuthorityError(String(cause)));
+                          void readSuggestedRoot();
                         }}
                       >
                         Try again
@@ -403,19 +391,19 @@ export function OnboardingWizard({
                 </div>
               )}
               <p className="break-all text-xs text-muted-foreground">
-                Agent data: <span className="font-mono">{root}</span>
+                Node data: <span className="font-mono">{root}</span>
               </p>
               {existingHome ? (
                 <p className="text-xs text-muted-foreground">
                   Found an existing Gents home
-                  {bootstrap?.initAgentName ? ` for ${bootstrap?.initAgentName}` : ""}.
+                  {bootstrap?.initNodeName ? ` for ${bootstrap?.initNodeName}` : ""}.
                   Next keeps that identity, native service, and reviewed host authority.
                 </p>
               ) : null}
               <p className="text-xs text-muted-foreground">
-                Your operating system manages the agent as a background service. Closing
-                this window or choosing Quit Desktop leaves the agent running; use the
-                menu bar’s Stop Agent command to stop it. Start-at-login remains a
+                Your operating system manages the node as a background service. Closing
+                this window or choosing Quit Desktop leaves the node running; use the
+                menu bar’s Stop Node command to stop it. Start-at-login remains a
                 separate operating-system preference.
               </p>
             </Option>
@@ -447,12 +435,12 @@ export function OnboardingWizard({
           </p>
         ) : null}
         <Nav
-          next={where === "local" ? createAgent : enrol}
+          next={where === "local" ? createNode : enrol}
           nextLabel={where === "local" ? "Next" : "Request access"}
           busy={busy}
           disabled={
             where === "local"
-              ? !agentName.trim() || !authority || !homeRoot
+              ? !nodeName.trim() || !authority || !homeRoot
               : !address.trim()
           }
         />
@@ -463,8 +451,8 @@ export function OnboardingWizard({
     const status = projectStartupLoadingStatus(phase, true);
     const done = provisionedAt !== null;
     const saying: Record<string, string> = {
-      "checking-managed-server": "Starting your local agent…",
-      "loading-configuration": "Loading agent configuration…",
+      "checking-managed-server": "Starting your local node…",
+      "loading-configuration": "Loading node configuration…",
       "starting-client": "Starting the secure client…",
     };
     return (
@@ -476,7 +464,7 @@ export function OnboardingWizard({
           done={done}
           steps={[
             {
-              label: where === "local" ? "Start local agent" : "Connect to server",
+              label: where === "local" ? "Start local node" : "Connect to server",
               state: done ? "complete" : status.managedServerState,
               detail: startupDetails.managedServer ?? null,
             },
@@ -495,7 +483,11 @@ export function OnboardingWizard({
           error={error}
           onRetry={() => dispatch({ type: "retried" })}
           onContinue={() => dispatch({ type: "continued" })}
-          onOpenLoginItems={api.openManagedServerLoginItems}
+          onOpenLoginItems={
+            actions.localServerOffers.loginItems
+              ? actions.openLocalServerLoginItems
+              : undefined
+          }
           diagnosticsHint={diagnosticsHint ?? bootstrap?.diagnosticsHint}
         />
       </Frame>

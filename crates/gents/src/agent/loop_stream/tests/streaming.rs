@@ -276,9 +276,9 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
             request_doc_id: "retry-input-doc".into(),
             request_commit_cid: "bafy-retry".into(),
             request_id: "retry-input".into(),
-            agent_did: "did:key:agent".into(),
+            node_did: "did:key:agent".into(),
             requester_did: String::new(),
-            behavior_id: "general".into(),
+            agent_id: "general".into(),
             session_id: "retry-session".into(),
             model_name: "test-model".into(),
             provider_family: None,
@@ -303,8 +303,18 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
             futures::pin_mut!(stream);
             let mut authored = 0;
             while let Some(item) = stream.next().await {
-                if matches!(item.unwrap(), LoopStreamItem::AuthoredInputReady { .. }) {
-                    authored += 1;
+                match item.unwrap() {
+                    LoopStreamItem::AuthoredInputReady { reply, .. } => {
+                        authored += 1;
+                        let _ = reply.send(Ok(Vec::new()));
+                    }
+                    LoopStreamItem::SteeringBoundary { reply } => {
+                        let _ = reply.send(Ok(Vec::new()));
+                    }
+                    LoopStreamItem::FinishOrIntake { reply, .. } => {
+                        let _ = reply.send(Ok(gents_loop::loop_stream::FinishOrIntake::Finished));
+                    }
+                    _ => {}
                 }
             }
             authored

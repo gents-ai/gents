@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "build_and_run",
-      "prompt": "One more graph, and this one declares two results. Graph id 'g-heldout-two-results'. 1) Create tasks bound to this engineer behavior: 't-extract-word' emits its input word unchanged on output port 'out'; 't-upper-word' uppercases its input and emits on port 'out'. 2) Author the graph: node 'extract' bound to t-extract-word, node 'upper' bound to t-upper-word, edge extract.out -> upper.in, declared input 'word' feeding node 'extract', and two results, both cardinality one: 'raw' from node 'extract' port 'out' and 'uppercased' from node 'upper' port 'out'. 3) Preview; fix and re-preview on any validation error; never run an invalid graph. 4) Run it with input {\"word\": \"heldout\"}. 5) Read the run back with get_graph_run and its results with get_graph_result.",
+      "prompt": "One more graph, and this one declares two results. Graph id 'g-heldout-two-results'. 1) Create tasks bound to this engineer agent: 't-extract-word' emits its input word unchanged on output port 'out'; 't-upper-word' uppercases its input and emits on port 'out'. 2) Author the graph: node 'extract' bound to t-extract-word, node 'upper' bound to t-upper-word, edge extract.out -> upper.in, declared input 'word' feeding node 'extract', and two results, both cardinality one: 'raw' from node 'extract' port 'out' and 'uppercased' from node 'upper' port 'out'. 3) Preview; fix and re-preview on any validation error; never run an invalid graph. 4) Run it with input {\"word\": \"heldout\"}. 5) Read the run back with get_graph_run and its results with get_graph_result.",
       "deadline_secs": 600,
       "checks": [
         {
@@ -86,7 +86,7 @@
           "name": "run_calls",
           "collection": "AgentToolCall",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "tool_name": {
@@ -140,7 +140,7 @@
             "graph_id": {
               "_eq": "g-heldout-two-results"
             },
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },

@@ -29,7 +29,7 @@ fn echo_plan(digest: &str, max_attempts: Option<u32>) -> GraphPlan {
     };
     compile_graph(
         &GraphIntent {
-            agent_did: graph_test_owner().to_owned(),
+            node_did: graph_test_owner().to_owned(),
             tags: vec![],
             graph_id: "echo-pipeline".to_owned(),
             nodes: vec![GraphNode {
@@ -64,7 +64,7 @@ fn echo_plan(digest: &str, max_attempts: Option<u32>) -> GraphPlan {
             },
         },
         &[StageCapability {
-            agent_did: graph_test_owner().to_owned(),
+            node_did: graph_test_owner().to_owned(),
             tags: vec![],
             workspace_authority: None,
             capability_id: "echo".to_owned(),
@@ -301,7 +301,7 @@ async fn a_failed_plugin_node_is_retried_and_the_run_then_succeeds() {
             .await
             .unwrap()
     );
-    crate::callback::recover_local_invocations(&node, graph_test_owner(), None, &plugins)
+    crate::callback::recover_local_invocations(&node, graph_test_owner(), None, &plugins, None)
         .await
         .unwrap();
     let view = reconcile_graph_run(&node, None, graph_test_owner(), &run.run_id)
@@ -461,7 +461,7 @@ async fn assert_interrupted_invocation_not_rerun(node: &EmbeddedNode, invocation
 }
 
 async fn recover(node: &EmbeddedNode, plugins: &crate::plugin::executor::PluginExecutor) {
-    crate::callback::recover_local_invocations(node, graph_test_owner(), None, plugins)
+    crate::callback::recover_local_invocations(node, graph_test_owner(), None, plugins, None)
         .await
         .unwrap();
 }

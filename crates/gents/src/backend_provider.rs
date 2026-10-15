@@ -289,7 +289,7 @@ pub async fn discover_models(
             let Some(credential) = oauth_credential else {
                 tracing::Span::current().record("failure_class", "auth");
                 anyhow::bail!(
-                    "ChatGPT Codex model discovery requires an OAuthCredential document; run `gents codex-login` for the agent DID first"
+                    "ChatGPT Codex model discovery requires an OAuthCredential document; run `gents codex-login` for the node DID first"
                 );
             };
             request = request.bearer_auth(&credential.access_token);
@@ -316,7 +316,7 @@ pub async fn discover_models(
             let Some(credential) = oauth_credential else {
                 tracing::Span::current().record("failure_class", "auth");
                 anyhow::bail!(
-                    "Grok OAuth model discovery requires an OAuthCredential document; run `gents grok-login` for the agent DID first"
+                    "Grok OAuth model discovery requires an OAuthCredential document; run `gents grok-login` for the node DID first"
                 );
             };
             request = request.bearer_auth(&credential.access_token);
@@ -336,7 +336,7 @@ pub async fn discover_models(
             let Some(credential) = oauth_credential else {
                 tracing::Span::current().record("failure_class", "auth");
                 anyhow::bail!(
-                    "Claude subscription model discovery requires an OAuthCredential document; run `gents claude-login --agent-did <did>` for the agent DID first"
+                    "Claude subscription model discovery requires an OAuthCredential document; run `gents claude-login --node-did <did>` for the node DID first"
                 );
             };
             request = request
@@ -797,7 +797,7 @@ mod tests {
         let credential = crate::oauth_credential::OAuthCredential {
             doc_id: None,
             credential_id: "chatgpt-codex:did:key:zAgent".to_string(),
-            agent_did: "did:key:zAgent".to_string(),
+            node_did: "did:key:zAgent".to_string(),
             provider: crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER.to_string(),
             access_token: "access-token".to_string(),
             refresh_token: "refresh-token".to_string(),
@@ -871,7 +871,7 @@ mod tests {
         crate::oauth_credential::OAuthCredential {
             doc_id: None,
             credential_id: "claude-subscription:did:key:zAgent".to_string(),
-            agent_did: "did:key:zAgent".to_string(),
+            node_did: "did:key:zAgent".to_string(),
             provider: crate::claude_oauth::CLAUDE_OAUTH_PROVIDER.to_string(),
             access_token: "access-token".to_string(),
             refresh_token: "refresh-token".to_string(),
@@ -893,7 +893,7 @@ mod tests {
         crate::oauth_credential::OAuthCredential {
             doc_id: None,
             credential_id: "xai-oauth:did:key:zAgent".to_string(),
-            agent_did: "did:key:zAgent".to_string(),
+            node_did: "did:key:zAgent".to_string(),
             provider: crate::xai_grok_oauth::XAI_OAUTH_PROVIDER.to_string(),
             access_token: "access-token".to_string(),
             refresh_token: "refresh-token".to_string(),
@@ -1061,7 +1061,7 @@ mod tests {
         let message = format!("{error:#}");
         assert!(
             message.contains("requires an OAuthCredential document")
-                && message.contains("--agent-did"),
+                && message.contains("--node-did"),
             "missing-credential error must name the login command: {message}"
         );
     }

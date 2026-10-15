@@ -1,22 +1,22 @@
 {
-  "agent_principal": {},
+  "node": {},
   "eval_definitions": [
     {
       "definition_id": "configurator-l5-agents-tools",
       "comparability_version": 10,
-      "title": "The Engineer \u2014 SubagentTarget wiring and delegation",
+      "title": "The Engineer \u2014 AgentTarget wiring and delegation",
       "subject": {
-        "kind": "behavior",
+        "kind": "agent",
         "inference_slots": [
           "engineer"
         ]
       },
       "cases": [
         "./cases/train_minimal_self_target.json",
-        "./cases/val_caller_behavior_and_delegate.json",
-        "./cases/val_self_target_existing_behavior.json",
+        "./cases/val_caller_agent_and_delegate.json",
+        "./cases/val_self_target_existing_agent.json",
         "./cases/val_two_targets_both_selected.json",
-        "./cases/val_ghost_behavior_refused.json",
+        "./cases/val_ghost_agent_refused.json",
         "./cases/val_repoint_target_in_place.json",
         "./cases/val_verify_then_delegate_no_dupes.json",
         "./cases/heldout_mixed_valid_and_ghost.json"

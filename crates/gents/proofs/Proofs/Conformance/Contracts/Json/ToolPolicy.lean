@@ -108,8 +108,8 @@ def surfaceViewJson (v : SurfaceView) : String :=
       ++ jsonString v.selfConfigCategoriesScopeKind ++ ","
     ++ "\"self_config_categories_keys\":"
       ++ jsonStringArray v.selfConfigCategoriesKeys ++ ","
-    ++ "\"subagent_targets_scope_kind\":" ++ jsonString v.subagentTargetsScopeKind ++ ","
-    ++ "\"subagent_targets_keys\":" ++ jsonStringArray v.subagentTargetsKeys ++ ","
+    ++ "\"agent_targets_scope_kind\":" ++ jsonString v.agentTargetsScopeKind ++ ","
+    ++ "\"agent_targets_keys\":" ++ jsonStringArray v.agentTargetsKeys ++ ","
     ++ "\"background_tools_scope_kind\":" ++ jsonString v.backgroundToolsScopeKind ++ ","
     ++ "\"background_tools_keys\":" ++ jsonStringArray v.backgroundToolsKeys ++ ","
     ++ "\"write_probe_tool\":" ++ jsonString v.writeProbe.1 ++ ","
@@ -135,7 +135,7 @@ def surfaceViewJson (v : SurfaceView) : String :=
 def toolPolicyCaseJson (c : Case) : String :=
   "{"
     ++ "\"name\":" ++ jsonString c.name ++ ","
-    ++ "\"behavior\":" ++ surfaceViewJson c.behavior ++ ","
+    ++ "\"agent\":" ++ surfaceViewJson c.agent ++ ","
     ++ "\"ceiling\":" ++ surfaceViewJson c.ceiling ++ ","
     ++ "\"runtime\":" ++ surfaceViewJson c.runtime ++ ","
     ++ "\"expected\":" ++ surfaceViewJson c.expected

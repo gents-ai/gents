@@ -65,16 +65,18 @@ pub(crate) async fn validate_manifest_against_live(
 
         let mut joined = Vec::new();
         for trigger in &manifest.triggers {
-            if trigger.agent_did != source.agent_did
+            if trigger.node_did != source.node_did
                 || !matches!(&trigger.source,
                     gents::document_config::TriggerSource::Event { event_source_id }
                     if event_source_id == &source.event_source_id)
             {
                 continue;
             }
-            let Some(task) = manifest.tasks.iter().find(|task| {
-                task.agent_did == trigger.agent_did && task.task_id == trigger.task_id
-            }) else {
+            let Some(task) = manifest
+                .tasks
+                .iter()
+                .find(|task| task.node_did == trigger.node_did && task.task_id == trigger.task_id)
+            else {
                 continue;
             };
             joined.push((trigger, task));
@@ -190,7 +192,7 @@ mod tests {
         triggers: serde_json::Value,
     ) -> Result<DesiredStateManifest> {
         Ok(serde_json::from_value(json!({
-            "agent_principal": { "agent_did": OWNER },
+            "node": { "node_did": OWNER },
             "event_sources": sources,
             "tasks": tasks,
             "triggers": triggers,
@@ -199,7 +201,7 @@ mod tests {
 
     fn source(id: &str, extra: serde_json::Value) -> serde_json::Value {
         let mut source = json!({
-            "agent_did": OWNER,
+            "node_did": OWNER,
             "event_source_id": id,
             "source_collection": "LiveProbe",
         });
@@ -226,14 +228,14 @@ mod tests {
         manifest(
             json!([receipt_source("reviewed", source_extra)]),
             json!([{
-                "agent_did": OWNER,
+                "node_did": OWNER,
                 "task_id": "review",
-                "behavior_id": "beh",
+                "agent_id": "beh",
                 "prompt_template": "Review attempt {{ doc.attempt }} for {{ doc.workspace_id }}",
                 "emit_outcome": emit_outcome,
             }]),
             json!([{
-                "agent_did": OWNER,
+                "node_did": OWNER,
                 "trigger_id": "on-review",
                 "task_id": "review",
                 "source": {"kind": "event", "event_source_id": "reviewed"},
@@ -279,13 +281,13 @@ mod tests {
         let manifest = manifest(
             json!([source("broken", json!({"correlation_field": "batch"}),)]),
             json!([{
-                "agent_did": OWNER,
+                "node_did": OWNER,
                 "task_id": "summarize",
-                "behavior_id": "beh",
+                "agent_id": "beh",
                 "prompt_template": "Summarize {{ doc.x",
             }]),
             json!([{
-                "agent_did": OWNER,
+                "node_did": OWNER,
                 "trigger_id": "on-broken",
                 "task_id": "summarize",
                 "source": {"kind": "event", "event_source_id": "broken"},
@@ -307,13 +309,13 @@ mod tests {
         let manifest = manifest(
             json!([source("templated", json!({"correlation_field": "batch"}))]),
             json!([{
-                "agent_did": OWNER,
+                "node_did": OWNER,
                 "task_id": "summarize",
-                "behavior_id": "beh",
+                "agent_id": "beh",
                 "prompt_template": "Summarize {{ doc.nope }}"
             }]),
             json!([{
-                "agent_did": OWNER,
+                "node_did": OWNER,
                 "trigger_id": "on-templated",
                 "task_id": "summarize",
                 "source": {"kind": "event", "event_source_id": "templated"}
@@ -364,13 +366,13 @@ mod tests {
         let manifest = manifest(
             json!([source("templated", json!({}))]),
             json!([{
-                "agent_did": OWNER,
+                "node_did": OWNER,
                 "task_id": "summarize",
-                "behavior_id": "beh",
+                "agent_id": "beh",
                 "prompt_template": "Summarize"
             }]),
             json!([{
-                "agent_did": OWNER,
+                "node_did": OWNER,
                 "trigger_id": "on-templated",
                 "task_id": "summarize",
                 "session_id_template": "{{ doc.session }}",

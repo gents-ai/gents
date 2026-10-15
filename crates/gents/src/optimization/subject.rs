@@ -1,8 +1,8 @@
 //! The baseline subject pack and the candidate packs derived from it.
 //!
 //! A candidate is the baseline pack with exactly one field changed: the system
-//! prompt of the context the subject behavior names, or the prompt template of
-//! a task of that behavior. When the pack keeps that text in a sidecar asset —
+//! prompt of the context the subject agent names, or the prompt template of
+//! a task of that agent. When the pack keeps that text in a sidecar asset —
 //! the shape every pack in this repository uses — the change is one file's
 //! bytes and nothing else, which is what makes the structural gate's "only the
 //! target moved" check a file comparison.
@@ -37,44 +37,44 @@ pub struct MaterializedPack {
     pub manifest: PackManifest,
     /// Every declared asset, keyed by its path relative to `dir`.
     pub files: BTreeMap<String, Vec<u8>>,
-    pub behavior_id: String,
+    pub agent_id: String,
     pub target: TargetField,
-    /// The context the subject behavior names, or the task being optimized.
+    /// The context the subject agent names, or the task being optimized.
     pub target_id: String,
     /// The declared asset the target document reads its text from, when the
     /// pack stores it as a sidecar rather than inline.
     pub prompt_asset: Option<String>,
 }
 
-/// Read the pack at `dir` as the subject of `behavior_id`, optimizing the
-/// behavior's context or, for a task target, that task.
+/// Read the pack at `dir` as the subject of `agent_id`, optimizing the
+/// agent's context or, for a task target, that task.
 pub fn materialize_pack(
     dir: &Path,
     owner: &str,
-    behavior_id: &str,
+    agent_id: &str,
     target: &JobTarget,
 ) -> Result<MaterializedPack> {
     let pack = load_pack(&CellSource::Directory(dir.to_path_buf()), owner)
         .with_context(|| format!("loading pack {}", dir.display()))?;
 
-    let behavior = pack
+    let agent = pack
         .config
-        .agent_behaviors
+        .agents
         .iter()
-        .find(|behavior| behavior.behavior_id == behavior_id)
-        .with_context(|| format!("pack declares no behavior {behavior_id:?}"))?;
+        .find(|agent| agent.agent_id == agent_id)
+        .with_context(|| format!("pack declares no agent {agent_id:?}"))?;
     let target_id = match target {
-        JobTarget::Context => behavior
+        JobTarget::Context => agent
             .context_id
             .clone()
-            .with_context(|| format!("behavior {behavior_id:?} names no context to optimize"))?,
+            .with_context(|| format!("agent {agent_id:?} names no context to optimize"))?,
         JobTarget::Task(task_id) => {
             pack.config
                 .tasks
                 .iter()
-                .find(|task| &task.task_id == task_id && task.behavior_id == behavior_id)
+                .find(|task| &task.task_id == task_id && task.agent_id == agent_id)
                 .with_context(|| {
-                    format!("pack declares no task {task_id:?} of behavior {behavior_id:?}")
+                    format!("pack declares no task {task_id:?} of agent {agent_id:?}")
                 })?;
             task_id.clone()
         }
@@ -92,7 +92,7 @@ pub fn materialize_pack(
         config: pack.config,
         manifest: pack.manifest,
         files: pack.files,
-        behavior_id: behavior_id.to_owned(),
+        agent_id: agent_id.to_owned(),
         target,
         target_id,
         prompt_asset,
@@ -285,7 +285,7 @@ pub fn materialize_candidate(
     materialize_pack(
         dir,
         owner,
-        &baseline.behavior_id,
+        &baseline.agent_id,
         &baseline.target.job_target(&baseline.target_id),
     )
 }
@@ -299,7 +299,7 @@ pub(crate) mod tests {
     pub(crate) use crate::eval::runner::freeze::tests::FIXTURE_PROMPT;
 
     /// The eval runner's own fixture pack: a manifest, a README, the canonical
-    /// config bundle and one behavior sidecar holding [`FIXTURE_PROMPT`].
+    /// config bundle and one agent sidecar holding [`FIXTURE_PROMPT`].
     pub(crate) fn write_fixture_pack(root: &Path) {
         crate::eval::runner::freeze::tests::write_fixture_pack(root, "Off");
     }
@@ -325,7 +325,7 @@ pub(crate) mod tests {
                         None => json!({"kind": "schedule", "schedule_id": "scheduled"}),
                     };
                     json!({
-                        "agent_did": OWNER,
+                        "node_did": OWNER,
                         "trigger_id": format!("trigger-{index}"),
                         "task_id": trigger.task_id,
                         "enabled": trigger.enabled,
@@ -338,7 +338,7 @@ pub(crate) mod tests {
                 .iter()
                 .map(|source| {
                     json!({
-                        "agent_did": OWNER,
+                        "node_did": OWNER,
                         "event_source_id": source.event_source_id,
                         "source_collection": source.source_collection,
                         "event_kind": source.event_kind,
@@ -346,9 +346,9 @@ pub(crate) mod tests {
                 })
                 .collect();
             let config: PackConfig = serde_json::from_value(json!({
-                "agent_principal": {"agent_did": OWNER},
+                "node": {"node_did": OWNER},
                 "tasks": [{
-                    "agent_did": OWNER, "task_id": "target", "behavior_id": "monitor",
+                    "node_did": OWNER, "task_id": "target", "agent_id": "monitor",
                     "prompt_template": "Work", "enabled": row.task_enabled,
                 }],
                 "triggers": triggers,
@@ -379,8 +379,8 @@ pub(crate) mod tests {
                 })
                 .collect();
             let definition = serde_json::from_value(json!({
-                "definition_id": "coverage", "agent_did": OWNER, "comparability_version": 1,
-                "subject": {"kind": "behavior", "inference_slots": ["primary"]},
+                "definition_id": "coverage", "node_did": OWNER, "comparability_version": 1,
+                "subject": {"kind": "agent", "inference_slots": ["primary"]},
                 "fixtures": {"documents": [{"collection": "Work", "document": {"value": "shared fixture"}}]},
                 "cases": cases,
             }))
@@ -399,7 +399,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// The fixture pack with one task of the monitor behavior, its prompt
+    /// The fixture pack with one task of the monitor agent, its prompt
     /// template in a sidecar or inline in `pack_config.json`, fired by an
     /// event trigger whose source has no group.
     pub(crate) fn write_task_fixture_pack(root: &Path, inline: bool) {
@@ -428,7 +428,7 @@ pub(crate) mod tests {
             serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
         config["tasks"] = json!([{
             "task_id": "plan",
-            "behavior_id": "monitor",
+            "agent_id": "monitor",
             "prompt_template": template,
         }]);
         config["event_sources"] = json!([{
@@ -515,7 +515,7 @@ pub(crate) mod tests {
             serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
         config["tasks"].as_array_mut().unwrap().push(json!({
             "task_id": "review",
-            "behavior_id": "monitor",
+            "agent_id": "monitor",
             "prompt_template": "./tasks/plan/prompt.md",
         }));
         std::fs::write(&config_path, serde_json::to_vec_pretty(&config).unwrap()).unwrap();
@@ -527,7 +527,7 @@ pub(crate) mod tests {
         let context = context_pack(&baseline_dir).unwrap();
         assert_eq!(
             context.prompt_asset.as_deref(),
-            Some("agent_behaviors/monitor/system_prompt.md")
+            Some("agents/monitor/system_prompt.md")
         );
     }
 
@@ -549,7 +549,7 @@ pub(crate) mod tests {
         assert_eq!(baseline.target_id, "monitor-context");
         assert_eq!(
             baseline.prompt_asset.as_deref(),
-            Some("agent_behaviors/monitor/system_prompt.md")
+            Some("agents/monitor/system_prompt.md")
         );
         assert_eq!(baseline_text(&baseline).unwrap(), FIXTURE_PROMPT);
         assert!(baseline.digest.starts_with("sha256:"));
@@ -574,7 +574,7 @@ pub(crate) mod tests {
             .filter(|(path, bytes)| candidate.files.get(*path) != Some(*bytes))
             .map(|(path, _)| path)
             .collect();
-        assert_eq!(differing, vec!["agent_behaviors/monitor/system_prompt.md"]);
+        assert_eq!(differing, vec!["agents/monitor/system_prompt.md"]);
         assert_eq!(
             baseline_text(&candidate).unwrap(),
             "Watch the mailbox, and say why.\n"
@@ -612,28 +612,20 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_behavior_the_pack_does_not_declare_is_an_error() {
+    fn a_agent_the_pack_does_not_declare_is_an_error() {
         let dirs = tempfile::tempdir().unwrap();
         let baseline_dir = dirs.path().join("baseline");
         write_fixture_pack(&baseline_dir);
-        let error = materialize_pack(
-            &baseline_dir,
-            OWNER,
-            "no-such-behavior",
-            &JobTarget::Context,
-        )
-        .unwrap_err();
-        assert!(
-            format!("{error:#}").contains("no-such-behavior"),
-            "{error:#}"
-        );
+        let error = materialize_pack(&baseline_dir, OWNER, "no-such-agent", &JobTarget::Context)
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("no-such-agent"), "{error:#}");
     }
 
     /// The same pack with the prompt inline in `pack_config.json` and no
     /// sidecar asset, for the structural gate's inline branch.
     pub(crate) fn write_inline_fixture_pack(root: &Path) {
         write_fixture_pack(root);
-        std::fs::remove_file(root.join("agent_behaviors/monitor/system_prompt.md")).unwrap();
+        std::fs::remove_file(root.join("agents/monitor/system_prompt.md")).unwrap();
         let manifest_path = root.join("manifest.json");
         let mut manifest: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();

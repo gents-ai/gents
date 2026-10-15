@@ -2,7 +2,7 @@ use gents::lifecycle::ClaimOutcome;
 use gents::lifecycle::RequestTerminalOutcome;
 use gents::RequestLifecycle;
 
-use crate::support::{build_request, create_request, first_row, test_db, AGENT_DID, AGENT_NAME};
+use crate::support::{build_request, create_request, first_row, test_db, AGENT_NAME, NODE_DID};
 
 #[tokio::test]
 async fn missing_session_observation_does_not_block_terminal_request() {
@@ -24,7 +24,7 @@ async fn missing_session_observation_does_not_block_terminal_request() {
         "2026-03-23T00:00:00Z".to_string(),
     );
     let mut lifecycle =
-        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
+        RequestLifecycle::new_with_node_did(db.node.clone(), AGENT_NAME, NODE_DID, request, 300);
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let response = db
         .node
@@ -82,10 +82,10 @@ async fn complete_does_not_overwrite_session_observation_for_newer_request() {
         session_id.into(),
         "2026-03-23T00:00:00Z".into(),
     );
-    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         first_request,
         300,
     );

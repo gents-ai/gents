@@ -1,5 +1,5 @@
 //! `gents optimization`: thin commands over `gents::optimization`. A job is
-//! driven by a scripted proposer supplied as a file, or by a behavior of a
+//! driven by a scripted proposer supplied as a file, or by an agent of a
 //! pack asked once per round on the served home.
 //!
 //! Refusals the library returns are re-raised with exactly their text
@@ -21,7 +21,7 @@ use gents::optimization::{
     Proposal, Proposer, ScriptedProposer,
 };
 use gents::template::catalog::{default_catalog, Site};
-use gents::{default_behavior_id_for_agent, default_inference_profile_id_for_behavior};
+use gents::{default_agent_id_for_node, default_inference_profile_id_for_agent};
 use tokio_util::sync::CancellationToken;
 
 use crate::cli::{
@@ -36,7 +36,7 @@ use crate::commands::eval::{
 };
 use crate::commands::pack::{resolve_pack_source, resolve_subject_pack, single_slot};
 
-use behavior_proposer::BehaviorProposer;
+use behavior_proposer::AgentProposer;
 
 mod behavior_proposer;
 mod render;
@@ -121,7 +121,7 @@ fn scripted_proposer(path: &Path, rounds: u32) -> Result<ScriptedProposer> {
     ))
 }
 
-/// The proposer behavior of a pack (resolved like `gents pack install`),
+/// The proposer agent of a pack (resolved like `gents pack install`),
 /// installed into the home with its one inference slot bound to
 /// `--proposer-profile` or the default profile, asked on a fresh session of
 /// the served home.
@@ -129,31 +129,31 @@ async fn behavior_proposer(
     ctx: &EvalContext,
     args: &OptimizationRunArgs,
     pack: &str,
-    behavior: Option<&str>,
+    agent: Option<&str>,
     subject_dir: &Path,
-    subject_behavior: &str,
-) -> Result<BehaviorProposer<LiveTurn>> {
+    subject_agent: &str,
+) -> Result<AgentProposer<LiveTurn>> {
     let resolved = resolve_pack_source(pack, args.registry.as_deref(), &ctx.home_dir).await?;
     let slot = single_slot(resolved.manifest())?;
-    let behavior_id = proposer_behavior_id(pack, slot, behavior)?;
+    let agent_id = proposer_agent_id(pack, slot, agent)?;
     let config = pack_config(&resolved, &ctx.owner)?;
-    ensure_tool_less(&config, &ctx.owner, &behavior_id)?;
+    ensure_tool_less(&config, &ctx.owner, &agent_id)?;
     let gents::ConfigAccess::Graphql(graphql) = &*ctx.access else {
         anyhow::bail!(
-            "start `gents server` for this home and retry: a behavior proposer runs on a served home"
+            "start `gents server` for this home and retry: an agent proposer runs on a served home"
         );
     };
     crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &ctx.owner)?;
-    let preamble = subject_preamble(subject_dir, subject_behavior, &args.target)?;
+    let preamble = subject_preamble(subject_dir, subject_agent, &args.target)?;
     let profile = args.proposer_profile.clone().unwrap_or_else(|| {
-        default_inference_profile_id_for_behavior(&default_behavior_id_for_agent(&ctx.owner))
+        default_inference_profile_id_for_agent(&default_agent_id_for_node(&ctx.owner))
     });
     install_pack_slot(&ctx.access, &ctx.owner, &resolved, &slot.name, &profile).await?;
-    Ok(BehaviorProposer::with_preamble(
+    Ok(AgentProposer::with_preamble(
         LiveTurn {
             graphql: graphql.clone(),
-            agent_did: ctx.owner.clone(),
-            behavior_id,
+            node_did: ctx.owner.clone(),
+            agent_id,
             session_id: uuid::Uuid::new_v4().to_string(),
             timeout_secs: args.proposer_timeout_secs,
             poll_secs: 1,
@@ -164,23 +164,23 @@ async fn behavior_proposer(
 }
 
 /// A proposer is tool-less, so a proposal draws only on the turns it is
-/// sent: the behavior's tool surface, resolved from the pack's documents by
+/// sent: the agent's tool surface, resolved from the pack's documents by
 /// the runtime's owner, names no tool, and its context names no skill (the
 /// runtime adds `load_skill` for those). The readonly ceiling narrows a host
 /// tool without removing it and needs no root; the CLI tools it filters out
 /// are counted anyway, since a server started with `--cli-tool` adds them
-/// back; and a subagent target counts whichever home behavior it names.
+/// back; and a agent target counts whichever home agent it names.
 fn ensure_tool_less(
     config: &gents::document_config::PackConfig,
     owner: &str,
-    behavior_id: &str,
+    agent_id: &str,
 ) -> Result<()> {
-    let behavior = config
-        .agent_behaviors
+    let agent = config
+        .agents
         .iter()
-        .find(|behavior| behavior.behavior_id == behavior_id)
-        .with_context(|| format!("the proposer pack has no behavior {behavior_id}"))?;
-    let context = behavior.context_id.as_deref().and_then(|id| {
+        .find(|agent| agent.agent_id == agent_id)
+        .with_context(|| format!("the proposer pack has no agent {agent_id}"))?;
+    let context = agent.context_id.as_deref().and_then(|id| {
         config
             .contexts
             .iter()
@@ -193,27 +193,22 @@ fn ensure_tool_less(
             .tools
             .iter()
             .find(|tools| tools.tools_id == id)
-            .with_context(|| format!("behavior {behavior_id} names unknown tools {id}"))?,
+            .with_context(|| format!("agent {agent_id} names unknown tools {id}"))?,
         None => &no_tools,
     };
     let active = config
-        .agent_behaviors
+        .agents
         .iter()
-        .map(|behavior| &behavior.behavior_id)
-        .chain(
-            config
-                .subagent_targets
-                .iter()
-                .map(|target| &target.behavior_id),
-        )
+        .map(|agent| &agent.agent_id)
+        .chain(config.agent_targets.iter().map(|target| &target.agent_id))
         .cloned()
         .collect();
-    let mut names = gents::BehaviorToolConfig::from_tools_documents(
-        behavior_id,
+    let mut names = gents::AgentToolSurfaceConfig::from_tools_documents(
+        agent_id,
         tools,
         &config.datastore_tool_surfaces,
         &config.eth_tools,
-        &config.subagent_targets,
+        &config.agent_targets,
         &gents::ToolCeiling::readonly(),
         Vec::new(),
     )?
@@ -232,22 +227,22 @@ fn ensure_tool_less(
     );
     anyhow::ensure!(
         names.is_empty(),
-        "proposer behavior {behavior_id} has tools {names:?}; a proposer must be tool-less"
+        "proposer agent {agent_id} has tools {names:?}; a proposer must be tool-less"
     );
     let skills = context.map_or(&[][..], |context| &context.skill_ids[..]);
     anyhow::ensure!(
         skills.is_empty(),
-        "proposer behavior {behavior_id} has skills {skills:?}; a proposer must be tool-less"
+        "proposer agent {agent_id} has skills {skills:?}; a proposer must be tool-less"
     );
     Ok(())
 }
 
 /// The session's first user turn: the subject's dossier, so a proposal
 /// names the subject's real tools and surfaces rather than guessing them.
-fn subject_preamble(subject_dir: &Path, behavior_id: &str, target: &JobTarget) -> Result<String> {
-    let dossier = crate::commands::eval::init::dossier::render(subject_dir, Some(behavior_id))?;
+fn subject_preamble(subject_dir: &Path, agent_id: &str, target: &JobTarget) -> Result<String> {
+    let dossier = crate::commands::eval::init::dossier::render(subject_dir, Some(agent_id))?;
     let instruction = match target {
-        JobTarget::Context => "this behavior's system prompt".to_owned(),
+        JobTarget::Context => "this agent's system prompt".to_owned(),
         JobTarget::Task(task_id) => format!(
             "the prompt template of its task {task_id:?}, rendered when the task fires; \
              every {{{{ variable }}}} of the current template must stay in the new one, \
@@ -263,27 +258,27 @@ fn subject_preamble(subject_dir: &Path, behavior_id: &str, target: &JobTarget) -
     ))
 }
 
-/// The behavior `--proposer behavior:<pack>[:<behavior>]` asks: the named
-/// one when the slot declares it, else the slot's only behavior.
-fn proposer_behavior_id(
+/// The agent `--proposer agent:<pack>[:<agent>]` asks: the named
+/// one when the slot declares it, else the slot's only agent.
+fn proposer_agent_id(
     pack: &str,
     slot: &gents::pack::PackInferenceSlot,
-    behavior: Option<&str>,
+    agent: Option<&str>,
 ) -> Result<String> {
-    match behavior {
-        Some(behavior) => {
+    match agent {
+        Some(agent) => {
             anyhow::ensure!(
-                slot.behaviors.iter().any(|known| known == behavior),
-                "pack {pack} has no inference-slot behavior {behavior:?}; it declares {:?}",
-                slot.behaviors
+                slot.agents.iter().any(|known| known == agent),
+                "pack {pack} has no inference-slot agent {agent:?}; it declares {:?}",
+                slot.agents
             );
-            Ok(behavior.to_owned())
+            Ok(agent.to_owned())
         }
-        None => match slot.behaviors.as_slice() {
+        None => match slot.agents.as_slice() {
             [only] => Ok(only.clone()),
-            [] => anyhow::bail!("pack {pack}: slot {} names no behavior", slot.name),
+            [] => anyhow::bail!("pack {pack}: slot {} names no agent", slot.name),
             many => anyhow::bail!(
-                "pack {pack} declares {} inference-slot behaviors; pass --proposer behavior:{pack}:<behavior> with one of {many:?}",
+                "pack {pack} declares {} inference-slot agents; pass --proposer agent:{pack}:<agent> with one of {many:?}",
                 many.len()
             ),
         },
@@ -297,14 +292,14 @@ async fn run(
     out: &mut dyn Write,
 ) -> Result<()> {
     let proposer_arg = args.proposer.as_ref().context(
-        "optimization run needs a proposer: pass --proposer scripted:<file> or --proposer behavior:<pack>[:<behavior>]",
+        "optimization run needs a proposer: pass --proposer scripted:<file> or --proposer agent:<pack>[:<agent>]",
     )?;
     let subject =
         resolve_subject_pack(&ctx.home_dir, &args.subject.pack, args.registry.as_deref()).await?;
     let baseline_pack = subject.directory().to_path_buf();
-    let behavior_id = match &args.subject.behavior {
-        Some(behavior) => behavior.clone(),
-        None => subject.default_behavior()?,
+    let agent_id = match &args.subject.agent {
+        Some(agent) => agent.clone(),
+        None => subject.default_agent()?,
     };
     // Bonferroni: the divisor must be the number of candidates the budget
     // allows, and the driver refuses a policy that disagrees.
@@ -326,11 +321,11 @@ async fn run(
         job_id: job_id.clone(),
         owner: ctx.owner.clone(),
         evaluator_did: ctx.owner.clone(),
-        behavior_id,
+        agent_id,
         target: args.target.clone(),
         definition_id: args.definition_id.clone(),
         inference_profile_id: args.profile.clone().unwrap_or_else(|| {
-            default_inference_profile_id_for_behavior(&default_behavior_id_for_agent(&ctx.owner))
+            default_inference_profile_id_for_agent(&default_agent_id_for_node(&ctx.owner))
         }),
         baseline_pack,
         trials_per_case: args.trials,
@@ -355,19 +350,19 @@ async fn run(
         captures: Vec::new(),
         run_options: deps.options.clone(),
     };
-    // A behavior proposer installs its pack, so a job refused on its request
+    // A agent proposer installs its pack, so a job refused on its request
     // or policy is refused first and writes nothing.
     gents::optimization::check_request(&request, &policy)?;
     let proposer: Box<dyn Proposer> = match proposer_arg {
         ProposerArg::Scripted(script) => Box::new(scripted_proposer(script, args.rounds)?),
-        ProposerArg::Behavior { pack, behavior } => {
+        ProposerArg::Agent { pack, agent } => {
             let proposer = behavior_proposer(
                 ctx,
                 args,
                 pack,
-                behavior.as_deref(),
+                agent.as_deref(),
                 &request.baseline_pack,
-                &request.behavior_id,
+                &request.agent_id,
             )
             .await?;
             Box::new(proposer)
@@ -585,7 +580,7 @@ mod tests {
         proposer_file,
     };
     use super::{
-        ensure_tool_less, execute, pack_config, proposer_behavior_id, subject_preamble, JobTarget,
+        ensure_tool_less, execute, pack_config, proposer_agent_id, subject_preamble, JobTarget,
     };
     use crate::cli::Cli;
     use crate::commands::eval::testing::{deps, eval, executor, Fixture, DEFINITION};
@@ -600,7 +595,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             error.to_string(),
-            "optimization run needs a proposer: pass --proposer scripted:<file> or --proposer behavior:<pack>[:<behavior>]"
+            "optimization run needs a proposer: pass --proposer scripted:<file> or --proposer agent:<pack>[:<agent>]"
         );
         let usage = match Cli::try_parse_from([
             "gents",
@@ -616,9 +611,9 @@ mod tests {
             Err(error) => error,
         };
         assert!(
-            usage.to_string().contains(
-                "pass --proposer scripted:<file> or --proposer behavior:<pack>[:<behavior>]"
-            ),
+            usage
+                .to_string()
+                .contains("pass --proposer scripted:<file> or --proposer agent:<pack>[:<agent>]"),
             "{usage}"
         );
         assert_eq!(usage.exit_code(), 2);
@@ -629,29 +624,29 @@ mod tests {
         let slot = gents::pack::PackInferenceSlot {
             name: "proposer".to_owned(),
             description: String::new(),
-            behaviors: vec!["terse".to_owned(), "verbose".to_owned()],
+            agents: vec!["terse".to_owned(), "verbose".to_owned()],
             optional: false,
         };
-        let error = proposer_behavior_id("p", &slot, None).unwrap_err();
+        let error = proposer_agent_id("p", &slot, None).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "pack p declares 2 inference-slot behaviors; pass --proposer behavior:p:<behavior> with one of [\"terse\", \"verbose\"]"
+            "pack p declares 2 inference-slot agents; pass --proposer agent:p:<agent> with one of [\"terse\", \"verbose\"]"
         );
         assert_eq!(
-            proposer_behavior_id("p", &slot, Some("verbose")).unwrap(),
+            proposer_agent_id("p", &slot, Some("verbose")).unwrap(),
             "verbose"
         );
-        let unknown = proposer_behavior_id("p", &slot, Some("other")).unwrap_err();
+        let unknown = proposer_agent_id("p", &slot, Some("other")).unwrap_err();
         assert!(
-            unknown.to_string().contains("no inference-slot behavior"),
+            unknown.to_string().contains("no inference-slot agent"),
             "{unknown}"
         );
         let one = gents::pack::PackInferenceSlot {
-            behaviors: vec!["terse".to_owned()],
+            agents: vec!["terse".to_owned()],
             optional: false,
             ..slot
         };
-        assert_eq!(proposer_behavior_id("p", &one, None).unwrap(), "terse");
+        assert_eq!(proposer_agent_id("p", &one, None).unwrap(), "terse");
     }
 
     #[test]
@@ -666,7 +661,7 @@ mod tests {
         assert!(preamble.contains("type FixtureJob"), "{preamble}");
         assert!(
             preamble.ends_with(
-                "The instruction you will rewrite is this behavior's system prompt. \
+                "The instruction you will rewrite is this agent's system prompt. \
                  Every later turn carries the current instruction and the training feedback."
             ),
             "{preamble}"
@@ -683,7 +678,7 @@ mod tests {
             "{task}"
         );
         assert!(
-            task.contains("node.node_did, node.behavior_id, ctx.now"),
+            task.contains("node.node_did, node.agent_id, ctx.now"),
             "{task}"
         );
     }
@@ -693,7 +688,7 @@ mod tests {
         let fixture = Fixture::new().await;
         let pack = fixture.pack_arg();
         let proposer = format!(
-            "behavior:{}",
+            "agent:{}",
             crate::commands::pack::test_support::fixture_dir("documents_fixture").display()
         );
         let error = optimization(
@@ -711,7 +706,7 @@ mod tests {
         .unwrap_err();
         let message = error.to_string();
         assert!(
-            message.starts_with("proposer behavior fixture-worker has tools [")
+            message.starts_with("proposer agent fixture-worker has tools [")
                 && message.ends_with("]; a proposer must be tool-less"),
             "{error:#}"
         );
@@ -719,7 +714,7 @@ mod tests {
     }
 
     /// What the resolved surface alone would miss: CLI tools a server started
-    /// with `--cli-tool` adds, a subagent target outside the pack, and skills.
+    /// with `--cli-tool` adds, a agent target outside the pack, and skills.
     #[test]
     fn cli_tools_a_target_outside_the_pack_or_skills_are_refused() {
         use serde_json::json;
@@ -737,16 +732,16 @@ mod tests {
             .unwrap()
             .cli
             .push(serde_json::from_value(json!({"name": "rg"})).unwrap());
-        let mut subagent = base.clone();
-        subagent.tools[0].subagents = Some(
+        let mut delegated = base.clone();
+        delegated.tools[0].agents = Some(
             serde_json::from_value(json!({"enabled": true, "target_ids": ["helper"]})).unwrap(),
         );
-        subagent.subagent_targets.push(
+        delegated.agent_targets.push(
             serde_json::from_value(json!({
                 "target_id": "helper",
-                "agent_did": OWNER,
-                "target_agent_did": OWNER,
-                "behavior_id": "home-default",
+                "node_did": OWNER,
+                "target_node_did": OWNER,
+                "agent_id": "home-default",
                 "name": "helper",
             }))
             .unwrap(),
@@ -761,7 +756,7 @@ mod tests {
         skills.contexts[0].skill_ids = vec!["review".to_owned()];
         for (config, offending) in [
             (cli, "\"rg\""),
-            (subagent, "\"agent_new\""),
+            (delegated, "\"agent_new\""),
             (sessions, "\"sessions\""),
             (skills, "has skills [\"review\"]"),
         ] {
@@ -769,7 +764,7 @@ mod tests {
                 .unwrap_err()
                 .to_string();
             assert!(
-                error.starts_with("proposer behavior fixture-author has ")
+                error.starts_with("proposer agent fixture-author has ")
                     && error.contains(offending)
                     && error.ends_with("; a proposer must be tool-less"),
                 "{error}"
@@ -783,7 +778,7 @@ mod tests {
         let fixture = Fixture::new().await;
         let pack = fixture.pack_arg();
         let proposer = format!(
-            "behavior:{}",
+            "agent:{}",
             crate::commands::pack::test_support::fixture_dir("slot_fixture").display()
         );
         let error = optimization(
@@ -817,7 +812,7 @@ mod tests {
                 "--subject",
                 pack.as_str(),
                 "--proposer",
-                "behavior:absent_proposer",
+                "agent:absent_proposer",
                 "--registry",
                 "http://127.0.0.1:9",
             ],
@@ -841,7 +836,7 @@ mod tests {
         let fixture = Fixture::new().await;
         let pack = fixture.pack_arg();
         let proposer = format!(
-            "behavior:{}",
+            "agent:{}",
             crate::commands::pack::test_support::fixture_dir("slot_fixture").display()
         );
         std::fs::create_dir_all(&fixture.ctx.home_dir).unwrap();
@@ -1173,7 +1168,7 @@ mod tests {
     #[tokio::test]
     async fn a_failure_before_the_freeze_does_not_say_resume() {
         let fixture = Fixture::new().await;
-        let subject = format!("{}:no-such-behavior", fixture.pack_arg());
+        let subject = format!("{}:no-such-agent", fixture.pack_arg());
         let proposer = proposer_file(&fixture);
         let error = optimization(
             &fixture,

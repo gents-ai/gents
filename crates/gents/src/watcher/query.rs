@@ -12,9 +12,9 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     _docID
                     request_id
                     purpose
-                    agent_did
+                    node_did
                     requester_did
-                    behavior_id
+                    agent_id
                     session_id
                     content
                     retry_parent_request_doc_id
@@ -26,7 +26,7 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     execution_generation
                     execution_lease_secs
                     execution_lease_expires_at
-                    subagent_depth
+                    request_hop
                     caused_by_parent_request_id
                     caused_by_parent_request_doc_id
                     caused_by_parent_tool_call_id
@@ -37,7 +37,7 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     caused_by_correlation
                     caused_by_trigger_context
                     workspace_id
-                    workspace_owner_agent_did
+                    workspace_owner_node_did
                     workspace_authority
                     workspace_seal_hash
 "#;
@@ -45,13 +45,13 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
 impl DefraWatcher {
     pub async fn try_fetch_request(&self, doc_id: &str) -> anyhow::Result<Option<AgentRequest>> {
         let escaped_doc_id = crate::graphql::escape_graphql_string(doc_id);
-        let escaped_agent_did = crate::graphql::escape_graphql_string(&self.agent_did);
+        let escaped_node_did = crate::graphql::escape_graphql_string(&self.node_did);
         let query = format!(
             r#"{{
                 AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
-                        agent_did: {{ _eq: "{agent_did}" }},
+                        node_did: {{ _eq: "{node_did}" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
                     limit: 1
@@ -62,7 +62,7 @@ impl DefraWatcher {
                 }}
             }}"#,
             doc_id = escaped_doc_id,
-            agent_did = escaped_agent_did,
+            node_did = escaped_node_did,
             fields = AGENT_REQUEST_FIELDS,
         );
 
@@ -95,12 +95,12 @@ impl DefraWatcher {
 
     pub(super) async fn pending_requests(&self) -> anyhow::Result<Vec<AgentRequest>> {
         let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
-        let agent_did = crate::graphql::escape_graphql_string(&self.agent_did);
+        let node_did = crate::graphql::escape_graphql_string(&self.node_did);
         let query = format!(
             r#"{{
                 AgentRequest(
                     filter: {{
-                        agent_did: {{ _eq: "{agent_did}" }},
+                        node_did: {{ _eq: "{node_did}" }},
                         lifecycle_state: {{ _in: {active_runtime_states} }}
                     }},
                     order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
@@ -110,7 +110,7 @@ impl DefraWatcher {
                     valid_until
                 }}
             }}"#,
-            agent_did = agent_did,
+            node_did = node_did,
             active_runtime_states = active_runtime_states,
             fields = AGENT_REQUEST_FIELDS,
         );
@@ -152,7 +152,7 @@ impl DefraWatcher {
         if let Err(persist_error) = crate::request_admission::terminalize_pending_request_rejection(
             self.node.as_ref(),
             row.doc_id.as_deref().unwrap_or_default(),
-            &self.agent_did,
+            &self.node_did,
             &failure_reason,
             "terminalize_incoherent_pending_request",
         )
@@ -175,14 +175,14 @@ impl DefraWatcher {
     }
 
     async fn terminalize_malformed_pending_request(&self, row: &MalformedPendingRow) {
-        if row.agent_did != self.agent_did || row.lifecycle_state.as_deref() != Some("pending") {
+        if row.node_did != self.node_did || row.lifecycle_state.as_deref() != Some("pending") {
             return;
         }
         let reason = "request rejected at ingest: malformed durable AgentRequest row";
         if let Err(error) = crate::request_admission::terminalize_pending_request_rejection(
             self.node.as_ref(),
             &row.doc_id,
-            &self.agent_did,
+            &self.node_did,
             reason,
             "terminalize_malformed_pending_request",
         )
@@ -252,7 +252,7 @@ impl DefraWatcher {
         }
 
         let session_id = crate::graphql::escape_graphql_string(&request.session_id);
-        let owner = crate::graphql::escape_graphql_string(&request.agent_did);
+        let owner = crate::graphql::escape_graphql_string(&request.node_did);
         let row_doc_id = request.doc_id.as_str();
         let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         let query = format!(
@@ -260,7 +260,7 @@ impl DefraWatcher {
                 AgentRequest(
                     filter: {{
                         session_id: {{ _eq: "{session_id}" }},
-                        agent_did: {{ _eq: "{owner}" }},
+                        node_did: {{ _eq: "{owner}" }},
                         purpose: {{ _eq: "normal" }},
                         lifecycle_state: {{ _in: {active_runtime_states} }}
                     }},
@@ -310,7 +310,7 @@ fn active_runtime_rows(data: Option<&serde_json::Value>) -> anyhow::Result<Vec<A
 #[derive(Debug)]
 struct MalformedPendingRow {
     doc_id: String,
-    agent_did: String,
+    node_did: String,
     lifecycle_state: Option<String>,
 }
 
@@ -330,10 +330,10 @@ fn parse_active_runtime_rows(
             Ok(row) => rows.push(row),
             Err(error) => {
                 let string = |name: &str| value.get(name).and_then(serde_json::Value::as_str);
-                if let (Some(doc_id), Some(agent_did)) = (string("_docID"), string("agent_did")) {
+                if let (Some(doc_id), Some(node_did)) = (string("_docID"), string("node_did")) {
                     malformed.push(MalformedPendingRow {
                         doc_id: doc_id.to_string(),
-                        agent_did: agent_did.to_string(),
+                        node_did: node_did.to_string(),
                         lifecycle_state: string("lifecycle_state").map(str::to_string),
                     });
                 } else {
@@ -460,8 +460,8 @@ mod tests {
             "_docID": format!("doc-{request_id}"),
             "request_id": request_id,
             "purpose": "normal",
-            "agent_did": "did:agent:1",
-            "behavior_id": "default",
+            "node_did": "did:agent:1",
+            "agent_id": "default",
             "session_id": session_id,
             "content": "work",
             "input": input,

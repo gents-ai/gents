@@ -22,7 +22,7 @@ fn definitions() -> Vec<EvalDefinition> {
         let config = load_pack_config(
             &manifest,
             &PackInstallOptions {
-                agent_did: "did:key:eval-owner".into(),
+                node_did: "did:key:eval-owner".into(),
             },
             &|path| Ok(std::fs::read(dir.join(path))?),
             &|_| None,
@@ -46,7 +46,7 @@ fn every_native_case_validates_and_uses_shipped_checks() {
         let application = load_pack_config(
             &manifest,
             &PackInstallOptions {
-                agent_did: "did:key:eval-owner".into(),
+                node_did: "did:key:eval-owner".into(),
             },
             &|path| Ok(std::fs::read(dir.join(path))?),
             &|_| None,
@@ -130,18 +130,18 @@ fn l2_checks_follow_selected_context_and_tools_and_reject_a_wrong_grant() {
     )
     .unwrap();
     let instructions = "You are Analyst, a read-only file assistant for research notes. Read and report; never modify files.";
-    evidence.captures.insert("behaviors".into(), CaptureResult::Documents { rows: vec![
-        serde_json::json!({"behavior_id":"scope:analyst", "display_name":"analyst", "enabled":true, "context_id":"analyst-context"}),
-        serde_json::json!({"behavior_id":"scope:engineer", "display_name":"The Engineer", "context_id":"engineer-context"}),
+    evidence.captures.insert("agents".into(), CaptureResult::Documents { rows: vec![
+        serde_json::json!({"agent_id":"scope:analyst", "display_name":"analyst", "enabled":true, "context_id":"analyst-context"}),
+        serde_json::json!({"agent_id":"scope:engineer", "display_name":"The Engineer", "context_id":"engineer-context"}),
     ]});
     evidence.captures.insert("contexts".into(), CaptureResult::Documents { rows: vec![
         serde_json::json!({"context_id":"analyst-context", "tools_id":"analyst-tools", "system_prompt": instructions}),
-        serde_json::json!({"context_id":"engineer-context", "tools_id":"engineer-tools", "system_prompt": gents_protocol::SETUP_STEWARD_PROMPT}),
+        serde_json::json!({"context_id":"engineer-context", "tools_id":"engineer-tools", "system_prompt": gents_protocol::ENGINEER_PROMPT}),
     ]});
     evidence.captures.insert("tools".into(), CaptureResult::Documents { rows: vec![
         serde_json::json!({"tools_id":"analyst-tools", "host":{"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}),
         serde_json::to_value(serde_json::from_value::<gents::document_config::Tools>(serde_json::json!({
-            "agent_did": "did:key:eval-owner",
+            "node_did": "did:key:eval-owner",
             "tools_id": "engineer-tools",
             "host": {"bash": {"mode":"Off"}, "root":"/eval/workspace"},
             "self_config": subject["tools"][0]["self_config"],
@@ -194,7 +194,7 @@ fn delegation_requires_delivery_of_the_matching_child_reply() {
             .stages
             .remove(0);
     evidence.captures.insert("helper-request".into(), CaptureResult::Documents { rows: vec![
-        serde_json::json!({"behavior_id":"scope:research-helper", "caused_by_parent_tool_call_doc_id":"matching-call"})
+        serde_json::json!({"agent_id":"scope:research-helper", "caused_by_parent_tool_call_doc_id":"matching-call"})
     ]});
     let delivered = serde_json::json!({"_docID":"matching-call", "lifecycle_state":"completed", "completion_notification_delivered_at":"2026-09-30T00:00:00Z"});
     evidence.captures.insert(
@@ -329,7 +329,7 @@ fn parallel_automation_accepts_default_concurrency_and_still_checks_its_task() {
                 .stages
                 .remove(0);
         evidence.captures.insert("trigger_config".into(), CaptureResult::Documents { rows:vec![serde_json::json!({"concurrency":concurrency,"task_id":task,"enabled":true,"source":{"event_source_id":"source"}})] });
-        evidence.captures.insert("task_config".into(), CaptureResult::Documents { rows:vec![serde_json::json!({"task_id":"task","behavior_id":"engineer","emit_outcome":true,"enabled":true})] });
+        evidence.captures.insert("task_config".into(), CaptureResult::Documents { rows:vec![serde_json::json!({"task_id":"task","agent_id":"engineer","emit_outcome":true,"enabled":true})] });
         evidence.captures.insert("eventsource_config".into(), CaptureResult::Documents { rows:vec![serde_json::json!({"event_source_id":"source","source_collection":"TrainPing","event_kind":null})] });
         let all_pass = configured
             .checks
@@ -420,10 +420,10 @@ fn repointed_delegation_grades_the_named_role_and_its_delivered_reply() {
         .remove(0);
     for (name, rows) in [
         (
-            "behaviors",
+            "agents",
             vec![
-                json!({"behavior_id":"engineer","context_id":"context"}),
-                json!({"behavior_id":"did:x:the-specialist","display_name":"The Specialist"}),
+                json!({"agent_id":"engineer","context_id":"context"}),
+                json!({"agent_id":"did:x:the-specialist","display_name":"The Specialist"}),
             ],
         ),
         (
@@ -432,22 +432,22 @@ fn repointed_delegation_grades_the_named_role_and_its_delivered_reply() {
         ),
         (
             "tools",
-            vec![json!({"tools_id":"tools","subagents":{"enabled":true,"target_ids":["helper"]}})],
+            vec![json!({"tools_id":"tools","agents":{"enabled":true,"target_ids":["helper"]}})],
         ),
         (
             "targets",
             vec![
-                json!({"target_id":"helper","agent_did":"did:x","target_agent_did":"did:x","behavior_id":"did:x:the-specialist"}),
+                json!({"target_id":"helper","node_did":"did:x","target_node_did":"did:x","agent_id":"did:x:the-specialist"}),
             ],
         ),
         (
-            "role_behaviors",
-            vec![json!({"behavior_id":"did:x:the-specialist","display_name":"The Specialist"})],
+            "role_agents",
+            vec![json!({"agent_id":"did:x:the-specialist","display_name":"The Specialist"})],
         ),
         (
             "repointed-request",
             vec![
-                json!({"behavior_id":"did:x:the-specialist","content":"Reply REP-555","caused_by_parent_tool_call_doc_id":"call"}),
+                json!({"agent_id":"did:x:the-specialist","content":"Reply REP-555","caused_by_parent_tool_call_doc_id":"call"}),
             ],
         ),
         (
@@ -468,9 +468,9 @@ fn repointed_delegation_grades_the_named_role_and_its_delivered_reply() {
         assert_eq!(verdict.score_bp, Some(10000), "{}", verdict.raw);
     }
     for (capture, field, wrong, index) in [
-        ("targets", "target_agent_did", json!("did:foreign"), 1),
-        ("role_behaviors", "display_name", json!("Publisher"), 2),
-        ("repointed-request", "behavior_id", json!("other"), 2),
+        ("targets", "target_node_did", json!("did:foreign"), 1),
+        ("role_agents", "display_name", json!("Publisher"), 2),
+        ("repointed-request", "agent_id", json!("other"), 2),
         (
             "delegation_calls",
             "completion_notification_delivered_at",

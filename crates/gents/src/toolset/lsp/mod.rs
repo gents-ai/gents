@@ -80,7 +80,7 @@ pub struct LspToolConfig {
     pub file: FileToolMode,
     pub workspace: PathBuf,
     pub session_id: String,
-    pub behavior_id: String,
+    pub agent_id: String,
     pub digest: String,
     pub servers: Vec<CatalogServer>,
     pub constraints: CommandConstraints,
@@ -347,7 +347,7 @@ impl Tool for LspTool {
                         .unwrap_or_else(|| self.config.session_id.clone());
                 let key = PoolKey {
                     session_id,
-                    behavior_id: self.config.behavior_id.clone(),
+                    agent_id: self.config.agent_id.clone(),
                     workspace_root: workspace.clone(),
                     server_name: server.name.clone(),
                     config_digest: self.config.digest.clone(),

@@ -2,23 +2,28 @@
    platform styling, links that leave the app, the simulator's end-to-end
    boot, and the title macOS shows. */
 import { useEffect } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { installExternalLinkGuard } from "../../lib/externalLinks";
+import { setWindowTitle } from "../../lib/nativeShell";
 import { startNativeSimulatorE2e } from "../../lib/nativeSimulatorE2e";
 import { applyShellPlatform, isMacTauriShell } from "../../lib/shellPlatform";
 import { useSelectedSessionValue } from "../hooks/useSelectedSession";
 import { useSelectedNode } from "../hooks/useClient";
 import type { Route } from "../lib/router";
+import { useApp } from "./AppContext";
 import { applyChosenTheme } from "../preferences";
 
 /** The window's theme, platform styling, link guard and simulator boot, once. */
 export function usePlatformSetup() {
+  const { openExternalUrl } = useApp().actions;
   useEffect(() => {
     applyChosenTheme();
     applyShellPlatform();
   }, []);
-  useEffect(() => installExternalLinkGuard(document), []);
+  useEffect(
+    () => installExternalLinkGuard(document, openExternalUrl),
+    [openExternalUrl],
+  );
   useEffect(() => {
     void startNativeSimulatorE2e();
   }, []);
@@ -26,13 +31,13 @@ export function usePlatformSetup() {
 
 const TITLES: Partial<Record<Route["name"], string>> = {
   sessions: "Sessions",
-  agents: "Agents",
+  agents: "Nodes",
   mailbox: "Mailbox",
 };
 
-/** The macOS window title: the screen, then the selected agent. */
+/** The macOS window title: the screen, then the selected node. */
 export function useWindowTitle(route: Route) {
-  const agent = useSelectedNode()?.agentPrincipal.displayName ?? null;
+  const agent = useSelectedNode()?.node.displayName ?? null;
   const sessionTitle = useSelectedSessionValue((s) => s?.title ?? null);
   useEffect(() => {
     if (!isMacTauriShell()) return;
@@ -40,8 +45,6 @@ export function useWindowTitle(route: Route) {
       route.name === "session"
         ? sessionTitle || "New Session"
         : (TITLES[route.name] ?? "Configuration");
-    void getCurrentWindow().setTitle(
-      agent ? `${title} — ${agent}` : `${title} — Gents`,
-    );
+    setWindowTitle(agent ? `${title} — ${agent}` : `${title} — Gents`);
   }, [agent, route.name, sessionTitle]);
 }

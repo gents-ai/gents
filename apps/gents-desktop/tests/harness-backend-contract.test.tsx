@@ -15,7 +15,7 @@ import { InferencePanel } from "../src/ui/screens/agent/InferencePanel";
 
 const backendDocument = (backend_id: string): InferenceBackend =>
   ({
-    agent_did: "did:key:z6MkBombadilAgent",
+    node_did: "did:key:z6MkBombadilAgent",
     backend_id,
     name: "Added backend",
     provider_kind: "OpenAiCompatible",
@@ -31,12 +31,12 @@ describe("harness backends keep the bridge's contract", () => {
     await api.saveBackendConfig({ document: backendDocument("backend-saved") });
     await api.applyConfigComponents({
       document: {
-        agent_principal: { agent_did: "did:key:z6MkBombadilAgent" },
+        node: { node_did: "did:key:z6MkBombadilAgent" },
         inference_backends: [backendDocument("backend-applied")],
       },
     });
     await api.patchConfigComponents({
-      agentDid: "did:key:z6MkBombadilAgent",
+      nodeDid: "did:key:z6MkBombadilAgent",
       patches: [
         {
           collection: "InferenceBackend",
@@ -75,7 +75,7 @@ describe("harness backends keep the bridge's contract", () => {
        stored key, while its apply path matches the bridge */
     await api.applyConfigComponents({
       document: {
-        agent_principal: { agent_did: "did:key:z6MkBombadilAgent" },
+        node: { node_did: "did:key:z6MkBombadilAgent" },
         inference_backends: [
           {
             ...backendDocument("anthropic-key"),
@@ -90,5 +90,27 @@ describe("harness backends keep the bridge's contract", () => {
     renderIn(testApp({ api }), <InferencePanel deployment={deployment} />);
     const meta = screen.getByText(/Anthropic API key · key from ANTHROPIC_API_KEY/);
     expect(meta.textContent).not.toMatch(/signed in/);
+  });
+});
+
+describe("harness MCP probe scope", () => {
+  it("probes only the exact registered node and service pair", async () => {
+    const { adapter } = createDesktopUiHarness();
+    const [service] = await adapter.listMcpServicesWithHealth();
+    expect(service).toBeDefined();
+    const nodeDid = service!.nodeDid!;
+    const serviceId = service!.serviceId;
+    await expect(adapter.probeMcpService(nodeDid, serviceId)).resolves.toMatchObject({
+      serviceId,
+      status: "healthy",
+    });
+    await expect(
+      adapter.probeMcpService("did:test:another-node", serviceId),
+    ).rejects.toThrow(
+      `MCP service ${serviceId} not found on node did:test:another-node`,
+    );
+    await expect(adapter.probeMcpService(nodeDid, "missing-service")).rejects.toThrow(
+      `MCP service missing-service not found on node ${nodeDid}`,
+    );
   });
 });

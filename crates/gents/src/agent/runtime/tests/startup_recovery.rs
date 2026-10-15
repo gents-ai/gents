@@ -1,5 +1,6 @@
 use super::support::*;
 use super::*;
+use crate::identity::NodeIdentity;
 
 // These timeouts detect deadlocks; they are not startup latency assertions.
 // Leave enough wall-clock headroom for the package-wide suite, which runs many
@@ -11,11 +12,11 @@ struct RejectRouterGenerationRunWriter;
 struct AcceptReadinessWriter;
 
 #[async_trait::async_trait]
-impl crate::behavior_readiness_publisher::BehaviorReadinessWriter for AcceptReadinessWriter {
+impl crate::node_readiness_publisher::NodeReadinessWriter for AcceptReadinessWriter {
     async fn upsert(
         &self,
-        _agent_did: &str,
-        _snapshot: &BehaviorReadinessSnapshot,
+        _node_did: &str,
+        _snapshot: &NodeReadinessSnapshot,
         _updated_at: &str,
     ) -> anyhow::Result<()> {
         Ok(())
@@ -26,41 +27,39 @@ impl crate::behavior_readiness_publisher::BehaviorReadinessWriter for AcceptRead
 struct ExhaustStartupSourceWriter {
     source_attempts: std::sync::atomic::AtomicUsize,
     source_exhausted: tokio::sync::Notify,
-    persisted: std::sync::Mutex<Vec<BehaviorReadinessSnapshot>>,
+    persisted: std::sync::Mutex<Vec<NodeReadinessSnapshot>>,
 }
 
 #[derive(Default)]
 struct ExhaustReadyWriter {
     ready_attempts: std::sync::atomic::AtomicUsize,
-    persisted: std::sync::Mutex<Vec<BehaviorReadinessSnapshot>>,
+    persisted: std::sync::Mutex<Vec<NodeReadinessSnapshot>>,
 }
 
 #[async_trait::async_trait]
-impl crate::behavior_readiness_publisher::BehaviorReadinessWriter
-    for RejectRouterGenerationRunWriter
-{
+impl crate::node_readiness_publisher::NodeReadinessWriter for RejectRouterGenerationRunWriter {
     async fn upsert(
         &self,
-        _agent_did: &str,
-        snapshot: &BehaviorReadinessSnapshot,
+        _node_did: &str,
+        snapshot: &NodeReadinessSnapshot,
         _updated_at: &str,
     ) -> anyhow::Result<()> {
         if snapshot.router_generation > 0 {
-            return Err(crate::behavior_readiness_publisher::FatalBehaviorReadinessWrite.into());
+            return Err(crate::node_readiness_publisher::FatalNodeReadinessWrite.into());
         }
         Ok(())
     }
 }
 
 #[async_trait::async_trait]
-impl crate::behavior_readiness_publisher::BehaviorReadinessWriter for ExhaustStartupSourceWriter {
+impl crate::node_readiness_publisher::NodeReadinessWriter for ExhaustStartupSourceWriter {
     async fn upsert(
         &self,
-        _agent_did: &str,
-        snapshot: &BehaviorReadinessSnapshot,
+        _node_did: &str,
+        snapshot: &NodeReadinessSnapshot,
         _updated_at: &str,
     ) -> anyhow::Result<()> {
-        if snapshot.process_state == BehaviorReadinessProcessState::Recovering
+        if snapshot.process_state == NodeReadinessProcessState::Recovering
             && snapshot.active_generation > 0
         {
             let attempt = self
@@ -81,14 +80,14 @@ impl crate::behavior_readiness_publisher::BehaviorReadinessWriter for ExhaustSta
 }
 
 #[async_trait::async_trait]
-impl crate::behavior_readiness_publisher::BehaviorReadinessWriter for ExhaustReadyWriter {
+impl crate::node_readiness_publisher::NodeReadinessWriter for ExhaustReadyWriter {
     async fn upsert(
         &self,
-        _agent_did: &str,
-        snapshot: &BehaviorReadinessSnapshot,
+        _node_did: &str,
+        snapshot: &NodeReadinessSnapshot,
         _updated_at: &str,
     ) -> anyhow::Result<()> {
-        if snapshot.process_state == BehaviorReadinessProcessState::Ready {
+        if snapshot.process_state == NodeReadinessProcessState::Ready {
             self.ready_attempts
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             anyhow::bail!("injected Ready persistence exhaustion");
@@ -213,7 +212,7 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-probe-discovers-model"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_behavior_backend_with_capacity_and_probe_status(
+    bind_default_agent_backend_with_capacity_and_probe_status(
         node.as_ref(),
         identity.did(),
         "backend-startup-probe",
@@ -223,7 +222,7 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
     )
     .await;
     let observer = Arc::new(RecordingObserver::default());
-    let agent = crate::Gents::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::agent::DocumentRuntimeOptions {
@@ -242,14 +241,14 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
     assert_eq!(status.process_state, "ready");
     assert!(status.active_generation >= 1);
     assert!(status.last_reconcile_error.is_empty());
-    let readiness = fetch_behavior_readiness(node.as_ref(), identity.did()).await;
-    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
-    let behavior = readiness
-        .behaviors
+    let readiness = fetch_node_readiness(node.as_ref(), identity.did()).await;
+    let default_agent_id = crate::default_agent_id_for_node(identity.did());
+    let agent = readiness
+        .agents
         .iter()
-        .find(|entry| entry.behavior_id == default_behavior_id)
-        .expect("default behavior readiness");
-    assert_eq!(behavior.state, BehaviorReadinessState::Ready);
+        .find(|entry| entry.agent_id == default_agent_id)
+        .expect("default agent readiness");
+    assert_eq!(agent.state, AgentReadinessState::Ready);
     let (probe_status, last_probe) =
         wait_for_backend_probe_status(node.as_ref(), "backend-startup-probe", "healthy").await;
     assert_eq!(probe_status, "healthy");
@@ -281,22 +280,22 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
 }
 
 #[tokio::test]
-async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_config() {
+async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-invalid-config"));
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         node.as_ref(),
         identity.did(),
         "backend-invalid-config",
         "http://127.0.0.1:9/v1",
     )
     .await;
-    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
+    let default_agent_id = crate::default_agent_id_for_node(identity.did());
     // This test exercises startup handling for corrupt persisted configuration.
     // The public writer correctly rejects the dangling reference, so inject the
     // invalid row through the storage boundary instead.
-    let context_id = format!("{default_behavior_id}:context");
+    let context_id = format!("{default_agent_id}:context");
     let escaped_context_id = escape_graphql_string(&context_id);
     let escaped_tools_id = escape_graphql_string("missing-tools");
     let mutation = format!(
@@ -310,7 +309,7 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
     let response = node.execute(&mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let agent = crate::Gents::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::agent::DocumentRuntimeOptions {
@@ -320,12 +319,12 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
     )
     .await
     .unwrap();
-    assert!(agent.behaviors().is_empty());
-    assert_eq!(agent.unavailable_behaviors().len(), 1);
+    assert!(agent.agents().is_empty());
+    assert_eq!(agent.unavailable_agents().len(), 1);
     let unavailable_reason = agent
-        .unavailable_behaviors()
-        .get(&default_behavior_id)
-        .expect("default behavior should be unavailable");
+        .unavailable_agents()
+        .get(&default_agent_id)
+        .expect("default agent should be unavailable");
     assert!(
         unavailable_reason.diagnostic.contains("missing-tools"),
         "unexpected unavailable reason: {}",
@@ -339,7 +338,7 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
         .expect_err("startup should fail for structurally invalid config");
     let error_text = format!("{error:#}");
     assert!(
-        error_text.contains("no runnable behaviors at startup due to invalid configuration"),
+        error_text.contains("no runnable agents at startup due to invalid configuration"),
         "unexpected startup error: {error_text}"
     );
     assert!(
@@ -360,15 +359,12 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
         .last_reconcile_error
         .contains("tool configuration is invalid"));
     assert!(!status.last_reconcile_error.contains("missing-tools"));
-    let readiness = fetch_behavior_readiness(node.as_ref(), identity.did()).await;
+    let readiness = fetch_node_readiness(node.as_ref(), identity.did()).await;
+    assert_eq!(readiness.process_state, NodeReadinessProcessState::Shutdown);
+    assert_eq!(readiness.agents.len(), 1);
     assert_eq!(
-        readiness.process_state,
-        BehaviorReadinessProcessState::Shutdown
-    );
-    assert_eq!(readiness.behaviors.len(), 1);
-    assert_eq!(
-        readiness.behaviors[0].reason,
-        Some(BehaviorReadinessUnavailableReason::RuntimeConfigurationInvalid)
+        readiness.agents[0].reason,
+        Some(AgentReadinessUnavailableReason::RuntimeConfigurationInvalid)
     );
 }
 
@@ -378,14 +374,14 @@ async fn router_generation_persistence_failure_terminates_run_agent_before_dispa
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("router-generation-persistence-run-agent"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         node.as_ref(),
         identity.did(),
         "backend-router-generation-persistence",
         mock_endpoint.endpoint(),
     )
     .await;
-    let agent = crate::Gents::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::agent::DocumentRuntimeOptions {
@@ -419,7 +415,7 @@ async fn router_generation_persistence_failure_terminates_run_agent_before_dispa
     .expect_err("router-generation persistence failure cannot become clean shutdown");
     assert_eq!(
         error.root_cause().to_string(),
-        "injected fatal behavior readiness write"
+        "injected fatal agent readiness write"
     );
     assert!(
         format!("{error:#}").contains("durably acknowledge router generation"),
@@ -434,14 +430,14 @@ async fn slot_drain_failure_reaches_run_agent_after_external_shutdown() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("slot-drain-failure"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         node.as_ref(),
         identity.did(),
         "backend-slot-drain-failure",
         mock_endpoint.endpoint(),
     )
     .await;
-    let agent = crate::Gents::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::agent::DocumentRuntimeOptions {
@@ -493,7 +489,7 @@ async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-source-persistence-exhaustion"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         node.as_ref(),
         identity.did(),
         "backend-startup-source-persistence",
@@ -501,7 +497,7 @@ async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run
     )
     .await;
     let observer = Arc::new(RecordingObserver::default());
-    let agent = crate::Gents::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::agent::DocumentRuntimeOptions {
@@ -608,7 +604,7 @@ async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run
         "injected startup source persistence exhaustion"
     );
     assert!(
-        format!("{error:#}").contains("durably publish startup behavior readiness source"),
+        format!("{error:#}").contains("durably publish startup agent_config readiness source"),
         "runtime returned the wrong failure: {error:#}"
     );
     assert_eq!(
@@ -625,13 +621,13 @@ async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run
     assert!(
         persisted
             .iter()
-            .all(|snapshot| snapshot.process_state != BehaviorReadinessProcessState::Ready),
+            .all(|snapshot| snapshot.process_state != NodeReadinessProcessState::Ready),
         "failed startup source publication must never persist Ready"
     );
     assert!(
         persisted
             .iter()
-            .any(|snapshot| snapshot.process_state == BehaviorReadinessProcessState::Shutdown),
+            .any(|snapshot| snapshot.process_state == NodeReadinessProcessState::Shutdown),
         "publisher must recover after the failed command and flush terminal Shutdown"
     );
     let observed = observer
@@ -647,7 +643,7 @@ async fn ready_persistence_exhaustion_is_fatal_and_never_opens_runtime_readiness
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("ready-persistence-exhaustion"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         node.as_ref(),
         identity.did(),
         "backend-ready-persistence",
@@ -655,7 +651,7 @@ async fn ready_persistence_exhaustion_is_fatal_and_never_opens_runtime_readiness
     )
     .await;
     let observer = Arc::new(RecordingObserver::default());
-    let agent = crate::Gents::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::agent::DocumentRuntimeOptions {
@@ -703,13 +699,13 @@ async fn ready_persistence_exhaustion_is_fatal_and_never_opens_runtime_readiness
     assert!(
         persisted
             .iter()
-            .all(|snapshot| snapshot.process_state != BehaviorReadinessProcessState::Ready),
+            .all(|snapshot| snapshot.process_state != NodeReadinessProcessState::Ready),
         "a rejected Ready command must not change durable readiness"
     );
     assert!(
         persisted
             .iter()
-            .any(|snapshot| snapshot.process_state == BehaviorReadinessProcessState::Shutdown),
+            .any(|snapshot| snapshot.process_state == NodeReadinessProcessState::Shutdown),
         "terminal Shutdown must flush after Ready command exhaustion"
     );
     let observed = observer
@@ -720,11 +716,11 @@ async fn ready_persistence_exhaustion_is_fatal_and_never_opens_runtime_readiness
 }
 
 #[tokio::test]
-async fn run_agent_starts_with_all_behaviors_unavailable_and_rejects_requests_at_runtime() {
+async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_runtime() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-all-unavailable"));
-    bind_default_behavior_backend_with_capacity_and_probe_status(
+    bind_default_agent_backend_with_capacity_and_probe_status(
         node.as_ref(),
         identity.did(),
         "backend-unavailable",
@@ -733,7 +729,7 @@ async fn run_agent_starts_with_all_behaviors_unavailable_and_rejects_requests_at
         "unknown",
     )
     .await;
-    let agent = crate::Gents::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::agent::DocumentRuntimeOptions {
@@ -743,8 +739,8 @@ async fn run_agent_starts_with_all_behaviors_unavailable_and_rejects_requests_at
     )
     .await
     .unwrap();
-    assert!(agent.behaviors().is_empty());
-    assert_eq!(agent.unavailable_behaviors().len(), 1);
+    assert!(agent.agents().is_empty());
+    assert_eq!(agent.unavailable_agents().len(), 1);
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
@@ -756,19 +752,13 @@ async fn run_agent_starts_with_all_behaviors_unavailable_and_rejects_requests_at
     assert_eq!(status.active_generation, 1);
     assert_eq!(status.last_reconcile_result, "startup");
     assert!(status.last_reconcile_error.is_empty());
-    let readiness = fetch_behavior_readiness(node.as_ref(), identity.did()).await;
+    let readiness = fetch_node_readiness(node.as_ref(), identity.did()).await;
+    assert_eq!(readiness.process_state, NodeReadinessProcessState::Ready);
+    assert_eq!(readiness.agents.len(), 1);
+    assert_eq!(readiness.agents[0].state, AgentReadinessState::Unavailable);
     assert_eq!(
-        readiness.process_state,
-        BehaviorReadinessProcessState::Ready
-    );
-    assert_eq!(readiness.behaviors.len(), 1);
-    assert_eq!(
-        readiness.behaviors[0].state,
-        BehaviorReadinessState::Unavailable
-    );
-    assert_eq!(
-        readiness.behaviors[0].reason,
-        Some(BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable)
+        readiness.agents[0].reason,
+        Some(AgentReadinessUnavailableReason::BackendTemporarilyUnavailable)
     );
 
     let request_doc_id = create_agent_request(
@@ -822,7 +812,7 @@ async fn run_agent_recovers_backend_availability_without_restart() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-backend-recovers"));
-    bind_default_behavior_backend_with_capacity_and_probe_status(
+    bind_default_agent_backend_with_capacity_and_probe_status(
         node.as_ref(),
         identity.did(),
         "backend-recovers",
@@ -831,7 +821,7 @@ async fn run_agent_recovers_backend_availability_without_restart() {
         "unknown",
     )
     .await;
-    let agent = crate::Gents::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::agent::DocumentRuntimeOptions {
@@ -841,8 +831,8 @@ async fn run_agent_recovers_backend_availability_without_restart() {
     )
     .await
     .unwrap();
-    assert!(agent.behaviors().is_empty());
-    assert_eq!(agent.unavailable_behaviors().len(), 1);
+    assert!(agent.agents().is_empty());
+    assert_eq!(agent.unavailable_agents().len(), 1);
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
@@ -851,11 +841,11 @@ async fn run_agent_recovers_backend_availability_without_restart() {
     let startup_status = fetch_runtime_status(node.as_ref(), identity.did()).await;
     assert_eq!(startup_status.active_generation, 1);
     assert_eq!(startup_status.last_reconcile_result, "startup");
-    let startup_readiness = fetch_behavior_readiness(node.as_ref(), identity.did()).await;
-    assert_eq!(startup_readiness.behaviors.len(), 1);
+    let startup_readiness = fetch_node_readiness(node.as_ref(), identity.did()).await;
+    assert_eq!(startup_readiness.agents.len(), 1);
     assert_eq!(
-        startup_readiness.behaviors[0].state,
-        BehaviorReadinessState::Unavailable
+        startup_readiness.agents[0].state,
+        AgentReadinessState::Unavailable
     );
 
     update_backend_probe_status(node.as_ref(), "backend-recovers", "healthy").await;
@@ -863,14 +853,14 @@ async fn run_agent_recovers_backend_availability_without_restart() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
     loop {
         let status = fetch_runtime_status(node.as_ref(), identity.did()).await;
-        let readiness = fetch_behavior_readiness(node.as_ref(), identity.did()).await;
+        let readiness = fetch_node_readiness(node.as_ref(), identity.did()).await;
         if status.process_state == "ready"
             && status.active_generation >= 2
             && status.last_reconcile_result == "applied"
             && status.last_reconcile_error.is_empty()
             && readiness.active_generation >= 2
-            && readiness.behaviors.len() == 1
-            && readiness.behaviors[0].state == BehaviorReadinessState::Ready
+            && readiness.agents.len() == 1
+            && readiness.agents[0].state == AgentReadinessState::Ready
         {
             break;
         }
@@ -897,16 +887,15 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
     let mock_endpoint = MockModelEndpoint::start_blocking_chat("default").unwrap();
     // Optional title inference shares backend capacity. Give these sessions
     // user titles so this test isolates the two foreground permit owners.
-    for (session_id, behavior_id) in [
+    for (session_id, agent_id) in [
         ("session-shutdown-running", "general"),
         ("session-shutdown-waiting", "code"),
     ] {
-        crate::session::ensure_session_with_behavior_id_and_requester_did(
+        crate::session::ensure_session_with_agent_id_and_requester_did(
             node.as_ref(),
             session_id,
-            "shutdown-waiting-request",
             identity.did(),
-            behavior_id,
+            agent_id,
             Some(identity.did()),
         )
         .await
@@ -922,7 +911,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         .await
         .unwrap();
     }
-    bind_default_behavior_backend_with_capacity(
+    bind_default_agent_backend_with_capacity(
         node.as_ref(),
         identity.did(),
         "backend-blocked",
@@ -930,22 +919,22 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         1,
     )
     .await;
-    // Fresh admission re-reads canonical behavior documents even when this
-    // test constructs the executable behavior slots directly. Keep that
+    // Fresh admission re-reads canonical agent documents even when this
+    // test constructs the executable agent slots directly. Keep that
     // authorization boundary real while isolating the capacity/shutdown
     // property below.
-    crate::test_support::install_test_behavior(node.as_ref(), identity.did(), "general").await;
-    crate::test_support::install_test_behavior(node.as_ref(), identity.did(), "code").await;
+    crate::test_support::install_test_agent(node.as_ref(), identity.did(), "general").await;
+    crate::test_support::install_test_agent(node.as_ref(), identity.did(), "code").await;
     let agent = crate::Gents::builder()
         .node(node.clone())
         .identity(identity.clone())
-        .default_behavior_id("general")
+        .default_agent_id("general")
         .tool_ceiling(ToolCeiling::meta_only())
-        .behavior("general")
+        .agent("general")
         .backend_id("backend-blocked")
         .model_name("default")
         .done()
-        .behavior("code")
+        .agent("code")
         .backend_id("backend-blocked")
         .model_name("default")
         .done()
@@ -958,7 +947,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
 
     wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
 
-    let first_request_doc_id = create_agent_request_for_behavior(
+    let first_request_doc_id = create_agent_request_for_agent(
         node.as_ref(),
         identity.did(),
         Some("general"),
@@ -975,7 +964,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
     // before it reached its actual assertion (#1060).
     wait_for_inference_call_state(node.as_ref(), "req-shutdown-running", "running").await;
 
-    let queued_request_doc_id = create_agent_request_for_behavior(
+    let queued_request_doc_id = create_agent_request_for_agent(
         node.as_ref(),
         identity.did(),
         Some("code"),

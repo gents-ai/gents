@@ -16,7 +16,7 @@ import {
 } from "@gents/ui/components/dropdown-menu";
 import { cn } from "@gents/ui/lib/utils";
 import { nodeDidOf, workingNode } from "@/lib/nodes";
-import { AgentAvatar } from "./AgentAvatar";
+import { NodeAvatar } from "./AgentAvatar";
 
 export function NodeAxis({
   nodes,
@@ -26,7 +26,7 @@ export function NodeAxis({
   onChange,
 }: {
   nodes: readonly NodeView[];
-  /** the home's agent DID, which marks the working node */
+  /** the home's node DID, which marks the working node */
   homeDid: string | null | undefined;
   counts: Record<string, number>;
   value: string[];
@@ -34,7 +34,7 @@ export function NodeAxis({
 }) {
   if (nodes.length < 2) return null;
   const working = workingNode(nodes, homeDid);
-  const nameOf = (n: NodeView) => n.agentPrincipal.displayName ?? n.label;
+  const nameOf = (n: NodeView) => n.node.displayName ?? n.label;
   const picked = nodes.filter((n) => value.includes(nodeDidOf(n)));
   /* open to all: the first few nodes stand in, the local one leading */
   const shown =
@@ -59,7 +59,7 @@ export function NodeAxis({
         {/* a phone has room for one mark on the axis: the rest come back at sm */}
         <span className="flex shrink-0 -space-x-1.5">
           {shown.slice(0, 3).map((n, i) => (
-            <AgentAvatar
+            <NodeAvatar
               key={nodeDidOf(n)}
               name={nameOf(n)}
               className={cn(
@@ -102,7 +102,7 @@ export function NodeAxis({
                 onCheckedChange={() => toggle(v)}
                 closeOnClick={false}
               >
-                <AgentAvatar name={nameOf(n)} className="size-5 text-[9px]" />
+                <NodeAvatar name={nameOf(n)} className="size-5 text-[9px]" />
                 <span className="min-w-0 flex-1 truncate">{nameOf(n)}</span>
                 <span className="text-xs tabular-nums text-muted-foreground">
                   {counts[v] ?? 0}

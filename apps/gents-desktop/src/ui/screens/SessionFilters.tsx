@@ -17,7 +17,7 @@ import {
 } from "@/lib/session-filter";
 import { nodeKeyOf } from "../../hooks/fleetStore";
 import { useFleet } from "@/hooks/useFleet";
-import { behaviorName } from "./behavior";
+import { agentName } from "./behavior";
 import { Button } from "@gents/ui/components/button";
 import {
   DropdownMenu,
@@ -37,7 +37,7 @@ import {
 } from "@gents/ui/components/combobox";
 import { cn } from "@gents/ui/lib/utils";
 import { isLive } from "@/lib/live";
-import { BehaviorAvatar } from "./parts";
+import { AgentInitials } from "./parts";
 
 const matchesState = (c: SessionSummary, state: SessionState) =>
   state === "live" ? isLive(c.turnState) : c.turnState === "failed";
@@ -61,7 +61,7 @@ const matchesSource = (c: SessionSummary, source: SessionSource) =>
 const passes = (c: SessionSummary, f: SessionFilter) =>
   (f.states.length === 0 || f.states.some((s) => matchesState(c, s))) &&
   (f.sources.length === 0 || f.sources.some((s) => matchesSource(c, s))) &&
-  (f.behaviors.length === 0 || f.behaviors.includes(c.behaviorId ?? ""));
+  (f.agents.length === 0 || f.agents.includes(c.agentId ?? ""));
 
 export const filterSessions = (
   sessions: SessionSummary[],
@@ -170,20 +170,20 @@ export function Axis<V extends string>({
   );
 }
 
-/* Behavior is the one axis with no ceiling, so it folds into a searchable
+/* Agent is the one axis with no ceiling, so it folds into a searchable
    control rather than a menu: the trigger wears the marks of what is
-   picked, so the row stays one line however many behaviors there are. */
-function BehaviorAxis({
-  behaviors,
+   picked, so the row stays one line however many agents there are. */
+function AgentAxis({
+  agents,
   value,
   onChange,
 }: {
-  behaviors: { id: string; name: string; count: number }[];
+  agents: { id: string; name: string; count: number }[];
   value: string[];
   onChange: (next: string[]) => void;
 }) {
-  const byId = new Map(behaviors.map((b) => [b.id, b]));
-  const picked = behaviors.filter((b) => value.includes(b.id));
+  const byId = new Map(agents.map((b) => [b.id, b]));
+  const picked = agents.filter((b) => value.includes(b.id));
   /* its popup is a dialog (it holds a search field), so it takes its turn
      with the shell's other popovers: opening Sync health closes it */
   const popover = useExclusivePopover();
@@ -195,9 +195,9 @@ function BehaviorAxis({
       onOpenChange={popover.onOpenChange}
       onOpenChangeComplete={popover.onOpenChangeComplete}
       multiple
-      items={[ANY, ...behaviors.map((b) => b.id)]}
+      items={[ANY, ...agents.map((b) => b.id)]}
       itemToStringLabel={(id: string) =>
-        id === ANY ? "Any behavior" : (byId.get(id)?.name ?? id)
+        id === ANY ? "Any agent" : (byId.get(id)?.name ?? id)
       }
       value={value.length ? value : [ANY]}
       onValueChange={(next: string[]) =>
@@ -213,7 +213,7 @@ function BehaviorAxis({
           <Button
             variant="quiet"
             size="sm"
-            aria-label="Behavior"
+            aria-label="Agent"
             /* the node axis alone keeps its chevron; this trigger's is
                drawn by the kit, so it is hidden from here */
             className={cn(
@@ -226,7 +226,7 @@ function BehaviorAxis({
         {picked.length > 0 ? (
           <span className="flex -space-x-1.5">
             {picked.slice(0, 3).map((b) => (
-              <BehaviorAvatar
+              <AgentInitials
                 key={b.id}
                 name={b.name}
                 className="size-5 text-[9px] ring-1 ring-background"
@@ -238,26 +238,26 @@ function BehaviorAxis({
         )}
         {picked.length > 0 && (
           <span className="hidden text-xs sm:inline">
-            {picked.length === 1 ? picked[0].name : `${picked.length} behaviors`}
+            {picked.length === 1 ? picked[0].name : `${picked.length} agents`}
           </span>
         )}
       </ComboboxTrigger>
       <ComboboxContent
         ref={popover.popupRef}
         className="w-60"
-        aria-label="Filter by behavior"
+        aria-label="Filter by agent"
       >
-        <ComboboxInput placeholder="Find a behavior" showTrigger={false} />
-        <ComboboxEmpty>No behavior by that name.</ComboboxEmpty>
+        <ComboboxInput placeholder="Find an agent" showTrigger={false} />
+        <ComboboxEmpty>No agent by that name.</ComboboxEmpty>
         <ComboboxList>
           {(id: string) => {
             if (id === ANY)
               return (
                 <ComboboxItem key={id} value={id}>
                   <Play className="size-4 shrink-0" />
-                  <span className="min-w-0 flex-1 truncate">Any behavior</span>
+                  <span className="min-w-0 flex-1 truncate">Any agent</span>
                   <span className="text-xs tabular-nums text-muted-foreground">
-                    {behaviors.reduce((n, b) => n + b.count, 0)}
+                    {agents.reduce((n, b) => n + b.count, 0)}
                   </span>
                 </ComboboxItem>
               );
@@ -269,7 +269,7 @@ function BehaviorAxis({
                 value={id}
                 disabled={b.count === 0 && !value.includes(id)}
               >
-                <BehaviorAvatar name={b.name} className="size-5 text-[9px]" />
+                <AgentInitials name={b.name} className="size-5 text-[9px]" />
                 <span className="min-w-0 flex-1 truncate">{b.name}</span>
                 <span className="text-xs tabular-nums text-muted-foreground">
                   {b.count}
@@ -291,7 +291,7 @@ export function SessionFilters({
   nodes,
 }: {
   sessions: SessionSummary[];
-  /** the nodes the list spans: their behaviors are the axis's options */
+  /** the nodes the list spans: their agents are the axis's options */
   nodeDids: readonly string[];
   value: SessionFilter;
   onChange: (next: SessionFilter) => void;
@@ -312,26 +312,23 @@ export function SessionFilters({
       countFor("sources", (c) => matchesSource(c, s.value)),
     ]),
   );
-  /* every behavior of the nodes the list spans, named by its node, offered
+  /* every agent of the nodes the list spans, named by its node, offered
      with its count even at zero; then any a listed session runs that its
      node no longer lists, and any stored pick none of them is, so a pick
      can always be seen and cleared */
   const fleetNodes = useFleet((state) => state.nodes);
   const names = new Map<string, string>();
   for (const did of nodeDids)
-    for (const b of fleetNodes[nodeKeyOf({ agentDid: did })]?.behaviors ?? [])
-      if (!names.has(b.behaviorId)) names.set(b.behaviorId, b.displayName);
+    for (const b of fleetNodes[nodeKeyOf({ nodeDid: did })]?.agents ?? [])
+      if (!names.has(b.agentId)) names.set(b.agentId, b.displayName);
   for (const c of sessions)
-    if (c.behaviorId && !names.has(c.behaviorId))
-      names.set(
-        c.behaviorId,
-        behaviorName(c.behaviorId, fleetNodes[nodeKeyOf(c)] ?? null),
-      );
-  for (const id of value.behaviors) if (!names.has(id)) names.set(id, id);
-  const behaviors = [...names].map(([id, name]) => ({
+    if (c.agentId && !names.has(c.agentId))
+      names.set(c.agentId, agentName(c.agentId, fleetNodes[nodeKeyOf(c)] ?? null));
+  for (const id of value.agents) if (!names.has(id)) names.set(id, id);
+  const agents = [...names].map(([id, name]) => ({
     id,
     name,
-    count: countFor("behaviors", (c) => c.behaviorId === id),
+    count: countFor("agents", (c) => c.agentId === id),
   }));
 
   /* a node pick that empties the list still needs its clear */
@@ -342,11 +339,11 @@ export function SessionFilters({
       aria-label="Session filters"
       className="flex min-w-0 shrink items-center gap-0.5 text-muted-foreground"
     >
-      {behaviors.length > 0 && (
-        <BehaviorAxis
-          behaviors={behaviors}
-          value={value.behaviors}
-          onChange={(next) => onChange({ ...value, behaviors: next })}
+      {agents.length > 0 && (
+        <AgentAxis
+          agents={agents}
+          value={value.agents}
+          onChange={(next) => onChange({ ...value, agents: next })}
         />
       )}
       <Axis

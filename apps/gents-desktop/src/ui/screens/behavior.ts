@@ -14,8 +14,8 @@ export function initials(name: string) {
   ).replace(/^(.)(.)$/, (_, a: string, b: string) => a.toUpperCase() + b.toLowerCase());
 }
 
-export function behaviorName(behaviorId: string | null, deployment: NodeView | null) {
-  return agentOf(deployment, behaviorId)?.displayName ?? "Default";
+export function agentName(agentId: string | null, deployment: NodeView | null) {
+  return agentOf(deployment, agentId)?.displayName ?? "Default";
 }
 
 /* The bridge's labels, as a person would say them. Files and bash come

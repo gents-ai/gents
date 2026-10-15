@@ -50,6 +50,7 @@ pub mod stream_processor;
 pub mod stream_writer;
 pub mod tool;
 pub mod tool_call_lifecycle;
+pub mod tool_effects;
 pub mod tool_policy;
 pub mod truncation;
 

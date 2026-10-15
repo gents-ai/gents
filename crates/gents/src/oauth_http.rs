@@ -287,13 +287,13 @@ where
     }
 }
 
-/// Resolve the `OAuthCredential` `pick` names for `(agent_did, provider)` and
+/// Resolve the `OAuthCredential` `pick` names for `(node_did, provider)` and
 /// mint a shared, cached [`DbCredentialBearer`] against it. Single owner of the
 /// resolve-or-missing-error-then-cache-bearer preamble the OAuth client
 /// builders and the health probe share.
 pub async fn bootstrap_oauth_client(
     node: Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     provider: &str,
     refresh_kind: OAuthRefreshKind,
     product: OAuthProduct,
@@ -301,16 +301,16 @@ pub async fn bootstrap_oauth_client(
 ) -> Result<(Arc<DbCredentialBearer>, OAuthCredential)> {
     let credential = resolve_oauth_credential(
         &crate::config_client::ConfigAccess::Local(node.clone()),
-        agent_did,
+        node_did,
         provider,
         pick,
     )
     .await
-    .with_context(|| format!("loading OAuthCredential for agent {agent_did}"))?
+    .with_context(|| format!("loading OAuthCredential for node {node_did}"))?
     .ok_or_else(|| {
         anyhow::anyhow!(classify_oauth_auth_error(
             &product,
-            agent_did,
+            node_did,
             provider,
             &OAuthAuthProblem::Missing,
         ))
@@ -320,7 +320,7 @@ pub async fn bootstrap_oauth_client(
     let bearer = shared_bearer(&credential_id, || {
         DbCredentialBearer::with_cache(
             node,
-            agent_did,
+            node_did,
             provider,
             credential_id.clone(),
             true,

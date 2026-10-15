@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type {
-  BehaviorReadinessSourceView,
-  BehaviorReadinessStatusView,
+  NodeReadinessSourceView,
+  AgentReadinessStatusView,
   DeploymentView,
   SyncHealthView,
 } from "./types.js";
@@ -10,19 +10,19 @@ import { projectDeploymentOperationalState } from "./operationalState.js";
 
 function deployment(
   overrides: Partial<DeploymentView> & {
-    readinessSource?: BehaviorReadinessSourceView;
-    readinessStatus?: BehaviorReadinessStatusView;
+    readinessSource?: NodeReadinessSourceView;
+    readinessStatus?: AgentReadinessStatusView;
   } = {},
 ): DeploymentView {
   const {
     readinessSource = { state: "current" },
-    readinessStatus = { state: "ready", behaviorId: "default" },
+    readinessStatus = { state: "ready", agentId: "default" },
     ...deploymentOverrides
   } = overrides;
   return {
     peerId: "peer-1",
     label: "Mandrake",
-    agentDid: "did:key:agent",
+    nodeDid: "did:key:node",
     addr: "endpoint",
     source: "enrollment",
     graphql: null,
@@ -31,20 +31,20 @@ function deployment(
     routes: [],
     pairing: [],
     lastError: null,
-    principalConfig: null,
-    behaviorConfigs: [],
+    nodeConfig: null,
+    agentConfigs: [],
     runtime: null,
-    behaviorReadiness: {
+    nodeReadiness: {
       source: readinessSource,
       activeGeneration: 1,
       routerGeneration: 1,
       updatedAt: "2026-09-02T00:00:00Z",
-      behaviors: [readinessStatus],
+      agents: [readinessStatus],
     },
-    behaviors: [
+    agents: [
       {
-        behaviorId: "default",
-        agentDid: "did:key:agent",
+        agentId: "default",
+        nodeDid: "did:key:node",
         displayName: "Default",
         description: null,
         contextId: null,
@@ -55,7 +55,7 @@ function deployment(
         createdAt: null,
       },
     ],
-    behaviorEnvironments: [],
+    agentEnvironments: [],
     inferenceBackends: [],
     inferenceProfiles: [],
     inferenceSampling: [],
@@ -64,7 +64,7 @@ function deployment(
     compactions: [],
     tools: [],
     toolServiceRegistries: [],
-    subagentTargets: [],
+    agentTargets: [],
     datastoreToolSurfaces: [],
     chainKeyBindings: [],
     skills: [],
@@ -74,10 +74,10 @@ function deployment(
     triggers: [],
     sessions: [],
     mailboxItems: [],
-    agentPrincipal: {
-      agentDid: "did:key:agent",
-      defaultBehaviorId: "default",
-    } as DeploymentView["agentPrincipal"],
+    node: {
+      nodeDid: "did:key:node",
+      defaultAgentId: "default",
+    } as DeploymentView["node"],
     ...deploymentOverrides,
   };
 }
@@ -128,16 +128,16 @@ describe("deployment operational state", () => {
     });
   });
 
-  it("does not wait for a gossiped AgentPrincipal after pairing", () => {
+  it("does not wait for a gossiped Node after pairing", () => {
     const state = projectDeploymentOperationalState(
       deployment({
-        agentPrincipal: {
-          agentDid: "did:key:agent",
-          defaultBehaviorId: null,
-        } as DeploymentView["agentPrincipal"],
-        behaviors: [
+        node: {
+          nodeDid: "did:key:node",
+          defaultAgentId: null,
+        } as DeploymentView["node"],
+        agents: [
           {
-            behaviorId: "did:key:agent:default",
+            agentId: "did:key:node:default",
             displayName: "Amy",
             enabled: true,
             isDefault: false,
@@ -145,47 +145,48 @@ describe("deployment operational state", () => {
         ],
         readinessStatus: {
           state: "ready",
-          behaviorId: "did:key:agent:default",
+          agentId: "did:key:node:default",
         },
       }),
     );
 
     expect(state.admissionBlocker).toBeNull();
-    expect(state.behavior).toMatchObject({
+    expect(state.agent).toMatchObject({
       kind: "ready",
       shortLabel: "Online",
     });
-    expect(state.behavior.shortLabel).not.toBe("Waiting for runtime");
+    expect(state.agent.shortLabel).not.toBe("Waiting for runtime");
   });
 
-  it("does not block an enrolled chat on a lagged ready replica", () => {
+  it("does not let a retained ready entry override an unknown generation", () => {
     const state = projectDeploymentOperationalState(
       deployment({
-        readinessSource: { state: "unknown", reason: "readiness_stale" },
+        readinessSource: { state: "unknown", reason: "router_generation_stale" },
       }),
     );
 
-    expect(state.admissionBlocker).toBeNull();
-    expect(state.behavior).toMatchObject({
-      kind: "ready",
-      shortLabel: "Online",
+    expect(state.admissionBlocker).toBe(state.agent);
+    expect(state.agent).toMatchObject({
+      kind: "waiting",
+      reason: "router_generation_stale",
+      shortLabel: "Waiting for runtime",
     });
   });
 
-  it("still accepts a legacy local readiness-stale verdict", () => {
+  it("keeps a local node waiting when its readiness source is missing", () => {
     const state = projectDeploymentOperationalState(
       deployment({
         source: "local-standard",
-        readinessSource: { state: "unknown", reason: "readiness_stale" },
+        readinessSource: { state: "unknown", reason: "readiness_missing" },
       }),
     );
 
-    expect(state.admissionBlocker).toBe(state.behavior);
-    expect(state.behavior).toMatchObject({
+    expect(state.admissionBlocker).toBe(state.agent);
+    expect(state.agent).toMatchObject({
       layer: "runtime",
       kind: "waiting",
-      reason: "readiness_stale",
-      shortLabel: "Runtime unavailable",
+      reason: "readiness_missing",
+      shortLabel: "Waiting for runtime",
     });
   });
 
@@ -193,7 +194,7 @@ describe("deployment operational state", () => {
     const state = projectDeploymentOperationalState(
       deployment({ source: "local-standard", dialSucceeded: false }),
     );
-    expect(state.behavior.kind).toBe("ready");
+    expect(state.agent.kind).toBe("ready");
     expect(state.admissionBlocker).toBe(state.transport);
     expect(state.summary).toBe(state.transport);
     expect(state.summary.shortLabel).toBe("Not connected");
@@ -215,10 +216,10 @@ describe("deployment operational state", () => {
     });
   });
 
-  it("does not let replica lag block chat while database sync is catching up", () => {
+  it("does not let database lag override current runtime readiness", () => {
     const state = projectDeploymentOperationalState(
       deployment({
-        readinessSource: { state: "unknown", reason: "readiness_stale" },
+        readinessSource: { state: "current" },
       }),
       null,
       syncHealth({
@@ -229,7 +230,7 @@ describe("deployment operational state", () => {
     );
 
     expect(state.admissionBlocker).toBeNull();
-    expect(state.behavior.kind).toBe("ready");
+    expect(state.agent.kind).toBe("ready");
     expect(state.summary).toBe(state.sync);
     expect(state.sync).toMatchObject({
       layer: "sync",
@@ -258,17 +259,23 @@ describe("deployment operational state", () => {
     });
   });
 
-  it("keeps an enrolled agent online from last-known readiness when sync is healthy", () => {
+  it("does not expire current runtime readiness based on its timestamp", () => {
     const state = projectDeploymentOperationalState(
       deployment({
-        readinessSource: { state: "unknown", reason: "readiness_stale" },
+        nodeReadiness: {
+          source: { state: "current" },
+          activeGeneration: 1,
+          routerGeneration: 1,
+          updatedAt: "2000-01-01T00:00:00Z",
+          agents: [{ state: "ready", agentId: "default" }],
+        },
       }),
       null,
       syncHealth(),
     );
 
     expect(state.admissionBlocker).toBeNull();
-    expect(state.behavior).toMatchObject({
+    expect(state.agent).toMatchObject({
       kind: "ready",
       shortLabel: "Online",
     });
@@ -277,7 +284,7 @@ describe("deployment operational state", () => {
   it("offers backend configuration only on the host that owns it", () => {
     const readinessStatus = {
       state: "unavailable" as const,
-      behaviorId: "default",
+      agentId: "default",
       reason: "backend_not_configured" as const,
     };
     const remote = projectDeploymentOperationalState(
@@ -287,26 +294,26 @@ describe("deployment operational state", () => {
       deployment({ source: "local-standard", readinessStatus }),
     );
 
-    expect(remote.behavior.action).toBeNull();
-    expect(local.behavior).toMatchObject({
+    expect(remote.agent.action).toBeNull();
+    expect(local.agent).toMatchObject({
       layer: "inference",
       kind: "blocked",
       action: "configureInference",
     });
   });
 
-  it("does not call an explicitly unavailable behavior online", () => {
+  it("does not call an explicitly unavailable agent online", () => {
     const state = projectDeploymentOperationalState(
       deployment({
         readinessStatus: {
           state: "unavailable",
-          behaviorId: "default",
-          reason: "behavior_disabled",
+          agentId: "default",
+          reason: "agent_disabled",
         },
       }),
     );
 
-    expect(state.summary).toBe(state.behavior);
+    expect(state.summary).toBe(state.agent);
     expect(state.summary).toMatchObject({
       kind: "blocked",
       shortLabel: "Unavailable",

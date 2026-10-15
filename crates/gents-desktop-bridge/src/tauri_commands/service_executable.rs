@@ -59,7 +59,7 @@ impl ServiceExecutable {
             BridgeError::new(
                 BridgeErrorCode::Backend,
                 format!(
-                    "Could not copy the Gents runtime to {} for the background agent: {error}. Check the free space and permissions there, then try again.",
+                    "Could not copy the Gents runtime to {} for the background Node: {error}. Check the free space and permissions there, then try again.",
                     installed.display()
                 ),
             )

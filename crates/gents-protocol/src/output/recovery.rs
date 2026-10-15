@@ -239,7 +239,7 @@ mod tests {
         (
             doc_id.into(),
             OutputSegment {
-                agent_did: "did:test:agent".into(),
+                node_did: "did:test:agent".into(),
                 requester_did: None,
                 session_id: "session".into(),
                 request_doc_id: "request".into(),

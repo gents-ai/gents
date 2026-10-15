@@ -55,8 +55,8 @@ const edit = tool({
 function session(overrides: Partial<DesktopSessionSnapshot>): DesktopSessionSnapshot {
   return {
     sessionId: "session-1",
-    agentDid: "did:test:agent",
-    behaviorId: "behavior-default",
+    nodeDid: "did:test:node",
+    agentId: "agent-default",
     title: "Session",
     previewText: null,
     status: "processing",
@@ -66,6 +66,8 @@ function session(overrides: Partial<DesktopSessionSnapshot>): DesktopSessionSnap
     retryEligibility: { eligible: false, denialReason: null },
     latestRequestOutcome: null,
     pendingTurn: null,
+    queuedTurns: [],
+    foldedInputs: [],
     context: {
       estimatedDurableTokens: 0,
       estimatedConversationTokens: 0,
@@ -93,6 +95,7 @@ const panel = (
     inFlight={inFlight}
     stopping={stopping}
     scroller={null}
+    content={null}
     session={snapshot}
     workers={NO_WORKERS}
     parentWork={NO_PARENT}
@@ -285,6 +288,31 @@ describe("stop", () => {
       within(notice).getByText("a stop request on this request"),
     ).toBeInTheDocument();
   });
+
+  it.each([undefined, false, true])(
+    "uses only positive runtime evidence for stopped-before-running (%s)",
+    (certificate) => {
+      render(
+        panel(
+          session({
+            turnState: "interrupted",
+            latestRequestOutcome: {
+              failureReason: null,
+              cancelCause: interruptEvidence,
+              stoppedBeforeRunning: certificate,
+            },
+          }),
+          false,
+        ),
+      );
+      const notice = screen.getByTestId("stopped-notice");
+      expect(
+        within(notice).getByText(
+          certificate === true ? "Stopped before running" : "Stopped",
+        ),
+      ).toBeVisible();
+    },
+  );
 
   it("binds Stopping to the request being stopped", () => {
     const base = {

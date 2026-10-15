@@ -1,31 +1,31 @@
-//! Shared principal-scoped inference selection for protocol adapters.
+//! Shared node-scoped inference selection for protocol adapters.
 
 use anyhow::{anyhow, Result};
 use gents::defra_node::EmbeddedNode;
-use gents::load_agent_principal;
+use gents::load_node;
 
 pub(crate) async fn load_bound_profile(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
 ) -> Result<gents::document_config::InferenceProfile> {
     use gents::config_client::{read_desired_state_record_in_txn as read, ConfigAccess};
     use gents::Collection;
     ConfigAccess::transact_local(node, None, "codex.bound_profile", |txn| {
         Box::pin(async move {
-            let behavior: gents::document_config::AgentBehavior = serde_json::from_value(
-                read(txn, Collection::AgentBehavior, agent_did, behavior_id)
+            let agent: gents::document_config::Agent = serde_json::from_value(
+                read(txn, Collection::Agent, node_did, agent_id)
                     .await?
                     .map(|(_, value)| value)
-                    .ok_or_else(|| anyhow!("behavior {behavior_id:?} missing for {agent_did:?}"))?,
+                    .ok_or_else(|| anyhow!("agent {agent_id:?} missing for {node_did:?}"))?,
             )?;
-            anyhow::ensure!(behavior.enabled, "bound behavior is disabled");
+            anyhow::ensure!(agent.enabled, "bound agent is disabled");
             let profile: gents::document_config::InferenceProfile = serde_json::from_value(
                 read(
                     txn,
                     Collection::InferenceProfile,
-                    agent_did,
-                    &behavior.inference_profile_id,
+                    node_did,
+                    &agent.inference_profile_id,
                 )
                 .await?
                 .map(|(_, value)| value)
@@ -36,7 +36,7 @@ pub(crate) async fn load_bound_profile(
                 read(
                     txn,
                     Collection::InferenceBackend,
-                    agent_did,
+                    node_did,
                     &profile.backend_id,
                 )
                 .await?
@@ -53,21 +53,21 @@ pub(crate) async fn load_bound_profile(
 
 pub(crate) async fn load_bound_context_window(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
 ) -> Result<i64> {
-    let profile = load_bound_profile(node, agent_did, behavior_id).await?;
-    let backend = gents::backend_registry::lookup_backend(node, agent_did, &profile.backend_id)
+    let profile = load_bound_profile(node, node_did, agent_id).await?;
+    let backend = gents::backend_registry::lookup_backend(node, node_did, &profile.backend_id)
         .await?
         .ok_or_else(|| anyhow!("bound backend disappeared"))?;
     let observation =
-        gents::backend_registry::lookup_backend_observation(node, agent_did, &profile.backend_id)
+        gents::backend_registry::lookup_backend_observation(node, node_did, &profile.backend_id)
             .await?;
     let credential_scope = matches!(
         backend.auth,
-        gents::document_config::BackendAuth::PrincipalOAuth { .. }
+        gents::document_config::BackendAuth::NodeOAuth { .. }
     )
-    .then_some(agent_did);
+    .then_some(node_did);
     let catalog = observation
         .as_ref()
         .map(|observation| observation.catalog_for(credential_scope))
@@ -94,30 +94,30 @@ pub(crate) async fn load_bound_context_window(
     Ok(value)
 }
 
-/// Resolve the behavior the Codex shim binds to.
+/// Resolve the agent the Codex shim binds to.
 ///
 /// An explicit override always wins. Otherwise the exact principal document
-/// and its configured default behavior are required.
-pub(crate) async fn resolve_bound_behavior_id(
+/// and its configured default agent are required.
+pub(crate) async fn resolve_bound_agent_id(
     node: &EmbeddedNode,
-    override_behavior_id: Option<&str>,
-    agent_did: &str,
+    override_agent_id: Option<&str>,
+    node_did: &str,
 ) -> Result<String> {
-    if let Some(value) = explicit_behavior_override(override_behavior_id) {
+    if let Some(value) = explicit_agent_override(override_agent_id) {
         return Ok(value);
     }
-    let principal = load_agent_principal(node, agent_did)
+    let principal = load_node(node, node_did)
         .await?
-        .ok_or_else(|| anyhow!("agent principal {agent_did:?} is not configured"))?;
+        .ok_or_else(|| anyhow!("node {node_did:?} is not configured"))?;
     principal
-        .default_behavior_id
+        .default_agent_id
         .map(|id| id.trim().to_string())
         .filter(|id| !id.is_empty())
-        .ok_or_else(|| anyhow!("agent principal {agent_did:?} has no default behavior binding"))
+        .ok_or_else(|| anyhow!("node {node_did:?} has no default agent binding"))
 }
 
-/// Normalize an optional adapter behavior selector before resolving documents.
-pub(crate) fn explicit_behavior_override(value: Option<&str>) -> Option<String> {
+/// Normalize an optional adapter agent selector before resolving documents.
+pub(crate) fn explicit_agent_override(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
         .filter(|id| !id.is_empty())

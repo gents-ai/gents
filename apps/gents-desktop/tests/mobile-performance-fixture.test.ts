@@ -4,13 +4,34 @@ import {
   MOBILE_PERFORMANCE_FIXTURE,
   createDesktopUiHarness,
 } from "./ui-harness/desktopHarness";
-import { sessionLiveDeltaRequest } from "../src/hooks/desktopShellRuntime";
+import { sessionLiveDeltaRequest } from "../src/hooks/liveDelta";
 
 function serializedBytes(value: unknown) {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
 describe("mobile performance fixture structural budgets", () => {
+  it("scales the fleet independently of bounded transcript pages", async () => {
+    const harness = createDesktopUiHarness({
+      scenario: "mobile-performance",
+      sessionIndexCount: 10_000,
+    });
+    const snapshot = await harness.adapter.fetchDesktopSnapshot();
+    expect(snapshot.client?.deployments[0]?.sessions).toHaveLength(10_000);
+    expect(harness.performance?.fixture).toMatchObject({
+      id: "mobile-interactions-v1-sessions-10000",
+      sessionIndexCount: 10_000,
+    });
+    const tip = await harness.adapter.fetchSessionSnapshot(
+      "session-large",
+      "did:key:z6MkBombadilAgent",
+      null,
+      { limit: 40 },
+    );
+    expect(tip?.timelineItems).toHaveLength(40);
+    expect(serializedBytes(tip)).toBeLessThanOrEqual(16 * 1024);
+  });
+
   it("keeps the durable session-index fixture shape explicit and bounded", async () => {
     const harness = createDesktopUiHarness({ scenario: "mobile-performance" });
     const snapshot = await harness.adapter.fetchDesktopSnapshot();

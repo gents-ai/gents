@@ -11,7 +11,7 @@ use gents::pack::{
     install_pack_documents, load_pack_config, DriftPolicy, PackIdentity, PackInstallOptions,
     PackManifest,
 };
-use gents::{AgentIdentity, Collection, DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use serde_json::{json, Value};
 
 use crate::support::streaming_backend::{
@@ -49,7 +49,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
 
     install_inference(&access, &owner, backend.endpoint()).await;
     install_pack(&access, &owner, &repo).await;
-    select_default_behavior(&access, &db.node, &owner).await;
+    select_default_agent(&access, &db.node, &owner).await;
     gents::backend_registry::set_backend_probe_status(
         &db.node,
         &owner,
@@ -61,24 +61,24 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     install_workspace_root(&access, root.path()).await;
     let configured = access
         .execute(
-            "{ AgentPrincipal { agent_did default_behavior_id enabled } AgentBehavior { behavior_id enabled inference_profile_id } InferenceProfile { profile_id backend_id model_name } WorkspaceRoot { root_path enabled } }",
+            "{ Node { node_did default_agent_id enabled } Agent { agent_id enabled inference_profile_id } InferenceProfile { profile_id backend_id model_name } WorkspaceRoot { root_path enabled } }",
         )
         .await
         .unwrap();
     assert_eq!(
-        configured["data"]["AgentPrincipal"][0]["default_behavior_id"], "change-unit-writer",
+        configured["data"]["Node"][0]["default_agent_id"], "change-unit-writer",
         "installed principal/default behavior: {configured:#}"
     );
     assert!(
-        configured["data"]["AgentBehavior"]
+        configured["data"]["Agent"]
             .as_array()
             .is_some_and(|rows| rows
                 .iter()
-                .any(|row| row["behavior_id"] == "change-unit-writer")),
+                .any(|row| row["agent_id"] == "change-unit-writer")),
         "installed behavior missing: {configured:#}"
     );
 
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         db.node_identity.clone(),
         DocumentRuntimeOptions {
@@ -89,9 +89,9 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     .await
     .expect("the installed change-unit pack routes its tasks");
     assert!(
-        agent.unavailable_behaviors().is_empty(),
+        agent.unavailable_agents().is_empty(),
         "change-unit pack behavior resolution failed: {:#?}",
-        agent.unavailable_behaviors()
+        agent.unavailable_agents()
     );
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let mut handle = tokio::spawn(agent.run(shutdown_rx));
@@ -103,12 +103,12 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
             panic!("runtime exited before readiness: {result:?}");
         }
         _ = tokio::time::sleep(Duration::from_secs(20)) => {
-            let state = access.execute("{ AgentRuntime { agent_did reconcile_phase last_reconcile_result last_reconcile_error } AgentBehaviorReadiness { agent_did snapshot_json } Trigger { trigger_id enabled last_error } }").await.unwrap();
+            let state = access.execute("{ NodeRuntime { node_did reconcile_phase last_reconcile_result last_reconcile_error } NodeReadiness { node_did snapshot_json } Trigger { trigger_id enabled last_error } }").await.unwrap();
             panic!("runtime did not publish readiness after 20 seconds; state={state:#}");
         }
     }
     let runtime = BootedAgent::new(shutdown_tx, handle, owner.clone());
-    let readiness = crate::support::snapshots::fetch_behavior_readiness_snapshot(&db.node, &owner)
+    let readiness = crate::support::snapshots::fetch_node_readiness_snapshot(&db.node, &owner)
         .await
         .expect("runtime readiness snapshot after initial convergence");
     tracing::info!(?readiness, "workspace cycle runtime readiness");
@@ -179,7 +179,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         .is_some_and(|sha| !sha.is_empty()));
     let request_rows = access
         .execute(
-            "{ AgentRequest { request_id behavior_id lifecycle_state workspace_id workspace_authority workspace_seal_hash } }",
+            "{ AgentRequest { request_id agent_id lifecycle_state workspace_id workspace_authority workspace_seal_hash } }",
         )
         .await
         .unwrap();
@@ -193,7 +193,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     let writer_request = request_for_receipt(writer_receipt);
     let review_requests = requests
         .iter()
-        .filter(|request| request["behavior_id"] == "change-unit-reviewer")
+        .filter(|request| request["agent_id"] == "change-unit-reviewer")
         .collect::<Vec<_>>();
     assert!(!review_requests.is_empty(), "reviewer request exists");
     let integration_request = request_for_receipt(integration_receipt);
@@ -344,7 +344,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
 
     install_inference(&access, &owner, backend.endpoint()).await;
     install_pack(&access, &owner, &repo).await;
-    select_default_behavior(&access, &db.node, &owner).await;
+    select_default_agent(&access, &db.node, &owner).await;
     gents::backend_registry::set_backend_probe_status(
         &db.node,
         &owner,
@@ -354,7 +354,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     .await
     .unwrap();
     install_workspace_root(&access, root.path()).await;
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         db.node_identity.clone(),
         DocumentRuntimeOptions {
@@ -364,7 +364,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     )
     .await
     .expect("the installed change-unit pack routes its tasks");
-    assert!(agent.unavailable_behaviors().is_empty());
+    assert!(agent.unavailable_agents().is_empty());
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
     gents::eval::runner::embedded::wait_for_runtime_ready(&db.node, &owner)
@@ -502,7 +502,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
 
     install_inference(&access, &owner, backend.endpoint()).await;
     install_pack(&access, &owner, &repo).await;
-    select_default_behavior(&access, &db.node, &owner).await;
+    select_default_agent(&access, &db.node, &owner).await;
     gents::backend_registry::set_backend_probe_status(
         &db.node,
         &owner,
@@ -522,7 +522,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
         .write(
             "workspace_cycle.create_supervisor_session",
             &format!(
-                "mutation {{ create_AgentSession(input: {{ session_id: \"{}\", requester_did: \"{}\", agent_did: \"{}\", behavior_id: \"change-unit-test-supervisor\", created_at: \"{}\" }}) {{ _docID }} }}",
+                "mutation {{ create_AgentSession(input: {{ session_id: \"{}\", requester_did: \"{}\", node_did: \"{}\", agent_id: \"change-unit-test-supervisor\", created_at: \"{}\" }}) {{ _docID }} }}",
                 escape_graphql_string(supervisor_session),
                 escape_graphql_string(desktop.did()),
                 escape_graphql_string(&owner),
@@ -532,9 +532,9 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
         .await
         .expect("create the existing supervisor session");
     install_failure_inbox_triggers(&access, &owner).await;
-    select_default_behavior(&access, &db.node, &owner).await;
+    select_default_agent(&access, &db.node, &owner).await;
 
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         db.node_identity.clone(),
         DocumentRuntimeOptions {
@@ -544,7 +544,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     )
     .await
     .expect("test triggers resolve to installed behavior");
-    assert!(agent.unavailable_behaviors().is_empty());
+    assert!(agent.unavailable_agents().is_empty());
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let mut handle = tokio::spawn(agent.run(shutdown_rx));
     tokio::select! {
@@ -553,7 +553,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
         }
         result = &mut handle => panic!("runtime exited before readiness: {result:?}"),
         _ = tokio::time::sleep(Duration::from_secs(20)) => {
-            let state = access.execute("{ AgentRuntime { agent_did reconcile_phase last_reconcile_result last_reconcile_error } AgentBehaviorReadiness { agent_did snapshot_json } Trigger { trigger_id enabled last_error } }").await.unwrap();
+            let state = access.execute("{ NodeRuntime { node_did reconcile_phase last_reconcile_result last_reconcile_error } NodeReadiness { node_did snapshot_json } Trigger { trigger_id enabled last_error } }").await.unwrap();
             panic!("runtime did not publish readiness after 20 seconds; state={state:#}");
         }
     }
@@ -573,7 +573,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
 
     let inbox = wait_supervisor_inbox(&access, &backend, FAILURE_UNIT).await;
     assert_eq!(inbox["session_id"], supervisor_session);
-    assert_eq!(inbox["behavior_id"], "change-unit-test-supervisor");
+    assert_eq!(inbox["agent_id"], "change-unit-test-supervisor");
     assert_eq!(inbox["requester_did"], desktop.did());
     assert_eq!(inbox["lifecycle_state"], "completed");
     assert!(inbox["content"].as_str().unwrap().contains(FAILURE_UNIT));
@@ -631,22 +631,22 @@ fn ensure_native_fs_runner_for_test() {
     });
 }
 
-async fn select_default_behavior(
+async fn select_default_agent(
     access: &ConfigAccess,
     node: &gents::defra_node::EmbeddedNode,
     owner: &str,
 ) {
-    let mut principal = gents::ensure_agent_principal(node, owner).await.unwrap();
-    principal.default_behavior_id = Some("change-unit-writer".to_owned());
+    let mut principal = gents::ensure_node(node, owner).await.unwrap();
+    principal.default_agent_id = Some("change-unit-writer".to_owned());
     let value = serde_json::to_value(principal).unwrap();
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::AgentPrincipal,
+        collection: Collection::Node,
         add: value.clone(),
         update: value,
     }])
     .unwrap();
     access
-        .transact("workspace_cycle.select_default_behavior", |txn| {
+        .transact("workspace_cycle.select_default_agent", |txn| {
             let plan = &plan;
             Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
         })
@@ -904,7 +904,7 @@ async fn install_inference(access: &ConfigAccess, owner: &str, endpoint: &str) {
         (
             Collection::InferenceBackend,
             json!({
-                "agent_did": owner,
+                "node_did": owner,
                 "backend_id": "workspace-cycle-backend",
                 "name": "Workspace cycle scripted model",
                 "provider_kind": "OpenAiCompatible",
@@ -919,7 +919,7 @@ async fn install_inference(access: &ConfigAccess, owner: &str, endpoint: &str) {
         (
             Collection::InferenceExecution,
             json!({
-                "agent_did": owner,
+                "node_did": owner,
                 "execution_id": "workspace-cycle-execution",
                 "max_turns": 8,
                 "deadline_duration_secs": 60,
@@ -930,7 +930,7 @@ async fn install_inference(access: &ConfigAccess, owner: &str, endpoint: &str) {
         (
             Collection::InferenceSampling,
             json!({
-                "agent_did": owner,
+                "node_did": owner,
                 "sampling_id": "workspace-cycle-sampling",
                 "temperature": 0.0
             }),
@@ -938,7 +938,7 @@ async fn install_inference(access: &ConfigAccess, owner: &str, endpoint: &str) {
         (
             Collection::InferenceProfile,
             json!({
-                "agent_did": owner,
+                "node_did": owner,
                 "profile_id": "workspace-cycle-profile",
                 "display_name": "Workspace cycle scripted model",
                 "backend_id": "workspace-cycle-backend",
@@ -987,7 +987,7 @@ async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) {
     let config = load_pack_config(
         &manifest,
         &PackInstallOptions {
-            agent_did: owner.to_owned(),
+            node_did: owner.to_owned(),
         },
         &read,
         &|name| (name == "GENTS_CHANGE_UNIT_ROOT").then(|| repo.to_string_lossy().into_owned()),
@@ -1066,34 +1066,34 @@ async fn disable_pack_writer_trigger(access: &ConfigAccess) {
 
 async fn install_failure_inbox_triggers(access: &ConfigAccess, owner: &str) {
     let config = json!({
-        "agent_principal": {"agent_did": owner, "default_behavior_id": "change-unit-writer"},
-        "agent_behaviors": [
+        "node": {"node_did": owner, "default_agent_id": "change-unit-writer"},
+        "agents": [
             {
-                "agent_did": owner,
-                "behavior_id": "change-unit-test-supervisor",
+                "node_did": owner,
+                "agent_id": "change-unit-test-supervisor",
                 "display_name": "Test Supervisor Inbox",
                 "inference_profile_id": "workspace-cycle-profile"
             }
         ],
         "tasks": [
             {
-                "agent_did": owner,
+                "node_did": owner,
                 "task_id": "change-unit-test-failure-task",
-                "behavior_id": "change-unit-writer",
+                "agent_id": "change-unit-writer",
                 "prompt_template": "Test failure stage for {{ doc.work_unit_id }}.",
                 "emit_outcome": true
             },
             {
-                "agent_did": owner,
+                "node_did": owner,
                 "task_id": "change-unit-supervisor-inbox-task",
-                "behavior_id": "change-unit-test-supervisor",
+                "agent_id": "change-unit-test-supervisor",
                 "prompt_template": "Supervisor inbox delivery: stage {{ doc.trigger_id }} for {{ doc.source_handoff_id }} failed: {{ doc.reason }}.",
                 "emit_outcome": false
             }
         ],
         "event_sources": [
             {
-                "agent_did": owner,
+                "node_did": owner,
                 "event_source_id": "change-unit-test-failure-source",
                 "source_collection": "CallbackResult",
                 "event_kind": "created",
@@ -1102,7 +1102,7 @@ async fn install_failure_inbox_triggers(access: &ConfigAccess, owner: &str) {
                 "filter": "{ binding_id: { _eq: \"change-unit-workspace\" }, work_unit_id: { _eq: \"change-unit:cycle-inbox\" } }"
             },
             {
-                "agent_did": owner,
+                "node_did": owner,
                 "event_source_id": "change-unit-supervisor-inbox-source",
                 "source_collection": "FireOutcome",
                 "event_kind": "created",
@@ -1112,14 +1112,14 @@ async fn install_failure_inbox_triggers(access: &ConfigAccess, owner: &str) {
         ],
         "triggers": [
             {
-                "agent_did": owner,
+                "node_did": owner,
                 "trigger_id": "change-unit-test-failure",
                 "task_id": "change-unit-test-failure-task",
                 "source": {"kind": "event", "event_source_id": "change-unit-test-failure-source"},
                 "concurrency": "parallel"
             },
             {
-                "agent_did": owner,
+                "node_did": owner,
                 "trigger_id": "change-unit-supervisor-inbox",
                 "task_id": "change-unit-supervisor-inbox-task",
                 "source": {"kind": "event", "event_source_id": "change-unit-supervisor-inbox-source"},
@@ -1271,12 +1271,12 @@ async fn wait_rows(
             return rows;
         }
         if matches!(collection, "ChangeUnitReview" | "ChangeUnitResult") {
-            let behaviors: &[&str] = if collection == "ChangeUnitReview" {
+            let agents: &[&str] = if collection == "ChangeUnitReview" {
                 &["change-unit-reviewer"]
             } else {
                 &["change-unit-record", "change-unit-rejected"]
             };
-            let failures = cycle_failure_diagnostics(access, work_unit_id, behaviors).await;
+            let failures = cycle_failure_diagnostics(access, work_unit_id, agents).await;
             if !failures.is_empty() {
                 panic!("cycle request terminated before writing {collection}: {failures:#?}");
             }
@@ -1292,13 +1292,13 @@ async fn wait_rows(
 async fn cycle_failure_diagnostics(
     access: &ConfigAccess,
     work_unit_id: &str,
-    behaviors: &[&str],
+    agents: &[&str],
 ) -> Vec<Value> {
     let work_unit_id = escape_graphql_string(work_unit_id);
     let requests = access
         .execute(
             &format!(
-                r#"{{ AgentRequest(filter: {{ caused_by_correlation: {{ _eq: "{work_unit_id}" }} }}) {{ _docID request_id agent_did requester_did session_id lifecycle_state failure_reason caused_by_trigger_id }} }}"#
+                r#"{{ AgentRequest(filter: {{ caused_by_correlation: {{ _eq: "{work_unit_id}" }} }}) {{ _docID request_id node_did requester_did session_id lifecycle_state failure_reason caused_by_trigger_id }} }}"#
             ),
         )
         .await
@@ -1309,7 +1309,7 @@ async fn cycle_failure_diagnostics(
         .unwrap_or_default();
     let mut failures = Vec::new();
     for request in requests {
-        if !behaviors.contains(&request["behavior_id"].as_str().unwrap_or_default()) {
+        if !agents.contains(&request["agent_id"].as_str().unwrap_or_default()) {
             continue;
         }
         if !matches!(
@@ -1339,7 +1339,7 @@ async fn cycle_failure_diagnostics(
             {
                 let (Some(tool_doc_id), Some(owner), Some(session_id)) = (
                     tool["_docID"].as_str(),
-                    request["agent_did"].as_str(),
+                    request["node_did"].as_str(),
                     request["session_id"].as_str(),
                 ) else {
                     continue;
@@ -1386,7 +1386,7 @@ async fn wait_for_writer(
         if Instant::now() >= deadline {
             let state = access
                 .execute(
-                    "{ AgentRuntime { agent_did reconcile_phase last_reconcile_result last_reconcile_error } AgentBehaviorReadiness { snapshot_json } EventSource { event_source_id source_collection event_kind filter correlation_field workspace_authority } AgentRequest { request_id lifecycle_state failure_reason caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_source_doc_id } TriggerFire { trigger_id source_collection source_doc_id task_id request_id } Trigger { trigger_id fire_count last_status last_error } CallbackInvocation { callback_id lifecycle_state error caused_by_correlation } CallbackResult { binding_id result_id work_unit_id workspace_id } WorkspaceReceipt { receipt_id kind work_unit_id workspace_id } }",
+                    "{ NodeRuntime { node_did reconcile_phase last_reconcile_result last_reconcile_error } NodeReadiness { snapshot_json } EventSource { event_source_id source_collection event_kind filter correlation_field workspace_authority } AgentRequest { request_id lifecycle_state failure_reason caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_source_doc_id } TriggerFire { trigger_id source_collection source_doc_id task_id request_id } Trigger { trigger_id fire_count last_status last_error } CallbackInvocation { callback_id lifecycle_state error caused_by_correlation } CallbackResult { binding_id result_id work_unit_id workspace_id } WorkspaceReceipt { receipt_id kind work_unit_id workspace_id } }",
                 )
                 .await
                 .unwrap();
@@ -1506,7 +1506,7 @@ async fn wait_supervisor_inbox(
 ) -> Value {
     let work_unit_id = escape_graphql_string(work_unit_id);
     let query = format!(
-        "{{ AgentRequest(filter: {{ caused_by_trigger_id: {{ _eq: \"change-unit-supervisor-inbox\" }}, caused_by_correlation: {{ _eq: \"{work_unit_id}\" }} }}) {{ request_id requester_did session_id behavior_id lifecycle_state failure_reason content }} }}"
+        "{{ AgentRequest(filter: {{ caused_by_trigger_id: {{ _eq: \"change-unit-supervisor-inbox\" }}, caused_by_correlation: {{ _eq: \"{work_unit_id}\" }} }}) {{ request_id requester_did session_id agent_id lifecycle_state failure_reason content }} }}"
     );
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
@@ -1590,7 +1590,7 @@ async fn wait_rejected_result(access: &ConfigAccess, work_unit_id: &str) -> Vec<
         }
         if Instant::now() >= deadline {
             let diagnostic = format!(
-                "{{ Trigger(filter: {{trigger_id: {{_eq: \"change-unit-rejected\"}}}}) {{ trigger_id last_status last_error fire_count }} TriggerFire(filter: {{trigger_id: {{_eq: \"change-unit-rejected\"}}}}) {{ request_id task_id source_doc_id }} AgentRequest(filter: {{caused_by_correlation: {{_eq: \"{unit}\"}}}}) {{ request_id behavior_id lifecycle_state failure_reason }} AgentToolCall {{ request_id tool_name lifecycle_state denial_reason tool_failure_class }} }}"
+                "{{ Trigger(filter: {{trigger_id: {{_eq: \"change-unit-rejected\"}}}}) {{ trigger_id last_status last_error fire_count }} TriggerFire(filter: {{trigger_id: {{_eq: \"change-unit-rejected\"}}}}) {{ request_id task_id source_doc_id }} AgentRequest(filter: {{caused_by_correlation: {{_eq: \"{unit}\"}}}}) {{ request_id agent_id lifecycle_state failure_reason }} AgentToolCall {{ request_id tool_name lifecycle_state denial_reason tool_failure_class }} }}"
             );
             let state = access.execute(&diagnostic).await.unwrap();
             panic!("rejected result not written: result={rows:#?}; runtime={state:#}");
@@ -1599,14 +1599,10 @@ async fn wait_rejected_result(access: &ConfigAccess, work_unit_id: &str) -> Vec<
     }
 }
 
-async fn wait_cycle_requests_completed(
-    access: &ConfigAccess,
-    work_unit_id: &str,
-    behaviors: &[&str],
-) {
+async fn wait_cycle_requests_completed(access: &ConfigAccess, work_unit_id: &str, agents: &[&str]) {
     let work_unit_id = escape_graphql_string(work_unit_id);
     let query = format!(
-        "{{ AgentRequest(filter: {{caused_by_correlation: {{_eq: \"{work_unit_id}\"}}}}) {{ request_id behavior_id lifecycle_state failure_reason }} }}"
+        "{{ AgentRequest(filter: {{caused_by_correlation: {{_eq: \"{work_unit_id}\"}}}}) {{ request_id agent_id lifecycle_state failure_reason }} }}"
     );
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
@@ -1614,15 +1610,15 @@ async fn wait_cycle_requests_completed(
         let rows = response["data"]["AgentRequest"].as_array().unwrap();
         let relevant = rows
             .iter()
-            .filter(|row| behaviors.contains(&row["behavior_id"].as_str().unwrap_or_default()))
+            .filter(|row| agents.contains(&row["agent_id"].as_str().unwrap_or_default()))
             .collect::<Vec<_>>();
-        let observed_behaviors = relevant
+        let observed_agents = relevant
             .iter()
-            .filter_map(|row| row["behavior_id"].as_str())
+            .filter_map(|row| row["agent_id"].as_str())
             .collect::<std::collections::HashSet<_>>();
-        if behaviors
+        if agents
             .iter()
-            .all(|behavior| observed_behaviors.contains(behavior))
+            .all(|behavior| observed_agents.contains(behavior))
             && relevant
                 .iter()
                 .all(|row| row["lifecycle_state"] == "completed")

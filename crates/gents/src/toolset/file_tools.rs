@@ -288,7 +288,8 @@ impl Tool for ListFilesTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.native_runner
+        let output = self
+            .native_runner
             .run(
                 NativeFsRunnerRequest::ListFiles(NativeListFilesArgs {
                     path: args.path,
@@ -303,7 +304,13 @@ impl Tool for ListFilesTool {
                 }),
                 Self::NAME,
             )
-            .await
+            .await?;
+        if args.raw_json {
+            crate::tool_output::render_json_text(output, &["entries", "matches"])
+                .map_err(Into::into)
+        } else {
+            Ok(output)
+        }
     }
 
     fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
@@ -444,7 +451,8 @@ impl Tool for GlobTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.native_runner
+        let output = self
+            .native_runner
             .run(
                 NativeFsRunnerRequest::Glob(NativeGlobArgs {
                     pattern: args.pattern,
@@ -459,7 +467,13 @@ impl Tool for GlobTool {
                 }),
                 Self::NAME,
             )
-            .await
+            .await?;
+        if args.raw_json {
+            crate::tool_output::render_json_text(output, &["entries", "matches"])
+                .map_err(Into::into)
+        } else {
+            Ok(output)
+        }
     }
 
     fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
@@ -514,7 +528,8 @@ impl Tool for GrepTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.native_runner
+        let output = self
+            .native_runner
             .run(
                 NativeFsRunnerRequest::Grep(NativeGrepArgs {
                     pattern: args.pattern,
@@ -531,7 +546,13 @@ impl Tool for GrepTool {
                 }),
                 Self::NAME,
             )
-            .await
+            .await?;
+        if args.raw_json {
+            crate::tool_output::render_json_text(output, &["entries", "matches"])
+                .map_err(Into::into)
+        } else {
+            Ok(output)
+        }
     }
 
     fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
@@ -621,6 +642,7 @@ impl Tool for WriteFileTool {
 
         let output = WriteFileOutput {
             metadata: WriteFileMetadata {
+                resolved_path: path.to_string_lossy().into_owned(),
                 ok: true,
                 status: "success",
                 tool: Self::NAME,
@@ -820,6 +842,7 @@ impl Tool for EditFileTool {
                 }
                 let output = EditFileOutput {
                     metadata: EditFileMetadata {
+                        resolved_path: path.to_string_lossy().into_owned(),
                         ok: true,
                         status: "success",
                         tool: Self::NAME,
@@ -942,6 +965,7 @@ struct WriteFileMetadata {
     status: &'static str,
     tool: &'static str,
     path: String,
+    resolved_path: String,
     returned_count: usize,
     total_count: Option<usize>,
     truncated: bool,
@@ -962,6 +986,7 @@ struct EditFileMetadata {
     status: &'static str,
     tool: &'static str,
     path: String,
+    resolved_path: String,
     returned_count: usize,
     total_count: Option<usize>,
     truncated: bool,
@@ -989,7 +1014,10 @@ fn render_tool_output(
     raw_json: bool,
 ) -> Result<String> {
     if raw_json {
-        return render_json(raw_value);
+        return crate::tool_output::render(
+            raw_value,
+            &["content", "entries", "matches", "diff", "status", "ok"],
+        );
     }
 
     let mut out = String::from(OUTPUT_META_PREFIX);

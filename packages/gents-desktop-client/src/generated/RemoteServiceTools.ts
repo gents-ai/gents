@@ -17,7 +17,7 @@ tool_names?: Array<string> | null,
  */
 style?: RemoteToolStyle | null,
 /**
- * Required services must be available before the behavior admits new work.
+ * Required services must be available before agent admission of new work.
  * Optional service outages do not block admission; calls still require the
  * selected service and tool to be available. Malformed refs remain errors.
  */

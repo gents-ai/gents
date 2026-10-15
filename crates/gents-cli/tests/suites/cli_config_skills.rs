@@ -21,7 +21,7 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -29,18 +29,18 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
 
     let mut serve = spawn_server_with_env(&home_dir, server_port, &[], &[])?;
     wait_for_port(server_port, &mut serve)?;
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, 1, Duration::from_secs(2)).await?;
 
     run_cli_json(
         &home_dir,
@@ -50,8 +50,8 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
             "add",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--skill-id",
             "research",
             "--name",
@@ -94,8 +94,8 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
             "add",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--skill-id",
             "research",
             "--name",
@@ -195,8 +195,8 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
             "list",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
         ],
     )?;
     assert_eq!(list.get("count").and_then(Value::as_u64), Some(0));
@@ -218,8 +218,8 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
             source.join("SKILL.md").to_str().unwrap(),
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
         ],
     )?;
     let show_skill = || {
@@ -250,8 +250,8 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
             exported.to_str().unwrap(),
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
         ],
     )?;
     let exported_skill = exported.join("coding-check");
@@ -267,8 +267,8 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
             exported_skill.to_str().unwrap(),
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
         ],
     )?;
     assert_eq!(
@@ -301,7 +301,7 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -309,18 +309,18 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
 
     let mut serve = spawn_server_with_env(&home_dir, server_port, &[], &[])?;
     wait_for_port(server_port, &mut serve)?;
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, 1, Duration::from_secs(2)).await?;
 
     let imported = run_cli_json(
         &home_dir,
@@ -331,8 +331,8 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
             &hermes_dir,
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
         ],
     )?;
     let imported_count = imported
@@ -352,8 +352,8 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
             "list",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
         ],
     )?;
     let listed_count = listed.get("count").and_then(Value::as_u64).unwrap_or(0);
@@ -372,8 +372,8 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
             out_dir.to_str().unwrap(),
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
         ],
     )?;
     let exported_count = exported
@@ -398,8 +398,8 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
             out_dir.to_str().unwrap(),
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
         ],
     )?;
     let reimported_count = reimported

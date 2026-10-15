@@ -11,8 +11,8 @@ structure RequestInputCase where
   contextSkillIds : List String
   cwdAllowed : Bool := true
   queueSourceAllowed : Bool := true
-  behavior : String := "coding"
-  sessionBehavior : String := "coding"
+  agent : String := "coding"
+  sessionAgent : String := "coding"
   sessionExists : Bool := true
   currentTitle : Option AgentSession.Title := none
   admissionKind : AgentRequestAdmissionKind := .localSelf
@@ -24,14 +24,14 @@ structure RequestInputCase where
   deriving Repr
 
 def RequestInputCase.accepted (c : RequestInputCase) : Bool :=
-  behaviorMatchesSession c.behavior c.sessionBehavior &&
+  agentMatchesSession c.agent c.sessionAgent &&
     inputWithinContext c.input c.contextSkillIds (fun _ => c.cwdAllowed)
       (fun _ => c.queueSourceAllowed) &&
     goalContinuationAllowed c.input c.admissionKind c.runtimeSource c.verifiedGoalContinuation &&
     requestWorkspaceWithinSource c.workspace c.workspaceSource c.workspaceSourceAuthenticated
 
 private def scopedWorkspace : RequestWorkspace :=
-  { workspaceId := some "workspace", ownerAgentDid := some "did:owner",
+  { workspaceId := some "workspace", ownerNodeDid := some "did:owner",
     authority := some .readOnly, sealHash := some "seal" }
 
 private def workspaceCases : List RequestInputCase :=
@@ -42,10 +42,10 @@ private def workspaceCases : List RequestInputCase :=
   [ base
   , {base with
       name := "workspace-foreign-owner-same-label-denied",
-      workspace := {scopedWorkspace with ownerAgentDid := some "did:foreign"}}
+      workspace := {scopedWorkspace with ownerNodeDid := some "did:foreign"}}
   , {base with
       name := "workspace-missing-owner-denied",
-      workspace := {scopedWorkspace with ownerAgentDid := none}}
+      workspace := {scopedWorkspace with ownerNodeDid := none}}
   , {base with
       name := "workspace-missing-id-denied",
       workspace := {scopedWorkspace with workspaceId := none}}
@@ -62,27 +62,37 @@ private def workspaceCases : List RequestInputCase :=
       workspace := {scopedWorkspace with sealHash := some "forged"}}
   , {base with
       name := "workspace-padded-owner-denied",
-      workspace := {scopedWorkspace with ownerAgentDid := some " did:owner "}}
+      workspace := {scopedWorkspace with ownerNodeDid := some " did:owner "}}
   , {base with
       name := "unbound-owner-injection-denied",
-      workspace := {ownerAgentDid := some "did:owner"}, workspaceSource := {}}
+      workspace := {ownerNodeDid := some "did:owner"}, workspaceSource := {}}
+  ]
+
+def queueExtensionCases : List RequestInputCase :=
+  let queue : RequestQueue := { source := .user, policy := .append }
+  let position : QueuePosition := ⟨"physical:slot", "physical:previous"⟩
+  [ { name := "signed-queue-steer", input := { queue := some {queue with delivery := .steer} }, contextSkillIds := [] }
+  , { name := "signed-queue-position", input := { queue := some {queue with position := some position} }, contextSkillIds := [] }
+  , { name := "signed-steer-position", input := { queue := some {queue with delivery := .steer, position := some position} }, contextSkillIds := [] }
+  , { name := "signed-position-slot-mutation", input := { queue := some {queue with position := some {position with slotRequestDocId := "physical:other-slot"}} }, contextSkillIds := [] }
+  , { name := "signed-position-predecessor-mutation", input := { queue := some {queue with position := some {position with replacesRequestDocId := "physical:other-previous"}} }, contextSkillIds := [] }
   ]
 
 def requestInputCases : List RequestInputCase :=
   [ { name := "empty-input-inherits-context", input := {}, contextSkillIds := ["rust"] }
   , { name := "explicit-skill-within-whitelist", input := { selectedSkillIds := ["rust"] },
       contextSkillIds := ["rust"] }
-  , { name := "principal-skill-outside-context-denied", input := { selectedSkillIds := ["admin"] },
+  , { name := "node-skill-outside-context-denied", input := { selectedSkillIds := ["admin"] },
       contextSkillIds := ["rust"] }
   , { name := "cwd-owner-rejects-escape", input := { cwd := some "/outside" },
       contextSkillIds := [], cwdAllowed := false }
   , { name := "forged-background-source-confers-no-authority",
       input := { queue := some { source := .backgroundCompletion, policy := .coalesce } },
       contextSkillIds := [], queueSourceAllowed := false }
-  , { name := "blank-behavior-no-principal-fallback", input := {}, contextSkillIds := [],
-      behavior := "  " }
-  , { name := "mismatched-behavior-cannot-rebind-session", input := {}, contextSkillIds := [],
-      behavior := "review" }
+  , { name := "blank-agent-no-node-fallback", input := {}, contextSkillIds := [],
+      agent := "  " }
+  , { name := "mismatched-agent-cannot-rebind-session", input := {}, contextSkillIds := [],
+      agent := "review" }
   , { name := "initial-title-only-on-creation",
       input := { initialTitle := some ⟨"Task title", .task⟩ }, contextSkillIds := [],
       sessionExists := false }
@@ -149,12 +159,12 @@ def requestInputCases : List RequestInputCase :=
       admissionKind := .runtimeInternal
       verifiedGoalContinuation := some ⟨3, false⟩ }
 
-  ] ++ workspaceCases
+  ] ++ workspaceCases ++ queueExtensionCases
 
 theorem input_boundary_cases_pinned : requestInputCases.map RequestInputCase.accepted =
     [true, true, false, false, false, false, false, true, true, true, false,
      false, false, true, true, false, false, false, false, false, false, true,
-     true, false, false, false, false, false, true, false, false, false] := by native_decide
+     true, false, false, false, false, false, true, false, false, false, true, true, true, true, true] := by native_decide
 
 theorem title_creation_cases_pinned :
     (requestInputCases.drop 7 |>.take 3).map
@@ -173,5 +183,9 @@ theorem input_encoding_distinguishes_semantics :
     requestInputFields {} ≠ requestInputFields { goalContinuation := some ⟨1, false⟩ } ∧
     requestInputFields { goalContinuation := some ⟨1, false⟩ } ≠
       requestInputFields { goalContinuation := some ⟨1, true⟩ } := by decide
+
+theorem new_queue_fields_change_signed_encoding :
+    let encoded := queueExtensionCases.map (fun c => requestInputFields c.input)
+    encoded.Nodup := by native_decide
 
 end Conformance.ContractCases

@@ -36,8 +36,8 @@ def final_output(native: dict[str, Any]) -> str | None:
 def participant_key(value: dict[str, Any]) -> tuple[Any, ...]:
     return (
         value.get("role"),
-        value.get("agent_did"),
-        value.get("behavior_id"),
+        value.get("node_did"),
+        value.get("agent_id"),
     )
 
 
@@ -54,8 +54,8 @@ def delegation_key(value: dict[str, Any]) -> tuple[Any, ...]:
         value.get("parent_request_id"),
         value.get("child_request_id"),
         value.get("parent_tool_call_id"),
-        value.get("agent_did"),
-        value.get("behavior_id"),
+        value.get("node_did"),
+        value.get("agent_id"),
         value.get("status"),
     )
 
@@ -98,11 +98,20 @@ def verify_capture_export(capture_path: Path, export_dir: Path) -> bool:
     assert export["projection_id"] == "multi_agent_task", export
     assert export["source_request_id"] == mapping["request_id"], export
     assert export["redaction_mode"] == capture["envelope"]["redaction_mode"], export
-    for key in ("source_session_id", "source_agent_did", "source_behavior_id"):
+    for key in ("source_session_id", "source_agent_id"):
         assert export.get(key) == capture["envelope"].get(key), (
             f"{key} mismatch: expected {capture['envelope'].get(key)!r}, "
             f"got {export.get(key)!r}"
         )
+    expected_node_did = (
+        "[training_safe_redacted]"
+        if export["redaction_mode"] == "training_safe"
+        else capture["envelope"].get("source_node_did")
+    )
+    assert export.get("source_node_did") == expected_node_did, (
+        f"source_node_did mismatch: expected {expected_node_did!r}, "
+        f"got {export.get('source_node_did')!r}"
+    )
     projection = export["output"]["projection"]
     expected = capture["envelope"]["output"]["projection"]
 

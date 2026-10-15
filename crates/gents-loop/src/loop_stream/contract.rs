@@ -49,6 +49,64 @@ pub type ReplayEvidenceResolver = Arc<
         + Sync,
 >;
 
+/// One-shot carrier from an admission estimate's replay evidence resolution to
+/// the immediately following dispatch lookup.
+///
+/// Native premise the model does not cover (it treats resolution as an opaque
+/// pure parameter of the tags): the slot holds ONLY the admission estimate's
+/// resolution, is consumed exactly once by the immediately following dispatch
+/// whose tags it covers, and every later assembly re-reads the store. A
+/// capture replicating between the estimate and that first dispatch is
+/// observed no earlier than the next resolution; the estimate's token count
+/// already races this way.
+#[derive(Clone, Default)]
+pub struct ReplayEstimateSeed {
+    state: std::sync::Arc<std::sync::Mutex<ReplayEstimateSeedState>>,
+}
+
+#[derive(Default)]
+struct ReplayEstimateSeedState {
+    armed: bool,
+    rows: Option<Vec<ReplayEvidenceRow>>,
+}
+
+impl ReplayEstimateSeed {
+    pub(crate) fn arm(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .armed = true;
+    }
+
+    pub(crate) fn disarm(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .armed = false;
+    }
+
+    /// Record one resolution while an admission estimate holds the seed armed;
+    /// dispatch and later resolutions resolve unarmed and record nothing.
+    pub fn record(&self, rows: Vec<ReplayEvidenceRow>) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.armed {
+            state.rows = Some(rows);
+        }
+    }
+
+    /// Take the recorded rows. Taken once: the next lookup re-reads the store.
+    pub(crate) fn take(&self) -> Option<Vec<ReplayEvidenceRow>> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .rows
+            .take()
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct LoopReplayInput {
     /// Present only for a persisted request with a real canonical owner.
@@ -61,6 +119,38 @@ pub struct LoopReplayInput {
     /// summarize. Replay selection does not read them.
     pub required: Vec<ReplayTag>,
     pub resolve: Option<ReplayEvidenceResolver>,
+    /// Carries the admission estimate's resolution to the first dispatch.
+    pub estimate_seed: Option<ReplayEstimateSeed>,
+}
+
+impl LoopReplayInput {
+    /// Arm [`Self::estimate_seed`] so the resolutions run while the returned
+    /// guard is held are recorded for the immediately following dispatch.
+    /// Dropping the guard ends the bracket, so an assembly that unwinds or is
+    /// cancelled still leaves later resolutions unarmed. The admission
+    /// estimate brackets exactly its own assembly with this.
+    pub fn arm_estimate_seed(&self) -> EstimateSeedGuard {
+        let seed = self.estimate_seed.clone();
+        if let Some(seed) = &seed {
+            seed.arm();
+        }
+        EstimateSeedGuard { seed }
+    }
+}
+
+/// Ends the estimate-seed bracket opened by
+/// [`LoopReplayInput::arm_estimate_seed`] when dropped, on every exit path
+/// including panics, unwinds and cancellation.
+pub struct EstimateSeedGuard {
+    seed: Option<ReplayEstimateSeed>,
+}
+
+impl Drop for EstimateSeedGuard {
+    fn drop(&mut self) {
+        if let Some(seed) = &self.seed {
+            seed.disarm();
+        }
+    }
 }
 
 /// `(turn_index, attempt, request, assembly_trace)`.
@@ -212,11 +302,21 @@ pub enum LoopStreamItem {
     OutputObligationPending {
         reminder: Message,
     },
+    FinishOrIntake {
+        text: String,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<FinishOrIntake>>,
+    },
+    SteeringBoundary {
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<FoldedPrompt>>>,
+    },
     /// Owned execution publishes admitted input before the first provider
     /// invocation. Tool continuation messages already have delivery owners.
     AuthoredInputReady {
         context: Option<Message>,
         prompt: Message,
+        /// Folded messages after the prompt, each with its authored key.
+        folded: Vec<(String, Message)>,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<FoldedPrompt>>>,
     },
 }
 
@@ -263,4 +363,36 @@ pub struct LoopConfig {
     pub deadline: Option<DateTime<Utc>>,
     pub max_turns: usize,
     pub output_obligation_gate: Option<Arc<dyn OutputObligationCheck>>,
+    /// Admitted messages folded into this request's turn, in queue order
+    /// (Lean `SessionQueue.TurnInput`). Each is a distinct user message sent
+    /// after the prompt and published under its own authored key.
+    pub folded_prompts: Vec<FoldedPrompt>,
+    /// The request's admitted input, published before the first provider
+    /// projection is built. A restored checkpoint carries its own provider
+    /// view, so the authored input travels independently of it.
+    pub authored_input: Option<AuthoredInput>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AuthoredInput {
+    pub context: Option<Message>,
+    pub prompt: Message,
+    pub folded: Vec<FoldedPrompt>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FoldedPrompt {
+    pub key: String,
+    pub message: Message,
+}
+
+#[derive(Debug)]
+pub enum FinishOrIntake {
+    Finished,
+    Continue(Vec<FoldedPrompt>),
+}
+
+pub struct SteeringSnapshot {
+    pub pending_request_doc_ids: Vec<String>,
+    pub inputs: Vec<FoldedPrompt>,
 }

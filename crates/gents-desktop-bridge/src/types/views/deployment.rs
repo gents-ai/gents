@@ -48,8 +48,8 @@ pub struct RuntimeView {
     pub last_reconcile_result: Option<String>,
     pub last_reconcile_error: Option<String>,
     pub updated_at: Option<String>,
-    pub behavior_executor_capacity: Option<i64>,
-    pub behavior_executor_queue_depth: Option<i64>,
+    pub agent_executor_capacity: Option<i64>,
+    pub agent_executor_queue_depth: Option<i64>,
 }
 
 #[cfg(test)]
@@ -63,8 +63,8 @@ mod runtime_view_tests {
             last_reconcile_result: Some("applied".to_string()),
             last_reconcile_error: None,
             updated_at: Some("2026-08-29T00:00:00Z".to_string()),
-            behavior_executor_capacity: Some(1),
-            behavior_executor_queue_depth: Some(0),
+            agent_executor_capacity: Some(1),
+            agent_executor_queue_depth: Some(0),
         })
         .expect("serialize diagnostic runtime view");
         let object = value.as_object().expect("runtime view object");
@@ -72,9 +72,9 @@ mod runtime_view_tests {
             "processState",
             "activeGeneration",
             "routerGeneration",
-            "defaultBehaviorId",
-            "runnableBehaviorCount",
-            "unavailableBehaviorCount",
+            "defaultAgentId",
+            "runnableAgentCount",
+            "unavailableAgentCount",
         ] {
             assert!(
                 !object.contains_key(forbidden),
@@ -86,8 +86,8 @@ mod runtime_view_tests {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
-pub enum BehaviorUnavailableReasonView {
-    BehaviorDisabled,
+pub enum AgentUnavailableReasonView {
+    AgentDisabled,
     RuntimeConfigurationInvalid,
     BackendNotConfigured,
     BackendDisabled,
@@ -101,14 +101,13 @@ pub enum BehaviorUnavailableReasonView {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
-pub enum BehaviorReadinessUnknownReasonView {
+pub enum AgentReadinessUnknownReasonView {
     ReadinessMissing,
     ReadinessMalformed,
     ReadinessVersionUnsupported,
-    ReadinessStale,
     ProcessNotReady,
     RouterGenerationStale,
-    BehaviorNotAssigned,
+    AgentNotAssigned,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
@@ -117,59 +116,59 @@ pub enum BehaviorReadinessUnknownReasonView {
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
-pub enum BehaviorReadinessStatusView {
+pub enum AgentReadinessStatusView {
     Ready {
-        behavior_id: String,
+        agent_id: String,
     },
     Unavailable {
-        behavior_id: String,
-        reason: BehaviorUnavailableReasonView,
+        agent_id: String,
+        reason: AgentUnavailableReasonView,
     },
     Unknown {
-        behavior_id: String,
-        reason: BehaviorReadinessUnknownReasonView,
+        agent_id: String,
+        reason: AgentReadinessUnknownReasonView,
     },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
 #[serde(tag = "state", rename_all = "snake_case")]
-pub enum BehaviorReadinessSourceView {
+pub enum NodeReadinessSourceView {
     Current,
     Unknown {
-        reason: BehaviorReadinessUnknownReasonView,
+        reason: AgentReadinessUnknownReasonView,
     },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct BehaviorReadinessView {
-    pub source: BehaviorReadinessSourceView,
+pub struct NodeReadinessView {
+    pub source: NodeReadinessSourceView,
     pub active_generation: Option<u64>,
     pub router_generation: Option<u64>,
     pub updated_at: Option<String>,
-    pub behaviors: Vec<BehaviorReadinessStatusView>,
+    pub agents: Vec<AgentReadinessStatusView>,
 }
 
-impl Default for BehaviorReadinessView {
+impl Default for NodeReadinessView {
     fn default() -> Self {
         Self {
-            source: BehaviorReadinessSourceView::Unknown {
-                reason: BehaviorReadinessUnknownReasonView::ReadinessMissing,
+            source: NodeReadinessSourceView::Unknown {
+                reason: AgentReadinessUnknownReasonView::ReadinessMissing,
             },
             active_generation: None,
             router_generation: None,
             updated_at: None,
-            behaviors: Vec::new(),
+            agents: Vec::new(),
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentPrincipalView {
-    pub agent_did: String,
+pub struct NodeView {
+    pub node_did: String,
     pub display_name: Option<String>,
-    pub default_behavior_id: Option<String>,
+    pub default_agent_id: Option<String>,
     pub enabled: Option<bool>,
     pub created_at: Option<String>,
     pub created_by: Option<String>,
@@ -177,9 +176,9 @@ pub struct AgentPrincipalView {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct BehaviorView {
-    pub behavior_id: String,
-    pub agent_did: String,
+pub struct AgentView {
+    pub agent_id: String,
+    pub node_did: String,
     pub display_name: String,
     pub description: Option<String>,
     pub context_id: Option<String>,
@@ -190,16 +189,16 @@ pub struct BehaviorView {
     pub created_at: Option<String>,
 }
 
-/// Resolved, presentation-safe description of a configured behavior environment.
+/// Resolved, presentation-safe description of a configured agent environment.
 ///
-/// AgentBehavior stores references to shared configuration documents. Clients
+/// Agent stores references to shared configuration documents. Clients
 /// should not have to repeat those joins (or infer tool semantics), so the
 /// bridge materializes the environment once alongside the raw configuration
 /// projection.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct BehaviorEnvironmentView {
-    pub behavior_id: String,
+pub struct AgentEnvironmentView {
+    pub agent_id: String,
     pub display_name: String,
     pub enabled: bool,
     pub is_default: bool,
@@ -241,12 +240,11 @@ pub struct InferenceBackendView {
 }
 
 // Configurations without credentials use their canonical serialized documents.
-// Derived presentation belongs to BehaviorEnvironmentView, not another config shape.
+// Derived presentation belongs to AgentEnvironmentView, not another config shape.
 pub use gents::document_config::{
-    AgentBehavior as AgentBehaviorDocument, AgentContext, AgentPrincipal, ChainKeyBindingDocument,
-    CompactionConfig, DatastoreToolSurfaceDocument, EventSource, InferenceExecution,
-    InferenceProfile, InferenceSampling, Schedule, SubagentTargetDocument, ToolServiceRegistry,
-    Tools, Trigger,
+    Agent, AgentContext, AgentTargetDocument, ChainKeyBindingDocument, CompactionConfig,
+    DatastoreToolSurfaceDocument, EventSource, InferenceExecution, InferenceProfile,
+    InferenceSampling, Node, Schedule, ToolServiceRegistry, Tools, Trigger,
 };
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -256,7 +254,7 @@ pub struct TaskView {
     pub task_id: String,
     pub name: Option<String>,
     pub description: Option<String>,
-    pub behavior_id: Option<String>,
+    pub agent_id: Option<String>,
     pub prompt_template: Option<String>,
     pub goal_objective_template: Option<String>,
     pub goal_token_budget: Option<i64>,
@@ -284,10 +282,10 @@ pub struct TaskRecentRunsView {
 pub struct TaskRunSummaryView {
     pub request_id: String,
     pub request_doc_id: Option<String>,
-    pub agent_did: String,
+    pub node_did: String,
     pub requester_did: Option<String>,
     pub session_id: Option<String>,
-    pub behavior_id: Option<String>,
+    pub agent_id: Option<String>,
     pub lifecycle_state: Option<String>,
     pub execution_origin: Option<String>,
     pub caused_by_trigger_id: Option<String>,
@@ -299,7 +297,7 @@ pub struct TaskRunSummaryView {
 #[serde(rename_all = "camelCase")]
 pub struct SkillView {
     pub skill_id: String,
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     pub name: Option<String>,
     pub description: Option<String>,
     pub instructions: Option<String>,
@@ -331,7 +329,7 @@ pub struct TriggerView {
 pub struct SessionSummary {
     pub started_by: Option<super::LinkedSessionView>,
     pub session_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub requester_did: Option<String>,
     pub latest_request_doc_id: Option<String>,
     pub closed_at: Option<String>,
@@ -340,7 +338,7 @@ pub struct SessionSummary {
     pub title: Option<String>,
     pub preview_text: Option<String>,
     pub status: Option<String>,
-    pub behavior_id: Option<String>,
+    pub agent_id: Option<String>,
     pub latest_request_id: Option<String>,
     pub task_id: Option<String>,
     pub task_name: Option<String>,
@@ -365,7 +363,7 @@ pub struct MailboxItemView {
     pub item_id: String,
     pub item_key: String,
     pub requester_did: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub status: String,
     pub kind: String,
     pub action: String,
@@ -378,8 +376,8 @@ pub struct MailboxItemView {
     pub request_id: Option<String>,
     pub graph_run_id: Option<String>,
     pub cause_doc_id: Option<String>,
-    pub target_agent_did: String,
-    pub target_behavior_id: String,
+    pub target_node_did: String,
+    pub target_agent_id: String,
     pub expected_collection: Option<String>,
     pub parent_item_id: Option<String>,
     pub deadline_at: Option<String>,
@@ -392,7 +390,7 @@ impl From<&MailboxItemRow> for MailboxItemView {
             item_id: row.doc_id.clone(),
             item_key: row.item_key.clone(),
             requester_did: row.requester_did.clone(),
-            agent_did: row.agent_did.clone(),
+            node_did: row.node_did.clone(),
             status: row.status.clone(),
             kind: row.kind.clone(),
             action: row.action.clone(),
@@ -405,8 +403,8 @@ impl From<&MailboxItemRow> for MailboxItemView {
             request_id: row.request_id.clone(),
             graph_run_id: row.graph_run_id.clone(),
             cause_doc_id: row.cause_doc_id.clone(),
-            target_agent_did: row.target_agent_did.clone(),
-            target_behavior_id: row.target_behavior_id.clone(),
+            target_node_did: row.target_node_did.clone(),
+            target_agent_id: row.target_agent_id.clone(),
             expected_collection: row.expected_collection.clone(),
             parent_item_id: row.parent_item_id.clone(),
             deadline_at: row.deadline_at.clone(),
@@ -439,7 +437,7 @@ pub struct ClientRouteStatusView {
 pub struct DeploymentView {
     pub peer_id: String,
     pub label: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub addr: String,
     pub source: Option<String>,
     pub graphql: Option<String>,
@@ -449,13 +447,13 @@ pub struct DeploymentView {
     #[serde(default)]
     pub pairing: Vec<PairingCollectionStatusView>,
     pub last_error: Option<String>,
-    pub agent_principal: AgentPrincipalView,
-    pub principal_config: Option<AgentPrincipal>,
-    pub behavior_configs: Vec<AgentBehaviorDocument>,
+    pub node: NodeView,
+    pub node_config: Option<Node>,
+    pub agent_configs: Vec<Agent>,
     pub runtime: Option<RuntimeView>,
-    pub behavior_readiness: BehaviorReadinessView,
-    pub behaviors: Vec<BehaviorView>,
-    pub behavior_environments: Vec<BehaviorEnvironmentView>,
+    pub node_readiness: NodeReadinessView,
+    pub agents: Vec<AgentView>,
+    pub agent_environments: Vec<AgentEnvironmentView>,
     pub inference_backends: Vec<InferenceBackendView>,
     pub inference_profiles: Vec<InferenceProfile>,
     pub inference_sampling: Vec<InferenceSampling>,
@@ -464,7 +462,7 @@ pub struct DeploymentView {
     pub compactions: Vec<CompactionConfig>,
     pub tools: Vec<Tools>,
     pub tool_service_registries: Vec<ToolServiceRegistry>,
-    pub subagent_targets: Vec<SubagentTargetDocument>,
+    pub agent_targets: Vec<AgentTargetDocument>,
     pub datastore_tool_surfaces: Vec<DatastoreToolSurfaceDocument>,
     pub chain_key_bindings: Vec<ChainKeyBindingDocument>,
     pub skills: Vec<SkillView>,
@@ -542,7 +540,7 @@ pub struct EnrollmentRequestView {
     /// Presentation-only label advertised by the authenticated status endpoint.
     /// It is never used for enrollment authority or route selection.
     pub server_label: Option<String>,
-    pub owner_agent: String,
+    pub owner_node: String,
     pub state: String,
     pub expires_at: String,
 }
@@ -555,7 +553,7 @@ impl From<gents_desktop_core::client::EnrollmentRequestResult> for EnrollmentReq
             admin_did: result.admin_did,
             server_peer: result.server_peer,
             server_label: None,
-            owner_agent: result.owner_agent,
+            owner_node: result.owner_node,
             state: result.state,
             expires_at: result.expires_at,
         }
@@ -579,16 +577,16 @@ mod peer_remove_response_tests {
     fn response_preserves_snapshot_shape_and_surfaces_mutation_result() {
         let snapshot = DesktopClientSnapshot {
             bootstrap: DesktopBootstrapSummary {
-                default_agent_home: "/agent".to_string(),
-                init_agent_name: None,
-                init_agent_did: None,
+                default_node_home: "/agent".to_string(),
+                init_node_name: None,
+                init_node_did: None,
                 init_tool_ceiling: None,
                 init_tool_root: None,
                 desktop_home: "/desktop".to_string(),
                 peer_directory_path: "/desktop/peers.json".to_string(),
                 node_data_dir: "/desktop/node".to_string(),
                 diagnostics_hint: "native logging".to_string(),
-                agent_home_exists: true,
+                node_home_exists: true,
                 desktop_home_exists: true,
                 peer_directory_exists: true,
                 client_state_exists: true,
@@ -645,6 +643,6 @@ pub struct NetworkSavedPeerView {
     pub peer_id: String,
     pub label: String,
     pub addr: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub source: Option<String>,
 }

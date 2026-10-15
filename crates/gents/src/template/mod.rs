@@ -779,11 +779,11 @@ fn engine_resolves(env: &Environment<'static>, probe: &str, argument: Option<&st
 
 pub fn task_node_ctx(
     node_did: &str,
-    behavior_id: &str,
+    agent_id: &str,
     now: &str,
 ) -> (serde_json::Value, serde_json::Value) {
     (
-        serde_json::json!({ "node_did": node_did, "behavior_id": behavior_id }),
+        serde_json::json!({ "node_did": node_did, "agent_id": agent_id }),
         serde_json::json!({ "now": now }),
     )
 }

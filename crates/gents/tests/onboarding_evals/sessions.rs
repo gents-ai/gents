@@ -13,7 +13,7 @@ fn session_investigation_eval_pack_validates_all_splits_and_shipped_checks() {
     let config = load_pack_config(
         &manifest,
         &PackInstallOptions {
-            agent_did: "did:key:eval-owner".into(),
+            node_did: "did:key:eval-owner".into(),
         },
         &|path| Ok(std::fs::read(root.join(path))?),
         &|_| None,
@@ -75,9 +75,7 @@ fn session_model_fixtures_expect_public_cross_agent_visibility() {
         })
         .collect();
     assert_eq!(closed_release.len(), 3);
-    assert!(closed_release
-        .iter()
-        .any(|doc| doc["agent_did"] != "$trial"));
+    assert!(closed_release.iter().any(|doc| doc["node_did"] != "$trial"));
     assert_eq!(
         count["stages"][0]["checks"][0]["params"]["expect"][0]["equals"],
         closed_release.len()
@@ -103,7 +101,7 @@ fn session_model_fixtures_expect_public_cross_agent_visibility() {
     assert_eq!(cross["case_id"], "cross-agent-visible");
     let source = &cross["stages"][0]["capture"][0];
     assert_eq!(source["filter"]["session_id"]["_eq"], "partner-archive");
-    assert_ne!(source["filter"]["agent_did"]["_eq"], "$trial");
+    assert_ne!(source["filter"]["node_did"]["_eq"], "$trial");
 }
 
 #[tokio::test]
@@ -115,7 +113,7 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
     use gents::config_client::ConfigAccess;
     use gents::defra_node::EmbeddedNode;
     use gents::session::load_tool_call_presentation;
-    use gents::{AgentIdentity, KeyIdentity};
+    use gents::{KeyIdentity, NodeIdentity};
     use serde_json::json;
 
     let run = std::path::PathBuf::from(std::env::var("GENTS_SESSION_METRICS_RUN")?);
@@ -136,7 +134,7 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
                 .await?,
         );
         let access = ConfigAccess::Local(node.clone());
-        let rows = access.execute("{ AgentToolCall(filter: {tool_name: {_eq: \"sessions\"}}) { _docID agent_did session_id requester_did lifecycle_state } }").await?;
+        let rows = access.execute("{ AgentToolCall(filter: {tool_name: {_eq: \"sessions\"}}) { _docID node_did session_id requester_did lifecycle_state } }").await?;
         let calls = rows["data"]["AgentToolCall"]
             .as_array()
             .context("missing canonical tool calls")?;
@@ -150,7 +148,7 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
             let presentation = load_tool_call_presentation(
                 &access,
                 call["_docID"].as_str().context("missing tool identity")?,
-                call["agent_did"].as_str().context("missing principal")?,
+                call["node_did"].as_str().context("missing principal")?,
                 call["session_id"].as_str().context("missing session")?,
                 call["requester_did"].as_str(),
             )
@@ -194,7 +192,7 @@ async fn retained_tool_trace_uses_native_canonical_reader() -> anyhow::Result<()
     use gents::defra_node::EmbeddedNode;
     use gents::graphql::escape_graphql_string;
     use gents::session::load_tool_call_presentation;
-    use gents::{AgentIdentity, KeyIdentity};
+    use gents::{KeyIdentity, NodeIdentity};
     use serde_json::json;
 
     let home = std::path::PathBuf::from(std::env::var("GENTS_EVAL_TRACE_HOME")?);
@@ -217,7 +215,7 @@ async fn retained_tool_trace_uses_native_canonical_reader() -> anyhow::Result<()
             .await?,
     );
     let access = ConfigAccess::Local(node);
-    let response = access.execute(&format!("{{AgentToolCall(filter: {{agent_did: {{_eq: \"{}\"}}}}, order: {{started_at: ASC}}) {{_docID agent_did session_id requester_did tool_name lifecycle_state started_at}}}}",escape_graphql_string(&did))).await?;
+    let response = access.execute(&format!("{{AgentToolCall(filter: {{node_did: {{_eq: \"{}\"}}}}, order: {{started_at: ASC}}) {{_docID node_did session_id requester_did tool_name lifecycle_state started_at}}}}",escape_graphql_string(&did))).await?;
     let rows = response["data"]["AgentToolCall"]
         .as_array()
         .context("missing canonical tool calls")?;
@@ -237,7 +235,7 @@ async fn retained_tool_trace_uses_native_canonical_reader() -> anyhow::Result<()
     }
     std::fs::write(
         output,
-        serde_json::to_vec_pretty(&json!({"home":home,"agent_did":did,"calls":calls}))?,
+        serde_json::to_vec_pretty(&json!({"home":home,"node_did":did,"calls":calls}))?,
     )?;
     Ok(())
 }

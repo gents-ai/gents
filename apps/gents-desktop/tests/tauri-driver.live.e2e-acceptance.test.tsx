@@ -15,14 +15,14 @@ import { isTerminalTurnState } from "./live-bridge-runner/observations";
 
 /* Native e2e acceptance against the live fixture runtime — NOT the managed
    backend product path. The real App is rendered against bridge_runner with
-   the live fixture (isolated desktop/remote/agent homes under a tempdir); the
+   the live fixture (isolated desktop/remote/node homes under a tempdir); the
    configured live inference endpoint/model is asserted through the canonical
    generated DeploymentView types; a scripted acceptance prompt forces one
    harmless file write + read-back through the live tool surface; a real
    nonterminal streaming observation is required; and the session is reloaded
    afterwards to prove the assistant final text and tool calls are durable.
-   The fixture ships only the generic "Live Repo Audit Default" behavior; The
-   Engineer behavior is NOT exercised here. Real
+   The fixture ships only the generic "Live Repo Audit Default" agent; The
+   Engineer agent is NOT exercised here. Real
    DMG install, first-run setup/start/config, and manual acceptance remain
    separate requirements.
    Requires GENTS_TAURI_LIVE=1 (set by tests/run-live-test.mjs) and real
@@ -32,7 +32,7 @@ import { isTerminalTurnState } from "./live-bridge-runner/observations";
        --model-name GLM-5.3-Flash-NVFP4 */
 
 const E2E_NOTE_RELATIVE = "workspace/e2e-acceptance-note.md";
-const FIXTURE_DEFAULT_BEHAVIOR_DISPLAY_NAME = "Live Repo Audit Default";
+const FIXTURE_DEFAULT_AGENT_DISPLAY_NAME = "Live Repo Audit Default";
 
 const e2eAcceptancePrompt = (sentinel: string) =>
   `Engineering acceptance check. You MUST call the bash_unrestricted tool once to create the file ${E2E_NOTE_RELATIVE} containing exactly one line: ${sentinel}. The file must contain exactly ${sentinel} followed by a single newline and nothing else; use a shell printf or echo redirect, not any other file tool. Then call read_file on ${E2E_NOTE_RELATIVE} to confirm the write. Finally explain the write and read-back verification in twenty numbered paragraphs, with two complete sentences in each paragraph, including ${sentinel}. The long explanation is required to exercise live streaming before completion.`;
@@ -44,10 +44,10 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
       // (1) Isolated homes: the fixture runs the desktop client, the remote
       // node, and the agent home under its own tempdir, never the daily
       // user home. The runner tool root is inside that tempdir.
-      expect(deployment.agentDid).toContain("did:key");
+      expect(deployment.nodeDid).toContain("did:key");
       expect(runner.toolRoot).not.toContain(process.env.HOME ?? "/Users/");
       logTurn(
-        `isolated deployment=${runner.deploymentLabel} agentDid=${runner.agentDid} toolRoot=${runner.toolRoot}`,
+        `isolated deployment=${runner.deploymentLabel} nodeDid=${runner.nodeDid} toolRoot=${runner.toolRoot}`,
       );
 
       // (2) Fixture runtime configuration, asserted through the canonical
@@ -72,32 +72,31 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
         )}`,
       ).toBeDefined();
       expect(backend?.endpoint).toBe(expectedInferenceUrl);
-      const defaultBehavior = deployment.behaviors.find(
-        (behavior) =>
-          behavior.behaviorId === deployment.agentPrincipal.defaultBehaviorId,
+      const defaultAgent = deployment.agents.find(
+        (agent) => agent.agentId === deployment.node.defaultAgentId,
       );
       expect(
-        defaultBehavior,
-        `fixture runtime exposed no default behavior: ${JSON.stringify(
-          deployment.behaviors,
+        defaultAgent,
+        `fixture runtime exposed no default agent: ${JSON.stringify(
+          deployment.agents,
         )}`,
       ).toBeDefined();
-      // The fixture ships a generic repository-audit behavior, not The
-      // Engineer; Engineer behavior acceptance is out of scope for this
+      // The fixture ships a generic repository-audit agent, not The
+      // Engineer; Engineer agent acceptance is out of scope for this
       // fixture and stays uncovered.
-      expect(defaultBehavior?.displayName).toBe(FIXTURE_DEFAULT_BEHAVIOR_DISPLAY_NAME);
+      expect(defaultAgent?.displayName).toBe(FIXTURE_DEFAULT_AGENT_DISPLAY_NAME);
       const profile = deployment.inferenceProfiles.find(
-        (candidate) => candidate.profile_id === defaultBehavior?.inferenceProfileId,
+        (candidate) => candidate.profile_id === defaultAgent?.inferenceProfileId,
       );
       expect(
         profile,
-        `fixture runtime exposed no inference profile for the default behavior: ${JSON.stringify(
+        `fixture runtime exposed no inference profile for the default agent: ${JSON.stringify(
           deployment.inferenceProfiles,
         )}`,
       ).toBeDefined();
       expect(profile?.model_name).toBe(expectedModelName);
       logTurn(
-        `fixture runtime endpoint=${backend?.endpoint} model=${profile?.model_name} behavior=${defaultBehavior?.behaviorId}`,
+        `fixture runtime endpoint=${backend?.endpoint} model=${profile?.model_name} agent=${defaultAgent?.agentId}`,
       );
 
       await driver.ready();
@@ -134,7 +133,7 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
         }
         const live = await runner.adapter.fetchSessionSnapshot(
           submitted.sessionId,
-          runner.agentDid,
+          runner.nodeDid,
           submitted.requestId,
         );
         if (live && isTerminalTurnState(live.turnState)) {
@@ -257,7 +256,7 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
       // the tool calls, with no liveAssistant item after the terminal turn.
       const reloaded = await runner.adapter.fetchSessionSnapshot(
         submitted.sessionId,
-        runner.agentDid,
+        runner.nodeDid,
         null,
       );
       expect(reloaded, "session reload returned no snapshot").toBeDefined();

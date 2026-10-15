@@ -148,7 +148,7 @@ impl RemoteSigner for TestRemoteSigner {
     }
 }
 
-/// Verifies that `AgentIdentity::verify` resolves a `did:key` DID to its public key
+/// Verifies that `NodeIdentity::verify` resolves a `did:key` DID to its public key
 /// without requiring the signer's key to be pre-registered in the process-local map.
 ///
 /// This reproduces the cross-node signed-invite pairing bug: node B tried to verify

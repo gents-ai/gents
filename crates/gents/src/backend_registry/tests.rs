@@ -6,7 +6,7 @@ use crate::OpenAiWireApi;
 
 fn base_backend() -> InferenceBackend {
     serde_json::from_value(serde_json::json!({
-        "agent_did": "did:key:backend-owner",
+        "node_did": "did:key:backend-owner",
         "backend_id": "reviewers",
         "name": "Reviewers",
         "provider_kind": "OpenAiCompatible",
@@ -47,7 +47,7 @@ fn inference_backend_from_value_parses() {
 
 #[test]
 fn inference_backend_from_value_requires_provider_kind_and_explicit_auth() {
-    for field in ["provider_kind", "auth", "agent_did"] {
+    for field in ["provider_kind", "auth", "node_did"] {
         let mut value = serde_json::to_value(base_backend()).unwrap();
         value.as_object_mut().unwrap().remove(field);
         let error = InferenceBackend::from_value(&value).unwrap_err();
@@ -62,23 +62,22 @@ fn inference_backend_from_value_requires_provider_kind_and_explicit_auth() {
 }
 
 #[test]
-fn principal_oauth_has_one_canonical_serde_tag() {
+fn node_oauth_has_one_canonical_serde_tag() {
     assert_eq!(
-        serde_json::to_value(BackendAuth::PrincipalOAuth { account_ref: None }).unwrap(),
-        serde_json::json!({"kind": "principal_oauth"})
+        serde_json::to_value(BackendAuth::NodeOAuth { account_ref: None }).unwrap(),
+        serde_json::json!({"kind": "node_oauth"})
     );
     assert!(
-        serde_json::from_value::<BackendAuth>(serde_json::json!({"kind": "principal_o_auth"}))
-            .is_err(),
+        serde_json::from_value::<BackendAuth>(serde_json::json!({"kind": "node_o_auth"})).is_err(),
         "the retired acronym-splitting spelling must not become a compatibility alias"
     );
 }
 
 #[test]
-fn principal_oauth_account_ref_round_trips_and_stays_absent_when_none() {
+fn node_oauth_account_ref_round_trips_and_stays_absent_when_none() {
     for text in [
-        r#"{"kind":"principal_oauth","account_ref":"acct-1"}"#,
-        r#"{"kind":"principal_oauth"}"#,
+        r#"{"kind":"node_oauth","account_ref":"acct-1"}"#,
+        r#"{"kind":"node_oauth"}"#,
     ] {
         let auth: BackendAuth = serde_json::from_str(text).unwrap();
         assert_eq!(serde_json::to_string(&auth).unwrap(), text);
@@ -194,7 +193,7 @@ fn resolve_backend_api_key_uses_explicit_credentials() {
         BackendAuth::Unauthenticated.resolve_api_key().unwrap(),
         None
     );
-    assert!(BackendAuth::PrincipalOAuth { account_ref: None }
+    assert!(BackendAuth::NodeOAuth { account_ref: None }
         .resolve_api_key()
         .is_err());
     assert!(BackendAuth::ApiKey { key: " ".into() }
@@ -270,14 +269,14 @@ fn inference_backend_validation_preserves_defaults_and_rejects_invalid_values() 
 #[test]
 fn inference_backend_validation_reports_every_violation() {
     let mut backend = base_backend();
-    backend.agent_did = " ".into();
+    backend.node_did = " ".into();
     backend.backend_id = " ".into();
     backend.endpoint = " ".into();
     backend.max_concurrent = Some(0);
     backend.max_queue_depth = Some(-1);
     let violations = backend.validation_violations();
     for field in [
-        "agent_did",
+        "node_did",
         "backend_id",
         "endpoint",
         "max_concurrent",
@@ -308,7 +307,7 @@ fn anthropic_api_key_takes_keys_on_the_fixed_endpoint_only() {
         backend.auth = auth;
         backend.validate().unwrap();
     }
-    backend.auth = BackendAuth::PrincipalOAuth { account_ref: None };
+    backend.auth = BackendAuth::NodeOAuth { account_ref: None };
     assert!(backend.validate().is_err());
 
     backend.auth = BackendAuth::Environment {
@@ -324,7 +323,7 @@ fn anthropic_api_key_takes_keys_on_the_fixed_endpoint_only() {
 #[test]
 fn inference_backend_validation_requires_provider_compatible_auth() {
     let mut backend = base_backend();
-    backend.auth = BackendAuth::PrincipalOAuth { account_ref: None };
+    backend.auth = BackendAuth::NodeOAuth { account_ref: None };
     assert!(backend.validate().is_err());
     for provider in [
         BackendProviderKind::ChatGptCodex,
@@ -332,7 +331,7 @@ fn inference_backend_validation_requires_provider_compatible_auth() {
         BackendProviderKind::ClaudeCliSubscription,
     ] {
         backend.provider_kind = provider;
-        backend.auth = BackendAuth::PrincipalOAuth { account_ref: None };
+        backend.auth = BackendAuth::NodeOAuth { account_ref: None };
         backend.validate().unwrap();
         for auth in [
             BackendAuth::Unauthenticated,
@@ -376,7 +375,7 @@ fn admission_rejects_unrelated_observation_and_defaults_capacity() {
 async fn scoped_backend_replacement_preserves_observations_and_resets_defaults() -> Result<()> {
     let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
-    crate::ensure_agent_principal(&node, &base_backend().agent_did).await?;
+    crate::ensure_node(&node, &base_backend().node_did).await?;
     let access = crate::config_client::ConfigAccess::Local(node.clone());
     let mut backend = base_backend();
     backend.backend_id = "reviewers\"quoted".into();
@@ -388,8 +387,8 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
     backend.tags = vec!["old".into()];
     let doc_id = crate::config_client::write_inference_backend_document(&access, &backend).await?;
     let catalogs = serde_json::json!([
-        {"agent_did":null,"observed_at":"2026-01-01T00:00:00Z","models":[{"model_name":"shared","display_name":null,"context_window":null,"max_context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]},
-        {"agent_did":"did:key:invoker","observed_at":"2026-01-02T00:00:00Z","models":[{"model_name":"private","display_name":null,"context_window":null,"max_context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]}
+        {"node_did":null,"observed_at":"2026-01-01T00:00:00Z","models":[{"model_name":"shared","display_name":null,"context_window":null,"max_context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]},
+        {"node_did":"did:key:invoker","observed_at":"2026-01-02T00:00:00Z","models":[{"model_name":"private","display_name":null,"context_window":null,"max_context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]}
     ]);
     let observation = serde_json::json!({"catalogs":{"entries":catalogs.clone()},"probe_status":"healthy","last_probe":"2026-01-02T00:00:00Z"});
     access
@@ -403,17 +402,17 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
         )
         .await?;
     let mut other = base_backend();
-    other.agent_did = "did:key:other-owner".into();
+    other.node_did = "did:key:other-owner".into();
     other.backend_id = backend.backend_id.clone();
     other.endpoint = "http://other.example/v1".into();
-    crate::ensure_agent_principal(&node, &other.agent_did).await?;
+    crate::ensure_node(&node, &other.node_did).await?;
     crate::config_client::write_inference_backend_document(&access, &other).await?;
     let mut replacement = base_backend();
     replacement.backend_id = backend.backend_id.clone();
     let replaced_id =
         crate::config_client::write_inference_backend_document(&access, &replacement).await?;
     assert_eq!(replaced_id, doc_id);
-    let loaded = lookup_backend(&node, &backend.agent_did, &backend.backend_id)
+    let loaded = lookup_backend(&node, &backend.node_did, &backend.backend_id)
         .await?
         .unwrap();
     assert_eq!(
@@ -422,7 +421,7 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
     );
     assert_eq!(loaded.effective_max_concurrent(), 1);
     assert_eq!(loaded.effective_max_queue_depth(), 100);
-    let observed = lookup_backend_observation(&node, &backend.agent_did, &backend.backend_id)
+    let observed = lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
         .await?
         .unwrap();
     assert_eq!(serde_json::to_value(&observed.catalogs)?, catalogs);
@@ -441,7 +440,7 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
         "private"
     );
     assert!(observed.catalog_for(Some("did:key:stranger"))?.is_none());
-    let other_loaded = lookup_backend(&node, &other.agent_did, &other.backend_id)
+    let other_loaded = lookup_backend(&node, &other.node_did, &other.backend_id)
         .await?
         .unwrap();
     assert_eq!(other_loaded.endpoint, other.endpoint);
@@ -457,7 +456,7 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
 async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Result<()> {
     let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
-    crate::ensure_agent_principal(&node, &base_backend().agent_did).await?;
+    crate::ensure_node(&node, &base_backend().node_did).await?;
     let access = crate::config_client::ConfigAccess::Local(node.clone());
     let backend = base_backend();
     crate::config_client::write_inference_backend_document(&access, &backend).await?;
@@ -476,7 +475,7 @@ async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Re
         duplicate_result.is_err(),
         "the canonical unique owner/ID index must reject duplicates"
     );
-    let loaded = lookup_backend(&node, &backend.agent_did, &backend.backend_id)
+    let loaded = lookup_backend(&node, &backend.node_did, &backend.backend_id)
         .await?
         .expect("original backend remains");
     assert_eq!(loaded.name, backend.name);
@@ -496,8 +495,8 @@ async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Re
 async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -> Result<()> {
     let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
-    let owner = base_backend().agent_did;
-    crate::ensure_agent_principal(&node, &owner).await?;
+    let owner = base_backend().node_did;
+    crate::ensure_node(&node, &owner).await?;
     let access = crate::config_client::ConfigAccess::Local(node.clone());
     crate::config_client::write_inference_backend_document(&access, &base_backend()).await?;
     let mut future = serde_json::to_value(base_backend())?;
@@ -541,12 +540,12 @@ async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -
 async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catalog() -> Result<()> {
     let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
-    crate::ensure_agent_principal(&node, &base_backend().agent_did).await?;
+    crate::ensure_node(&node, &base_backend().node_did).await?;
     let access = crate::config_client::ConfigAccess::Local(node.clone());
     let backend = base_backend();
     crate::config_client::write_inference_backend_document(&access, &backend).await?;
     let catalog = BackendModelCatalog {
-        agent_did: None,
+        node_did: None,
         observed_at: "2026-09-09T10:00:00Z".into(),
         models: vec![crate::document_config::AdvertisedModel {
             model_name: "advertised-model".into(),
@@ -559,7 +558,7 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
     };
     record_model_catalog(&node, &backend, catalog.clone()).await?;
     let mut wrong_scope = catalog.clone();
-    wrong_scope.agent_did = Some("did:key:other".into());
+    wrong_scope.node_did = Some("did:key:other".into());
     assert!(record_model_catalog(&node, &backend, wrong_scope)
         .await
         .is_err());
@@ -568,7 +567,7 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
     older.models.clear();
     record_model_catalog(&node, &backend, older).await?;
     assert_eq!(
-        lookup_backend_observation(&node, &backend.agent_did, &backend.backend_id)
+        lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
             .await?
             .unwrap()
             .catalogs,
@@ -581,7 +580,7 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
         .await
         .is_err());
     assert_eq!(
-        lookup_backend_observation(&node, &backend.agent_did, &backend.backend_id)
+        lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
             .await?
             .unwrap()
             .catalogs,
@@ -594,12 +593,12 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
 async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Result<()> {
     let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
-    crate::ensure_agent_principal(&node, &base_backend().agent_did).await?;
+    crate::ensure_node(&node, &base_backend().node_did).await?;
     let access = crate::config_client::ConfigAccess::Local(node.clone());
     let backend = base_backend();
     crate::config_client::write_inference_backend_document(&access, &backend).await?;
     let catalog = BackendModelCatalog {
-        agent_did: None,
+        node_did: None,
         observed_at: "2026-09-09T10:00:00Z".into(),
         models: vec![crate::document_config::AdvertisedModel {
             model_name: "exact-model".into(),
@@ -618,7 +617,7 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
         })
         .await?;
     assert_eq!(
-        lookup_backend_observation(&node, &backend.agent_did, &backend.backend_id)
+        lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
             .await?
             .unwrap()
             .catalogs,
@@ -641,7 +640,7 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
         .await;
     assert!(failed.is_err());
     assert_eq!(
-        lookup_backend_observation(&node, &backend.agent_did, &backend.backend_id)
+        lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
             .await?
             .unwrap()
             .catalogs,
@@ -649,7 +648,7 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
     );
     record_model_catalog(&node, &backend, empty.clone()).await?;
     assert_eq!(
-        lookup_backend_observation(&node, &backend.agent_did, &backend.backend_id)
+        lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
             .await?
             .unwrap()
             .catalogs,
@@ -700,14 +699,14 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
     const SECRET: &str = "subscription-access-token-never-stored";
     let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
-    let owner = base_backend().agent_did;
-    crate::ensure_agent_principal(&node, &owner).await?;
+    let owner = base_backend().node_did;
+    crate::ensure_node(&node, &owner).await?;
     let access = crate::config_client::ConfigAccess::Local(node.clone());
     let endpoint = spawn_echoing_models_server(SECRET).await;
     let mut claude = base_backend();
     claude.backend_id = "claude".into();
     claude.provider_kind = BackendProviderKind::ClaudeCliSubscription;
-    claude.auth = BackendAuth::PrincipalOAuth { account_ref: None };
+    claude.auth = BackendAuth::NodeOAuth { account_ref: None };
     claude.endpoint = endpoint.clone();
     let mut elsewhere = claude.clone();
     elsewhere.backend_id = "claude-elsewhere".into();
@@ -718,7 +717,7 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
     let credential = crate::oauth_credential::OAuthCredential {
         doc_id: None,
         credential_id: format!("claude-subscription:{owner}"),
-        agent_did: owner.clone(),
+        node_did: owner.clone(),
         provider: crate::claude_oauth::CLAUDE_OAUTH_PROVIDER.into(),
         access_token: SECRET.into(),
         refresh_token: format!("{SECRET}-refresh"),
@@ -748,7 +747,7 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
         &owner,
         claude.provider_kind,
         &endpoint,
-        &BackendAuth::PrincipalOAuth { account_ref: None },
+        &BackendAuth::NodeOAuth { account_ref: None },
         models,
     )
     .await?;

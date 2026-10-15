@@ -9,19 +9,19 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     let model_name = format!("mock-skill-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockChatEndpoint::start(&model_name, "ok")?;
     let server_port = allocate_port()?;
-    let agent_name = format!("cli-codex-skill-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-skill-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -43,11 +43,11 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, 1, Duration::from_secs(2)).await?;
 
     let added = run_cli_json(
         &home_dir,
@@ -57,8 +57,8 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
             "add",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--skill-id",
             "research",
             "--enabled",
@@ -74,8 +74,8 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
         added.get("skill_id").and_then(Value::as_str),
         Some("research")
     );
-    select_default_behavior_skills(&graphql, &agent_did, &["research"]).await?;
-    let foreign_agent_did = "did:key:zForeignSkillOwner";
+    select_default_agent_skills(&graphql, &node_did, &["research"]).await?;
+    let foreign_node_did = "did:key:zForeignSkillOwner";
     run_cli_json(
         &home_dir,
         &[
@@ -84,8 +84,8 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
             "add",
             "--graphql",
             &graphql,
-            "--agent-did",
-            foreign_agent_did,
+            "--node-did",
+            foreign_node_did,
             "--skill-id",
             "foreign-skill",
             "--enabled",
@@ -172,8 +172,8 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
         ],
     )?;
     assert_eq!(
-        foreign.get("agent_did").and_then(Value::as_str),
-        Some(foreign_agent_did)
+        foreign.get("node_did").and_then(Value::as_str),
+        Some(foreign_node_did)
     );
     assert_eq!(foreign.get("enabled").and_then(Value::as_bool), Some(true));
 
@@ -232,19 +232,19 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
     let model_name = format!("mock-skill-inject-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
     let server_port = allocate_port()?;
-    let agent_name = format!("cli-skill-inject-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-skill-inject-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -266,11 +266,11 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
-    let gen0 = wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+    let gen0 = wait_for_runtime_quiescence(&graphql, &node_did, 1, Duration::from_secs(2)).await?;
 
     let body_phrase = format!("INJECTED-BODY-{}", Uuid::new_v4().simple());
     run_cli_json(
@@ -281,8 +281,8 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
             "add",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--skill-id",
             "inject-skill",
             "--enabled",
@@ -294,8 +294,8 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
             &body_phrase,
         ],
     )?;
-    select_default_behavior_skills(&graphql, &agent_did, &["inject-skill"]).await?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, gen0 + 1, Duration::from_secs(2)).await?;
+    select_default_agent_skills(&graphql, &node_did, &["inject-skill"]).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, gen0 + 1, Duration::from_secs(2)).await?;
 
     let (mut ws, _) = serve
         .capturing(async {
@@ -367,7 +367,7 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
     Ok(())
 }
 
-/// A selection outside the bound behavior's effective set must not inject its
+/// A selection outside the bound agent's effective set must not inject its
 /// skill body.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
@@ -379,19 +379,19 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
     let model_name = format!("mock-skill-scope-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
     let server_port = allocate_port()?;
-    let agent_name = format!("cli-skill-scope-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-skill-scope-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -413,11 +413,11 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, 1, Duration::from_secs(2)).await?;
 
     let body_phrase = format!("UNSCOPED-BODY-{}", Uuid::new_v4().simple());
     run_cli_json(
@@ -428,8 +428,8 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
             "add",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--skill-id",
             "unscoped-skill",
             "--enabled",
@@ -510,7 +510,7 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
         captured
             .iter()
             .all(|request| !request.to_string().contains(&body_phrase)),
-        "a behavior-scoped skill not in the effective set must not be injected; captured={captured:?}"
+        "a agent-scoped skill not in the effective set must not be injected; captured={captured:?}"
     );
 
     let _ = ws.close(None).await;

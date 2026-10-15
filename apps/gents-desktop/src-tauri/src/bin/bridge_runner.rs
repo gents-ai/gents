@@ -14,7 +14,7 @@ use clap::Parser;
 use serde::Serialize;
 
 use http::BridgeRunnerServer;
-use live_fixture::{LiveBackendOverride, LiveBridgeFixture, LiveSubagentBackendOverride};
+use live_fixture::{LiveBackendOverride, LiveBridgeFixture, LiveTargetBackendOverride};
 
 /// glibc per-thread arenas retained DefraDB query churn at about 2.5x the live
 /// heap and memcg-OOM-killed the runtime at 512 MiB (#2034).
@@ -37,15 +37,15 @@ struct RunnerArgs {
     #[arg(long)]
     api_key_env_var: Option<String>,
     #[arg(long)]
-    subagent_inference_url: Option<String>,
+    agent_target_inference_url: Option<String>,
     #[arg(long)]
-    subagent_model_name: Option<String>,
+    agent_target_model_name: Option<String>,
     #[arg(long)]
-    subagent_provider: Option<String>,
+    agent_target_provider: Option<String>,
     #[arg(long)]
-    subagent_api_key: Option<String>,
+    agent_target_api_key: Option<String>,
     #[arg(long)]
-    subagent_api_key_env_var: Option<String>,
+    agent_target_api_key_env_var: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -54,7 +54,7 @@ struct ReadyMessage {
     kind: &'static str,
     base_url: String,
     deployment_label: String,
-    agent_did: String,
+    node_did: String,
     tool_root: String,
     data_root: String,
 }
@@ -72,15 +72,15 @@ fn main() -> Result<()> {
             api_key: args.api_key,
             api_key_env_var: args.api_key_env_var,
         };
-        let subagent_override = LiveSubagentBackendOverride {
-            inference_url: args.subagent_inference_url,
-            model_name: args.subagent_model_name,
-            provider: args.subagent_provider,
-            api_key: args.subagent_api_key,
-            api_key_env_var: args.subagent_api_key_env_var,
+        let agent_target_override = LiveTargetBackendOverride {
+            inference_url: args.agent_target_inference_url,
+            model_name: args.agent_target_model_name,
+            provider: args.agent_target_provider,
+            api_key: args.agent_target_api_key,
+            api_key_env_var: args.agent_target_api_key_env_var,
         };
         std::panic::catch_unwind(|| {
-            LiveBridgeFixture::start(Some(backend_override), Some(subagent_override))
+            LiveBridgeFixture::start(Some(backend_override), Some(agent_target_override))
         })
         .map_err(|_| anyhow!("bridge runner panicked during startup"))??
     };
@@ -89,7 +89,7 @@ fn main() -> Result<()> {
         kind: "ready",
         base_url: server.base_url(),
         deployment_label: fixture.deployment_label().to_string(),
-        agent_did: fixture.agent_did().to_string(),
+        node_did: fixture.node_did().to_string(),
         tool_root: fixture.tool_root().display().to_string(),
         data_root: fixture.data_root().display().to_string(),
     };

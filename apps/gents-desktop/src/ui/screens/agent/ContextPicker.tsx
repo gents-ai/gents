@@ -1,4 +1,4 @@
-/* The context a behavior points at, chosen from the node's contexts, a
+/* The context an agent points at, chosen from the node's contexts, a
    duplicate of one, or an empty one. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
@@ -19,7 +19,7 @@ import { nameOf } from "./behaviorDraft";
 const TRIGGER =
   "flex h-9 w-auto min-w-48 max-w-full items-center justify-between gap-1.5 rounded-2xl border border-transparent bg-input/50 px-3 text-sm whitespace-nowrap outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 max-md:w-full";
 
-/* Picks whose instructions and tools a behavior uses. Searchable, because an
+/* Picks whose instructions and tools an agent uses. Searchable, because an
    agent can have hundreds of contexts; each row says who uses it. */
 export function ContextPicker({
   id,
@@ -86,7 +86,7 @@ export function ContextPicker({
         <ComboboxInput
           showTrigger={false}
           aria-label="Search contexts"
-          placeholder={`Search ${deployment.contexts.length} contexts or behaviors`}
+          placeholder={`Search ${deployment.contexts.length} contexts or agents`}
         />
         <ComboboxEmpty>Nothing by that name.</ComboboxEmpty>
         <ComboboxList>

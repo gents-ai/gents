@@ -37,7 +37,7 @@ export interface Contribution {
 /** data: NavItem (ui/app/navRegistry.tsx). All mount in order; same id replaces. */
 export const NAV_AREA = "nav";
 
-/** data: AgentSectionData + render({ agentDid, item }). All mount in order. */
+/** data: AgentSectionData + render({ nodeDid, item }). All mount in order. */
 export const AGENT_SECTIONS_AREA = "agent.sections";
 
 /** render only. Trailing actions in a session's header. All mount in order. */
@@ -72,7 +72,7 @@ export interface AgentSectionData {
 
 /** props an `agent.sections` page receives */
 export interface AgentSectionProps {
-  agentDid: string;
+  nodeDid: string;
   item?: string;
 }
 

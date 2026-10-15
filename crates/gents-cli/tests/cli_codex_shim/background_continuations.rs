@@ -11,21 +11,21 @@ async fn codex_shim_streams_claimed_background_completion_and_replays_it_once() 
     let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-background-wake-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-background-wake-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let identity = identity_from_init(&init)?;
-    let behavior_id = format!("{agent_did}:default");
+    let agent_id = format!("{node_did}:default");
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -46,7 +46,7 @@ async fn codex_shim_streams_claimed_background_completion_and_replays_it_once() 
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -61,7 +61,7 @@ async fn codex_shim_streams_claimed_background_completion_and_replays_it_once() 
     initialize_config_and_thread(&mut ws, &home_dir).await?;
     let thread_id = start_thread(&mut ws, &home_dir).await?;
     let wake_request_id =
-        seed_background_completion_wake(&graphql, &identity, &behavior_id, &thread_id).await?;
+        seed_background_completion_wake(&graphql, &identity, &agent_id, &thread_id).await?;
 
     let started = tokio::time::timeout(Duration::from_secs(30), read_turn_started(&mut ws))
         .await
@@ -128,21 +128,21 @@ async fn codex_shim_resume_finishes_an_in_progress_background_completion() -> Re
     )?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-resumed-background-wake-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-resumed-background-wake-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let identity = identity_from_init(&init)?;
-    let behavior_id = format!("{agent_did}:default");
+    let agent_id = format!("{node_did}:default");
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -163,7 +163,7 @@ async fn codex_shim_resume_finishes_an_in_progress_background_completion() -> Re
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -178,7 +178,7 @@ async fn codex_shim_resume_finishes_an_in_progress_background_completion() -> Re
     initialize_config_and_thread(&mut ws, &home_dir).await?;
     let thread_id = start_thread(&mut ws, &home_dir).await?;
     let wake_request_id =
-        seed_background_completion_wake(&graphql, &identity, &behavior_id, &thread_id).await?;
+        seed_background_completion_wake(&graphql, &identity, &agent_id, &thread_id).await?;
 
     let started = tokio::time::timeout(Duration::from_secs(30), read_turn_started(&mut ws))
         .await

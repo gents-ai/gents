@@ -78,12 +78,12 @@ impl ClientCore {
             open_or_create_client_store_key(&paths, options.store_key_custody, &mut checkpoint)
                 .await?;
 
-        let principal = PrincipalIdentity::load_or_create(&paths).await?;
+        let node_identity = PrincipalIdentity::load_or_create(&paths).await?;
         checkpoint("paths_and_identity");
         let mut node_builder =
             gents::store_key::persistent_builder(paths.node_data_dir(), &store_key)?
                 .with_p2p(desktop_p2p_config(&paths, &options))
-                .with_node_identity_did(principal.did());
+                .with_node_identity_did(node_identity.did());
         if let Some(http_addr) = options.http_addr {
             node_builder = node_builder.with_http(HttpConfig::with_addr(http_addr));
         }
@@ -120,10 +120,10 @@ impl ClientCore {
 
             let observer_subscription = node.subscribe_document_changes();
 
-            let (selected_agent_did, _) = watch::channel::<Option<String>>(None);
+            let (selected_node_did, _) = watch::channel::<Option<String>>(None);
 
             let initial_snapshot = {
-                load_full_snapshot_with_peer_records(node.as_ref(), &records, principal.did())
+                load_full_snapshot_with_peer_records(node.as_ref(), &records, node_identity.did())
                     .await?
             };
             let (store, _store_updates) = ObservedStore::new(initial_snapshot);
@@ -141,7 +141,7 @@ impl ClientCore {
             let route_manager = Arc::new(ClientRouteManager::new(
                 Arc::clone(&node),
                 Arc::clone(&p2p),
-                Arc::new(principal.clone()),
+                Arc::new(node_identity.clone()),
             ));
 
             // Each saved peer can take a full dial timeout, so each one settled
@@ -151,7 +151,7 @@ impl ClientCore {
                 &p2p,
                 &records,
                 &options,
-                &principal,
+                &node_identity,
                 &route_manager,
                 &mut || checkpoint("saved_peer"),
             )
@@ -176,9 +176,9 @@ impl ClientCore {
                 Arc::clone(&node),
                 Arc::clone(&store),
                 sync_state.clone(),
-                principal.did().to_string(),
+                node_identity.did().to_string(),
                 observer_subscription,
-                selected_agent_did.subscribe(),
+                selected_node_did.subscribe(),
             );
             let (p2p_control, p2p_control_rx) = mpsc::channel(8);
             let p2p_supervisor = spawn_p2p_supervisor_task(
@@ -186,7 +186,7 @@ impl ClientCore {
                 Arc::clone(&p2p),
                 sync_state.clone(),
                 p2p_control_rx,
-                Arc::new(principal.clone()),
+                Arc::new(node_identity.clone()),
                 local_peer_id.clone(),
                 Arc::clone(&route_manager),
                 options.install_replicators_on_bootstrap,
@@ -195,7 +195,7 @@ impl ClientCore {
                 store_lock: tokio::sync::Mutex::new(None),
                 paths,
                 options,
-                principal,
+                node_identity,
                 node: Arc::clone(&node),
                 p2p,
                 route_manager,
@@ -204,7 +204,7 @@ impl ClientCore {
                 sync_state,
                 p2p_supervisor: tokio::sync::Mutex::new(Some(p2p_supervisor)),
                 hydration_transition: tokio::sync::Mutex::new(()),
-                selected_agent_did,
+                selected_node_did,
                 last_loaded_for: tokio::sync::Mutex::new(std::collections::HashMap::new()),
                 request_patch_signatures: tokio::sync::Mutex::new(std::collections::HashMap::new()),
                 p2p_control: tokio::sync::Mutex::new(Some(p2p_control)),
@@ -268,7 +268,7 @@ pub(super) async fn bootstrap_saved_peers(
         let mut status = ClientPeerStatus {
             peer_id: record.peer_id.clone(),
             label: record.label.clone(),
-            agent_did: record.agent_did.clone(),
+            node_did: record.node_did.clone(),
             addr: record.addr.clone(),
             dial_succeeded: false,
             last_error: None,
@@ -566,13 +566,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = DesktopPaths::from_root(temp.path().join("client"));
         paths.ensure_root_dirs().await.unwrap();
-        let principal = PrincipalIdentity::load_or_create(&paths).await.unwrap();
+        let node_identity = PrincipalIdentity::load_or_create(&paths).await.unwrap();
         let identity_bytes = std::fs::read(paths.identity_key_path()).unwrap();
         let plain = Arc::new(
             NodeBuilder::default()
                 .data_path(paths.node_data_dir())
                 .with_storage_backend(StorageBackend::Regolith)
-                .with_node_identity_did(principal.did())
+                .with_node_identity_did(node_identity.did())
                 .with_p2p(desktop_p2p_config(&paths, &ClientCoreOptions::local_only()))
                 .build()
                 .await
@@ -585,17 +585,17 @@ mod tests {
                 "test.client_upgrade.session",
                 &format!(
                     r#"mutation {{ create_AgentSession(input: {{
-                session_id: "upgrade-session", agent_did: "{}", behavior_id: "default",
+                session_id: "upgrade-session", node_did: "{}", agent_id: "default",
                 title: {{ text: "before upgrade", source: "user" }},
                 created_at: "2026-09-30T00:00:00Z"
             }}) {{ _docID }} }}"#,
-                    escape_graphql_string(principal.did()),
+                    escape_graphql_string(node_identity.did()),
                 ),
             )
             .await
             .unwrap();
         let query = r#"{ AgentSession(filter: {session_id: {_eq: "upgrade-session"}}) {
-            _docID session_id agent_did title created_at
+            _docID session_id node_did title created_at
         } }"#;
         let before = access.execute(query).await.unwrap();
         let doc_id = before["data"]["AgentSession"][0]["_docID"]
@@ -649,7 +649,7 @@ mod tests {
             let core = ClientCore::start_with_paths_and_options(paths.clone(), options)
                 .await
                 .unwrap();
-            assert_eq!(core.principal().did(), principal.did());
+            assert_eq!(core.node_identity().did(), node_identity.did());
             assert_eq!(
                 std::fs::read(paths.identity_key_path()).unwrap(),
                 identity_bytes
@@ -716,7 +716,7 @@ mod tests {
         .await
         .unwrap();
         let key = std::fs::read(paths.store_key_path()).unwrap();
-        let did = core.principal().did().to_string();
+        let did = core.node_identity().did().to_string();
         let error = match ClientCore::start_with_paths_and_options(
             paths.clone(),
             ClientCoreOptions::local_only(),
@@ -737,7 +737,7 @@ mod tests {
             ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
                 .await
                 .unwrap();
-        assert_eq!(reopened.principal().did(), did);
+        assert_eq!(reopened.node_identity().did(), did);
         reopened.shutdown().await.unwrap();
     }
 }

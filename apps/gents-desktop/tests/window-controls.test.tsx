@@ -13,7 +13,10 @@ const controls = vi.hoisted(() => ({
   onMaximizedChange: vi.fn(),
 }));
 
-vi.mock("../src/lib/windowControls", () => controls);
+vi.mock("../src/lib/nativeShell", async (actual) => ({
+  ...(await actual<typeof import("../src/lib/nativeShell")>()),
+  ...controls,
+}));
 vi.mock("../src/lib/shellPlatform", () => ({
   headerIsWindowBar: () => true,
   isWindowsTauriShell: () => true,
@@ -62,7 +65,7 @@ describe("Windows caption controls", () => {
 
     const header = container.querySelector("header");
     expect(header).toHaveAttribute("data-tauri-drag-region");
-    expect(header?.querySelector("a[aria-label='Agents']")).toBeInTheDocument();
+    expect(header?.querySelector("a[aria-label='Nodes']")).toBeInTheDocument();
     /* the sync chip sits at the nav's foot, not in the bar */
     expect(
       screen.getAllByRole("button", { name: /Show sync diagnostics/ })[0],

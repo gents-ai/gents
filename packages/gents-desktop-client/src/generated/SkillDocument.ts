@@ -4,7 +4,7 @@
  * Document-layer view of a `Skill` row (decision D1). Mirrors
  * `crates/gents-schemas/schemas/agent/skill.graphql`.
  */
-export type SkillDocument = { skill_id: string, agent_did: string, name?: string | null, description?: string | null, instructions?: string | null,
+export type SkillDocument = { skill_id: string, node_did: string, name?: string | null, description?: string | null, instructions?: string | null,
 /**
  * Local supporting-file base, not portable identity or an access grant.
  */

@@ -14,7 +14,7 @@ use crate::{
 
 pub(crate) fn resolve_home_identity(
     home: Option<&std::path::Path>,
-) -> Result<std::sync::Arc<dyn gents::AgentIdentity>> {
+) -> Result<std::sync::Arc<dyn gents::NodeIdentity>> {
     let home_dir = resolve_home_dir(home);
     let config = read_init_config(&home_dir)?.with_context(|| {
         format!(

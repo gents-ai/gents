@@ -21,7 +21,7 @@
     {
       "name": "engineer",
       "description": "Runs the Engineer and, through the one backend it binds, every crew agent the Engineer configures.",
-      "behaviors": [
+      "agents": [
         "engineer"
       ]
     }

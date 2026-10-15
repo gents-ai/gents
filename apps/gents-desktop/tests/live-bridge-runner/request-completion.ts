@@ -17,7 +17,7 @@ const REQUEST_POLL_MS = 500;
 
 export type RequestCompletionTarget = Pick<
   ChatSendResult | TaskRunResult,
-  "agentDid" | "requestId" | "sessionId"
+  "nodeDid" | "requestId" | "sessionId"
 >;
 
 export async function waitForRequestCompletion({
@@ -115,7 +115,7 @@ export async function waitForRequestCompletion({
       ) {
         const snapshot = await adapter.fetchSessionSnapshot(
           request.sessionId,
-          request.agentDid,
+          request.nodeDid,
           request.requestId,
         );
         if (

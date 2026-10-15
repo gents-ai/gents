@@ -1,3 +1,6 @@
+import type { PendingQueueEditRequest } from "../generated/PendingQueueEditRequest.js";
+import type { PendingQueueEditResult } from "../generated/PendingQueueEditResult.js";
+import type { OauthProvider } from "../transport.js";
 import type { ConfigComponentsApplyRequest } from "../generated/ConfigComponentsApplyRequest.js";
 import type { ConfigComponentsPatchRequest } from "../generated/ConfigComponentsPatchRequest.js";
 import type { EventSourceSaveRequest } from "../generated/EventSourceSaveRequest.js";
@@ -16,13 +19,13 @@ import type { InferenceRecommendationRequest } from "../generated/InferenceRecom
 import type { InferenceBackendRecommendationRequest } from "../generated/InferenceBackendRecommendationRequest.js";
 import type { InferenceModelRecommendation } from "../generated/InferenceModelRecommendation.js";
 import type {
-  AgentConfigSaveRequest,
-  DefaultBehaviorSetRequest,
+  NodeConfigSaveRequest,
+  DefaultAgentSetRequest,
   BackendDeleteRequest,
   BackendSaveRequest,
-  BehaviorDeleteRequest,
+  AgentDeleteRequest,
   ContextDeleteRequest,
-  BehaviorSaveRequest,
+  AgentSaveRequest,
   ChatSendResult,
   CodexLoginResult,
   ClaudeLoginResult,
@@ -71,6 +74,25 @@ import type {
   DesktopOperationsSnapshot,
   DesktopOperationsSnapshotRequest,
 } from "../types/operations.js";
+import type {
+  FoundPack,
+  InstalledPack,
+  PackEditedChoice,
+  PackInstallRequest,
+  PackPluginSlot,
+  PackSlotProfile,
+} from "../types/packs.js";
+import type {
+  AllowedFolderAccess,
+  AllowedFolders,
+  PluginApprovalDecision,
+  PluginApprovalRequest,
+} from "../types/hostAccess.js";
+import type {
+  PackPluginCallRequest,
+  UxPluginListing,
+  UxPluginSource,
+} from "../types/uxPlugins.js";
 
 export type ManagedServerAuthorityInput = {
   toolCeiling: ManagedServerToolCeiling;
@@ -88,32 +110,39 @@ export type DesktopApiAdapter = {
   shutdownDesktopClient: () => Promise<DesktopClientSnapshot>;
   managedServerStatus?: () => Promise<ManagedServerStatus>;
   startManagedServer?: (
-    agentName: string,
+    nodeName: string,
     authority?: ManagedServerAuthorityInput,
   ) => Promise<ManagedServerStatus>;
   restartManagedServer?: (
-    agentName: string,
+    nodeName: string,
     authority: ManagedServerAuthorityInput,
   ) => Promise<ManagedServerStatus>;
-  /** Omit `confirmation` to preview a home this version cannot open. */
+  /** Omit `confirmation` to preview the entries the reset will retire. */
   resetManagedServer?: (
     confirmation?: string,
     disposition?: HomeResetDisposition,
+    fullReset?: boolean,
   ) => Promise<ManagedServerResetResult>;
   /** Quits the application, leaving all local state untouched. */
   quitDesktop?: () => Promise<void>;
   validateManagedServerRoot?: (path: string) => Promise<string>;
   openManagedServerLoginItems?: () => Promise<void>;
   commitManagedServerAutoStart?: (
-    agentName: string,
+    nodeName: string,
   ) => Promise<ManagedServerStatus>;
   stopManagedServer?: (
     disableAutoStart: boolean,
   ) => Promise<ManagedServerStatus>;
   /** Opens the managed runtime's DB explorer window; resolves to its URL. */
   openDbExplorer?: () => Promise<string>;
-  setManagedServerAutoStart?: (enabled: boolean) => Promise<ManagedServerStatus>;
-  setSelectedAgent: (agentDid: string | null) => Promise<void>;
+  /** Opens a URL in the person's browser. The bridge strips the packaged
+   *  build's own libraries and display backend from the environment the
+   *  browser inherits, which the OS opener cannot. */
+  openExternalUrl?: (url: string) => Promise<void>;
+  setManagedServerAutoStart?: (
+    enabled: boolean,
+  ) => Promise<ManagedServerStatus>;
+  setSelectedNode: (nodeDid: string | null) => Promise<void>;
   removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
   fetchPeerStatus: (peerId: string) => Promise<unknown>;
@@ -122,17 +151,17 @@ export type DesktopApiAdapter = {
   ) => Promise<EnrollmentRequestView>;
   listWorkspace: (subpath?: string | null) => Promise<WorkspaceListingView>;
   fetchRequestTimeline: (
-    agentDid: string,
+    nodeDid: string,
     requestId: string,
   ) => Promise<RequestTimelineView>;
   explainToolSurface: (
-    agentDid: string,
-    behaviorId: string,
+    nodeDid: string,
+    agentId: string,
   ) => Promise<ToolSurfaceExplanationView>;
   fetchNetworkStatus: () => Promise<NetworkStatusView>;
   fetchSessionSnapshot: (
     sessionId: string,
-    agentDid?: string | null,
+    nodeDid?: string | null,
     requestId?: string | null,
     timelinePage?: {
       limit?: number;
@@ -141,11 +170,11 @@ export type DesktopApiAdapter = {
   ) => Promise<DesktopSessionSnapshot | null>;
   retrySessionHydration: (
     sessionId: string,
-    agentDid?: string | null,
+    nodeDid?: string | null,
   ) => Promise<void>;
   fetchSessionLiveDelta?: (request: {
     sessionId: string;
-    agentDid?: string | null;
+    nodeDid?: string | null;
     requestId: string;
     baseLiveCursor: string;
     baseContentByteLen: number;
@@ -154,8 +183,8 @@ export type DesktopApiAdapter = {
     baseReasoningHash: string;
   }) => Promise<SessionLiveDeltaView | null>;
   sendChatMessage: (request: {
-    agentDid: string;
-    behaviorId?: string | null;
+    nodeDid: string;
+    agentId?: string | null;
     sessionId?: string | null;
     content: string;
     causedBySourceDocId?: string | null;
@@ -165,17 +194,20 @@ export type DesktopApiAdapter = {
     /** The folder the user works in for this chat. */
     cwd?: string | null;
   }) => Promise<ChatSendResult>;
+  editPendingQueue: (
+    request: PendingQueueEditRequest,
+  ) => Promise<PendingQueueEditResult>;
   listMailbox: () => Promise<MailboxItemView[]>;
   startMailboxRequest: (itemId: string) => Promise<MailboxItemView>;
   dismissMailboxItem: (itemId: string) => Promise<void>;
   renameSession: (request: SessionRenameRequest) => Promise<void>;
   resendRequest: (
     requestId: string,
-    agentDid?: string,
+    nodeDid?: string,
   ) => Promise<RequestResendResult>;
   retryRequest: (
     requestId: string,
-    agentDid?: string,
+    nodeDid?: string,
   ) => Promise<ChatSendResult>;
   applyConfigComponents: (
     request: ConfigComponentsApplyRequest,
@@ -183,14 +215,14 @@ export type DesktopApiAdapter = {
   patchConfigComponents: (
     request: ConfigComponentsPatchRequest,
   ) => Promise<DesktopClientSnapshot>;
+  saveNodeConfig: (
+    request: NodeConfigSaveRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  setDefaultAgent: (
+    request: DefaultAgentSetRequest,
+  ) => Promise<DesktopClientSnapshot>;
   saveAgentConfig: (
-    request: AgentConfigSaveRequest,
-  ) => Promise<DesktopClientSnapshot>;
-  setDefaultBehavior: (
-    request: DefaultBehaviorSetRequest,
-  ) => Promise<DesktopClientSnapshot>;
-  saveBehaviorConfig: (
-    request: BehaviorSaveRequest,
+    request: AgentSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
   saveSkillConfig: (
     request: SkillSaveRequest,
@@ -225,8 +257,8 @@ export type DesktopApiAdapter = {
   deleteToolServiceConfig: (
     request: ToolServiceDeleteRequest,
   ) => Promise<DesktopClientSnapshot>;
-  deleteBehaviorConfig: (
-    request: BehaviorDeleteRequest,
+  deleteAgentConfig: (
+    request: AgentDeleteRequest,
   ) => Promise<DesktopClientSnapshot>;
   deleteContextConfig: (
     request: ContextDeleteRequest,
@@ -246,43 +278,49 @@ export type DesktopApiAdapter = {
     request: InferenceBackendRecommendationRequest,
   ) => Promise<InferenceModelRecommendation>;
   codexLogin: (
-    agentDid: string,
+    nodeDid: string,
     provider?: string | null,
     label?: string | null,
   ) => Promise<CodexLoginResult>;
   cancelCodexLogin: () => Promise<void>;
   grokLogin: (
-    agentDid: string,
+    nodeDid: string,
     provider?: string | null,
     label?: string | null,
   ) => Promise<GrokLoginResult>;
   cancelGrokLogin: () => Promise<void>;
   claudeLogin: (
-    agentDid: string,
+    nodeDid: string,
     provider?: string | null,
     label?: string | null,
   ) => Promise<ClaudeLoginResult>;
   cancelClaudeLogin: () => Promise<void>;
-  listProviderAccounts?: (agentDid: string) => Promise<ProviderAccountView[]>;
+  /** Calls `onUrl` with each sign-in URL the bridge sends while a
+   *  provider's login runs; resolves to a function that stops watching. */
+  watchProviderLoginUrl?: (
+    provider: OauthProvider,
+    onUrl: (url: string) => void,
+  ) => Promise<() => void>;
+  listProviderAccounts?: (nodeDid: string) => Promise<ProviderAccountView[]>;
   disconnectProviderAccount?: (
-    agentDid: string,
+    nodeDid: string,
     credentialId: string,
   ) => Promise<void>;
   /** Saves a sign-in the bridge holds after a failed credential save,
    *  without repeating the browser login. `provider` is the credential kind. */
   retrySaveProviderAccount?: (
-    agentDid: string,
+    nodeDid: string,
     provider: string,
   ) => Promise<ProviderAccountView>;
   renameProviderAccount?: (
-    agentDid: string,
+    nodeDid: string,
     credentialId: string,
     label: string,
   ) => Promise<void>;
   /** Removes the account and the backends its sign-in created that no
    *  profile uses. */
   removeProviderAccount?: (
-    agentDid: string,
+    nodeDid: string,
     credentialId: string,
   ) => Promise<void>;
   /** Asks the runtime to read usage (skipping accounts read in the last
@@ -290,7 +328,7 @@ export type DesktopApiAdapter = {
    *  true for an explicit Refresh, the only read whose failure rejects.
    *  `provider` is a credential kind. */
   readProviderUsage?: (
-    agentDid: string,
+    nodeDid: string,
     refresh: boolean,
     provider?: string | null,
   ) => Promise<BackendUsageView[]>;
@@ -320,13 +358,77 @@ export type DesktopApiAdapter = {
   ) => Promise<SessionProvenanceView>;
   listBackendsWithHealth: () => Promise<BackendHealth[]>;
   listMcpServicesWithHealth: () => Promise<MCPServiceHealthView[]>;
-  probeMcpService: (serviceId: string) => Promise<McpServiceProbeResult>;
+  probeMcpService: (
+    nodeDid: string,
+    serviceId: string,
+  ) => Promise<McpServiceProbeResult>;
   fetchOperationsSnapshot: (
     request: DesktopOperationsSnapshotRequest,
   ) => Promise<DesktopOperationsSnapshot>;
   interruptRequest: (
     request: DesktopInterruptRequestRequest,
   ) => Promise<InterruptRequestResult>;
+  listInstalledPacks: () => Promise<{ packs: InstalledPack[] }>;
+  listPackPluginSlots: () => Promise<{
+    plugins: PackPluginSlot[];
+    profiles: PackSlotProfile[];
+  }>;
+  /** the registry account signed in, or a failure when none is */
+  readPackAccount: () => Promise<{ account: { username: string } }>;
+  searchPacks: (
+    query: string,
+    page: number,
+  ) => Promise<{ packs: FoundPack[]; has_more: boolean }>;
+  installPack: (request: PackInstallRequest) => Promise<void>;
+  updatePack: (pack: string, edited: PackEditedChoice) => Promise<void>;
+  removePack: (pack: string) => Promise<void>;
+  bindPackPlugin: (plugin: string, profile: string | null) => Promise<void>;
+  signInToPackRegistry: (token: string) => Promise<void>;
+  signOutOfPackRegistry: () => Promise<void>;
+  listAllowedFolders: () => Promise<AllowedFolders>;
+  addAllowedFolder: (
+    path: string,
+    access: AllowedFolderAccess,
+  ) => Promise<AllowedFolders>;
+  removeAllowedFolder: (path: string) => Promise<AllowedFolders>;
+  listPendingPluginApprovals: () => Promise<{
+    requests: PluginApprovalRequest[];
+  }>;
+  decidePluginApproval: (
+    id: string,
+    decision: PluginApprovalDecision,
+  ) => Promise<void>;
+  listUxPlugins: () => Promise<{ plugins: UxPluginListing[] }>;
+  readUxPluginSource: (id: string) => Promise<UxPluginSource>;
+  callPackPlugin: (
+    request: PackPluginCallRequest,
+  ) => Promise<{ output: unknown }>;
 };
 
-export type { HomeResetDisposition, ManagedServerResetResult, ManagedServerStatus };
+export type PackCommand =
+  | "listInstalledPacks"
+  | "listPackPluginSlots"
+  | "readPackAccount"
+  | "searchPacks"
+  | "installPack"
+  | "updatePack"
+  | "removePack"
+  | "bindPackPlugin"
+  | "signInToPackRegistry"
+  | "signOutOfPackRegistry";
+
+export type HostAccessCommand =
+  | "listAllowedFolders"
+  | "addAllowedFolder"
+  | "removeAllowedFolder"
+  | "listPendingPluginApprovals"
+  | "decidePluginApproval";
+
+export type UxPluginCommand =
+  "listUxPlugins" | "readUxPluginSource" | "callPackPlugin";
+
+export type {
+  HomeResetDisposition,
+  ManagedServerResetResult,
+  ManagedServerStatus,
+};

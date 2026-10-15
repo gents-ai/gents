@@ -28,7 +28,7 @@ namespace Handover
 structure PhysicalRequestAdmission where
   document : DocId
   entry : SessionQueue.QueueEntry
-  agent : Nat
+  node : Nat
   session : SessionId
   requester : Option Nat
   authenticated : Bool
@@ -49,7 +49,7 @@ structure TitleBinding where
   logicalRequest : RequestId
   parentPhysical : DocId
   parentLogical : RequestId
-  agent : Nat
+  node : Nat
   session : SessionId
   authenticated : Bool
   deriving DecidableEq, Repr
@@ -74,6 +74,9 @@ structure Activation where
   generation : Generation
   duration : Time
   deadline : Time
+  /-- Pending requests whose signed admission the claim verified for folding
+  (`SessionQueue.claimFolding`); empty claims only the head. -/
+  admitted : List RequestId := []
   deriving DecidableEq, Repr
 
 structure ClaimedBinding where
@@ -96,6 +99,7 @@ structure ToolAdmission where
 inductive ToolProvenance where
   | acceptedIntent
   | spawnedBackground (parentToolDoc : DocId)
+  | pluginEffect (parentToolDoc : DocId) (ordinal : Nat)
   deriving DecidableEq, Repr
 
 structure ToolGenesis where
@@ -117,8 +121,22 @@ structure OwnedTool where
   session : SessionId
   acceptedSequence : Transcript.Sequence
   provenance : ToolProvenance := .acceptedIntent
+  effectArguments : Option DocId := none
+  terminalOutput : Option PayloadSpec := none
   context : ToolExecution.ToolCallContext
   stuckSince : Option Time := none
+  deriving DecidableEq, Repr
+
+/-- Input bytes and the child lifecycle commit together. The selected
+installed-plugin grant is enforced before this admission by the invocation
+owner (`ToolPolicy.PluginCalls.available`). -/
+structure PluginEffectAdmission where
+  document : DocId
+  parentToolDoc : DocId
+  ordinal : Nat
+  name : String
+  context : ToolExecution.ToolCallContext
+  arguments : Segment
   deriving DecidableEq, Repr
 
 structure SpawnedToolAdmission where
@@ -132,7 +150,7 @@ its physical document binding. Logical `entry.requestId` is never substituted
 for `wakeDocument`. -/
 structure WakeDocumentBinding where
   entry : SessionQueue.QueueEntry
-  agent : Nat
+  node : Nat
   session : SessionId
   notificationMessageId : Transcript.MessageId
   notificationSequence : Transcript.Sequence
@@ -144,9 +162,9 @@ structure World where
   requestId : DocId
   sessionId : SessionId
   purpose : RequestPurpose
-  /-- Authenticated principal supplied by existing DID/ACP ownership at the
+  /-- Authenticated nodeDid supplied by existing DID/ACP ownership at the
   local gate. It is not inferred from a source. -/
-  principal : Nat
+  nodeDid : Nat
   lease : RequestExecutionLease.World Generation
   segments : List Segment
   messages : List MessageEnvelope
@@ -159,7 +177,7 @@ structure World where
   gateOwner : Option Nat := none
   gateSchedule : StorageWriteGate.State := ⟨.released, true, false⟩
   queue : SessionQueue.SessionQueueState :=
-    { scope := { agent := 0, session := 0, requester := none }
+    { scope := { node := 0, session := 0, requester := none }
     , active := none, pending := [], terminal := ∅ }
   claimed : Option Handover.ClaimedBinding := none
   retry : CompletionRetry.State :=

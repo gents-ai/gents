@@ -74,29 +74,29 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
 
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let mut behavior = test_behavior();
+    let mut agent_config = test_agent();
     {
-        let behavior = Arc::get_mut(&mut behavior).unwrap();
-        behavior.stream_batch_ms = 300_000;
-        behavior.deadline_duration = Duration::from_secs(120);
-        behavior.stream_liveness_timeout = Duration::from_secs(120);
-        behavior.provider_idle_timeout = Duration::from_secs(120);
+        let agent_config = Arc::get_mut(&mut agent_config).unwrap();
+        agent_config.stream_batch_ms = 300_000;
+        agent_config.deadline_duration = Duration::from_secs(120);
+        agent_config.stream_liveness_timeout = Duration::from_secs(120);
+        agent_config.provider_idle_timeout = Duration::from_secs(120);
     }
-    let agent_did = behavior.agent_did().to_owned();
-    let identity = behavior.principal_identity().clone();
+    let node_did = agent_config.node_did().to_owned();
+    let identity = agent_config.node_identity().clone();
     let model = BufferedReasoningShutdownProvider {
         processed_two: Arc::new(tokio::sync::Notify::new()),
     };
-    let prompt = LayeredPromptBuilder::for_behavior(
-        &behavior.system_prompt,
-        &behavior.behavior_id,
+    let prompt = LayeredPromptBuilder::for_agent(
+        &agent_config.system_prompt,
+        &agent_config.agent_id,
         &[],
         false,
         &[],
     );
-    let mut daemon = BehaviorDaemon::new(
+    let mut daemon = AgentDaemon::new(
         node.clone(),
-        behavior.clone(),
+        agent_config.clone(),
         None,
         Arc::new(model.clone()),
         prompt.preamble().to_owned(),
@@ -107,7 +107,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         BackgroundToolRegistry::default(),
         BackgroundExecutionRegistry::default(),
         Arc::new(StartupBarrier::ready_for_test()),
-        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), agent_did.clone()),
+        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), node_did.clone()),
         1,
         crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
@@ -116,13 +116,13 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         ),
     )
     .unwrap();
-    let request = create_routed_request(&node, &behavior, &agent_did).await;
+    let request = create_routed_request(&node, &agent_config, &node_did).await;
     let doc_id = request.doc_id.clone();
     let session = gents_protocol::session::AgentSession {
         session_id: request.session_id.clone(),
-        agent_did: agent_did.clone(),
+        node_did: node_did.clone(),
         requester_did: request.requester_did.clone(),
-        behavior_id: behavior.behavior_id.clone(),
+        agent_id: agent_config.agent_id.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
         title: Some(gents_protocol::session::SessionTitle {
@@ -487,19 +487,19 @@ impl crate::llm::tool::ToolDyn for LeaseBlockingTool {
 async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let behavior = test_behavior();
-    let agent_did = behavior.agent_did().to_owned();
-    let identity = behavior.principal_identity().clone();
-    let prompt = LayeredPromptBuilder::for_behavior(
-        &behavior.system_prompt,
-        &behavior.behavior_id,
+    let agent_config = test_agent();
+    let node_did = agent_config.node_did().to_owned();
+    let identity = agent_config.node_identity().clone();
+    let prompt = LayeredPromptBuilder::for_agent(
+        &agent_config.system_prompt,
+        &agent_config.agent_id,
         &[],
         false,
         &[],
     );
-    let mut daemon = BehaviorDaemon::new(
+    let mut daemon = AgentDaemon::new(
         node.clone(),
-        behavior.clone(),
+        agent_config.clone(),
         None,
         Arc::new(LeaseLossProvider),
         prompt.preamble().to_owned(),
@@ -512,7 +512,7 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         BackgroundToolRegistry::default(),
         BackgroundExecutionRegistry::default(),
         Arc::new(StartupBarrier::ready_for_test()),
-        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), agent_did.clone()),
+        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), node_did.clone()),
         1,
         crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
@@ -521,13 +521,13 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         ),
     )
     .unwrap();
-    let request = create_routed_request(&node, &behavior, &agent_did).await;
+    let request = create_routed_request(&node, &agent_config, &node_did).await;
     let request_doc_id = request.doc_id.clone();
     let session = gents_protocol::session::AgentSession {
         session_id: request.session_id.clone(),
-        agent_did: agent_did.clone(),
+        node_did: node_did.clone(),
         requester_did: request.requester_did.clone(),
-        behavior_id: behavior.behavior_id.clone(),
+        agent_id: agent_config.agent_id.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
         title: Some(gents_protocol::session::SessionTitle {
@@ -672,10 +672,12 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let mut behavior = test_behavior();
-    Arc::get_mut(&mut behavior).unwrap().stream_liveness_timeout = Duration::from_secs(1);
-    let agent_did = behavior.agent_did().to_owned();
-    let identity = behavior.principal_identity().clone();
+    let mut agent_config = test_agent();
+    Arc::get_mut(&mut agent_config)
+        .unwrap()
+        .stream_liveness_timeout = Duration::from_secs(1);
+    let node_did = agent_config.node_did().to_owned();
+    let identity = agent_config.node_identity().clone();
     let model = NonTerminalProvider {
         empty_forever,
         active_chunks: None,
@@ -683,16 +685,16 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
         stream_calls: Arc::new(AtomicUsize::new(0)),
         empty_deltas: Arc::new(AtomicUsize::new(0)),
     };
-    let prompt = LayeredPromptBuilder::for_behavior(
-        &behavior.system_prompt,
-        &behavior.behavior_id,
+    let prompt = LayeredPromptBuilder::for_agent(
+        &agent_config.system_prompt,
+        &agent_config.agent_id,
         &[],
         false,
         &[],
     );
-    let mut daemon = BehaviorDaemon::new(
+    let mut daemon = AgentDaemon::new(
         node.clone(),
-        behavior.clone(),
+        agent_config.clone(),
         None,
         Arc::new(model.clone()),
         prompt.preamble().to_owned(),
@@ -703,7 +705,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
         BackgroundToolRegistry::default(),
         BackgroundExecutionRegistry::default(),
         Arc::new(StartupBarrier::ready_for_test()),
-        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), agent_did.clone()),
+        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), node_did.clone()),
         1,
         crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
@@ -714,15 +716,15 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
     .expect("construct daemon with valid execution configuration");
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     for _ in 0..8 {
-        let request = create_routed_request(&node, &behavior, &agent_did).await;
+        let request = create_routed_request(&node, &agent_config, &node_did).await;
         // This test counts request inference attempts exactly. A supplied title
         // prevents optional background title generation from sharing the same
         // deliberately nonterminal provider and inflating calls/captures.
         let session = gents_protocol::session::AgentSession {
             session_id: request.session_id.clone(),
-            agent_did: agent_did.clone(),
+            node_did: node_did.clone(),
             requester_did: request.requester_did.clone(),
-            behavior_id: behavior.behavior_id.clone(),
+            agent_id: agent_config.agent_id.clone(),
             created_at: request.created_at.clone(),
             closed_at: None,
             title: Some(gents_protocol::session::SessionTitle {
@@ -764,7 +766,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                         None;
                     loop {
                         tokio::time::sleep(Duration::from_millis(100)).await;
-                        let recovered = crate::RequestLifecycle::recover_all(&node, &agent_did)
+                        let recovered = crate::RequestLifecycle::recover_all(&node, &node_did)
                             .await
                             .unwrap();
                         if !empty_forever || observed_renewal {
@@ -806,7 +808,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                         crate::interrupt::interrupt_request_by_doc_id(
                             &node,
                             &request_doc_id,
-                            &agent_did,
+                            &node_did,
                             requester_did.as_deref(),
                         )
                         .await
@@ -837,7 +839,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
             match selected {
                 gents_protocol::output::TerminalOutput::Message { message_doc_id } => {
                     let (header, native) = crate::session::load_canonical_message_from_node(
-                        &node, &message_doc_id, &agent_did, requester_did.as_deref(),
+                        &node, &message_doc_id, &node_did, requester_did.as_deref(),
                     ).await.unwrap();
                     assert_eq!(header.request_doc_id.as_deref(), Some(request_doc_id.as_str()));
                     assert_eq!(header.outcome, gents_protocol::output::OutputOutcome::Partial);
@@ -867,7 +869,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                         request_doc_id: &request_doc_id, session_id: &session_id,
                         target: LiveTarget { request_doc_id: &request_doc_id,
                             source: &target.segment.source, writer: &target.segment.writer, message_id: None },
-                        messages: &[], agent_did: &agent_did, requester_did: requester_did.as_deref(),
+                        messages: &[], node_did: &node_did, requester_did: requester_did.as_deref(),
                         records: &facts, denied_headers: &[], denied_segments: &[], dependency_denials: &[],
                         owner: OwnerLiveness::default(), request_terminal: true,
                         terminal_selection: Some(gents_protocol::output::TerminalOutput::NoMessage),
@@ -878,7 +880,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                     assert!(streams.iter().any(|stream| stream.text.contains("durable partial incident text")));
                 }
             }
-            let second = crate::RequestLifecycle::recover_all(&node, &agent_did)
+            let second = crate::RequestLifecycle::recover_all(&node, &node_did)
                 .await
                 .unwrap();
             assert_eq!(second.requests_recovered, 0);
@@ -921,20 +923,20 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let access = crate::config_client::ConfigAccess::Local(node.clone());
-    let behavior = test_behavior();
-    let agent_did = behavior.agent_did().to_owned();
-    let identity = behavior.principal_identity().clone();
+    let agent_config = test_agent();
+    let node_did = agent_config.node_did().to_owned();
+    let identity = agent_config.node_identity().clone();
     let tool_entered = Arc::new(AtomicBool::new(false));
-    let prompt = LayeredPromptBuilder::for_behavior(
-        &behavior.system_prompt,
-        &behavior.behavior_id,
+    let prompt = LayeredPromptBuilder::for_agent(
+        &agent_config.system_prompt,
+        &agent_config.agent_id,
         &[],
         false,
         &[],
     );
-    let mut daemon = BehaviorDaemon::new(
+    let mut daemon = AgentDaemon::new(
         node.clone(),
-        behavior.clone(),
+        agent_config.clone(),
         None,
         Arc::new(LeaseLossProvider),
         prompt.preamble().to_owned(),
@@ -947,7 +949,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         BackgroundToolRegistry::default(),
         BackgroundExecutionRegistry::default(),
         Arc::new(StartupBarrier::ready_for_test()),
-        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), agent_did.clone()),
+        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), node_did.clone()),
         1,
         crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
@@ -956,15 +958,15 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         ),
     )
     .unwrap();
-    let request = create_routed_request(&node, &behavior, &agent_did).await;
+    let request = create_routed_request(&node, &agent_config, &node_did).await;
     let request_doc_id = request.doc_id.clone();
     let session_id = request.session_id.clone();
     let requester_did = request.requester_did.clone();
     let session = gents_protocol::session::AgentSession {
         session_id: session_id.clone(),
-        agent_did: agent_did.clone(),
+        node_did: node_did.clone(),
         requester_did: requester_did.clone(),
-        behavior_id: behavior.behavior_id.clone(),
+        agent_id: agent_config.agent_id.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
         title: Some(gents_protocol::session::SessionTitle {
@@ -1034,7 +1036,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
     crate::interrupt::interrupt_request_by_doc_id(
         &node,
         &request_doc_id,
-        &agent_did,
+        &node_did,
         requester_did.as_deref(),
     )
     .await
@@ -1042,10 +1044,10 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
     let wake_id = "daemon-post-latch-wake";
     let wake_input = serde_json::json!({
         "request_id": wake_id,
-        "agent_did": agent_did.clone(),
+        "node_did": node_did.clone(),
         "requester_did": requester_did.clone(),
         "session_id": session_id.clone(),
-        "behavior_id": behavior.behavior_id.clone(),
+        "agent_id": agent_config.agent_id.clone(),
         "lifecycle_state": "pending",
         "execution_origin": "scheduled",
         "input": {"queue": {
@@ -1108,14 +1110,14 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let mut behavior = test_behavior();
+    let mut agent_config = test_agent();
     {
-        let behavior = Arc::get_mut(&mut behavior).unwrap();
-        behavior.stream_batch_ms = crate::config::DEFAULT_STREAM_BATCH_MS;
-        behavior.stream_liveness_timeout = Duration::from_secs(1);
+        let agent_config = Arc::get_mut(&mut agent_config).unwrap();
+        agent_config.stream_batch_ms = crate::config::DEFAULT_STREAM_BATCH_MS;
+        agent_config.stream_liveness_timeout = Duration::from_secs(1);
     }
-    let agent_did = behavior.agent_did().to_owned();
-    let identity = behavior.principal_identity().clone();
+    let node_did = agent_config.node_did().to_owned();
+    let identity = agent_config.node_identity().clone();
     let model = NonTerminalProvider {
         empty_forever: false,
         active_chunks: Some(8),
@@ -1123,16 +1125,16 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         stream_calls: Arc::new(AtomicUsize::new(0)),
         empty_deltas: Arc::new(AtomicUsize::new(0)),
     };
-    let prompt = LayeredPromptBuilder::for_behavior(
-        &behavior.system_prompt,
-        &behavior.behavior_id,
+    let prompt = LayeredPromptBuilder::for_agent(
+        &agent_config.system_prompt,
+        &agent_config.agent_id,
         &[],
         false,
         &[],
     );
-    let mut daemon = BehaviorDaemon::new(
+    let mut daemon = AgentDaemon::new(
         node.clone(),
-        behavior.clone(),
+        agent_config.clone(),
         None,
         Arc::new(model.clone()),
         prompt.preamble().to_owned(),
@@ -1143,7 +1145,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         BackgroundToolRegistry::default(),
         BackgroundExecutionRegistry::default(),
         Arc::new(StartupBarrier::ready_for_test()),
-        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), agent_did.clone()),
+        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), node_did.clone()),
         1,
         crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
@@ -1153,15 +1155,15 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     )
     .unwrap();
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let request = create_routed_request(&node, &behavior, &agent_did).await;
+    let request = create_routed_request(&node, &agent_config, &node_did).await;
     let request_id = request.request_id.clone();
     let request_doc_id = request.doc_id.clone();
     let requester_did = request.requester_did.clone();
     let session = gents_protocol::session::AgentSession {
         session_id: request.session_id.clone(),
-        agent_did: agent_did.clone(),
+        node_did: node_did.clone(),
         requester_did: request.requester_did.clone(),
-        behavior_id: behavior.behavior_id.clone(),
+        agent_id: agent_config.agent_id.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
         title: Some(gents_protocol::session::SessionTitle {
@@ -1209,7 +1211,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     let (header, message) = crate::session::load_canonical_message_from_node(
         &node,
         &message_doc_id,
-        &agent_did,
+        &node_did,
         requester_did.as_deref(),
     )
     .await
@@ -1239,15 +1241,15 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
 
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let mut behavior = test_behavior();
+    let mut agent_config = test_agent();
     {
-        let behavior = Arc::get_mut(&mut behavior).unwrap();
-        behavior.deadline_duration = Duration::from_secs(3);
-        behavior.stream_liveness_timeout = Duration::from_secs(8);
-        behavior.provider_idle_timeout = Duration::from_secs(8);
+        let agent_config = Arc::get_mut(&mut agent_config).unwrap();
+        agent_config.deadline_duration = Duration::from_secs(3);
+        agent_config.stream_liveness_timeout = Duration::from_secs(8);
+        agent_config.provider_idle_timeout = Duration::from_secs(8);
     }
-    let agent_did = behavior.agent_did().to_owned();
-    let identity = behavior.principal_identity().clone();
+    let node_did = agent_config.node_did().to_owned();
+    let identity = agent_config.node_identity().clone();
     let model = NonTerminalProvider {
         empty_forever: false,
         active_chunks: None,
@@ -1255,16 +1257,16 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         stream_calls: Arc::new(AtomicUsize::new(0)),
         empty_deltas: Arc::new(AtomicUsize::new(0)),
     };
-    let prompt = LayeredPromptBuilder::for_behavior(
-        &behavior.system_prompt,
-        &behavior.behavior_id,
+    let prompt = LayeredPromptBuilder::for_agent(
+        &agent_config.system_prompt,
+        &agent_config.agent_id,
         &[],
         false,
         &[],
     );
-    let mut daemon = BehaviorDaemon::new(
+    let mut daemon = AgentDaemon::new(
         node.clone(),
-        behavior.clone(),
+        agent_config.clone(),
         None,
         Arc::new(model.clone()),
         prompt.preamble().to_owned(),
@@ -1275,7 +1277,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         BackgroundToolRegistry::default(),
         BackgroundExecutionRegistry::default(),
         Arc::new(StartupBarrier::ready_for_test()),
-        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), agent_did.clone()),
+        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), node_did.clone()),
         1,
         crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
@@ -1284,13 +1286,13 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         ),
     )
     .unwrap();
-    let request = create_routed_request(&node, &behavior, &agent_did).await;
+    let request = create_routed_request(&node, &agent_config, &node_did).await;
     let doc_id = request.doc_id.clone();
     let session = gents_protocol::session::AgentSession {
         session_id: request.session_id.clone(),
-        agent_did: agent_did.clone(),
+        node_did: node_did.clone(),
         requester_did: request.requester_did.clone(),
-        behavior_id: behavior.behavior_id.clone(),
+        agent_id: agent_config.agent_id.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
         title: Some(gents_protocol::session::SessionTitle {

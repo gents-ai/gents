@@ -248,7 +248,7 @@
       "constructors": []
     },
     {
-      "id": "projection-terminal-selection-and-subagent-final-result",
+      "id": "projection-terminal-selection-and-agent-request-final-result",
       "model_symbols": [
         { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Terminal.lean", "symbol": "CanonicalOutput.resolveTerminal" },
         { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Terminal.lean", "symbol": "CanonicalOutput.terminalPublicationEligible" },
@@ -274,7 +274,7 @@
       "required_cases": [
         "Resolve only the request's explicit terminal_output Message identity or explicit NoMessage; never select the latest visible assistant row.",
         "Reject missing selection, missing or conflicting header identity, wrong request/session scope, non-assistant role, tool-delivery publication, fork publication, and ACP denial distinctly.",
-        "Reconstruct every dependency of the selected message before returning a subagent final result; missing remains incomplete and denied remains denied.",
+        "Reconstruct every dependency of the selected message before returning an agent-request final result; missing remains incomplete and denied remains denied.",
         "Bind child final-result reads to the authenticated physical child request and descendant edge, not a matching logical request ID or session sequence.",
         "Ensure late background messages and unrelated headers cannot replace terminal selection after request terminalization.",
         "Export concrete terminal selection, headers, segments, denials, expected native message or exact error; no terminal-selection fixture group currently exists."

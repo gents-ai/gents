@@ -54,7 +54,7 @@ export function TriggerEditor({
   const cfg = trigger.config;
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: SECTION,
   };
   const saved = {
@@ -118,7 +118,7 @@ export function TriggerEditor({
       if (newTask || newSchedule || newEvent)
         await changeConfig("applyConfigComponents", {
           document: {
-            agent_principal: { agent_did: deployment.agentDid },
+            node: { node_did: deployment.nodeDid },
             ...(newTask ? { tasks: [newTask] } : {}),
             ...(newSchedule ? { schedules: [newSchedule] } : {}),
             ...(newEvent ? { event_sources: [newEvent] } : {}),
@@ -183,7 +183,7 @@ export function TriggerEditor({
         }
         description={
           besideTask
-            ? `Runs with ${agentOf(deployment, besideTask.behaviorId)?.displayName ?? "no behavior"}`
+            ? `Runs with ${agentOf(deployment, besideTask.agentId)?.displayName ?? "no agent"}`
             : besideSchedule
               ? cadenceInWords(besideSchedule)
               : besideSource
@@ -267,7 +267,7 @@ export function TriggerEditor({
         <RefRow
           id={id("task")}
           label="Task"
-          description="The prompt that runs, and the behavior that runs it."
+          description="The prompt that runs, and the agent that runs it."
           value={d.draft.taskId}
           error={d.problems.taskId}
           onChange={(v) => d.set("taskId", v)}
@@ -439,7 +439,7 @@ export function TriggerEditor({
           onDelete={() =>
             changeConfig("deleteTriggerConfig", {
               triggerId: cfg.trigger_id,
-              agentDid: deployment.agentDid,
+              nodeDid: deployment.nodeDid,
             })
           }
         />
@@ -458,7 +458,7 @@ export function TriggersPanel({
   const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: SECTION,
   };
   const [creating, setCreating] = useState(false);
@@ -501,7 +501,7 @@ export function TriggersPanel({
                   onChange: (enabled) =>
                     setEnabled(
                       changeConfig,
-                      deployment.agentDid,
+                      deployment.nodeDid,
                       "Trigger",
                       t.config.trigger_id,
                       enabled,
@@ -524,7 +524,7 @@ export function TriggersPanel({
                 onDelete={() =>
                   changeConfig("deleteTriggerConfig", {
                     triggerId: t.config.trigger_id,
-                    agentDid: deployment.agentDid,
+                    nodeDid: deployment.nodeDid,
                   })
                 }
               />

@@ -19,7 +19,7 @@ type AgentToolCall @branchable {
     request_id: String @index @immutable
     request_doc_id: String @index @immutable
     session_id: String @index
-    agent_did: String @index @immutable
+    node_did: String @index @immutable
     requester_did: String @index @immutable
     message_sequence: Int
     tool_name: String @index
@@ -33,8 +33,10 @@ type AgentToolCall @branchable {
     started_at: DateTime
     deadline_at: DateTime
     completed_at: DateTime
+    terminal_output: JSON
     selected_service_id: String
     selected_tool_name: String
+    plugin_execution_receipt: JSON
     tool_failure_class: String
     denial_reason: String
     denied_argv: [String]
@@ -50,6 +52,8 @@ type AgentToolCall @branchable {
     # Separate spawn_process execution: exact accepted meta-call provenance.
     # Same sequence/name is not sufficient when a turn has multiple spawns.
     spawned_by_tool_call_doc_id: String @index @immutable
+    plugin_parent_tool_call_doc_id: String @index @immutable
+    plugin_effect_ordinal: Int @immutable
     # A running call outlives its request's exceptional terminal: the terminal
     # transaction records this uncertainty handoff, never a cancel.
     stuck_since: DateTime

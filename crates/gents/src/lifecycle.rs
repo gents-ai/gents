@@ -21,6 +21,7 @@ pub(crate) use execution_renewal::{renew_in_transaction, RenewalAttemptOutcome};
 mod terminal_binding;
 pub(crate) use terminal_binding::is_exact_invocation_reply;
 mod terminal_tools;
+pub use crate::trigger_engine::durable::request_arrival_order;
 #[cfg(test)]
 pub(crate) use execution_lease::revoke_execution_preserving_output_at;
 #[cfg(test)]
@@ -61,6 +62,13 @@ pub(crate) use materialize::{
     write_trigger_delivery, SessionMessageCause, SessionMessageTarget,
 };
 pub use queue::enqueue_local_steering_request;
+pub use queue::validate_position as validate_queue_position;
+pub use queue::{pending_user_queue, PendingQueueEntry, PendingQueueSnapshot};
+pub use queue::{prepare_pending_user_edit, prepare_user_message_input};
+pub use queue::{
+    submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,
+};
+pub use queue::{FOLDED_REASON, REPLACED_REASON};
 pub(crate) use task_title::task_goal_session_title;
 pub use task_title::task_session_title;
 
@@ -127,6 +135,120 @@ pub fn request_content_owns_user_projection(
             queue::QueueSource::User | queue::QueueSource::Steering
         )
     })
+}
+
+/// The logical request a message was folded into, when its claim answered it
+/// (Lean `SessionQueue.claimFolding`). Its content is presented by that
+/// request's authored transcript entry, not by its own row.
+pub fn folded_into(row: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
+    (row.lifecycle_state
+        == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Superseded)
+        && row.failure_reason.as_deref() == Some(queue::FOLDED_REASON))
+    .then_some(row.superseded_by_request.as_deref())
+    .flatten()
+    .filter(|head| !head.trim().is_empty())
+}
+
+/// The pending request that replaced this one when its author edited it.
+pub fn replaced_by(row: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
+    (row.lifecycle_state
+        == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Superseded)
+        && row.failure_reason.as_deref() == Some(queue::REPLACED_REASON))
+    .then_some(row.superseded_by_request.as_deref())
+    .flatten()
+    .filter(|replacement| !replacement.trim().is_empty())
+}
+
+/// The transcript key under which the claimed request publishes a message
+/// folded into it.
+pub fn folded_message_key(claimed_request_doc_id: &str, folded_request_doc_id: &str) -> String {
+    crate::session::canonical_rows::authored_message_key(
+        claimed_request_doc_id,
+        &queue::folded_input_key(folded_request_doc_id),
+    )
+}
+
+/// The physical request and transcript key under which a request's input is
+/// published: its own authored prompt, or, once folded, its folded entry under
+/// the request that published it. A row is folded only in the transaction
+/// that publishes that entry; a selected message stays pending until then.
+pub fn input_message_owner(row: &gents_protocol::row::AgentRequestRow) -> Option<(String, String)> {
+    let doc = row
+        .doc_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|doc| !doc.is_empty())?;
+    if folded_into(row).is_some() {
+        let owner = row
+            .superseded_by_request_doc_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|owner| !owner.is_empty())?;
+        return Some((owner.to_owned(), folded_message_key(owner, doc)));
+    }
+    Some((
+        doc.to_owned(),
+        crate::session::canonical_rows::authored_message_key(doc, "prompt"),
+    ))
+}
+
+/// What put a request's content into its session. Only `Person` is typed by
+/// the session's requester; every other origin enters the session without the
+/// person typing it, and its content is still the model's user input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestOrigin<'a> {
+    Person,
+    /// An `agent_message` or `agent_new` call in another session.
+    SessionMessage {
+        parent_request_doc_id: Option<&'a str>,
+    },
+    /// A trigger delivery: event, schedule or manual Task run.
+    Trigger {
+        trigger_id: &'a str,
+        trigger_kind: Option<&'a str>,
+    },
+    /// The durable goal controller continuing its objective.
+    GoalContinuation {
+        goal_id: Option<&'a str>,
+        sequence: Option<i64>,
+    },
+    /// A wake that delivers finished background work.
+    BackgroundCompletion,
+}
+
+pub fn request_origin(row: &gents_protocol::row::AgentRequestRow) -> RequestOrigin<'_> {
+    fn present(value: &Option<String>) -> Option<&str> {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+    let input = row.input.as_ref();
+    let source = input
+        .and_then(|input| input.queue.as_ref())
+        .map(|queue| queue.source);
+    let continuation = input.and_then(|input| input.goal_continuation.as_ref());
+    if continuation.is_some() || source == Some(queue::QueueSource::Goal) {
+        return RequestOrigin::GoalContinuation {
+            goal_id: present(&row.caused_by_trigger_id),
+            sequence: continuation.map(|continuation| continuation.sequence),
+        };
+    }
+    if source == Some(queue::QueueSource::BackgroundCompletion) {
+        return RequestOrigin::BackgroundCompletion;
+    }
+    if present(&row.caused_by_parent_tool_call_doc_id).is_some() {
+        return RequestOrigin::SessionMessage {
+            parent_request_doc_id: present(&row.caused_by_parent_request_doc_id),
+        };
+    }
+    if let Some(trigger_id) = present(&row.caused_by_trigger_id) {
+        return RequestOrigin::Trigger {
+            trigger_id,
+            trigger_kind: present(&row.caused_by_trigger_kind),
+        };
+    }
+    RequestOrigin::Person
 }
 
 /// Whether the request represents a logical user turn.
@@ -217,12 +339,12 @@ pub(crate) enum ClaimAdmissionError {
     #[error("session {session_id} requester scope mismatch: {reason}")]
     SessionScopeMismatch { session_id: String, reason: String },
     #[error(
-        "session {session_id} is pinned to behavior {existing_behavior_id} and cannot switch to {requested_behavior_id}"
+        "session {session_id} is pinned to agent {existing_agent_id} and cannot switch to {requested_agent_id}"
     )]
-    SessionBehaviorMismatch {
+    SessionAgentMismatch {
         session_id: String,
-        existing_behavior_id: String,
-        requested_behavior_id: String,
+        existing_agent_id: String,
+        requested_agent_id: String,
     },
 }
 
@@ -247,7 +369,7 @@ pub struct TriggerLineage {
 #[serde(default)]
 pub struct WorkspaceLineage {
     pub workspace_id: Option<String>,
-    pub workspace_owner_agent_did: Option<String>,
+    pub workspace_owner_node_did: Option<String>,
     pub workspace_authority: Option<String>,
     pub workspace_seal_hash: Option<String>,
 }
@@ -260,7 +382,7 @@ pub fn snapshot_workspace_lineage_source_fields(
 ) {
     const SOURCE_KEYS: &[&str] = &[
         "workspace_id",
-        "workspace_owner_agent_did",
+        "workspace_owner_node_did",
         "workspace_authority",
         "work_unit_id",
         "workspace_seal_hash",
@@ -269,7 +391,7 @@ pub fn snapshot_workspace_lineage_source_fields(
     ];
     const BIND_KEYS: &[&str] = &[
         "workspace_id",
-        "workspace_owner_agent_did",
+        "workspace_owner_node_did",
         "workspace_authority",
         "workspace_seal_hash",
         "seal_hash",
@@ -327,7 +449,7 @@ impl WorkspaceLineage {
         };
         Ok(Self {
             workspace_id: field("workspace_id"),
-            workspace_owner_agent_did: field("workspace_owner_agent_did"),
+            workspace_owner_node_did: field("workspace_owner_node_did"),
             workspace_authority: field("workspace_authority"),
             workspace_seal_hash: field("workspace_seal_hash").or_else(|| field("seal_hash")),
         })
@@ -343,7 +465,7 @@ impl WorkspaceLineage {
     pub fn require_authority_if_workspace_id(&self) -> Result<()> {
         gents_protocol::request_admission::validate_workspace_reference(
             self.workspace_id.as_deref(),
-            self.workspace_owner_agent_did.as_deref(),
+            self.workspace_owner_node_did.as_deref(),
             self.workspace_authority.as_deref(),
             self.workspace_seal_hash.as_deref(),
         )
@@ -360,7 +482,7 @@ impl WorkspaceLineage {
         source.require_authority_if_workspace_id()?;
         anyhow::ensure!(
             self.workspace_id == source.workspace_id
-                && self.workspace_owner_agent_did == source.workspace_owner_agent_did
+                && self.workspace_owner_node_did == source.workspace_owner_node_did
                 && self.workspace_seal_hash == source.workspace_seal_hash,
             "workspace reference differs from its authenticated source"
         );
@@ -413,7 +535,7 @@ impl TriggerExecutionContext {
 
 pub struct RequestLifecycle {
     node: Arc<EmbeddedNode>,
-    behavior_id: String,
+    agent_id: String,
     execution_origin: ExecutionOrigin,
     backend_id: String,
     failure_reason: Option<String>,
@@ -428,9 +550,40 @@ pub struct RequestLifecycle {
     execution_lease: Option<RequestExecutionLease>,
     execution_lease_duration_secs: u64,
     renewal_task: Option<execution_renewal::RenewalTask>,
+    fold_admitted: Vec<String>,
+    folded_selection: Vec<queue::FoldedInput>,
+    natural_finish_allowed: bool,
 }
 
 impl RequestLifecycle {
+    pub(crate) fn allow_natural_finish(&mut self, allowed: bool) {
+        self.natural_finish_allowed = allowed;
+    }
+    pub(crate) fn natural_finish_allowed(&self) -> bool {
+        self.natural_finish_allowed
+    }
+    pub(crate) fn natural_finish_completed(&self) -> bool {
+        self.natural_finish_allowed && self.state == LocalLifecycleState::Completed
+    }
+
+    /// Pending requests whose signed admission the caller verified for this
+    /// claim. The claim selects the contiguous run of them directly behind
+    /// it (Lean `SessionQueue.claimFolding`); empty claims only this request.
+    pub(crate) fn set_fold_admitted(&mut self, admitted: Vec<String>) {
+        assert_eq!(
+            self.state,
+            LocalLifecycleState::Pending,
+            "verify folded admissions before claim"
+        );
+        self.fold_admitted = admitted;
+    }
+
+    /// The still-queued messages this claim selected to answer, in queue
+    /// order. The turn consumes each when it publishes it.
+    pub(crate) fn folded_selection(&self) -> &[queue::FoldedInput] {
+        &self.folded_selection
+    }
+
     /// Configuration supplied by the runtime, never by request input. Only the
     /// first claim pins it; resumed physical requests retain their durable limit.
     pub(crate) fn set_configured_max_total_tokens(&mut self, limit: Option<u64>) {
@@ -440,6 +593,13 @@ impl RequestLifecycle {
             "configure token limit before claim"
         );
         self.configured_max_total_tokens = limit;
+    }
+
+    pub(crate) fn input_publication_before_deadline(
+        now: chrono::DateTime<chrono::Utc>,
+        deadline: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> bool {
+        deadline.is_none_or(|deadline| now < deadline)
     }
 
     pub(crate) fn claimed_deadline_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -538,7 +698,7 @@ mod tests {
     struct MaterializationTestIdentity;
 
     #[async_trait::async_trait]
-    impl crate::identity::AgentIdentity for MaterializationTestIdentity {
+    impl crate::identity::NodeIdentity for MaterializationTestIdentity {
         fn did(&self) -> &str {
             "did:test:test"
         }
@@ -556,7 +716,7 @@ mod tests {
         }
     }
 
-    fn materialization_identity() -> Arc<dyn crate::identity::AgentIdentity> {
+    fn materialization_identity() -> Arc<dyn crate::identity::NodeIdentity> {
         Arc::new(MaterializationTestIdentity)
     }
 
@@ -709,14 +869,14 @@ mod tests {
     fn snapshot_overlays_event_trigger_workspace_authority() {
         let source = serde_json::json!({
             "workspace_id": "ws-1",
-            "workspace_owner_agent_did": "did:key:workspace-owner",
+            "workspace_owner_node_did": "did:key:workspace-owner",
             "seal_hash": "tree-1"
         });
         let mut fields = std::collections::BTreeMap::new();
         snapshot_workspace_lineage_source_fields(&source, &mut fields, Some("readOnly"));
         assert_eq!(fields.get("workspace_id").map(String::as_str), Some("ws-1"));
         assert_eq!(
-            fields.get("workspace_owner_agent_did").map(String::as_str),
+            fields.get("workspace_owner_node_did").map(String::as_str),
             Some("did:key:workspace-owner")
         );
         assert_eq!(
@@ -781,7 +941,7 @@ mod tests {
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        crate::test_support::install_test_behavior(node.as_ref(), "did:test:test", "default").await;
+        crate::test_support::install_test_agent(node.as_ref(), "did:test:test", "default").await;
         let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
             node.clone(),
             "default",

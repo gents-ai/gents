@@ -34,7 +34,7 @@
         "in-place edits",
         "reentry"
       ],
-      "title": "Behavior configuration"
+      "title": "Agent configuration"
     },
     {
       "id": "l3-datastore",

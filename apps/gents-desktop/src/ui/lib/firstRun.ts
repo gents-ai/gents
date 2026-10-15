@@ -1,4 +1,4 @@
-/* First-run is unfinished until a local agent can actually run inference.
+/* First-run is unfinished until a local node can actually run inference.
    gents init writes a placeholder backend, so a non-empty backends list is
    not enough; a key, OAuth, env var, or a healthy probe is. */
 import type { NodeView } from "../../hooks/fleetStore";
@@ -8,13 +8,13 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { agentOf } from "./agents";
 
-export function isLocalAgent(
-  deployment: Pick<NodeView, "agentDid" | "source">,
-  initAgentDid?: string | null,
+export function isLocalNode(
+  deployment: Pick<NodeView, "nodeDid" | "source">,
+  initNodeDid?: string | null,
 ): boolean {
   const source = deployment.source ?? "";
   return (
-    deployment.agentDid === initAgentDid ||
+    deployment.nodeDid === initNodeDid ||
     source === "local" ||
     source === "local-standard" ||
     source.startsWith("local")
@@ -22,11 +22,11 @@ export function isLocalAgent(
 }
 
 export function inferenceIsConfigured(deployment: NodeView): boolean {
-  const behavior = deployment.behaviorConfigs.find(
-    (row) => row.behavior_id === deployment.agentPrincipal.defaultBehaviorId,
+  const agent = deployment.agentConfigs.find(
+    (row) => row.agent_id === deployment.node.defaultAgentId,
   );
   const profile = deployment.inferenceProfiles.find(
-    (row) => row.profile_id === behavior?.inference_profile_id,
+    (row) => row.profile_id === agent?.inference_profile_id,
   );
   return (
     Boolean(profile?.model_name?.trim()) &&
@@ -40,7 +40,7 @@ export function inferenceIsConfigured(deployment: NodeView): boolean {
 export function backendIsConfigured(backend: InferenceBackendView): boolean {
   if (backend.enabled === false) return false;
   if (backend.apiKeyConfigured) return true;
-  if (backend.authKind === "principal_oauth" || backend.authKind === "environment") {
+  if (backend.authKind === "node_oauth" || backend.authKind === "environment") {
     return true;
   }
   return backend.probeStatus === "ok" || backend.probeStatus === "healthy";
@@ -51,24 +51,21 @@ export function shouldRebindSetupDefault(
   addingExtra: boolean,
 ): boolean {
   if (!addingExtra) return true;
-  const defaultBehavior = agentOf(
-    deployment,
-    deployment.agentPrincipal.defaultBehaviorId,
-  );
+  const defaultAgent = agentOf(deployment, deployment.node.defaultAgentId);
   const defaultProfile = deployment.inferenceProfiles.find(
-    (profile) => profile.profile_id === defaultBehavior?.inferenceProfileId,
+    (profile) => profile.profile_id === defaultAgent?.inferenceProfileId,
   );
-  return defaultProfile?.backend_id === `${deployment.agentDid}:backend`;
+  return defaultProfile?.backend_id === `${deployment.nodeDid}:backend`;
 }
 
 /** The node first-run setup configured: the one this machine runs, else the
     first listed. Setup also runs when remote nodes are already paired and
-    only this machine's agent lacks inference, so the first listed node may
+    only this machine's node lacks inference, so the first listed node may
     be a remote one. */
 export function nodeSetUp(snapshot: DesktopClientSnapshot) {
   const nodes = snapshot.client?.deployments ?? [];
   return (
-    nodes.find((node) => isLocalAgent(node, snapshot.bootstrap.initAgentDid)) ??
+    nodes.find((node) => isLocalNode(node, snapshot.bootstrap.initNodeDid)) ??
     nodes[0] ??
     null
   );
@@ -79,7 +76,7 @@ export function needsFirstRunSetup(snapshot: DesktopClientSnapshot): boolean {
   if (deployments.length === 0) return true;
   return deployments.some(
     (deployment) =>
-      isLocalAgent(deployment, snapshot.bootstrap.initAgentDid) &&
+      isLocalNode(deployment, snapshot.bootstrap.initNodeDid) &&
       !inferenceIsConfigured(deployment),
   );
 }

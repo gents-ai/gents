@@ -1,29 +1,29 @@
 {
-  "agent_principal": {},
-  "agent_behaviors": [
+  "node": {},
+  "agents": [
     {
-      "behavior_id": "review-recon",
+      "agent_id": "review-recon",
       "display_name": "Review reconnaissance",
       "description": "Partitions a repository review into a closed set of areas.",
       "context_id": "review-recon-context",
       "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
-      "behavior_id": "review-scan",
+      "agent_id": "review-scan",
       "display_name": "Review area scanner",
       "description": "Inspects one repository area and records findings.",
       "context_id": "review-scan-context",
       "inference_profile_id": "gents:inference-slot:worker"
     },
     {
-      "behavior_id": "review-verify",
+      "agent_id": "review-verify",
       "display_name": "Adversarial review verification",
       "description": "Refutes or confirms every candidate against freshly read code.",
       "context_id": "review-verify-context",
       "inference_profile_id": "gents:inference-slot:verifier"
     },
     {
-      "behavior_id": "review-triage",
+      "agent_id": "review-triage",
       "display_name": "Review triage",
       "description": "Ranks verified findings and writes the final report.",
       "context_id": "review-triage-context",
@@ -33,25 +33,25 @@
   "contexts": [
     {
       "context_id": "review-recon-context",
-      "system_prompt": "./agent_behaviors/review_recon/system_prompt.md",
+      "system_prompt": "./agents/review_recon/system_prompt.md",
       "tools_id": "review-recon-tools",
       "compaction_id": "review-compaction"
     },
     {
       "context_id": "review-scan-context",
-      "system_prompt": "./agent_behaviors/review_scan/system_prompt.md",
+      "system_prompt": "./agents/review_scan/system_prompt.md",
       "tools_id": "review-scan-tools",
       "compaction_id": "review-compaction"
     },
     {
       "context_id": "review-verify-context",
-      "system_prompt": "./agent_behaviors/review_verify/system_prompt.md",
+      "system_prompt": "./agents/review_verify/system_prompt.md",
       "tools_id": "review-verify-tools",
       "compaction_id": "review-compaction"
     },
     {
       "context_id": "review-triage-context",
-      "system_prompt": "./agent_behaviors/review_triage/system_prompt.md",
+      "system_prompt": "./agents/review_triage/system_prompt.md",
       "tools_id": "review-triage-tools",
       "compaction_id": "review-compaction"
     }
@@ -328,28 +328,28 @@
     {
       "task_id": "review-recon-task",
       "display_name": "Partition repository review",
-      "behavior_id": "review-recon",
+      "agent_id": "review-recon",
       "prompt_template": "./tasks/review_recon_task/prompt.md",
       "goal_objective_template": "Dispatch all four host-evidenced review lenses for run {{ event.correlation }}, persist the complete area ledger, then complete this Goal."
     },
     {
       "task_id": "review-scan-task",
       "display_name": "Scan one review area",
-      "behavior_id": "review-scan",
+      "agent_id": "review-scan",
       "prompt_template": "./tasks/review_scan_task/prompt.md",
       "goal_objective_template": "Finish the {{ doc.lens }} review for area {{ doc.area_id }} in run {{ event.correlation }}. Persist at most three supported candidates, or none when no defects are supported, and the mandatory scan-result sentinel for this exact area; then complete this Goal."
     },
     {
       "task_id": "review-verify-task",
       "display_name": "Verify completed review candidates",
-      "behavior_id": "review-verify",
+      "agent_id": "review-verify",
       "prompt_template": "./tasks/review_verify_task/prompt.md",
       "goal_objective_template": "Close verification for run {{ group.correlation_value }} across its {{ group.count }} completed scans. Persist one supported verdict per candidate, promote only confirmed findings, and publish the balanced verification summary, including zero candidates; then complete this Goal."
     },
     {
       "task_id": "review-triage-task",
       "display_name": "Write the merge report",
-      "behavior_id": "review-triage",
+      "agent_id": "review-triage",
       "prompt_template": "./tasks/review_triage_task/prompt.md",
       "goal_objective_template": "Publish the final triage report for run {{ event.correlation }} matching its closed verification ledger ({{ doc.candidate_count }} candidates, {{ doc.confirmed_count }} confirmed, {{ doc.refuted_count }} refuted), then complete this Goal."
     }
@@ -420,7 +420,7 @@
   "graph_capabilities": [
     {
       "capability_id": "review-recon",
-      "allowed_callers": ["${GENTS_PACK_AGENT_DID}"],
+      "allowed_callers": ["${GENTS_PACK_NODE_DID}"],
       "revision": "v1",
       "target": {"kind": "task", "task_id": "review-recon-task"},
       "input_ports": [{"name": "job", "collection": "CodeReviewJob", "schema": "CodeReviewJob/v1", "correlation_field": "run_id", "cardinality": "one", "required": true}],
@@ -429,7 +429,7 @@
     },
     {
       "capability_id": "review-scan",
-      "allowed_callers": ["${GENTS_PACK_AGENT_DID}"],
+      "allowed_callers": ["${GENTS_PACK_NODE_DID}"],
       "revision": "v1",
       "target": {"kind": "task", "task_id": "review-scan-task"},
       "input_ports": [{"name": "area", "collection": "CodeReviewArea", "schema": "CodeReviewArea/v1", "correlation_field": "run_id", "cardinality": "one", "required": true}],
@@ -441,7 +441,7 @@
     },
     {
       "capability_id": "review-verify",
-      "allowed_callers": ["${GENTS_PACK_AGENT_DID}"],
+      "allowed_callers": ["${GENTS_PACK_NODE_DID}"],
       "revision": "v1",
       "target": {"kind": "task", "task_id": "review-verify-task"},
       "input_ports": [{"name": "scan_results", "collection": "CodeReviewScanResult", "schema": "CodeReviewScanResult/v1", "correlation_field": "run_id", "cardinality": "many", "required": true}],
@@ -454,7 +454,7 @@
     },
     {
       "capability_id": "review-triage",
-      "allowed_callers": ["${GENTS_PACK_AGENT_DID}"],
+      "allowed_callers": ["${GENTS_PACK_NODE_DID}"],
       "revision": "v1",
       "target": {"kind": "task", "task_id": "review-triage-task"},
       "input_ports": [{"name": "summary", "collection": "CodeReviewVerificationSummary", "schema": "CodeReviewVerificationSummary/v1", "correlation_field": "run_id", "cardinality": "one", "required": true}],

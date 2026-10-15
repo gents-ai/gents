@@ -23,14 +23,14 @@ pub use observe::{
     ObservedStore, ObserverHandle, ObserverMetricsSnapshot, StoreProjectionRevision,
     StoreUpdateNotice,
 };
-pub use paths::DesktopPaths;
+pub use paths::{DesktopPaths, DESKTOP_HOME_ENV};
 #[cfg(test)]
 pub(crate) use peer_directory::load_peer_directory_snapshot;
 pub(crate) use peer_directory::PeerDirectory;
 pub use peer_directory::{initialize_local_standard_peer, load_peer_records, PeerRecord};
 pub use principal_identity::PrincipalIdentity;
 pub use query::{
-    fetch_doc_patch, load_agent_scoped_snapshot, load_request_prompt_ownership,
+    fetch_doc_patch, load_node_scoped_snapshot, load_request_prompt_ownership,
     load_request_prompt_ownership_on, load_session_context_store, load_session_context_store_on,
     load_session_diagnostics_store, load_session_live_store, load_session_live_store_on,
     load_session_tip_store, load_session_tip_store_on, load_session_transcript_page,
@@ -40,5 +40,8 @@ pub use query::{
     MAX_SESSION_TRANSCRIPT_PAGE_SIZE,
 };
 pub use schema::subscribed_collection_names;
-pub use store::{ClientStore, ClientStoreRows, TaskRecentRuns, TranscriptView};
+pub use store::{
+    folded_requests, queued_behind_turn, session_turn_request, ClientStore, ClientStoreRows,
+    TaskRecentRuns, TranscriptView,
+};
 pub use sync_projection::{project_sync_health, SyncHealth, SyncHealthState};

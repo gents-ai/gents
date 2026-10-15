@@ -67,15 +67,13 @@ impl Tool for EchoTool {
 
 pub(super) async fn insert_backend(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     backend_id: &str,
     endpoint: &str,
 ) {
-    crate::ensure_agent_principal(node, agent_did)
-        .await
-        .unwrap();
+    crate::ensure_node(node, node_did).await.unwrap();
     let value = serde_json::json!({
-        "agent_did": agent_did,
+        "node_did": node_did,
         "backend_id": backend_id,
         "name": "Balanced Backend",
         "provider_kind": "OpenAiCompatible",
@@ -97,7 +95,7 @@ pub(super) async fn insert_backend(
     })
     .await
     .unwrap();
-    crate::backend_registry::set_backend_probe_status(node, agent_did, backend_id, "healthy")
+    crate::backend_registry::set_backend_probe_status(node, node_did, backend_id, "healthy")
         .await
         .unwrap();
 }

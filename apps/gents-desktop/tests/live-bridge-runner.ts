@@ -85,14 +85,22 @@ export function createLiveBridgeRunnerInvocation(
   appendRunnerArg(runnerArgs, "--provider", options.provider);
   appendRunnerArg(runnerArgs, "--api-key", options.apiKey);
   appendRunnerArg(runnerArgs, "--api-key-env-var", options.apiKeyEnvVar);
-  appendRunnerArg(runnerArgs, "--subagent-inference-url", options.subagentInferenceUrl);
-  appendRunnerArg(runnerArgs, "--subagent-model-name", options.subagentModelName);
-  appendRunnerArg(runnerArgs, "--subagent-provider", options.subagentProvider);
-  appendRunnerArg(runnerArgs, "--subagent-api-key", options.subagentApiKey);
   appendRunnerArg(
     runnerArgs,
-    "--subagent-api-key-env-var",
-    options.subagentApiKeyEnvVar,
+    "--agent-target-inference-url",
+    options.agentTargetInferenceUrl,
+  );
+  appendRunnerArg(
+    runnerArgs,
+    "--agent-target-model-name",
+    options.agentTargetModelName,
+  );
+  appendRunnerArg(runnerArgs, "--agent-target-provider", options.agentTargetProvider);
+  appendRunnerArg(runnerArgs, "--agent-target-api-key", options.agentTargetApiKey);
+  appendRunnerArg(
+    runnerArgs,
+    "--agent-target-api-key-env-var",
+    options.agentTargetApiKeyEnvVar,
   );
   return { command, runnerArgs };
 }
@@ -111,7 +119,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     private readonly process: ChildProcessWithoutNullStreams,
     readonly baseUrl: string,
     readonly deploymentLabel: string,
-    readonly agentDid: string,
+    readonly nodeDid: string,
     readonly toolRoot: string,
     readonly dataRoot: string | undefined,
     startupStdout = "",
@@ -163,7 +171,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
       child,
       message.baseUrl,
       message.deploymentLabel,
-      message.agentDid,
+      message.nodeDid,
       message.toolRoot,
       message.dataRoot,
       stdout,

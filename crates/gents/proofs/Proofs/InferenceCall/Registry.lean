@@ -11,7 +11,7 @@ timeouts, which are most likely while the server is already saturated, so
 forgetting those permits at an outage would grant another full capacity on
 every flap. Hung calls are bounded separately by the stream idle timeout.
 
-`connection` is the identity a behavior slot's provider client was built
+`connection` is the identity an agent slot's provider client was built
 from: endpoint, credentials and provider/wire protocol, but not capacity or
 queue depth. Snapshot semantics (product decision on #1725): a connection
 change, such as key rotation or an endpoint move, is a new incarnation for

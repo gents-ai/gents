@@ -4,7 +4,7 @@ use gents_desktop_core::client::ClientCore;
 use super::super::types::MailboxItemView;
 
 pub fn list_mailbox(core: &ClientCore) -> Vec<MailboxItemView> {
-    let requester = core.principal().did();
+    let requester = core.node_identity().did();
     core.store()
         .snapshot()
         .mailbox_items
@@ -15,7 +15,7 @@ pub fn list_mailbox(core: &ClientCore) -> Vec<MailboxItemView> {
 }
 
 pub fn start_mailbox_request(core: &ClientCore, item_id: &str) -> Result<MailboxItemView> {
-    let requester = core.principal().did();
+    let requester = core.node_identity().did();
     let snapshot = core.store().snapshot();
     let row = snapshot
         .mailbox_items
@@ -41,7 +41,7 @@ pub(crate) fn question_reply_content(
     core: &ClientCore,
     item_id: Option<&str>,
     session_id: Option<&str>,
-    agent_did: &str,
+    node_did: &str,
     answer: &gents_protocol::mailbox_question::MailboxQuestionAnswer,
 ) -> Result<String> {
     let item_id = item_id
@@ -49,13 +49,13 @@ pub(crate) fn question_reply_content(
         .filter(|id| !id.is_empty())
         .context("an answer requires causedBySourceDocId")?;
     let item = start_mailbox_request(core, item_id)?;
-    question_reply_for_item(&item, session_id, agent_did, answer)
+    question_reply_for_item(&item, session_id, node_did, answer)
 }
 
 fn question_reply_for_item(
     item: &MailboxItemView,
     session_id: Option<&str>,
-    agent_did: &str,
+    node_did: &str,
     answer: &gents_protocol::mailbox_question::MailboxQuestionAnswer,
 ) -> Result<String> {
     if item.kind != "ask" || item.action != "start_request" {
@@ -64,7 +64,7 @@ fn question_reply_for_item(
     if item.session_id.is_none() || item.session_id.as_deref() != session_id.map(str::trim) {
         bail!("an answer must be sent to the question's session");
     }
-    if item.target_agent_did != agent_did {
+    if item.target_node_did != node_did {
         bail!("an answer must be sent to the agent that asked");
     }
     let question = gents_protocol::mailbox_question::MailboxQuestion::from_payload(
@@ -100,11 +100,11 @@ mod tests {
         };
         let row: gents_protocol::row::MailboxItemRow = serde_json::from_value(serde_json::json!({
             "_docID": "item-1", "item_key": "k", "requester_did": "did:person",
-            "agent_did": "did:agent", "status": "open", "kind": "ask",
+            "node_did": "did:agent", "status": "open", "kind": "ask",
             "action": "start_request", "title": "Release",
             "payload": serde_json::to_string(&question).unwrap(),
             "source_kind": "agent", "source_id": "s", "session_id": "session-1",
-            "target_agent_did": "did:agent", "target_behavior_id": "engineer",
+            "target_node_did": "did:agent", "target_agent_id": "engineer",
             "created_at": "2026-09-29T00:00:00Z"
         }))
         .unwrap();

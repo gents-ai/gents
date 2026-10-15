@@ -10,19 +10,19 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
     let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -43,7 +43,7 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -150,13 +150,13 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
                 r#"{{
                     AgentSession(filter: {{
                         session_id: {{ _eq: "{}" }},
-                        agent_did: {{ _eq: "{}" }},
+                        node_did: {{ _eq: "{}" }},
                         requester_did: {{ _eq: "{}" }}
                     }}) {{ _docID }}
                 }}"#,
                 escape_graphql_string(&git_thread_id),
-                escape_graphql_string(&agent_did),
-                escape_graphql_string(&agent_did),
+                escape_graphql_string(&node_did),
+                escape_graphql_string(&node_did),
             ),
         ))
         .await?;
@@ -190,12 +190,12 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
             &format!(
                 r#"{{ AgentSession(filter: {{
                     session_id: {{ _eq: "{}" }},
-                    agent_did: {{ _eq: "{}" }},
+                    node_did: {{ _eq: "{}" }},
                     requester_did: {{ _eq: "{}" }}
                 }}) {{ title }} }}"#,
                 escape_graphql_string(&git_thread_id),
-                escape_graphql_string(&agent_did),
-                escape_graphql_string(&agent_did),
+                escape_graphql_string(&node_did),
+                escape_graphql_string(&node_did),
             ),
         ))
         .await?;
@@ -243,19 +243,19 @@ async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> Result<()
 
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-fork-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-fork-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -276,7 +276,7 @@ async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> Result<()
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -329,7 +329,7 @@ async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> Result<()
                 r#"{{
                 AgentSession(filter: {{
                     session_id: {{ _eq: "{}" }},
-                    agent_did: {{ _eq: "{}" }},
+                    node_did: {{ _eq: "{}" }},
                     requester_did: {{ _eq: "{}" }}
                 }}, limit: 1) {{
                     session_id
@@ -337,8 +337,8 @@ async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> Result<()
                 }}
             }}"#,
                 escape_graphql_string(&forked_id),
-                escape_graphql_string(&agent_did),
-                escape_graphql_string(&agent_did),
+                escape_graphql_string(&node_did),
+                escape_graphql_string(&node_did),
             ),
         ))
         .await?;

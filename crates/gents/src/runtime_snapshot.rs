@@ -7,30 +7,30 @@ use serde::Serialize;
 use tokio::sync::mpsc;
 
 use crate::admission::BackendAdmissionConfig;
-use crate::config::ResolvedBehavior;
+use crate::config::ResolvedAgent;
 pub use crate::document_config::ConcurrencyMode;
 pub use crate::document_config::ScheduleCadence;
 use crate::document_config::TaskHook;
-use crate::identity::RuntimePrincipal;
+use crate::identity::RuntimeNode;
 use crate::schedule_cron::{next_cron_run_after, CronMissedRunPolicy};
 use crate::tool_surface::ToolSurface;
 use crate::watcher::AgentRequest;
-use gents_protocol::row::BehaviorReadinessUnavailableReason;
-use gents_protocol::row::{
-    effective_behavior_readiness_admission, EffectiveBehaviorReadinessAdmission,
+use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
+use gents_protocol::node_readiness::{
+    effective_agent_readiness_admission, EffectiveAgentReadinessAdmission,
 };
 
 pub type DispatcherMap = HashMap<String, mpsc::Sender<AgentRequest>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnavailableBehavior {
-    pub public_reason: BehaviorReadinessUnavailableReason,
+pub struct UnavailableAgent {
+    pub public_reason: AgentReadinessUnavailableReason,
     pub diagnostic: String,
 }
 
-impl UnavailableBehavior {
+impl UnavailableAgent {
     pub fn new(
-        public_reason: BehaviorReadinessUnavailableReason,
+        public_reason: AgentReadinessUnavailableReason,
         diagnostic: impl Into<String>,
     ) -> Self {
         Self {
@@ -45,38 +45,38 @@ impl UnavailableBehavior {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EffectiveBehaviorAdmission<'a> {
+pub(crate) enum EffectiveAgentAdmission<'a> {
     Ready,
     Unavailable {
-        public_reason: BehaviorReadinessUnavailableReason,
+        public_reason: AgentReadinessUnavailableReason,
         diagnostic: &'a str,
     },
     Unassigned,
 }
 
-/// Single behavior-admission decision shared by routing and readiness
+/// Single agent-admission decision shared by routing and readiness
 /// publication. Explicit unavailability and startup demotion always veto an
 /// installed dispatcher.
-pub(crate) fn effective_behavior_admission<'a>(
+pub(crate) fn effective_agent_admission<'a>(
     dispatcher_present: bool,
-    unavailable: Option<&'a UnavailableBehavior>,
+    unavailable: Option<&'a UnavailableAgent>,
     startup_diagnostic: Option<&'a str>,
-) -> EffectiveBehaviorAdmission<'a> {
-    match effective_behavior_readiness_admission(
+) -> EffectiveAgentAdmission<'a> {
+    match effective_agent_readiness_admission(
         dispatcher_present,
         unavailable.map(|unavailable| unavailable.public_reason),
         startup_diagnostic.is_some(),
     ) {
-        EffectiveBehaviorReadinessAdmission::Ready => EffectiveBehaviorAdmission::Ready,
-        EffectiveBehaviorReadinessAdmission::Unavailable(public_reason) => {
-            EffectiveBehaviorAdmission::Unavailable {
+        EffectiveAgentReadinessAdmission::Ready => EffectiveAgentAdmission::Ready,
+        EffectiveAgentReadinessAdmission::Unavailable(public_reason) => {
+            EffectiveAgentAdmission::Unavailable {
                 public_reason,
                 diagnostic: startup_diagnostic
                     .or_else(|| unavailable.map(|unavailable| unavailable.diagnostic.as_str()))
                     .expect("unavailable admission has a diagnostic source"),
             }
         }
-        EffectiveBehaviorReadinessAdmission::Unassigned => EffectiveBehaviorAdmission::Unassigned,
+        EffectiveAgentReadinessAdmission::Unassigned => EffectiveAgentAdmission::Unassigned,
     }
 }
 
@@ -85,7 +85,7 @@ pub struct ResolvedTask {
     pub emit_outcome: bool,
     pub task_id: String,
     pub name: Option<String>,
-    pub behavior_id: String,
+    pub agent_id: String,
     pub prompt_template: String,
     pub goal_objective_template: Option<String>,
     pub goal_token_budget: Option<i64>,
@@ -209,13 +209,13 @@ pub(crate) fn advance_schedule_next_run_at(
 
 #[derive(Clone, Debug)]
 pub(crate) struct ResolvedRuntimeSnapshot {
-    pub(crate) principal: Option<Arc<RuntimePrincipal>>,
+    pub(crate) node: Option<Arc<RuntimeNode>>,
     pub(crate) local_did: String,
-    pub(crate) default_behavior_id: String,
-    pub(crate) behaviors: HashMap<String, Arc<ResolvedBehavior>>,
+    pub(crate) default_agent_id: String,
+    pub(crate) agents: HashMap<String, Arc<ResolvedAgent>>,
     pub(crate) tool_surfaces: HashMap<String, Arc<ToolSurface>>,
     pub(crate) backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
-    pub(crate) unavailable_behaviors: HashMap<String, UnavailableBehavior>,
+    pub(crate) unavailable_agents: HashMap<String, UnavailableAgent>,
     pub(crate) active_schedules: HashMap<String, ResolvedSchedule>,
     pub(crate) unavailable_schedules: HashSet<String>,
     pub(crate) active_event_triggers: HashMap<String, ResolvedEventTrigger>,
@@ -226,45 +226,43 @@ pub(crate) struct ResolvedRuntimeSnapshot {
 impl ResolvedRuntimeSnapshot {
     /// Validates the runtime-authored identity set before any executor slot is
     /// started or an active generation is installed.
-    pub(crate) fn validate_behavior_readiness_source(&self) -> Result<()> {
+    pub(crate) fn validate_node_readiness_source(&self) -> Result<()> {
         let canonical = |value: &str| !value.is_empty() && value == value.trim();
-        if !canonical(&self.default_behavior_id) {
+        if !canonical(&self.default_agent_id) {
             anyhow::bail!(
-                "default behavior {:?} is not a canonical behavior identifier",
-                self.default_behavior_id
+                "default agent {:?} is not a canonical agent identifier",
+                self.default_agent_id
             );
         }
         if self
-            .behaviors
+            .agents
             .keys()
-            .chain(self.unavailable_behaviors.keys())
-            .any(|behavior_id| !canonical(behavior_id))
+            .chain(self.unavailable_agents.keys())
+            .any(|agent_id| !canonical(agent_id))
         {
-            anyhow::bail!("runtime behavior identifiers must be non-empty and trimmed");
+            anyhow::bail!("runtime agent identifiers must be non-empty and trimmed");
         }
-        let runnable_behavior_ids = self.behaviors.keys().collect::<BTreeSet<_>>();
-        let tool_surface_behavior_ids = self.tool_surfaces.keys().collect::<BTreeSet<_>>();
-        if runnable_behavior_ids != tool_surface_behavior_ids {
-            let missing = runnable_behavior_ids
-                .difference(&tool_surface_behavior_ids)
-                .map(|behavior_id| behavior_id.as_str())
+        let runnable_agent_ids = self.agents.keys().collect::<BTreeSet<_>>();
+        let tool_surface_agent_ids = self.tool_surfaces.keys().collect::<BTreeSet<_>>();
+        if runnable_agent_ids != tool_surface_agent_ids {
+            let missing = runnable_agent_ids
+                .difference(&tool_surface_agent_ids)
+                .map(|agent_id| agent_id.as_str())
                 .collect::<Vec<_>>();
-            let extra = tool_surface_behavior_ids
-                .difference(&runnable_behavior_ids)
-                .map(|behavior_id| behavior_id.as_str())
+            let extra = tool_surface_agent_ids
+                .difference(&runnable_agent_ids)
+                .map(|agent_id| agent_id.as_str())
                 .collect::<Vec<_>>();
             anyhow::bail!(
-                "runnable behavior/tool-surface keysets differ (missing={missing:?}, extra={extra:?})"
+                "runnable agent/tool-surface keysets differ (missing={missing:?}, extra={extra:?})"
             );
         }
-        if !self.behaviors.contains_key(&self.default_behavior_id)
-            && !self
-                .unavailable_behaviors
-                .contains_key(&self.default_behavior_id)
+        if !self.agents.contains_key(&self.default_agent_id)
+            && !self.unavailable_agents.contains_key(&self.default_agent_id)
         {
             anyhow::bail!(
-                "default behavior {:?} is not assigned to the resolved runtime",
-                self.default_behavior_id
+                "default agent {:?} is not assigned to the resolved runtime",
+                self.default_agent_id
             );
         }
         Ok(())
@@ -272,38 +270,38 @@ impl ResolvedRuntimeSnapshot {
 
     #[allow(dead_code)]
     pub(crate) fn from_parts(
-        default_behavior_id: String,
-        behaviors: Vec<Arc<ResolvedBehavior>>,
+        default_agent_id: String,
+        agents: Vec<Arc<ResolvedAgent>>,
         tool_surfaces: HashMap<String, Arc<ToolSurface>>,
-        unavailable_behaviors: HashMap<String, UnavailableBehavior>,
+        unavailable_agents: HashMap<String, UnavailableAgent>,
     ) -> Self {
         Self::from_parts_with_admission_configs(
-            default_behavior_id,
-            behaviors,
+            default_agent_id,
+            agents,
             tool_surfaces,
             HashMap::new(),
-            unavailable_behaviors,
+            unavailable_agents,
         )
     }
 
     pub(crate) fn from_parts_with_admission_configs(
-        default_behavior_id: String,
-        behaviors: Vec<Arc<ResolvedBehavior>>,
+        default_agent_id: String,
+        agents: Vec<Arc<ResolvedAgent>>,
         tool_surfaces: HashMap<String, Arc<ToolSurface>>,
         backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
-        unavailable_behaviors: HashMap<String, UnavailableBehavior>,
+        unavailable_agents: HashMap<String, UnavailableAgent>,
     ) -> Self {
         Self {
-            principal: None,
+            node: None,
             local_did: String::new(),
-            default_behavior_id,
-            behaviors: behaviors
+            default_agent_id,
+            agents: agents
                 .into_iter()
-                .map(|behavior| (behavior.behavior_id.clone(), behavior))
+                .map(|agent| (agent.agent_id.clone(), agent))
                 .collect(),
             tool_surfaces,
             backend_admission_configs,
-            unavailable_behaviors,
+            unavailable_agents,
             active_schedules: HashMap::new(),
             unavailable_schedules: HashSet::new(),
             active_event_triggers: HashMap::new(),
@@ -312,8 +310,8 @@ impl ResolvedRuntimeSnapshot {
         }
     }
 
-    pub(crate) fn with_principal(mut self, principal: Arc<RuntimePrincipal>) -> Self {
-        self.principal = Some(principal);
+    pub(crate) fn with_node(mut self, node: Arc<RuntimeNode>) -> Self {
+        self.node = Some(node);
         self
     }
 
@@ -339,19 +337,19 @@ impl ResolvedRuntimeSnapshot {
         generation: u64,
         dispatchers: DispatcherMap,
     ) -> ActiveRuntimeSnapshot {
-        let behavior_executor_capacities = dispatchers
+        let agent_executor_capacities = dispatchers
             .keys()
-            .map(|behavior_id| (behavior_id.clone(), 1))
+            .map(|agent_id| (agent_id.clone(), 1))
             .collect();
-        let behavior_executor_queue_capacities = dispatchers
+        let agent_executor_queue_capacities = dispatchers
             .iter()
-            .map(|(behavior_id, dispatcher)| (behavior_id.clone(), dispatcher.max_capacity()))
+            .map(|(agent_id, dispatcher)| (agent_id.clone(), dispatcher.max_capacity()))
             .collect();
         self.activate_with_executor_metadata(
             generation,
             dispatchers,
-            behavior_executor_capacities,
-            behavior_executor_queue_capacities,
+            agent_executor_capacities,
+            agent_executor_queue_capacities,
         )
     }
 
@@ -359,43 +357,43 @@ impl ResolvedRuntimeSnapshot {
         self,
         generation: u64,
         dispatchers: DispatcherMap,
-        behavior_executor_capacities: HashMap<String, usize>,
-        behavior_executor_queue_capacities: HashMap<String, usize>,
+        agent_executor_capacities: HashMap<String, usize>,
+        agent_executor_queue_capacities: HashMap<String, usize>,
     ) -> ActiveRuntimeSnapshot {
         debug_assert!(
-            self.principal.is_some(),
-            "ResolvedRuntimeSnapshot::activate called without principal set — \
-             every production construction path must call .with_principal(...) \
+            self.node.is_some(),
+            "ResolvedRuntimeSnapshot::activate called without node set — \
+             every production construction path must call .with_node(...) \
              before activation",
         );
         ActiveRuntimeSnapshot {
             generation,
-            principal: self.principal,
+            node: self.node,
             local_did: self.local_did,
-            default_behavior_id: self.default_behavior_id,
-            behaviors: self.behaviors,
+            default_agent_id: self.default_agent_id,
+            agents: self.agents,
             tool_surfaces: self.tool_surfaces,
             backend_admission_configs: self.backend_admission_configs,
-            unavailable_behaviors: self.unavailable_behaviors,
+            unavailable_agents: self.unavailable_agents,
             active_schedules: self.active_schedules,
             unavailable_schedules: self.unavailable_schedules,
             active_event_triggers: self.active_event_triggers,
             unavailable_event_triggers: self.unavailable_event_triggers,
             active_tasks: self.active_tasks,
             dispatchers,
-            behavior_executor_capacities,
-            behavior_executor_queue_capacities,
+            agent_executor_capacities,
+            agent_executor_queue_capacities,
         }
     }
 
     pub(crate) fn configuration_fingerprint(&self) -> String {
         configuration_fingerprint(
-            &self.default_behavior_id,
+            &self.default_agent_id,
             &self.local_did,
-            &self.behaviors,
+            &self.agents,
             &self.tool_surfaces,
             &self.backend_admission_configs,
-            &self.unavailable_behaviors,
+            &self.unavailable_agents,
             &self.active_schedules,
             &self.unavailable_schedules,
             &self.active_event_triggers,
@@ -408,33 +406,33 @@ impl ResolvedRuntimeSnapshot {
 #[derive(Clone, Debug)]
 pub struct ActiveRuntimeSnapshot {
     pub generation: u64,
-    pub principal: Option<Arc<RuntimePrincipal>>,
+    pub node: Option<Arc<RuntimeNode>>,
     pub local_did: String,
-    pub default_behavior_id: String,
-    pub behaviors: HashMap<String, Arc<ResolvedBehavior>>,
+    pub default_agent_id: String,
+    pub agents: HashMap<String, Arc<ResolvedAgent>>,
     pub tool_surfaces: HashMap<String, Arc<ToolSurface>>,
     pub backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
-    pub unavailable_behaviors: HashMap<String, UnavailableBehavior>,
+    pub unavailable_agents: HashMap<String, UnavailableAgent>,
     pub active_schedules: HashMap<String, ResolvedSchedule>,
     pub unavailable_schedules: HashSet<String>,
     pub active_event_triggers: HashMap<String, ResolvedEventTrigger>,
     pub unavailable_event_triggers: HashSet<String>,
     pub active_tasks: HashMap<String, ResolvedTask>,
     pub dispatchers: DispatcherMap,
-    pub behavior_executor_capacities: HashMap<String, usize>,
-    pub behavior_executor_queue_capacities: HashMap<String, usize>,
+    pub agent_executor_capacities: HashMap<String, usize>,
+    pub agent_executor_queue_capacities: HashMap<String, usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct BehaviorExecutorStatus {
+pub(crate) struct AgentExecutorStatus {
     pub(crate) worker_capacity: usize,
     pub(crate) queue_depth: usize,
     pub(crate) queue_capacity: usize,
 }
 
 impl ActiveRuntimeSnapshot {
-    pub(crate) fn behavior(&self, behavior_id: &str) -> Option<&Arc<ResolvedBehavior>> {
-        self.behaviors.get(behavior_id)
+    pub(crate) fn agent(&self, agent_id: &str) -> Option<&Arc<ResolvedAgent>> {
+        self.agents.get(agent_id)
     }
 
     pub(crate) fn active_schedules(&self) -> &HashMap<String, ResolvedSchedule> {
@@ -449,33 +447,33 @@ impl ActiveRuntimeSnapshot {
         &self.active_tasks
     }
 
-    pub(crate) fn tool_surface(&self, behavior_id: &str) -> Option<&Arc<ToolSurface>> {
-        self.tool_surfaces.get(behavior_id)
+    pub(crate) fn tool_surface(&self, agent_id: &str) -> Option<&Arc<ToolSurface>> {
+        self.tool_surfaces.get(agent_id)
     }
 
-    pub(crate) fn unavailable_public_message(&self, behavior_id: &str) -> Option<&'static str> {
-        self.unavailable_behaviors
-            .get(behavior_id)
-            .map(UnavailableBehavior::public_message)
+    pub(crate) fn unavailable_public_message(&self, agent_id: &str) -> Option<&'static str> {
+        self.unavailable_agents
+            .get(agent_id)
+            .map(UnavailableAgent::public_message)
     }
 
-    pub(crate) fn behavior_executor_statuses(&self) -> BTreeMap<String, BehaviorExecutorStatus> {
-        let mut behavior_ids = self
-            .behaviors
+    pub(crate) fn agent_executor_statuses(&self) -> BTreeMap<String, AgentExecutorStatus> {
+        let mut agent_ids = self
+            .agents
             .keys()
             .chain(self.dispatchers.keys())
-            .chain(self.behavior_executor_capacities.keys())
+            .chain(self.agent_executor_capacities.keys())
             .cloned()
             .collect::<BTreeSet<_>>();
-        behavior_ids.extend(self.behavior_executor_queue_capacities.keys().cloned());
+        agent_ids.extend(self.agent_executor_queue_capacities.keys().cloned());
 
-        behavior_ids
+        agent_ids
             .into_iter()
-            .map(|behavior_id| {
-                let dispatcher = self.dispatchers.get(&behavior_id);
+            .map(|agent_id| {
+                let dispatcher = self.dispatchers.get(&agent_id);
                 let queue_capacity = self
-                    .behavior_executor_queue_capacities
-                    .get(&behavior_id)
+                    .agent_executor_queue_capacities
+                    .get(&agent_id)
                     .copied()
                     .or_else(|| dispatcher.map(mpsc::Sender::max_capacity))
                     .unwrap_or_default();
@@ -483,13 +481,13 @@ impl ActiveRuntimeSnapshot {
                     .map(|dispatcher| queue_capacity.saturating_sub(dispatcher.capacity()))
                     .unwrap_or_default();
                 let worker_capacity = self
-                    .behavior_executor_capacities
-                    .get(&behavior_id)
+                    .agent_executor_capacities
+                    .get(&agent_id)
                     .copied()
                     .unwrap_or_else(|| if dispatcher.is_some() { 1 } else { 0 });
                 (
-                    behavior_id,
-                    BehaviorExecutorStatus {
+                    agent_id,
+                    AgentExecutorStatus {
                         worker_capacity,
                         queue_depth,
                         queue_capacity,
@@ -501,12 +499,12 @@ impl ActiveRuntimeSnapshot {
 
     pub(crate) fn configuration_fingerprint(&self) -> String {
         configuration_fingerprint(
-            &self.default_behavior_id,
+            &self.default_agent_id,
             &self.local_did,
-            &self.behaviors,
+            &self.agents,
             &self.tool_surfaces,
             &self.backend_admission_configs,
-            &self.unavailable_behaviors,
+            &self.unavailable_agents,
             &self.active_schedules,
             &self.unavailable_schedules,
             &self.active_event_triggers,
@@ -518,12 +516,12 @@ impl ActiveRuntimeSnapshot {
 
 #[allow(clippy::too_many_arguments)]
 fn configuration_fingerprint(
-    default_behavior_id: &str,
+    default_agent_id: &str,
     local_did: &str,
-    behaviors: &HashMap<String, Arc<ResolvedBehavior>>,
+    agents: &HashMap<String, Arc<ResolvedAgent>>,
     tool_surfaces: &HashMap<String, Arc<ToolSurface>>,
     backend_admission_configs: &HashMap<String, BackendAdmissionConfig>,
-    unavailable_behaviors: &HashMap<String, UnavailableBehavior>,
+    unavailable_agents: &HashMap<String, UnavailableAgent>,
     active_schedules: &HashMap<String, ResolvedSchedule>,
     unavailable_schedules: &HashSet<String>,
     active_event_triggers: &HashMap<String, ResolvedEventTrigger>,
@@ -535,30 +533,30 @@ fn configuration_fingerprint(
     fingerprint.push_str(local_did);
     fingerprint.push('\n');
     fingerprint.push_str("default:");
-    fingerprint.push_str(default_behavior_id);
+    fingerprint.push_str(default_agent_id);
     fingerprint.push('\n');
 
-    let mut behavior_ids = behaviors.keys().cloned().collect::<Vec<_>>();
-    behavior_ids.sort();
-    for behavior_id in behavior_ids {
-        let behavior = behaviors
-            .get(&behavior_id)
-            .expect("behavior id came from behaviors map");
-        fingerprint.push_str("behavior:");
-        fingerprint.push_str(&behavior_id);
+    let mut agent_ids = agents.keys().cloned().collect::<Vec<_>>();
+    agent_ids.sort();
+    for agent_id in agent_ids {
+        let agent = agents
+            .get(&agent_id)
+            .expect("agent id came from agents map");
+        fingerprint.push_str("agent:");
+        fingerprint.push_str(&agent_id);
         fingerprint.push('=');
-        fingerprint.push_str(&format!("{behavior:?}"));
+        fingerprint.push_str(&format!("{agent:?}"));
         fingerprint.push('\n');
     }
 
     let mut tool_ids = tool_surfaces.keys().cloned().collect::<Vec<_>>();
     tool_ids.sort();
-    for behavior_id in tool_ids {
+    for agent_id in tool_ids {
         let tool_surface = tool_surfaces
-            .get(&behavior_id)
-            .expect("behavior id came from tool surface map");
+            .get(&agent_id)
+            .expect("agent id came from tool surface map");
         fingerprint.push_str("tools:");
-        fingerprint.push_str(&behavior_id);
+        fingerprint.push_str(&agent_id);
         fingerprint.push('=');
         fingerprint.push_str(&format!("{tool_surface:?}"));
         fingerprint.push('\n');
@@ -580,14 +578,14 @@ fn configuration_fingerprint(
         fingerprint.push('\n');
     }
 
-    let mut unavailable_ids = unavailable_behaviors.keys().cloned().collect::<Vec<_>>();
+    let mut unavailable_ids = unavailable_agents.keys().cloned().collect::<Vec<_>>();
     unavailable_ids.sort();
-    for behavior_id in unavailable_ids {
-        let reason = unavailable_behaviors
-            .get(&behavior_id)
-            .expect("behavior id came from unavailable behavior map");
+    for agent_id in unavailable_ids {
+        let reason = unavailable_agents
+            .get(&agent_id)
+            .expect("agent id came from unavailable agent map");
         fingerprint.push_str("unavailable:");
-        fingerprint.push_str(&behavior_id);
+        fingerprint.push_str(&agent_id);
         fingerprint.push('=');
         fingerprint.push_str(&reason.diagnostic);
         fingerprint.push(':');

@@ -1,18 +1,60 @@
 import { describe, expect, it } from "vitest";
-import { exactControl, labelledInput, persistedSessionControl } from "./nativeLocalE2e";
+import {
+  exactControl,
+  emulateNativeReducedMotion,
+  labelledInput,
+  persistedSessionControl,
+  renderedAssistantResponse,
+} from "./nativeLocalE2e";
+import { findAssistantResponseMarker } from "./nativeSimulatorE2eDom";
+
+it("emulates reduced motion only in the native test window", () => {
+  const target = {
+    matchMedia: (media: string) => ({ media, matches: false }) as MediaQueryList,
+  };
+  emulateNativeReducedMotion(target);
+  expect(target.matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
+  expect(target.matchMedia("(prefers-color-scheme: dark)").matches).toBe(false);
+});
+
+describe("native canonical response matching", () => {
+  it("matches the full rendered answer when canonical Markdown contains formatting", () => {
+    const response = "Both received: `QUEUE_SECOND` and **QUEUE_EDITED**.";
+    document.body.innerHTML =
+      '<div data-slot="assistant-message">Both received: <code>QUEUE_SECOND</code> and <strong>QUEUE_EDITED</strong>.</div>';
+    expect(findAssistantResponseMarker(document, response)).toBeNull();
+    expect(renderedAssistantResponse(response)).toBe(
+      "Both received: QUEUE_SECOND and QUEUE_EDITED.",
+    );
+    expect(
+      findAssistantResponseMarker(document, renderedAssistantResponse(response)),
+    ).not.toBeNull();
+  });
+
+  it("still rejects a rendered answer with a missing retained message", () => {
+    document.body.innerHTML =
+      '<div data-slot="assistant-message">Both received: <code>QUEUE_SECOND</code>.</div>';
+    expect(
+      findAssistantResponseMarker(
+        document,
+        renderedAssistantResponse("Both received: `QUEUE_SECOND` and `QUEUE_EDITED`."),
+      ),
+    ).toBeNull();
+  });
+});
 
 describe("native local setup selectors", () => {
   it("finds both nested setup fields and the separately labelled tool root", () => {
     document.body.innerHTML = `
-      <label><span>Agent name</span><input id="name"></label>
+      <label><span>Node name</span><input id="name"></label>
       <label for="root">Tool root</label><input id="root">
       <label><span>Endpoint</span><input id="endpoint"></label>`;
-    expect(labelledInput(document, "Agent name")?.id).toBe("name");
+    expect(labelledInput(document, "Node name")?.id).toBe("name");
     expect(labelledInput(document, "Tool root")?.id).toBe("root");
     expect(labelledInput(document, "Endpoint")?.id).toBe("endpoint");
   });
 
-  it("selects the exact enabled Engineer option instead of a similarly named behavior", () => {
+  it("selects the exact enabled Engineer option instead of a similarly named agent", () => {
     document.body.innerHTML = `
       <button role="option"><span>The Engineer staging</span></button>
       <button role="option" disabled><span>The Engineer</span></button>

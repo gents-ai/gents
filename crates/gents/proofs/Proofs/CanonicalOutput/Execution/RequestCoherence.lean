@@ -52,7 +52,7 @@ private theorem coherent_nonrunning_not_inFlight
           beq_eq_false_iff_ne.mpr hstate
         simpa [hsbool] using ht.2
       exact of_decide_eq_false hin
-  | spawnedBackground parent =>
+  | spawnedBackground parent | pluginEffect parent _ =>
       simp only [hp, Bool.and_eq_true, Bool.not_eq_true] at ht
       exact of_decide_eq_true ht.2
 

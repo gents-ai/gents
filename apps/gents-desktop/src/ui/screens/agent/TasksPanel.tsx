@@ -24,7 +24,7 @@ import { DeleteButton, ListDetail } from "./ListDetail";
 import { newId } from "./draft";
 import { Group, Row } from "./rows";
 import { RowMenu } from "./RowMenu";
-import { BehaviorSheet } from "./BehaviorSheet";
+import { AgentSheet } from "./BehaviorSheet";
 import { NewAutomationDialog } from "./NewAutomationDialog";
 import { EditorSheet } from "./EditorSheet";
 import { TriggerEditor } from "./TriggersPanel";
@@ -53,12 +53,12 @@ export function TaskEditor({
   } = useApp();
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "tasks",
   };
   const saved = {
     name: task.name ?? "",
-    behaviorId: task.behaviorId ?? "",
+    agentId: task.agentId ?? "",
     enabled: task.enabled ?? true,
     description: task.description ?? "",
     promptTemplate: task.promptTemplate ?? "",
@@ -78,11 +78,11 @@ export function TaskEditor({
       if (typeof hooks === "string") return Promise.reject(new Error(hooks));
       return changeConfig("saveTaskConfig", {
         document: {
-          agent_did: deployment.agentDid,
+          node_did: deployment.nodeDid,
           task_id: task.taskId,
           display_name: n.name.trim() || task.taskId,
           description: n.description || null,
-          behavior_id: n.behaviorId,
+          agent_id: n.agentId,
           prompt_template: n.promptTemplate,
           emit_outcome: n.emitOutcome,
           goal_objective_template: n.goalObjectiveTemplate || null,
@@ -98,9 +98,9 @@ export function TaskEditor({
       problems: (n) => {
         const hooks = hooksFromDraft(n.hooks);
         return {
-          behaviorId: deployment.behaviors.some((b) => b.behaviorId === n.behaviorId)
+          agentId: deployment.agents.some((b) => b.agentId === n.agentId)
             ? undefined
-            : "Choose an existing behavior",
+            : "Choose an existing agent",
           promptTemplate: n.promptTemplate.trim()
             ? undefined
             : "Prompt template is required",
@@ -114,10 +114,8 @@ export function TaskEditor({
       },
     },
   );
-  /* the New behavior dialog's resolver while it is open */
-  const [newBehavior, setNewBehavior] = useState<((id: string | null) => void) | null>(
-    null,
-  );
+  /* the New agent dialog's resolver while it is open */
+  const [newAgent, setNewAgent] = useState<((id: string | null) => void) | null>(null);
   /* this task's triggers, and the one open beside the page */
   const myTriggers = deployment.triggers.filter(
     (x) => x.config.task_id === task.taskId,
@@ -132,8 +130,8 @@ export function TaskEditor({
   const [lastRun, setLastRun] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const id = (f: string) => `${task.taskId}-${f}`;
-  const behaviors = deployment.behaviors.map((b) => ({
-    value: b.behaviorId,
+  const agents = deployment.agents.map((b) => ({
+    value: b.agentId,
     label: b.displayName,
   }));
   const run = async () => {
@@ -149,7 +147,7 @@ export function TaskEditor({
     setRunning(true);
     const pending = runTask({
       taskId: task.taskId,
-      agentDid: deployment.agentDid,
+      nodeDid: deployment.nodeDid,
       args: parsed,
     });
     const intentGeneration = captureComposeIntent();
@@ -178,32 +176,32 @@ export function TaskEditor({
           onChange={(v) => d.set("name", v)}
         />
         <RefRow
-          id={id("behavior")}
-          label="Behavior"
+          id={id("agent")}
+          label="Agent"
           description="Runs the prompt with its instructions, tools and model."
-          value={d.draft.behaviorId}
-          error={d.problems.behaviorId}
-          onChange={(v) => d.set("behaviorId", v)}
-          items={behaviors}
+          value={d.draft.agentId}
+          error={d.problems.agentId}
+          onChange={(v) => d.set("agentId", v)}
+          items={agents}
           none="Unset"
-          createLabel="New behavior…"
+          createLabel="New agent…"
           onCreate={() =>
             new Promise<string | null>((resolve) => {
-              setNewBehavior(() => resolve);
+              setNewAgent(() => resolve);
             })
           }
-          openRoute={(behaviorId) => ({
+          openRoute={(agentId) => ({
             ...base,
-            section: "behaviors",
-            item: behaviorId,
+            section: "agents",
+            item: agentId,
           })}
         />
-        <BehaviorSheet
+        <AgentSheet
           deployment={deployment}
-          open={newBehavior !== null}
-          onClose={(behaviorId) => {
-            newBehavior?.(behaviorId);
-            setNewBehavior(null);
+          open={newAgent !== null}
+          onClose={(agentId) => {
+            newAgent?.(agentId);
+            setNewAgent(null);
           }}
         />
         <SwitchRow
@@ -278,7 +276,7 @@ export function TaskEditor({
       <DraftActions
         draft={d}
         fields={{
-          behaviorId: id("behavior"),
+          agentId: id("agent"),
           promptTemplate: id("prompt"),
           goalObjectiveTemplate: id("goal"),
           goalTokenBudget: id("budget"),
@@ -319,7 +317,7 @@ export function TaskEditor({
                   onCheckedChange={(next) =>
                     void setEnabled(
                       changeConfig,
-                      deployment.agentDid,
+                      deployment.nodeDid,
                       "Trigger",
                       tr.config.trigger_id,
                       next,
@@ -428,7 +426,7 @@ export function TaskEditor({
           onDelete={() =>
             changeConfig("deleteTaskConfig", {
               taskId: task.taskId,
-              agentDid: deployment.agentDid,
+              nodeDid: deployment.nodeDid,
             })
           }
         />
@@ -456,11 +454,11 @@ function whenItRuns(deployment: NodeView, t: TaskView) {
 /* the canonical document for a task view, for row edits and copies */
 function taskDocument(deployment: NodeView, t: TaskView) {
   return {
-    agent_did: deployment.agentDid,
+    node_did: deployment.nodeDid,
     task_id: t.taskId,
     display_name: t.name ?? t.taskId,
     description: t.description,
-    behavior_id: t.behaviorId ?? "",
+    agent_id: t.agentId ?? "",
     prompt_template: t.promptTemplate ?? "",
     emit_outcome: t.emitOutcome,
     goal_objective_template: t.goalObjectiveTemplate,
@@ -482,7 +480,7 @@ export function TasksPanel({
   const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "tasks",
   };
   const [creating, setCreating] = useState(false);
@@ -503,7 +501,7 @@ export function TasksPanel({
             id: t.taskId,
             title: t.name ?? t.taskId,
             tags: t.tags,
-            meta: `${w.when} · with ${agentOf(deployment, t.behaviorId)?.displayName ?? "no behavior"}`,
+            meta: `${w.when} · with ${agentOf(deployment, t.agentId)?.displayName ?? "no agent"}`,
             badge:
               w.problem ??
               (t.recentRuns.lastStatus === "failed" ? "last run failed" : undefined),
@@ -518,7 +516,7 @@ export function TasksPanel({
                   onChange: (enabled) =>
                     setEnabled(
                       changeConfig,
-                      deployment.agentDid,
+                      deployment.nodeDid,
                       "Task",
                       t.taskId,
                       enabled,
@@ -538,7 +536,7 @@ export function TasksPanel({
                 onDelete={() =>
                   changeConfig("deleteTaskConfig", {
                     taskId: t.taskId,
-                    agentDid: deployment.agentDid,
+                    nodeDid: deployment.nodeDid,
                   })
                 }
                 warning={dependentsWarning(deployment, "task", t.taskId)}
@@ -547,7 +545,7 @@ export function TasksPanel({
           };
         })}
         createLabel="New task"
-        empty="No tasks. A task is a prompt a behavior runs: when you run it, on a schedule, or when something happens."
+        empty="No tasks. A task is a prompt an agent runs: when you run it, on a schedule, or when something happens."
         onCreate={() => setCreating(true)}
         detail={(id) => {
           const task = deployment.tasks.find((t) => t.taskId === id)!;

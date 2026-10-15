@@ -14,7 +14,7 @@ use crate::post_graphql;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct McpPoolSnapshot {
     pub(crate) generated_at: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) totals: McpPoolTotals,
     pub(crate) services: Vec<McpPoolService>,
 }
@@ -39,7 +39,7 @@ pub(crate) struct McpPoolService {
     pub(crate) lan_ip: Option<String>,
     pub(crate) mcp_port: Option<i64>,
     pub(crate) mcp_path: Option<String>,
-    pub(crate) send_agent_did: bool,
+    pub(crate) send_node_did: bool,
     pub(crate) status: Option<String>,
     pub(crate) version: Option<String>,
     pub(crate) updated_at: Option<String>,
@@ -66,20 +66,20 @@ struct McpPoolEnvelope {
 
 pub(crate) async fn load_mcp_pool_snapshot(
     graphql: &GraphqlEndpoint,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<McpPoolSnapshot> {
     let generated_at = Utc::now();
-    let response = post_graphql(graphql, &mcp_pool_query(agent_did)).await?;
+    let response = post_graphql(graphql, &mcp_pool_query(node_did)).await?;
     let envelope = decode_mcp_pool_response(response)?;
     Ok(build_mcp_pool_snapshot(
         generated_at,
-        agent_did.to_string(),
+        node_did.to_string(),
         envelope,
     ))
 }
 
-fn mcp_pool_query(agent_did: &str) -> String {
-    let agent_did = escape_graphql_string(agent_did);
+fn mcp_pool_query(node_did: &str) -> String {
+    let node_did = escape_graphql_string(node_did);
     format!(
         r#"{{
             ToolServiceRegistry(order: {{ service_id: ASC }}) {{
@@ -91,17 +91,17 @@ fn mcp_pool_query(agent_did: &str) -> String {
                 lan_ip
                 mcp_port
                 mcp_path
-                send_agent_did
+                send_node_did
                 status
                 version
                 updated_at
             }}
             ToolServiceHealthState(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
                 order: {{ service_id: ASC }}
             ) {{
                 service_id
-                agent_did
+                node_did
                 endpoint
                 status
                 tool_count
@@ -129,7 +129,7 @@ fn decode_mcp_pool_response(response: Value) -> Result<McpPoolEnvelope> {
 
 fn build_mcp_pool_snapshot(
     generated_at: DateTime<Utc>,
-    agent_did: String,
+    node_did: String,
     envelope: McpPoolEnvelope,
 ) -> McpPoolSnapshot {
     let mut health_by_service = envelope
@@ -165,7 +165,7 @@ fn build_mcp_pool_snapshot(
             lan_ip: registry.lan_ip,
             mcp_port: registry.mcp_port,
             mcp_path: registry.mcp_path,
-            send_agent_did: registry.send_agent_did,
+            send_node_did: registry.send_node_did,
             status: registry.status,
             version: registry.version,
             updated_at: registry.updated_at,
@@ -187,7 +187,7 @@ fn build_mcp_pool_snapshot(
 
     McpPoolSnapshot {
         generated_at: generated_at.to_rfc3339(),
-        agent_did,
+        node_did,
         totals,
         services,
     }
@@ -238,7 +238,7 @@ mod tests {
                         lan_ip: None,
                         mcp_port: Some(9201),
                         mcp_path: Some("/mcp".to_string()),
-                        send_agent_did: true,
+                        send_node_did: true,
                         tools: Vec::new(),
                         status: Some("online".to_string()),
                         version: Some("test".to_string()),
@@ -253,7 +253,7 @@ mod tests {
                         lan_ip: None,
                         mcp_port: None,
                         mcp_path: None,
-                        send_agent_did: false,
+                        send_node_did: false,
                         tools: Vec::new(),
                         status: Some("offline".to_string()),
                         version: None,
@@ -262,7 +262,7 @@ mod tests {
                 ],
                 health: vec![ToolServiceHealthStateRow {
                     service_id: "obs-mcp".to_string(),
-                    agent_did: Some("did:key:zAgent".to_string()),
+                    node_did: Some("did:key:zAgent".to_string()),
                     endpoint: Some("http://100.64.0.10:9201/mcp".to_string()),
                     status: Some("healthy".to_string()),
                     tool_count: Some(12),
@@ -279,7 +279,7 @@ mod tests {
         );
 
         assert_eq!(snapshot.generated_at, "2026-06-05T00:00:00+00:00");
-        assert_eq!(snapshot.agent_did, "did:key:zAgent");
+        assert_eq!(snapshot.node_did, "did:key:zAgent");
         assert_eq!(
             snapshot.totals,
             McpPoolTotals {

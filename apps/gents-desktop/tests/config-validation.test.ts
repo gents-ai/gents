@@ -88,11 +88,11 @@ describe("configuration validation", () => {
   });
 
   it.each(["ChatGptCodex", "XaiGrokOAuth", "ClaudeCliSubscription"])(
-    "stores %s as principal OAuth instead of unauthenticated",
+    "stores %s as node OAuth instead of unauthenticated",
     (providerKind) => {
       expect(
         backendSave("did:key:agent", { ...baseBackend, providerKind }),
-      ).toMatchObject({ document: { auth: { kind: "principal_oauth" } } });
+      ).toMatchObject({ document: { auth: { kind: "node_oauth" } } });
     },
   );
 

@@ -11,14 +11,14 @@ export function SetupScreen({
   onDone,
   initialStep,
   purpose = "onboarding",
-  agentDid,
+  nodeDid,
   onCancel,
   provider,
 }: {
   onDone: (snapshot: DesktopClientSnapshot) => void;
   initialStep?: "welcome" | "starting" | "inference";
   purpose?: "onboarding" | "add-backend";
-  agentDid?: string;
+  nodeDid?: string;
   onCancel?: () => void;
   /* a catalog row was chosen, so the form is that provider's inputs only */
   provider?: ProviderId;
@@ -29,7 +29,7 @@ export function SetupScreen({
         purpose="add-backend"
         checkRuntime
         onDone={onDone}
-        agentDid={agentDid}
+        nodeDid={nodeDid}
         onCancel={onCancel}
         provider={provider}
       />
@@ -38,7 +38,7 @@ export function SetupScreen({
     <OnboardingWizard
       onDone={onDone}
       initialStep={initialStep}
-      agentDid={agentDid}
+      nodeDid={nodeDid}
       onCancel={onCancel}
       provider={provider}
     />

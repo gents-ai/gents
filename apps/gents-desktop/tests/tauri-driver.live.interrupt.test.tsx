@@ -20,7 +20,7 @@ describeLive("Tauri app live interrupt flow", () => {
       await withLiveDesktop(async ({ runner, driver }) => {
         await driver.ready();
         await driver.openChat();
-        logTurn(`driver ready agentDid=${runner.agentDid}`);
+        logTurn(`driver ready nodeDid=${runner.nodeDid}`);
 
         await driver.typeComposer(
           phase === "streaming"
@@ -53,7 +53,7 @@ describeLive("Tauri app live interrupt flow", () => {
             async () => {
               const session = await runner.adapter.fetchSessionSnapshot(
                 submitted.sessionId,
-                runner.agentDid,
+                runner.nodeDid,
                 submitted.requestId,
               );
               expect(session?.turnState).toBe("running");

@@ -6,7 +6,7 @@
    here. Existing schedules, sources and tasks can be reused instead of
    made. */
 import type { NodeView } from "../../../hooks/fleetStore";
-import { behaviorReadiness } from "@/lib/behavior-readiness";
+import { agentReadiness } from "@/lib/agent-readiness";
 import { useRef, useState } from "react";
 import type {
   ConfigComponentsApplyRequest,
@@ -126,8 +126,8 @@ export function NewAutomationDialog({
   onCreated?: (triggerId: string) => void;
 }) {
   const { changeConfig } = useApp().actions;
-  const defaultBehavior =
-    defaultAgentOf(deployment)?.behaviorId ?? deployment.behaviors[0]?.behaviorId ?? "";
+  const defaultAgent =
+    defaultAgentOf(deployment)?.agentId ?? deployment.agents[0]?.agentId ?? "";
   const [name, setName] = useState("");
   const startKind = forTask ? "manual" : (initialKind ?? "schedule");
   const [kind, setKind] = useState<"schedule" | "event" | "manual">(startKind);
@@ -145,7 +145,7 @@ export function NewAutomationDialog({
   const ids = useRef<Record<string, string>>({});
   const idFor = (key: string, prefix: string) => (ids.current[key] ??= newId(prefix));
   const [prompt, setPrompt] = useState("");
-  const [behaviorId, setBehaviorId] = useState(defaultBehavior);
+  const [agentId, setAgentId] = useState(defaultAgent);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -164,23 +164,21 @@ export function NewAutomationDialog({
       setEventKind("created");
       setTaskId(task ?? NEW);
       setPrompt("");
-      setBehaviorId(defaultBehavior);
+      setAgentId(defaultAgent);
       setError(null);
     }
     onOpenChange(next);
   };
 
-  /* the behavior that will run it: the new task's pick, or the chosen task's */
-  const runningBehaviorId =
+  /* the agent that will run it: the new task's pick, or the chosen task's */
+  const runningAgentId =
     taskId === NEW
-      ? behaviorId
-      : deployment.tasks.find((t) => t.taskId === taskId)?.behaviorId;
-  const behavior = agentOf(deployment, runningBehaviorId) ?? null;
-  /* whether the behavior can run is the bridge's readiness decision */
-  const readiness = behavior
-    ? behaviorReadiness(deployment, behavior.behaviorId)
-    : null;
-  const behaviorOff = readiness !== null && !readiness.ready;
+      ? agentId
+      : deployment.tasks.find((t) => t.taskId === taskId)?.agentId;
+  const agent = agentOf(deployment, runningAgentId) ?? null;
+  /* whether the agent can run is the bridge's readiness decision */
+  const readiness = agent ? agentReadiness(deployment, agent.agentId) : null;
+  const agentOff = readiness !== null && !readiness.ready;
 
   const create = async () => {
     setError(null);
@@ -188,13 +186,13 @@ export function NewAutomationDialog({
       setError("Say what the agent should do.");
       return;
     }
-    if (taskId === NEW && !behaviorId) {
-      setError("Choose the behavior that runs it.");
+    if (taskId === NEW && !agentId) {
+      setError("Choose the agent that runs it.");
       return;
     }
     setBusy(true);
     try {
-      const agent_did = deployment.agentDid;
+      const node_did = deployment.nodeDid;
       const trigger_id = idFor("trigger", "trig");
       const displayName =
         name.trim() ||
@@ -220,9 +218,9 @@ export function NewAutomationDialog({
             missed_run_policy: "latest_only" as const,
           };
           schedules.push({
-            agent_did,
+            node_did,
             schedule_id,
-            display_name: cadenceInWords({ agent_did, schedule_id, cadence }),
+            display_name: cadenceInWords({ node_did, schedule_id, cadence }),
             cadence,
           });
         }
@@ -233,7 +231,7 @@ export function NewAutomationDialog({
           if (!collection.trim()) throw new Error("Name the collection to watch.");
           event_source_id = idFor("event", "evsrc");
           const doc = {
-            agent_did,
+            node_did,
             event_source_id,
             display_name: null as string | null,
             source_collection: collection.trim(),
@@ -250,11 +248,11 @@ export function NewAutomationDialog({
       if (taskId === NEW) {
         task_id = idFor("task", "task");
         tasks.push({
-          agent_did,
+          node_did,
           task_id,
           display_name: displayName,
           description: null,
-          behavior_id: behaviorId,
+          agent_id: agentId,
           prompt_template: prompt.trim(),
           emit_outcome: false,
           goal_objective_template: null,
@@ -264,20 +262,20 @@ export function NewAutomationDialog({
         });
       }
 
-      /* the trigger: off unless turned on here, and never on for a behavior that is off */
+      /* the trigger: off unless turned on here, and never on for an agent that is off */
       if (source)
         triggers.push({
-          agent_did,
+          node_did,
           trigger_id,
           display_name: displayName,
           task_id,
           source,
-          enabled: enable && !behaviorOff,
+          enabled: enable && !agentOff,
           concurrency: "serial",
         });
       await changeConfig("applyConfigComponents", {
         document: {
-          agent_principal: { agent_did },
+          node: { node_did },
           ...(schedules.length ? { schedules } : {}),
           ...(eventSources.length ? { event_sources: eventSources } : {}),
           ...(tasks.length ? { tasks } : {}),
@@ -289,10 +287,10 @@ export function NewAutomationDialog({
       else
         navigate(
           forTask
-            ? { name: "agent", agentDid: agent_did, section: "tasks", item: task_id }
+            ? { name: "agent", nodeDid: node_did, section: "tasks", item: task_id }
             : {
                 name: "agent",
-                agentDid: agent_did,
+                nodeDid: node_did,
                 section: "triggers",
                 item: trigger_id,
               },
@@ -312,8 +310,8 @@ export function NewAutomationDialog({
             {forTask ? "New task" : task ? "When it runs" : "New trigger"}
           </DialogTitle>
           <DialogDescription>
-            When it runs, what it does, and which behavior does it. Everything else can
-            be tuned afterwards.
+            When it runs, what it does, and which agent does it. Everything else can be
+            tuned afterwards.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
@@ -460,21 +458,21 @@ export function NewAutomationDialog({
                 />
               </Field>
               <Field>
-                <FieldLabel htmlFor="auto-behavior">Who</FieldLabel>
+                <FieldLabel htmlFor="auto-agent">Who</FieldLabel>
                 <Select
-                  items={deployment.behaviors.map((b) => ({
-                    value: b.behaviorId,
+                  items={deployment.agents.map((b) => ({
+                    value: b.agentId,
                     label: b.displayName,
                   }))}
-                  value={behaviorId}
-                  onValueChange={(v) => v && setBehaviorId(v)}
+                  value={agentId}
+                  onValueChange={(v) => v && setAgentId(v)}
                 >
-                  <SelectTrigger id="auto-behavior" className="w-full">
+                  <SelectTrigger id="auto-agent" className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {deployment.behaviors.map((b) => (
-                      <SelectItem key={b.behaviorId} value={b.behaviorId}>
+                    {deployment.agents.map((b) => (
+                      <SelectItem key={b.agentId} value={b.agentId}>
                         {b.displayName}
                         {b.isDefault ? " (default)" : ""}
                         {b.enabled ? "" : " · off"}
@@ -482,9 +480,9 @@ export function NewAutomationDialog({
                     ))}
                   </SelectContent>
                 </Select>
-                {behaviorOff && behavior && (
+                {agentOff && agent && (
                   <FieldDescription>
-                    {behavior.displayName} can’t run ({readiness?.reason}), so the
+                    {agent.displayName} can’t run ({readiness?.reason}), so the
                     automation is created off.
                   </FieldDescription>
                 )}
@@ -495,8 +493,8 @@ export function NewAutomationDialog({
             <div className="flex items-center gap-2 text-sm">
               <Checkbox
                 id="auto-enable"
-                checked={enable && !behaviorOff}
-                disabled={behaviorOff}
+                checked={enable && !agentOff}
+                disabled={agentOff}
                 onCheckedChange={(v) => setEnable(Boolean(v))}
               />
               <label htmlFor="auto-enable">Turn it on now</label>

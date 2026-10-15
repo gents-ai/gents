@@ -46,7 +46,7 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -61,15 +61,15 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     )?;
     let config_path = root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let behavior_id = config["agent_principal"]
-        .get("default_behavior_id")
+    let agent_id = config["node"]
+        .get("default_agent_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing default_behavior_id"))?
+        .ok_or_else(|| anyhow!("exported bundle missing default_agent_id"))?
         .to_string();
-    let agent_did = config["agent_principal"]
-        .get("agent_did")
+    let node_did = config["node"]
+        .get("node_did")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing agent_did"))?
+        .ok_or_else(|| anyhow!("exported bundle missing node_did"))?
         .to_string();
 
     let task_id = format!("greet-{}", Uuid::new_v4().simple());
@@ -77,7 +77,7 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
         "task_id": task_id.clone(),
         "display_name": "Greet",
         "description": "Manual-only task for CLI task run.",
-        "behavior_id": behavior_id.clone(),
+        "agent_id": agent_id.clone(),
         "prompt_template": "hi {{ args.name }}",
         "enabled": true,
     }]);
@@ -89,7 +89,7 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let applied = run_cli_json(
         &home_dir,
@@ -120,9 +120,9 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     );
     assert_eq!(
         listed_task
-            .pointer("/behavior/behavior_id")
+            .pointer("/agent/agent_id")
             .and_then(Value::as_str),
-        Some(behavior_id.as_str())
+        Some(agent_id.as_str())
     );
 
     let shown = run_cli_json(
@@ -135,8 +135,8 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     );
     assert_eq!(shown.get("runnable").and_then(Value::as_bool), Some(true));
     assert_eq!(
-        shown.pointer("/behavior/agent_did").and_then(Value::as_str),
-        Some(agent_did.as_str())
+        shown.pointer("/agent/node_did").and_then(Value::as_str),
+        Some(node_did.as_str())
     );
 
     let fire = run_cli_json(
@@ -158,12 +158,12 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     );
     assert_eq!(fire.get("status").and_then(Value::as_str), Some("pending"));
     assert_eq!(
-        fire.get("behavior_id").and_then(Value::as_str),
-        Some(behavior_id.as_str())
+        fire.get("agent_id").and_then(Value::as_str),
+        Some(agent_id.as_str())
     );
     assert_eq!(
-        fire.get("agent_did").and_then(Value::as_str),
-        Some(agent_did.as_str())
+        fire.get("node_did").and_then(Value::as_str),
+        Some(node_did.as_str())
     );
     let request_id = fire
         .get("request_id")
@@ -182,8 +182,8 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
             r#"{{
                 AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     request_id
-                    agent_did
-                    behavior_id
+                    node_did
+                    agent_id
                     content
                     lifecycle_state
                     execution_origin
@@ -197,12 +197,12 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     .await?;
     let row = first_graphql_row(&response, "AgentRequest")?;
     assert_eq!(
-        row.get("agent_did").and_then(Value::as_str),
-        Some(agent_did.as_str())
+        row.get("node_did").and_then(Value::as_str),
+        Some(node_did.as_str())
     );
     assert_eq!(
-        row.get("behavior_id").and_then(Value::as_str),
-        Some(behavior_id.as_str())
+        row.get("agent_id").and_then(Value::as_str),
+        Some(agent_id.as_str())
     );
     assert_eq!(row.get("content").and_then(Value::as_str), Some("hi Amy"));
     let persisted_lifecycle_state = row.get("lifecycle_state").and_then(Value::as_str);
@@ -252,7 +252,7 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
     run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -267,22 +267,22 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
     )?;
     let config_path = root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let behavior_id = config["agent_principal"]
-        .get("default_behavior_id")
+    let agent_id = config["node"]
+        .get("default_agent_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing default_behavior_id"))?
+        .ok_or_else(|| anyhow!("exported bundle missing default_agent_id"))?
         .to_string();
-    let agent_did = config["agent_principal"]
-        .get("agent_did")
+    let node_did = config["node"]
+        .get("node_did")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing agent_did"))?
+        .ok_or_else(|| anyhow!("exported bundle missing node_did"))?
         .to_string();
 
     let task_id = format!("disabled-{}", Uuid::new_v4().simple());
     config["tasks"] = serde_json::json!([{
         "task_id": task_id.clone(),
         "display_name": "Disabled",
-        "behavior_id": behavior_id.clone(),
+        "agent_id": agent_id.clone(),
         "prompt_template": "noop",
         "enabled": false,
     }]);
@@ -294,7 +294,7 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     run_cli_json(
         &home_dir,

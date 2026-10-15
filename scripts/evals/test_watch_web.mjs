@@ -24,7 +24,7 @@ test('completion uses requirements, not blended score; keeps setup and repair se
 
 test('object progress caps extras, preserves unknowns and escapes table content',()=>{
   const run=viewer();
-  run(`globalThis.slot={key:'x',run:{key:'r',home:'/workstation-1',cases:[{case_id:'<script>',stages:['setup','repair']}]},case_id:'<script>',trial_index:0,state:'stopped',live:{documents:{AgentBehavior:10},schemas:[],tool_calls:70,failed_tool_calls:20},goal:[{collection:'AgentBehavior',min:7},{collection:'schemas',min:6}]};`);
+  run(`globalThis.slot={key:'x',run:{key:'r',home:'/workstation-1',cases:[{case_id:'<script>',stages:['setup','repair']}]},case_id:'<script>',trial_index:0,state:'stopped',live:{documents:{Agent:10},schemas:[],tool_calls:70,failed_tool_calls:20},goal:[{collection:'Agent',min:7},{collection:'schemas',min:6}]};`);
   assert.equal(run('objectProgress(slot)'),100*7/13);
   const table=run('trialTable([slot])');
   assert.match(table,/<table/);assert.match(table,/Stopped/);assert.match(table,/10 \/ 7/);assert.match(table,/20 \/ 70/);

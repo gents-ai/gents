@@ -119,8 +119,8 @@ fn spawn_background_tool_watcher_handle(
                     match observed_tool_status(tool) {
                         ProjectionStatus::InProgress => {}
                         status => {
-                            let (Some(tool_doc_id), Some(agent_did)) =
-                                (tool.doc_id.as_deref(), tool.agent_did.as_deref())
+                            let (Some(tool_doc_id), Some(node_did)) =
+                                (tool.doc_id.as_deref(), tool.node_did.as_deref())
                             else {
                                 tracing::warn!(
                                     tool_key,
@@ -133,7 +133,7 @@ fn spawn_background_tool_watcher_handle(
                                 match gents::tool_call_lifecycle::load_tool_call_presentation(
                                     &access,
                                     tool_doc_id,
-                                    agent_did,
+                                    node_did,
                                     &session_id,
                                     tool.requester_did.as_deref(),
                                 )
@@ -414,8 +414,8 @@ mod tests {
             node,
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
             graphql: gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1/graphql"),
-            agent_did: Arc::from("did:test:background-watcher"),
-            behavior_id: Arc::from("did:test:background-watcher:default"),
+            node_did: Arc::from("did:test:background-watcher"),
+            agent_id: Arc::from("did:test:background-watcher:default"),
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),
             poll_interval,
@@ -451,7 +451,7 @@ mod tests {
                     request_id: "{request_id}",
                     request_doc_id: "{request_id}",
                     session_id: "{session_id}",
-                    agent_did: "did:test:background-watcher",
+                    node_did: "did:test:background-watcher",
                     message_sequence: 1,
                     tool_name: "{tool_name}",
                     tool_call_id: "{tool_call_id}",
@@ -494,7 +494,7 @@ mod tests {
             TranscriptMessage,
         };
 
-        let agent_did = "did:test:background-watcher";
+        let node_did = "did:test:background-watcher";
         let created_at = "2026-07-07T12:00:00Z";
         let args = if spawned_parent.is_some() {
             r#"{"tool_name":"bash","args":{"command":"true"}}"#
@@ -505,7 +505,7 @@ mod tests {
             .map(|(doc_id, call_id)| (doc_id, call_id, "spawn_process"))
             .unwrap_or((tool_doc_id, tool_call_id, "bash"));
         let accepted_segment = OutputSegment {
-            agent_did: agent_did.into(),
+            node_did: node_did.into(),
             requester_did: None,
             session_id: session_id.into(),
             request_doc_id: request_id.into(),
@@ -545,7 +545,7 @@ mod tests {
             &TranscriptMessage {
                 message_key: format!("accepted:{request_id}:{tool_call_id}"),
                 session_id: session_id.into(),
-                agent_did: agent_did.into(),
+                node_did: node_did.into(),
                 requester_did: None,
                 request_doc_id: Some(request_id.into()),
                 publication: MessagePublication::RequestExecution {
@@ -573,7 +573,7 @@ mod tests {
         .await;
 
         let result_segment = OutputSegment {
-            agent_did: agent_did.into(),
+            node_did: node_did.into(),
             requester_did: None,
             session_id: session_id.into(),
             request_doc_id: request_id.into(),
@@ -613,7 +613,7 @@ mod tests {
             &TranscriptMessage {
                 message_key: format!("delivery:{request_id}:{tool_call_id}"),
                 session_id: session_id.into(),
-                agent_did: agent_did.into(),
+                node_did: node_did.into(),
                 requester_did: None,
                 request_doc_id: Some(request_id.into()),
                 publication: MessagePublication::ToolDelivery {
@@ -787,7 +787,7 @@ mod tests {
                     tool_call_key: "{tool_call_key}",
                     request_id: "{request_id}",
                     session_id: "{session_id}",
-                    agent_did: "did:test:background-watcher",
+                    node_did: "did:test:background-watcher",
                     message_sequence: 1,
                     tool_name: "bash",
                     tool_call_id: "{tool_call_id}",

@@ -20,7 +20,7 @@ structure Request where
   key : String
   peer : String
   requester : String
-  agent : String
+  node : String
   session : String
   /-- Native identity supplied by the session owner. Zero is reserved for
   abstract enrollment fixtures which never install closure input. -/
@@ -34,14 +34,14 @@ structure SessionOwner where
   session : String
   nativeSession : SessionId
   requester : String
-  agent : String
+  node : String
   deriving DecidableEq, Repr
 
-/-- A locally desired pairing whose exact requester/agent filter was applied for this peer. -/
+/-- A locally desired pairing whose exact requester/node filter was applied for this peer. -/
 structure AppliedPairingRoute where
   peer : String
   requester : String
-  agent : String
+  node : String
   deriving DecidableEq, Repr
 
 /-- An active membership already verified against the selected network root. -/
@@ -56,7 +56,7 @@ structure Document where
   deriving DecidableEq, Repr
 
 def Request.authorizationScope (r : Request) : CanonicalOutput.Hydration.AuthorizationScope :=
-  ⟨r.peer, r.requester, r.agent, r.session, r.nativeSession⟩
+  ⟨r.peer, r.requester, r.node, r.session, r.nativeSession⟩
 
 /-- Inputs retained at the consumed boundary. Selection executes the canonical
 builder; the catalog never accepts a caller-supplied manifest. -/
@@ -71,6 +71,7 @@ structure ClosureInput where
   deniedHeaders : List CanonicalOutput.DocId
   deniedSegments : List CanonicalOutput.DocId
   dependencyDenials : List CanonicalOutput.DependencyDenial := []
+  effects : List CanonicalOutput.Hydration.EffectRow := []
   deriving DecidableEq
 
 structure Catalog where
@@ -125,13 +126,13 @@ theorem collection_is_transcript
 
 def ownedSession (r : Request) : SessionOwner :=
   { session := r.session, nativeSession := r.nativeSession,
-    requester := r.requester, agent := r.agent }
+    requester := r.requester, node := r.node }
 
 def verifiedMembership (cat : Catalog) (r : Request) : VerifiedActiveMembership :=
   { network := cat.selectedNetwork, member := r.requester }
 
 def appliedPairingRoute (r : Request) : AppliedPairingRoute :=
-  { peer := r.peer, requester := r.requester, agent := r.agent }
+  { peer := r.peer, requester := r.requester, node := r.node }
 
 def admits (cat : Catalog) (r : Request) : Prop :=
   appliedPairingRoute r ∈ cat.appliedPairingRoutes ∧
@@ -155,7 +156,7 @@ def buildDocuments (input : ClosureInput) :
   let manifest ← CanonicalOutput.Hydration.buildManifest input.request.authorizationScope
     input.request.nativeSession
     input.bases input.roots input.requirements input.messages input.segments input.access
-    input.deniedHeaders input.deniedSegments input.dependencyDenials
+    input.deniedHeaders input.deniedSegments input.dependencyDenials input.effects
   pure (manifest.map canonicalDocument).toFinset
 
 /-- `none` means absent/ambiguous input or failed canonical authorization. A

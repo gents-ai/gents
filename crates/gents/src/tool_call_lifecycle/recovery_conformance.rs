@@ -33,7 +33,7 @@ async fn teardown(admission: PublishedAdmission) {
 async fn restart_obligations(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
 ) -> (Vec<String>, Vec<serde_json::Value>) {
     let session_id = crate::graphql::escape_graphql_string(session_id);
@@ -50,14 +50,10 @@ async fn restart_obligations(
     let mut messages = Vec::new();
     for row in data["AgentMessage"].as_array().unwrap() {
         let doc_id = row["_docID"].as_str().unwrap();
-        let (_, message) = crate::session::load_canonical_message_from_node(
-            node,
-            doc_id,
-            agent_did,
-            requester_did,
-        )
-        .await
-        .expect("reconstruct canonical restart notification");
+        let (_, message) =
+            crate::session::load_canonical_message_from_node(node, doc_id, node_did, requester_did)
+                .await
+                .expect("reconstruct canonical restart notification");
         if let crate::llm::message::Message::User { content } = message {
             for item in content {
                 if let crate::llm::message::UserContent::Text(text) = item {
@@ -168,7 +164,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         };
         let report = ToolCallLifecycle::recover_all_with_executions(
             &admission.node,
-            &admission.agent_did,
+            &admission.node_did,
             &registry,
         )
         .await
@@ -220,8 +216,8 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         let (messages, wakes) = restart_obligations(
             &admission.node,
             &session_id,
-            &admission.agent_did,
-            Some(&admission.agent_did),
+            &admission.node_did,
+            Some(&admission.node_did),
         )
         .await;
         if let Some(reason) = case.notification_reason.as_deref() {
@@ -253,7 +249,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         }
         let second = ToolCallLifecycle::recover_all_with_executions(
             &admission.node,
-            &admission.agent_did,
+            &admission.node_did,
             &registry,
         )
         .await
@@ -262,8 +258,8 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         let (messages_after, wakes_after) = restart_obligations(
             &admission.node,
             &session_id,
-            &admission.agent_did,
-            Some(&admission.agent_did),
+            &admission.node_did,
+            Some(&admission.node_did),
         )
         .await;
         assert_eq!(messages_after, messages, "{name}");
@@ -330,14 +326,14 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
             // The periodic terminal-parent sweep never ends a background row.
             let periodic = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
                 &admission.node,
-                &admission.agent_did,
+                &admission.node_did,
             )
             .await
             .unwrap();
             assert_eq!(periodic.tool_calls_terminalized, 0, "{name}");
         }
 
-        let report = ToolCallLifecycle::recover_all(&admission.node, &admission.agent_did)
+        let report = ToolCallLifecycle::recover_all(&admission.node, &admission.node_did)
             .await
             .unwrap();
         let actual = row(&admission.node, &tool_doc).await;
@@ -355,8 +351,8 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
         let (messages, wakes) = restart_obligations(
             &admission.node,
             &session_id,
-            &admission.agent_did,
-            Some(&admission.agent_did),
+            &admission.node_did,
+            Some(&admission.node_did),
         )
         .await;
         assert_eq!(
@@ -369,7 +365,7 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
             usize::from(case.queue_source.is_some()),
             "{name}"
         );
-        let second = ToolCallLifecycle::recover_all(&admission.node, &admission.agent_did)
+        let second = ToolCallLifecycle::recover_all(&admission.node, &admission.node_did)
             .await
             .unwrap();
         assert_eq!(second.tool_calls_recovered, 0, "{name}");
@@ -444,7 +440,7 @@ async fn generated_native_recovery_cases_use_canonical_admission_owner() {
             )
             .await;
         }
-        let report = ToolCallLifecycle::recover_all(&admission.node, &admission.agent_did)
+        let report = ToolCallLifecycle::recover_all(&admission.node, &admission.node_did)
             .await
             .unwrap();
         assert_eq!(report.tool_calls_recovered, 1, "{name}");

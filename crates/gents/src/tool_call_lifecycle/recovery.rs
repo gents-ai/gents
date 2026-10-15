@@ -70,7 +70,7 @@ struct RunningToolCallRow {
     /// Immutable owner principal stamped at create. Recovery scopes by this
     /// field — `request_id` alone is not unique across agents.
     #[serde(default)]
-    agent_did: Option<String>,
+    node_did: Option<String>,
     session_id: String,
     tool_call_id: String,
     #[serde(default)]
@@ -92,7 +92,7 @@ struct TerminalBackgroundToolRow {
     #[serde(default)]
     request_doc_id: Option<String>,
     #[serde(default)]
-    agent_did: Option<String>,
+    node_did: Option<String>,
     #[serde(default)]
     requester_did: Option<String>,
     #[serde(default)]
@@ -124,11 +124,11 @@ impl super::ToolCallLifecycle {
     /// background process cannot be proven owned, so its row settles as lost.
     pub async fn recover_all(
         node: &std::sync::Arc<EmbeddedNode>,
-        agent_did: &str,
+        node_did: &str,
     ) -> Result<ToolCallRecoveryReport> {
         Self::recover_all_with_executions(
             node,
-            agent_did,
+            node_did,
             &crate::hook::BackgroundExecutionRegistry::default(),
         )
         .await
@@ -139,15 +139,15 @@ impl super::ToolCallLifecycle {
     /// before its row is settled.
     pub async fn recover_all_with_executions(
         node: &std::sync::Arc<EmbeddedNode>,
-        agent_did: &str,
+        node_did: &str,
         executions: &crate::hook::BackgroundExecutionRegistry,
     ) -> Result<ToolCallRecoveryReport> {
-        let tool_calls_recovered = recover_stuck_running_tool_calls(node, agent_did).await?
-            + Self::reconcile_orphaned_background_tools(node, agent_did, executions)
+        let tool_calls_recovered = recover_stuck_running_tool_calls(node, node_did).await?
+            + Self::reconcile_orphaned_background_tools(node, node_did, executions)
                 .await?
                 .tool_calls_terminalized;
         let notifications_repaired =
-            Self::reconcile_background_completion_side_effects(node, agent_did)
+            Self::reconcile_background_completion_side_effects(node, node_did)
                 .await?
                 .side_effects_converged;
 
@@ -162,7 +162,7 @@ impl super::ToolCallLifecycle {
     /// **not** interrupt live-parent background tools (restart-only path).
     ///
     /// Scope and ordering:
-    /// 1. Load only tool rows stamped with this agent's immutable `agent_did`
+    /// 1. Load only tool rows stamped with this agent's immutable `node_did`
     ///    (not global `request_id` matches — that field is not unique).
     /// 2. Resolve the parent under the same DID; skip missing/foreign parents.
     /// 3. Require a terminal parent before any write.
@@ -175,16 +175,16 @@ impl super::ToolCallLifecycle {
     /// no executor active.
     pub async fn reconcile_terminal_parent_owned_tools(
         node: &std::sync::Arc<EmbeddedNode>,
-        agent_did: &str,
+        node_did: &str,
     ) -> Result<TerminalParentToolReport> {
-        let rows = load_running_tool_call_rows_for_agent(node, agent_did).await?;
+        let rows = load_running_tool_call_rows_for_agent(node, node_did).await?;
         let mut report = TerminalParentToolReport::default();
         let mut parent_cache: std::collections::HashMap<String, Option<AgentRequestRow>> =
             std::collections::HashMap::new();
 
         for row in rows {
             // Defense in depth: never mutate a row whose stamped owner differs.
-            if row.agent_did.as_deref() != Some(agent_did) {
+            if row.node_did.as_deref() != Some(node_did) {
                 continue;
             }
             // Background rows belong exclusively to their own sweeps, which
@@ -202,7 +202,7 @@ impl super::ToolCallLifecycle {
                     if let Some(cached) = parent_cache.get(request_id) {
                         cached.clone()
                     } else {
-                        let loaded = lookup_parent_request(node, agent_did, request_id).await?;
+                        let loaded = lookup_parent_request(node, node_did, request_id).await?;
                         parent_cache.insert(request_id.to_string(), loaded.clone());
                         loaded
                     }
@@ -275,21 +275,21 @@ impl super::ToolCallLifecycle {
     /// the row running for a later tick.
     pub async fn reconcile_orphaned_background_tools(
         node: &std::sync::Arc<EmbeddedNode>,
-        agent_did: &str,
+        node_did: &str,
         executions: &crate::hook::BackgroundExecutionRegistry,
     ) -> Result<OrphanedBackgroundToolReport> {
-        let rows = load_running_tool_call_rows_for_agent(node, agent_did).await?;
+        let rows = load_running_tool_call_rows_for_agent(node, node_did).await?;
         let mut report = OrphanedBackgroundToolReport::default();
         let mut running_background = std::collections::HashSet::new();
 
         for row in rows {
-            if row.agent_did.as_deref() != Some(agent_did) || !is_background_tool_row(&row) {
+            if row.node_did.as_deref() != Some(node_did) || !is_background_tool_row(&row) {
                 continue;
             }
             running_background.insert(row.tool_call_id.clone());
             let registered = executions.contains(&row.tool_call_id).await;
             let parent = match row.request_id.as_deref().filter(|id| !id.is_empty()) {
-                Some(request_id) => lookup_parent_request(node, agent_did, request_id).await?,
+                Some(request_id) => lookup_parent_request(node, node_did, request_id).await?,
                 None => None,
             };
             // An unresolvable parent is an incomplete owner observation; it
@@ -305,7 +305,7 @@ impl super::ToolCallLifecycle {
                 }
                 continue;
             };
-            let task_deleted = owner_task_deleted(node, agent_did, &parent).await?;
+            let task_deleted = owner_task_deleted(node, node_did, &parent).await?;
             if registered && !task_deleted {
                 continue;
             }
@@ -509,19 +509,19 @@ impl super::ToolCallLifecycle {
     /// both side effects converge, so transient failures remain discoverable.
     pub async fn reconcile_background_completion_side_effects(
         node: &std::sync::Arc<EmbeddedNode>,
-        agent_did: &str,
+        node_did: &str,
     ) -> Result<BackgroundCompletionSideEffectReport> {
-        let rows = load_pending_background_completion_rows(node, agent_did).await?;
+        let rows = load_pending_background_completion_rows(node, node_did).await?;
         let mut report = BackgroundCompletionSideEffectReport::default();
 
         for row in rows {
-            if row.agent_did.as_deref() != Some(agent_did) {
+            if row.node_did.as_deref() != Some(node_did) {
                 continue;
             }
             let Some(request_id) = non_empty(row.request_id.as_deref()) else {
                 continue;
             };
-            if lookup_parent_request(node, agent_did, request_id)
+            if lookup_parent_request(node, node_did, request_id)
                 .await?
                 .is_none()
             {
@@ -544,7 +544,7 @@ impl super::ToolCallLifecycle {
                 &row.doc_id,
                 request_doc_id,
                 session_id,
-                agent_did,
+                node_did,
                 row.requester_did.as_deref(),
             )
             .await
@@ -652,7 +652,7 @@ mod tests {
             doc_id: "doc-1".to_string(),
             request_id: Some("request-1".to_string()),
             request_doc_id: Some("request-doc-1".to_string()),
-            agent_did: Some("did:test:agent".to_string()),
+            node_did: Some("did:test:agent".to_string()),
             requester_did: None,
             session_id: Some("session-1".to_string()),
             tool_call_id: Some("tool-1".to_string()),
@@ -673,7 +673,7 @@ mod tests {
             doc_id: "doc-custom".to_string(),
             request_id: Some("request-custom".to_string()),
             request_doc_id: Some("request-doc-custom".to_string()),
-            agent_did: Some("did:test:agent".to_string()),
+            node_did: Some("did:test:agent".to_string()),
             requester_did: None,
             session_id: Some("session-custom".to_string()),
             tool_call_id: Some("tool-custom".to_string()),
@@ -828,16 +828,15 @@ mod tests {
 
 async fn recover_stuck_running_tool_calls(
     node: &std::sync::Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<usize> {
-    let rows = load_running_tool_call_rows_for_agent(node, agent_did).await?;
+    let rows = load_running_tool_call_rows_for_agent(node, node_did).await?;
 
     let mut recovered = 0;
     for row in rows {
         // Background rows have their own owners: native processes the
         // orphan sweep, session-message rows the session-message sweep.
-        if row.agent_did.as_deref() != Some(agent_did) || await_mode(&row) == AwaitMode::Background
-        {
+        if row.node_did.as_deref() != Some(node_did) || await_mode(&row) == AwaitMode::Background {
             continue;
         }
 
@@ -847,7 +846,7 @@ async fn recover_stuck_running_tool_calls(
             .as_deref()
             .filter(|request_id| !request_id.is_empty())
         {
-            Some(request_id) => lookup_parent_request(node, agent_did, request_id).await?,
+            Some(request_id) => lookup_parent_request(node, node_did, request_id).await?,
             None => None,
         };
 
@@ -933,17 +932,14 @@ async fn append_recovered_background_tool_completion(
     }
 }
 
-/// Running tool rows owned by `agent_did` (immutable scope key on create).
+/// Running tool rows owned by `node_did` (immutable scope key on create).
 async fn load_running_tool_call_rows_for_agent(
     node: &std::sync::Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<RunningToolCallRow>> {
-    let escaped = escape_graphql_string(agent_did);
-    load_running_tool_call_rows_with_filter(
-        node,
-        &format!(r#", agent_did: {{ _eq: "{escaped}" }}"#),
-    )
-    .await
+    let escaped = escape_graphql_string(node_did);
+    load_running_tool_call_rows_with_filter(node, &format!(r#", node_did: {{ _eq: "{escaped}" }}"#))
+        .await
 }
 
 async fn load_running_tool_call_rows_with_filter(
@@ -959,7 +955,7 @@ async fn load_running_tool_call_rows_with_filter(
             request_id
             request_doc_id
             requester_did
-            agent_did
+            node_did
             session_id
             tool_call_id
             tool_name
@@ -1004,13 +1000,13 @@ async fn load_running_tool_call_rows_with_filter(
 
 async fn load_pending_background_completion_rows(
     node: &std::sync::Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<TerminalBackgroundToolRow>> {
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
             AgentToolCall(filter: {{
-                agent_did: {{ _eq: "{agent_did}" }},
+                node_did: {{ _eq: "{node_did}" }},
                 await_mode: {{ _eq: "background" }},
                 lifecycle_state: {{ _in: ["completed", "failed", "timedOut", "cancelled"] }},
                 status: {{ _like: "completionPending%" }}
@@ -1018,7 +1014,7 @@ async fn load_pending_background_completion_rows(
                 _docID
                 request_id
                 request_doc_id
-                agent_did
+                node_did
                 requester_did
                 session_id
                 tool_call_id
@@ -1087,28 +1083,28 @@ fn background_completion_projection(
 
 async fn lookup_parent_request(
     node: &std::sync::Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     request_id: &str,
 ) -> Result<Option<AgentRequestRow>> {
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    node_did: {{ _eq: "{escaped_node_did}" }},
                     request_id: {{ _eq: "{escaped_request_id}" }}
                 }},
                 limit: 1
             ) {{
                 request_id
-                agent_did
+                node_did
                 lifecycle_state
                 caused_by_trigger_id
-                subagent_depth
+                request_hop
                 workspace_id
                 workspace_authority
-                workspace_owner_agent_did
+                workspace_owner_node_did
                 workspace_seal_hash
             }}
         }}"#
@@ -1136,14 +1132,14 @@ async fn load_recovery_lifecycle(
     node: &std::sync::Arc<EmbeddedNode>,
     row: &RunningToolCallRow,
 ) -> Result<ToolCallLifecycle> {
-    let agent_did = row
-        .agent_did
+    let node_did = row
+        .node_did
         .as_deref()
-        .context("recovery row omitted agent_did")?;
+        .context("recovery row omitted node_did")?;
     ToolCallLifecycle::load_by_doc_id(
         node.clone(),
         &row.doc_id,
-        agent_did,
+        node_did,
         &row.session_id,
         row.requester_did.as_deref(),
     )
@@ -1287,18 +1283,18 @@ fn classify_orphaned_background_tool(
 /// replicated here.
 async fn owner_task_deleted(
     node: &std::sync::Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     parent: &AgentRequestRow,
 ) -> Result<bool> {
     let Some(trigger_id) = non_empty(parent.caused_by_trigger_id.as_deref()) else {
         return Ok(false);
     };
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let trigger_id = escape_graphql_string(trigger_id);
     let response = crate::graphql::graphql_with_transaction_retry(
         node,
         &format!(
-            r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, trigger_id: {{ _eq: "{trigger_id}" }} }}, showDeleted: true) {{ _deleted task_id }} }}"#
+            r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{node_did}" }}, trigger_id: {{ _eq: "{trigger_id}" }} }}, showDeleted: true) {{ _deleted task_id }} }}"#
         ),
         "tool_call.recovery.owner_trigger",
     )
@@ -1321,7 +1317,7 @@ async fn owner_task_deleted(
     let response = crate::graphql::graphql_with_transaction_retry(
         node,
         &format!(
-            r#"{{ Task(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, task_id: {{ _eq: "{task_id}" }} }}, showDeleted: true) {{ _deleted }} }}"#
+            r#"{{ Task(filter: {{ node_did: {{ _eq: "{node_did}" }}, task_id: {{ _eq: "{task_id}" }} }}, showDeleted: true) {{ _deleted }} }}"#
         ),
         "tool_call.recovery.owner_task",
     )

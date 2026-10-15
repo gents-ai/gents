@@ -147,7 +147,7 @@ impl ClientRouteManager {
             &record.peer_id,
             &record.addr,
             self.actor.did(),
-            &record.agent_did,
+            &record.node_did,
         )?;
         anyhow::ensure!(
             is_enrollment_peer(record),
@@ -467,7 +467,7 @@ impl ClientRouteManager {
         use gents::agent::p2p_reconcile::templates::CLIENT_TEMPLATE;
 
         let peer_id = escape_graphql_string(&route.desired_id(direction));
-        let agent_did = escape_graphql_string(&route.owner_agent_did);
+        let node_did = escape_graphql_string(&route.owner_node_did);
         let address = escape_graphql_string(route.transport.address());
         let now = escape_graphql_string(
             &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -494,13 +494,13 @@ impl ClientRouteManager {
         let mutation = format!(
             r#"mutation {{ upsert_PeerPairingDesired(
                     filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
-                    add: {{ peer_id: "{peer_id}", agent_did: "{agent_did}", collections: null,
+                    add: {{ peer_id: "{peer_id}", node_did: "{node_did}", collections: null,
                         template: "{CLIENT_TEMPLATE}", replicator_addresses: ["{address}"],
                         source: "enrollment", enrollment_request_digest: "{request_digest}",
                         enrollment_authorization_sequence: {authorization_sequence},
                         enrollment_authorization_expires_at: "{authorization_expires_at}",
                         profiles: null, created_at: "{now}", updated_at: "{now}" }},
-                    update: {{ agent_did: "{agent_did}", collections: null,
+                    update: {{ node_did: "{node_did}", collections: null,
                         template: "{CLIENT_TEMPLATE}", replicator_addresses: ["{address}"],
                         source: "enrollment", enrollment_request_digest: "{request_digest}",
                         enrollment_authorization_sequence: {authorization_sequence},
@@ -518,7 +518,7 @@ impl ClientRouteManager {
     }
 
     /// HTTP P2P admin for a runtime's management endpoint, acting as the
-    /// runtime's principal exactly when the operator endpoint does.
+    /// runtime's node identity exactly when the operator endpoint does.
     fn remote_admin(
         &self,
         record: &PeerRecord,
@@ -526,7 +526,7 @@ impl ClientRouteManager {
     ) -> gents::agent::p2p_reconcile::RemoteP2pAdminResult<HttpRemoteP2pAdmin> {
         let admin = HttpRemoteP2pAdmin::new_with_actor(graphql, Arc::clone(&self.actor))?;
         Ok(match crate::local_runtime::operator_endpoint(record) {
-            Some(endpoint) => admin.with_node_principal(endpoint),
+            Some(endpoint) => admin.with_node_identity(endpoint),
             None => admin,
         })
     }
@@ -616,7 +616,7 @@ impl ClientRouteManager {
             EnrollmentEndpointEntry {
                 desired_id: client_route_id(&record.peer_id, PairingDirection::ClientToRuntime),
                 peer_id: record.peer_id.clone(),
-                agent_did: record.agent_did.clone(),
+                node_did: record.node_did.clone(),
                 address: record.addr.clone(),
                 request_digest,
                 authorization_sequence,
@@ -1125,7 +1125,7 @@ mod tests {
             &record.peer_id,
             &record.addr,
             "did:key:phone",
-            &record.agent_did,
+            &record.node_did,
         )
         .unwrap();
         let desired = route.desired(PairingDirection::ClientToRuntime);
@@ -1134,7 +1134,7 @@ mod tests {
             vec![ClientPeerStatus {
                 peer_id: record.peer_id.clone(),
                 label: record.label.clone(),
-                agent_did: record.agent_did.clone(),
+                node_did: record.node_did.clone(),
                 addr: record.addr.clone(),
                 dial_succeeded: true,
                 last_error: None,
@@ -1192,7 +1192,7 @@ mod tests {
             vec![ClientPeerStatus {
                 peer_id: record.peer_id.clone(),
                 label: record.label.clone(),
-                agent_did: record.agent_did.clone(),
+                node_did: record.node_did.clone(),
                 addr: record.addr.clone(),
                 dial_succeeded: true,
                 last_error: None,
@@ -1206,7 +1206,7 @@ mod tests {
             &record.peer_id,
             &record.addr,
             "did:key:phone",
-            &record.agent_did,
+            &record.node_did,
         )
         .unwrap();
         for direction in [

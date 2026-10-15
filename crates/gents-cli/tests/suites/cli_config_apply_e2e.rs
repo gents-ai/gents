@@ -19,7 +19,7 @@ async fn config_apply_reconciles_canonical_event_source_and_trigger() -> Result<
     let init = run_init_json(
         &home,
         &[
-            "--agent-name",
+            "--node-name",
             "event-apply",
             "--model-name",
             &model,
@@ -27,20 +27,20 @@ async fn config_apply_reconciles_canonical_event_source_and_trigger() -> Result<
             endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     run_cli_text(
         &home,
         &["config", "export", "--root", root.to_str().unwrap()],
     )?;
     let path = root.join("pack_config.json");
     let mut config = read_json_file(&path)?;
-    let behavior_id = config["agent_principal"]["default_behavior_id"]
+    let agent_id = config["node"]["default_agent_id"]
         .as_str()
-        .context("default behavior")?
+        .context("default agent")?
         .to_string();
     config["tasks"] = json!([{
         "task_id": "event-task",
-        "behavior_id": behavior_id,
+        "agent_id": agent_id,
         "prompt_template": "Observe {{ doc.backend_id }}",
         "enabled": false
     }]);
@@ -60,7 +60,7 @@ async fn config_apply_reconciles_canonical_event_source_and_trigger() -> Result<
 
     let mut server = spawn_server(&home, port)?;
     wait_for_port(port, &mut server)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     let applied = run_cli_json(
         &home,
         &[
@@ -91,8 +91,8 @@ async fn config_apply_round_trips_canonical_datastore_surface() -> Result<()> {
     let root = tempdir.path().join("config");
     fs::create_dir_all(&home)?;
     let exported = tempdir.path().join("exported");
-    let init = run_init_json(&home, &["--agent-name", "surface-roundtrip"])?;
-    let agent_did = agent_did_from_init(&init)?;
+    let init = run_init_json(&home, &["--node-name", "surface-roundtrip"])?;
+    let node_did = node_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     run_cli_text(
@@ -115,7 +115,7 @@ async fn config_apply_round_trips_canonical_datastore_surface() -> Result<()> {
     write_json_file(&path, &config)?;
     let mut server = spawn_server(&home, port)?;
     wait_for_port(port, &mut server)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     run_cli_json(
         &home,
         &[
@@ -136,8 +136,8 @@ async fn config_apply_round_trips_canonical_datastore_surface() -> Result<()> {
             exported.to_str().unwrap(),
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
         ],
     )?;
     let round_trip = read_json_file(&exported.join("pack_config.json"))?;

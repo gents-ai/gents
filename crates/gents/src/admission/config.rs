@@ -94,7 +94,7 @@ impl BackendAdmissionConfig {
         let fields = backend.backend_fields();
         let fingerprint_inputs = (
             BACKEND_CONFIG_FINGERPRINT_TAG,
-            &backend.agent_did,
+            &backend.node_did,
             &backend.backend_id,
             &fields.backend_provider_kind,
             &fields.openai_wire_api,
@@ -200,7 +200,7 @@ mod tests {
     fn resource_identity_normalizes_wire_defaults_and_protects_credentials() {
         let mut backend = InferenceBackend::from_value(&serde_json::json!({
             "backend_id": "resource-identity",
-            "agent_did": "did:test:admission",
+            "node_did": "did:test:admission",
             "name": "Resource identity",
             "provider_kind": "OpenAiCompatible",
             "endpoint": "http://127.0.0.1/v1",

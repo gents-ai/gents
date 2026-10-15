@@ -9,8 +9,8 @@ use anyhow::{Context, Result};
 use axum::{http::Uri, routing::get, Router};
 use gents::defra_node::EmbeddedNode;
 use gents::{
-    AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, ProcessLifecycleObserver,
-    ProcessLifecycleState, ToolCeiling,
+    DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, NodeIdentity, ProcessLifecycleObserver,
+    ProcessLifecycleState,
 };
 use serde_json::{json, Value};
 use tokio::sync::watch;
@@ -23,14 +23,14 @@ use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
 use crate::http::runtime_contract_router;
 use crate::shared::{P2pAdmissionState, *};
 use crate::{
-    default_data_dir, default_key_path, display_host, format_tool_ceiling, parse_cli_tool_arg,
-    print_json, read_init_config, resolve_home_dir, server_start_failure_hint, write_runtime_state,
-    DEFAULT_AGENT_NAME,
+    default_data_dir, default_key_path, display_host, format_tool_ceiling, host_tool_ceiling,
+    parse_cli_tool_arg, print_json, read_init_config, resolve_home_dir, server_start_failure_hint,
+    write_runtime_state, DEFAULT_NODE_NAME,
 };
 use gents::codex_shim_binding::{ShimBinding, ShimUnboundReason};
 use gents_protocol::row::{
-    project_behavior_readiness_summary, BehaviorReadinessState, BehaviorReadinessSummary,
-    ProjectedBehaviorReadinessSummary,
+    project_node_readiness_summary, AgentReadinessState, NodeReadinessSummary,
+    ProjectedNodeReadinessSummary,
 };
 
 pub(crate) struct CliReadyObserver {
@@ -79,10 +79,9 @@ impl gents::RuntimeSnapshotObserver for CliRuntimeSnapshotObserver {
         &self,
         generation: u64,
         configuration_fingerprint: &str,
-        runnable_behavior_ids: &[String],
+        runnable_agent_ids: &[String],
     ) {
-        self.runnable_tx
-            .send_replace(runnable_behavior_ids.to_vec());
+        self.runnable_tx.send_replace(runnable_agent_ids.to_vec());
         self.configuration_tx
             .send_replace(Some(RuntimeConfigurationObservation {
                 generation,
@@ -124,32 +123,32 @@ async fn wait_for_runtime_configuration(
         .context("runtime configuration observer closed")
 }
 
-async fn wait_for_live_behavior_readiness(
+async fn wait_for_live_node_readiness(
     graphql_url: &str,
-    agent_did: &str,
+    node_did: &str,
     fence: Option<&PostApplyReadinessFence>,
-) -> Result<BehaviorReadinessSummary> {
+) -> Result<NodeReadinessSummary> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let last_observation =
-            match crate::commands::status::load_live_behavior_readiness(
+            match crate::commands::status::load_live_node_readiness(
                 &gents::config_client::GraphqlEndpoint::anonymous(graphql_url),
-                agent_did,
+                node_did,
             )
                 .await
             {
-                Ok(row) => match project_behavior_readiness_summary(row.as_ref(), agent_did, chrono::Utc::now()) {
-                    ProjectedBehaviorReadinessSummary::Observed(summary)
+                Ok(row) => match project_node_readiness_summary(row.as_ref(), node_did) {
+                    ProjectedNodeReadinessSummary::Observed(summary)
                         if fence.is_none_or(|fence| fence.matches(&summary)) =>
                     {
                         return Ok(summary);
                     }
-                    ProjectedBehaviorReadinessSummary::Observed(summary) => format!(
+                    ProjectedNodeReadinessSummary::Observed(summary) => format!(
                         "waiting for post-apply runtime projection (current generation={}, default={:?})",
                         summary.snapshot.active_generation,
-                        summary.snapshot.default_behavior_id,
+                        summary.snapshot.default_agent_id,
                     ),
-                    ProjectedBehaviorReadinessSummary::Unknown(reason) => format!("{reason:?}"),
+                    ProjectedNodeReadinessSummary::Unknown(reason) => format!("{reason:?}"),
                 },
                 Err(error) => error.to_string(),
             };
@@ -164,27 +163,27 @@ async fn wait_for_live_behavior_readiness(
 }
 
 struct PostApplyReadinessFence {
-    expected_default_behavior_id: String,
-    expected_behavior_ids: BTreeSet<String>,
+    expected_default_agent_id: String,
+    expected_agent_ids: BTreeSet<String>,
 }
 
 impl PostApplyReadinessFence {
-    fn matches(&self, summary: &BehaviorReadinessSummary) -> bool {
-        summary.snapshot.default_behavior_id == self.expected_default_behavior_id
-            && self.expected_behavior_ids.iter().all(|expected| {
+    fn matches(&self, summary: &NodeReadinessSummary) -> bool {
+        summary.snapshot.default_agent_id == self.expected_default_agent_id
+            && self.expected_agent_ids.iter().all(|expected| {
                 summary
                     .snapshot
-                    .behaviors
+                    .agents
                     .iter()
-                    .any(|entry| entry.behavior_id == *expected)
+                    .any(|entry| entry.agent_id == *expected)
             })
     }
 }
 
 struct AppliedPack {
     report: Value,
-    expected_default_behavior_id: String,
-    expected_behavior_ids: BTreeSet<String>,
+    expected_default_agent_id: String,
+    expected_agent_ids: BTreeSet<String>,
 }
 
 fn announce_codex_shim(
@@ -212,8 +211,8 @@ fn announce_codex_shim(
         "websocket": codex_shim_url,
         "launch_command": launch_command,
         "auth_required": bound.auth_required(),
-        "bound_agent_did": bound.agent_did(),
-        "bound_behavior_id": bound.behavior_id(),
+        "bound_node_did": bound.node_did(),
+        "bound_agent_id": bound.agent_id(),
         "shim_home": bound.codex_home().to_path_buf(),
         "codex_home": bound.codex_home().to_path_buf(),
         "event_log": bound.trace_path().to_path_buf(),
@@ -241,14 +240,14 @@ fn set_codex_shim_health(handle: &CodexShimHealthHandle, health: CodexShimHealth
 
 /// Apply a self-contained pack (optional `schemas/` then desired-state) to the
 /// server's live node after readiness. Rebinds placeholder DIDs to the home
-/// principal so checked-in experiment packs work without hand-editing.
+/// node so checked-in experiment packs work without hand-editing.
 async fn apply_pack_after_ready(
     node: Arc<EmbeddedNode>,
     home_dir: &Path,
     root: &Path,
     prune: bool,
 ) -> Result<AppliedPack> {
-    use crate::cli::ManifestAgentDidBindingArg;
+    use crate::cli::ManifestNodeDidBindingArg;
     use crate::commands::config::apply::apply_bound_desired_manifest;
     use crate::commands::config::binding::{load_bound_manifest, ManifestBindingOptions};
     use crate::commands::schema::apply_pack_schemas_if_present;
@@ -279,24 +278,24 @@ async fn apply_pack_after_ready(
         root,
         home: Some(home_dir),
         graphql: None,
-        bind_agent_did: Some(ManifestAgentDidBindingArg::Home),
+        bind_node_did: Some(ManifestNodeDidBindingArg::Home),
         force_rebind_concrete_did: true,
         access: Some(&access),
     })
     .await?
     .require_valid()?;
 
-    let expected_default_behavior_id = bound
+    let expected_default_agent_id = bound
         .manifest
-        .agent_principal
-        .default_behavior_id
+        .node
+        .default_agent_id
         .clone()
-        .context("applied pack has no default behavior")?;
-    let expected_behavior_ids = bound
+        .context("applied pack has no default agent")?;
+    let expected_agent_ids = bound
         .manifest
-        .agent_behaviors
+        .agents
         .iter()
-        .map(|behavior| behavior.behavior_id.clone())
+        .map(|agent| agent.agent_id.clone())
         .collect::<BTreeSet<_>>();
 
     let mut report = apply_bound_desired_manifest(root, &access, &bound, prune).await?;
@@ -312,10 +311,10 @@ async fn apply_pack_after_ready(
     }
 
     tracing::info!(
-        "  config apply: status={} ok={} agent_did={}",
+        "  config apply: status={} ok={} node_did={}",
         report.status,
         report.ok,
-        report.agent_did
+        report.node_did
     );
     if !report.ok {
         anyhow::bail!(
@@ -327,24 +326,22 @@ async fn apply_pack_after_ready(
 
     Ok(AppliedPack {
         report: serde_json::to_value(&report).context("serializing pack apply report")?,
-        expected_default_behavior_id,
-        expected_behavior_ids,
+        expected_default_agent_id,
+        expected_agent_ids,
     })
 }
 
 fn spawn_codex_shim_supervisor(
     bind_args: CodexShimBindArgs,
-    bound_behavior_id: String,
+    bound_agent_id: String,
     mut runnable_rx: watch::Receiver<Vec<String>>,
     public_url: Option<String>,
     auth_token_env: Option<String>,
     health: CodexShimHealthHandle,
 ) {
     tokio::spawn(async move {
-        let mut binding = ShimBinding::unbound(
-            bound_behavior_id.clone(),
-            ShimUnboundReason::DependencyMissing,
-        );
+        let mut binding =
+            ShimBinding::unbound(bound_agent_id.clone(), ShimUnboundReason::DependencyMissing);
 
         loop {
             let runnable = runnable_rx.borrow_and_update().clone();
@@ -364,12 +361,12 @@ fn spawn_codex_shim_supervisor(
                             CodexShimHealth::Listening {
                                 websocket: url.clone(),
                                 auth_required: bound.auth_required(),
-                                bound_agent_did: bound.agent_did().to_string(),
-                                bound_behavior_id: bound.behavior_id().to_string(),
+                                bound_node_did: bound.node_did().to_string(),
+                                bound_agent_id: bound.agent_id().to_string(),
                             },
                         );
                         tracing::info!(
-                            "Codex endpoint bound: behavior {bound_behavior_id:?} became runnable; \
+                            "Codex endpoint bound: agent {bound_agent_id:?} became runnable; \
                              the shim is now running on {url} (no restart was needed)."
                         );
                         tracing::info!(
@@ -381,9 +378,9 @@ fn spawn_codex_shim_supervisor(
                     }
                     Err(error) if error.is_dependency_missing() => {
                         tracing::debug!(
-                            behavior_id = %bound_behavior_id,
+                            agent_id = %bound_agent_id,
                             error = %error.error(),
-                            "Codex shim still waiting on its bound behavior's documents"
+                            "Codex shim still waiting on its bound agent's documents"
                         );
                     }
                     Err(error) => {
@@ -396,7 +393,7 @@ fn spawn_codex_shim_supervisor(
                             },
                         );
                         tracing::warn!(
-                            "Codex endpoint disabled: behavior {bound_behavior_id:?} became runnable, \
+                            "Codex endpoint disabled: agent {bound_agent_id:?} became runnable, \
                              but the shim could not bind: {:#}",
                             error.error()
                         );
@@ -588,7 +585,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         tracing::warn!(
             home = %home_dir.display(),
             port = http_port,
-            "serving a non-default home on port {http_port}, which the desktop agent and the default CLI expect to belong to the default home; pass --http-port to serve this home on another port"
+            "serving a non-default home on port {http_port}, which the desktop app and the default CLI expect to belong to the default home; pass --http-port to serve this home on another port"
         );
     }
     let http_addr = SocketAddr::new(args.http_addr, http_port);
@@ -604,12 +601,12 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         http_port
     );
     let init_config = read_init_config(&home_dir)?;
-    if let (Some(explicit), Some(config)) = (args.agent_name.as_deref(), init_config.as_ref()) {
-        if explicit != config.agent_name {
+    if let (Some(explicit), Some(config)) = (args.node_name.as_deref(), init_config.as_ref()) {
+        if explicit != config.node_name {
             anyhow::bail!(
-                "--agent-name {} does not match initialized home agent {}",
+                "--node-name {} does not match initialized home node {}",
                 explicit,
-                config.agent_name
+                config.node_name
             );
         }
     }
@@ -617,14 +614,14 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
     let local_hostname = hostname::get()
         .map(|host| host.to_string_lossy().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
-    let agent_name = args
-        .agent_name
+    let node_name = args
+        .node_name
         .clone()
-        .or_else(|| init_config.as_ref().map(|config| config.agent_name.clone()))
-        .unwrap_or_else(|| DEFAULT_AGENT_NAME.to_string());
+        .or_else(|| init_config.as_ref().map(|config| config.node_name.clone()))
+        .unwrap_or_else(|| DEFAULT_NODE_NAME.to_string());
     gents::home::ensure_home_identity_can_serve(&home_dir)?;
     let server_identity =
-        resolve_server_identity(&args, init_config.as_ref(), &home_dir, &agent_name)?;
+        resolve_server_identity(&args, init_config.as_ref(), &home_dir, &node_name)?;
     let identity = server_identity.identity;
     let effective_tool_ceiling = args
         .tool_ceiling
@@ -635,29 +632,12 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             .as_ref()
             .and_then(|config| config.tool_root.as_ref().map(PathBuf::from))
     });
-    let effective_tool_root = match effective_tool_ceiling {
-        ToolCeilingArg::MetaOnly => configured_tool_root,
-        ToolCeilingArg::Readonly => Some(match configured_tool_root {
-            Some(root) => root,
-            None => resolve_default_tool_root(None)?,
-        }),
-        ToolCeilingArg::Readwrite => Some(configured_tool_root.ok_or_else(|| {
-            anyhow::anyhow!("--tool-root is required when --tool-ceiling readwrite")
-        })?),
+    let effective_tool_root = match (effective_tool_ceiling, configured_tool_root) {
+        (ToolCeilingArg::Readonly, None) => Some(resolve_default_tool_root(None)?),
+        (_, root) => root,
     };
-    let mut tool_ceiling = match effective_tool_ceiling {
-        ToolCeilingArg::MetaOnly => ToolCeiling::meta_only(),
-        ToolCeilingArg::Readonly => ToolCeiling::readonly_at(
-            effective_tool_root
-                .as_ref()
-                .expect("readonly root resolved"),
-        ),
-        ToolCeilingArg::Readwrite => ToolCeiling::readwrite(
-            effective_tool_root
-                .as_ref()
-                .expect("readwrite root resolved"),
-        ),
-    };
+    let mut tool_ceiling =
+        host_tool_ceiling(effective_tool_ceiling, effective_tool_root.as_deref())?;
     tool_ceiling = tool_ceiling.with_command_timeout_secs(args.command_timeout_secs);
     if let Some(max_secs) = args.command_timeout_max_secs {
         tool_ceiling = tool_ceiling.with_command_timeout_max_secs(max_secs);
@@ -681,15 +661,6 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         crate::p2p_relay::log_relay_mode_diagnostics(args.p2p_relay_mode);
         log_p2p_admission_config(config);
     }
-    let mcp_query_scope = if !args.enable_mcp {
-        None
-    } else if args.mcp_query_collections.is_empty() {
-        Some(gents::defra_query::CollectionScope::all())
-    } else {
-        Some(gents::defra_query::CollectionScope::restricted(
-            args.mcp_query_collections.clone(),
-        ))
-    };
     let p2p_admission_state = p2p_config.as_ref().map(p2p_admission_state);
     let p2p_admission = p2p_admission_state.as_ref().map(P2pAdmissionState::to_json);
     let backend_health = gents::BackendHealthMap::new();
@@ -698,8 +669,8 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             CodexShimHealth::Off
         } else {
             CodexShimHealth::Pending {
-                bound_behavior_id: args
-                    .codex_shim_behavior_id
+                bound_agent_id: args
+                    .codex_shim_agent_id
                     .clone()
                     .unwrap_or_else(|| "<default>".to_string()),
                 reason: "the Codex shim has not bound yet".to_string(),
@@ -711,20 +682,38 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
     let enrollment_offer_issuer = crate::http::enrollment::empty_issuer_handle();
     let enrollment_decisions = crate::http::enrollment::empty_decision_service_handle();
     let activation_runtime = Arc::new(tokio::sync::OnceCell::new());
+    let mcp_options = args
+        .enable_mcp
+        .then(|| crate::http::mcp_server::McpServiceOptions {
+            scope: if args.mcp_query_collections.is_empty() {
+                gents::defra_query::CollectionScope::all()
+            } else {
+                gents::defra_query::CollectionScope::restricted(args.mcp_query_collections.clone())
+            },
+            write_collections: args.mcp_write_collections.iter().cloned().collect(),
+            graph_reads: args.mcp_graph_tools,
+        });
     let (activation_tx, activation_rx) = watch::channel(RuntimeActivationObservation::default());
     let replicated_schema = Arc::new(tokio::sync::OnceCell::new());
     let serve_lifecycle = ServeLifecycleHandle::default();
     let extra_routes = runtime_contract_router(
         graphql_url.clone(),
-        agent_name.clone(),
+        node_name.clone(),
         identity.did().to_string(),
         format_tool_ceiling(effective_tool_ceiling).to_string(),
         effective_tool_root
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned()),
+            .as_deref()
+            .map(|root| {
+                gents::tool_surface::resolve_configured_tool_root(root)
+                    .map(|resolved| resolved.to_string_lossy().into_owned())
+                    .map_err(|error| {
+                        format!("tool root {} does not resolve: {error:#}", root.display())
+                    })
+            })
+            .transpose(),
+        args.cli_tools.clone(),
         Some(home_dir.to_string_lossy().into_owned()),
-        mcp_query_scope,
-        args.mcp_write_collections.clone(),
+        mcp_options,
         Some(backend_health.clone()),
         p2p_admission_state.clone(),
         Some(codex_shim_health.clone()),
@@ -750,9 +739,9 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         .await?
         .with_http(defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(extra_routes));
     if let Some(node_identity_did) = server_identity.node_identity_did.as_ref() {
-        // The served home's principal owns node access control, so its HTTP
+        // The served home's node identity owns node access control, so its HTTP
         // API admits writes, schema changes and P2P administration only from
-        // requests that principal signs.
+        // requests that identity signs.
         node_builder = node_builder
             .with_node_identity_did(node_identity_did.clone())
             .with_node_acp_enabled();
@@ -788,7 +777,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
     let enrollment_network = crate::http::enrollment::ensure_enrollment_network(
         node.as_ref(),
         identity.as_ref(),
-        &agent_name,
+        &node_name,
     )
     .await
     .context("ensuring authenticated enrollment network")?;
@@ -800,7 +789,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
     let (configuration_tx, mut configuration_rx) =
         watch::channel::<Option<RuntimeConfigurationObservation>>(None);
 
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
@@ -885,8 +874,8 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             node: node.clone(),
             background_execution_registry: background_execution_registry.clone(),
             graphql: graphql_url.clone(),
-            agent_did: identity.did().to_string(),
-            behavior_id: args.codex_shim_behavior_id.clone(),
+            node_did: identity.did().to_string(),
+            agent_id: args.codex_shim_agent_id.clone(),
             auth_token: codex_shim_auth_token,
             bind_addr: args.codex_shim_bind_addr,
             port: args.codex_shim_port,
@@ -908,42 +897,42 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
                                 .unwrap_or_default()
                                 .to_string(),
                             auth_required: bound.auth_required(),
-                            bound_agent_did: bound.agent_did().to_string(),
-                            bound_behavior_id: bound.behavior_id().to_string(),
+                            bound_node_did: bound.node_did().to_string(),
+                            bound_agent_id: bound.agent_id().to_string(),
                         },
                     );
                     codex_shim_output = Some(announced);
                     Some(bound.spawn())
                 }
                 Err(error) if error.is_dependency_missing() => {
-                    match crate::commands::codex_shim::resolve_codex_shim_behavior_id(
+                    match crate::commands::codex_shim::resolve_codex_shim_agent_id(
                         node.as_ref(),
-                        args.codex_shim_behavior_id.as_deref(),
+                        args.codex_shim_agent_id.as_deref(),
                         identity.did(),
                     )
                     .await
                     {
-                        Ok(bound_behavior_id) => {
+                        Ok(bound_agent_id) => {
                             tracing::warn!("Codex endpoint pending: {:#}", error.error());
                             tracing::warn!(
-                                "The server keeps running. The shim binds by itself once behavior {bound_behavior_id:?} \
+                                "The server keeps running. The shim binds by itself once agent {bound_agent_id:?} \
                                  becomes runnable (for example after `gents config apply`) — no restart needed."
                             );
                             codex_shim_output = Some(json!({
                                 "pending": true,
-                                "bound_behavior_id": bound_behavior_id,
+                                "bound_agent_id": bound_agent_id,
                                 "reason": format!("{:#}", error.error()),
                             }));
                             set_codex_shim_health(
                                 &codex_shim_health,
                                 CodexShimHealth::Pending {
-                                    bound_behavior_id: bound_behavior_id.clone(),
+                                    bound_agent_id: bound_agent_id.clone(),
                                     reason: format!("{:#}", error.error()),
                                 },
                             );
                             spawn_codex_shim_supervisor(
                                 codex_shim_bind_args.clone(),
-                                bound_behavior_id,
+                                bound_agent_id,
                                 runnable_rx,
                                 args.codex_shim_public_url.clone(),
                                 args.codex_shim_auth_token_env.clone(),
@@ -1017,8 +1006,8 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         let readiness_fence = applied_pack
             .as_ref()
             .map(|outcome| PostApplyReadinessFence {
-                expected_default_behavior_id: outcome.expected_default_behavior_id.clone(),
-                expected_behavior_ids: outcome.expected_behavior_ids.clone(),
+                expected_default_agent_id: outcome.expected_default_agent_id.clone(),
+                expected_agent_ids: outcome.expected_agent_ids.clone(),
             });
 
         if applied_pack.is_some() {
@@ -1076,10 +1065,10 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             }
         }
 
-        // `--apply-root` can replace the default behavior and advance the runtime
+        // `--apply-root` can replace the default agent and advance the runtime
         // generation. Report and persist only the post-apply authoritative
         // snapshot; pre-apply configuration is never reused as readiness evidence.
-        let readiness = match wait_for_live_behavior_readiness(
+        let readiness = match wait_for_live_node_readiness(
             &graphql_url,
             identity.did(),
             readiness_fence.as_ref(),
@@ -1089,35 +1078,35 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             Ok(readiness) => readiness,
             Err(error) => return Err(error),
         };
-        let default_behavior_id = readiness.snapshot.default_behavior_id.clone();
-        let runnable_behaviors = readiness
+        let default_agent_id = readiness.snapshot.default_agent_id.clone();
+        let runnable_agents = readiness
             .snapshot
-            .behaviors
+            .agents
             .iter()
-            .filter(|entry| entry.state == BehaviorReadinessState::Ready)
-            .map(|entry| json!({ "behavior_id": entry.behavior_id }))
+            .filter(|entry| entry.state == AgentReadinessState::Ready)
+            .map(|entry| json!({ "agent_id": entry.agent_id }))
             .collect::<Vec<_>>();
-        let unavailable_behaviors = readiness
+        let unavailable_agents = readiness
             .snapshot
-            .behaviors
+            .agents
             .iter()
             .filter_map(|entry| {
                 entry.reason.map(|reason| {
                     json!({
-                        "behavior_id": entry.behavior_id,
+                        "agent_id": entry.agent_id,
                         "reason": reason,
                         "message": reason.public_message(),
                     })
                 })
             })
             .collect::<Vec<_>>();
-        let readiness_status = if unavailable_behaviors.is_empty() {
+        let readiness_status = if unavailable_agents.is_empty() {
             "ready"
         } else {
             "degraded"
         };
-        let behavior_readiness = serde_json::to_value(&readiness.snapshot)
-            .context("serializing durable behavior readiness")?;
+        let node_readiness = serde_json::to_value(&readiness.snapshot)
+            .context("serializing durable node readiness")?;
         let pack_apply = applied_pack.map(|outcome| outcome.report);
 
         write_runtime_state(
@@ -1125,9 +1114,9 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             &StoredRuntimeState {
                 home: home_dir.to_string_lossy().to_string(),
                 graphql: graphql_url.clone(),
-                agent_name: agent_name.clone(),
-                agent_did: identity.did().to_string(),
-                default_behavior_id: default_behavior_id.clone(),
+                node_name: node_name.clone(),
+                node_did: identity.did().to_string(),
+                default_agent_id: default_agent_id.clone(),
                 p2p_transport: p2p_status
                     .get("p2p_transport")
                     .and_then(Value::as_str)
@@ -1156,7 +1145,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
 
         // The Grok TUI leader socket is opt-in: stock Grok attaches to it as the
         // pager client. Binding follows pack apply and readiness fencing so a
-        // fresh home can receive the selected behavior in this invocation.
+        // fresh home can receive the selected agent in this invocation.
         let grok_shim_socket_path = args
             .grok_shim
             .then(|| resolve_grok_shim_socket_path(args.grok_shim_socket_path.as_deref()));
@@ -1165,11 +1154,11 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
                 background_executions: background_execution_registry.clone(),
                 node: node.clone(),
                 actor: identity::Did::new(identity.did().to_owned())
-                    .context("server principal DID is not ACP-addressable")?,
+                    .context("server node DID is not ACP-addressable")?,
                 graphql: graphql_url.clone(),
-                behavior_id: args.grok_shim_behavior_id.clone(),
-                agent_did: identity.did().to_string(),
-                agent_name: agent_name.clone(),
+                agent_id: args.grok_shim_agent_id.clone(),
+                node_did: identity.did().to_string(),
+                node_name: node_name.clone(),
                 socket_path: socket_path.clone(),
             })
             .await
@@ -1194,16 +1183,16 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
 
         let output = json!({
             "status": "serving",
-            "behavior_readiness": behavior_readiness,
+            "node_readiness": node_readiness,
             "readiness_status": readiness_status,
             "home": home_dir,
-            "agent_name": agent_name,
-            "agent_did": identity.did(),
-            "default_behavior_id": default_behavior_id,
+            "node_name": node_name,
+            "node_did": identity.did(),
+            "default_agent_id": default_agent_id,
             "tool_ceiling": format_tool_ceiling(effective_tool_ceiling),
             "tool_root": effective_tool_root,
-            "runnable_behaviors": runnable_behaviors,
-            "unavailable_behaviors": unavailable_behaviors,
+            "runnable_agents": runnable_agents,
+            "unavailable_agents": unavailable_agents,
             "graphql": graphql_url,
             "p2p_transport": p2p_status.get("p2p_transport").cloned().unwrap_or(Value::String(default_p2p_transport())),
             "p2p_peer_id": p2p_status.get("p2p_peer_id").cloned().unwrap_or(Value::Null),
@@ -1286,7 +1275,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
 ///
 /// Every exit after spawn goes through [`ServeRuntime::finish`]. Aborting or
 /// detaching the task would skip `run_agent`'s shutdown epilogue, leaving
-/// behavior readiness at `ready`, received turns unflushed and detached
+/// agent readiness at `ready`, received turns unflushed and detached
 /// children still firing.
 struct ServeRuntime {
     shutdown_tx: watch::Sender<bool>,
@@ -1331,7 +1320,7 @@ impl ServeRuntime {
 }
 
 struct ServerIdentity {
-    identity: Arc<dyn AgentIdentity>,
+    identity: Arc<dyn NodeIdentity>,
     node_identity_did: Option<String>,
 }
 
@@ -1339,11 +1328,11 @@ fn resolve_server_identity(
     args: &ServeArgs,
     init_config: Option<&StoredInitConfig>,
     home_dir: &Path,
-    agent_name: &str,
+    node_name: &str,
 ) -> Result<ServerIdentity> {
     if let Some(config) = init_config {
-        let agent_did = config.agent_did.trim();
-        if has_agent_did(agent_did)
+        let node_did = config.node_did.trim();
+        if has_node_did(node_did)
             && args.key_path.is_none()
             && config
                 .key_path
@@ -1355,13 +1344,13 @@ fn resolve_server_identity(
         }
     }
 
-    let key_path = resolve_server_key_path(args, init_config, home_dir, agent_name)?;
+    let key_path = resolve_server_key_path(args, init_config, home_dir, node_name)?;
     ensure_key_path_exists_for_initialized_did(init_config, &key_path)?;
-    let identity = if init_config.is_some_and(|config| has_agent_did(&config.agent_did)) {
-        KeyIdentity::load_existing(&key_path, None).context("loading agent identity key")?
+    let identity = if init_config.is_some_and(|config| has_node_did(&config.node_did)) {
+        KeyIdentity::load_existing(&key_path, None).context("loading node identity key")?
     } else {
         KeyIdentity::load_or_create(&key_path, None)
-            .context("creating or loading agent identity key")?
+            .context("creating or loading node identity key")?
     };
     let identity = Arc::new(identity);
     ensure_identity_matches_init_config(init_config, identity.did())?;
@@ -1391,7 +1380,7 @@ fn resolve_server_key_path(
     args: &ServeArgs,
     init_config: Option<&StoredInitConfig>,
     home_dir: &Path,
-    agent_name: &str,
+    node_name: &str,
 ) -> Result<PathBuf> {
     if let Some(path) = args.key_path.clone() {
         return Ok(path);
@@ -1408,7 +1397,7 @@ fn resolve_server_key_path(
         }
     }
 
-    Ok(default_key_path(home_dir, agent_name))
+    Ok(default_key_path(home_dir, node_name))
 }
 
 fn ensure_identity_matches_init_config(
@@ -1418,10 +1407,10 @@ fn ensure_identity_matches_init_config(
     let Some(config) = init_config else {
         return Ok(());
     };
-    if has_agent_did(&config.agent_did) && config.agent_did.trim() != resolved_did {
+    if has_node_did(&config.node_did) && config.node_did.trim() != resolved_did {
         anyhow::bail!(
-            "initialized home agent DID {} does not match loaded identity DID {}; repair init.json or use the correct --key-path",
-            config.agent_did,
+            "initialized home node DID {} does not match loaded identity DID {}; repair init.json or use the correct --key-path",
+            config.node_did,
             resolved_did
         );
     }
@@ -1435,17 +1424,17 @@ fn ensure_key_path_exists_for_initialized_did(
     let Some(config) = init_config else {
         return Ok(());
     };
-    if has_agent_did(&config.agent_did) && !key_path.exists() {
+    if has_node_did(&config.node_did) && !key_path.exists() {
         anyhow::bail!(
-            "initialized home agent DID {} requires identity key {} to already exist; restore the configured key, pass --key-path for the matching key, or bootstrap the host identity backend first",
-            config.agent_did,
+            "initialized home node DID {} requires identity key {} to already exist; restore the configured key, pass --key-path for the matching key, or bootstrap the host identity backend first",
+            config.node_did,
             key_path.display()
         );
     }
     Ok(())
 }
 
-fn has_agent_did(did: &str) -> bool {
+fn has_node_did(did: &str) -> bool {
     !did.trim().is_empty()
 }
 
@@ -1743,17 +1732,17 @@ mod grok_shim_tests {
         let args = parse_server(&[]);
         assert!(!args.grok_shim);
         assert!(args.grok_shim_socket_path.is_none());
-        assert!(args.grok_shim_behavior_id.is_none());
+        assert!(args.grok_shim_agent_id.is_none());
     }
 
     #[test]
     fn grok_shim_socket_flags_require_the_shim_flag() {
-        // The socket path and behavior override only make sense with the shim.
+        // The socket path and agent override only make sense with the shim.
         assert!(
             Cli::try_parse_from(["gents", "server", "--grok-shim-socket-path", "/tmp/g.sock"])
                 .is_err()
         );
-        assert!(Cli::try_parse_from(["gents", "server", "--grok-shim-behavior-id", "b"]).is_err());
+        assert!(Cli::try_parse_from(["gents", "server", "--grok-shim-agent-id", "b"]).is_err());
     }
 
     #[test]
@@ -1762,15 +1751,15 @@ mod grok_shim_tests {
             "--grok-shim",
             "--grok-shim-socket-path",
             "/tmp/leader.sock",
-            "--grok-shim-behavior-id",
-            "behavior-a",
+            "--grok-shim-agent-id",
+            "agent-a",
         ]);
         assert!(args.grok_shim);
         assert_eq!(
             args.grok_shim_socket_path.as_deref(),
             Some(Path::new("/tmp/leader.sock"))
         );
-        assert_eq!(args.grok_shim_behavior_id.as_deref(), Some("behavior-a"));
+        assert_eq!(args.grok_shim_agent_id.as_deref(), Some("agent-a"));
     }
 
     #[test]

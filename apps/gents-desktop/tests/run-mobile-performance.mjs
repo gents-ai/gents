@@ -17,10 +17,21 @@ const TRANSCRIPT_ROWS = '[data-testid="transcript-panel"] [data-window-row]';
 const VIEWPORT = { width: 390, height: 844 };
 const TYPING_NEXT_PAINT_BUDGET_MS = 50;
 const TYPING_REACT_BUDGET_MS_PER_CHARACTER = 12;
+/* The bridge announces no plugin approval request, so the access prompt polls
+   the approval queue on a timer; those reads are not caused by what a scenario
+   does and are reported apart from its budgets. */
+const POLLED_COMMANDS = new Set(["listPendingPluginApprovals"]);
 
 const args = process.argv.slice(2);
 const runs = integerArgument("--runs", DEFAULT_RUNS);
 const port = integerArgument("--port", DEFAULT_PORT);
+const sessionIndexCount =
+  valueArgument("--sessions") == null ? null : integerArgument("--sessions", 0);
+if (
+  sessionIndexCount !== null &&
+  (sessionIndexCount < 2 || sessionIndexCount > 100_000)
+)
+  throw new Error("--sessions must be an integer from 2 to 100000");
 const enforceResponsiveBudgets = args.includes("--enforce-responsive-budgets");
 const outputArgument = valueArgument("--output");
 const outputRoot = resolve(
@@ -164,7 +175,7 @@ async function runSample(browserInstance, sampleIndex) {
 
   const navigationStartedAt = process.hrtime.bigint();
   await page.goto(
-    `${baseUrl}/tests/ui-harness/harness.html?scenario=mobile-performance`,
+    `${baseUrl}/tests/ui-harness/harness.html?scenario=mobile-performance${sessionIndexCount === null ? "" : `&sessions=${sessionIndexCount}`}`,
     { waitUntil: "domcontentloaded" },
   );
   await page.locator('[data-testid="app-shell"]').waitFor({ state: "visible" });
@@ -608,7 +619,8 @@ async function domSnapshot(page) {
   }));
 }
 
-function bridgeSummary(calls) {
+function bridgeSummary(allCalls) {
+  const calls = allCalls.filter((call) => !POLLED_COMMANDS.has(call.command));
   const byCommand = {};
   for (const call of calls) {
     const entry = (byCommand[call.command] ??= {
@@ -629,6 +641,7 @@ function bridgeSummary(calls) {
     requestBytes: sum(calls.map((call) => call.requestBytes)),
     responseBytes: sum(calls.map((call) => call.responseBytes)),
     byCommand,
+    polledCallCount: allCalls.length - calls.length,
   };
 }
 
@@ -693,6 +706,11 @@ function evaluateStructuralAssertions(samples) {
   const all = (id) =>
     samples.map((sample) => sample.scenarios.find((scenario) => scenario.id === id));
   const tip = all("open_large_local_transcript_tip");
+  const index = all("paired_launch_to_session_index");
+  const indexLimit =
+    samples[0].fixture.sessionIndexCount > 200
+      ? 80
+      : samples[0].fixture.sessionIndexCount;
   const pageOlder = all("page_older_transcript_rows");
   const sustained = all("sustained_streamed_response");
   const burst = all("update_coalescing_burst");
@@ -704,6 +722,16 @@ function evaluateStructuralAssertions(samples) {
   const typingWithoutLiveDeltas = [...typingActiveTurn, ...typingIdle];
   const typing = [...typingWithoutLiveDeltas, ...typingConcurrent];
   return [
+    {
+      id: "session_index_mounts_a_bounded_window",
+      policy: "hard",
+      limit: indexLimit,
+      observedMax: Math.max(...index.map((scenario) => scenario.dom.sessionRows)),
+      passed: index.every(
+        (scenario) =>
+          scenario.dom.sessionRows > 0 && scenario.dom.sessionRows <= indexLimit,
+      ),
+    },
     {
       id: "large_tip_mounts_one_page",
       policy: "hard",

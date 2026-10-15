@@ -299,8 +299,8 @@ async fn trace_project(args: TraceProjectArgs) -> Result<()> {
     let actor_did = args.actor_did;
     let projection_kind = adapter_projection_kind(args.projection);
     let scope = projection_acp::ProjectionDocumentScope {
-        agent_did: optional_scope_arg("scope-agent-did", args.scope_agent_did)?,
-        behavior_id: optional_scope_arg("scope-behavior-id", args.scope_behavior_id)?,
+        node_did: optional_scope_arg("scope-node-did", args.scope_node_did)?,
+        agent_id: optional_scope_arg("scope-agent-id", args.scope_agent_id)?,
         session_id: optional_scope_arg("scope-session-id", args.scope_session_id)?,
     };
     let rows = load_run_timeline_rows(&access, &args.request_id).await?;
@@ -564,8 +564,8 @@ fn build_record(
         run_id: args.run_id.clone(),
         case_id: args.case_id.clone(),
         prompt: request.and_then(|request| request.content.clone()),
-        agent_did: request.and_then(|request| request.agent_did.clone()),
-        behavior_id: request.and_then(|request| request.behavior_id.clone()),
+        node_did: request.and_then(|request| request.node_did.clone()),
+        agent_id: request.and_then(|request| request.agent_id.clone()),
         session_id: tool_call.session_id.clone(),
         request_id: request.map(|request| request.request_id.clone()),
         request_status: request
@@ -687,8 +687,8 @@ mod tests {
                 request_id: "request".into(),
                 doc_id: Some("physical".into()),
                 session_id: Some("session".into()),
-                agent_did: Some("owner".into()),
-                behavior_id: Some("behavior".into()),
+                node_did: Some("owner".into()),
+                agent_id: Some("agent".into()),
                 content: Some("prompt".into()),
                 ..Default::default()
             },
@@ -705,7 +705,7 @@ mod tests {
         orphan.request_doc_id = None;
         let record = build_record(&orphan, None, &args()).unwrap();
         assert!(record.request_id.is_none());
-        assert!(record.agent_did.is_none());
+        assert!(record.node_did.is_none());
         assert!(record.raw_assistant_message.is_none());
     }
     #[test]
@@ -740,11 +740,11 @@ mod tests {
             session_id: "session".into(),
             sequence: 3,
             timestamp: None,
-            agent_did: None,
+            node_did: None,
             header: gents_protocol::output::TranscriptMessage {
                 message_key: "session:3".into(),
                 session_id: "session".into(),
-                agent_did: "did:test:agent".into(),
+                node_did: "did:test:agent".into(),
                 requester_did: None,
                 request_doc_id: Some("foreign".into()),
                 publication: gents_protocol::output::MessagePublication::RequestExecution {

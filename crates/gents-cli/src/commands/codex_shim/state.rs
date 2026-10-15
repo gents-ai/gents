@@ -9,8 +9,8 @@ pub(super) struct ShimState {
     pub(super) node: Arc<EmbeddedNode>,
     pub(super) background_execution_registry: gents::BackgroundExecutionRegistry,
     pub(super) graphql: gents::config_client::GraphqlEndpoint,
-    pub(super) agent_did: Arc<str>,
-    pub(super) behavior_id: Arc<str>,
+    pub(super) node_did: Arc<str>,
+    pub(super) agent_id: Arc<str>,
     pub(super) id_counter: Arc<AtomicU64>,
     pub(super) timeout: Duration,
     pub(super) poll_interval: Duration,
@@ -77,10 +77,10 @@ pub(super) struct RootContinuationStreamControl {
 }
 
 impl ShimState {
-    /// LocalSelf admission proves signer = requester = target principal.
+    /// LocalSelf admission proves signer = requester = target node.
     /// Child streams instead carry their actual committed requester explicitly.
     pub(super) fn local_requester_did(&self) -> &str {
-        self.agent_did.as_ref()
+        self.node_did.as_ref()
     }
 
     pub(super) fn next_thread_id(&self) -> String {

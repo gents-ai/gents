@@ -216,7 +216,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
             let request_id = escape_graphql_string(&request_doc_id);
             let value = txn.execute_local_response(&format!(r#"{{ AgentRequest(
                 filter: {{ _docID: {{ _eq: "{request_id}" }} }}, limit: 1) {{
-                _docID request_id purpose agent_did requester_did session_id lifecycle_state interrupt_requested_at
+                _docID request_id purpose node_did requester_did session_id lifecycle_state interrupt_requested_at
                 execution_generation execution_lease_expires_at terminal_output
             }} }}"#)).await?;
             let row = crate::graphql::first_row::<AgentRequestRow>(&value, "AgentRequest")?
@@ -234,7 +234,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                 let headers = session::load_request_headers_in_txn(
                     txn,
                     row.session_id.as_deref().context("missing request session")?,
-                    row.agent_did.as_deref().context("missing request agent")?,
+                    row.node_did.as_deref().context("missing request agent")?,
                     row.requester_did.as_deref(),
                     &request_doc_id,
                 )
@@ -247,7 +247,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     let segments = request_segments(
                         txn,
                         &request_doc_id,
-                        row.agent_did.as_deref().context("missing request agent")?,
+                        row.node_did.as_deref().context("missing request agent")?,
                         row.session_id.as_deref().context("missing request session")?,
                         row.requester_did.as_deref(),
                     )
@@ -271,7 +271,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                             if execution_generation == &fresh_generation
                     ))
                     .count();
-                let agent = row.agent_did.as_deref().context("missing request agent")?;
+                let agent = row.node_did.as_deref().context("missing request agent")?;
                 let mut reader = session::TxnCanonicalReader::new(txn, agent, row.requester_did.as_deref());
                 reader.observe_headers(&headers);
                 validate_selection(&mut reader, &headers, &row, row.terminal_output.as_ref().expect("checked"))
@@ -295,7 +295,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
             if deadline > observed_now {
                 return Ok(RecoveryResult::Lost);
             }
-            let agent = row.agent_did.as_deref().context("missing request agent")?;
+            let agent = row.node_did.as_deref().context("missing request agent")?;
             let session_id = row.session_id.as_deref().context("missing request session")?;
             let writer = OutputWriter::RequestExecution { execution_generation: expected_generation.to_owned() };
             let mut segments = request_segments(
@@ -348,7 +348,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                         let plan = plan_recovery_prefix(&observations, &request_doc_id, &source, &writer)?;
                         let exemplar = segments.iter().find(|record| record.segment.source == source).context("source disappeared")?;
                         let closing = OutputSegment {
-                            agent_did: exemplar.segment.agent_did.clone(), requester_did: exemplar.segment.requester_did.clone(),
+                            node_did: exemplar.segment.node_did.clone(), requester_did: exemplar.segment.requester_did.clone(),
                             session_id: exemplar.segment.session_id.clone(), request_doc_id: request_doc_id.clone(),
                             source: source.clone(), writer: writer.clone(), ordinal: None, runs: Vec::new(), payload: String::new(),
                             close: Some(plan.close.clone()), created_at: timestamp.clone(),
@@ -381,7 +381,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                 if blocks.is_empty() { continue; }
                 let next_sequence = sequence.as_mut().context("normal recovery has no sequence")?;
                 let message = TranscriptMessage {
-                    message_key: crate::streaming::canonical::partial_message_key(&request_doc_id, &source)?, session_id: session_id.to_owned(), agent_did: agent.to_owned(),
+                    message_key: crate::streaming::canonical::partial_message_key(&request_doc_id, &source)?, session_id: session_id.to_owned(), node_did: agent.to_owned(),
                     requester_did: row.requester_did.clone(), request_doc_id: Some(request_doc_id.clone()),
                     publication: MessagePublication::RequestRecovery { execution_generation: fresh_generation.clone() },
                     outcome: OutputOutcome::Partial, sequence: *next_sequence, role: MessageRole::Assistant, native_id: None,

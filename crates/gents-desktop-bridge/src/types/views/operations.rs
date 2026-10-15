@@ -5,7 +5,7 @@ use ts_rs::TS;
 #[serde(rename_all = "camelCase")]
 pub struct DesktopOperationsSnapshot {
     pub fetched_at: String,
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     pub liveness: Option<RuntimeLivenessView>,
     pub liveness_unavailable_reason: Option<String>,
     pub backgrounded_tools: Vec<BackgroundedToolView>,
@@ -31,7 +31,7 @@ pub struct ActiveRequestView {
     pub deadline_expired: bool,
     pub deadline_age_ms: Option<i64>,
     pub last_progress_age_ms: i64,
-    pub subagent_depth: i64,
+    pub request_hop: i64,
     pub caused_by_parent_request_id: Option<String>,
     pub caused_by_trigger_kind: Option<String>,
 }
@@ -100,7 +100,7 @@ pub struct SessionProvenanceView {
     pub session_id: String,
     /// The session whose request started this one.
     pub started_by: Option<LinkedSessionView>,
-    /// Sessions this session's requests started: its subagents.
+    /// Sessions this session's requests started.
     pub started: Vec<LinkedSessionView>,
     /// Other sessions this session messaged without starting them.
     pub sent: Vec<LinkedSessionView>,
@@ -118,7 +118,7 @@ pub struct SessionProvenanceView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct LinkedSessionView {
-    pub agent_did: String,
+    pub node_did: String,
     pub session_id: String,
     pub requester_did: Option<String>,
     /// The causing request: in the other session for `started_by` and
@@ -147,7 +147,7 @@ pub struct CausedCallView {
 #[serde(rename_all = "camelCase")]
 pub struct CausedRequestView {
     pub request_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub session_id: String,
     pub requester_did: Option<String>,
     pub lifecycle_state: Option<String>,
@@ -226,7 +226,7 @@ pub struct InferenceCallSummaryView {
 #[serde(rename_all = "camelCase")]
 pub struct MCPServiceHealthView {
     pub service_id: String,
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     pub endpoint: Option<String>,
     pub status: Option<String>,
     pub display_state: String,

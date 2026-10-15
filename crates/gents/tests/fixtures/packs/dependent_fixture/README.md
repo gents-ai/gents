@@ -6,7 +6,7 @@ dependency rather than an empty list.
 
 ## Configuration
 
-One tool-less behavior (`fixture-dependent`) bound to the `worker` slot, and
+One tool-less agent (`fixture-dependent`) bound to the `worker` slot, and
 one manifest dependency: `fixture/review_graph`. No schema, event source or
 trigger of its own.
 

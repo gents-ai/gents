@@ -13,11 +13,11 @@ use super::util::require_trimmed;
 fn schedule_for_run<'a>(
     rows: &'a [Schedule],
     id: &str,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
 ) -> Result<&'a Schedule> {
     let mut matches = rows
         .iter()
-        .filter(|row| row.schedule_id == id && agent_did.is_none_or(|did| row.agent_did == did));
+        .filter(|row| row.schedule_id == id && node_did.is_none_or(|did| row.node_did == did));
     let row = matches
         .next()
         .ok_or_else(|| anyhow!("schedule {id} was not found"))?;
@@ -27,10 +27,10 @@ fn schedule_for_run<'a>(
     Ok(row)
 }
 
-fn task_for_run<'a>(rows: &'a [Task], id: &str, agent_did: Option<&str>) -> Result<&'a Task> {
+fn task_for_run<'a>(rows: &'a [Task], id: &str, node_did: Option<&str>) -> Result<&'a Task> {
     let mut matches = rows
         .iter()
-        .filter(|row| row.task_id == id && agent_did.is_none_or(|did| row.agent_did == did));
+        .filter(|row| row.task_id == id && node_did.is_none_or(|did| row.node_did == did));
     let row = matches
         .next()
         .ok_or_else(|| anyhow!("task {id} was not found"))?;
@@ -42,18 +42,18 @@ fn task_for_run<'a>(rows: &'a [Task], id: &str, agent_did: Option<&str>) -> Resu
 
 async fn load_agent_request_by_request_id(
     core: &ClientCore,
-    agent_did: &str,
+    node_did: &str,
     request_id: &str,
 ) -> Result<AgentRequestRow> {
     let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }}, agent_did: {{ _eq: "{escaped_agent_did}" }} }}, limit: 1) {{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }}, node_did: {{ _eq: "{escaped_node_did}" }} }}, limit: 1) {{
                 _docID
                 request_id
-                agent_did
-                behavior_id
+                node_did
+                agent_id
                 session_id
                 lifecycle_state
             }}
@@ -77,7 +77,7 @@ async fn load_agent_request_by_request_id(
     // runtime so Goal, GoalCreationClaim and AgentRequest become visible
     // together. Resolve their document ID at that authoritative operator
     // node instead of racing the runtime-to-client P2P projection.
-    let response = core.operator_access(agent_did)?.execute(&query).await?;
+    let response = core.operator_access(node_did)?.execute(&query).await?;
     let row = response
         .pointer("/data/AgentRequest/0")
         .cloned()
@@ -99,21 +99,17 @@ pub async fn run_schedule_config(
 ) -> Result<TaskRunResult> {
     let schedule_id = require_trimmed("schedule_id", request.schedule_id)?;
     let store = core.store().snapshot();
-    let selected_agent_did = request
-        .agent_did
-        .map(|did| require_trimmed("agent_did", did))
+    let selected_node_did = request
+        .node_did
+        .map(|did| require_trimmed("node_did", did))
         .transpose()?
-        .or_else(|| core.selected_agent_did());
-    let schedule = schedule_for_run(
-        &store.schedules,
-        &schedule_id,
-        selected_agent_did.as_deref(),
-    )?;
+        .or_else(|| core.selected_node_did());
+    let schedule = schedule_for_run(&store.schedules, &schedule_id, selected_node_did.as_deref())?;
     let submitted = core
-        .fire_schedule_now_for_agent(&schedule.agent_did, &schedule_id)
+        .fire_schedule_now_for_node(&schedule.node_did, &schedule_id)
         .await?;
     let row =
-        load_agent_request_by_request_id(core, &submitted.agent_did, &submitted.request_id).await?;
+        load_agent_request_by_request_id(core, &submitted.node_did, &submitted.request_id).await?;
     let request_doc_id = row
         .doc_id
         .clone()
@@ -123,8 +119,8 @@ pub async fn run_schedule_config(
         request_doc_id,
         request_id: row.request_id,
         session_id: row.session_id.unwrap_or_default(),
-        agent_did: row.agent_did.unwrap_or_default(),
-        behavior_id: row.behavior_id.unwrap_or_default(),
+        node_did: row.node_did.unwrap_or_default(),
+        agent_id: row.agent_id.unwrap_or_default(),
         lifecycle_state: row.lifecycle_state.map(|state| state.as_str().to_string()),
     })
 }
@@ -137,17 +133,17 @@ pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Resu
     let task_id = require_trimmed("task_id", request.task_id)?;
     let args = request.args.unwrap_or_else(|| serde_json::json!({}));
     let store = core.store().snapshot();
-    let selected_agent_did = request
-        .agent_did
-        .map(|did| require_trimmed("agent_did", did))
+    let selected_node_did = request
+        .node_did
+        .map(|did| require_trimmed("node_did", did))
         .transpose()?
-        .or_else(|| core.selected_agent_did());
-    let task = task_for_run(&store.tasks, &task_id, selected_agent_did.as_deref())?;
+        .or_else(|| core.selected_node_did());
+    let task = task_for_run(&store.tasks, &task_id, selected_node_did.as_deref())?;
     let submitted = core
-        .fire_task_now_for_agent(&task.agent_did, &task_id, args)
+        .fire_task_now_for_node(&task.node_did, &task_id, args)
         .await?;
     let row =
-        load_agent_request_by_request_id(core, &submitted.agent_did, &submitted.request_id).await?;
+        load_agent_request_by_request_id(core, &submitted.node_did, &submitted.request_id).await?;
     let request_doc_id = row
         .doc_id
         .clone()
@@ -157,8 +153,8 @@ pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Resu
         request_doc_id,
         request_id: row.request_id,
         session_id: row.session_id.unwrap_or_default(),
-        agent_did: row.agent_did.unwrap_or_default(),
-        behavior_id: row.behavior_id.unwrap_or_default(),
+        node_did: row.node_did.unwrap_or_default(),
+        agent_id: row.agent_id.unwrap_or_default(),
         lifecycle_state: row.lifecycle_state.map(|state| state.as_str().to_string()),
     })
 }
@@ -174,7 +170,7 @@ pub async fn delete_event_source_config(
     core: &ClientCore,
     request: EventSourceDeleteRequest,
 ) -> Result<()> {
-    core.delete_event_source(&request.event_source_id, &request.agent_did)
+    core.delete_event_source(&request.event_source_id, &request.node_did)
         .await
 }
 
@@ -185,21 +181,26 @@ mod tests {
 
     #[test]
     fn task_and_schedule_actions_keep_their_agent_scope_across_views() {
-        let tasks: Vec<Task> = ["did:alpha", "did:beta"].into_iter().map(|did| serde_json::from_value(json!({
-            "agent_did": did, "task_id": "daily", "behavior_id": "default", "prompt_template": "hello"
-        })).unwrap()).collect();
+        let tasks: Vec<Task> = ["did:alpha", "did:beta"]
+            .into_iter()
+            .map(|did| {
+                serde_json::from_value(json!({
+            "node_did": did, "task_id": "daily", "agent_id": "default", "prompt_template": "hello"
+        })).unwrap()
+            })
+            .collect();
         let schedules: Vec<Schedule> = ["did:alpha", "did:beta"].into_iter().map(|did| serde_json::from_value(json!({
-            "agent_did": did, "schedule_id": "daily", "cadence": { "kind": "interval", "interval_secs": 60 }
+            "node_did": did, "schedule_id": "daily", "cadence": { "kind": "interval", "interval_secs": 60 }
         })).unwrap()).collect();
         for did in ["did:alpha", "did:beta"] {
             assert_eq!(
-                task_for_run(&tasks, "daily", Some(did)).unwrap().agent_did,
+                task_for_run(&tasks, "daily", Some(did)).unwrap().node_did,
                 did
             );
             assert_eq!(
                 schedule_for_run(&schedules, "daily", Some(did))
                     .unwrap()
-                    .agent_did,
+                    .node_did,
                 did
             );
         }

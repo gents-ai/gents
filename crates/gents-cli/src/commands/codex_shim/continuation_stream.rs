@@ -27,7 +27,7 @@ pub(super) async fn ensure_loaded_root_continuation_stream(
     record: &CodexThreadRecord,
     baseline_turns: Option<Vec<codex::Turn>>,
 ) {
-    if record.is_subagent() {
+    if record.is_caused() {
         return;
     }
 
@@ -178,10 +178,10 @@ async fn project_background_continuation(
         .session_id
         .clone()
         .context("background continuation AgentRequest missing session_id")?;
-    let agent_did = request
-        .agent_did
+    let node_did = request
+        .node_did
         .clone()
-        .context("background continuation AgentRequest missing agent_did")?;
+        .context("background continuation AgentRequest missing node_did")?;
     let turn_id = request.request_id.clone();
     let started_at = request.created_at.as_deref().and_then(timestamp_seconds);
     if baseline_turn.is_none() {
@@ -215,8 +215,8 @@ async fn project_background_continuation(
     let submitted = SubmittedRequest {
         request_id: request.request_id,
         session_id: session_id.clone(),
-        agent_did,
-        behavior_id: request.behavior_id,
+        node_did,
+        agent_id: request.agent_id,
         request_doc_id: request
             .doc_id
             .context("continuation has no physical request")?,
@@ -285,11 +285,11 @@ async fn load_background_continuation_requests(
     thread_id: &str,
 ) -> Result<Vec<AgentRequestRow>> {
     let request_scope = gents::session::public_request_filter(&format!(
-        r#"session_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}, behavior_id: {{ _eq: "{}" }}"#,
+        r#"session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}, agent_id: {{ _eq: "{}" }}"#,
         escape_graphql_string(thread_id),
-        escape_graphql_string(state.agent_did.as_ref()),
-        escape_graphql_string(state.agent_did.as_ref()),
-        escape_graphql_string(state.behavior_id.as_ref()),
+        escape_graphql_string(state.node_did.as_ref()),
+        escape_graphql_string(state.node_did.as_ref()),
+        escape_graphql_string(state.agent_id.as_ref()),
     ));
     let query = format!(
         r#"{{
@@ -301,8 +301,8 @@ async fn load_background_continuation_requests(
                 requester_did
                 request_id
                 session_id
-                agent_did
-                behavior_id
+                node_did
+                agent_id
                 input
                 lifecycle_state
                 created_at
@@ -322,9 +322,9 @@ async fn load_background_continuation_requests(
             row.session_id
                 .as_deref()
                 .context("background continuation AgentRequest missing session_id")?;
-            row.agent_did
+            row.node_did
                 .as_deref()
-                .context("background continuation AgentRequest missing agent_did")?;
+                .context("background continuation AgentRequest missing node_did")?;
             Ok(row)
         })
         .collect::<Result<Vec<_>>>()

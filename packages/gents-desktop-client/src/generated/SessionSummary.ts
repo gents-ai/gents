@@ -2,7 +2,7 @@
 import type { LinkedSessionView } from "./LinkedSessionView.js";
 import type { SessionProvenance } from "./SessionProvenance.js";
 
-export type SessionSummary = { startedBy: LinkedSessionView | null, sessionId: string, agentDid: string, requesterDid: string | null, latestRequestDocId: string | null, closedAt: string | null, tags: Array<string>, provenance: SessionProvenance | null, title: string | null, previewText: string | null, status: string | null, behaviorId: string | null, latestRequestId: string | null, taskId: string | null, taskName: string | null, triggerId: string | null, triggerKind: string | null, createdAt: string | null, updatedAt: string | null, turnState: string | null,
+export type SessionSummary = { startedBy: LinkedSessionView | null, sessionId: string, nodeDid: string, requesterDid: string | null, latestRequestDocId: string | null, closedAt: string | null, tags: Array<string>, provenance: SessionProvenance | null, title: string | null, previewText: string | null, status: string | null, agentId: string | null, latestRequestId: string | null, taskId: string | null, taskName: string | null, triggerId: string | null, triggerKind: string | null, createdAt: string | null, updatedAt: string | null, turnState: string | null,
 /**
  * Absent when the bounded deployment projection did not query transcript
  * aggregates. Never inferred from resident transcript rows.

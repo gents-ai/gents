@@ -7,12 +7,12 @@ use tokio::sync::{watch, OwnedRwLockReadGuard, RwLock};
 use crate::agent::RuntimeSnapshotObserver;
 use crate::lifecycle::{ExecutionOrigin, RequestLifecycle};
 use crate::runtime_snapshot::{
-    effective_behavior_admission, ActiveRuntimeSnapshot, EffectiveBehaviorAdmission,
+    effective_agent_admission, ActiveRuntimeSnapshot, EffectiveAgentAdmission,
 };
 use crate::runtime_status::RuntimeStatusHandle;
 use crate::watcher::{AgentRequest, DefraWatcher, Watcher};
 
-use super::context::BehaviorResolution;
+use super::context::AgentResolution;
 
 #[derive(Clone)]
 pub(in crate::agent) struct RuntimeAdmissionGate {
@@ -105,7 +105,7 @@ impl RuntimeAdmissionGate {
 
 pub(super) async fn run_router(
     node: Arc<defra_node::EmbeddedNode>,
-    agent_did: String,
+    node_did: String,
     active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     mut shutdown: watch::Receiver<bool>,
     admission_gate: RuntimeAdmissionGate,
@@ -118,10 +118,10 @@ pub(super) async fn run_router(
     if !admission_gate.wait_open(&mut shutdown).await {
         return Ok(());
     }
-    let watcher = DefraWatcher::new(node.clone(), &agent_did);
+    let watcher = DefraWatcher::new(node.clone(), &node_did);
     let result = run_router_with_watcher(
         node,
-        agent_did,
+        node_did,
         watcher,
         active_snapshot_rx,
         shutdown,
@@ -141,7 +141,7 @@ pub(super) async fn run_router(
 
 pub(in crate::agent) async fn run_router_with_watcher<W>(
     node: Arc<defra_node::EmbeddedNode>,
-    agent_did: String,
+    node_did: String,
     mut watcher: W,
     mut active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     mut shutdown: watch::Receiver<bool>,
@@ -159,7 +159,7 @@ where
     loop {
         let Some((request, routed_snapshot, admission_observation)) =
             wait_for_next_request_with_latest_snapshot(
-                &agent_did,
+                &node_did,
                 &mut watcher,
                 &mut active_snapshot,
                 &mut active_snapshot_rx,
@@ -179,46 +179,44 @@ where
             return Ok(());
         };
 
-        let resolution = resolve_behavior_for_request(node.as_ref(), &request).await?;
+        let resolution = resolve_agent_for_request(node.as_ref(), &request).await?;
         if let Some(reason) = resolution.rejection_reason.as_deref() {
             tracing::warn!(
                 request_id = %request.request_id,
                 session_id = %request.session_id,
-                behavior_id = %resolution.behavior_id,
+                agent_id = %resolution.agent_id,
                 reason = %reason,
                 "rejecting request before dispatch"
             );
             fail_routed_request(
                 node.clone(),
-                agent_did.as_str(),
+                node_did.as_str(),
                 request,
-                resolution.behavior_id.as_str(),
+                resolution.agent_id.as_str(),
                 reason,
             )
             .await?;
             continue;
         }
 
-        let startup_diagnostic = admission_observation.demotion_reason(&resolution.behavior_id);
-        match effective_behavior_admission(
+        let startup_diagnostic = admission_observation.demotion_reason(&resolution.agent_id);
+        match effective_agent_admission(
             routed_snapshot
                 .dispatchers
-                .contains_key(&resolution.behavior_id),
-            routed_snapshot
-                .unavailable_behaviors
-                .get(&resolution.behavior_id),
+                .contains_key(&resolution.agent_id),
+            routed_snapshot.unavailable_agents.get(&resolution.agent_id),
             startup_diagnostic.as_deref(),
         ) {
-            EffectiveBehaviorAdmission::Ready => {
+            EffectiveAgentAdmission::Ready => {
                 let dispatcher = routed_snapshot
                     .dispatchers
-                    .get(&resolution.behavior_id)
+                    .get(&resolution.agent_id)
                     .expect("effective admission verified the dispatcher");
                 tracing::info!(
                     request_id = %request.request_id,
                     session_id = %request.session_id,
-                    behavior_id = %resolution.behavior_id,
-                    "dispatching request to behavior executor"
+                    agent_id = %resolution.agent_id,
+                    "dispatching request to agent executor"
                 );
                 #[cfg(test)]
                 if let Some(dispatch_attempted) = &admission_gate.dispatch_attempted {
@@ -242,45 +240,45 @@ where
                 };
                 sent.map_err(|_| {
                     anyhow!(
-                        "executor queue for behavior {} closed unexpectedly",
-                        resolution.behavior_id
+                        "executor queue for agent {} closed unexpectedly",
+                        resolution.agent_id
                     )
                 })?;
             }
-            EffectiveBehaviorAdmission::Unavailable {
+            EffectiveAgentAdmission::Unavailable {
                 public_reason,
                 diagnostic,
             } => {
                 tracing::warn!(
                     request_id = %request.request_id,
                     session_id = %request.session_id,
-                    behavior_id = %resolution.behavior_id,
+                    agent_id = %resolution.agent_id,
                     public_reason = ?public_reason,
                     diagnostic = %diagnostic,
-                    "behavior unavailable for request"
+                    "agent unavailable for request"
                 );
                 fail_routed_request(
                     node.clone(),
-                    agent_did.as_str(),
+                    node_did.as_str(),
                     request,
-                    resolution.behavior_id.as_str(),
+                    resolution.agent_id.as_str(),
                     public_reason.public_message(),
                 )
                 .await?;
             }
-            EffectiveBehaviorAdmission::Unassigned => {
+            EffectiveAgentAdmission::Unassigned => {
                 tracing::warn!(
                     request_id = %request.request_id,
                     session_id = %request.session_id,
-                    behavior_id = %resolution.behavior_id,
-                    agent_did = %agent_did,
-                    "behavior is not assigned to the active runtime"
+                    agent_id = %resolution.agent_id,
+                    node_did = %node_did,
+                    "agent is not assigned to the active runtime"
                 );
                 fail_routed_request(
                     node.clone(),
-                    agent_did.as_str(),
+                    node_did.as_str(),
                     request,
-                    resolution.behavior_id.as_str(),
+                    resolution.agent_id.as_str(),
                     gents_protocol::row::BEHAVIOR_NOT_ASSIGNED_MESSAGE,
                 )
                 .await?;
@@ -290,7 +288,7 @@ where
 }
 
 pub(super) async fn wait_for_next_request_with_latest_snapshot<W>(
-    agent_did: &str,
+    node_did: &str,
     watcher: &mut W,
     active_snapshot: &mut Arc<ActiveRuntimeSnapshot>,
     active_snapshot_rx: &mut watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
@@ -298,7 +296,7 @@ pub(super) async fn wait_for_next_request_with_latest_snapshot<W>(
     admission_gate: &RuntimeAdmissionGate,
     admission_changed: &mut watch::Receiver<bool>,
     readiness_changed: &mut watch::Receiver<
-        crate::behavior_readiness_publisher::BehaviorAdmissionObservation,
+        crate::node_readiness_publisher::AgentAdmissionObservation,
     >,
     runtime_status: Option<&RuntimeStatusHandle>,
     runtime_snapshot_observer: Option<&dyn RuntimeSnapshotObserver>,
@@ -306,7 +304,7 @@ pub(super) async fn wait_for_next_request_with_latest_snapshot<W>(
     Option<(
         AgentRequest,
         Arc<ActiveRuntimeSnapshot>,
-        crate::behavior_readiness_publisher::BehaviorAdmissionObservation,
+        crate::node_readiness_publisher::AgentAdmissionObservation,
     )>,
 >
 where
@@ -393,7 +391,7 @@ where
                 match req {
                     Some(Ok(req)) => req,
                     Some(Err(error)) => {
-                        tracing::error!(agent_did = %agent_did, error = %error, "watcher error, retrying");
+                        tracing::error!(node_did = %node_did, error = %error, "watcher error, retrying");
                         continue;
                     }
                     None => return Ok(None),
@@ -404,42 +402,42 @@ where
     }
 }
 
-pub(super) async fn resolve_behavior_for_request(
+pub(super) async fn resolve_agent_for_request(
     node: &defra_node::EmbeddedNode,
     request: &AgentRequest,
-) -> Result<BehaviorResolution> {
-    let behavior_id = request.behavior_id.clone();
-    let session_behavior_id = crate::session::load_session_behavior_id(
+) -> Result<AgentResolution> {
+    let agent_id = request.agent_id.clone();
+    let session_agent_id = crate::session::load_session_agent_id(
         node,
-        &request.agent_did,
+        &request.node_did,
         &request.session_id,
         request.requester_did.as_deref(),
     )
     .await?;
-    let rejection_reason = if behavior_id.trim().is_empty() {
-        Some("request must select a behavior".to_string())
+    let rejection_reason = if agent_id.trim().is_empty() {
+        Some("request must select an agent".to_string())
     } else {
-        session_behavior_id
-            .filter(|existing| existing != &behavior_id)
+        session_agent_id
+            .filter(|existing| existing != &agent_id)
             .map(|existing| {
                 format!(
-                    "session {} is pinned to behavior {} and cannot switch to {}",
-                    request.session_id, existing, behavior_id
+                    "session {} is pinned to agent {} and cannot switch to {}",
+                    request.session_id, existing, agent_id
                 )
             })
     };
 
-    Ok(BehaviorResolution {
-        behavior_id,
+    Ok(AgentResolution {
+        agent_id,
         rejection_reason,
     })
 }
 
 pub(super) async fn fail_routed_request(
     node: Arc<defra_node::EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     request: AgentRequest,
-    behavior_id: &str,
+    agent_id: &str,
     error_message: &str,
 ) -> Result<()> {
     let execution_origin =
@@ -450,7 +448,7 @@ pub(super) async fn fail_routed_request(
                 return crate::request_admission::terminalize_pending_request_rejection(
                     node.as_ref(),
                     &request.doc_id,
-                    agent_did,
+                    node_did,
                     &reason,
                     "terminalize_invalid_execution_origin_before_route_rejection",
                 )
@@ -459,8 +457,8 @@ pub(super) async fn fail_routed_request(
         };
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        behavior_id,
-        agent_did,
+        agent_id,
+        node_did,
         request.clone(),
         Duration::from_secs(30).as_secs(),
         execution_origin,

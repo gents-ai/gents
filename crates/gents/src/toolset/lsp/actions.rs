@@ -63,7 +63,7 @@ pub async fn dispatch(
                 .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| config.session_id.clone());
             let states = pool
-                .inspect_session(&session_id, &config.behavior_id, workspace, &config.digest)
+                .inspect_session(&session_id, &config.agent_id, workspace, &config.digest)
                 .await;
             Ok(status_text(states, &config.servers, workspace))
         }
@@ -73,7 +73,7 @@ pub async fn dispatch(
                 .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| config.session_id.clone());
             let retired = pool
-                .reload_snapshot(&session_id, &config.behavior_id, workspace, &config.digest)
+                .reload_snapshot(&session_id, &config.agent_id, workspace, &config.digest)
                 .await;
             Ok(format!(
                 "retired {retired} language-server client(s) for the current snapshot"
@@ -219,6 +219,7 @@ async fn run_file_action(
         method,
         params,
         request_timeout(req),
+        config.action_timeout.maximum,
         retry_empty,
     )
     .await
@@ -436,18 +437,13 @@ pub(crate) async fn request_maybe_retry(
     method: &str,
     params: Value,
     timeout: std::time::Duration,
+    max_timeout: std::time::Duration,
     retry_empty: bool,
 ) -> Result<Value, String> {
     const MAX_EMPTY_ATTEMPTS: usize = 3;
     let deadline = std::time::Instant::now() + timeout;
-    for attempt in 0..MAX_EMPTY_ATTEMPTS {
-        if attempt > 0 {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                return Ok(Value::Null);
-            }
-            tokio::time::sleep(remaining.min(std::time::Duration::from_millis(400))).await;
-        }
+    let mut attempts = 0;
+    loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
             return Ok(Value::Null);
@@ -455,11 +451,26 @@ pub(crate) async fn request_maybe_retry(
         let result = client
             .request_with_timeout(method, params.clone(), remaining)
             .await?;
-        if !retry_empty || !semantic_result_is_empty(&result) || attempt + 1 == MAX_EMPTY_ATTEMPTS {
+        if !retry_empty || !semantic_result_is_empty(&result) {
             return Ok(result);
         }
+        // Servers that never report work fall back to bounded attempts.
+        if client.wait_while_busy(deadline).await {
+            if std::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "LSP request {method} timed out while the language server is indexing; call lsp again with a larger timeout (maximum {} seconds)",
+                    max_timeout.as_secs()
+                ));
+            }
+            continue;
+        }
+        attempts += 1;
+        if attempts == MAX_EMPTY_ATTEMPTS {
+            return Ok(result);
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        tokio::time::sleep(remaining.min(std::time::Duration::from_millis(400))).await;
     }
-    unreachable!("bounded retry loop always returns")
 }
 
 fn semantic_result_is_empty(result: &Value) -> bool {

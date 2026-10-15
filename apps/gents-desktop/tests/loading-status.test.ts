@@ -14,37 +14,37 @@ import {
 const loaded: SessionLoadState = {
   phase: "loaded",
   sessionId: "session-1",
-  agentDid: "did:test:agent",
+  nodeDid: "did:test:agent",
   found: true,
   error: null,
 };
 
 function deployment(overrides: Partial<DeploymentView> = {}): DeploymentView {
   return {
-    agentDid: "did:test:agent",
+    nodeDid: "did:test:agent",
     dialSucceeded: true,
     chatSafe: true,
     source: "enrolled",
     lastError: null,
     runtime: null,
-    agentPrincipal: {
-      agentDid: "did:test:agent",
-      defaultBehaviorId: "default",
+    node: {
+      nodeDid: "did:test:agent",
+      defaultAgentId: "default",
     },
-    behaviors: [
+    agents: [
       {
-        behaviorId: "default",
+        agentId: "default",
         displayName: "Default",
         enabled: true,
         isDefault: true,
       },
     ],
-    behaviorReadiness: {
+    nodeReadiness: {
       source: { state: "current" },
       activeGeneration: 1,
       routerGeneration: 1,
       updatedAt: "2026-09-02T00:00:00Z",
-      behaviors: [{ state: "ready", behaviorId: "default" }],
+      agents: [{ state: "ready", agentId: "default" }],
     },
     ...overrides,
   } as DeploymentView;
@@ -55,7 +55,7 @@ function session(
 ): DesktopSessionSnapshot {
   return {
     sessionId: "session-1",
-    agentDid: "did:test:agent",
+    nodeDid: "did:test:agent",
     timelineItems: [],
     ...overrides,
   } as DesktopSessionSnapshot;
@@ -66,7 +66,7 @@ function project(
 ) {
   return projectSessionLoadingStatus({
     selectedSessionId: "session-1",
-    selectedAgentDid: "did:test:agent",
+    selectedNodeDid: "did:test:agent",
     session: session(),
     sessionLoad: loaded,
     operationalState: projectDeploymentOperationalState(deployment()),
@@ -77,7 +77,7 @@ function project(
 describe("startup loading projection", () => {
   it("reports only lifecycle-owned startup work", () => {
     expect(projectStartupLoadingStatus("checking-managed-server", true)).toMatchObject({
-      currentLabel: "Checking the background agent",
+      currentLabel: "Checking the background node",
       managedServerState: "active",
       connectionState: "pending",
       clientState: "pending",
@@ -145,7 +145,7 @@ describe("session loading projection", () => {
       sessionLoad: {
         phase: "loading",
         sessionId: "session-old",
-        agentDid: "did:test:other",
+        nodeDid: "did:test:other",
         found: null,
         error: null,
       },
@@ -159,7 +159,7 @@ describe("session loading projection", () => {
         session: session({
           hydration: {
             sessionId: "session-1",
-            agentDid: "did:test:agent",
+            nodeDid: "did:test:agent",
             phase: "serving",
             mergedCount: 124,
             coveredCount: 47,
@@ -180,7 +180,7 @@ describe("session loading projection", () => {
         session: session({
           hydration: {
             sessionId: "session-1",
-            agentDid: "did:test:agent",
+            nodeDid: "did:test:agent",
             phase: "unreadable",
             mergedCount: 0,
             coveredCount: 0,
@@ -206,7 +206,7 @@ describe("session loading projection", () => {
         session: session({
           hydration: {
             sessionId: "session-1",
-            agentDid: "did:test:agent",
+            nodeDid: "did:test:agent",
             phase: "failed",
             mergedCount: 0,
             coveredCount: 0,
@@ -232,7 +232,7 @@ describe("session loading projection", () => {
         session: session({
           hydration: {
             sessionId: "session-1",
-            agentDid: "did:test:agent",
+            nodeDid: "did:test:agent",
             phase: "requested",
             mergedCount: 0,
             coveredCount: 0,
@@ -263,14 +263,15 @@ describe("session loading projection", () => {
     });
   });
 
-  it("does not block a new enrolled chat on a lagged ready replica", () => {
+  it("does not block a new enrolled chat solely because its readiness observation is old", () => {
     expect(
       project({
         operationalState: projectDeploymentOperationalState(
           deployment({
-            behaviorReadiness: {
-              ...deployment().behaviorReadiness,
-              source: { state: "unknown", reason: "readiness_stale" },
+            nodeReadiness: {
+              ...deployment().nodeReadiness,
+              source: { state: "current" },
+              updatedAt: "2000-01-01T00:00:00Z",
             },
           }),
           null,
@@ -294,12 +295,12 @@ describe("session loading projection", () => {
       projectDeploymentOperationalState(
         deployment({
           source,
-          behaviorReadiness: {
-            ...deployment().behaviorReadiness,
-            behaviors: [
+          nodeReadiness: {
+            ...deployment().nodeReadiness,
+            agents: [
               {
                 state: "unavailable",
-                behaviorId: "default",
+                agentId: "default",
                 reason: "backend_not_configured",
               },
             ],
@@ -317,18 +318,18 @@ describe("session loading projection", () => {
     });
   });
 
-  it("does not mislabel a non-inference behavior failure", () => {
+  it("does not mislabel a non-inference agent failure", () => {
     expect(
       project({
         operationalState: projectDeploymentOperationalState(
           deployment({
-            behaviorReadiness: {
-              ...deployment().behaviorReadiness,
-              behaviors: [
+            nodeReadiness: {
+              ...deployment().nodeReadiness,
+              agents: [
                 {
                   state: "unavailable",
-                  behaviorId: "default",
-                  reason: "behavior_disabled",
+                  agentId: "default",
+                  reason: "agent_disabled",
                 },
               ],
             },
@@ -337,12 +338,12 @@ describe("session loading projection", () => {
       }),
     ).toMatchObject({
       layer: "runtime",
-      title: "This behavior is unavailable",
+      title: "This agent is unavailable",
       action: null,
     });
   });
 
-  it("renders no wait when the exact session and behavior are ready", () => {
+  it("renders no wait when the exact session and agent are ready", () => {
     expect(project()).toBeNull();
   });
 });

@@ -27,9 +27,9 @@ import { Kbd } from "@gents/ui/components/kbd";
 import { cn } from "@gents/ui/lib/utils";
 import { href, navigate } from "@/lib/router";
 import { useState, type ComponentProps } from "react";
-import { behaviorName } from "./behavior";
+import { agentName } from "./behavior";
 import type { ShellActions } from "@/../hooks/shellActions";
-import { NodeBehaviorStack } from "./NodeBehaviorStack";
+import { NodeAgentStack } from "./NodeBehaviorStack";
 import { deadlineOf, dueSoon } from "./mailbox-triage";
 import { parseQuestion, QuestionAnswer } from "./MailboxQuestion";
 import { Markdown } from "./Markdown";
@@ -84,8 +84,8 @@ export function Item({
   onSelect: (next: boolean) => void;
   last: boolean;
 }) {
-  /* the node that filed the item names its behavior; its session may be listed by any node */
-  const filer = useFleet((state) => nodeOf(state, m.agentDid));
+  /* the node that filed the item names its agent; its session may be listed by any node */
+  const filer = useFleet((state) => nodeOf(state, m.nodeDid));
   const session = useFleet((state) =>
     m.sessionId ? state.bySessionId[m.sessionId] : undefined,
   );
@@ -125,7 +125,7 @@ export function Item({
     </time>
   );
   const overdue = deadline !== null && deadline < now;
-  const behavior = behaviorName(m.targetBehaviorId, filer);
+  const agent = agentName(m.targetAgentId, filer);
   return (
     <li
       className="group/item relative"
@@ -184,11 +184,11 @@ export function Item({
         }}
       >
         <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 max-md:gap-y-2">
-          {/* room for a node behind the behavior on every row, so titles
+          {/* room for a node behind the agent on every row, so titles
               line up whether or not this one is remote; the stack keeps
               to the title's side, the node reaching left */}
           <div className="col-start-1 row-start-1 flex justify-end max-md:self-center md:mt-0.5 md:w-12">
-            <NodeBehaviorStack nodeDid={m.agentDid} behaviorId={m.targetBehaviorId} />
+            <NodeAgentStack nodeDid={m.nodeDid} agentId={m.targetAgentId} />
           </div>
           <span className="col-start-2 row-start-1 flex items-center gap-3 self-center justify-self-end text-xs leading-5 text-muted-foreground md:hidden">
             <Due due={due} soon={soon} />
@@ -213,7 +213,7 @@ export function Item({
               <Badge variant={kind.badge}>{kind.label}</Badge>
               <Badge variant={status.badge}>{status.label}</Badge>
               <span>
-                from <span className="text-foreground">{behavior}</span>
+                from <span className="text-foreground">{agent}</span>
               </span>
               {m.sessionId && (
                 <a

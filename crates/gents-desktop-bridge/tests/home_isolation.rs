@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use gents_desktop_bridge::{
-    resolve_policy, AgentHomePolicy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy,
-    ManagedServerPolicy, SnapshotGrants,
+    resolve_policy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy,
+    NodeHomePolicy, SnapshotGrants,
 };
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use tempfile::tempdir;
@@ -33,8 +33,8 @@ async fn fixed_root_homes_do_not_collide() {
 
     assert_eq!(policy.desktop_paths.root(), bridge_root.as_path());
     assert!(
-        policy.agent_home.is_none(),
-        "PairedRemoteOnly has no agent home"
+        policy.node_home.is_none(),
+        "PairedRemoteOnly has no node home"
     );
     assert_ne!(
         policy.desktop_paths.root(),
@@ -71,18 +71,18 @@ async fn fixed_root_homes_do_not_collide() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn local_runtime_allowed_binds_fixed_agent_home() {
+async fn local_runtime_allowed_binds_fixed_node_home() {
     let tmp = tempdir().expect("tempdir");
     let bridge_root = tmp.path().join("bridge");
-    let agent_root = tmp.path().join("agent");
+    let node_root = tmp.path().join("node");
     std::fs::create_dir_all(&bridge_root).unwrap();
-    std::fs::create_dir_all(&agent_root).unwrap();
+    std::fs::create_dir_all(&node_root).unwrap();
 
     let policy = resolve_policy(
         &BridgeConfig {
             home: HomePolicy::FixedRoot(bridge_root.clone()),
             bootstrap: BootstrapPolicy::LocalRuntimeAllowed {
-                agent_home: AgentHomePolicy::Fixed(agent_root.clone()),
+                node_home: NodeHomePolicy::Fixed(node_root.clone()),
             },
             app_meta: AppMeta {
                 app_name: "fixture".into(),
@@ -96,7 +96,7 @@ async fn local_runtime_allowed_binds_fixed_agent_home() {
     )
     .expect("resolve");
 
-    assert_eq!(policy.agent_home.as_deref(), Some(agent_root.as_path()));
+    assert_eq!(policy.node_home.as_deref(), Some(node_root.as_path()));
     assert_eq!(policy.desktop_paths.root(), bridge_root.as_path());
 }
 

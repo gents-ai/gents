@@ -54,17 +54,16 @@ impl Tool for DiscoverToolsTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let services =
-            crate::registry::configured_mcp_services(&self.ctx.node, &self.ctx.agent_did)
-                .await?
-                .into_iter()
-                .filter(|service| {
-                    service.enabled && self.ctx.service_selection(&service.service_id).is_some()
-                })
-                .collect::<Vec<_>>();
+        let services = crate::registry::configured_mcp_services(&self.ctx.node, &self.ctx.node_did)
+            .await?
+            .into_iter()
+            .filter(|service| {
+                service.enabled && self.ctx.service_selection(&service.service_id).is_some()
+            })
+            .collect::<Vec<_>>();
         if services.is_empty() {
             return Ok(if self.ctx.allowed_mcp_service_ids.is_empty() {
-                "No MCP services are allowed for this behavior.".to_string()
+                "No MCP services are allowed for this agent.".to_string()
             } else {
                 format!(
                     "No allowed data services are currently online. Allowed services: {}.",
@@ -167,7 +166,7 @@ mod tests {
                 filter: { service_id: { _eq: "observability-mcp" } },
                 add: {
                     service_id: "observability-mcp",
-                    agent_did: "did:key:z-test-agent",
+                    node_did: "did:key:z-test-agent",
                     display_name: "Observability",
                     description: "Metrics and logs",
                     hostname: "localhost",
@@ -193,7 +192,7 @@ mod tests {
             health: ServiceHealthMap::new(),
             local_hostname: "studio-1".to_string(),
             local_subnet: None,
-            agent_did: "did:key:z-test-agent".to_string(),
+            node_did: "did:key:z-test-agent".to_string(),
             allowed_mcp_service_ids: vec!["x-data".to_string()],
             remote_tools: super::super::tests::remote_selection(&["x-data"], &["search_posts"]),
         });
@@ -235,7 +234,7 @@ mod tests {
                 filter: {{ service_id: {{ _eq: "{service_id}" }} }},
                 add: {{
                     service_id: "{service_id}",
-                    agent_did: "did:key:z-test-agent",
+                    node_did: "did:key:z-test-agent",
                     display_name: "{service_id}",
                     description: "test service {service_id}",
                     hostname: "{hostname}",
@@ -276,7 +275,7 @@ mod tests {
             health,
             local_hostname: "studio-1".to_string(),
             local_subnet: None,
-            agent_did: "did:key:z-test-agent".to_string(),
+            node_did: "did:key:z-test-agent".to_string(),
             allowed_mcp_service_ids: vec![
                 "x-data".to_string(),
                 "hf-data".to_string(),

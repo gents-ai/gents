@@ -1,9 +1,9 @@
 # Frozen source input and origin survive planner retries; journals own recovery.
 type CallbackInvocation @branchable
-    @index(fields: ["owner_agent_did", "invocation_id"], unique: true)
-    @index(fields: ["owner_agent_did", "idempotency_key"], unique: true) {
+    @index(fields: ["owner_node_did", "invocation_id"], unique: true)
+    @index(fields: ["owner_node_did", "idempotency_key"], unique: true) {
     invocation_id: String @immutable
-    owner_agent_did: String @index @immutable
+    owner_node_did: String @index @immutable
     callback_id: String @index @immutable
     origin: JSON @immutable
     input: JSON @immutable

@@ -9,7 +9,7 @@ type IncompatibleHomeScreenProps = {
 };
 
 const SCOPE_LABEL = {
-  runtime: "Local agent data",
+  runtime: "Local node data",
   client: "Desktop app data",
 } as const;
 
@@ -76,29 +76,41 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
             ) : (
               <p className="text-sm">The old home was permanently deleted.</p>
             )}
+            {home.fullReset ? (
+              <p className="text-sm">Quit and reopen Gents to set it up again.</p>
+            ) : null}
             <button
               className="inline-flex h-8 w-fit items-center rounded-lg bg-brand px-3 text-sm font-medium text-brand-foreground"
               data-testid="incompatible-home-continue"
               disabled={home.busy}
-              onClick={() => void home.continueFresh()}
+              onClick={() => void (home.fullReset ? home.keep() : home.continueFresh())}
               type="button"
             >
-              Set up Gents
+              {home.fullReset ? "Quit Gents" : "Set up Gents"}
             </button>
           </div>
         ) : (
           <div className="grid gap-4">
             <div className="grid gap-2">
               <p className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-                Upgrade
+                {home.fullReset ? "Reset" : "Upgrade"}
               </p>
               <h2
                 id="incompatible-home-title"
                 className="font-heading text-2xl font-medium text-heading"
               >
-                This home needs a fresh start
+                {home.fullReset
+                  ? "Reset Gents on this Mac"
+                  : "This home needs a fresh start"}
               </h2>
-              {unsafeKey ? (
+              {home.fullReset ? (
+                <p className="text-sm">
+                  Back up or delete this node’s data, the desktop app’s identity and
+                  pairings, and its local service. Browser storage and caches are
+                  cleared in both modes. Gents will close to finish the reset; reopen it
+                  after the completion message.
+                </p>
+              ) : unsafeKey ? (
                 <p className="text-sm" data-testid="incompatible-home-unsafe-key">
                   This home&apos;s keys were created by an older Gents version with
                   unsafe file permissions, so other users on this computer could read
@@ -140,7 +152,7 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
                 className="text-sm text-muted-foreground"
                 data-testid="incompatible-home-retained"
               >
-                Other agent homes inside it stay where they are:{" "}
+                Other node homes inside it stay where they are:{" "}
                 {report.retainedPaths.map((path) => (
                   <code className="block break-all" key={path}>
                     {path}
@@ -152,6 +164,20 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
               <p>Starting fresh moves or deletes exactly these:</p>
               {pathList(report.plannedPaths, "incompatible-home-planned")}
             </div>
+            {report.browserPaths.length > 0 ? (
+              <div className="grid gap-1 text-sm" data-testid="reset-browser-clear">
+                <p>
+                  Browser storage and caches are cleared permanently, including when you
+                  choose Back up:
+                </p>
+                {pathList(report.browserPaths, "reset-browser-paths")}
+              </div>
+            ) : null}
+            {home.fullReset && home.busy ? (
+              <p role="status" className="text-sm">
+                Closing Gents to finish the reset…
+              </p>
+            ) : null}
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
             {confirmingDelete ? (
               <div
@@ -169,13 +195,12 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
                 {clientStateOnlyWithRuntime ? (
                   <p data-testid="incompatible-home-delete-client-note">
                     This also deletes this app&apos;s own identity key and its pairings
-                    with remote agents. Back up instead to keep them.
+                    with remote nodes. Back up instead to keep them.
                   </p>
                 ) : null}
                 {removesInstalledContent ? (
                   <p data-testid="incompatible-home-delete-installed-note">
-                    This also deletes the packs and plugins you installed for this
-                    agent.
+                    This also deletes the packs and plugins you installed for this node.
                   </p>
                 ) : null}
                 {pathList(report.deletePaths, "incompatible-home-delete-paths")}
@@ -233,10 +258,10 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
                     className="inline-flex h-8 w-fit items-center rounded-lg border border-border px-3 text-sm font-medium disabled:opacity-50"
                     data-testid="incompatible-home-keep"
                     disabled={home.busy}
-                    onClick={() => void home.keep()}
+                    onClick={() => (home.fullReset ? home.cancel() : void home.keep())}
                     type="button"
                   >
-                    Keep it and quit
+                    {home.fullReset ? "Cancel" : "Keep it and quit"}
                   </button>
                 </div>
               </div>

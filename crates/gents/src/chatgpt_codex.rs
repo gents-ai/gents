@@ -32,14 +32,14 @@ pub fn default_backend_endpoint() -> &'static str {
 
 impl OAuthCredential {
     pub fn from_login_tokens(
-        agent_did: impl Into<String>,
+        node_did: impl Into<String>,
         provider: impl Into<String>,
         id_token: &str,
         access_token: String,
         refresh_token: String,
         now: DateTime<Utc>,
     ) -> Self {
-        let agent_did = agent_did.into();
+        let node_did = node_did.into();
         let provider = provider.into();
         let id_claims = crate::chatgpt_oauth_refresh::decode_id_token_claims(id_token);
         let access_token_expires_at = crate::chatgpt_oauth_refresh::jwt_expiration(&access_token)
@@ -52,8 +52,8 @@ impl OAuthCredential {
         );
         Self {
             doc_id: None,
-            credential_id: oauth_credential_id(&agent_did, &provider),
-            agent_did,
+            credential_id: oauth_credential_id(&node_did, &provider),
+            node_did,
             provider,
             access_token,
             refresh_token,
@@ -374,7 +374,7 @@ fn sse_events(sse_body: &str) -> Vec<Value> {
 
 pub async fn build_responses_client(
     node: Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     account_ref: Option<&str>,
     endpoint: &str,
 ) -> Result<
@@ -390,7 +390,7 @@ pub async fn build_responses_client(
     let provider = CHATGPT_CODEX_PROVIDER;
     let (bearer, credential) = crate::oauth_http::bootstrap_oauth_client(
         node.clone(),
-        agent_did,
+        node_did,
         provider,
         OAuthRefreshKind::ChatGpt,
         CHATGPT_OAUTH_PRODUCT,
@@ -735,9 +735,9 @@ mod tests {
                 request_doc_id: "doc-1".to_string(),
                 request_commit_cid: "bafy-request-commit".to_string(),
                 request_id: "req-1".to_string(),
-                agent_did: "did:key:agent".to_string(),
+                node_did: "did:key:agent".to_string(),
                 requester_did: String::new(),
-                behavior_id: "behavior".to_string(),
+                agent_id: "behavior".to_string(),
                 session_id: "session".to_string(),
                 model_name: "configured-model".to_string(),
                 provider_family: None,
@@ -868,7 +868,7 @@ mod tests {
             &OAuthAuthProblem::Missing,
         );
 
-        assert!(msg.contains("did:key:zAgent"), "names the agent DID: {msg}");
+        assert!(msg.contains("did:key:zAgent"), "names the node DID: {msg}");
         assert!(
             msg.contains("gents codex-login"),
             "tells the user how to fix it: {msg}"

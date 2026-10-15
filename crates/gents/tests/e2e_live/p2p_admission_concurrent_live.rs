@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use gents::AgentIdentity;
+use gents::NodeIdentity;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 
@@ -122,7 +122,7 @@ async fn fetch_lifecycle(node: &EmbeddedNode, request_id: &str) -> Option<String
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{
                 lifecycle_state
-                agent_did
+                node_did
             }}
         }}"#
     );
@@ -166,22 +166,22 @@ async fn wait_for_peer_request(
             r#"{{
                 AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{
                     lifecycle_state
-                    agent_did
+                    node_did
                 }}
             }}"#
         );
         #[derive(Deserialize)]
         struct Row {
             lifecycle_state: Option<String>,
-            agent_did: Option<String>,
+            node_did: Option<String>,
         }
         let resp = node.execute(&query).await;
         if let Some(row) = first_optional_row::<Row>(&resp, "AgentRequest") {
             let state = row.lifecycle_state.unwrap_or_default();
-            last = format!("lifecycle={state} did={:?}", row.agent_did);
+            last = format!("lifecycle={state} did={:?}", row.node_did);
             if is_terminal(&state) {
                 assert_eq!(
-                    row.agent_did.as_deref(),
+                    row.node_did.as_deref(),
                     Some(expected_owner_did),
                     "{label}: peer replica must keep owner DID"
                 );
@@ -310,12 +310,12 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
     )
     .await;
 
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("p2p-adm-live-owner"));
-    let (agent_did, behavior_id) =
+    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("p2p-adm-live-owner"));
+    let (node_did, agent_id) =
         bind_target(topo.owner().node.as_ref(), identity.as_ref(), &target).await;
     let agent = boot_live_agent(topo.owner(), identity).await?;
     topo.set_agent(agent);
-    eprintln!("[p2p-admission-live] owner ready did={agent_did}");
+    eprintln!("[p2p-admission-live] owner ready did={node_did}");
 
     let wave_ids: Vec<String> = (0..CONCURRENT_WAVES)
         .map(|i| format!("p2p-adm-live-wave-{i}"))
@@ -328,8 +328,8 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
     for (i, request_id) in wave_ids.iter().enumerate() {
         create_runtime_request(
             topo.owner().node.as_ref(),
-            &agent_did,
-            &behavior_id,
+            &node_did,
+            &agent_id,
             request_id,
             &session_ids[i],
             &format!("Reply with exactly one word: wave{i}"),
@@ -357,7 +357,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
         wait_for_peer_request(
             topo.peer_a().node.as_ref(),
             request_id,
-            &agent_did,
+            &node_did,
             peer_deadline,
             "peer-a",
         )
@@ -365,7 +365,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
         wait_for_peer_request(
             topo.peer_b().node.as_ref(),
             request_id,
-            &agent_did,
+            &node_did,
             peer_deadline,
             "peer-b",
         )

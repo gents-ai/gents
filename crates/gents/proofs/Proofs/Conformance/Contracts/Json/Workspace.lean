@@ -26,7 +26,7 @@ def bindingWitnessJson (workspaceId : String)
     ++ "\"workspace_id\":" ++ jsonString workspaceId ++ ","
     ++ "\"request_id\":" ++ jsonString witness.requestId ++ ","
     ++ "\"authority\":" ++ jsonString witness.authority.toDefraDB ++ ","
-    ++ "\"agent_did\":" ++ jsonString witness.agentDid ++ ","
+    ++ "\"node_did\":" ++ jsonString witness.nodeDid ++ ","
     ++ "\"seal_hash\":" ++ jsonOptionalString witness.sealHash ++ ","
     ++ "\"state\":" ++ jsonString witness.state.toDefraDB
     ++ "}"
@@ -38,7 +38,7 @@ def workspaceBindingCaseJson
     ++ "\"workspace_id\":" ++ jsonString witness.workspaceId ++ ","
     ++ "\"workspace_state\":" ++ jsonString witness.workspaceState.toDefraDB ++ ","
     ++ "\"workspace_seal_hash\":" ++ jsonOptionalString witness.workspaceSealHash ++ ","
-    ++ "\"owner_agent_did\":" ++ jsonString witness.ownerAgentDid ++ ","
+    ++ "\"owner_node_did\":" ++ jsonString witness.ownerNodeDid ++ ","
     ++ "\"creation_policy\":" ++ jsonString witness.creationPolicy.toDefraDB ++ ","
     ++ "\"existing\":"
       ++ jsonArray
@@ -46,8 +46,8 @@ def workspaceBindingCaseJson
     ++ "\"candidate\":"
       ++ bindingWitnessJson witness.workspaceId witness.candidate ++ ","
     ++ "\"git_metadata_write\":" ++ boolString witness.gitMetadataWrite ++ ","
-    ++ "\"behavior_command_mode\":"
-      ++ jsonString witness.behaviorCommandMode.toDefraDB ++ ","
+    ++ "\"agent_command_mode\":"
+      ++ jsonString witness.agentCommandMode.toDefraDB ++ ","
     ++ "\"legal\":" ++ boolString witness.legal
     ++ "}"
 

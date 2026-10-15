@@ -1,12 +1,12 @@
 {
-  "agent_principal": {},
+  "node": {},
   "eval_definitions": [
     {
       "definition_id": "configurator-l2-agent",
       "comparability_version": 8,
-      "title": "The Engineer: behavior + context + tool-grant configuration",
+      "title": "The Engineer: agent + context + tool-grant configuration",
       "subject": {
-        "kind": "behavior",
+        "kind": "agent",
         "inference_slots": [
           "engineer"
         ]

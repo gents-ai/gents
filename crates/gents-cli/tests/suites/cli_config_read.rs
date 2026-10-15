@@ -23,7 +23,7 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -31,12 +31,12 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     serve
         .capturing(async {
-            wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+            wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
             wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
             run_cli_text(
@@ -45,10 +45,10 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
             )?;
             let config_path = root.join("pack_config.json");
             let mut config = read_json_file(&config_path)?;
-            let behavior_id = config["agent_principal"]
-                .get("default_behavior_id")
+            let agent_id = config["node"]
+                .get("default_agent_id")
                 .and_then(Value::as_str)
-                .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
+                .ok_or_else(|| anyhow!("missing default_agent_id after export"))?
                 .to_string();
 
             let task_id = format!("{agent_name}-task");
@@ -61,7 +61,7 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
                 "task_id": task_id.clone(),
                 "display_name": "Read Commands Task",
                 "description": "Seeds config read command coverage.",
-                "behavior_id": behavior_id.clone(),
+                "agent_id": agent_id.clone(),
                 "prompt_template": "Report config read status.",
                 "enabled": false,
             }]);
@@ -90,7 +90,7 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
                 "lan_ip": "",
                 "mcp_port": 3030,
                 "mcp_path": "/mcp",
-                "send_agent_did": true,
+                "send_node_did": true,
             }]);
             write_json_file(&config_path, &config)?;
 

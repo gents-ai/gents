@@ -15,7 +15,7 @@ pub enum EventConsumer {
 #[serde(deny_unknown_fields)]
 pub struct EventGroupState {
     pub group_key: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub consumer: EventConsumer,
     pub correlation: String,
     /// Fingerprint of the effective delivery configuration used by the event owner.

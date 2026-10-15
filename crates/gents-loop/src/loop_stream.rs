@@ -59,9 +59,10 @@ mod tool_dispatch;
 mod turn_threading;
 
 pub use contract::{
-    LoopConfig, LoopReplayInput, LoopStreamItem, RenderedRequestSink, ReplayEvidenceResolver,
-    ReplayEvidenceRow, ReplayEvidenceViolation, StructuredOutputConfig, TaggedMessage,
-    TurnCompactionOutcome, TurnCompactionRequest,
+    AuthoredInput, EstimateSeedGuard, FinishOrIntake, FoldedPrompt, LoopConfig, LoopReplayInput,
+    LoopStreamItem, RenderedRequestSink, ReplayEstimateSeed, ReplayEvidenceResolver,
+    ReplayEvidenceRow, ReplayEvidenceViolation, SteeringSnapshot, StructuredOutputConfig,
+    TaggedMessage, TurnCompactionOutcome, TurnCompactionRequest,
 };
 pub use one_shot::{
     run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotNoVisibleOutput,
@@ -82,6 +83,9 @@ pub use request_assembly::{
     clamp_request_output_budget, completion_request_input_components, ensure_context_can_dispatch,
     repair_provider_input,
 };
+// Same reasoning: gents' session replay tests drive the dispatch lookup
+// directly to pin the estimate-seed window.
+pub use request_assembly::resolve_replay_evidence;
 use tool_dispatch::admit_tool;
 pub use tool_dispatch::dispatch_tool;
 
@@ -151,6 +155,7 @@ where
     H: SessionHook + 'static,
 {
     try_stream! {
+        let hook = hook.map(Arc::new);
         let provider_profile = config.provider_input_counter.profile();
         let routing_affinity = crate::provider_input::routing_affinity::RoutingAffinity::start(
             provider_profile == crate::provider_input::ProviderInputProfile::ChatGptCodexResponses,
@@ -174,6 +179,7 @@ where
             )))
         })?;
         let history = entry_projection;
+        let authored_prompt = prompt.message.clone();
         // Prior requests' per-request context rows must not re-enter provider
         // history. The current context is assembled into `new_messages`.
         // Repair may rewrite both vectors in place after provider rejection.
@@ -188,6 +194,9 @@ where
         // prompt (mirrors Lean `PromptAssembly.Template.assembleWithContext`).
         let mut new_messages: Vec<TaggedMessage> =
             assemble_new_messages(config.context_message.clone(), prompt);
+        if hook.is_none() {
+            new_messages.extend(config.folded_prompts.iter().map(|row| TaggedMessage::unassociated(row.message.clone())));
+        }
         // Request-local and cumulative across turns, retries, and compaction.
         let mut invalid_tool_progress = invalid_tool_progress::InvalidToolProgress::default();
         let mut repeated_tool_failure = repeated_tool_failure::RepeatedToolFailure::default();
@@ -224,6 +233,33 @@ where
             current_turn += 1;
 
             let turn_index = current_turn - 1;
+            // The admitted input is published before anything can reduce the
+            // provider projection or persist a reduction checkpoint, so a
+            // restored checkpoint always follows its accepted input.
+            if current_turn == 1 && hook.is_some() && turn_index == 0 && !config.resume_from_history {
+                let authored = config.authored_input.clone().unwrap_or_else(|| AuthoredInput {
+                    context: config.context_message.clone(),
+                    prompt: authored_prompt.clone(),
+                    folded: config.folded_prompts.clone(),
+                });
+                let (reply, committed) = tokio::sync::oneshot::channel();
+                yield LoopStreamItem::AuthoredInputReady {
+                    context: authored.context,
+                    prompt: authored.prompt,
+                    folded: authored
+                        .folded
+                        .into_iter()
+                        .map(|folded| (folded.key, folded.message))
+                        .collect(),
+                    reply,
+                };
+                new_messages.extend(receive_steering(committed).await?.into_iter().map(|row| TaggedMessage::unassociated(row.message)));
+            }
+            if hook.is_some() {
+                let (reply, committed) = tokio::sync::oneshot::channel();
+                yield LoopStreamItem::SteeringBoundary { reply };
+                new_messages.extend(receive_steering(committed).await?.into_iter().map(|row| TaggedMessage::unassociated(row.message)));
+            }
             let preparation_started = std::time::Instant::now();
             let (mut request, turn_context_decision) = build_budgeted_request(
                 &model,
@@ -282,16 +318,6 @@ where
                         reason,
                     })))?;
                 }
-            }
-
-            // A resumed checkpoint already includes its original authored
-            // input. New executions publish under their live request owner,
-            // before dispatch, not when the request is merely queued.
-            if current_turn == 1 && hook.is_some() && turn_index == 0 && !config.resume_from_history {
-                yield LoopStreamItem::AuthoredInputReady {
-                    context: config.context_message.clone(),
-                    prompt: current_prompt.clone(),
-                };
             }
 
             let mut attempt = 0_u32;
@@ -1100,29 +1126,37 @@ where
                         };
                         let suppressed =
                             repeat_decision == repeated_tool_failure::RepeatDecision::Suppress;
+                        let effects = hook.as_ref().filter(|_| !suppressed).map(|hook| {
+                            Arc::new(tool_dispatch::EffectDispatcher {
+                                tools: tools.clone(),
+                                hook: hook.clone(),
+                                parent_internal_id: internal_call_id.clone(),
+                                fatal: tokio::sync::Mutex::new(None),
+                            })
+                        });
                         let outcome = if suppressed {
                             drop(live_output);
                             repeated_tool_failure.suppress()
                         } else {
-                            dispatch_tool(
+                            crate::tool_effects::scope(effects.clone().map(|effects| effects as Arc<dyn crate::tool_effects::ToolEffectDispatcher>), dispatch_tool(
                                 tools.as_slice(),
                                 &tool_name,
                                 tool_args.clone(),
                                 live_output,
                                 session_id,
-                            )
+                            ))
                             .await
                         };
                         if let Some(hook) = hook.as_ref() {
-                            let result_action = hook
-                                .on_tool_result(
-                                    &tool_name,
-                                    tool_call.call_id.clone(),
-                                    &internal_call_id,
-                                    &tool_args,
-                                    &outcome,
-                                )
-                                .await;
+                            let result_action = match effects.as_ref() {
+                                Some(effects) => effects.settle_parent_result(
+                                    &tool_name, tool_call.call_id.clone(), &tool_args, &outcome,
+                                ).await,
+                                None => hook.on_tool_result(
+                                    &tool_name, tool_call.call_id.clone(), &internal_call_id,
+                                    &tool_args, &outcome,
+                                ).await,
+                            };
                             if let HookAction::Terminate { reason } = result_action {
                                 Err(StreamingError::Prompt(Box::new(
                                     PromptError::PromptCancelled {
@@ -1173,6 +1207,24 @@ where
             }
 
             if pending_results.is_empty() {
+                if hook.is_some() {
+                    let (reply, committed) = tokio::sync::oneshot::channel();
+                    yield LoopStreamItem::SteeringBoundary { reply };
+                    let committed = receive_steering(committed).await?;
+                    if !committed.is_empty() {
+                        if let Some(mut message) = accumulator.take_message() {
+                            if let Message::Assistant { id, .. } = &mut message {
+                                *id = stream.message_id.clone();
+                            }
+                            new_messages.push(TaggedMessage {
+                                message, source: accepted_source.clone(),
+                                physical_header: None, block_indices: Vec::new(),
+                            });
+                        }
+                        new_messages.extend(committed.into_iter().map(|row| TaggedMessage::unassociated(row.message)));
+                        continue 'turns;
+                    }
+                }
                 if let Some(gate) = config.output_obligation_gate.as_ref() {
                     let unmet = gate.unmet().await.map_err(|error| {
                         StreamingError::Completion(CompletionError::ProviderError(format!(
@@ -1199,6 +1251,25 @@ where
                         continue 'turns;
                     }
                 }
+                if hook.is_some() {
+                    let (reply, decision) = tokio::sync::oneshot::channel();
+                    yield LoopStreamItem::FinishOrIntake { text: turn_text.clone(), reply };
+                    match decision.await.map_err(|error| StreamingError::Completion(CompletionError::ProviderError(format!("finish acknowledgment dropped: {error}"))))?
+                        .map_err(|error| StreamingError::Completion(CompletionError::ProviderError(format!("finish or intake failed: {error:#}"))))? {
+                        FinishOrIntake::Finished => {
+                            yield LoopStreamItem::Final { text: turn_text.clone() };
+                            break 'turns;
+                        },
+                        FinishOrIntake::Continue(inputs) => {
+                            if let Some(mut message) = accumulator.take_message() {
+                                if let Message::Assistant { id, .. } = &mut message { *id = stream.message_id.clone(); }
+                                new_messages.push(TaggedMessage { message, source: accepted_source.clone(), physical_header: None, block_indices: Vec::new() });
+                            }
+                            new_messages.extend(inputs.into_iter().map(|input| TaggedMessage::unassociated(input.message)));
+                            continue 'turns;
+                        }
+                    }
+                }
                 yield LoopStreamItem::Final { text: turn_text.clone() };
                 break 'turns;
             }
@@ -1216,6 +1287,23 @@ where
         }
         }
     }
+}
+
+async fn receive_steering(
+    committed: tokio::sync::oneshot::Receiver<anyhow::Result<Vec<FoldedPrompt>>>,
+) -> Result<Vec<FoldedPrompt>, StreamingError> {
+    committed
+        .await
+        .map_err(|error| {
+            StreamingError::Completion(CompletionError::ProviderError(format!(
+                "steering publication acknowledgment dropped: {error}"
+            )))
+        })?
+        .map_err(|error| {
+            StreamingError::Completion(CompletionError::ProviderError(format!(
+                "steering publication failed: {error:#}"
+            )))
+        })
 }
 
 async fn sleep_retry_delay(

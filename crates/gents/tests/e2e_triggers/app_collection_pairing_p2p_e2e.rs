@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
-use crate::support::fixtures::bind_default_behavior_backend;
+use crate::support::fixtures::bind_default_agent_backend;
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{fetch_runtime_snapshot, is_routed_ready_after, RuntimeSnapshot};
 use crate::support::test_p2p_db;
@@ -48,20 +48,20 @@ async fn create_task(
     node: &EmbeddedNode,
     owner: &str,
     task_id: &str,
-    behavior_id: &str,
+    agent_id: &str,
     prompt_template: &str,
 ) {
     let escaped_owner = escape_graphql_string(owner);
     let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
+    let escaped_agent_id = escape_graphql_string(agent_id);
     let escaped_prompt_template = escape_graphql_string(prompt_template);
     let mutation = format!(
         r#"mutation {{
             create_Task(input: {{
-                agent_did: "{escaped_owner}",
+                node_did: "{escaped_owner}",
                 task_id: "{escaped_task_id}",
                 display_name: "{escaped_task_id}",
-                behavior_id: "{escaped_behavior_id}",
+                agent_id: "{escaped_agent_id}",
                 prompt_template: "{escaped_prompt_template}",
                 enabled: true
             }}) {{ _docID }}
@@ -94,14 +94,14 @@ async fn create_event_trigger_with_filter(
         r#"mutation {{
             create_EventSource(input: {{
                 event_source_id: "{escaped_trigger_id}",
-                agent_did: "{escaped_owner}",
+                node_did: "{escaped_owner}",
                 source_collection: "{escaped_source_collection}",
                 event_kind: "{escaped_event_kind}",
                 filter: "{escaped_filter}"
             }}) {{ _docID }}
             create_Trigger(input: {{
                 trigger_id: "{escaped_trigger_id}",
-                agent_did: "{escaped_owner}",
+                node_did: "{escaped_owner}",
                 task_id: "{escaped_task_id}",
                 source: {{ kind: "event", event_source_id: "{escaped_trigger_id}" }},
                 enabled: true,
@@ -120,7 +120,7 @@ async fn create_event_trigger_with_filter(
 
 async fn wait_for_runtime_snapshot<F>(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     predicate: F,
 ) -> RuntimeSnapshot
 where
@@ -128,7 +128,7 @@ where
 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let last_snapshot = fetch_runtime_snapshot(node, agent_did).await;
+        let last_snapshot = fetch_runtime_snapshot(node, node_did).await;
         if let Some(snapshot) = last_snapshot.as_ref() {
             if predicate(snapshot) {
                 return snapshot.clone();
@@ -136,7 +136,7 @@ where
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {agent_did}; \
+            "timed out waiting for runtime snapshot for {node_did}; \
              last_snapshot={last_snapshot:?}"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -167,7 +167,7 @@ async fn write_app_collection_pairing(
     let mutation = format!(
         r#"mutation {{
             create_DataPlanePairingDesired(input: {{
-                peer_id: "{peer}", agent_did: "{did}",
+                peer_id: "{peer}", node_did: "{did}",
                 collections: [{cols}], replicator_addresses: ["{addr}"],
                 template: "app-collections", source: "test-app-collections",
                 created_at: "{now}", updated_at: "{now}"
@@ -627,14 +627,14 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
 
     let mock_a = MockModelEndpoint::start("default").unwrap();
     let mock_b = MockModelEndpoint::start("default").unwrap();
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         db_a.node.as_ref(),
         &did_a,
         "backend-app-collection-a",
         mock_a.endpoint(),
     )
     .await;
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         db_b.node.as_ref(),
         &did_b,
         "backend-app-collection-b",
@@ -642,7 +642,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     )
     .await;
 
-    let agent_a = Gents::from_default_behavior_documents(
+    let agent_a = Gents::from_default_agent_documents(
         db_a.node.clone(),
         identity_a.clone(),
         DocumentRuntimeOptions {
@@ -652,7 +652,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     )
     .await
     .unwrap();
-    let agent_b = Gents::from_default_behavior_documents(
+    let agent_b = Gents::from_default_agent_documents(
         db_b.node.clone(),
         identity_b.clone(),
         DocumentRuntimeOptions {
@@ -662,7 +662,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     )
     .await
     .unwrap();
-    let default_behavior_b = agent_b.default_behavior_id().to_string();
+    let default_agent_b = agent_b.default_agent_id().to_string();
     let (shutdown_a_tx, shutdown_a_rx) = tokio::sync::watch::channel(false);
     let (shutdown_b_tx, shutdown_b_rx) = tokio::sync::watch::channel(false);
     let handle_a = tokio::spawn(agent_a.run(shutdown_a_rx));
@@ -703,7 +703,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
         db_b.node.as_ref(),
         &did_b,
         TASK_ID,
-        &default_behavior_b,
+        &default_agent_b,
         PROMPT_TEMPLATE,
     )
     .await;
@@ -884,14 +884,14 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
 
     let mock_a = MockModelEndpoint::start("default").unwrap();
     let mock_b = MockModelEndpoint::start("default").unwrap();
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         db_a.node.as_ref(),
         &did_a,
         "backend-soft-a",
         mock_a.endpoint(),
     )
     .await;
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         db_b.node.as_ref(),
         &did_b,
         "backend-soft-b",
@@ -899,7 +899,7 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     )
     .await;
 
-    let agent_a = Gents::from_default_behavior_documents(
+    let agent_a = Gents::from_default_agent_documents(
         db_a.node.clone(),
         identity_a.clone(),
         DocumentRuntimeOptions {
@@ -909,7 +909,7 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     )
     .await
     .unwrap();
-    let agent_b = Gents::from_default_behavior_documents(
+    let agent_b = Gents::from_default_agent_documents(
         db_b.node.clone(),
         identity_b.clone(),
         DocumentRuntimeOptions {
@@ -964,7 +964,7 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     let mutation = format!(
         r#"mutation {{
             create_DataPlanePairingDesired(input: {{
-                peer_id: "{peer}", agent_did: "{did}",
+                peer_id: "{peer}", node_did: "{did}",
                 collections: ["   "], replicator_addresses: ["{addr}"],
                 template: "app-collections", source: "test-app-collections",
                 created_at: "{now}", updated_at: "{now}"
@@ -1017,20 +1017,20 @@ struct HydrationStatusRow {
 async fn seed_preexisting_hydration_history(
     node: &EmbeddedNode,
     requester_did: &str,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
 ) {
     let requester_did_gql = escape_graphql_string(requester_did);
-    let agent_did_gql = escape_graphql_string(agent_did);
-    let behavior_id = escape_graphql_string(behavior_id);
+    let node_did_gql = escape_graphql_string(node_did);
+    let agent_id = escape_graphql_string(agent_id);
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mutation = format!(
         r#"mutation {{
             session: create_AgentSession(input: {{
                 session_id: "{HYDRATION_SESSION_ID}",
                 requester_did: "{requester_did_gql}",
-                agent_did: "{agent_did_gql}",
-                behavior_id: "{behavior_id}",
+                node_did: "{node_did_gql}",
+                agent_id: "{agent_id}",
                 created_at: "{now}"
             }}) {{ _docID }}
         }}"#,
@@ -1067,9 +1067,9 @@ async fn seed_preexisting_hydration_history(
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
                 purpose: "normal",
-                agent_did: "{agent_did_gql}",
+                node_did: "{node_did_gql}",
                 requester_did: "{requester_did_gql}",
-                behavior_id: "{behavior_id}",
+                agent_id: "{agent_id}",
                 session_id: "{HYDRATION_SESSION_ID}",
                 retry_parent_request: "",
                 retry_root_request: "{request_id}",
@@ -1081,7 +1081,7 @@ async fn seed_preexisting_hydration_history(
                 created_at: "{now}",
                 retry_count: 0,
                 max_retries: {max_retries},
-                subagent_depth: 0
+                request_hop: 0
             }}) {{ _docID }}
         }}"#,
         max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
@@ -1101,7 +1101,7 @@ async fn seed_preexisting_hydration_history(
 
     let content = "pre-existing authenticated hydration history";
     let segment = OutputSegment {
-        agent_did: agent_did.into(),
+        node_did: node_did.into(),
         requester_did: Some(requester_did.into()),
         session_id: HYDRATION_SESSION_ID.into(),
         request_doc_id: request_doc_id.clone(),
@@ -1154,9 +1154,9 @@ async fn seed_preexisting_hydration_history(
         .to_owned();
 
     let message = TranscriptMessage {
-        message_key: sequence_message_key(agent_did, HYDRATION_SESSION_ID, Some(requester_did), 1),
+        message_key: sequence_message_key(node_did, HYDRATION_SESSION_ID, Some(requester_did), 1),
         session_id: HYDRATION_SESSION_ID.into(),
-        agent_did: agent_did.into(),
+        node_did: node_did.into(),
         requester_did: Some(requester_did.into()),
         request_doc_id: Some(request_doc_id),
         publication: MessagePublication::RequestExecution {
@@ -1196,12 +1196,12 @@ async fn create_session_hydration_request(
     node: &EmbeddedNode,
     peer_id: &str,
     requester_did: &str,
-    agent_did: &str,
+    node_did: &str,
 ) -> String {
     let request_key = format!("{peer_id}:{HYDRATION_SESSION_ID}");
     let request_key_gql = escape_graphql_string(&request_key);
     let requester_did = escape_graphql_string(requester_did);
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let response = node
         .execute(&format!(
@@ -1209,7 +1209,7 @@ async fn create_session_hydration_request(
                 create_SessionHydrationRequest(input: {{
                     request_key: "{request_key_gql}",
                     requester_did: "{requester_did}",
-                    agent_did: "{agent_did}",
+                    node_did: "{node_did}",
                     session_id: "{HYDRATION_SESSION_ID}",
                     created_at: "{now}",
                     status: "pending",
@@ -1248,7 +1248,7 @@ async fn wait_for_hydrated_history(
     node: &EmbeddedNode,
     request_key: &str,
     requester_did: &str,
-    agent_did: &str,
+    node_did: &str,
     timeout: Duration,
 ) {
     // #1571: AgentMessage headers carry no content bytes. Assert the exact
@@ -1259,21 +1259,21 @@ async fn wait_for_hydrated_history(
     let expected_content = "pre-existing authenticated hydration history";
     struct HydratedHeader {
         doc_id: String,
-        agent_did: String,
+        node_did: String,
         requester_did: Option<String>,
     }
     let deadline = Instant::now() + timeout;
     let requester_did = escape_graphql_string(requester_did);
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     loop {
         let status = hydration_status(node, request_key).await;
         let headers = node
             .execute(&format!(
                 r#"{{ AgentMessage(filter: {{
                     requester_did: {{ _eq: "{requester_did}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     session_id: {{ _eq: "{HYDRATION_SESSION_ID}" }}
-                }}) {{ _docID agent_did requester_did }} }}"#,
+                }}) {{ _docID node_did requester_did }} }}"#,
             ))
             .await;
         assert!(
@@ -1294,8 +1294,8 @@ async fn wait_for_hydrated_history(
                             .and_then(Value::as_str)
                             .expect("hydrated header omitted physical identity")
                             .to_owned(),
-                        agent_did: row
-                            .get("agent_did")
+                        node_did: row
+                            .get("node_did")
                             .and_then(Value::as_str)
                             .expect("hydrated header omitted agent principal")
                             .to_owned(),
@@ -1315,7 +1315,7 @@ async fn wait_for_hydrated_history(
             match gents::session::load_canonical_message_from_node(
                 node,
                 &header.doc_id,
-                &header.agent_did,
+                &header.node_did,
                 header.requester_did.as_deref(),
             )
             .await
@@ -1386,7 +1386,7 @@ async fn install_control_only_authenticated_hydration_route(
     client_peer: &str,
     client_addr: &str,
     requester_did: &str,
-    agent_did: &str,
+    node_did: &str,
 ) {
     use gents::agent::p2p_reconcile::{
         resolve_template, resolve_template_filters, PairingDirection, CLIENT_COLLECTIONS,
@@ -1448,7 +1448,7 @@ async fn install_control_only_authenticated_hydration_route(
         template,
         PairingDirection::ClientToRuntime,
         requester_did,
-        agent_did,
+        node_did,
     );
     let filters = escape_graphql_string(&serde_json::to_string(&filters).expect("pairing filters"));
     let client_peer = escape_graphql_string(client_peer);

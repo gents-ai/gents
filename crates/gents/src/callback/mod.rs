@@ -1,7 +1,7 @@
 //! Callback engine: first-seen source creates → journaled host actions.
 //!
 //! Bindings select shared EventSource configuration (first-arrival create semantics).
-//! Invocations are claimable only on `owner_agent_did`. `CallbackResult`
+//! Invocations are claimable only on `owner_node_did`. `CallbackResult`
 //! is created only after IsolatedWorkspace + WorkspacePlacement are durable.
 
 use std::collections::{HashMap, HashSet};
@@ -16,10 +16,11 @@ use crate::UpdateSubscriptionSource;
 
 mod claim;
 mod documents;
+mod planner;
 pub(crate) mod plugin;
 mod run;
 mod scan;
-mod wasm;
+mod workers;
 
 #[cfg(test)]
 mod tests;
@@ -42,7 +43,7 @@ pub(crate) const LIFECYCLE_DENIED: &str = "denied";
 
 pub(super) struct CallbackEngine {
     node: Arc<EmbeddedNode>,
-    agent_did: String,
+    node_did: String,
     ceiling: Option<PathBuf>,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
@@ -59,32 +60,38 @@ pub(super) struct CallbackEngine {
     group_recovery_cursor: usize,
     rescan_tick: tokio::time::Interval,
     cancel: CancellationToken,
+    workers: Option<workers::CallbackWorkers>,
 }
 
 pub async fn run_callback_engine(
     node: Arc<EmbeddedNode>,
-    agent_did: String,
+    node_did: String,
     ceiling: Option<PathBuf>,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let mut engine = CallbackEngine::new(node, agent_did.clone(), ceiling.clone(), cancel.clone());
+    let mut engine = CallbackEngine::new(node, node_did.clone(), ceiling.clone(), cancel.clone());
     engine.plugins = plugins;
+    engine.workers = Some(workers::CallbackWorkers::new(
+        workers::PLUGIN_CALLBACK_CONCURRENCY,
+        cancel,
+    ));
     engine.reconcile_bindings().await;
     if let Err(error) = recover_local_invocations(
         engine.node.as_ref(),
-        &agent_did,
+        &node_did,
         ceiling.as_deref(),
         &engine.plugins,
+        Some(&engine),
     )
     .await
     {
         tracing::warn!(%error, "callback recovery sweep failed at startup");
     }
 
-    loop {
+    let result = loop {
         if engine.cancel.is_cancelled() {
-            return Ok(());
+            break Ok(());
         }
         if engine.subscription.is_none() && !engine.desired_collections.is_empty() {
             engine.subscription = Some(engine.subscription_source.subscribe_updates());
@@ -93,15 +100,16 @@ pub async fn run_callback_engine(
         if engine.subscription.is_none() {
             tokio::select! {
                 biased;
-                _ = engine.cancel.cancelled() => return Ok(()),
+                _ = engine.cancel.cancelled() => break Ok(()),
                 _ = engine.rescan_tick.tick() => {
                     engine.reconcile_bindings().await;
                     engine.rescan_created_docs().await;
                     if let Err(error) = recover_local_invocations(
                         engine.node.as_ref(),
-                        &engine.agent_did,
+                        &engine.node_did,
                         engine.ceiling.as_deref(),
                         &engine.plugins,
+                        Some(&engine),
                     )
                     .await
                     {
@@ -120,7 +128,7 @@ pub async fn run_callback_engine(
                 .expect("subscription is Some when desired_collections is non-empty");
             tokio::select! {
                 biased;
-                _ = engine.cancel.cancelled() => return Ok(()),
+                _ = engine.cancel.cancelled() => break Ok(()),
                 _ = engine.rescan_tick.tick() => true,
                 msg = subscription.recv() => {
                     message = msg;
@@ -133,9 +141,10 @@ pub async fn run_callback_engine(
             engine.rescan_created_docs().await;
             if let Err(error) = recover_local_invocations(
                 engine.node.as_ref(),
-                &engine.agent_did,
+                &engine.node_did,
                 engine.ceiling.as_deref(),
                 &engine.plugins,
+                Some(&engine),
             )
             .await
             {
@@ -144,7 +153,7 @@ pub async fn run_callback_engine(
             continue;
         }
         let Some(message) = message else {
-            return Ok(());
+            break Ok(());
         };
         let Some(update) = message.as_update() else {
             continue;
@@ -152,16 +161,23 @@ pub async fn run_callback_engine(
         engine
             .handle_update(&update.collection_id, &update.doc_id)
             .await;
-    }
+    };
+    engine
+        .workers
+        .as_ref()
+        .expect("live callback workers")
+        .drain()
+        .await;
+    result
 }
 
 #[cfg(test)]
 pub(crate) async fn scan_callbacks(
     node: Arc<EmbeddedNode>,
-    agent_did: String,
+    node_did: String,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
 ) {
-    let mut engine = CallbackEngine::new(node, agent_did, None, CancellationToken::new());
+    let mut engine = CallbackEngine::new(node, node_did, None, CancellationToken::new());
     engine.plugins = plugins;
     engine.reconcile_bindings().await;
     engine.rescan_created_docs().await;

@@ -104,7 +104,7 @@ pub struct NativeServiceConfig {
     /// service, so configured host tools remain discoverable after detaching
     /// from a terminal. No other caller environment is serialized.
     pub search_path: Option<OsString>,
-    /// Desktop bundle that owns this agent. macOS Login Items otherwise
+    /// Desktop bundle that owns this node runtime. macOS Login Items otherwise
     /// names the background item after the code-signing identity.
     pub associated_bundle_id: Option<String>,
     /// Where the service manager appends the runtime's stderr. With the
@@ -1156,7 +1156,7 @@ fn render_systemd(config: &NativeServiceConfig) -> Result<String> {
         .map(systemd_append_target)
         .transpose()?
         .unwrap_or_else(|| "journal".to_string());
-    Ok(format!("[Unit]\nDescription=Gents agent runtime\n\n[Service]\nType=simple\nExecStart={executable} \"server\" \"--home\" {home}\nEnvironment=\"GENTS_SYSTEM_LOG=1\"\n{search_path}StandardOutput=journal\nStandardError={stderr}\nRestart=on-failure\nRestartPreventExitStatus={INCOMPATIBLE_STORE_EXIT_CODE} {INSECURE_KEY_EXIT_CODE} {FOREIGN_STORE_EXIT_CODE}\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"))
+    Ok(format!("[Unit]\nDescription=Gents node runtime\n\n[Service]\nType=simple\nExecStart={executable} \"server\" \"--home\" {home}\nEnvironment=\"GENTS_SYSTEM_LOG=1\"\n{search_path}StandardOutput=journal\nStandardError={stderr}\nRestart=on-failure\nRestartPreventExitStatus={INCOMPATIBLE_STORE_EXIT_CODE} {INSECURE_KEY_EXIT_CODE} {FOREIGN_STORE_EXIT_CODE}\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"))
 }
 
 /// `append:` takes the rest of the line as the path after specifier expansion.

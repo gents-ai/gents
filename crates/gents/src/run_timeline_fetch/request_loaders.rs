@@ -22,9 +22,9 @@ pub(super) async fn load_timeline_request_by_id(
             ) {{
                 _docID
                 request_id
-                agent_did
+                node_did
                 requester_did
-                behavior_id
+                agent_id
                 session_id
                 content
                 max_total_tokens
@@ -46,7 +46,7 @@ pub(super) async fn load_timeline_request_by_id(
                 caused_by_parent_tool_call_doc_id
                 workspace_id
                 workspace_authority
-                workspace_owner_agent_did
+                workspace_owner_node_did
                 workspace_seal_hash
                 execution_origin
             }}
@@ -65,11 +65,11 @@ pub(super) async fn load_timeline_request_by_id(
 
 pub(super) async fn load_timeline_requests_for_session(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<TimelineRequestRow>> {
-    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
+    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentRequest(
@@ -78,9 +78,9 @@ pub(super) async fn load_timeline_requests_for_session(
             ) {{
                 _docID
                 request_id
-                agent_did
+                node_did
                 requester_did
-                behavior_id
+                agent_id
                 session_id
                 content
                 max_total_tokens
@@ -102,7 +102,7 @@ pub(super) async fn load_timeline_requests_for_session(
                 caused_by_parent_tool_call_doc_id
                 workspace_id
                 workspace_authority
-                workspace_owner_agent_did
+                workspace_owner_node_did
                 workspace_seal_hash
                 execution_origin
             }}
@@ -123,9 +123,9 @@ pub(super) async fn load_timeline_child_requests(
             ) {{
                 _docID
                 request_id
-                agent_did
+                node_did
                 requester_did
-                behavior_id
+                agent_id
                 session_id
                 content
                 max_total_tokens
@@ -147,7 +147,7 @@ pub(super) async fn load_timeline_child_requests(
                 caused_by_parent_tool_call_doc_id
                 workspace_id
                 workspace_authority
-                workspace_owner_agent_did
+                workspace_owner_node_did
                 workspace_seal_hash
                 execution_origin
             }}

@@ -5,7 +5,7 @@ use serde_json::json;
 use super::super::bound_behavior::{
     load_bound_context_window, load_bound_model_selection_id_for_state,
 };
-use super::super::child_stream::ensure_loaded_subagent_stream;
+use super::super::child_stream::ensure_loaded_caused_stream;
 use super::super::continuation_stream::ensure_loaded_root_continuation_stream;
 use super::super::history_projection::{
     conversation_summary_json, load_thread_turns, thread_turn_items_list_response,
@@ -41,8 +41,8 @@ pub(super) async fn handle_thread_request(
             state.set_thread_cwd(&thread_id, cwd.clone()).await;
             let bound_model_id = load_bound_model_selection_id_for_state(
                 state.node.as_ref(),
-                &state.agent_did,
-                &state.behavior_id,
+                &state.node_did,
+                &state.agent_id,
             )
             .await
             .context("resolving bound model selection for ThreadStart")?;
@@ -81,7 +81,7 @@ pub(super) async fn handle_thread_request(
                 load_thread_turns(state, &record).await?
             };
             let continuation_baseline = (!params.exclude_turns).then(|| turns.clone());
-            let child_stream_baseline = record.subagent.as_ref().and_then(|link| {
+            let child_stream_baseline = record.caused.as_ref().and_then(|link| {
                 turns
                     .iter()
                     .find(|turn| turn.id == link.latest_request_id)
@@ -93,20 +93,20 @@ pub(super) async fn handle_thread_request(
                     })
                     .cloned()
             });
-            let response_behavior_id = record.projection_behavior_id(state.behavior_id.as_ref());
-            let response_agent_did = record
-                .subagent
+            let response_agent_id = record.projection_agent_id(state.agent_id.as_ref());
+            let response_node_did = record
+                .caused
                 .as_ref()
-                .map(|link| link.agent_did.as_str())
-                .unwrap_or(state.agent_did.as_ref());
+                .map(|link| link.node_did.as_str())
+                .unwrap_or(state.node_did.as_ref());
             let bound_model_id = load_bound_model_selection_id_for_state(
                 state.node.as_ref(),
-                response_agent_did,
-                response_behavior_id,
+                response_node_did,
+                response_agent_id,
             )
             .await
             .context("resolving scoped bound model for ThreadResume")?;
-            if record.is_subagent() {
+            if record.is_caused() {
                 connection.stop_child_stream(&record.session_id).await;
             }
             send_typed_json_result::<codex::ThreadResumeResponse>(
@@ -118,8 +118,8 @@ pub(super) async fn handle_thread_request(
             let (total_usage, last_usage) = thread_record_token_usage(state, &record).await?;
             let model_context_window = load_bound_context_window(
                 state.node.as_ref(),
-                response_agent_did,
-                response_behavior_id,
+                response_node_did,
+                response_agent_id,
             )
             .await
             .context("resolving scoped context window for ThreadResume")?;
@@ -139,7 +139,7 @@ pub(super) async fn handle_thread_request(
                 ),
             )
             .await?;
-            ensure_loaded_subagent_stream(connection, state, &record, child_stream_baseline).await;
+            ensure_loaded_caused_stream(connection, state, &record, child_stream_baseline).await;
             ensure_loaded_root_continuation_stream(
                 connection,
                 state,
@@ -347,7 +347,7 @@ pub(super) async fn handle_thread_request(
                 json!({ "thread": codex_thread_json(&record, false) }),
             )
             .await?;
-            ensure_loaded_subagent_stream(connection, state, &record, None).await;
+            ensure_loaded_caused_stream(connection, state, &record, None).await;
             ensure_loaded_root_continuation_stream(connection, state, &record, None).await;
             Ok(())
         }

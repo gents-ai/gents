@@ -31,7 +31,8 @@ pub struct IsolatedWorkspaceDoc {
     pub branch: String,
     pub creation_policy: String,
     pub adapter: String,
-    pub owner_agent_did: String,
+    /// The node workspace scope copied from the verified workspace; not host identity.
+    pub owner_node_did: String,
     pub writer_principal: String,
     pub integrator_principal: String,
     #[serde(default, deserialize_with = "deserialize_null_string")]
@@ -59,7 +60,8 @@ impl IsolatedWorkspaceDoc {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspacePlacementDoc {
     pub workspace_id: String,
-    pub owner_agent_did: String,
+    /// The node workspace scope copied from the verified workspace; not host identity.
+    pub owner_node_did: String,
     pub host_path: String,
     pub repository_placement_id: String,
     pub adapter: String,
@@ -91,7 +93,8 @@ pub struct WorkspaceBindingDoc {
     pub request_id: String,
     pub request_doc_id: String,
     pub authority: String,
-    pub owner_agent_did: String,
+    /// The node workspace scope copied from the verified workspace; not host identity.
+    pub owner_node_did: String,
     pub seal_hash: Option<String>,
     pub lifecycle_state: String,
 }
@@ -203,7 +206,7 @@ pub(crate) fn new_isolated_workspace(
     identity: &LogicalWorkspaceIdentity,
     creation_policy: CreationPolicy,
     adapter: WorkspaceAdapterKind,
-    owner_agent_did: &str,
+    owner_node_did: &str,
     writer_principal: &str,
     integrator_principal: &str,
     caused_by_invocation_id: &str,
@@ -221,7 +224,7 @@ pub(crate) fn new_isolated_workspace(
         branch: identity.branch.clone(),
         creation_policy: creation_policy.as_str().to_string(),
         adapter: adapter.as_str().to_string(),
-        owner_agent_did: owner_agent_did.to_string(),
+        owner_node_did: owner_node_did.to_string(),
         writer_principal: writer_principal.to_string(),
         integrator_principal: integrator_principal.to_string(),
         instruction_manifest,
@@ -263,10 +266,10 @@ pub fn repository_placement_upsert_mutation(
     Ok(format!(
         r#"mutation {{
             upsert_RepositoryPlacement(
-                filter: {{ repository_id: {{ _eq: "{repository_id}" }}, agent_did: {{ _eq: "{owner_agent_did}" }} }},
+                filter: {{ repository_id: {{ _eq: "{repository_id}" }}, node_did: {{ _eq: "{owner_node_did}" }} }},
                 add: {{
                     repository_id: "{repository_id}",
-                    agent_did: "{owner_agent_did}",
+                    node_did: "{owner_node_did}",
                     host_path: "{host_path}",
                     enabled: {enabled},
                     updated_at: "{updated_at}"
@@ -279,7 +282,7 @@ pub fn repository_placement_upsert_mutation(
             ) {{ _docID }}
         }}"#,
         repository_id = escape_graphql_string(&placement.repository_id),
-        owner_agent_did = escape_graphql_string(&placement.owner_agent_did),
+        owner_node_did = escape_graphql_string(&placement.owner_node_did),
         host_path = escape_graphql_string(host_path),
         updated_at = escape_graphql_string(updated_at),
     ))
@@ -336,7 +339,7 @@ fn isolated_workspace_upsert_field(alias: &str, doc: &IsolatedWorkspaceDoc) -> S
     };
     format!(
         r#"{alias}: upsert_IsolatedWorkspace(
-                filter: {{ workspace_id: {{ _eq: "{workspace_id}" }}, owner_agent_did: {{ _eq: "{owner_agent_did}" }} }},
+                filter: {{ workspace_id: {{ _eq: "{workspace_id}" }}, owner_node_did: {{ _eq: "{owner_node_did}" }} }},
                 add: {{
                     workspace_id: "{workspace_id}",
                     work_unit_id: "{work_unit_id}",
@@ -346,7 +349,7 @@ fn isolated_workspace_upsert_field(alias: &str, doc: &IsolatedWorkspaceDoc) -> S
                     path_capability: "{path_capability}",
                     creation_policy: "{creation_policy}",
                     adapter: "{adapter}",
-                    owner_agent_did: "{owner_agent_did}",
+                    owner_node_did: "{owner_node_did}",
                     writer_principal: "{writer_principal}",
                     integrator_principal: "{integrator_principal}",
                     instruction_manifest: "{instruction_manifest}",
@@ -368,7 +371,7 @@ fn isolated_workspace_upsert_field(alias: &str, doc: &IsolatedWorkspaceDoc) -> S
         path_capability = escape_graphql_string(&doc.path_capability.canonical_json()),
         creation_policy = escape_graphql_string(&doc.creation_policy),
         adapter = escape_graphql_string(&doc.adapter),
-        owner_agent_did = escape_graphql_string(&doc.owner_agent_did),
+        owner_node_did = escape_graphql_string(&doc.owner_node_did),
         writer_principal = escape_graphql_string(&doc.writer_principal),
         integrator_principal = escape_graphql_string(&doc.integrator_principal),
         instruction_manifest = escape_graphql_string(&doc.instruction_manifest),
@@ -387,10 +390,10 @@ fn workspace_placement_upsert_field(
     let updated_at = escape_graphql_string(updated_at);
     format!(
         r#"{alias}: upsert_WorkspacePlacement(
-                filter: {{ workspace_id: {{ _eq: "{workspace_id}" }}, owner_agent_did: {{ _eq: "{owner_agent_did}" }} }},
+                filter: {{ workspace_id: {{ _eq: "{workspace_id}" }}, owner_node_did: {{ _eq: "{owner_node_did}" }} }},
                 add: {{
                     workspace_id: "{workspace_id}",
-                    owner_agent_did: "{owner_agent_did}",
+                    owner_node_did: "{owner_node_did}",
                     host_path: "{host_path}",
                     repository_placement_id: "{repository_placement_id}",
                     adapter: "{adapter}",
@@ -413,7 +416,7 @@ fn workspace_placement_upsert_field(
                 }}
             ) {{ _docID }}"#,
         workspace_id = escape_graphql_string(&doc.workspace_id),
-        owner_agent_did = escape_graphql_string(&doc.owner_agent_did),
+        owner_node_did = escape_graphql_string(&doc.owner_node_did),
         host_path = escape_graphql_string(&doc.host_path),
         repository_placement_id = escape_graphql_string(&doc.repository_placement_id),
         adapter = escape_graphql_string(&doc.adapter),
@@ -428,14 +431,14 @@ fn workspace_binding_upsert_field(alias: &str, doc: &WorkspaceBindingDoc) -> Str
     let seal_hash = graphql_nullable_string(doc.seal_hash.as_deref());
     format!(
         r#"{alias}: upsert_WorkspaceBinding(
-                filter: {{ binding_id: {{ _eq: "{binding_id}" }}, owner_agent_did: {{ _eq: "{owner_agent_did}" }} }},
+                filter: {{ binding_id: {{ _eq: "{binding_id}" }}, owner_node_did: {{ _eq: "{owner_node_did}" }} }},
                 add: {{
                     binding_id: "{binding_id}",
                     workspace_id: "{workspace_id}",
                     request_id: "{request_id}",
                     request_doc_id: "{request_doc_id}",
                     authority: "{authority}",
-                    owner_agent_did: "{owner_agent_did}",
+                    owner_node_did: "{owner_node_did}",
                     seal_hash: {seal_hash},
                     lifecycle_state: "{lifecycle_state}"
                 }},
@@ -448,7 +451,7 @@ fn workspace_binding_upsert_field(alias: &str, doc: &WorkspaceBindingDoc) -> Str
         request_id = escape_graphql_string(&doc.request_id),
         request_doc_id = escape_graphql_string(&doc.request_doc_id),
         authority = escape_graphql_string(&doc.authority),
-        owner_agent_did = escape_graphql_string(&doc.owner_agent_did),
+        owner_node_did = escape_graphql_string(&doc.owner_node_did),
         lifecycle_state = escape_graphql_string(&doc.lifecycle_state),
     )
 }

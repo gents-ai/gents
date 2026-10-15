@@ -50,7 +50,7 @@ pub(crate) fn sink(
 ) -> AuxiliaryOutputSink {
     let writer = Arc::new(DefraStreamWriter::new(
         node,
-        &request.agent_did,
+        &request.node_did,
         batch_interval,
     ));
     let request = Arc::new(request);

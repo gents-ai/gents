@@ -5,7 +5,7 @@ pub(super) struct LiveCodexShim {
     pub(super) home_dir: std::path::PathBuf,
     pub(super) codex_home: std::path::PathBuf,
     pub(super) graphql: String,
-    pub(super) agent_did: String,
+    pub(super) node_did: String,
     pub(super) shim_port: u16,
     pub(super) shim_trace: std::path::PathBuf,
     pub(super) _server: ServeProcess,
@@ -43,15 +43,15 @@ pub(super) async fn start_live_codex_shim_with_write_tools(
 
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-live-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-live-{}", Uuid::new_v4().simple());
     let tool_root_string = tool_root.map(|root| root.to_string_lossy().to_string());
     let model_endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
     let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     let mut init_args = vec![
-        "--agent-name",
-        &agent_name,
+        "--node-name",
+        &node_name,
         "--model-name",
         model_name.as_str(),
         "--inference-url",
@@ -69,7 +69,7 @@ pub(super) async fn start_live_codex_shim_with_write_tools(
         init_args.push(tool_root.as_str());
     }
     let init = run_init_json(&home_dir, &init_args)?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let codex_home = home_dir.join(".gents").join("codex-ui");
@@ -89,14 +89,14 @@ pub(super) async fn start_live_codex_shim_with_write_tools(
     )?;
     wait_for_port(server_port, &mut server)?;
     wait_for_port(shim_port, &mut server)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     Ok(LiveCodexShim {
         codex_home,
         tempdir,
         home_dir,
         graphql,
-        agent_did,
+        node_did,
         shim_port,
         shim_trace,
         _server: server,

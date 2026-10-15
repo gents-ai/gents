@@ -1,18 +1,16 @@
-use crate::commands::mcp_health::load_mcp_services_with_health_for_agent;
+use crate::commands::mcp_health::load_mcp_services_with_health_for_node;
 use crate::error::BridgeError;
-use std::collections::HashSet;
-use std::path::PathBuf;
-
-use gents::{BehaviorToolConfig, ToolCeiling};
+use gents::AgentToolSurfaceConfig;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use tauri::State;
 
-use crate::state::{current_core, require_agent_home, DesktopAppState};
+use crate::state::{current_core, require_node_home, DesktopAppState};
 
 #[tauri::command]
 pub async fn desktop_tool_surface_explain(
-    agent_did: String,
-    behavior_id: String,
+    node_did: String,
+    agent_id: String,
     state: State<'_, DesktopAppState>,
 ) -> Result<Value, BridgeError> {
     let Some(core) = current_core(&state) else {
@@ -21,41 +19,40 @@ pub async fn desktop_tool_surface_explain(
 
     let snapshot = core.store().snapshot();
 
-    let behavior = snapshot
-        .behaviors
+    let agent = snapshot
+        .agents
         .iter()
-        .find(|row| row.behavior_id == behavior_id && row.agent_did == agent_did)
-        .ok_or_else(|| format!("behavior {behavior_id} not found for {agent_did}"))?;
+        .find(|row| row.agent_id == agent_id && row.node_did == node_did)
+        .ok_or_else(|| format!("agent {agent_id} not found for {node_did}"))?;
 
-    let agent_home = require_agent_home(&state)?;
-    let (ceiling, ceiling_source) = resolve_desktop_tool_ceiling(&agent_home)?;
-    let mcp_services_online = load_mcp_services_with_health_for_agent(core.as_ref(), &agent_did)
+    let node_home = require_node_home(&state)?;
+    let (ceiling, ceiling_source) = crate::snapshot::resolve_node_home_tool_ceiling(&node_home)
+        .map_err(BridgeError::untyped)?;
+    let mcp_services_online = load_mcp_services_with_health_for_node(core.as_ref(), &node_did)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?
         .iter()
         .any(|row| matches!(row.status.as_deref(), Some("healthy" | "stale")));
-    let active_behavior_ids = snapshot
-        .behaviors
+    let active_agent_ids = snapshot
+        .agents
         .iter()
-        .filter(|row| row.agent_did == agent_did && row.enabled)
-        .map(|row| row.behavior_id.clone())
+        .filter(|row| row.node_did == node_did && row.enabled)
+        .map(|row| row.agent_id.clone())
         .collect::<HashSet<_>>();
-    let datastore_tool_surfaces = gents::list_datastore_tool_surfaces(core.node(), &agent_did)
+    let datastore_tool_surfaces = gents::list_datastore_tool_surfaces(core.node(), &node_did)
         .await
         .map_err(|error| {
             BridgeError::untyped(format!(
-                "loading DatastoreToolSurface documents for {agent_did}: {error}"
+                "loading DatastoreToolSurface documents for {node_did}: {error}"
             ))
         })?;
-    let eth_tools = gents::list_eth_tools(core.node(), &agent_did)
+    let eth_tools = gents::list_eth_tools(core.node(), &node_did)
         .await
         .map_err(|error| {
-            BridgeError::untyped(format!(
-                "loading EthTool documents for {agent_did}: {error}"
-            ))
+            BridgeError::untyped(format!("loading EthTool documents for {node_did}: {error}"))
         })?;
 
-    let context_id = behavior
+    let context_id = agent
         .context_id
         .as_deref()
         .map(str::trim)
@@ -66,7 +63,7 @@ pub async fn desktop_tool_surface_explain(
             snapshot
                 .contexts
                 .iter()
-                .find(|row| row.context_id == context_id && row.agent_did == agent_did)
+                .find(|row| row.context_id == context_id && row.node_did == node_did)
                 .ok_or_else(|| format!("referenced AgentContext {context_id} is missing"))?,
         ),
         None => None,
@@ -81,10 +78,10 @@ pub async fn desktop_tool_surface_explain(
             let document = snapshot
                 .tools
                 .iter()
-                .find(|row| row.tools_id == tools_id && row.agent_did == agent_did)
+                .find(|row| row.tools_id == tools_id && row.node_did == node_did)
                 .ok_or_else(|| format!("referenced Tools {tools_id} is missing"))?;
-            let config = BehaviorToolConfig::from_tools_document_with_surfaces(
-                &behavior.behavior_id,
+            let config = AgentToolSurfaceConfig::from_tools_document_with_surfaces(
+                &agent.agent_id,
                 document,
                 &datastore_tool_surfaces,
                 &eth_tools,
@@ -94,14 +91,17 @@ pub async fn desktop_tool_surface_explain(
             .map_err(|error| BridgeError::untyped(error.to_string()))?;
             ("document", config)
         }
-        None => ("default_missing_tools_id", BehaviorToolConfig::meta_only()),
+        None => (
+            "default_missing_tools_id",
+            AgentToolSurfaceConfig::meta_only(),
+        ),
     };
 
     let explanation =
-        config.explain_with_runtime(mcp_services_online, &agent_did, &active_behavior_ids);
+        config.explain_with_runtime(mcp_services_online, &node_did, &active_agent_ids);
     Ok(json!({
-        "behaviorId": behavior.behavior_id,
-        "enabled": behavior.enabled,
+        "agentId": agent.agent_id,
+        "enabled": agent.enabled,
         "contextId": context_id,
         "toolsId": tools_id,
         "toolsSource": tools_source,
@@ -109,53 +109,4 @@ pub async fn desktop_tool_surface_explain(
         "mcpServicesOnline": mcp_services_online,
         "surface": serde_json::to_value(&explanation).map_err(|error| BridgeError::untyped(error.to_string()))?,
     }))
-}
-
-fn resolve_desktop_tool_ceiling(
-    agent_home: &std::path::Path,
-) -> Result<(ToolCeiling, &'static str), BridgeError> {
-    #[derive(serde::Deserialize)]
-    struct InitCeilingView {
-        #[serde(default)]
-        tool_ceiling: Option<String>,
-        #[serde(default)]
-        tool_root: Option<String>,
-    }
-
-    let Some(config) = std::fs::read(agent_home.join("init.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<InitCeilingView>(&bytes).ok())
-    else {
-        return Ok((ToolCeiling::meta_only(), "default_no_init_json"));
-    };
-
-    let tool_root = config
-        .tool_root
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    match config
-        .tool_ceiling
-        .as_deref()
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        None | Some("metaonly") | Some("meta_only") => Ok((ToolCeiling::meta_only(), "init_json")),
-        Some("readonly") => Ok((
-            match tool_root.as_deref() {
-                Some(root) => ToolCeiling::readonly_at(PathBuf::from(root)),
-                None => ToolCeiling::readonly(),
-            },
-            "init_json",
-        )),
-        Some("readwrite") => {
-            let root = tool_root.ok_or_else(|| {
-                "init.json has readwrite tool_ceiling but no tool_root".to_string()
-            })?;
-            Ok((ToolCeiling::readwrite(PathBuf::from(root)), "init_json"))
-        }
-        Some(other) => Err(format!("init.json has unrecognized tool_ceiling {other:?}").into()),
-    }
 }

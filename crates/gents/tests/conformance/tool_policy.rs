@@ -14,7 +14,7 @@ pub(super) fn generated_tool_policy_cases_match_lean_composition() {
         "Lean tool-policy composition matrix drifted"
     );
     for case in cases {
-        let actual = tool_policy_codec::compose(&case.behavior, &case.ceiling, &case.runtime);
+        let actual = tool_policy_codec::compose(&case.agent, &case.ceiling, &case.runtime);
         assert_eq!(
             actual, case.expected,
             "{}: production permission composition",

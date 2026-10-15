@@ -1,16 +1,13 @@
 import type { DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desktop-client";
 import { listenToDesktopClientUpdates } from "@source-inc/gents-desktop-client";
 
-import { isMacTauriShell } from "../lib/shellPlatform";
 import { clientRunning } from "./clientStore";
 import { readSession } from "./sessionStore";
 import type { DesktopApp } from "./desktopApp";
-import { createDesktopProjectionController } from "./desktopProjectionController";
-import {
-  desktopUpdateRefreshScope,
-  logShellEvent,
-  timingConfig,
-} from "./desktopShellRuntime";
+import { createProjectionController } from "./projectionController";
+import { logShellEvent } from "./clientLifecycle";
+import { desktopUpdateRefreshScope } from "./projectionController";
+import { timingConfig } from "./timing";
 
 /**
  * How the desktop follows the client while it runs, as reactions to the
@@ -42,7 +39,7 @@ export function startClientObservation(
       logShellEvent(`desktop update listener failed: ${message}`);
       lifecycle.setError(message);
     };
-    const controller = createDesktopProjectionController({
+    const controller = createProjectionController({
       currentSessionId: () => selection.getState().sessionId,
       refreshSnapshot,
       refreshSession,
@@ -73,7 +70,7 @@ export function startClientObservation(
     let published = 0;
     const publishSelection = () => {
       const mine = ++published;
-      void api.setSelectedAgent(selection.getState().agentDid).catch((err) => {
+      void api.setSelectedNode(selection.getState().nodeDid).catch((err) => {
         if (!stopped && mine === published) lifecycle.setError(String(err));
       });
     };
@@ -107,8 +104,8 @@ export function startClientObservation(
     void controller.request("session");
     followPoll();
     const unsubscribeSelection = selection.subscribe((state, prev) => {
-      if (state.agentDid !== prev.agentDid) publishSelection();
-      if (state.agentDid !== prev.agentDid || state.sessionId !== prev.sessionId) {
+      if (state.nodeDid !== prev.nodeDid) publishSelection();
+      if (state.nodeDid !== prev.nodeDid || state.sessionId !== prev.sessionId) {
         void controller.request("session");
         followPoll();
       }
@@ -127,10 +124,6 @@ export function startClientObservation(
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("focus", refreshForegroundState);
-    /* closing sibling windows returns focus to the surviving view: the host
-       can narrow its observation again once it is the only one */
-    const mac = isMacTauriShell();
-    if (mac) window.addEventListener("focus", publishSelection);
 
     return () => {
       stopped = true;
@@ -141,7 +134,6 @@ export function startClientObservation(
       unsubscribeTracked();
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", refreshForegroundState);
-      if (mac) window.removeEventListener("focus", publishSelection);
       unlisten?.();
     };
   }

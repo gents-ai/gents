@@ -222,7 +222,7 @@ async fn manual_run_exposes_manual_event_and_node_scope() {
     );
     assert!(
         content.contains(&format!("node={}", db.node_identity.did())),
-        "the node scope must expose the local agent DID, got: {content:?}"
+        "the node scope must expose the local node DID, got: {content:?}"
     );
 }
 

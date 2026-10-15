@@ -7,27 +7,29 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
-fn apply_live_file_behavior_config(
+fn apply_live_file_agent_config(
     home: &std::path::Path,
     root: &std::path::Path,
     graphql: &str,
-    agent_did: &str,
+    node_did: &str,
     tools_id: &str,
-    file_root: &std::path::Path,
+    host: Value,
     system_prompt: &std::path::Path,
-    behavior_ids: &[&str],
+    agent_ids: &[&str],
 ) -> Result<()> {
     run_cli_text(
         home,
         &[
             "config",
             "export",
+            "--home",
+            home.to_str().context("node home is not UTF-8")?,
             "--root",
             root.to_str().context("config root is not UTF-8")?,
             "--graphql",
             graphql,
-            "--agent-did",
-            agent_did,
+            "--node-did",
+            node_did,
         ],
     )?;
     let path = root.join("pack_config.json");
@@ -38,32 +40,29 @@ fn apply_live_file_behavior_config(
         .iter_mut()
         .find(|tools| tools["tools_id"] == tools_id)
         .context("default Tools document is missing")?;
-    tools["host"] = serde_json::json!({
-        "root": file_root.to_str().context("file root is not UTF-8")?,
-        "files": {"mode": "ReadOnly"}
-    });
+    tools["host"] = host;
     let prompt = fs::read_to_string(system_prompt)?;
-    let base_behavior = config["agent_behaviors"][0].clone();
+    let base_agent = config["agents"][0].clone();
     let base_context = config["contexts"][0].clone();
-    for behavior_id in behavior_ids {
-        let existing_context_id = config["agent_behaviors"]
+    for agent_id in agent_ids {
+        let existing_context_id = config["agents"]
             .as_array()
-            .context("agent_behaviors is not an array")?
+            .context("agents is not an array")?
             .iter()
-            .find(|behavior| behavior["behavior_id"] == *behavior_id)
-            .and_then(|behavior| behavior["context_id"].as_str())
+            .find(|agent| agent["agent_id"] == *agent_id)
+            .and_then(|agent| agent["context_id"].as_str())
             .map(ToOwned::to_owned);
         let context_id = if let Some(context_id) = existing_context_id {
             context_id
         } else {
-            let context_id = format!("{behavior_id}:context");
-            let mut behavior = base_behavior.clone();
-            behavior["behavior_id"] = Value::String((*behavior_id).to_string());
-            behavior["context_id"] = Value::String(context_id.clone());
-            config["agent_behaviors"]
+            let context_id = format!("{agent_id}:context");
+            let mut agent = base_agent.clone();
+            agent["agent_id"] = Value::String((*agent_id).to_string());
+            agent["context_id"] = Value::String(context_id.clone());
+            config["agents"]
                 .as_array_mut()
-                .context("agent_behaviors is not an array")?
-                .push(behavior);
+                .context("agents is not an array")?
+                .push(agent);
             let mut context = base_context.clone();
             context["context_id"] = Value::String(context_id.clone());
             context["tools_id"] = Value::String(tools_id.to_string());
@@ -78,7 +77,7 @@ fn apply_live_file_behavior_config(
             .context("contexts is not an array")?
             .iter_mut()
             .find(|context| context["context_id"] == context_id)
-            .context("behavior context is missing")?;
+            .context("agent context is missing")?;
         context["system_prompt"] = Value::String(prompt.clone());
         context["tools_id"] = Value::String(tools_id.to_string());
     }
@@ -88,6 +87,8 @@ fn apply_live_file_behavior_config(
         &[
             "config",
             "apply",
+            "--home",
+            home.to_str().context("node home is not UTF-8")?,
             "--root",
             root.to_str().context("config root is not UTF-8")?,
             "--graphql",
@@ -95,6 +96,13 @@ fn apply_live_file_behavior_config(
         ],
     )?;
     Ok(())
+}
+
+fn read_only_files(root: &std::path::Path) -> Result<Value> {
+    Ok(serde_json::json!({
+        "root": root.to_str().context("file root is not UTF-8")?,
+        "files": {"mode": "ReadOnly"}
+    }))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -133,7 +141,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let init_args = vec![
         "--home".to_string(),
         home_arg.to_string(),
-        "--agent-name".to_string(),
+        "--node-name".to_string(),
         agent_name.clone(),
         "--model-name".to_string(),
         model_name,
@@ -146,11 +154,11 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     ];
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
-    let agent_did = agent_did_from_init(&init)?;
-    let behavior_id = init
-        .pointer("/init/default_behavior_id")
+    let node_did = node_did_from_init(&init)?;
+    let agent_id = init
+        .pointer("/init/default_agent_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing default_behavior_id: {init}"))?
+        .ok_or_else(|| anyhow!("init output missing default_agent_id: {init}"))?
         .to_string();
     let tools_id = init
         .pointer("/init/tools_id")
@@ -161,7 +169,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let (mut serve, readiness) =
         spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[])?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     assert_eq!(
         readiness.get("p2p_transport").and_then(Value::as_str),
         Some("iroh")
@@ -177,8 +185,8 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         Some("local-standard")
     );
     assert_eq!(
-        desktop_init.get("agentDid").and_then(Value::as_str),
-        Some(agent_did.as_str())
+        desktop_init.get("nodeDid").and_then(Value::as_str),
+        Some(node_did.as_str())
     );
     assert_eq!(
         desktop_init.get("graphql").and_then(Value::as_str),
@@ -214,25 +222,25 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         Some("local-standard")
     );
     assert_eq!(
-        peer.get("agent_did").and_then(Value::as_str),
-        Some(agent_did.as_str())
+        peer.get("node_did").and_then(Value::as_str),
+        Some(node_did.as_str())
     );
     assert_eq!(
         peer.get("graphql").and_then(Value::as_str),
         Some(graphql.as_str())
     );
 
-    apply_live_file_behavior_config(
+    apply_live_file_agent_config(
         &home_dir,
         &tempdir.path().join("live-config"),
         &graphql,
-        &agent_did,
+        &node_did,
         &tools_id,
-        &home_dir,
+        read_only_files(&home_dir)?,
         &system_prompt,
-        &[&behavior_id],
+        &[&agent_id],
     )?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
 
     let session_id = Uuid::new_v4().to_string();
     let first_prompt = "Use the filesystem tools. First list demo-files, then read demo-files/alpha.txt, then reply with only the exact token in alpha.txt.";
@@ -318,6 +326,8 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
+    // The shared config helper addresses the node by `--home`.
+    let home_arg = home_dir.to_str().context("home is not UTF-8")?;
 
     let files_dir = home_dir.join("live-projection-files");
     fs::create_dir_all(&files_dir)?;
@@ -339,7 +349,9 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     let mut init_args = vec![
-        "--agent-name".to_string(),
+        "--home".to_string(),
+        home_arg.to_string(),
+        "--node-name".to_string(),
         agent_name,
         "--model-name".to_string(),
         model_name.clone(),
@@ -356,11 +368,11 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     init_args.push(model_endpoint);
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
-    let agent_did = agent_did_from_init(&init)?;
-    let behavior_id = init
-        .pointer("/init/default_behavior_id")
+    let node_did = node_did_from_init(&init)?;
+    let agent_id = init
+        .pointer("/init/default_agent_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing default_behavior_id: {init}"))?
+        .ok_or_else(|| anyhow!("init output missing default_agent_id: {init}"))?
         .to_string();
     let tools_id = init
         .pointer("/init/tools_id")
@@ -368,21 +380,21 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
         .to_string();
 
-    let mut serve = spawn_server(&home_dir, port)?;
+    let mut serve = spawn_server_with_env(&home_dir, port, &["--home", home_arg], &[])?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
-    apply_live_file_behavior_config(
+    apply_live_file_agent_config(
         &home_dir,
         &tempdir.path().join("projection-config"),
         &graphql,
-        &agent_did,
+        &node_did,
         &tools_id,
-        &home_dir,
+        read_only_files(&home_dir)?,
         &system_prompt,
-        &[&behavior_id],
+        &[&agent_id],
     )?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
 
     let session_id = format!("live-projection-session-{}", Uuid::new_v4().simple());
     let prompt = format!(
@@ -393,14 +405,16 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         &[
             "request",
             "submit",
+            "--home",
+            home_arg,
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--session-id",
             &session_id,
-            "--behavior-id",
-            &behavior_id,
+            "--agent-id",
+            &agent_id,
             "--content",
             &prompt,
             "--timeout-secs",
@@ -678,9 +692,9 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
             record.get("sample_kind").and_then(Value::as_str) == Some("participant")
                 && record
                     .get("metadata")
-                    .and_then(|metadata| metadata.get("agent_did"))
+                    .and_then(|metadata| metadata.get("node_did"))
                     .and_then(Value::as_str)
-                    == Some(agent_did.as_str())
+                    == Some(node_did.as_str())
         }),
         "live multi-agent eval JSONL missing owner participant: {multi_agent_eval_jsonl:#?}"
     );
@@ -701,9 +715,11 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
+    // The shared config helper addresses the node by `--home`.
+    let home_arg = home_dir.to_str().context("home is not UTF-8")?;
 
     struct LiveRequestSpec {
-        behavior_id: String,
+        agent_id: String,
         prompt: String,
         tokens: Vec<String>,
     }
@@ -730,7 +746,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             paths.join(", ")
         );
         request_specs.push(LiveRequestSpec {
-            behavior_id: format!("live-{request_index}"),
+            agent_id: format!("live-{request_index}"),
             prompt,
             tokens,
         });
@@ -749,7 +765,9 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     let mut init_args = vec![
-        "--agent-name".to_string(),
+        "--home".to_string(),
+        home_arg.to_string(),
+        "--node-name".to_string(),
         agent_name.clone(),
         "--model-name".to_string(),
         model_name.clone(),
@@ -766,7 +784,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     init_args.push(model_endpoint.clone());
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let backend_id = init
         .pointer("/init/backend_id")
         .and_then(Value::as_str)
@@ -777,25 +795,25 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
         .to_string();
-    let mut serve = spawn_server(&home_dir, port)?;
+    let mut serve = spawn_server_with_env(&home_dir, port, &["--home", home_arg], &[])?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
-    let behavior_ids = request_specs
+    let agent_ids = request_specs
         .iter()
-        .map(|spec| spec.behavior_id.as_str())
+        .map(|spec| spec.agent_id.as_str())
         .collect::<Vec<_>>();
-    apply_live_file_behavior_config(
+    apply_live_file_agent_config(
         &home_dir,
         &tempdir.path().join("smoke-config"),
         &graphql,
-        &agent_did,
+        &node_did,
         &tools_id,
-        &home_dir,
+        read_only_files(&home_dir)?,
         &system_prompt,
-        &behavior_ids,
+        &agent_ids,
     )?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
 
     let mut children = Vec::new();
     for spec in &request_specs {
@@ -804,12 +822,14 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             &[
                 "request",
                 "submit",
+                "--home",
+                home_arg,
                 "--graphql",
                 &graphql,
-                "--agent-did",
-                &agent_did,
-                "--behavior-id",
-                &spec.behavior_id,
+                "--node-did",
+                &node_did,
+                "--agent-id",
+                &spec.agent_id,
                 "--content",
                 &spec.prompt,
                 "--timeout-secs",
@@ -826,7 +846,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     for (spec, child) in children {
         match child.wait_with_output() {
             Ok(output) => outputs.push((spec, output)),
-            Err(error) => wait_errors.push(format!("{}: {error}", spec.behavior_id)),
+            Err(error) => wait_errors.push(format!("{}: {error}", spec.agent_id)),
         }
     }
     if !wait_errors.is_empty() {
@@ -841,7 +861,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             let (server_stdout, server_stderr) = serve.captured_output()?;
             bail!(
                 "live request {} failed\nstdout:\n{}\nstderr:\n{}\nserver stdout:\n{}\nserver stderr:\n{}",
-                spec.behavior_id,
+                spec.agent_id,
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr),
                 server_stdout,
@@ -849,10 +869,10 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             );
         }
         let result: Value = serde_json::from_slice(&output.stdout)
-            .with_context(|| format!("parsing live request JSON for {}", spec.behavior_id))?;
+            .with_context(|| format!("parsing live request JSON for {}", spec.agent_id))?;
         assert_eq!(
-            result.get("behavior_id").and_then(Value::as_str),
-            Some(spec.behavior_id.as_str())
+            result.get("agent_id").and_then(Value::as_str),
+            Some(spec.agent_id.as_str())
         );
         let response = result
             .pointer("/output/presentation/body_markdown")
@@ -864,7 +884,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             assert!(
                 response.contains(token),
                 "expected response for {} to contain token {token}, got {response}",
-                spec.behavior_id
+                spec.agent_id
             );
         }
         let session_id = result
@@ -883,21 +903,593 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             assert!(
                 tool_results.contains(token),
                 "expected persisted read_file tool calls for {} to include token {token}: {tool_results}",
-                spec.behavior_id
+                spec.agent_id
             );
         }
     }
 
-    wait_for_completed_inference_behaviors(
+    wait_for_completed_inference_agents(
         &graphql,
         &backend_id,
         &request_specs
             .iter()
-            .map(|spec| spec.behavior_id.as_str())
+            .map(|spec| spec.agent_id.as_str())
             .collect::<Vec<_>>(),
     )
     .await?;
 
+    Ok(())
+}
+
+/// The endpoint, model and credential variable of the inference target named
+/// by `GENTS_EVAL_TARGET` (a file under `scripts/evals/targets/`), applied
+/// through `gents init` the way `scripts/evals/run-ladder.sh` applies it.
+fn live_eval_target() -> Result<(String, String, Option<String>)> {
+    let name = std::env::var("GENTS_EVAL_TARGET").context("set GENTS_EVAL_TARGET")?;
+    let target = read_json_file(
+        &workspace_root()?
+            .join("scripts/evals/targets")
+            .join(format!("{name}.json")),
+    )?;
+    let backend = &target["inference_backends"][0];
+    let endpoint = backend["endpoint"]
+        .as_str()
+        .context("target lacks an endpoint")?;
+    let model = target["inference_profiles"][0]["model_name"]
+        .as_str()
+        .context("target lacks a model")?;
+    let api_key_env = (backend["auth"]["kind"] == "environment")
+        .then(|| backend["auth"]["variable"].as_str().map(str::to_owned))
+        .flatten();
+    Ok((endpoint.to_owned(), model.to_owned(), api_key_env))
+}
+
+/// Live counterpart of
+/// `cli_request::pending_message_commands_edit_reorder_and_remove_against_held_provider`.
+/// The real model is held inside a foreground `bash_unrestricted` call that
+/// blocks on a release file, so queue commands act on a genuinely running
+/// request while the provider keeps producing real output.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "live: requires GENTS_LIVE_OPENAI=1 and GENTS_EVAL_TARGET"]
+async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Result<()> {
+    use std::process::Child;
+
+    anyhow::ensure!(
+        std::env::var("GENTS_LIVE_OPENAI").as_deref() == Ok("1"),
+        "set GENTS_LIVE_OPENAI=1"
+    );
+    struct ChildGuard(Option<Child>);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            if let Some(child) = self.0.as_mut() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+    struct Release(std::path::PathBuf);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            let _ = fs::write(&self.0, "released");
+        }
+    }
+    fn entries(snapshot: &Value) -> impl Iterator<Item = &Value> {
+        snapshot["entries"].as_array().into_iter().flatten()
+    }
+    fn ids(snapshot: &Value) -> Vec<String> {
+        entries(snapshot)
+            .map(|entry| {
+                entry["request_doc_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect()
+    }
+    fn contents(snapshot: &Value) -> Vec<String> {
+        entries(snapshot)
+            .map(|entry| entry["content"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    }
+    fn doc_id_of(snapshot: &Value, content: &str) -> Result<String> {
+        entries(snapshot)
+            .find(|entry| entry["content"] == content)
+            .and_then(|entry| entry["request_doc_id"].as_str())
+            .map(str::to_owned)
+            .with_context(|| format!("{content} is not pending: {snapshot}"))
+    }
+    fn wait_child(mut child: Child, what: &str) -> Result<Value> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(600);
+        while child.try_wait()?.is_none() {
+            if std::time::Instant::now() > deadline {
+                let _ = child.kill();
+                bail!("harness: {what} did not exit within 600s");
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let output = child.wait_with_output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "harness: {what} failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).with_context(|| format!("parsing {what} output"))
+    }
+
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home = tempdir.path().join("home");
+    let workspace = tempdir.path().join("workspace");
+    fs::create_dir_all(&home)?;
+    fs::create_dir_all(&workspace)?;
+    let started = workspace.join("hold.started");
+    let release = workspace.join("hold.release");
+    let _release_on_failure = Release(release.clone());
+
+    let token = |label: &str| format!("{label}-{}", Uuid::new_v4().simple());
+    let marker = |token: &str| format!("Include the exact token {token} in your final answer.");
+    let steer_token = token("STEER");
+    let old_token = token("OBSOLETE");
+    let edited_token = token("EDITED");
+    let dropped_token = token("REMOVED");
+    let gamma_token = token("GAMMA");
+    let stale_token = token("STALE");
+    let steer = marker(&steer_token);
+    let alpha = marker(&old_token);
+    let alpha_edited = marker(&edited_token);
+    let beta = marker(&dropped_token);
+    let gamma = marker(&gamma_token);
+    let stale = marker(&stale_token);
+    let (steer, alpha, alpha_edited, beta, gamma, stale) = (
+        steer.as_str(),
+        alpha.as_str(),
+        alpha_edited.as_str(),
+        beta.as_str(),
+        gamma.as_str(),
+        stale.as_str(),
+    );
+    let tool_done = "OPERATOR_UPDATES_READY";
+
+    let hold_args = serde_json::json!({
+        "command": format!(
+            "printf HOLD_STARTED > '{}'; while [ ! -f '{}' ] && [ -d '{}' ]; do sleep 0.2; done; printf '{tool_done}: answer using the latest user messages; do not call any tool again.'",
+            started.display(),
+            release.display(),
+            workspace.display(),
+        ),
+        "args": [],
+        "timeout_secs": 600
+    });
+    let system_prompt = tempdir.path().join("steering_system_prompt.txt");
+    fs::write(
+        &system_prompt,
+        format!(
+            "You are an agent in a live integration test. When the user asks you to start, call bash_unrestricted exactly once with exactly these arguments: {hold_args}. Wait for its result. After it returns, read every later user message and give one short final answer that contains every token those messages ask for. Never call any tool after bash_unrestricted returns."
+        ),
+    )?;
+
+    let (endpoint, model, api_key_env) = live_eval_target()?;
+    // The shared config helper addresses the node by `--home`.
+    let home_arg = home.to_str().context("home is not UTF-8")?;
+    let mut init_args = vec![
+        "--home".to_owned(),
+        home_arg.to_owned(),
+        "--node-name".to_owned(),
+        format!("cli-live-steering-{}", Uuid::new_v4().simple()),
+        "--model-name".to_owned(),
+        model,
+        "--inference-url".to_owned(),
+        endpoint,
+        // Unrestricted bash needs the yolo package's ceiling; the hold
+        // command runs only inside this test's workspace.
+        "--yolo".to_owned(),
+        "--tool-root".to_owned(),
+        workspace
+            .to_str()
+            .context("workspace is not UTF-8")?
+            .to_owned(),
+    ];
+    if let Some(variable) = api_key_env {
+        init_args.extend(["--api-key-env-var".to_owned(), variable]);
+    }
+    let init = run_init_json(
+        &home,
+        &init_args.iter().map(String::as_str).collect::<Vec<_>>(),
+    )?;
+    let node = node_did_from_init(&init)?;
+    let agent_id = init
+        .pointer("/init/default_agent_id")
+        .and_then(Value::as_str)
+        .context("init output missing default_agent_id")?
+        .to_owned();
+    let tools_id = init
+        .pointer("/init/tools_id")
+        .and_then(Value::as_str)
+        .context("init output missing tools_id")?
+        .to_owned();
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let (mut serve, _) = spawn_server_with_ready_json(
+        &home,
+        port,
+        &["--home", home_arg, "--command-timeout-max-secs", "600"],
+        &[],
+    )?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &node, Duration::from_secs(30)).await?;
+    apply_live_file_agent_config(
+        &home,
+        &tempdir.path().join("steering-config"),
+        &graphql,
+        &node,
+        &tools_id,
+        serde_json::json!({
+            "root": workspace.to_str().context("workspace is not UTF-8")?,
+            "bash": {"mode": "Unrestricted"}
+        }),
+        &system_prompt,
+        &[&agent_id],
+    )?;
+    wait_for_runtime_quiescence(&graphql, &node, 2, Duration::from_secs(6)).await?;
+
+    let session = Uuid::new_v4().to_string();
+    let submit = |content: &str, wait: bool| {
+        let mut args = vec![
+            "request",
+            "submit",
+            "--home",
+            home_arg,
+            "--graphql",
+            &graphql,
+            "--node-did",
+            &node,
+            "--session-id",
+            &session,
+            "--content",
+            content,
+        ];
+        args.extend(if wait {
+            &["--timeout-secs", "600", "--poll-secs", "1"][..]
+        } else {
+            &["--no-wait"][..]
+        });
+        args.into_iter().map(str::to_owned).collect::<Vec<_>>()
+    };
+    let spawn =
+        |args: Vec<String>| spawn_cli(&home, &args.iter().map(String::as_str).collect::<Vec<_>>());
+    let run = |args: Vec<String>| {
+        run_cli_json(&home, &args.iter().map(String::as_str).collect::<Vec<_>>())
+    };
+    let scope = [
+        "--home",
+        home_arg,
+        "--graphql",
+        graphql.as_str(),
+        "--node-did",
+        node.as_str(),
+        "--session-id",
+        session.as_str(),
+        "--output",
+        "json",
+    ];
+    let pending = || run_cli_json(&home, &[&["request", "pending"][..], &scope[..]].concat());
+    let wait_for_pending = |expected: Vec<&str>| {
+        let expected = expected.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        let pending = &pending;
+        async move {
+            tokio::time::timeout(Duration::from_secs(60), async {
+                loop {
+                    let snapshot = pending()?;
+                    if contents(&snapshot) == expected {
+                        break Ok::<_, anyhow::Error>(snapshot);
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            })
+            .await
+            .with_context(|| format!("harness: pending queue never became {expected:?}"))?
+        }
+    };
+    let mutate = |command: &str, snapshot: &Value, extra: &[&str]| {
+        let mut args = vec!["request".to_owned(), command.to_owned()];
+        args.extend(scope.iter().map(|arg| (*arg).to_owned()));
+        for id in ids(snapshot) {
+            args.extend(["--expected-request-doc-id".to_owned(), id]);
+        }
+        args.extend(extra.iter().map(|arg| (*arg).to_owned()));
+        args
+    };
+    let request_row = |field: &str, value: &str| {
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ {field}: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state failure_reason superseded_by_request_doc_id }} }}"#,
+            escape_graphql_string(value)
+        );
+        let graphql = graphql.clone();
+        async move {
+            let rows = graphql_query(&graphql, &query).await?;
+            Ok::<_, anyhow::Error>(first_graphql_row(&rows, "AgentRequest")?.clone())
+        }
+    };
+    let captures_for = |request_id: &str| {
+        let query = format!(
+            r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, order: {{ turn_index: ASC }}) {{ request_doc_id capture_version request_json turn_index }} }}"#,
+            escape_graphql_string(request_id)
+        );
+        let graphql = graphql.clone();
+        async move {
+            let rows = graphql_query(&graphql, &query).await?;
+            Ok::<_, anyhow::Error>(
+                rows["data"]["RenderedRequest"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+        }
+    };
+
+    // 1. Start a turn and hold the live model inside its tool call.
+    let mut first = ChildGuard(Some(spawn(submit(
+        "Start now: call bash_unrestricted as instructed and wait for its result before answering.",
+        true,
+    ))?));
+    let entered = tokio::time::timeout(Duration::from_secs(300), async {
+        while !started.exists() && first.0.as_mut().unwrap().try_wait()?.is_none() {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+    if !matches!(entered, Ok(Ok(()))) || !started.exists() {
+        let mut child = first.0.take().unwrap();
+        let _ = child.kill();
+        let output = child.wait_with_output()?;
+        let submit_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let observed = graphql_query(
+            &graphql,
+            &format!(
+                r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{0}" }} }}) {{ request_id lifecycle_state failure_reason terminal_output }} AgentToolCall(filter: {{ session_id: {{ _eq: "{0}" }} }}) {{ tool_name status lifecycle_state }} }}"#,
+                escape_graphql_string(&session)
+            ),
+        )
+        .await?;
+        bail!(
+            "live model never entered the held bash_unrestricted call (model or harness; see state); this is not a skipped test: {entered:?}\nsubmit stderr: {submit_stderr}\n{observed:#}"
+        );
+    }
+    let active = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "processing" }} }}) {{ _docID request_id }} }}"#,
+            escape_graphql_string(&session)
+        ),
+    )
+    .await?;
+    let active = first_graphql_row(&active, "AgentRequest")?.clone();
+    let active_doc_id = active["_docID"]
+        .as_str()
+        .context("active doc id")?
+        .to_owned();
+    let active_request_id = active["request_id"]
+        .as_str()
+        .context("active request id")?
+        .to_owned();
+
+    // 2. Safe-step steering: an ordinary message while the request runs.
+    let steer_submit = run(submit(steer, false))?;
+    let steer_request_id = steer_submit["request_id"]
+        .as_str()
+        .context("steer submit output lacks request_id")?
+        .to_owned();
+    wait_for_pending(vec![steer]).await?;
+
+    // 3. Queue, then edit, reorder and remove from observed snapshots.
+    let mut waiter = ChildGuard(Some(spawn(submit(alpha, true))?));
+    wait_for_pending(vec![steer, alpha]).await?;
+    run(submit(beta, false))?;
+    run(submit(gamma, false))?;
+    let queued = wait_for_pending(vec![steer, alpha, beta, gamma]).await?;
+    assert!(
+        entries(&queued).all(|entry| entry["editable"] == true),
+        "harness: queued author messages must be editable: {queued}"
+    );
+
+    let edited = run(mutate(
+        "edit-pending",
+        &queued,
+        &[
+            "--request-doc-id",
+            &doc_id_of(&queued, alpha)?,
+            "--content",
+            alpha_edited,
+        ],
+    ))?;
+    assert_eq!(
+        edited["request_doc_ids"].as_array().map(Vec::len),
+        Some(1),
+        "edit must name one replacement: {edited}"
+    );
+    let after_edit = pending()?;
+    assert_eq!(contents(&after_edit), [steer, alpha_edited, beta, gamma]);
+
+    run(mutate(
+        "reorder-pending",
+        &after_edit,
+        &[
+            "--request-doc-id",
+            &doc_id_of(&after_edit, gamma)?,
+            "--request-doc-id",
+            &doc_id_of(&after_edit, alpha_edited)?,
+            "--request-doc-id",
+            &doc_id_of(&after_edit, beta)?,
+        ],
+    ))?;
+    let after_reorder = pending()?;
+    assert_eq!(contents(&after_reorder), [steer, gamma, alpha_edited, beta]);
+
+    let removed_doc_id = doc_id_of(&after_reorder, beta)?;
+    let removed = run(mutate(
+        "remove-pending",
+        &after_reorder,
+        &["--request-doc-id", &removed_doc_id],
+    ))?;
+    assert_eq!(
+        removed["request_doc_ids"].as_array().map(Vec::len),
+        Some(0),
+        "removal creates no replacement: {removed}"
+    );
+    let settled = pending()?;
+    assert_eq!(contents(&settled), [steer, gamma, alpha_edited]);
+
+    let stale_args = mutate(
+        "edit-pending",
+        &after_reorder,
+        &[
+            "--request-doc-id",
+            &doc_id_of(&settled, gamma)?,
+            "--content",
+            stale,
+        ],
+    );
+    let stderr = run_cli_failure_stderr(
+        &home,
+        &stale_args.iter().map(String::as_str).collect::<Vec<_>>(),
+    )?;
+    assert!(
+        stderr.contains("The message queue changed"),
+        "stale snapshot must fail with a queue-changed error: {stderr}"
+    );
+    let unchanged = pending()?;
+    assert_eq!(
+        ids(&unchanged),
+        ids(&settled),
+        "stale edit changed the queue"
+    );
+    assert_eq!(contents(&unchanged), [steer, gamma, alpha_edited]);
+
+    // Nothing reached the model while the tool held the request.
+    assert_eq!(
+        captures_for(&active_request_id).await?.len(),
+        1,
+        "held tool must prevent another provider call before release"
+    );
+    assert!(
+        first.0.as_mut().unwrap().try_wait()?.is_none()
+            && waiter.0.as_mut().unwrap().try_wait()?.is_none(),
+        "submit --wait exited before the held tool was released"
+    );
+
+    // 4. Release and check durable provider input, then the model's answer.
+    fs::write(&release, "released")?;
+    let first_result = wait_child(first.0.take().unwrap(), "first request submit --wait")?;
+    let waited = wait_child(waiter.0.take().unwrap(), "edited message's submit --wait")?;
+    assert_eq!(
+        request_row("_docID", &active_doc_id).await?["lifecycle_state"],
+        "completed",
+        "harness: the held request must complete"
+    );
+
+    let access = gents::config_client::ConfigAccess::Graphql(
+        crate::support::graphql::served_endpoint(&graphql),
+    );
+    let captures = captures_for(&active_request_id).await?;
+    assert!(
+        captures.len() >= 2,
+        "same request must resume after the tool settles: {captures:?}"
+    );
+    let mut resumed = None;
+    for capture in &captures {
+        assert_eq!(
+            capture["request_doc_id"], active_doc_id,
+            "steering must not start a second physical request"
+        );
+        let body = gents::rendered_request::decode_capture_json(
+            &access,
+            capture["capture_version"]
+                .as_u64()
+                .context("capture_version")? as u32,
+            capture["request_json"].as_str().context("request_json")?,
+            gents::rendered_request::CapturePayloadKind::RequestBody,
+        )
+        .await?
+        .to_string();
+        for absent in [&old_token, &dropped_token, &stale_token] {
+            assert!(
+                !body.contains(absent.as_str()),
+                "replaced, removed or stale input {absent} reached the provider"
+            );
+        }
+        if body.contains(&steer_token) && resumed.is_none() {
+            resumed = Some(body);
+        }
+    }
+    let body = resumed.context("persisted provider input never received the steered messages")?;
+    for delivered in [&steer_token, &gamma_token, &edited_token] {
+        assert_eq!(
+            body.matches(delivered.as_str()).count(),
+            1,
+            "{delivered} must be delivered exactly once"
+        );
+    }
+    let tool_result = body
+        .rfind(tool_done)
+        .context("resumed provider input lacks the held tool's result")?;
+    let (steer_at, gamma_at, edited_at) = (
+        body.find(&steer_token).unwrap(),
+        body.find(&gamma_token).unwrap(),
+        body.find(&edited_token).unwrap(),
+    );
+    assert!(
+        tool_result < steer_at && steer_at < gamma_at && gamma_at < edited_at,
+        "steered input must follow the tool result in the reordered queue order"
+    );
+    for row in [
+        request_row("request_id", &steer_request_id).await?,
+        request_row("_docID", &doc_id_of(&settled, gamma)?).await?,
+        request_row("_docID", &doc_id_of(&settled, alpha_edited)?).await?,
+    ] {
+        assert_eq!(row["lifecycle_state"], "superseded", "{row}");
+        assert_eq!(
+            row["failure_reason"],
+            gents::lifecycle::FOLDED_REASON,
+            "{row}"
+        );
+        assert_eq!(
+            row["superseded_by_request_doc_id"], active_doc_id,
+            "steered input must fold into the running request: {row}"
+        );
+        let request_id = row["request_id"].as_str().context("request_id")?;
+        assert!(
+            captures_for(request_id).await?.is_empty(),
+            "steered input {request_id} must not run as its own turn"
+        );
+    }
+    let removed_row = request_row("_docID", &removed_doc_id).await?;
+    assert_eq!(
+        (
+            &removed_row["lifecycle_state"],
+            &removed_row["superseded_by_request_doc_id"]
+        ),
+        (&Value::from("interrupted"), &Value::Null),
+        "removed input must terminate without folding into the running request: {removed_row}"
+    );
+    assert!(contents(&pending()?).is_empty(), "queue must drain");
+
+    let answer = first_result
+        .pointer("/output/presentation/body_markdown")
+        .and_then(Value::as_str)
+        .context("first request output lacks a final answer")?;
+    assert_eq!(
+        waited["output"], first_result["output"],
+        "the edited message's waiter must follow its replacements to the request that consumed them"
+    );
+    let missing = [&steer_token, &gamma_token, &edited_token]
+        .into_iter()
+        .filter(|token| !answer.contains(token.as_str()))
+        .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "model answer-quality miss (delivery verified from durable provider input): final answer omits {missing:?}: {answer}"
+    );
     Ok(())
 }
 

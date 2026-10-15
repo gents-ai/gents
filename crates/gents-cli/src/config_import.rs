@@ -16,12 +16,12 @@ use crate::shared::{ConfigApplyCounts, ConfigExportBundle};
 pub(crate) async fn apply_delete_collection(
     txn: &ConfigApplyTxn<'_>,
     collection: Collection,
-    agent_did: &str,
+    node_did: &str,
     ids: &[String],
 ) -> Result<usize> {
     let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(
         ids.iter()
-            .map(|id| (collection, agent_did.to_owned(), id.clone()))
+            .map(|id| (collection, node_did.to_owned(), id.clone()))
             .collect(),
     )?;
     Ok(apply_selected_plan(txn, &plan).await?.get(collection))
@@ -46,7 +46,7 @@ pub(crate) async fn apply_desired_state_changes(
     // Validate the complete input's owner, including unselected authoring roots.
     desired_state::manifest_from_export_bundle(bundle)?;
     anyhow::ensure!(
-        planned.agent_did == bundle.agent_did,
+        planned.node_did == bundle.node_did,
         "apply plan owner differs from desired configuration"
     );
     anyhow::ensure!(
@@ -70,7 +70,7 @@ pub(crate) async fn apply_desired_state_changes(
                 .get(collection)
                 .delete
                 .iter()
-                .map(|id| (collection, bundle.agent_did.clone(), id.clone())),
+                .map(|id| (collection, bundle.node_did.clone(), id.clone())),
         );
     }
     let plan = DesiredStateApplyPlan::new(documents)?.with_removals(removals)?;

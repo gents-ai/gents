@@ -158,18 +158,18 @@ async fn bash_schema_advertises_decoupled_default_and_max() {
 
 #[test]
 fn session_message_tools_follow_enabled_and_agent_new_needs_a_target() {
-    let disabled = SubagentToolConfig {
-        targets: subagent_targets("worker"),
+    let disabled = AgentToolConfig {
+        targets: agent_targets("worker"),
         enabled: false,
     };
-    assert!(subagent_tool_names(&disabled).is_empty());
+    assert!(agent_tool_names(&disabled).is_empty());
 
-    let no_targets = SubagentToolConfig {
+    let no_targets = AgentToolConfig {
         targets: Vec::new(),
         enabled: true,
     };
     assert_eq!(
-        subagent_tool_names(&no_targets),
+        agent_tool_names(&no_targets),
         AGENT_TOOL_NAMES
             .iter()
             .filter(|name| **name != AGENT_NEW_TOOL_NAME)
@@ -177,19 +177,19 @@ fn session_message_tools_follow_enabled_and_agent_new_needs_a_target() {
             .collect::<Vec<_>>()
     );
     assert_eq!(
-        build_subagent_tools(no_targets)
+        build_agent_tools(no_targets)
             .iter()
             .map(|tool| tool.name())
             .collect::<Vec<_>>(),
         ["agent_message", "agent_interrupt", "agent_list"]
     );
 
-    let enabled = SubagentToolConfig {
-        targets: subagent_targets("worker"),
+    let enabled = AgentToolConfig {
+        targets: agent_targets("worker"),
         enabled: true,
     };
     assert_eq!(
-        subagent_tool_names(&enabled),
+        agent_tool_names(&enabled),
         AGENT_TOOL_NAMES
             .iter()
             .map(|name| name.to_string())
@@ -278,11 +278,11 @@ async fn spawn_process_decodes_only_its_advertised_schema() {
 
 #[tokio::test]
 async fn session_message_tool_definitions_register_expected_surface() {
-    let config = SubagentToolConfig {
-        targets: subagent_targets("research"),
+    let config = AgentToolConfig {
+        targets: agent_targets("research"),
         enabled: true,
     };
-    let tools = build_subagent_tools(config);
+    let tools = build_agent_tools(config);
     let names = tools.iter().map(|tool| tool.name()).collect::<Vec<_>>();
     assert_eq!(
         names,
@@ -331,13 +331,13 @@ async fn session_message_tool_definitions_register_expected_surface() {
 }
 
 /// Build a single-target list for session-message tool tests. `name` doubles as the
-/// behavior id and the destination principal is the same fixed local owner.
-fn subagent_targets(name: &str) -> Vec<crate::document_config::SubagentTargetDocument> {
-    vec![crate::document_config::SubagentTargetDocument {
+/// agent id and the destination principal is the same fixed local owner.
+fn agent_targets(name: &str) -> Vec<crate::document_config::AgentTargetDocument> {
+    vec![crate::document_config::AgentTargetDocument {
         target_id: format!("{name}-target"),
-        agent_did: "did:key:zTest".to_string(),
-        target_agent_did: "did:key:zTest".to_string(),
-        behavior_id: name.to_string(),
+        node_did: "did:key:zTest".to_string(),
+        target_node_did: "did:key:zTest".to_string(),
+        agent_id: name.to_string(),
         name: name.to_string(),
         description: None,
         tags: Vec::new(),
@@ -663,9 +663,11 @@ async fn read_file_rejects_paths_outside_root() {
 }
 
 #[tokio::test]
-async fn write_and_edit_file_work_under_root() {
+async fn write_and_edit_file_work_under_base_within_root() {
     let root = temp_root("gents-write-edit");
-    let context = ToolContext::new(root.clone(), true).unwrap();
+    let base = root.join("workspace");
+    std::fs::create_dir_all(&base).unwrap();
+    let context = ToolContext::new_with_base(root.clone(), Some(base.clone()), true).unwrap();
     let writer = WriteFileTool::new(context.clone());
     let editor = EditFileTool::new(context);
 
@@ -684,6 +686,11 @@ async fn write_and_edit_file_work_under_root() {
     let write_meta = compact_meta(&write_output);
     assert_eq!(write_meta["tool"], "write_file");
     assert_eq!(write_meta["path"], "nested/file.txt");
+    let resolved = base.join("nested/file.txt").canonicalize().unwrap();
+    assert_eq!(
+        write_meta["resolved_path"],
+        resolved.to_string_lossy().as_ref()
+    );
     assert_eq!(write_meta["bytes_written"], 11);
     assert_eq!(write_meta["created"], true);
     assert!(write_output.contains("write_file: wrote 11 bytes"));
@@ -707,11 +714,15 @@ async fn write_and_edit_file_work_under_root() {
     let edit_meta = compact_meta(&edit_output);
     assert_eq!(edit_meta["tool"], "edit_file");
     assert_eq!(edit_meta["path"], "nested/file.txt");
+    assert_eq!(
+        edit_meta["resolved_path"],
+        resolved.to_string_lossy().as_ref()
+    );
     assert_eq!(edit_meta["replacements_applied"], 1);
     assert_eq!(edit_meta["total_count"], 1);
     assert!(edit_output.contains("edit_file: edited nested/file.txt"));
 
-    let content = std::fs::read_to_string(root.join("nested/file.txt")).unwrap();
+    let content = std::fs::read_to_string(base.join("nested/file.txt")).unwrap();
     assert_eq!(content, "hello amy");
 }
 
@@ -856,6 +867,7 @@ async fn raw_json_escape_hatch_returns_structured_output() {
     .await
     .unwrap();
 
+    assert!(output.starts_with("{\n  \"entries\":"));
     let value: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(value["ok"], true);
     assert_eq!(value["tool"], "list_files");
@@ -1757,6 +1769,7 @@ async fn bash_output_supports_raw_json_escape_hatch() {
     .await
     .unwrap();
 
+    assert!(output.starts_with("{\"stdout\":\"json\",\"stderr\":\"\","));
     let value: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(value["ok"], true);
     assert_eq!(value["command"], "printf json");

@@ -1,8 +1,8 @@
-/* What a person can do to a subagent from the session that started it:
+/* What a person can do to a worker from the session that started it:
    stop the one request a row's call caused, the modeled single-request
    interrupt; the row settles when that request reaches a terminal state.
    Nothing else stops with it, and nothing this session is doing stops.
-   Telling a subagent something is sending its session a message, so it is
+   Telling a worker something is sending its session a message, so it is
    done there; opening it is the row's arrow. A native background process
    has no desktop stop (#1969). */
 import { createContext, useContext } from "react";

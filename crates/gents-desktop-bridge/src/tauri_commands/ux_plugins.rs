@@ -13,7 +13,7 @@ use crate::state::DesktopAppState;
 use gents_server::packs;
 
 fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
-    state.policy.agent_home.clone().ok_or_else(|| {
+    state.policy.node_home.clone().ok_or_else(|| {
         BridgeError::new(
             BridgeErrorCode::Unsupported,
             "ux plugins load from a local agent's home; start one first",

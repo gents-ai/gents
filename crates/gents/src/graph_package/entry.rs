@@ -236,10 +236,10 @@ fn git_diff_host_json(facts: &GitDiffFacts) -> Value {
 
 /// The `read_only_workspace` host fact exactly as a prepare plugin's stdin
 /// carries it.
-fn read_only_workspace_host_json(workspace_id: &str, owner_agent_did: &str) -> Value {
+fn read_only_workspace_host_json(workspace_id: &str, owner_node_did: &str) -> Value {
     json!({
         "workspace_id": workspace_id,
-        "owner_agent_did": owner_agent_did,
+        "owner_node_did": owner_node_did,
         "authority": "readOnly",
     })
 }
@@ -315,7 +315,7 @@ async fn collect_host_facts(
                     "workspace".to_owned(),
                     read_only_workspace_host_json(
                         &workspace.workspace.workspace_id,
-                        &workspace.workspace.owner_agent_did,
+                        &workspace.workspace.owner_node_did,
                     ),
                 );
             }

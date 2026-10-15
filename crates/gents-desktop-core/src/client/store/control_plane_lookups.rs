@@ -1,83 +1,76 @@
 use super::*;
 
 impl ClientStore {
-    pub fn default_behavior_id_for_agent(&self, agent_did: &str) -> Option<&str> {
-        let from_principal = self
-            .agent_principals
+    pub fn default_agent_id_for_node(&self, node_did: &str) -> Option<&str> {
+        let from_node = self
+            .nodes
             .iter()
-            .find(|row| row.agent_did == agent_did)
-            .and_then(|row| row.default_behavior_id.as_deref())
+            .find(|row| row.node_did == node_did)
+            .and_then(|row| row.default_agent_id.as_deref())
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        if from_principal.is_some() {
-            return from_principal;
+        if from_node.is_some() {
+            return from_node;
         }
 
-        let behaviors = self.behavior_rows(agent_did);
-        let conventional = gents::default_behavior_id_for_agent(agent_did);
-        if let Some(row) = behaviors.iter().find(|row| row.behavior_id == conventional) {
-            return Some(row.behavior_id.as_str());
+        let agents = self.agent_rows(node_did);
+        let conventional = gents::default_agent_id_for_node(node_did);
+        if let Some(row) = agents.iter().find(|row| row.agent_id == conventional) {
+            return Some(row.agent_id.as_str());
         }
-        let enabled = behaviors
-            .iter()
-            .filter(|row| row.enabled)
-            .collect::<Vec<_>>();
-        (enabled.len() == 1).then(|| enabled[0].behavior_id.as_str())
+        let enabled = agents.iter().filter(|row| row.enabled).collect::<Vec<_>>();
+        (enabled.len() == 1).then(|| enabled[0].agent_id.as_str())
     }
 
-    pub fn behavior_rows(&self, agent_did: &str) -> Vec<&AgentBehavior> {
-        self.behaviors
+    pub fn agent_rows(&self, node_did: &str) -> Vec<&Agent> {
+        self.agents
             .iter()
-            .filter(|row| row.agent_did == agent_did)
+            .filter(|row| row.node_did == node_did)
             .collect()
     }
 
-    pub fn behavior_row(&self, agent_did: &str, behavior_id: &str) -> Option<&AgentBehavior> {
-        self.behaviors
+    pub fn agent_row(&self, node_did: &str, agent_id: &str) -> Option<&Agent> {
+        self.agents
             .iter()
-            .find(|row| row.agent_did == agent_did && row.behavior_id == behavior_id)
+            .find(|row| row.node_did == node_did && row.agent_id == agent_id)
     }
 
-    pub fn session_behavior_id(&self, session_id: &str, agent_did: Option<&str>) -> Option<String> {
+    pub fn session_agent_id(&self, session_id: &str, node_did: Option<&str>) -> Option<String> {
         self.sessions
             .iter()
             .find(|row| {
                 row.session_id == session_id
-                    && agent_did.is_none_or(|agent_did| row.agent_did == agent_did)
+                    && node_did.is_none_or(|node_did| row.node_did == node_did)
             })
-            .and_then(|row| clean_string(Some(&row.behavior_id)))
+            .and_then(|row| clean_string(Some(&row.agent_id)))
     }
 
-    pub fn sessions_for_behavior(&self, agent_did: &str, behavior_id: &str) -> Vec<&AgentSession> {
+    pub fn sessions_for_agent(&self, node_did: &str, agent_id: &str) -> Vec<&AgentSession> {
         self.sessions
             .iter()
             .filter(|row| {
-                row.agent_did == agent_did
-                    && clean_string(Some(&row.behavior_id)).as_deref() == Some(behavior_id)
+                row.node_did == node_did
+                    && clean_string(Some(&row.agent_id)).as_deref() == Some(agent_id)
             })
             .collect()
     }
 
-    pub fn requests_for_behavior(
-        &self,
-        agent_did: &str,
-        behavior_id: &str,
-    ) -> Vec<&AgentRequestRow> {
+    pub fn requests_for_agent(&self, node_did: &str, agent_id: &str) -> Vec<&AgentRequestRow> {
         self.requests
             .iter()
             .filter(|row| {
-                row.agent_did.as_deref() == Some(agent_did)
-                    && clean_string(row.behavior_id.as_deref()).as_deref() == Some(behavior_id)
+                row.node_did.as_deref() == Some(node_did)
+                    && clean_string(row.agent_id.as_deref()).as_deref() == Some(agent_id)
             })
             .collect()
     }
 
-    /// Return every `Task` bound to the given behavior.
+    /// Return every `Task` bound to the given agent.
     ///
-    pub fn tasks_for_behavior(&self, agent_did: &str, behavior_id: &str) -> Vec<&Task> {
+    pub fn tasks_for_agent(&self, node_did: &str, agent_id: &str) -> Vec<&Task> {
         self.tasks
             .iter()
-            .filter(|row| row.agent_did == agent_did && row.behavior_id == behavior_id)
+            .filter(|row| row.node_did == node_did && row.agent_id == agent_id)
             .collect()
     }
 
@@ -120,10 +113,10 @@ impl ClientStore {
                     .enumerate()
                     .find(|(index, observation)| {
                         observation.trigger_id == trigger.trigger_id
-                            && source_agent_matches(
-                                &self.trigger_observation_source_agent_dids,
+                            && source_node_matches(
+                                &self.trigger_observation_source_node_dids,
                                 *index,
-                                &trigger.agent_did,
+                                &trigger.node_did,
                             )
                     })
                     .map(|(_, observation)| observation)
@@ -185,10 +178,10 @@ impl ClientStore {
         }
     }
 
-    pub fn session_rows(&self, agent_did: &str) -> Vec<&AgentSession> {
+    pub fn session_rows(&self, node_did: &str) -> Vec<&AgentSession> {
         self.sessions
             .iter()
-            .filter(|session| session.agent_did == agent_did)
+            .filter(|session| session.node_did == node_did)
             .collect()
     }
 }

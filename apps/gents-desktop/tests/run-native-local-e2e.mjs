@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createNativeProviderGate } from "./native-local-provider-gate.mjs";
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(appRoot, "../..");
@@ -15,6 +16,7 @@ if ([...args].some((arg) => arg !== "--skip-build")) {
     "Only --skip-build is supported; it requires fresh native-e2e app and CLI binaries.",
   );
 }
+const fileStoreKeys = process.env.GENTS_E2E_FILE_STORE_KEYS === "1";
 if (process.platform !== "darwin")
   throw new Error("Native local acceptance currently requires macOS launchd.");
 const service = "ai.gents.runtime.native-e2e";
@@ -22,13 +24,13 @@ const serviceTarget = `gui/${process.getuid()}/${service}`;
 const definition = join(homedir(), "Library", "LaunchAgents", `${service}.plist`);
 const target = resolve(repoRoot, process.env.CARGO_TARGET_DIR ?? "target", "debug");
 const artifactRoot = await mkdtemp(join(tmpdir(), "gents-native-local-"));
-const agentHome = join(artifactRoot, "agent");
+const nodeHome = join(artifactRoot, "node");
 const desktopHome = join(artifactRoot, "desktop");
 const toolRoot = join(artifactRoot, "workspace");
 const runTmp = join(artifactRoot, "tmp");
 const webviewStoreId = randomBytes(16).toString("hex");
 const binaries = join(artifactRoot, "bin");
-for (const directory of [agentHome, desktopHome, toolRoot, runTmp, binaries]) {
+for (const directory of [nodeHome, desktopHome, toolRoot, runTmp, binaries]) {
   await mkdir(directory);
 }
 console.log(`Native acceptance artifacts: ${artifactRoot}`);
@@ -36,26 +38,27 @@ await writeFile(
   "/tmp/gents-native-local-latest.json",
   JSON.stringify({
     artifactRoot,
-    agentHome,
+    nodeHome,
     desktopHome,
     toolRoot,
     serviceTarget,
     webviewStoreId,
+    storeKeyCustody: fileStoreKeys ? "file" : "macos-keychain",
   }),
 );
 const buildLog = createWriteStream(join(artifactRoot, "build.log"));
 let app = null;
 let log = null;
 let passed = false;
+let providerGate = null;
 
 async function recordedCustody() {
-  const agent = JSON.parse(await readFile(join(agentHome, "init.json"), "utf8"));
+  const node = JSON.parse(await readFile(join(nodeHome, "init.json"), "utf8"));
   const desktop = JSON.parse(
     await readFile(join(desktopHome, "store-encryption.json"), "utf8"),
   );
-  const records = { agent: agent.store_encryption, desktop };
-  const expected =
-    process.env.GENTS_E2E_FILE_STORE_KEYS === "1" ? "file" : "macos-keychain";
+  const records = { node: node.store_encryption, desktop };
+  const expected = fileStoreKeys ? "file" : "macos-keychain";
   for (const record of Object.values(records)) {
     if (record?.custody !== expected)
       throw new Error(`Expected native store custody ${expected}`);
@@ -128,23 +131,24 @@ async function runPhase(phase) {
   const statusPath = join(runTmp, "native-e2e-status.json");
   await rm(statusPath, { force: true });
   const marker = `NATIVE_ENGINEER_${phase.toUpperCase()}_CONFIRMED`;
+  const prompt = `Reply with exactly ${marker}. Do not call tools.`;
+  providerGate.arm(prompt);
   const env = {
     ...process.env,
     TMPDIR: `${runTmp}/`,
     GENTS_BIN: join(binaries, "gents"),
     GENTS_NATIVE_E2E: "1",
     GENTS_DESKTOP_CONSOLE_LOG: "1",
-    GENTS_E2E_AGENT_HOME: agentHome,
+    GENTS_E2E_NODE_HOME: nodeHome,
     GENTS_E2E_DESKTOP_HOME: desktopHome,
     GENTS_E2E_LOCAL_TOOL_ROOT: toolRoot,
     GENTS_E2E_AGENT_LABEL: "Native Acceptance Engineer",
-    GENTS_E2E_SERVER_ADDRESS:
-      process.env.GENTS_TAURI_LIVE_INFERENCE_URL ?? "http://workstation-1:8000/v1",
+    GENTS_E2E_SERVER_ADDRESS: providerGate.endpoint,
     GENTS_E2E_LOCAL_MODEL:
       process.env.GENTS_TAURI_LIVE_MODEL_NAME ?? "GLM-5.3-Flash-NVFP4",
     GENTS_E2E_LOCAL_PHASE: phase,
     GENTS_E2E_WEBVIEW_STORE_ID: webviewStoreId,
-    GENTS_E2E_PROMPT: `Reply with exactly ${marker}. Do not call tools.`,
+    GENTS_E2E_PROMPT: prompt,
     GENTS_E2E_EXPECTED_RESPONSE: marker,
   };
   log = createWriteStream(join(artifactRoot, `${phase}.log`));
@@ -184,6 +188,44 @@ async function runPhase(phase) {
         join(artifactRoot, `${phase}-result.json`),
         JSON.stringify(status, null, 2),
       );
+      const userText = (capture) =>
+        capture.messages
+          .filter((message) => message.role === "user")
+          .map((message) =>
+            typeof message.content === "string"
+              ? message.content
+              : JSON.stringify(message.content),
+          )
+          .join("\n");
+      const amended = `QUEUE_${phase}_EDITED`;
+      const retained = `QUEUE_${phase}_SECOND`;
+      for (const capture of providerGate.captures) {
+        const text = userText(capture);
+        if (
+          text.includes(`QUEUE_${phase}_ORIGINAL`) ||
+          text.includes(`QUEUE_${phase}_REMOVED`)
+        )
+          throw new Error(
+            "Real provider input included an obsolete or removed queue message",
+          );
+      }
+      const matched = providerGate.captures.find((capture) => {
+        const text = userText(capture);
+        return text.includes(amended) && text.includes(retained);
+      });
+      if (!matched)
+        throw new Error(
+          "No real subsequent provider request contained both retained queue inputs",
+        );
+      const text = userText(matched);
+      if (
+        text.includes(`QUEUE_${phase}_ORIGINAL`) ||
+        text.includes(`QUEUE_${phase}_REMOVED`) ||
+        text.indexOf(retained) > text.indexOf(amended)
+      )
+        throw new Error(
+          "Real provider input did not preserve queue edit/remove/reorder",
+        );
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -248,6 +290,10 @@ try {
     "com.source-inc.gents.local-e2e",
   ]);
   await requireIsolationMarkers("gents", [service]);
+  providerGate = await createNativeProviderGate(
+    process.env.GENTS_TAURI_LIVE_INFERENCE_URL ?? "http://workstation-1:8000/v1",
+    join(artifactRoot, "provider-requests.jsonl"),
+  );
   await runPhase("setup");
   const custody = await recordedCustody();
   const beforeRestart = await checked("launchctl", ["print", serviceTarget]);
@@ -293,9 +339,10 @@ try {
   passed = true;
 } finally {
   await stopApp();
+  await providerGate?.close();
   // Remove only the isolated service definition created for this run's home.
   const contents = await readFile(definition, "utf8").catch(() => "");
-  if (contents.includes(agentHome)) {
+  if (contents.includes(nodeHome)) {
     await command("launchctl", ["bootout", serviceTarget]);
     await rm(definition);
   }

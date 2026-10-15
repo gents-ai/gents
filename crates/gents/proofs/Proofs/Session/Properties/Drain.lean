@@ -210,6 +210,12 @@ theorem terminal_history_monotonic
   | claim_next _ _ h_post =>
       rw [h_post, SessionQueueState.claimHead]
       exact h_mem
+  | claim_folding _ _ h_post =>
+      rw [h_post, SessionQueueState.claimFolding]
+      exact h_mem
+  | consume_folded _ _ h_post =>
+      rw [h_post, SessionQueueState.consumeFolded]
+      exact Finset.mem_insert_of_mem h_mem
   | finish_active _ h_post =>
       rw [h_post, SessionQueueState.finishActive]
       exact Finset.mem_insert_of_mem h_mem

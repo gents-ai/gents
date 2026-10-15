@@ -31,7 +31,7 @@ fn rust_mailbox_vocabularies_and_machine_match_lean_contract() {
 
 /// The Lean Mailbox machine carries a terminal/nonterminal partition that the
 /// vocabulary check above never reads. The Rust owners gate every transition on
-/// `MailboxStatus::is_terminal` and the requester principal, so this test pins
+/// `MailboxStatus::is_terminal` and the requester DID, so this test pins
 /// that partition to the Rust enum and then drives the real dismiss owner
 /// through the machine's one legal dismissal transition and its terminal no-op.
 #[tokio::test]
@@ -73,8 +73,8 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
         &node,
         &MailboxStampContext {
             requester_did: "did:test:owner".to_string(),
-            agent_did: "did:test:agent".to_string(),
-            behavior_id: "operator".to_string(),
+            node_did: "did:test:agent".to_string(),
+            agent_id: "operator".to_string(),
             session_id: Some("session-1".to_string()),
         },
         FileMailboxItemArgs {
@@ -98,7 +98,7 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
     .expect("stamped open mailbox item");
     assert_eq!(item.status, "open");
 
-    // Lean applyResolution? refuses dismiss unless the principal is the
+    // Lean applyResolution? refuses dismiss unless the caller DID is the
     // requester: the Rust owner must refuse without touching the open row.
     assert!(
         dismiss_mailbox_item(&node, &item.doc_id, "did:test:other")

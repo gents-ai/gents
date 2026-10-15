@@ -316,9 +316,11 @@ theorem start_requires_active_revision
   split at h <;> simp_all
 
 /-- A run may not start without input that satisfies the pinned entry
-contract: the host runs any declared prepare step and admits the operator
-input against the entry's schema before the start transaction begins, never
-inside it. -/
+contract. A declared prepare step runs on the host before the start
+transaction begins; admission of caller-supplied input against the entry's
+schema may run inside the start transaction, and the package path also admits
+it before any host step. The admitted flag conveys no trust beyond that
+admission. -/
 theorem start_requires_admitted_input
     {pre post : State} {runId : RunId} {inputAdmitted : Bool}
     (h : step? pre (.startRun runId inputAdmitted) = some post) :

@@ -9,12 +9,12 @@ use crate::commands::config::task_run::{config_task_run, resolve_task_id_for};
 use crate::config_writes::ConfigAccess;
 use crate::{print_json, resolve_config_access};
 
-const TASK_FIELDS: &str = "task_id agent_did display_name description behavior_id prompt_template emit_outcome goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
-const BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name description context_id inference_profile_id enabled tags created_at updated_at";
-const TRIGGER_FIELDS: &str = "trigger_id agent_did display_name description task_id source session_id_template enabled concurrency next_run_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count created_at updated_at tags";
+const TASK_FIELDS: &str = "task_id node_did display_name description agent_id prompt_template emit_outcome goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
+const BEHAVIOR_FIELDS: &str = "agent_id node_did display_name description context_id inference_profile_id enabled tags created_at updated_at";
+const TRIGGER_FIELDS: &str = "trigger_id node_did display_name description task_id source session_id_template enabled concurrency next_run_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count created_at updated_at tags";
 const SCHEDULE_FIELDS: &str =
-    "schedule_id agent_did display_name cadence created_at updated_at tags";
-const EVENT_SOURCE_FIELDS: &str = "event_source_id agent_did display_name source_collection event_kind filter correlation_field group workspace_authority created_at updated_at tags";
+    "schedule_id node_did display_name cadence created_at updated_at tags";
+const EVENT_SOURCE_FIELDS: &str = "event_source_id node_did display_name source_collection event_kind filter correlation_field group workspace_authority created_at updated_at tags";
 
 pub(crate) async fn dispatch(command: TaskCommand) -> Result<()> {
     match command {
@@ -52,7 +52,7 @@ pub(crate) async fn task_show(args: TaskShowArgs) -> Result<()> {
 
 struct TaskInventory {
     tasks: Vec<Value>,
-    behaviors_by_id: BTreeMap<String, Value>,
+    agents_by_id: BTreeMap<String, Value>,
     triggers: Vec<Value>,
     schedules_by_id: BTreeMap<String, Value>,
     event_sources_by_id: BTreeMap<String, Value>,
@@ -68,24 +68,22 @@ impl TaskInventory {
 
     fn task_summary(&self, task: &Value) -> Value {
         let task_id = string_field(task, "task_id").unwrap_or_default();
-        let behavior_id = string_field(task, "behavior_id");
-        let behavior = behavior_id
-            .as_deref()
-            .and_then(|id| self.behaviors_by_id.get(id));
+        let agent_id = string_field(task, "agent_id");
+        let agent = agent_id.as_deref().and_then(|id| self.agents_by_id.get(id));
         let triggers = self.triggers_for_task(&task_id);
-        let (runnable, unavailable_reason) = runnable_status(task, behavior);
+        let (runnable, unavailable_reason) = runnable_status(task, agent);
 
         json!({
             "task_id": task_id,
             "display_name": task.get("display_name").cloned().unwrap_or(Value::Null),
             "description": task.get("description").cloned().unwrap_or(Value::Null),
-            "behavior_id": behavior_id,
+            "agent_id": agent_id,
             "goal_objective_template": task.get("goal_objective_template").cloned().unwrap_or(Value::Null),
             "goal_token_budget": task.get("goal_token_budget").cloned().unwrap_or(Value::Null),
             "enabled": bool_field(task, "enabled").unwrap_or(false),
             "runnable": runnable,
             "unavailable_reason": unavailable_reason,
-            "behavior": behavior.and_then(behavior_summary).unwrap_or(Value::Null),
+            "agent": agent.and_then(agent_summary).unwrap_or(Value::Null),
             "trigger_count": triggers.len(),
             "trigger_ids": triggers.iter().filter_map(|row| string_field(row, "trigger_id")).collect::<Vec<_>>(),
         })
@@ -93,15 +91,15 @@ impl TaskInventory {
 
     fn task_detail(&self, task: &Value) -> Value {
         let task_id = string_field(task, "task_id").unwrap_or_default();
-        let behavior = string_field(task, "behavior_id")
+        let agent = string_field(task, "agent_id")
             .as_deref()
-            .and_then(|id| self.behaviors_by_id.get(id));
+            .and_then(|id| self.agents_by_id.get(id));
         let triggers = self.triggers_for_task(&task_id);
-        let (runnable, unavailable_reason) = runnable_status(task, behavior);
+        let (runnable, unavailable_reason) = runnable_status(task, agent);
 
         json!({
             "task": task,
-            "behavior": behavior.cloned().unwrap_or(Value::Null),
+            "agent": agent.cloned().unwrap_or(Value::Null),
             "runnable": runnable,
             "unavailable_reason": unavailable_reason,
             "trigger_count": triggers.len(),
@@ -154,9 +152,9 @@ async fn load_task_inventory(
     let mut tasks = rows(&response, "Task");
     sort_rows_by_string_field(&mut tasks, "task_id");
 
-    let behaviors_by_id = rows(&response, "AgentBehavior")
+    let agents_by_id = rows(&response, "Agent")
         .into_iter()
-        .filter_map(|row| string_field(&row, "behavior_id").map(|id| (id, row)))
+        .filter_map(|row| string_field(&row, "agent_id").map(|id| (id, row)))
         .collect::<BTreeMap<_, _>>();
 
     let mut triggers = rows(&response, "Trigger");
@@ -172,7 +170,7 @@ async fn load_task_inventory(
 
     Ok(TaskInventory {
         tasks,
-        behaviors_by_id,
+        agents_by_id,
         triggers,
         schedules_by_id,
         event_sources_by_id,
@@ -202,7 +200,7 @@ fn task_inventory_query(task_id_filter: Option<&str>) -> String {
             Task{task_args} {{
                 {TASK_FIELDS}
             }}
-            AgentBehavior {{
+            Agent {{
                 {BEHAVIOR_FIELDS}
             }}
             Trigger{trigger_args} {{
@@ -257,30 +255,30 @@ fn sort_rows_by_string_field(rows: &mut [Value], field: &str) {
     });
 }
 
-fn behavior_summary(behavior: &Value) -> Option<Value> {
-    let behavior_id = string_field(behavior, "behavior_id")?;
+fn agent_summary(agent: &Value) -> Option<Value> {
+    let agent_id = string_field(agent, "agent_id")?;
     Some(json!({
-        "behavior_id": behavior_id,
-        "agent_did": behavior.get("agent_did").cloned().unwrap_or(Value::Null),
-        "display_name": behavior.get("display_name").cloned().unwrap_or(Value::Null),
-        "enabled": bool_field(behavior, "enabled").unwrap_or(false),
-        "context_id": behavior.get("context_id").cloned().unwrap_or(Value::Null),
-        "inference_profile_id": behavior.get("inference_profile_id").cloned().unwrap_or(Value::Null),
+        "agent_id": agent_id,
+        "node_did": agent.get("node_did").cloned().unwrap_or(Value::Null),
+        "display_name": agent.get("display_name").cloned().unwrap_or(Value::Null),
+        "enabled": bool_field(agent, "enabled").unwrap_or(false),
+        "context_id": agent.get("context_id").cloned().unwrap_or(Value::Null),
+        "inference_profile_id": agent.get("inference_profile_id").cloned().unwrap_or(Value::Null),
     }))
 }
 
-fn runnable_status(task: &Value, behavior: Option<&Value>) -> (bool, Option<&'static str>) {
+fn runnable_status(task: &Value, agent: Option<&Value>) -> (bool, Option<&'static str>) {
     if !bool_field(task, "enabled").unwrap_or(false) {
         return (false, Some("task_disabled"));
     }
-    if string_field(task, "behavior_id").is_none() {
-        return (false, Some("missing_behavior_id"));
+    if string_field(task, "agent_id").is_none() {
+        return (false, Some("missing_agent_id"));
     }
-    let Some(behavior) = behavior else {
-        return (false, Some("behavior_missing"));
+    let Some(agent) = agent else {
+        return (false, Some("agent_missing"));
     };
-    if !bool_field(behavior, "enabled").unwrap_or(false) {
-        return (false, Some("behavior_disabled"));
+    if !bool_field(agent, "enabled").unwrap_or(false) {
+        return (false, Some("agent_disabled"));
     }
     (true, None)
 }
@@ -296,7 +294,7 @@ mod tests {
                     "task_id": "disabled",
                     "display_name": "Disabled",
                     "description": null,
-                    "behavior_id": "default",
+                    "agent_id": "default",
                     "prompt_template": "noop",
                     "enabled": false,
                     "output_schema_ref": null,
@@ -307,7 +305,7 @@ mod tests {
                     "task_id": "host-check",
                     "display_name": "Host check",
                     "description": "Sweep host status",
-                    "behavior_id": "default",
+                    "agent_id": "default",
                     "prompt_template": "check",
                     "goal_objective_template": "Finish host {{ args.host }}",
                     "goal_token_budget": 12000,
@@ -317,11 +315,11 @@ mod tests {
                     "updated_at": null
                 }),
             ],
-            behaviors_by_id: BTreeMap::from([(
+            agents_by_id: BTreeMap::from([(
                 "default".to_string(),
                 json!({
-                    "behavior_id": "default",
-                    "agent_did": "did:key:z-test",
+                    "agent_id": "default",
+                    "node_did": "did:key:z-test",
                     "display_name": "Default",
                     "description": null,
                     "context_id": "default-context",
@@ -385,9 +383,7 @@ mod tests {
             Some(1)
         );
         assert_eq!(
-            summary
-                .pointer("/behavior/context_id")
-                .and_then(Value::as_str),
+            summary.pointer("/agent/context_id").and_then(Value::as_str),
             Some("default-context")
         );
     }

@@ -97,7 +97,7 @@ async fn generated_composed_invariants_use_canonical_admission_owner() {
         if witness.deadline_exceeded {
             if running {
                 prepare_expired_composed_boundary(&admission, &tool_doc_id, &request_doc_id).await;
-                let report = ToolCallLifecycle::recover_all(&admission.node, &admission.agent_did)
+                let report = ToolCallLifecycle::recover_all(&admission.node, &admission.node_did)
                     .await
                     .unwrap();
                 assert_eq!(report.tool_calls_recovered, 1);
@@ -131,7 +131,7 @@ async fn generated_composed_invariants_use_canonical_admission_owner() {
         let arguments = super::load_tool_call_arguments(
             &ConfigAccess::Local(admission.node.clone()),
             &tool_doc_id,
-            &admission.agent_did,
+            &admission.node_did,
             &session_id,
             None,
         )

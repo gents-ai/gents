@@ -77,9 +77,9 @@ pub(crate) fn context_for_claimed_request(
         request_doc_id: request.doc_id.clone(),
         request_commit_cid: request_commit_cid.to_string(),
         request_id: request.request_id.clone(),
-        agent_did: request.agent_did.clone(),
+        node_did: request.node_did.clone(),
         requester_did: request.requester_did.clone().unwrap_or_default(),
-        behavior_id: request.behavior_id.clone(),
+        agent_id: request.agent_id.clone(),
         session_id: request.session_id.clone(),
         model_name,
         provider_family,
@@ -120,7 +120,7 @@ mod tests {
                 doc_id: "bae-base".into(),
                 field_commit_cid: "base-commit".into(),
                 depth: 0,
-                agent_did: "did:test".into(),
+                node_did: "did:test".into(),
                 requester_did: String::new(),
                 session_id: "session".into(),
                 source: "openai_responses".into(),
@@ -162,7 +162,7 @@ mod tests {
                 &encoding::encode_full(&serde_json::json!({}))?,
             )?;
             Ok(serde_json::json!({"data":{"RenderedRequest":[{
-                "capture_version":2, "agent_did":"did:test", "requester_did":"",
+                "capture_version":2, "node_did":"did:test", "requester_did":"",
                 "session_id":"session", "source":"openai_responses", "capture_scope":"inference.1",
                 "request_json":encoded
             }], "_commits":[{"cid":self.cid.lock().unwrap().clone(), "height":1, "fieldName":"request_json"}]}}))
@@ -239,7 +239,7 @@ mod tests {
         let mutation = format!(
             r#"mutation {{ create_RenderedRequest(input: {{
                 capture_key: "batched-base", capture_version: 2,
-                agent_did: "did:test", requester_did: "", session_id: "session",
+                node_did: "did:test", requester_did: "", session_id: "session",
                 source: "openai_responses", capture_scope: "inference.1",
                 request_json: "{}"
             }}) {{ _docID }} }}"#,
@@ -670,9 +670,9 @@ mod tests {
             purpose: gents_protocol::request_admission::RequestPurpose::Normal,
             doc_id: "doc-1".to_string(),
             request_id: "request-1".to_string(),
-            agent_did: "did:key:test".to_string(),
+            node_did: "did:key:test".to_string(),
             requester_did: None,
-            behavior_id: "behavior".to_string(),
+            agent_id: "behavior".to_string(),
             session_id: "session".to_string(),
             content: "hi".to_string(),
             max_total_tokens: None,
@@ -683,7 +683,7 @@ mod tests {
             execution_generation: None,
             execution_lease_expires_at: None,
             execution_lease_secs: None,
-            subagent_depth: 0,
+            request_hop: 0,
             caused_by_parent_request_id: None,
             caused_by_parent_request_doc_id: None,
             caused_by_parent_tool_call_id: None,
@@ -695,7 +695,7 @@ mod tests {
             caused_by_trigger_context: None,
             workspace_id: None,
             workspace_authority: None,
-            workspace_owner_agent_did: None,
+            workspace_owner_node_did: None,
             workspace_seal_hash: None,
         }
     }
@@ -834,7 +834,7 @@ async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
                 if !cache.bases.contains_key(&base.doc_id) {
                     let query = format!(
                         r#"{{ RenderedRequest(filter: {{_docID: {{_eq: "{doc_id}"}}}}, limit: 2) {{
-                            capture_version agent_did requester_did session_id source capture_scope request_json
+                            capture_version node_did requester_did session_id source capture_scope request_json
                         }}
                         _commits(docID: "{doc_id}") {{ cid height fieldName }}
                         }}"#,
@@ -867,7 +867,7 @@ async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
                     .get(&base.doc_id)
                     .context("rendered-request delta base cache was not populated")?;
                 for (name, expected) in [
-                    ("agent_did", base.agent_did.as_str()),
+                    ("node_did", base.node_did.as_str()),
                     ("requester_did", base.requester_did.as_str()),
                     ("session_id", base.session_id.as_str()),
                     ("source", base.source.as_str()),
@@ -1027,6 +1027,67 @@ async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
                 field_commit_cid: commit.cid,
             },
         );
+    }
+    Ok(())
+}
+
+/// Read the manifest blocks of many captures into one shared cache: the block
+/// rows and their field-commit witnesses batch across every manifest of the
+/// pass instead of one statement set per capture. Only positive observations
+/// enter the cache, so each capture still re-checks every entry's content key
+/// at resolution; a manifest beyond the reader ceiling, and a manifest whose
+/// blocks fail verification, are left to fail in their own capture's
+/// resolution rather than failing the whole pass here, while a
+/// [`CaptureStoreReadError`] stays fatal.
+pub(crate) async fn preload_manifest_blocks<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    manifests: &[Vec<encoding::ManifestEntry>],
+    cache: &mut CaptureReadCache,
+) -> Result<()> {
+    let mut union = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for entries in manifests {
+        if entries.len() > encoding::MAX_MANIFEST_BLOCKS {
+            continue;
+        }
+        for entry in entries {
+            if seen.insert(entry.doc_id.clone()) {
+                union.push(entry.clone());
+            }
+        }
+    }
+    for chunk in union.chunks(encoding::MAX_MANIFEST_BLOCKS) {
+        if let Err(error) = read_manifest_blocks(reader, chunk, &mut cache.blocks).await {
+            return preload_isolate_verification_failures(reader, manifests, error, cache).await;
+        }
+    }
+    Ok(())
+}
+
+/// A verification failure in the shared batched read names one manifest's
+/// pinned blocks but aborts the batch before anything is cached, so it cannot
+/// be attributed there. Re-read per manifest: the offending manifest stays
+/// uncached and fails verification in its own capture's resolution, every
+/// healthy manifest keeps its blocks. A [`CaptureStoreReadError`] says the
+/// store is broken, not that one capture is unverifiable, and stays fatal.
+async fn preload_isolate_verification_failures<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    manifests: &[Vec<encoding::ManifestEntry>],
+    error: anyhow::Error,
+    cache: &mut CaptureReadCache,
+) -> Result<()> {
+    if error.downcast_ref::<CaptureStoreReadError>().is_some() {
+        return Err(error);
+    }
+    for entries in manifests {
+        if entries.len() > encoding::MAX_MANIFEST_BLOCKS {
+            continue;
+        }
+        if let Err(error) = read_manifest_blocks(reader, entries, &mut cache.blocks).await {
+            if error.downcast_ref::<CaptureStoreReadError>().is_some() {
+                return Err(error);
+            }
+        }
     }
     Ok(())
 }

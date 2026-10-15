@@ -98,7 +98,7 @@ The `Stuck` config is a diagnostic and is EXPECTED to report a violation: it kee
 ./scripts/run-tlc.sh MCReplicatedRequestConvergenceStuck
 ```
 
-The `PeerClaim` config is the safety diagnostic and is EXPECTED to report a violation: with the adversarial peer-claim action armed (`AllowPeerClaim = TRUE`), a peer drives itself into `Claimed`, reachably VIOLATING `INVARIANT SingleClaimer`. This proves `SingleClaimer` clause (1) is falsifiable — its green result in the two configs above is evidence the `agent_did` watcher fence holds, not a type artifact:
+The `PeerClaim` config is the safety diagnostic and is EXPECTED to report a violation: with the adversarial peer-claim action armed (`AllowPeerClaim = TRUE`), a peer drives itself into `Claimed`, reachably VIOLATING `INVARIANT SingleClaimer`. This proves `SingleClaimer` clause (1) is falsifiable — its green result in the two configs above is evidence the `node_did` watcher fence holds, not a type artifact:
 ```bash
 ./scripts/run-tlc.sh MCReplicatedRequestConvergencePeerClaim
 ```
@@ -134,14 +134,14 @@ Current parameters in `MCReplicatedRequestConvergence.cfg` / `MCReplicatedReques
 
 | Parameter | Value | Rationale |
 |-----------|-------|-----------|
-| `Owner` | `o` | The owning node — the request's `agent_did` holder and the only node that drives the lifecycle |
+| `Owner` | `o` | The owning node — the request's `node_did` holder and the only node that drives the lifecycle |
 | `ReplicaHolder` | `{p1}` | The one requesting coordinator authorized to hold the host-owned child request; unrelated fleet peers are excluded |
 | `DeltaId` | `{d1, d2, d3, d4, d5, d6}` | Bounded id pool for terminal re-emissions; `StateBound` caps consumption below the pool size |
 | `MaxDrops` | `1` | One terminal delta may drop before fair re-emission converges (green) / strands a peer (stuck) |
 | `MaxCrashes` | `1` | One total node crash (owner restart or a peer losing volatile inbound) |
 | `TerminalKind` | `{Completed, Failed}` | The peer must converge to the *specific* terminal the owner reached, not merely some terminal |
 | `Cap` | `3` (green) / `1` (stuck) | Persisted per-request budget = shipping `TERMINAL_REDRIVE_CAP`; each emission is one owner write fanned out only to online request-party replicators. The green config also enables reconnect replay, so a party peer offline beyond all three writes still converges. |
-| `ReplayOnRecovery` | `TRUE` (green/peer-claim) / `FALSE` (stuck) | Production recovery reinstalls a configured subagent replicator once per reconnect, causing a bounded full replay. The stuck diagnostic removes that action and exposes the exhausted-cap liveness gap. |
+| `ReplayOnRecovery` | `TRUE` (green/peer-claim) / `FALSE` (stuck) | Production recovery reinstalls a configured peer replicator once per reconnect, causing a bounded full replay. The stuck diagnostic removes that action and exposes the exhausted-cap liveness gap. |
 | `StateBound` | `Cardinality(deltaIdsUsed) <= Cap` | `emitCount` is persisted per request and caps same-value owner writes at `Cap`, independent of replica count. |
 
 Current parameters in `MCP2PBackpressureGreen.cfg` / diagnostic configs:
@@ -201,7 +201,7 @@ The diagnostics are **designed** to reproduce one load-bearing failure each (cla
 Active lines from `MCReplicatedRequestConvergence.cfg` (`Cap = 3`, reconnect replay enabled):
 
 - **`INVARIANT TypeOK`** — `reqState`, the gossip `messages`/`pendingInbound` sets, `deltaIdsUsed`, and the drop/crash counters stay in their declared domains.
-- **`INVARIANT SingleClaimer`** — every non-owner peer only ever holds `Pending` or the owner's terminal (delivered by an owner delta); it never sits in `Claimed`/`Processing`. A peer claiming/processing of its own volition would violate this — it is the model fence for the `agent_did` watcher filter.
+- **`INVARIANT SingleClaimer`** — every non-owner peer only ever holds `Pending` or the owner's terminal (delivered by an owner delta); it never sits in `Claimed`/`Processing`. A peer claiming/processing of its own volition would violate this — it is the model fence for the `node_did` watcher filter.
 - **`INVARIANT DeltaBackedByOwnerTerminal`** — every in-flight terminal delta carries the owner's (absorbing) terminal value; no peer can converge to a value the owner never reached.
 - **`INVARIANT DeltaIdsTracked`** — every in-flight delta's id is recorded in `deltaIdsUsed`; no id reuse.
 - **`INVARIANT ReplayBound`** — a peer recovery schedules at most one full replay in the modeled reconnect cycle.
@@ -211,7 +211,7 @@ Active lines from `MCReplicatedRequestConvergence.cfg` (`Cap = 3`, reconnect rep
 Two diagnostic configs reproduce the pre-fix convergence gap (liveness) and prove the safety property is falsifiable (safety):
 
 - **`MCReplicatedRequestConvergenceStuck.cfg`** (`Cap = 1`, `ReplayOnRecovery = FALSE`) — the invariants still hold while `PROPERTY TerminalConverges` is intentionally VIOLATED. One owner write can be lost or emitted while a peer is offline; `emitCount = Cap` then disables further writes and replay is unavailable, leaving owner-terminal/peer-nonterminal forever. This proves reconnect replay, rather than an unbounded rewrite loop, is the load-bearing repair for partitions beyond the cap.
-- **`MCReplicatedRequestConvergencePeerClaim.cfg`** (`AllowPeerClaim = TRUE`) — arms the `PeerClaimsForeign` action, which drives a peer from `Pending` into `Claimed` of its own volition (the exact thing the `agent_did` watcher filter forbids, and what a peer-side write to a foreign replica would do). `INVARIANT SingleClaimer` is intentionally VIOLATED. Without this config, `SingleClaimer` clause (1) (`reqState[n] ∉ {Claimed, Processing}`) would be vacuously true — no other action can put a peer in those states — so its green result would prove nothing. With a config in which the property actually breaks, the green runs above are real evidence the fence holds. Mirrors the `Cap` red/green that makes `TerminalConverges` load-bearing.
+- **`MCReplicatedRequestConvergencePeerClaim.cfg`** (`AllowPeerClaim = TRUE`) — arms the `PeerClaimsForeign` action, which drives a peer from `Pending` into `Claimed` of its own volition (the exact thing the `node_did` watcher filter forbids, and what a peer-side write to a foreign replica would do). `INVARIANT SingleClaimer` is intentionally VIOLATED. Without this config, `SingleClaimer` clause (1) (`reqState[n] ∉ {Claimed, Processing}`) would be vacuously true — no other action can put a peer in those states — so its green result would prove nothing. With a config in which the property actually breaks, the green runs above are real evidence the fence holds. Mirrors the `Cap` red/green that makes `TerminalConverges` load-bearing.
 
 ## Fairness annotations
 

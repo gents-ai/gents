@@ -194,7 +194,7 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
         let result = {
             let mut ctx = fx.ctx(&mut docs, caps);
             if wrong_owner {
-                ctx.owner_agent_did = "foreign-owner".into();
+                ctx.owner_node_did = "foreign-owner".into();
             }
             execute_freeze_workspace_base_plan(&plan, &mut journal, &mut ctx)
         };
@@ -381,10 +381,10 @@ fn freeze_fault_context<'a>(
     docs: &'a mut dyn WorkspaceDocuments,
 ) -> HostExecutorContext<'a> {
     HostExecutorContext {
-        owner_agent_did: "did:key:zWorkspaceOwner".into(),
+        owner_node_did: "did:key:zWorkspaceOwner".into(),
         repository: RepositoryPlacementRef {
             repository_id: "repo-1".into(),
-            owner_agent_did: "did:key:zWorkspaceOwner".into(),
+            owner_node_did: "did:key:zWorkspaceOwner".into(),
             host_path: fx.repo.clone(),
             enabled: true,
         },

@@ -5,7 +5,7 @@ use defra_node::EmbeddedNode;
 use crate::health_checker::ServiceHealthMap;
 use crate::mcp_pool::McpPool;
 use crate::toolset::lsp::LspPool;
-use crate::AgentIdentity;
+use crate::NodeIdentity;
 
 #[derive(Clone)]
 pub struct ToolRuntimeContext {
@@ -15,8 +15,8 @@ pub struct ToolRuntimeContext {
     pub(super) health_map: ServiceHealthMap,
     pub(super) local_hostname: String,
     pub(super) local_subnet: Option<String>,
-    pub(super) agent_did: String,
-    pub(super) identity: Option<Arc<dyn AgentIdentity>>,
+    pub(super) node_did: String,
+    pub(super) identity: Option<Arc<dyn NodeIdentity>>,
     pub(super) plugins: Arc<crate::plugin::executor::PluginExecutor>,
 }
 
@@ -28,7 +28,7 @@ impl ToolRuntimeContext {
         local_hostname: impl Into<String>,
         local_subnet: Option<String>,
     ) -> Self {
-        Self::new_with_agent_did(
+        Self::new_with_node_did(
             node,
             mcp_pool,
             health_map,
@@ -39,14 +39,14 @@ impl ToolRuntimeContext {
         )
     }
 
-    pub fn new_with_agent_did(
+    pub fn new_with_node_did(
         node: Arc<EmbeddedNode>,
         mcp_pool: McpPool,
         health_map: ServiceHealthMap,
         local_hostname: impl Into<String>,
         local_subnet: Option<String>,
-        agent_did: impl Into<String>,
-        identity: Option<Arc<dyn AgentIdentity>>,
+        node_did: impl Into<String>,
+        identity: Option<Arc<dyn NodeIdentity>>,
     ) -> Self {
         Self {
             node,
@@ -55,17 +55,17 @@ impl ToolRuntimeContext {
             health_map,
             local_hostname: local_hostname.into(),
             local_subnet,
-            agent_did: agent_did.into(),
+            node_did: node_did.into(),
             identity,
             plugins: Arc::default(),
         }
     }
 
     pub fn oneshot(node: Arc<EmbeddedNode>) -> Self {
-        Self::oneshot_with_agent_did(node, "")
+        Self::oneshot_with_node_did(node, "")
     }
 
-    pub fn oneshot_with_agent_did(node: Arc<EmbeddedNode>, agent_did: impl Into<String>) -> Self {
+    pub fn oneshot_with_node_did(node: Arc<EmbeddedNode>, node_did: impl Into<String>) -> Self {
         Self {
             node,
             mcp_pool: McpPool::default(),
@@ -73,7 +73,7 @@ impl ToolRuntimeContext {
             health_map: ServiceHealthMap::default(),
             local_hostname: "localhost".to_string(),
             local_subnet: None,
-            agent_did: agent_did.into(),
+            node_did: node_did.into(),
             identity: None,
             plugins: Arc::default(),
         }

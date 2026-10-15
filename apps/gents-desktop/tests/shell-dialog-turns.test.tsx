@@ -109,7 +109,7 @@ vi.mock("../src/ui/screens/Markdown", () => ({
   CopyButton: () => null,
   Markdown: ({ children }: { children: string }) => <div>{children}</div>,
 }));
-vi.mock("../src/ui/screens/BehaviorPicker", () => ({ BehaviorPicker: () => null }));
+vi.mock("../src/ui/screens/BehaviorPicker", () => ({ AgentPicker: () => null }));
 vi.mock("../src/ui/screens/TracePanel", () => ({
   TracePanel: () => <p>Trace</p>,
   TraceSurface: () => <p>Trace</p>,
@@ -163,8 +163,8 @@ function sessionApp() {
     },
     session: {
       sessionId: "session",
-      agentDid: "did:key:agent",
-      behaviorId: "behavior",
+      nodeDid: "did:key:node",
+      agentId: "agent",
       title: "Session",
       turnState: "completed",
       timelineItems: [],
@@ -174,7 +174,7 @@ function sessionApp() {
       goal: null,
       context,
     } as unknown as DesktopSessionSnapshot,
-    selection: { behaviorId: "behavior" },
+    selection: { agentId: "agent" },
   });
 }
 

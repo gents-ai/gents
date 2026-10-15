@@ -20,7 +20,7 @@ pub(crate) const INIT_BACKOFF: Duration = Duration::from_secs(180);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PoolKey {
     pub session_id: String,
-    pub behavior_id: String,
+    pub agent_id: String,
     pub workspace_root: std::path::PathBuf,
     pub server_name: String,
     pub config_digest: String,
@@ -430,13 +430,13 @@ impl LspPool {
         let session_count = map
             .keys()
             .filter(|key| {
-                key.session_id == incoming.session_id && key.behavior_id == incoming.behavior_id
+                key.session_id == incoming.session_id && key.agent_id == incoming.agent_id
             })
             .count();
         let mut victims = Vec::new();
         if session_count >= MAX_PER_SESSION {
             let victim = lru_idle_ready(map, |key| {
-                key.session_id == incoming.session_id && key.behavior_id == incoming.behavior_id
+                key.session_id == incoming.session_id && key.agent_id == incoming.agent_id
             })
             .await?;
             if let Some(slot) = map.remove(&victim) {
@@ -459,7 +459,7 @@ impl LspPool {
     pub async fn reload_snapshot(
         &self,
         session_id: &str,
-        behavior_id: &str,
+        agent_id: &str,
         workspace: &std::path::Path,
         digest: &str,
     ) -> usize {
@@ -468,7 +468,7 @@ impl LspPool {
             map.keys()
                 .filter(|key| {
                     key.session_id == session_id
-                        && key.behavior_id == behavior_id
+                        && key.agent_id == agent_id
                         && key.workspace_root == workspace
                         && key.config_digest == digest
                 })
@@ -536,7 +536,7 @@ impl LspPool {
     pub(crate) async fn inspect_session(
         &self,
         session_id: &str,
-        behavior_id: &str,
+        agent_id: &str,
         workspace: &std::path::Path,
         digest: &str,
     ) -> HashMap<String, PoolServerState> {
@@ -544,7 +544,7 @@ impl LspPool {
         let mut states = HashMap::new();
         for (key, slot) in map.iter() {
             if key.session_id == session_id
-                && key.behavior_id == behavior_id
+                && key.agent_id == agent_id
                 && key.workspace_root == workspace
                 && key.config_digest == digest
             {
@@ -571,7 +571,7 @@ impl LspPool {
         let failed = self.failed.lock().await;
         for (key, (error, at)) in failed.iter() {
             if key.session_id == session_id
-                && key.behavior_id == behavior_id
+                && key.agent_id == agent_id
                 && key.workspace_root == workspace
                 && key.config_digest == digest
                 && at.elapsed() < INIT_BACKOFF

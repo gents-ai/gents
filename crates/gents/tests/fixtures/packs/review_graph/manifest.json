@@ -15,10 +15,10 @@
   "config": "pack_config.json",
   "assets": [
     "README.md",
-    "agent_behaviors/review_recon/system_prompt.md",
-    "agent_behaviors/review_scan/system_prompt.md",
-    "agent_behaviors/review_triage/system_prompt.md",
-    "agent_behaviors/review_verify/system_prompt.md",
+    "agents/review_recon/system_prompt.md",
+    "agents/review_scan/system_prompt.md",
+    "agents/review_triage/system_prompt.md",
+    "agents/review_verify/system_prompt.md",
     "pack_config.json",
     "schemas/candidate_finding.graphql",
     "schemas/evidence_manifest.graphql",
@@ -53,7 +53,7 @@
     {
       "name": "coordinator",
       "description": "Planning, evidence triage, and final review. Prefer a strong reasoning profile.",
-      "behaviors": [
+      "agents": [
         "review-recon",
         "review-triage"
       ]
@@ -61,14 +61,14 @@
     {
       "name": "worker",
       "description": "Bounded parallel code-review scans. A fast, capable worker profile is appropriate.",
-      "behaviors": [
+      "agents": [
         "review-scan"
       ]
     },
     {
       "name": "verifier",
       "description": "Adversarial verification of candidate findings. Prefer an independent high-quality profile.",
-      "behaviors": [
+      "agents": [
         "review-verify"
       ]
     }

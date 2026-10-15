@@ -249,7 +249,7 @@ async fn waits_after_the_backend_was_disabled() {
     execute(
         &reset.f.node,
         &format!(
-            r#"mutation {{ update_InferenceBackend(filter: {{ agent_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#,
+            r#"mutation {{ update_InferenceBackend(filter: {{ node_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#,
             escape_graphql_string(reset.f.identity.did()),
             escape_graphql_string(&reset.accounts.a)
         ),

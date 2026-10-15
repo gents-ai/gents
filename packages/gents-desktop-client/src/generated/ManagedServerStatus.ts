@@ -3,7 +3,7 @@ import type { BridgeErrorCode } from "./BridgeErrorCode.js";
 import type { ManagedServerState } from "./ManagedServerState.js";
 import type { ManagedServerToolCeiling } from "./ManagedServerToolCeiling.js";
 
-export type ManagedServerStatus = { state: ManagedServerState, autoStart: boolean, agentName: string | null, agentDid: string | null, graphql: string | null, effectiveToolCeiling: ManagedServerToolCeiling | null, effectiveToolRoot: string | null, suggestedToolRoot: string | null, pairingReady: boolean, approvalRequired: boolean,
+export type ManagedServerStatus = { state: ManagedServerState, autoStart: boolean, nodeName: string | null, nodeDid: string | null, graphql: string | null, effectiveToolCeiling: ManagedServerToolCeiling | null, effectiveToolRoot: string | null, suggestedToolRoot: string | null, pairingReady: boolean, approvalRequired: boolean,
 /**
  * This home's runtime answers but has not reported ready, typically while
  * it migrates its data after an update. Not a failure: it is waited on

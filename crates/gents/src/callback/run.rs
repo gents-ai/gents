@@ -21,7 +21,7 @@ use super::documents::{
     load_trusted_callback_signers, strip_secret_fields, update_invocation, CallbackInvocationDoc,
     CallbackModuleDoc, CallbackResultDoc,
 };
-use super::wasm::{plan_from_wasm_module, validate_callback_module};
+use super::planner::{plan_from_module, validate_callback_module};
 use super::{
     LIFECYCLE_CLAIMED, LIFECYCLE_DENIED, LIFECYCLE_FAILED, LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED,
 };
@@ -94,12 +94,12 @@ pub fn plan_from_callback(
         } => emit_create_workspace_from_source(&source),
         CallbackHandler::Module { module_id } => {
             let module = module.ok_or_else(|| {
-                format!("CallbackModule {module_id} was not loaded for WASM planner")
+                format!("CallbackModule {module_id} was not loaded for callback planner")
             })?;
-            if module.module_id != *module_id || module.agent_did != callback.agent_did {
+            if module.module_id != *module_id || module.node_did != callback.node_did {
                 return Err("callback module owner/reference mismatch".into());
             }
-            plan_from_wasm_module(
+            plan_from_module(
                 module,
                 &source,
                 &callback.capabilities.iter().cloned().collect(),
@@ -118,7 +118,7 @@ async fn load_planner_module(
     let crate::document_config::CallbackHandler::Module { module_id } = &callback.handler else {
         return Ok(None);
     };
-    let module = load_callback_module(node, module_id, &callback.agent_did)
+    let module = load_callback_module(node, module_id, &callback.node_did)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("CallbackModule {module_id} not found for callback owner"))?;
@@ -307,13 +307,13 @@ pub async fn run_owned_invocation(
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
 ) -> Result<()> {
-    if !invocation_is_claimable(&invocation.owner_agent_did, invocation)
+    if !invocation_is_claimable(&invocation.owner_node_did, invocation)
         && invocation.lifecycle_state != LIFECYCLE_CLAIMED
         && invocation.lifecycle_state != LIFECYCLE_RUNNING
     {
         return Ok(());
     }
-    let Some(mut claimed) = claim_invocation(node, &invocation.owner_agent_did, invocation).await?
+    let Some(mut claimed) = claim_invocation(node, &invocation.owner_node_did, invocation).await?
     else {
         return Ok(());
     };
@@ -341,7 +341,7 @@ async fn persist_claimed_to_running(
     let current = super::documents::load_invocation(
         node,
         &invocation.invocation_id,
-        &invocation.owner_agent_did,
+        &invocation.owner_node_did,
     )
     .await?;
     match current {
@@ -370,7 +370,7 @@ async fn execute_running_invocation(
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
 ) -> Result<()> {
-    if callback.agent_did != invocation.owner_agent_did
+    if callback.node_did != invocation.owner_node_did
         || callback.callback_id != invocation.callback_id
         || !callback.enabled
     {
@@ -483,7 +483,7 @@ async fn execute_running_invocation(
     }
 
     let Some(repository) =
-        load_repository_placement(node, &action.repository_id, &invocation.owner_agent_did).await?
+        load_repository_placement(node, &action.repository_id, &invocation.owner_node_did).await?
     else {
         return deny(
             node,
@@ -512,17 +512,17 @@ async fn execute_running_invocation(
     }
 
     let mut docs =
-        load_memory_workspace_docs(node, &action.workspace_id, &invocation.owner_agent_did).await?;
+        load_memory_workspace_docs(node, &action.workspace_id, &invocation.owner_node_did).await?;
     let capabilities: BTreeSet<String> = callback.capabilities.iter().cloned().collect();
     let correlation = correlation_from_source(source);
     let execute_result = {
         let mut ctx = HostExecutorContext {
-            owner_agent_did: invocation.owner_agent_did.clone(),
+            owner_node_did: invocation.owner_node_did.clone(),
             repository,
             ceiling,
             capabilities,
-            writer_principal: callback.agent_did.clone(),
-            integrator_principal: callback.agent_did.clone(),
+            writer_principal: callback.node_did.clone(),
+            integrator_principal: callback.node_did.clone(),
             caused_by_invocation_id: invocation.invocation_id.clone(),
             caused_by_correlation: correlation.clone(),
             documents: &mut docs,
@@ -600,7 +600,7 @@ async fn emit_new_plan(
         let source = source.clone();
         tokio::task::spawn_blocking(move || plan_from_callback(&callback, &source, module.as_ref()))
             .await
-            .map_err(|error| format!("WASM planner task failed: {error}"))?
+            .map_err(|error| format!("callback planner task failed: {error}"))?
     } else {
         plan_from_callback(callback, source, None)
     }
@@ -658,7 +658,7 @@ async fn succeed_then_emit_result(
             result_id: format!("res-{}", invocation.invocation_id),
             invocation_id: invocation.invocation_id.clone(),
             binding_id: Some(invocation.origin.binding_id().to_string()),
-            owner_agent_did: invocation.owner_agent_did.clone(),
+            owner_node_did: invocation.owner_node_did.clone(),
             workspace_id: Some(workspace.workspace_id.clone()),
             work_unit_id: Some(workspace.work_unit_id.clone()),
             caused_by_correlation: Some(correlation),
@@ -671,13 +671,23 @@ async fn succeed_then_emit_result(
 
 pub async fn recover_local_invocations(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
+    engine: Option<&super::CallbackEngine>,
 ) -> Result<()> {
-    let invocations = super::documents::list_recoverable_invocations(node, agent_did).await?;
+    let mut invocations = super::documents::list_recoverable_invocations(node, node_did).await?;
+    if let Some(workers) = engine.and_then(|engine| engine.workers.as_ref()) {
+        workers.prioritize(&mut invocations);
+    }
     for invocation in invocations {
-        if invocation.owner_agent_did != agent_did {
+        if engine
+            .and_then(|engine| engine.workers.as_ref())
+            .is_some_and(|workers| workers.contains(&invocation.invocation_id))
+        {
+            continue;
+        }
+        if invocation.owner_node_did != node_did {
             continue;
         }
         if invocation.lifecycle_state == LIFECYCLE_SUCCEEDED {
@@ -690,11 +700,11 @@ pub async fn recover_local_invocations(
             }
             continue;
         }
-        if !invocation_is_claimable(agent_did, &invocation) {
+        if !invocation_is_claimable(node_did, &invocation) {
             continue;
         }
         let Some(callback) =
-            load_callback(node, &invocation.callback_id, &invocation.owner_agent_did).await?
+            load_callback(node, &invocation.callback_id, &invocation.owner_node_did).await?
         else {
             tracing::warn!(
                 invocation_id = %invocation.invocation_id,
@@ -704,7 +714,7 @@ pub async fn recover_local_invocations(
             continue;
         };
         if let Err(error) =
-            run_owned_invocation(node, &invocation, &callback, ceiling, plugins).await
+            execute_recovered(node, &invocation, &callback, ceiling, plugins, engine).await
         {
             tracing::warn!(
                 invocation_id = %invocation.invocation_id,
@@ -713,21 +723,22 @@ pub async fn recover_local_invocations(
             );
         }
     }
-    retry_failed_plugin_invocations(node, agent_did, ceiling, plugins).await
+    retry_failed_plugin_invocations(node, node_did, ceiling, plugins, engine).await
 }
 
 /// Runs a failed plugin invocation again once its backoff has passed, while
 /// its callback allows more attempts and nothing it did could repeat.
 async fn retry_failed_plugin_invocations(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
+    engine: Option<&super::CallbackEngine>,
 ) -> Result<()> {
     let now = chrono::Utc::now();
-    for failed in super::documents::list_recent_failed(node, agent_did).await? {
+    for failed in super::documents::list_recent_failed(node, node_did).await? {
         let Some(callback) =
-            load_callback(node, &failed.callback_id, &failed.owner_agent_did).await?
+            load_callback(node, &failed.callback_id, &failed.owner_node_did).await?
         else {
             continue;
         };
@@ -769,7 +780,8 @@ async fn retry_failed_plugin_invocations(
             attempt = attempts + 1,
             "retrying a failed plugin invocation"
         );
-        if let Err(error) = run_owned_invocation(node, &pending, &callback, ceiling, plugins).await
+        if let Err(error) =
+            execute_recovered(node, &pending, &callback, ceiling, plugins, engine).await
         {
             tracing::warn!(
                 invocation_id = %pending.invocation_id,
@@ -779,6 +791,21 @@ async fn retry_failed_plugin_invocations(
         }
     }
     Ok(())
+}
+
+async fn execute_recovered(
+    node: &EmbeddedNode,
+    invocation: &CallbackInvocationDoc,
+    callback: &crate::document_config::Callback,
+    ceiling: Option<&Path>,
+    plugins: &PluginExecutor,
+    engine: Option<&super::CallbackEngine>,
+) -> Result<()> {
+    if let Some(engine) = engine {
+        engine.execute_invocation(invocation, callback).await
+    } else {
+        run_owned_invocation(node, invocation, callback, ceiling, plugins).await
+    }
 }
 
 pub async fn finish_succeeded_if_docs_ready(
@@ -803,7 +830,7 @@ pub async fn finish_succeeded_if_docs_ready(
     let Some(workspace_id) = workspace_id else {
         return Ok(false);
     };
-    let docs = load_memory_workspace_docs(node, &workspace_id, &invocation.owner_agent_did).await?;
+    let docs = load_memory_workspace_docs(node, &workspace_id, &invocation.owner_node_did).await?;
     let workspace = docs.load_isolated_workspace(&workspace_id)?;
     let placement = docs.load_placement(&workspace_id)?;
     if !result_docs_ready(&journal, workspace.as_ref(), placement.as_ref()) {
@@ -815,7 +842,7 @@ pub async fn finish_succeeded_if_docs_ready(
     let Some(placement) = placement else {
         return Ok(false);
     };
-    if load_callback_result(node, &invocation.invocation_id, &invocation.owner_agent_did)
+    if load_callback_result(node, &invocation.invocation_id, &invocation.owner_node_did)
         .await?
         .is_some()
         && invocation.lifecycle_state == LIFECYCLE_SUCCEEDED
@@ -878,7 +905,7 @@ mod path_capability_tests {
     #[test]
     fn builtin_requires_capability_in_frozen_projected_input() {
         let callback: crate::document_config::Callback = serde_json::from_value(json!({
-            "callback_id":"path-contract", "agent_did":"did:key:writer", "handler":{"kind":"built_in","emitter":"create_workspace"}
+            "callback_id":"path-contract", "node_did":"did:key:writer", "handler":{"kind":"built_in","emitter":"create_workspace"}
         })).unwrap();
         let mut source = json!({"work_unit_id":"unit","repository_id":"repo","base_sha":"base","branch":"branch"});
         assert!(plan_from_callback(&callback, &source, None).is_err());

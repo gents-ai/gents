@@ -38,18 +38,18 @@ vi.stubGlobal(
 );
 
 vi.mock("../src/ui/screens/BehaviorPicker", () => ({
-  BehaviorPicker: () => null,
+  AgentPicker: () => null,
 }));
 
-const AGENT = deployment.agentDid;
+const NODE = deployment.nodeDid;
 
 /* a session held for the screen: interrupted (so a message may follow)
    unless a test says otherwise */
 function heldSession(over: Partial<DesktopSessionSnapshot> = {}) {
   return {
     sessionId: "session",
-    agentDid: AGENT,
-    behaviorId: "default",
+    nodeDid: NODE,
+    agentId: "default",
     title: "Session",
     turnState: "interrupted",
     timelineItems: [],
@@ -58,6 +58,8 @@ function heldSession(over: Partial<DesktopSessionSnapshot> = {}) {
     latestRequestOutcome: null,
     goal: null,
     context: null,
+    queuedTurns: [],
+    foldedInputs: [],
     ...over,
   } as unknown as DesktopSessionSnapshot;
 }
@@ -87,7 +89,7 @@ function screenApp({
     },
     deployments: [node(nodeOverrides)],
     session,
-    selection: { agentDid: AGENT, sessionId: session?.sessionId ?? null },
+    selection: { nodeDid: NODE, sessionId: session?.sessionId ?? null },
   });
   return { app, sendChatMessage };
 }
@@ -180,45 +182,45 @@ describe("SessionScreen canonical composer admission", () => {
     hold(app, second);
     expect(screen.getByLabelText("Message")).toHaveValue("second draft");
   });
-  it("uses the selected non-default behavior decision, never the default or retry path", () => {
+  it("uses the selected non-default agent decision, never the default or retry path", () => {
     const selected = (defaultReady: boolean, selectedReady: boolean) => {
       const deployment = {
-        agentDid: "did:key:agent",
+        nodeDid: "did:key:agent",
         dialSucceeded: true,
         chatSafe: true,
-        agentPrincipal: { agentDid: "did:key:agent", defaultBehaviorId: "default" },
-        behaviors: [
+        node: { nodeDid: "did:key:agent", defaultAgentId: "default" },
+        agents: [
           {
-            behaviorId: "default",
+            agentId: "default",
             displayName: "Default",
             enabled: true,
             isDefault: true,
           },
           {
-            behaviorId: "selected",
+            agentId: "selected",
             displayName: "Selected",
             enabled: true,
             isDefault: false,
           },
         ],
-        behaviorReadiness: {
+        nodeReadiness: {
           source: { state: "current" },
           activeGeneration: 1,
           routerGeneration: 1,
           updatedAt: "2026-09-15T00:00:00Z",
-          behaviors: [
+          agents: [
             defaultReady
-              ? { state: "ready", behaviorId: "default" }
+              ? { state: "ready", agentId: "default" }
               : {
                   state: "unavailable",
-                  behaviorId: "default",
+                  agentId: "default",
                   reason: "backend_disabled",
                 },
             selectedReady
-              ? { state: "ready", behaviorId: "selected" }
+              ? { state: "ready", agentId: "selected" }
               : {
                   state: "unavailable",
-                  behaviorId: "selected",
+                  agentId: "selected",
                   reason: "backend_disabled",
                 },
           ],
@@ -227,7 +229,7 @@ describe("SessionScreen canonical composer admission", () => {
       } as unknown as DeploymentView;
       return projectChatShell({
         clientAvailable: true,
-        selectedAgentDid: deployment.agentDid,
+        selectedNodeDid: deployment.nodeDid,
         selectedSessionId: null,
         sending: false,
         session: null,
@@ -244,7 +246,7 @@ describe("SessionScreen canonical composer admission", () => {
     expect(selected(false, true)).toEqual({ kind: "ready" });
     expect(selected(true, false)).toMatchObject({
       kind: "disabled",
-      reason: "behaviorUnavailable",
+      reason: "agentUnavailable",
     });
   });
 
@@ -263,7 +265,7 @@ describe("SessionScreen canonical composer admission", () => {
     expect(sendChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         content: "hello",
-        behaviorId: "default",
+        agentId: "default",
         sessionId: null,
       }),
     );
@@ -285,7 +287,7 @@ describe("SessionScreen canonical composer admission", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     /* the person moves to another node while the send is in flight */
-    act(() => app.actions.selectAgent("did:key:other-agent"));
+    act(() => app.actions.selectNode("did:key:other-agent"));
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "unrelated draft" },
     });
@@ -297,7 +299,7 @@ describe("SessionScreen canonical composer admission", () => {
     expect(sendChatMessage).toHaveBeenCalledOnce();
     expect(screen.getByLabelText("Message")).toHaveValue("unrelated draft");
     expect(navigate).not.toHaveBeenCalled();
-    act(() => app.actions.selectAgent(AGENT));
+    act(() => app.actions.selectNode(NODE));
     expect(screen.getByLabelText("Message")).toHaveValue("");
   });
 
@@ -323,15 +325,245 @@ describe("SessionScreen canonical composer admission", () => {
   it("re-enables the rendered existing-session composer after terminal interruption", () => {
     const { app } = screenApp({ session: heldSession({ turnState: "running" }) });
     renderScreen(app);
+    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "follow up" },
     });
-    /* while the turn runs the composer offers Stop, not Send */
-    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    /* typed text while the turn runs is queued behind it */
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
 
     hold(app, heldSession({ turnState: "interrupted" }));
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
     expect(screen.getByLabelText("Message")).toHaveValue("follow up");
+  });
+});
+
+const queuedTurn = (requestId: string, content: string) => ({
+  requestId,
+  content,
+  selectedSkillIds: [],
+  lifecycleState: "pending",
+  foldedIntoRequestId: null,
+  origin: null,
+  createdAt: "2026-10-07T12:00:00Z",
+});
+
+const userEntry = (
+  itemKey: string,
+  sequence: number,
+  content: string,
+  input: string,
+) => ({
+  kind: "userMessage" as const,
+  itemKey,
+  requestId: "doc-request",
+  inputRequestId: input,
+  ownsTurn: itemKey === "authored:doc-request:prompt",
+  sequence,
+  content,
+  timestamp: null,
+  reconstruction: { state: "ready" as const },
+});
+
+describe("SessionScreen messages queued behind a running turn", () => {
+  it("keeps the composer usable and admits a message while the turn runs", async () => {
+    const user = userEvent.setup();
+    const { app, sendChatMessage } = screenApp({
+      session: heldSession({
+        turnState: "running",
+        timelineItems: [
+          userEntry("authored:doc-request:prompt", 1, "how are we looking", "request"),
+        ],
+      }),
+    });
+    renderScreen(app);
+    const message = screen.getByRole("textbox", { name: "Message" });
+    expect(message).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
+    await user.type(message, "one more thing");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(sendChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "one more thing", sessionId: "session" }),
+    );
+  });
+
+  it("shows queued messages after the running turn, in queue order, as queued", () => {
+    const { app } = screenApp({
+      session: heldSession({
+        turnState: "running",
+        timelineItems: [
+          userEntry("authored:doc-request:prompt", 1, "how are we looking", "request"),
+        ],
+        queuedTurns: [
+          queuedTurn("first", "we should move faster"),
+          queuedTurn("second", "and check the tests"),
+        ],
+      }),
+    });
+    renderScreen(app);
+    expect(screen.getAllByTestId("queued-input").map((row) => row.textContent)).toEqual(
+      ["we should move fasterPending", "and check the testsPending"],
+    );
+    const text = screen.getByTestId("transcript-panel").textContent ?? "";
+    expect(text.indexOf("how are we looking")).toBeLessThan(
+      text.indexOf("we should move faster"),
+    );
+  });
+
+  it("renders folded messages once, as the claimed turn's own input", () => {
+    const { app } = screenApp({
+      session: heldSession({
+        turnState: "running",
+        timelineItems: [
+          userEntry("authored:doc-request:prompt", 1, "how are we looking", "request"),
+          userEntry(
+            "authored:doc-request:folded:doc-first",
+            2,
+            "we should move faster",
+            "first",
+          ),
+          userEntry(
+            "authored:doc-request:folded:doc-second",
+            3,
+            "and check the tests",
+            "second",
+          ),
+        ],
+        foldedInputs: [
+          { requestId: "first", foldedIntoRequestId: "request" },
+          { requestId: "second", foldedIntoRequestId: "request" },
+        ],
+      }),
+    });
+    renderScreen(app);
+    expect(screen.queryAllByTestId("queued-input")).toHaveLength(0);
+    expect(screen.getAllByText("we should move faster")).toHaveLength(1);
+    expect(screen.getAllByText("and check the tests")).toHaveLength(1);
+    expect(screen.queryByText("Queued")).not.toBeInTheDocument();
+  });
+
+  it("shows a queued message the runtime ended before sending", () => {
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          {
+            kind: "pendingUserTurn",
+            itemKey: "pending-dropped",
+            requestId: "dropped",
+            content: "never sent",
+            selectedSkillIds: [],
+            lifecycleState: "interrupted",
+            foldedIntoRequestId: null,
+            origin: null,
+            createdAt: null,
+          },
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    expect(screen.getByText("Not sent · interrupted")).toBeInTheDocument();
+  });
+});
+
+describe("SessionScreen automated inputs", () => {
+  const durable = (itemKey: string, sequence: number) => ({
+    itemKey,
+    requestId: `doc-${itemKey}`,
+    sequence,
+    timestamp: null,
+    reconstruction: { state: "ready" as const },
+  });
+
+  it("renders inputs nobody typed in stream order as compact items that expand", async () => {
+    const user = userEvent.setup();
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          { kind: "userMessage", content: "start the review", ...durable("person", 1) },
+          {
+            kind: "assistantMessage",
+            content: "started",
+            reasoning: null,
+            ...durable("answer", 2),
+          },
+          {
+            kind: "automatedInput",
+            origin: {
+              kind: "sessionMessage",
+              senderNodeDid: NODE,
+              senderSessionId: "sender-session",
+              senderRequestId: "sender-request",
+            },
+            content: "please review the diff\nit is in src/",
+            ...durable("message", 3),
+          },
+          {
+            kind: "automatedInput",
+            origin: { kind: "trigger", triggerId: "nightly", triggerKind: "schedule" },
+            content: "write the nightly report",
+            ...durable("trigger", 4),
+          },
+          {
+            kind: "automatedInput",
+            origin: { kind: "backgroundCompletion" },
+            content: "<agent-notification>done</agent-notification>",
+            ...durable("background", 5),
+          },
+          {
+            kind: "automatedInput",
+            origin: { kind: "goalContinuation", goalId: "goal-1", sequence: 2 },
+            content: "You are running under the durable goal controller",
+            ...durable("goal", 6),
+          },
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    const items = screen.getAllByTestId("automated-input");
+    expect(items.map((item) => item.textContent)).toEqual([
+      expect.stringContaining("Message from another session"),
+      expect.stringContaining("Schedule · nightly"),
+      expect.stringContaining("Background work finished"),
+      expect.stringContaining("Goal continuation · 2"),
+    ]);
+    const text = screen.getByTestId("transcript-panel").textContent ?? "";
+    expect(text.indexOf("started")).toBeLessThan(text.indexOf("Message from"));
+    expect(screen.queryByTestId("automated-input-content")).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", {
+        name: "Message from another session: show its published input",
+      }),
+    );
+    expect(screen.getByTestId("automated-input-content").textContent).toBe(
+      "please review the diff\nit is in src/",
+    );
+  });
+
+  it("says why an input is unavailable instead of expanding to nothing", async () => {
+    const user = userEvent.setup();
+    const { app } = screenApp({
+      session: heldSession({
+        timelineItems: [
+          {
+            kind: "automatedInput",
+            itemKey: "authored:doc-trigger:prompt",
+            requestId: "doc-trigger",
+            sequence: 1,
+            origin: { kind: "trigger", triggerId: "nightly", triggerKind: "event" },
+            content: null,
+            timestamp: null,
+            reconstruction: { state: "denied", deniedDependencyDocId: "segment" },
+          },
+        ] as DesktopSessionSnapshot["timelineItems"],
+      }),
+    });
+    renderScreen(app);
+    await user.click(
+      screen.getByRole("button", { name: "Event · nightly: show its published input" }),
+    );
+    expect(screen.getByTestId("automated-input-unavailable")).toHaveTextContent(
+      "This input is not shared with this device.",
+    );
   });
 });
 
@@ -386,7 +618,7 @@ describe("renaming a session", () => {
     });
     await app.actions.renameSession("session", "Renamed");
     expect(renameSession).toHaveBeenCalledWith({
-      agentDid: AGENT,
+      nodeDid: NODE,
       sessionId: "session",
       title: "Renamed",
     });
@@ -422,7 +654,7 @@ describe("renaming a session", () => {
     await user.type(input, "Renamed session{Enter}");
     await vi.waitFor(() =>
       expect(renameSession).toHaveBeenCalledWith({
-        agentDid: AGENT,
+        nodeDid: NODE,
         sessionId: "session",
         title: "Renamed session",
       }),
@@ -431,7 +663,7 @@ describe("renaming a session", () => {
     await vi.waitFor(() =>
       expect(fetchSessionSnapshot).toHaveBeenCalledWith(
         "session",
-        AGENT,
+        NODE,
         null,
         expect.objectContaining({ limit: expect.any(Number) }),
       ),

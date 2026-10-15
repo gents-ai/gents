@@ -7,7 +7,7 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 #[tokio::test]
 async fn fork_does_not_transition_parent_lifecycle_state() {
     use gents::session::{fork, ForkParams};
-    use support::{create_agent_behavior, create_agent_message, create_agent_session};
+    use support::{create_agent, create_agent_message, create_agent_session};
 
     let db = test_db("fork-no-lifecycle-transition").await;
 
@@ -19,7 +19,7 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
         "2026-04-21T10:00:00Z",
     )
     .await;
-    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    create_agent(&db.node, AGENT_NAME, NODE_DID).await;
 
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_doc_id = create_request(
@@ -58,9 +58,9 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
         ForkParams {
             source_session_id: &parent_session,
             fork_at_user_turn: 0,
-            caller_agent_did: AGENT_DID,
+            caller_node_did: NODE_DID,
             caller_requester_did: None,
-            target_behavior_id: None,
+            target_agent_id: None,
         },
     )
     .await
@@ -130,7 +130,7 @@ async fn pending_tie_break_prefers_interrupt_over_expire() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -160,7 +160,7 @@ async fn fail_after_interrupt_latch_prefers_interrupted() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -254,7 +254,7 @@ async fn interrupt_on_already_terminal_is_noop() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -325,7 +325,7 @@ async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
     let mut lifecycle_a = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         request_a,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -363,7 +363,7 @@ async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
     let mut lifecycle_b = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         request_b,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -422,7 +422,7 @@ async fn s8_valid_until_never_rewritten_by_transitions() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -478,7 +478,7 @@ async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -596,7 +596,7 @@ async fn manual_run_materializes_pending_request() {
         snap.execution_origin, "interactive",
         "manual runs inherit the interactive execution origin"
     );
-    assert_eq!(snap.behavior_id, AGENT_NAME);
+    assert_eq!(snap.agent_id, AGENT_NAME);
 
     let lineage = fetch_request_lineage_snapshot(&db.node, &doc_id).await;
     assert_eq!(
@@ -690,7 +690,7 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
         session_id.clone(),
         created_at,
     );
-    request.agent_did = db.node_identity.did().to_string();
+    request.node_did = db.node_identity.did().to_string();
     request.requester_did = row
         .get("requester_did")
         .and_then(|value| value.as_str())
@@ -738,7 +738,7 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
 
 /// On the first `interrupt_requested_at` latch, `interrupt_request` drains
 /// already-pending automated wake-ups in the same transaction. The query is
-/// scoped to the interrupted row's own `agent_did` (#664), and its predicate
+/// scoped to the interrupted row's own `node_did` (#664), and its predicate
 /// selects only scheduled coalesced background-completion wake-ups. A replay
 /// does not drain wakes queued after the latch. This test observes which rows
 /// the first latch terminalizes, including the foreign replica that survives.
@@ -746,7 +746,7 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
 async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
     let db = test_db("interrupt-drain-wakeups").await;
     let session_id = "interrupt-drain-session";
-    let foreign_did = "did:test:foreign-drain";
+    let foreign_node_did = "did:test:foreign-drain";
     let wakeup_input = format!(
         r#"{{"queue":{{"source":"background_completion","policy":"coalesce","key":"background_completion:{session_id}","queued_after_request_id":null}}}}"#
     );
@@ -767,29 +767,29 @@ async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
         &db.node,
         "drain-wakeup-owner",
         session_id,
-        AGENT_DID,
+        NODE_DID,
         "scheduled",
         &wakeup_input,
     )
     .await;
-    // Same session, same row shape, foreign principal: the drain's
-    // agent_did-scoped query must never surface it (#664).
+    // Same session, same row shape, foreign node: the drain's
+    // node_did-scoped query must never surface it (#664).
     create_pending_queue_row(
         &db.node,
         "drain-wakeup-foreign",
         session_id,
-        foreign_did,
+        foreign_node_did,
         "scheduled",
         &wakeup_input,
     )
     .await;
-    // Owner principal but interactive origin: a user-turn queue row is not an
+    // Owner node but interactive origin: a user-turn queue row is not an
     // automated wake-up and must survive its session's interrupt.
     create_pending_queue_row(
         &db.node,
         "drain-wakeup-interactive",
         session_id,
-        AGENT_DID,
+        NODE_DID,
         "interactive",
         &wakeup_input,
     )
@@ -800,7 +800,7 @@ async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
         &db.node,
         "drain-scheduled-user",
         session_id,
-        AGENT_DID,
+        NODE_DID,
         "scheduled",
         non_wakeup_input,
     )
@@ -832,11 +832,11 @@ async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
     );
 
     let foreign = fetch_drain_row(&db.node, "drain-wakeup-foreign").await;
-    assert_eq!(foreign.agent_did, foreign_did);
+    assert_eq!(foreign.node_did, foreign_node_did);
     assert_eq!(
         foreign.lifecycle_state,
         RequestLifecycleState::Pending,
-        "a foreign-principal replica sharing the session must never be drained by this owner"
+        "a foreign-node replica sharing the session must never be drained by this owner"
     );
 
     let interactive = fetch_drain_row(&db.node, "drain-wakeup-interactive").await;
@@ -858,13 +858,13 @@ async fn create_pending_queue_row(
     node: &EmbeddedNode,
     request_id: &str,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     execution_origin: &str,
     input: &str,
 ) {
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let escaped_origin = escape_graphql_string(execution_origin);
     let input = serde_json::from_str::<Value>(input).expect("request input JSON");
     let input =
@@ -874,8 +874,8 @@ async fn create_pending_queue_row(
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 purpose: "normal",
-                agent_did: "{escaped_agent_did}",
-                behavior_id: "{AGENT_NAME}",
+                node_did: "{escaped_node_did}",
+                agent_id: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{escaped_request_id}",
@@ -904,7 +904,7 @@ struct DrainRow {
     lifecycle_state: RequestLifecycleState,
     #[serde(default)]
     failure_reason: Option<String>,
-    agent_did: String,
+    node_did: String,
 }
 
 async fn fetch_drain_row(node: &EmbeddedNode, request_id: &str) -> DrainRow {
@@ -914,7 +914,7 @@ async fn fetch_drain_row(node: &EmbeddedNode, request_id: &str) -> DrainRow {
             AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
                 lifecycle_state
                 failure_reason
-                agent_did
+                node_did
             }}
         }}"#
     );

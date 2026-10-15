@@ -68,13 +68,13 @@ struct NotificationRow {
 /// one attempt in that epoch completes successfully.
 pub async fn load_background_completion_diagnostics(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<BackgroundCompletionDiagnostics> {
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
             wakes: AgentRequest(filter: {{
-                agent_did: {{ _eq: "{escaped_agent_did}" }},
+                node_did: {{ _eq: "{escaped_node_did}" }},
                 execution_origin: {{ _eq: "scheduled" }}
             }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}], limit: {WAKE_SCAN_LIMIT}) {{
                 _docID request_id session_id retry_root_request input lifecycle_state
@@ -83,7 +83,7 @@ pub async fn load_background_completion_diagnostics(
                 background_completion_notification_keys_json
             }}
             notifications: AgentMessage(filter: {{
-                agent_did: {{ _eq: "{escaped_agent_did}" }},
+                node_did: {{ _eq: "{escaped_node_did}" }},
                 message_key: {{ _like: "background-completion-notification:%" }}
             }}, order: {{ created_at: DESC }}, limit: {NOTIFICATION_SCAN_LIMIT}) {{
                 message_key request_doc_id
@@ -135,7 +135,7 @@ pub async fn load_background_completion_diagnostics(
                     // The diagnostic scan is bounded, but authority comes from all
                     // actual scoped requests, including ordinary later user turns.
                     if let Some(head) =
-                        crate::session::load_latest_request_in_txn(txn, agent_did, session_id, None)
+                        crate::session::load_latest_request_in_txn(txn, node_did, session_id, None)
                             .await?
                     {
                         heads.insert(session_id.to_owned(), head.observed.request_doc_id);
@@ -464,7 +464,7 @@ mod tests {
             max_retries: Some(max_retries),
             background_completion_input_through_sequence: Some(1),
             background_completion_notification_keys_json: Some(
-                r#"["background-completion-notification:child-1:subagent"]"#.to_string(),
+                r#"["background-completion-notification:child-1:agent"]"#.to_string(),
             ),
             ..Default::default()
         }
@@ -472,7 +472,7 @@ mod tests {
 
     fn notification(request_id: &str, suffix: &str) -> NotificationRow {
         NotificationRow {
-            message_key: format!("background-completion-notification:{suffix}:subagent"),
+            message_key: format!("background-completion-notification:{suffix}:agent"),
             request_doc_id: Some(format!("physical-{request_id}")),
         }
     }
@@ -576,8 +576,8 @@ mod tests {
         let mut successor = wake("wake-2", None, "completed", 0, 3);
         successor.background_completion_notification_keys_json = Some(
             serde_json::to_string(&vec![
-                "background-completion-notification:child-1:subagent",
-                "background-completion-notification:child-2:subagent",
+                "background-completion-notification:child-1:agent",
+                "background-completion-notification:child-2:agent",
             ])
             .unwrap(),
         );
@@ -667,9 +667,9 @@ mod tests {
         // directly and maintain no session cache.
         let owner = "did:test:diagnostics\"owner";
         let mut failed = serde_json::json!({
-            "agent_did":owner, "requester_did":"requester-a", "request_id":"wake", "session_id":"shared-session",
+            "node_did":owner, "requester_did":"requester-a", "request_id":"wake", "session_id":"shared-session",
             "purpose":"normal",
-            "behavior_id":"behavior", "input":input(), "execution_origin":"scheduled",
+            "agent_id":"general", "input":input(), "execution_origin":"scheduled",
             "lifecycle_state":"failed", "created_at":"2026-08-12T00:00:00Z",
             "terminalized_at":"2026-08-12T00:00:05Z", "retry_count":0, "max_retries":3
         });
@@ -677,9 +677,9 @@ mod tests {
         for value in [
             failed.clone(),
             serde_json::json!({
-                "agent_did":"foreign-owner", "requester_did":"requester-z", "request_id":"foreign-later",
+                "node_did":"foreign-owner", "requester_did":"requester-z", "request_id":"foreign-later",
                 "purpose":"normal",
-                "session_id":"shared-session", "behavior_id":"behavior", "execution_origin":"interactive",
+                "session_id":"shared-session", "agent_id":"general", "execution_origin":"interactive",
                 "lifecycle_state":"completed", "created_at":"2026-08-14T00:00:00Z"
             }),
         ] {
@@ -697,7 +697,7 @@ mod tests {
             }
         }
         access.write("test.diagnostic.notification", &format!("mutation {{ create_AgentMessage(input:{}){{_docID}} }}", gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
-            "agent_did":owner,"session_id":"shared-session","message_key":"background-completion-notification:child:subagent",
+            "node_did":owner,"session_id":"shared-session","message_key":"background-completion-notification:child:agent",
             "request_doc_id":wake_doc_id.context("wake not created")?,"role":"user","sequence":1,"created_at":"2026-08-12T00:00:01Z"
         }))?)).await?;
         let diagnostics = load_background_completion_diagnostics(&access, owner).await?;

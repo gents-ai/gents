@@ -8,7 +8,7 @@
 //! prefill tax on each hop. See issue #447.
 //!
 //! The session id is resolved per request from the admission task-local request
-//! context, because the rig completion client is built once per behavior while
+//! context, because the rig completion client is built once per agent while
 //! the session id varies per request. This mirrors the per-request injection
 //! seam already used by [`crate::chatgpt_codex::ChatGptCodexHttpClient`].
 

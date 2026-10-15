@@ -1,5 +1,5 @@
 use super::*;
-use crate::identity::{AgentIdentity, KeyIdentity};
+use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
 use crate::streaming::DefraStreamWriter;
 use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
@@ -59,10 +59,10 @@ async fn claimed(
             .await
             .unwrap();
     }
-    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
-        request.agent_did.as_deref().expect("fixture agent DID"),
+        request.node_did.as_deref().expect("fixture agent DID"),
         request.clone().try_into().unwrap(),
         60,
     );
@@ -140,7 +140,7 @@ async fn terminalize_accepted_tool(
         .expect("claimed request deadline");
     let mut tool = ToolCallLifecycle::from_accepted(
         node.clone(),
-        lifecycle.request().agent_did.clone(),
+        lifecycle.request().node_did.clone(),
         lifecycle.request().requester_did.clone(),
         accepted,
         deadline,
@@ -215,7 +215,7 @@ async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
         let tool_call_doc_id = accepted.tool_call_doc_id.clone();
         let mut tool = ToolCallLifecycle::from_accepted(
             node.clone(),
-            lifecycle.request().agent_did.clone(),
+            lifecycle.request().node_did.clone(),
             lifecycle.request().requester_did.clone(),
             accepted,
             lifecycle.claimed_deadline_at().expect("claimed deadline"),
@@ -315,7 +315,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             1,
             false,
             "2026-09-05T00:00:01Z",
-            root_request.subagent_depth,
+            root_request.request_hop,
         )
         .unwrap();
         if !case["authenticated_child"].as_bool().unwrap() {
@@ -645,7 +645,7 @@ async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
     for accepted in published.accepted_tools.drain(..) {
         let mut tool = ToolCallLifecycle::from_accepted(
             node.clone(),
-            lifecycle.request().agent_did.clone(),
+            lifecycle.request().node_did.clone(),
             lifecycle.request().requester_did.clone(),
             accepted,
             deadline,

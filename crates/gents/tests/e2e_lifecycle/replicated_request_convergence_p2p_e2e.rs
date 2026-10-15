@@ -40,7 +40,7 @@ use crate::support::test_p2p_db;
 
 const OWNER_DID: &str = "did:test:convergence-p2p-owner";
 const PEER_DID: &str = "did:test:convergence-p2p-peer";
-const BEHAVIOR_ID: &str = "convergence-p2p-behavior";
+const AGENT_ID: &str = "convergence-p2p-behavior";
 
 async fn install_one_way_replicator(
     sender: &Arc<EmbeddedNode>,
@@ -141,12 +141,12 @@ async fn create_request(
     node: &EmbeddedNode,
     request_id: &str,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     lifecycle_state: &str,
 ) {
     let request_id = escape_graphql_string(request_id);
     let session_id = escape_graphql_string(session_id);
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let lifecycle_state = escape_graphql_string(lifecycle_state);
     let created_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let terminal_fields = if matches!(lifecycle_state.as_str(), "completed" | "failed") {
@@ -159,9 +159,9 @@ async fn create_request(
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
                 purpose: "normal",
-                agent_did: "{agent_did}",
+                node_did: "{node_did}",
                 requester_did: "{PEER_DID}",
-                behavior_id: "{BEHAVIOR_ID}",
+                agent_id: "{AGENT_ID}",
                 session_id: "{session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{request_id}",
@@ -174,7 +174,7 @@ async fn create_request(
                 created_at: "{created_at}",
                 retry_count: 0,
                 max_retries: 3,
-                subagent_depth: 0
+                request_hop: 0
                 {terminal_fields}
             }}) {{ _docID }}
         }}"#
@@ -190,11 +190,11 @@ async fn create_request(
 async fn terminalize_request(
     node: &EmbeddedNode,
     request_id: &str,
-    agent_did: &str,
+    node_did: &str,
     lifecycle_state: &str,
 ) {
     let request_id = escape_graphql_string(request_id);
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let lifecycle_state = escape_graphql_string(lifecycle_state);
     let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let mutation = format!(
@@ -202,7 +202,7 @@ async fn terminalize_request(
             update_AgentRequest(
                 filter: {{
                     request_id: {{ _eq: "{request_id}" }},
-                    agent_did: {{ _eq: "{agent_did}" }}
+                    node_did: {{ _eq: "{node_did}" }}
                 }},
                 input: {{
                     lifecycle_state: "{lifecycle_state}",
@@ -227,7 +227,7 @@ async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<AgentReq
             AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
                 _docID
                 request_id
-                agent_did
+                node_did
                 lifecycle_state
             }}
         }}"#
@@ -299,11 +299,11 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     )
     .await;
     assert_eq!(
-        on_peer_processing.agent_did.as_deref(),
+        on_peer_processing.node_did.as_deref(),
         Some(OWNER_DID),
         "peer replica must retain the owner's DID (peer is passive)"
     );
-    assert_ne!(on_peer_processing.agent_did.as_deref(), Some(PEER_DID));
+    assert_ne!(on_peer_processing.node_did.as_deref(), Some(PEER_DID));
 
     terminalize_request(owner.node.as_ref(), request_id, OWNER_DID, "completed").await;
 
@@ -324,7 +324,7 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
         "peer (terminal, first delivery)",
     )
     .await;
-    assert_eq!(on_peer_terminal.agent_did.as_deref(), Some(OWNER_DID));
+    assert_eq!(on_peer_terminal.node_did.as_deref(), Some(OWNER_DID));
     assert_eq!(
         on_peer_terminal.lifecycle_state, on_owner.lifecycle_state,
         "peer must match owner terminal exactly"
@@ -347,7 +347,7 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
         "peer (after re-drive)",
     )
     .await;
-    assert_eq!(after_redrive.agent_did.as_deref(), Some(OWNER_DID));
+    assert_eq!(after_redrive.node_did.as_deref(), Some(OWNER_DID));
     assert_eq!(after_redrive.doc_id, on_peer_terminal.doc_id);
 
     let mut total_reasserted = first.reasserted;
@@ -379,7 +379,7 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
         final_peer.lifecycle_state,
         Some(RequestLifecycleState::Completed)
     );
-    assert_eq!(final_peer.agent_did.as_deref(), Some(OWNER_DID));
+    assert_eq!(final_peer.node_did.as_deref(), Some(OWNER_DID));
 
     owner.node.shutdown().await;
     peer.node.shutdown().await;
@@ -433,7 +433,7 @@ async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
         "peer (after full replay)",
     )
     .await;
-    assert_eq!(on_peer.agent_did.as_deref(), Some(OWNER_DID));
+    assert_eq!(on_peer.node_did.as_deref(), Some(OWNER_DID));
     let still_exhausted =
         RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
             .await

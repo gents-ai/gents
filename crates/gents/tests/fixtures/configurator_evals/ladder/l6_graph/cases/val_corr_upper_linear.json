@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "build_and_run",
-      "prompt": "Build the correlation + uppercased-result contract as a graph. Graph id 'g-corr-upper'. 1) Create two tasks bound to this engineer behavior: 't-corr-emit' whose prompt_template renders both the correlation id and the word it receives and emits them as its node output; 't-corr-upper' whose prompt_template reads the item carrying correlation id 'corr-42' and emits the correlation id together with the uppercase of its word. 2) Author graph 'g-corr-upper': node 'emit' bound to t-corr-emit, node 'upper' bound to t-corr-upper, edge emit.out -> upper.in, result 'uppercased' from node 'upper' port 'out', cardinality one. 3) Preview it; fix and re-preview on any validation error; do not run an invalid graph. 4) Run it with input {\"correlation\": \"corr-42\", \"word\": \"orchard\"}. 5) Read the run back with get_graph_run and its result with get_graph_result.",
+      "prompt": "Build the correlation + uppercased-result contract as a graph. Graph id 'g-corr-upper'. 1) Create two tasks bound to this engineer agent: 't-corr-emit' whose prompt_template renders both the correlation id and the word it receives and emits them as its node output; 't-corr-upper' whose prompt_template reads the item carrying correlation id 'corr-42' and emits the correlation id together with the uppercase of its word. 2) Author graph 'g-corr-upper': node 'emit' bound to t-corr-emit, node 'upper' bound to t-corr-upper, edge emit.out -> upper.in, result 'uppercased' from node 'upper' port 'out', cardinality one. 3) Preview it; fix and re-preview on any validation error; do not run an invalid graph. 4) Run it with input {\"correlation\": \"corr-42\", \"word\": \"orchard\"}. 5) Read the run back with get_graph_run and its result with get_graph_result.",
       "deadline_secs": 600,
       "checks": [
         {
@@ -86,7 +86,7 @@
           "name": "run_calls",
           "collection": "AgentToolCall",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "tool_name": {

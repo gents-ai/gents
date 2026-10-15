@@ -66,12 +66,12 @@ pub struct RenderedRequestContext {
     /// this request. Empty only for a one-shot run.
     pub request_commit_cid: String,
     pub request_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     /// The requesting principal. Empty when the request has none — an empty DID
     /// is never a participant, so downstream authorization must treat `""` as
     /// "owner only" rather than as a DID.
     pub requester_did: String,
-    pub behavior_id: String,
+    pub agent_id: String,
     pub session_id: String,
     /// The behavior's configured model. Used only when the captured body names
     /// no `model`.
@@ -130,7 +130,7 @@ impl RenderedRequestComponents {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderedCompletionRequest {
-    /// `capture_key(agent_did, session_id, request_doc_id, capture_scope,
+    /// `capture_key(node_did, session_id, request_doc_id, capture_scope,
     /// turn_index, attempt)`. The unique index on the durable row and the
     /// idempotency key of the sink.
     pub capture_key: String,
@@ -148,10 +148,10 @@ pub struct RenderedCompletionRequest {
     pub capture_scope: String,
     pub turn_index: usize,
     pub attempt: u32,
-    pub agent_did: String,
+    pub node_did: String,
     /// Empty when the request carried no requester DID.
     pub requester_did: String,
-    pub behavior_id: String,
+    pub agent_id: String,
     pub session_id: String,
     pub model_name: String,
     pub source: RenderedRequestSource,
@@ -199,7 +199,7 @@ pub fn build_rendered_completion_request(
     } = components;
 
     let capture_key = capture_key(
-        &context.agent_did,
+        &context.node_did,
         &context.session_id,
         &context.request_doc_id,
         capture_scope,
@@ -235,9 +235,9 @@ pub fn build_rendered_completion_request(
         capture_scope: capture_scope.to_string(),
         turn_index,
         attempt,
-        agent_did: context.agent_did.clone(),
+        node_did: context.node_did.clone(),
         requester_did: context.requester_did.clone(),
-        behavior_id: context.behavior_id.clone(),
+        agent_id: context.agent_id.clone(),
         session_id: context.session_id.clone(),
         model_name,
         source,
@@ -281,7 +281,7 @@ pub fn build_rendered_completion_request(
 /// reintroduce exactly the delimiter collision the array encoding exists to
 /// rule out.
 pub fn capture_key(
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     request_doc_id: &str,
     capture_scope: &str,
@@ -289,7 +289,7 @@ pub fn capture_key(
     attempt: u32,
 ) -> Result<String> {
     let tuple = json!([
-        agent_did,
+        node_did,
         session_id,
         [request_doc_id, capture_scope],
         turn_index,

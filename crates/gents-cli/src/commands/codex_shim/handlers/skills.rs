@@ -16,10 +16,10 @@ fn skill_doc_path(skill_id: &str) -> gents_codex_protocol::AbsolutePathBuf {
 
 pub(super) async fn load_skill_metadata(state: &ShimState) -> Result<Vec<codex::SkillMetadata>> {
     let query = format!(
-        r#"{{ Skill(filter: {{ agent_did: {{ _eq: "{did}" }} }}) {{
+        r#"{{ Skill(filter: {{ node_did: {{ _eq: "{did}" }} }}) {{
             skill_id name description enabled
         }} }}"#,
-        did = escape_graphql_string(&state.agent_did),
+        did = escape_graphql_string(&state.node_did),
     );
     let response = query_node_json(state.node.as_ref(), &query).await?;
     let rows = response
@@ -57,7 +57,7 @@ pub(super) async fn load_skill_metadata(state: &ShimState) -> Result<Vec<codex::
             interface: None,
             dependencies: None,
             path: skill_doc_path(skill_id),
-            // Gents skills are principal-owned documents. Preserve Codex's
+            // Gents skills are node-owned documents. Preserve Codex's
             // wire vocabulary by projecting that ownership as system scope.
             scope: codex::SkillScope::System,
             enabled,
@@ -85,12 +85,12 @@ pub(super) async fn handle_skills_config_write(
             .await;
         }
     };
-    let agent_did = escape_graphql_string(&state.agent_did);
+    let node_did = escape_graphql_string(&state.node_did);
     let mutation = format!(
         r#"mutation {{ update_Skill(
             filter: {{
                 skill_id: {{ _eq: "{skill_id}" }},
-                agent_did: {{ _eq: "{agent_did}" }}
+                node_did: {{ _eq: "{node_did}" }}
             }},
             input: {{ enabled: {enabled} }}
         ) {{ _docID }} }}"#,
@@ -116,7 +116,7 @@ pub(super) async fn handle_skills_config_write(
             JSONRPC_INVALID_PARAMS,
             format!(
                 "no skill {skill_id:?} belongs to bound agent {:?}",
-                state.agent_did
+                state.node_did
             ),
         )
         .await;

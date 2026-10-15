@@ -52,7 +52,7 @@ pub fn validate_fork_metadata(
             doc_id: child.doc_id.into(),
         });
     }
-    if message.agent_did != original.agent_did || message.requester_did != original.requester_did {
+    if message.node_did != original.node_did || message.requester_did != original.requester_did {
         return Err(OriginError::ScopeMismatch {
             doc_id: child.doc_id.into(),
         });
@@ -79,7 +79,7 @@ pub fn lookup_message<'a>(
     messages: &[ObservedMessage<'a>],
     denied: &[String],
     id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<ObservedMessage<'a>, OriginError> {
     if denied.iter().any(|denied| denied == id) {
@@ -100,7 +100,7 @@ pub fn lookup_message<'a>(
         return Err(OriginError::Conflict { doc_id: id.into() });
     }
     if row.doc_id.trim().is_empty()
-        || row.message.agent_did != agent_did
+        || row.message.node_did != node_did
         || row.message.requester_did.as_deref() != requester_did
     {
         return Err(OriginError::ScopeMismatch { doc_id: id.into() });
@@ -116,10 +116,10 @@ pub fn resolve_origin<'a>(
     messages: &[ObservedMessage<'a>],
     denied: &[String],
     root_doc_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<ObservedMessage<'a>, OriginError> {
-    let lookup = |id: &str| lookup_message(messages, denied, id, agent_did, requester_did);
+    let lookup = |id: &str| lookup_message(messages, denied, id, node_did, requester_did);
     let mut current = lookup(root_doc_id)?;
     let mut visited = BTreeSet::new();
     loop {
@@ -149,7 +149,7 @@ mod tests {
         TranscriptMessage {
             message_key: format!("{session}:0"),
             session_id: session.into(),
-            agent_did: "agent".into(),
+            node_did: "agent".into(),
             requester_did: Some("requester".into()),
             request_doc_id: Some("request".into()),
             publication: MessagePublication::RequestExecution {
@@ -258,7 +258,7 @@ mod tests {
                 0 => child.sequence = 1,
                 1 => child.native_id = Some("invented".into()),
                 2 => child.request_doc_id = Some("invented".into()),
-                3 => child.agent_did = "foreign".into(),
+                3 => child.node_did = "foreign".into(),
                 _ => child.requester_did = None,
             }
             assert!(resolve_origin(

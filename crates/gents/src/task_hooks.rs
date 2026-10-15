@@ -556,25 +556,26 @@ impl TaskHookExec for ManagedTaskHookExec {
 /// running it without the hooks it was fired under would skip the operator's
 /// gates, so the binding fails closed. Claim admission already refuses an
 /// automated request whose Trigger is gone.
+/// The owner flag remains true for a Task with no configured hooks.
 pub(crate) async fn resolve_request_task_hooks(
     node: &EmbeddedNode,
     request: &AgentRequest,
-) -> Result<Vec<TaskHook>> {
-    let task_id = match load_fire_task_id(node, &request.agent_did, &request.request_id).await? {
+) -> Result<(Vec<TaskHook>, bool)> {
+    let task_id = match load_fire_task_id(node, &request.node_did, &request.request_id).await? {
         Some(task_id) => Some(task_id),
         None if request.has_automated_trigger_lineage() => {
             let trigger_id = request
                 .caused_by_trigger_id
                 .as_deref()
                 .context("automated trigger lineage has no trigger_id")?;
-            load_trigger_task_id(node, &request.agent_did, trigger_id).await?
+            load_trigger_task_id(node, &request.node_did, trigger_id).await?
         }
         None => None,
     };
     let Some(task_id) = task_id else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), false));
     };
-    let task = load_task(node, &request.agent_did, &task_id)
+    let task = load_task(node, &request.node_did, &task_id)
         .await?
         .with_context(|| {
             format!("Task {task_id} this request was fired from no longer exists; refusing to run it without its hooks")
@@ -585,7 +586,7 @@ pub(crate) async fn resolve_request_task_hooks(
     );
     task.validate()
         .with_context(|| format!("Task {task_id} hooks are not admissible"))?;
-    Ok(task.hooks)
+    Ok((task.hooks, true))
 }
 
 fn nonempty_task_id(task_id: Option<String>) -> Option<String> {
@@ -601,14 +602,14 @@ struct TaskIdRow {
 
 async fn load_fire_task_id(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     request_id: &str,
 ) -> Result<Option<String>> {
     let response = graphql_with_transaction_retry(
         node,
         &format!(
             r#"{{ TriggerFire(filter: {{ owner_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}, limit: 2) {{ task_id }} }}"#,
-            escape_graphql_string(agent_did),
+            escape_graphql_string(node_did),
             escape_graphql_string(request_id),
         ),
         "load task hook fire receipt",
@@ -626,14 +627,14 @@ async fn load_fire_task_id(
 
 async fn load_trigger_task_id(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     trigger_id: &str,
 ) -> Result<Option<String>> {
     let response = graphql_with_transaction_retry(
         node,
         &format!(
-            r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ task_id }} }}"#,
-            escape_graphql_string(agent_did),
+            r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ task_id }} }}"#,
+            escape_graphql_string(node_did),
             escape_graphql_string(trigger_id),
         ),
         "load task hook trigger",
@@ -642,20 +643,20 @@ async fn load_trigger_task_id(
     let rows: Vec<TaskIdRow> = crate::graphql::rows(&response, "Trigger")?;
     anyhow::ensure!(
         rows.len() <= 1,
-        "ambiguous Trigger {trigger_id:?} for {agent_did:?}"
+        "ambiguous Trigger {trigger_id:?} for {node_did:?}"
     );
     Ok(nonempty_task_id(
         rows.into_iter().next().and_then(|row| row.task_id),
     ))
 }
 
-async fn load_task(node: &EmbeddedNode, agent_did: &str, task_id: &str) -> Result<Option<Task>> {
+async fn load_task(node: &EmbeddedNode, node_did: &str, task_id: &str) -> Result<Option<Task>> {
     let (fields, _) = config_projection(Collection::Task, None)?;
     let response = graphql_with_transaction_retry(
         node,
         &format!(
-            "{{ Task(filter: {{ agent_did: {{_eq: \"{}\"}}, task_id: {{_eq: \"{}\"}} }}, limit: 2) {{ {} }} }}",
-            escape_graphql_string(agent_did),
+            "{{ Task(filter: {{ node_did: {{_eq: \"{}\"}}, task_id: {{_eq: \"{}\"}} }}, limit: 2) {{ {} }} }}",
+            escape_graphql_string(node_did),
             escape_graphql_string(task_id),
             fields.join(" "),
         ),
@@ -665,7 +666,7 @@ async fn load_task(node: &EmbeddedNode, agent_did: &str, task_id: &str) -> Resul
     let rows: Vec<serde_json::Value> = crate::graphql::rows(&response, "Task")?;
     anyhow::ensure!(
         rows.len() <= 1,
-        "ambiguous Task {task_id:?} for {agent_did:?}"
+        "ambiguous Task {task_id:?} for {node_did:?}"
     );
     let Some(row) = rows.into_iter().next() else {
         return Ok(None);

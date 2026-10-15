@@ -98,7 +98,7 @@ theorem stored_receipt_is_durable (state post : RegistryState)
     (∃ stored ∈ post.rows, stored.envelope = row ∧ stored.isOpen = true) ∧
       row.identity.ownerPrefix = request.identity.ownerPrefix ∧
       row.identity.requesterDid = request.identity.requesterDid ∧
-      row.identity.agentDid = request.identity.agentDid ∧
+      row.identity.nodeDid = request.identity.nodeDid ∧
       row.handling = request.handling ∧ row.sessionId = request.sessionId ∧
       row.requestId = request.requestId ∧ row.content = request.content := by
   by_cases hstamp : stamped request = true
@@ -106,7 +106,7 @@ theorem stored_receipt_is_durable (state post : RegistryState)
     cases hfind : next.rows.find? (fun found =>
         found.isOpen &&
         found.envelope.identity.ownerPrefix == request.identity.ownerPrefix &&
-        found.envelope.identity.agentDid == request.identity.agentDid &&
+        found.envelope.identity.nodeDid == request.identity.nodeDid &&
         found.envelope.handling == request.handling &&
         found.envelope.sessionId == request.sessionId &&
         found.envelope.requestId == request.requestId &&

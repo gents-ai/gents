@@ -218,6 +218,44 @@ impl RequestLifecycle {
             .await
     }
 
+    /// Finishes an interactive request against its observed whole pending queue.
+    /// DefraDB 980190c mutates the AgentRequest arrival head for local and P2P
+    /// inserts in their document transaction. Reading that head inside the
+    /// finalizer supplies the point-read conflict fence that RepeatableRead
+    /// predicate scans alone cannot provide.
+    pub(crate) async fn finish_natural_turn(
+        &mut self,
+        message_doc_id: &str,
+        pending_request_doc_ids: &[String],
+    ) -> Result<bool> {
+        let generation = self.execution_generation()?.to_owned();
+        let result = terminalize_execution_with_time(
+            &self.node,
+            &self.request.doc_id,
+            TerminalAuthority::Owner(&generation),
+            RequestTerminalOutcome::Completed,
+            Some(TerminalOutput::Message {
+                message_doc_id: message_doc_id.to_owned(),
+            }),
+            "",
+            None,
+            None,
+            Some((pending_request_doc_ids, self.claimed_deadline_at)),
+        )
+        .await;
+        match result {
+            Err(error) if error.is::<PendingQueueChanged>() => Ok(false),
+            Err(error) => Err(error),
+            Ok(TerminalizeResult::Lost) => {
+                anyhow::bail!("natural completion lost execution ownership")
+            }
+            Ok(_) => {
+                self.state = LocalLifecycleState::Completed;
+                Ok(true)
+            }
+        }
+    }
+
     pub async fn terminalize_owned(
         &mut self,
         outcome: RequestTerminalOutcome,
@@ -330,6 +368,7 @@ pub(crate) async fn revoke_execution_preserving_output_at(
         reason,
         Some(now),
         Some(fresh_generation),
+        None,
     )
     .await
 }
@@ -349,6 +388,7 @@ async fn terminalize_execution(
         outcome,
         selection,
         reason,
+        None,
         None,
         None,
     )
@@ -373,6 +413,7 @@ pub(crate) async fn terminalize_owned_at(
         "",
         Some(now),
         None,
+        None,
     )
     .await
 }
@@ -386,6 +427,7 @@ async fn terminalize_execution_with_time(
     reason: &str,
     fixture_now: Option<DateTime<Utc>>,
     fixture_fresh_generation: Option<&str>,
+    pending_fence: Option<(&[String], Option<DateTime<Utc>>)>,
 ) -> Result<TerminalizeResult> {
     use super::execution_policy::{
         authorize_execution_revocation, authorize_finalize, LeaseObservation,
@@ -401,10 +443,13 @@ async fn terminalize_execution_with_time(
         node, None, crate::config_client::IdempotentTransactionRetry::Standard,
         "lifecycle.terminalize_execution",
         move |txn| Box::pin(async move {
+            if pending_fence.is_some() {
+                crate::graphql::fence_arrivals(txn, "AgentRequest").await?;
+            }
             let doc_id = escape_graphql_string(request_doc_id);
             let result = txn.execute_local_response(&format!(r#"{{ AgentRequest(
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-                _docID request_id purpose agent_did requester_did session_id lifecycle_state
+                _docID request_id purpose node_did requester_did session_id lifecycle_state
                 execution_generation execution_lease_expires_at interrupt_requested_at terminal_output
             }} }}"#)).await?;
             let row = crate::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
@@ -442,8 +487,14 @@ async fn terminalize_execution_with_time(
             if !authorized || row.terminal_output.is_some() {
                 return Ok(TerminalizeResult::Lost);
             }
-            let agent = row.agent_did.as_deref().context("missing request agent")?;
+            let agent = row.node_did.as_deref().context("missing request agent")?;
             let session_id = row.session_id.as_deref().context("missing request session")?;
+            if let Some((expected, request_deadline)) = pending_fence {
+                anyhow::ensure!(request_deadline.is_none_or(|deadline| Utc::now() < deadline), "request deadline expired before natural completion");
+                let actual = super::queue::pending_ids_in_txn(txn, agent, session_id).await?;
+                if actual != expected { return Err(PendingQueueChanged.into()); }
+            }
+
             let headers = session::load_request_headers_in_txn(
                 txn, session_id, agent, row.requester_did.as_deref(), request_doc_id
             ).await?;
@@ -516,6 +567,8 @@ async fn terminalize_execution_with_time(
             let timestamp_gql = escape_graphql_string(&timestamp);
             let outcome_reason = reason;
             let reason = escape_graphql_string(reason);
+            let stopped_before_running = state.certifies_stopped_before_running(
+                effective_outcome.request_state(), matches!(authority, TerminalAuthority::Owner(_)));
             let target = escape_graphql_string(effective_outcome.request_state().as_str());
             let state = escape_graphql_string(state.as_str());
             let mutation = format!(r#"mutation($terminal_output: JSON) {{ update_AgentRequest(
@@ -524,7 +577,7 @@ async fn terminalize_execution_with_time(
                 input: {{ lifecycle_state: "{target}", execution_generation: "{next_generation}",
                     execution_lease_expires_at: "{timestamp_gql}", failure_reason: "{reason}",
                     terminalized_at: "{timestamp_gql}", terminal_redrive_attempts: 0,
-                    terminal_output: $terminal_output }}
+                    terminal_output: $terminal_output, stopped_before_running: {stopped_before_running} }}
             ) {{ _docID }} }}"#);
             let result = txn.execute_with_variables(&mutation, &serde_json::json!({
                 "terminal_output": selection
@@ -636,3 +689,7 @@ pub(super) fn validate_title_sources_decided(
 
 #[cfg(test)]
 mod tests;
+
+#[derive(Debug, thiserror::Error)]
+#[error("pending input changed before natural completion")]
+struct PendingQueueChanged;

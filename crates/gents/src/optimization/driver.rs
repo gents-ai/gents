@@ -60,7 +60,7 @@ pub struct JobRequest {
     pub owner: String,
     /// The DID of the home that launched the job, recorded on every run.
     pub evaluator_did: String,
-    pub behavior_id: String,
+    pub agent_id: String,
     pub target: JobTarget,
     pub definition_id: String,
     pub inference_profile_id: String,
@@ -282,7 +282,7 @@ pub(crate) fn run_request(request: &JobRequest, origin: &JobOrigin, plan: &RunPl
                 cell_id: (*cell_id).to_owned(),
                 label: (*cell_id).to_owned(),
                 source: CellSource::Directory(pack.clone()),
-                behavior_id: origin.subject.behavior_id.clone(),
+                agent_id: origin.subject.agent_id.clone(),
                 inference_profile_id: origin.inference_profile_id.clone(),
             })
             .collect(),
@@ -647,8 +647,8 @@ pub(crate) fn check_resume(
     if origin.seed_base != request.seed_base {
         differs.push("seed_base");
     }
-    if origin.subject.behavior_id != request.behavior_id {
-        differs.push("behavior_id");
+    if origin.subject.agent_id != request.agent_id {
+        differs.push("agent_id");
     }
     if origin.target.job_target() != request.target {
         differs.push("target");
@@ -715,7 +715,7 @@ pub(crate) fn check_run_matches_plan(
             && run.cells.iter().zip(&plan.cells).zip(digests).all(
                 |((cell, (cell_id, _)), digest)| {
                     cell.cell_id == *cell_id
-                        && cell.subject.behavior_id == origin.subject.behavior_id
+                        && cell.subject.agent_id == origin.subject.agent_id
                         && cell.subject.pack_digest == *digest
                         && cell.inference_profile_id == origin.inference_profile_id
                 },
@@ -919,7 +919,7 @@ fn proposed_candidate(
     let candidate = materialize_pack(
         &final_dir,
         &origin.owner,
-        &origin.subject.behavior_id,
+        &origin.subject.agent_id,
         &origin.target.job_target(),
     )?;
     anyhow::ensure!(
@@ -984,7 +984,7 @@ async fn freeze_job(
     let source = materialize_pack(
         &request.baseline_pack,
         owner,
-        &request.behavior_id,
+        &request.agent_id,
         &request.target,
     )?;
     let missing = missing_task_seed_splits(&source.config, &request.target, &definition);
@@ -1047,7 +1047,7 @@ async fn freeze_job(
         closure: closure_digests(&closure)?,
         subject: SubjectRef {
             pack_digest: baseline.digest.clone(),
-            behavior_id: request.behavior_id.clone(),
+            agent_id: request.agent_id.clone(),
         },
         definition: definition_ref(&definition)?,
         policy: policy.clone(),
@@ -1209,7 +1209,7 @@ pub async fn run_job(
     let baseline = materialize_pack(
         &baseline_path,
         owner,
-        &origin.subject.behavior_id,
+        &origin.subject.agent_id,
         &origin.target.job_target(),
     )?;
     if baseline.digest != origin.subject.pack_digest {
@@ -1539,7 +1539,7 @@ pub(crate) fn verified_checkpoint(
     let pack = materialize_pack(
         &path,
         &origin.owner,
-        &origin.subject.behavior_id,
+        &origin.subject.agent_id,
         &origin.target.job_target(),
     )?;
     anyhow::ensure!(
@@ -1617,9 +1617,9 @@ mod tests {
         };
         serde_json::from_value(json!({
             "definition_id": "monitor-findings",
-            "agent_did": "did:key:o",
+            "node_did": "did:key:o",
             "comparability_version": 1,
-            "subject": {"kind": "behavior", "inference_slots": ["primary"]},
+            "subject": {"kind": "agent", "inference_slots": ["primary"]},
             "cases": [
                 case("train-a", "train"),
                 case("val-a", "validation"),
@@ -1644,7 +1644,7 @@ mod tests {
             job_id: "job-1".into(),
             owner: "did:key:o".into(),
             evaluator_did: "did:key:home".into(),
-            behavior_id: "monitor".into(),
+            agent_id: "monitor".into(),
             target: JobTarget::Context,
             definition_id: "monitor-findings".into(),
             inference_profile_id: "local".into(),
@@ -1677,7 +1677,7 @@ mod tests {
             closure: Vec::new(),
             subject: SubjectRef {
                 pack_digest: "sha256:baseline".into(),
-                behavior_id: "monitor".into(),
+                agent_id: "monitor".into(),
             },
             definition: DefinitionRef {
                 definition_id: "monitor-findings".into(),
@@ -1750,7 +1750,7 @@ mod tests {
         let mut drifted = request();
         drifted.trials_per_case = 5;
         drifted.seed_base = 9_999;
-        drifted.behavior_id = "other".into();
+        drifted.agent_id = "other".into();
         drifted.inference_profile_id = "other".into();
         drifted.definition_id = "other".into();
         drifted.captures.clear();
@@ -1763,7 +1763,7 @@ mod tests {
         assert!(frozen
             .cells
             .iter()
-            .all(|cell| cell.behavior_id == "monitor" && cell.inference_profile_id == "local"));
+            .all(|cell| cell.agent_id == "monitor" && cell.inference_profile_id == "local"));
         assert_eq!(
             plan.seed_base,
             validation_plan("job-1", &origin, 1, 0, Path::new("a"), Path::new("b")).seed_base
@@ -2079,7 +2079,7 @@ mod tests {
                 case_id: "train-a".into(),
                 trial_index: 0,
                 attempt: 0,
-                trial_agent_did: "did:key:t".into(),
+                trial_node_did: "did:key:t".into(),
                 session_id: "s".into(),
                 seed: 0,
                 home_hint: None,
@@ -2417,7 +2417,7 @@ mod tests {
             label: cell_id.into(),
             subject: SubjectRef {
                 pack_digest: digest.into(),
-                behavior_id: "monitor".into(),
+                agent_id: "monitor".into(),
             },
             inference_profile_id: "local".into(),
         };

@@ -23,14 +23,14 @@ fn local(node: &Arc<EmbeddedNode>) -> ConfigAccess {
     ConfigAccess::Local(node.clone())
 }
 
-fn credential(agent_did: &str, account_ref: Option<&str>, key: Option<&str>) -> OAuthCredential {
+fn credential(node_did: &str, account_ref: Option<&str>, key: Option<&str>) -> OAuthCredential {
     OAuthCredential {
         doc_id: None,
         credential_id: match account_ref {
-            Some(account_ref) => format!("{}:{account_ref}", oauth_credential_id(agent_did, CODEX)),
-            None => oauth_credential_id(agent_did, CODEX),
+            Some(account_ref) => format!("{}:{account_ref}", oauth_credential_id(node_did, CODEX)),
+            None => oauth_credential_id(node_did, CODEX),
         },
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         provider: CODEX.to_string(),
         access_token: "access-TEST".into(),
         refresh_token: "refresh-TEST".into(),
@@ -72,14 +72,9 @@ fn report(windows: Vec<UsageWindow>) -> UsageReport {
     }
 }
 
-fn backend(
-    agent_did: &str,
-    provider_kind: &str,
-    backend_id: &str,
-    auth: Value,
-) -> InferenceBackend {
+fn backend(node_did: &str, provider_kind: &str, backend_id: &str, auth: Value) -> InferenceBackend {
     serde_json::from_value(json!({
-        "agent_did": agent_did,
+        "node_did": node_did,
         "backend_id": backend_id,
         "name": backend_id,
         "provider_kind": provider_kind,
@@ -89,18 +84,18 @@ fn backend(
     .expect("backend")
 }
 
-fn api_key_account(agent_did: &str) -> UsageAccount {
+fn api_key_account(node_did: &str) -> UsageAccount {
     UsageAccount::Backend {
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         provider: "OpenAiCompatible".to_string(),
         backend_id: "backend-usage-a".to_string(),
     }
 }
 
-/// Every stored row as `(agent_did, provider, usage_key)`.
+/// Every stored row as `(node_did, provider, usage_key)`.
 async fn rows(node: &Arc<EmbeddedNode>) -> Vec<(String, String, String)> {
     let response = node
-        .execute("{ ProviderAccountUsage { agent_did provider usage_key } }")
+        .execute("{ ProviderAccountUsage { node_did provider usage_key } }")
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let data = response.data.expect("data");
@@ -110,7 +105,7 @@ async fn rows(node: &Arc<EmbeddedNode>) -> Vec<(String, String, String)> {
         .iter()
         .map(|row| {
             let field = |name: &str| row[name].as_str().unwrap_or_default().to_string();
-            (field("agent_did"), field("provider"), field("usage_key"))
+            (field("node_did"), field("provider"), field("usage_key"))
         })
         .collect();
     rows.sort();
@@ -346,7 +341,7 @@ async fn store_new_first_account_never_shows_the_removed_accounts_usage() {
             A,
             "ChatGptCodex",
             "backend-usage-a",
-            json!({ "kind": "principal_oauth" }),
+            json!({ "kind": "node_oauth" }),
         ),
     )
     .await
@@ -587,7 +582,7 @@ async fn store_disabled_account_writes_and_loads_nothing() {
             A,
             "ChatGptCodex",
             "backend-usage-a",
-            json!({ "kind": "principal_oauth" }),
+            json!({ "kind": "node_oauth" }),
         ),
     )
     .await
@@ -703,7 +698,7 @@ async fn store_usage_for_backend_resolves_the_account_and_plan() {
             A,
             "ChatGptCodex",
             "backend-usage-a",
-            json!({ "kind": "principal_oauth", "account_ref": "acct-ref-2" }),
+            json!({ "kind": "node_oauth", "account_ref": "acct-ref-2" }),
         ),
     )
     .await
@@ -741,19 +736,19 @@ const CODEX_USAGE_BODY: &str = r#"{"plan_type":"plus","rate_limit":{"primary_win
 const OPENROUTER_KEY_BODY: &str =
     r#"{"data":{"limit":20,"limit_remaining":15,"limit_reset":"daily"}}"#;
 
-/// A signed-in account of `provider` for `agent_did`, expiring at `expires_at`.
+/// A signed-in account of `provider` for `node_did`, expiring at `expires_at`.
 async fn sign_in(
     node: &Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     provider: &str,
     expires_at: DateTime<Utc>,
     account_id: Option<&str>,
 ) {
-    test_support::seed_credential(node, agent_did, provider, expires_at).await;
+    test_support::seed_credential(node, node_did, provider, expires_at).await;
     if let Some(account_id) = account_id {
         let mut row = resolve_oauth_credential(
             &local(node),
-            agent_did,
+            node_did,
             provider,
             AccountPick::Reference(None),
         )
@@ -782,7 +777,7 @@ fn api_key_backend(endpoint: String, backend_id: &str, auth: Value) -> Inference
 
 fn openrouter_account(backend_id: &str) -> UsageAccount {
     UsageAccount::Backend {
-        agent_did: A.to_string(),
+        node_did: A.to_string(),
         provider: "OpenRouter".to_string(),
         backend_id: backend_id.to_string(),
     }
@@ -790,13 +785,13 @@ fn openrouter_account(backend_id: &str) -> UsageAccount {
 
 async fn read(
     node: &Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     backend: &InferenceBackend,
     trigger: UsageTrigger,
     endpoints: &UsageEndpoints,
     now: DateTime<Utc>,
 ) -> UsageRead {
-    read_account_usage(node.clone(), agent_did, backend, trigger, endpoints, now)
+    read_account_usage(node.clone(), node_did, backend, trigger, endpoints, now)
         .await
         .expect("read")
 }
@@ -826,7 +821,7 @@ async fn read_codex_sends_account_header_to_the_backend_host_and_stores_endpoint
         did,
         "ChatGptCodex",
         "backend-usage-a",
-        json!({ "kind": "principal_oauth" }),
+        json!({ "kind": "node_oauth" }),
     );
     for (step, suffix) in [(0, "/codex"), (1, "/codex/")] {
         let (url, handle) = test_support::one_shot_token_server(200, CODEX_USAGE_BODY).await;
@@ -888,7 +883,7 @@ async fn read_grok_sends_identity_headers_and_credits_query() {
         did,
         "XaiGrokOAuth",
         "backend-usage-grok",
-        json!({ "kind": "principal_oauth" }),
+        json!({ "kind": "node_oauth" }),
     );
 
     assert_eq!(
@@ -986,7 +981,7 @@ async fn read_claude_on_open_then_skips_a_recent_read() {
         did,
         "ClaudeCliSubscription",
         "backend-usage-claude",
-        json!({ "kind": "principal_oauth" }),
+        json!({ "kind": "node_oauth" }),
     );
 
     assert_eq!(
@@ -1030,7 +1025,7 @@ async fn read_claude_on_refresh_sends_the_oauth_beta() {
         did,
         "ClaudeCliSubscription",
         "backend-usage-claude",
-        json!({ "kind": "principal_oauth" }),
+        json!({ "kind": "node_oauth" }),
     );
 
     assert_eq!(
@@ -1083,7 +1078,7 @@ async fn read_expired_sign_in_refreshes_through_the_owner_then_reads() {
         did,
         "ChatGptCodex",
         "backend-usage-a",
-        json!({ "kind": "principal_oauth" }),
+        json!({ "kind": "node_oauth" }),
     );
     codex.endpoint = format!("{}/codex", origin(&usage_url));
 
@@ -1184,7 +1179,7 @@ async fn read_guard_recent_read_is_skipped() {
     sign_in(&node, did, CODEX, now - Duration::hours(1), None).await;
     let account = UsageAccount::Credential {
         doc_id: None,
-        agent_did: did.to_string(),
+        node_did: did.to_string(),
         provider: CODEX.to_string(),
         account_ref: None,
     };
@@ -1198,7 +1193,7 @@ async fn read_guard_recent_read_is_skipped() {
         did,
         "ChatGptCodex",
         "backend-usage-a",
-        json!({ "kind": "principal_oauth" }),
+        json!({ "kind": "node_oauth" }),
     );
     let result = read(
         &node,
@@ -1307,7 +1302,7 @@ async fn read_guard_refresh_failure_is_sign_in_expired() {
         did,
         "ChatGptCodex",
         "backend-usage-a",
-        json!({ "kind": "principal_oauth" }),
+        json!({ "kind": "node_oauth" }),
     );
     codex.endpoint = format!("{}/codex", origin(&usage_url));
 
@@ -1357,7 +1352,7 @@ async fn read_guard_disabled_account_is_not_read() {
         A,
         "ChatGptCodex",
         "backend-usage-a",
-        json!({ "kind": "principal_oauth" }),
+        json!({ "kind": "node_oauth" }),
     );
     assert_eq!(
         read(
@@ -1581,31 +1576,31 @@ const GROK_BILLING_BODY: &str = r#"{"config":{"creditUsagePercent":30,"currentPe
 /// A second account of `provider` with reference `account_ref`.
 async fn sign_in_ref(
     node: &Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     provider: &str,
     account_ref: &str,
     enabled: bool,
 ) {
-    let mut row = credential(agent_did, Some(account_ref), None);
+    let mut row = credential(node_did, Some(account_ref), None);
     row.provider = provider.to_string();
-    row.credential_id = format!("{}:{account_ref}", oauth_credential_id(agent_did, provider));
+    row.credential_id = format!("{}:{account_ref}", oauth_credential_id(node_did, provider));
     row.enabled = enabled;
     row.connected_at = Some(Utc::now());
     seed(node, &row).await;
 }
 
 fn oauth_backend(
-    agent_did: &str,
+    node_did: &str,
     kind: &str,
     backend_id: &str,
     account_ref: Option<&str>,
     enabled: bool,
 ) -> InferenceBackend {
     let mut backend = backend(
-        agent_did,
+        node_did,
         kind,
         backend_id,
-        json!({ "kind": "principal_oauth", "account_ref": account_ref }),
+        json!({ "kind": "node_oauth", "account_ref": account_ref }),
     );
     backend.enabled = enabled;
     if kind == "ClaudeCliSubscription" {
@@ -1629,23 +1624,23 @@ fn grok_endpoints(url: &str) -> UsageEndpoints {
     }
 }
 
-async fn principal_read(
+async fn node_read(
     node: &Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     trigger: UsageTrigger,
     provider: Option<&str>,
     endpoints: &UsageEndpoints,
 ) -> Vec<AccountUsageRead> {
-    read_principal_usage(
+    read_node_usage(
         node.clone(),
-        agent_did,
+        node_did,
         trigger,
         provider,
         endpoints,
         Utc::now(),
     )
     .await
-    .expect("principal read")
+    .expect("node read")
 }
 
 fn outcome<'a>(reads: &'a [AccountUsageRead], account_ref: Option<&str>) -> &'a UsageRead {
@@ -1658,7 +1653,7 @@ fn outcome<'a>(reads: &'a [AccountUsageRead], account_ref: Option<&str>) -> &'a 
 }
 
 #[tokio::test]
-async fn principal_read_skips_disabled_accounts_without_a_request() {
+async fn node_read_skips_disabled_accounts_without_a_request() {
     let did = "did:key:z6MkUsageSurfDisabled";
     let node = node().await;
     sign_in(&node, did, GROK, Utc::now() + Duration::hours(1), None).await;
@@ -1679,7 +1674,7 @@ async fn principal_read_skips_disabled_accounts_without_a_request() {
     .await;
     let (url, handle) = test_support::one_shot_token_server(200, GROK_BILLING_BODY).await;
 
-    let reads = principal_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
+    let reads = node_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
 
     assert_eq!(reads.len(), 2, "{reads:?}");
     assert_eq!(outcome(&reads, None), &UsageRead::Read);
@@ -1692,7 +1687,7 @@ async fn principal_read_skips_disabled_accounts_without_a_request() {
 }
 
 #[tokio::test]
-async fn principal_read_open_reads_claude_once_within_the_window() {
+async fn node_read_open_reads_claude_once_within_the_window() {
     let did = "did:key:z6MkUsageSurfClaude";
     let node = node().await;
     sign_in(&node, did, CLAUDE, Utc::now() + Duration::hours(1), None).await;
@@ -1717,18 +1712,18 @@ async fn principal_read_open_reads_claude_once_within_the_window() {
         ..UsageEndpoints::default()
     };
 
-    let open = principal_read(&node, did, UsageTrigger::Open, None, &endpoints).await;
+    let open = node_read(&node, did, UsageTrigger::Open, None, &endpoints).await;
     assert_eq!(outcome(&open, None), &UsageRead::Read);
     assert_eq!(
         first_line(&handle.await.unwrap()),
         "GET /api/oauth/usage HTTP/1.1"
     );
-    let again = principal_read(&node, did, UsageTrigger::Open, None, &endpoints).await;
+    let again = node_read(&node, did, UsageTrigger::Open, None, &endpoints).await;
     assert_eq!(outcome(&again, None), &UsageRead::SkippedRecent);
 }
 
 #[tokio::test]
-async fn principal_read_reads_each_account_once() {
+async fn node_read_reads_each_account_once() {
     let did = "did:key:z6MkUsageSurfOnce";
     let node = node().await;
     sign_in(&node, did, GROK, Utc::now() + Duration::hours(1), None).await;
@@ -1742,7 +1737,7 @@ async fn principal_read_reads_each_account_once() {
     .await;
     let (url, handle) = test_support::one_shot_token_server(200, GROK_BILLING_BODY).await;
 
-    let reads = principal_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
+    let reads = node_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
 
     assert_eq!(reads.len(), 1, "{reads:?}");
     assert_eq!(outcome(&reads, None), &UsageRead::Read);
@@ -1750,7 +1745,7 @@ async fn principal_read_reads_each_account_once() {
 }
 
 #[tokio::test]
-async fn principal_read_disabled_backend_does_not_hide_the_account() {
+async fn node_read_disabled_backend_does_not_hide_the_account() {
     let did = "did:key:z6MkUsageSurfSharedBackend";
     let node = node().await;
     sign_in(&node, did, GROK, Utc::now() + Duration::hours(1), None).await;
@@ -1772,7 +1767,7 @@ async fn principal_read_disabled_backend_does_not_hide_the_account() {
     .await;
     let url = crate::provider_http::tests::server_for(2, "200 OK", &[], GROK_BILLING_BODY).await;
 
-    let reads = principal_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
+    let reads = node_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
 
     assert_eq!(reads.len(), 2, "{reads:?}");
     assert_eq!(outcome(&reads, None), &UsageRead::Read);
@@ -1780,7 +1775,7 @@ async fn principal_read_disabled_backend_does_not_hide_the_account() {
 }
 
 #[tokio::test]
-async fn principal_read_reads_an_enabled_account_no_backend_names() {
+async fn node_read_reads_an_enabled_account_no_backend_names() {
     let did = "did:key:z6MkUsageSurfNoBackend";
     let node = node().await;
     sign_in(&node, did, GROK, Utc::now() + Duration::hours(1), None).await;
@@ -1798,7 +1793,7 @@ async fn principal_read_reads_an_enabled_account_no_backend_names() {
     .await;
     let url = crate::provider_http::tests::server_for(2, "200 OK", &[], GROK_BILLING_BODY).await;
 
-    let reads = principal_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
+    let reads = node_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
 
     assert_eq!(reads.len(), 2, "{reads:?}");
     assert_eq!(outcome(&reads, None), &UsageRead::Read);
@@ -1806,7 +1801,7 @@ async fn principal_read_reads_an_enabled_account_no_backend_names() {
 }
 
 #[test]
-fn usage_account_for_backend_follows_principal_oauth() {
+fn usage_account_for_backend_follows_node_oauth() {
     let api_key = backend(
         A,
         "XaiGrokOAuth",
@@ -1816,7 +1811,7 @@ fn usage_account_for_backend_follows_principal_oauth() {
     assert_eq!(
         UsageAccount::for_backend(A, &api_key),
         UsageAccount::Backend {
-            agent_did: A.to_string(),
+            node_did: A.to_string(),
             provider: "XaiGrokOAuth".to_string(),
             backend_id: "backend-usage-a".to_string(),
         }
@@ -1832,7 +1827,7 @@ fn usage_account_for_backend_follows_principal_oauth() {
         UsageAccount::for_backend(A, &oauth),
         UsageAccount::Credential {
             doc_id: None,
-            agent_did: A.to_string(),
+            node_did: A.to_string(),
             provider: GROK.to_string(),
             account_ref: Some("acct-key-a".to_string()),
         }
@@ -1840,7 +1835,7 @@ fn usage_account_for_backend_follows_principal_oauth() {
 }
 
 #[tokio::test]
-async fn principal_read_skips_accounts_not_on_this_node_and_filters_by_provider() {
+async fn node_read_skips_accounts_not_on_this_node_and_filters_by_provider() {
     let did = "did:key:z6MkUsageSurfFilter";
     let node = node().await;
     sign_in(&node, did, GROK, Utc::now() + Duration::hours(1), None).await;
@@ -1869,7 +1864,7 @@ async fn principal_read_skips_accounts_not_on_this_node_and_filters_by_provider(
     .await;
     let (url, handle) = test_support::one_shot_token_server(200, GROK_BILLING_BODY).await;
 
-    let reads = principal_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
+    let reads = node_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
     assert_eq!(reads.len(), 2, "{reads:?}");
     assert_eq!(outcome(&reads, None), &UsageRead::Read);
     let chat = reads
@@ -1882,7 +1877,7 @@ async fn principal_read_skips_accounts_not_on_this_node_and_filters_by_provider(
         .all(|read| read.account_ref.as_deref() != Some("acct-other")));
     handle.await.unwrap();
 
-    let claude_only = principal_read(
+    let claude_only = node_read(
         &node,
         did,
         UsageTrigger::Open,
@@ -1894,7 +1889,7 @@ async fn principal_read_skips_accounts_not_on_this_node_and_filters_by_provider(
 }
 
 #[tokio::test]
-async fn principal_read_outcomes_hold_no_secrets() {
+async fn node_read_outcomes_hold_no_secrets() {
     let did = "did:key:z6MkUsageSurfSecrets";
     let node = node().await;
     sign_in(&node, did, GROK, Utc::now() + Duration::hours(1), None).await;
@@ -1911,7 +1906,7 @@ async fn principal_read_outcomes_hold_no_secrets() {
     .await;
     let (url, handle) = test_support::one_shot_token_server(200, GROK_BILLING_BODY).await;
 
-    let reads = principal_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
+    let reads = node_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
 
     assert_eq!(reads.len(), 1, "{reads:?}");
     handle.await.unwrap();

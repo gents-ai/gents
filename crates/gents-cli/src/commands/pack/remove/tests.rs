@@ -8,7 +8,7 @@ fn scope(home: &Path) -> GraphScopeArgs {
     GraphScopeArgs {
         home: Some(home.to_path_buf()),
         graphql: None,
-        agent_did: None,
+        node_did: None,
     }
 }
 

@@ -15,7 +15,7 @@ fn load(value: Value, graph: bool) -> Result<PackConfig> {
     load_pack_config(
         &manifest(graph),
         &PackInstallOptions {
-            agent_did: "did:key:owner".into(),
+            node_did: "did:key:owner".into(),
         },
         &|path| match path {
             "config/bundle.json" => Ok(serde_json::to_vec(&value)?),
@@ -28,16 +28,16 @@ fn load(value: Value, graph: bool) -> Result<PackConfig> {
 
 #[test]
 fn explicit_pack_caller_uses_selected_owner_and_cannot_be_spoofed_by_environment() {
-    let value = json!({"agent_principal":{},"graph_capabilities":[{
+    let value = json!({"node":{},"graph_capabilities":[{
         "capability_id":"review","revision":"1","target":{"kind":"task","task_id":"review"},
-        "allowed_callers":["${GENTS_PACK_AGENT_DID}"]
+        "allowed_callers":["${GENTS_PACK_NODE_DID}"]
     },{
         "capability_id":"closed","revision":"1","target":{"kind":"task","task_id":"review"}
     }]});
     let config = load_pack_config(
         &manifest(true),
         &PackInstallOptions {
-            agent_did: "did:key:selected".into(),
+            node_did: "did:key:selected".into(),
         },
         &|_| Ok(serde_json::to_vec(&value)?),
         &|_| Some("did:key:spoofed".into()),
@@ -56,10 +56,10 @@ fn explicit_pack_caller_uses_selected_owner_and_cannot_be_spoofed_by_environment
 #[test]
 fn document_and_graph_loading_share_scope_defaults_and_literal_sidecars() {
     let value = json!({
-        "agent_principal":{"created_by":"did:key:creator"},
+        "node":{"created_by":"did:key:creator"},
         "contexts":[{"context_id":"work","system_prompt":"./prompt.md"}],
-        "tasks":[{"task_id":"review","behavior_id":"reviewer","prompt_template":"./prompt.md"}],
-        "subagent_targets":[{"target_id":"remote","name":"remote","target_agent_did":"did:key:foreign","behavior_id":"worker"}],
+        "tasks":[{"task_id":"review","agent_id":"reviewer","prompt_template":"./prompt.md"}],
+        "agent_targets":[{"target_id":"remote","name":"remote","target_node_did":"did:key:foreign","agent_id":"worker"}],
         "tools":null
     });
     let document = load(value.clone(), false).unwrap();
@@ -68,17 +68,11 @@ fn document_and_graph_loading_share_scope_defaults_and_literal_sidecars() {
         serde_json::to_value(&document).unwrap(),
         serde_json::to_value(graph).unwrap()
     );
-    assert_eq!(document.agent_principal.agent_did, "did:key:owner");
-    assert_eq!(
-        document.agent_principal.created_by.as_deref(),
-        Some("did:key:creator")
-    );
-    assert_eq!(document.subagent_targets[0].agent_did, "did:key:owner");
-    assert_eq!(
-        document.subagent_targets[0].target_agent_did,
-        "did:key:foreign"
-    );
-    assert_eq!(document.tasks[0].agent_did, "did:key:owner");
+    assert_eq!(document.node.node_did, "did:key:owner");
+    assert_eq!(document.node.created_by.as_deref(), Some("did:key:creator"));
+    assert_eq!(document.agent_targets[0].node_did, "did:key:owner");
+    assert_eq!(document.agent_targets[0].target_node_did, "did:key:foreign");
+    assert_eq!(document.tasks[0].node_did, "did:key:owner");
     assert!(document.tasks[0].enabled);
     assert!(document.tools.is_empty());
     assert_eq!(
@@ -94,8 +88,8 @@ fn document_and_graph_loading_share_scope_defaults_and_literal_sidecars() {
 #[test]
 fn interpolation_cannot_change_json_structure_and_preserves_task_braces() {
     let config = load(
-        json!({"agent_principal":{},"tasks":[{
-            "task_id":"review","behavior_id":"reviewer",
+        json!({"node":{},"tasks":[{
+            "task_id":"review","agent_id":"reviewer",
             "prompt_template":"${TEXT} {{ task.input }} $${LITERAL} ${MISSING:-fallback}"
         }]}),
         false,
@@ -105,29 +99,25 @@ fn interpolation_cannot_change_json_structure_and_preserves_task_braces() {
         config.tasks[0].prompt_template,
         "quoted \"value\"\nsecond line {{ task.input }} ${LITERAL} fallback"
     );
-    assert!(load(
-        json!({"agent_principal":{"display_name":"${UNSET}"}}),
-        false
-    )
-    .is_err());
+    assert!(load(json!({"node":{"display_name":"${UNSET}"}}), false).is_err());
 }
 
 #[test]
 fn explicit_owner_mismatch_and_unknown_authoring_keys_fail() {
     for owner in [json!("did:key:foreign"), json!(null), json!("")] {
-        assert!(load(json!({"agent_principal":{"agent_did":owner}}), false).is_err());
+        assert!(load(json!({"node":{"node_did":owner}}), false).is_err());
         assert!(load(
-            json!({"agent_principal":{},"contexts":[{"agent_did":owner,"context_id":"work"}]}),
+            json!({"node":{},"contexts":[{"node_did":owner,"context_id":"work"}]}),
             false
         )
         .is_err());
     }
+    assert!(load(json!({"node":{},"old_tool_selections":[]}), false).is_err());
     assert!(load(
-        json!({"agent_principal":{},"old_tool_selections":[]}),
+        json!({"node":{},"contexts":[{"context_id":"work","request_context_template":"removed"}]}),
         false
     )
     .is_err());
-    assert!(load(json!({"agent_principal":{},"contexts":[{"context_id":"work","request_context_template":"removed"}]}), false).is_err());
 }
 
 #[test]
@@ -139,7 +129,7 @@ fn sidecar_cannot_escape_or_read_undeclared_assets() {
         "./prompt\\other.md",
     ] {
         let error = load(
-            json!({"agent_principal":{},"contexts":[{"context_id":"work","system_prompt":path}]}),
+            json!({"node":{},"contexts":[{"context_id":"work","system_prompt":path}]}),
             false,
         )
         .unwrap_err();
@@ -153,7 +143,7 @@ fn sidecar_cannot_escape_or_read_undeclared_assets() {
     let result = load_pack_config(
         &undeclared,
         &PackInstallOptions {
-            agent_did: "did:key:owner".into(),
+            node_did: "did:key:owner".into(),
         },
         &|_| panic!("invalid manifest must fail before read"),
         &|_| None,
@@ -170,7 +160,7 @@ fn graph_fixture_loads_slot_authoring_and_literal_prompt_assets() {
     let config = load_pack_config(
         &manifest,
         &PackInstallOptions {
-            agent_did: "did:key:review-owner".into(),
+            node_did: "did:key:review-owner".into(),
         },
         &|path| Ok(std::fs::read(root.join(path))?),
         &|_| None,
@@ -179,7 +169,7 @@ fn graph_fixture_loads_slot_authoring_and_literal_prompt_assets() {
     assert!(config.inference_backends.is_empty());
     assert!(config.inference_profiles.is_empty());
     assert_eq!(
-        config.agent_behaviors[0].inference_profile_id,
+        config.agents[0].inference_profile_id,
         "gents:inference-slot:coordinator"
     );
     let authored: Value =
@@ -238,7 +228,7 @@ fn every_fixture_pack_that_ships_a_config_loads_it_cleanly() {
         load_pack_config(
             &manifest,
             &PackInstallOptions {
-                agent_did: "did:key:fixture-owner".into(),
+                node_did: "did:key:fixture-owner".into(),
             },
             &|path| Ok(std::fs::read(root.join(path))?),
             &|_| None,
@@ -257,10 +247,10 @@ fn eval_manifest(assets: &[&str]) -> PackManifest {
 }
 
 fn eval_config(cases: Value) -> Value {
-    json!({"agent_principal": {}, "eval_definitions": [{
+    json!({"node": {}, "eval_definitions": [{
         "definition_id": "defn",
         "comparability_version": 1,
-        "subject": {"kind": "behavior"},
+        "subject": {"kind": "agent"},
         "cases": cases,
     }]})
 }
@@ -273,7 +263,7 @@ fn load_eval(manifest: &PackManifest, config: Value) -> Result<PackConfig> {
     load_pack_config(
         manifest,
         &PackInstallOptions {
-            agent_did: "did:key:owner".into(),
+            node_did: "did:key:owner".into(),
         },
         &|path| match path {
             "config/bundle.json" => Ok(serde_json::to_vec(&config)?),
@@ -296,7 +286,7 @@ fn eval_definition_case_sidecars_hydrate_as_literal_cases_beside_inline_ones() {
     }]});
     let config = load_eval(&manifest, eval_config(json!(["./cases/one.json", inline]))).unwrap();
     let definition = &config.eval_definitions[0];
-    assert_eq!(definition.agent_did, "did:key:owner");
+    assert_eq!(definition.node_did, "did:key:owner");
     assert_eq!(
         definition
             .cases
@@ -352,7 +342,7 @@ fn eval_definition_case_sidecars_refuse_undeclared_escaping_bare_and_malformed_p
 fn skill_instructions_load_from_a_literal_sidecar() {
     let config = load(
         json!({
-            "agent_principal":{},
+            "node":{},
             "skills":[{"skill_id":"review","name":"review","instructions":"./prompt.md"}]
         }),
         false,
@@ -375,13 +365,13 @@ fn plugin_pack_config(target: Value) -> Result<PackConfig> {
                     "language":"rust","input_schema":{"type":"object"}}],
     }))
     .unwrap();
-    let config = json!({"agent_principal":{},"graph_capabilities":[{
+    let config = json!({"node":{},"graph_capabilities":[{
         "capability_id":"lint","revision":"1","target":target,
     }]});
     load_pack_config(
         &manifest,
         &PackInstallOptions {
-            agent_did: "did:key:owner".into(),
+            node_did: "did:key:owner".into(),
         },
         &|path| match path {
             "config/bundle.json" => Ok(serde_json::to_vec(&config)?),
@@ -453,7 +443,7 @@ fn prepare_pack_config(entry_extra: Value) -> Result<PackConfig> {
     for (key, value) in entry_extra.as_object().unwrap() {
         entry[key] = value.clone();
     }
-    let config = json!({"agent_principal":{},"graph_intents":[{
+    let config = json!({"node":{},"graph_intents":[{
         "graph_id":"g",
         "nodes":[{"node_id":"worker","capability_id":"worker","capability_revision":"1"}],
         "edges":[],
@@ -466,7 +456,7 @@ fn prepare_pack_config(entry_extra: Value) -> Result<PackConfig> {
     load_pack_config(
         &manifest,
         &PackInstallOptions {
-            agent_did: "did:key:owner".into(),
+            node_did: "did:key:owner".into(),
         },
         &|path| match path {
             "config/bundle.json" => Ok(serde_json::to_vec(&config)?),
@@ -515,16 +505,12 @@ fn an_entry_input_schema_must_compile_and_declare_an_object() {
 }
 
 #[test]
-fn a_pack_that_selects_the_default_behavior_is_refused() {
-    let error = load(
-        json!({"agent_principal":{"default_behavior_id":"worker"}}),
-        false,
-    )
-    .unwrap_err();
+fn a_pack_that_selects_the_default_agent_is_refused() {
+    let error = load(json!({"node":{"default_agent_id":"worker"}}), false).unwrap_err();
     let message = format!("{error:#}");
     assert!(
-        message.contains("must not choose the default behavior") && message.contains("worker"),
+        message.contains("must not choose the default agent") && message.contains("worker"),
         "{message}"
     );
-    assert!(load(json!({"agent_principal":{}}), false).is_ok());
+    assert!(load(json!({"node":{}}), false).is_ok());
 }

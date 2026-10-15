@@ -78,8 +78,10 @@ pub async fn call_installed(
         executor = executor.with_models(Arc::new(AccessModels(access)));
     }
     let coordinate = format!("{namespace}/{name}");
+    // No tool-effect grant: a call from the desktop or a module producer
+    // runs outside any model turn, so the guest has no runtime to call back.
     let call = executor
-        .call_data_bound(&record, input, None)
+        .call_data_bound(&record, input, None, false)
         .await
         .with_context(|| format!("calling plugin {coordinate}"))?;
     if let Some(note) = &call.binding_note {

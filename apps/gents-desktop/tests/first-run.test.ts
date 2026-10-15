@@ -3,20 +3,20 @@ import { describe, expect, it } from "vitest";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 import {
   inferenceIsConfigured,
-  isLocalAgent,
+  isLocalNode,
   needsFirstRunSetup,
   nodeSetUp,
   shouldRebindSetupDefault,
 } from "../src/ui/lib/firstRun";
 
 describe("first-run inference gate", () => {
-  it("recognizes the initialized local principal after background enrollment changes its route source", () => {
+  it("recognizes the initialized local node after background enrollment changes its route source", () => {
     const paired = { ...deployment, source: "enrollment" };
-    expect(isLocalAgent(paired, deployment.agentDid)).toBe(true);
-    expect(isLocalAgent(paired, "did:another-home")).toBe(false);
+    expect(isLocalNode(paired, deployment.nodeDid)).toBe(true);
+    expect(isLocalNode(paired, "did:another-home")).toBe(false);
     expect(
       needsFirstRunSetup({
-        bootstrap: { ...bootstrap, initAgentDid: deployment.agentDid },
+        bootstrap: { ...bootstrap, initNodeDid: deployment.nodeDid },
         client: { deployments: [paired] },
       } as Parameters<typeof needsFirstRunSetup>[0]),
     ).toBe(true);
@@ -30,7 +30,7 @@ describe("first-run inference gate", () => {
           {
             ...deployment.inferenceBackends[0]!,
             backendId: "codex-unbound",
-            authKind: "principal_oauth",
+            authKind: "node_oauth",
           },
         ],
       }),
@@ -38,7 +38,7 @@ describe("first-run inference gate", () => {
   });
 
   it("treats a local placeholder backend as unfinished", () => {
-    expect(isLocalAgent(deployment)).toBe(true);
+    expect(isLocalNode(deployment)).toBe(true);
     expect(inferenceIsConfigured(deployment)).toBe(false);
     expect(
       needsFirstRunSetup({
@@ -74,14 +74,14 @@ describe("first-run inference gate", () => {
   });
 
   it("replaces only init's generated default when another provider exists", () => {
-    const defaultBehaviorId = deployment.agentPrincipal.defaultBehaviorId;
-    const generatedBackendId = `${deployment.agentDid}:backend`;
+    const defaultAgentId = deployment.node.defaultAgentId;
+    const generatedBackendId = `${deployment.nodeDid}:backend`;
     const generated = {
       ...deployment,
-      behaviors: deployment.behaviors.map((behavior) =>
-        behavior.behaviorId === defaultBehaviorId
-          ? { ...behavior, inferenceProfileId: "profile-generated" }
-          : behavior,
+      agents: deployment.agents.map((agent) =>
+        agent.agentId === defaultAgentId
+          ? { ...agent, inferenceProfileId: "profile-generated" }
+          : agent,
       ),
       inferenceProfiles: [
         {
@@ -99,20 +99,20 @@ describe("first-run inference gate", () => {
 });
 
 describe("the node first-run setup configured", () => {
-  const remote = { ...deployment, agentDid: "did:key:remote", source: "enrollment" };
-  const home = { ...deployment, agentDid: "did:key:home", source: "enrollment" };
+  const remote = { ...deployment, nodeDid: "did:key:remote", source: "enrollment" };
+  const home = { ...deployment, nodeDid: "did:key:home", source: "enrollment" };
   const read = (deployments: (typeof deployment)[]) =>
     ({
-      bootstrap: { ...bootstrap, initAgentDid: "did:key:home" },
+      bootstrap: { ...bootstrap, initNodeDid: "did:key:home" },
       client: { deployments },
     }) as Parameters<typeof nodeSetUp>[0];
 
   it("is the one this machine runs, even when a remote node is listed first", () => {
-    expect(nodeSetUp(read([remote, home]))?.agentDid).toBe("did:key:home");
+    expect(nodeSetUp(read([remote, home]))?.nodeDid).toBe("did:key:home");
   });
 
   it("is the first listed when this machine runs none, and none without nodes", () => {
-    expect(nodeSetUp(read([remote]))?.agentDid).toBe("did:key:remote");
+    expect(nodeSetUp(read([remote]))?.nodeDid).toBe("did:key:remote");
     expect(nodeSetUp(read([]))).toBeNull();
   });
 });

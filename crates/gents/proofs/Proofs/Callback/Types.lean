@@ -127,7 +127,7 @@ structure ActionJournalEntry where
 
 structure CallbackInvocation where
   invocationId : String
-  ownerAgentDid : String
+  ownerNodeDid : String
   /-- Opaque frozen projected input, including ordered group members. Its
   internal JSON encoding belongs to the existing projection owner. -/
   input : String := ""

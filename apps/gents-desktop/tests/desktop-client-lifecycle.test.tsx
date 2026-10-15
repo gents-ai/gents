@@ -36,7 +36,7 @@ describe("desktop client restart selection ordering", () => {
       const api = {
         managedServerStatus: vi
           .fn()
-          .mockResolvedValue({ state: "stopped", autoStart: true, agentName: "local" }),
+          .mockResolvedValue({ state: "stopped", autoStart: true, nodeName: "local" }),
         startManagedServer: vi.fn().mockResolvedValue({ state: "running" }),
         fetchDesktopSnapshot: vi.fn().mockResolvedValue(snapshot),
       };

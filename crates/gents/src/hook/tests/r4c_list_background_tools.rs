@@ -67,10 +67,9 @@ async fn setup_hook(
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-request");
     let did = db.node_identity.did();
-    gents::session::ensure_session_with_behavior_id_and_requester_did(
+    gents::session::ensure_session_with_agent_id_and_requester_did(
         db.node.as_ref(),
         &session_id,
-        "r4c-background-tools",
         did,
         "r4c-background-tools",
         Some(did),
@@ -81,7 +80,6 @@ async fn setup_hook(
     let hook = DefraSessionHook::resume_with_identity_policy(
         db.node.clone(),
         &session_id,
-        "r4c-background-tools",
         did,
         Some(did),
         FailurePolicy::default(),
@@ -324,10 +322,9 @@ async fn setup_hook_on_db(
     registry: BackgroundToolRegistry,
 ) -> (DefraSessionHook, String, String) {
     let did = db.node_identity.did();
-    gents::session::ensure_session_with_behavior_id_and_requester_did(
+    gents::session::ensure_session_with_agent_id_and_requester_did(
         db.node.as_ref(),
         session_id,
-        "r4c-background-tools",
         did,
         "r4c-background-tools",
         Some(did),
@@ -337,7 +334,6 @@ async fn setup_hook_on_db(
     let hook = DefraSessionHook::resume_with_identity_policy(
         db.node.clone(),
         session_id,
-        "r4c-background-tools",
         did,
         Some(did),
         FailurePolicy::default(),

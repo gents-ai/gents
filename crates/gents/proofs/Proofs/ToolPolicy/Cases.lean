@@ -49,8 +49,8 @@ structure SurfaceView where
   p2pCollectionsKeys : List String
   selfConfigCategoriesScopeKind : String
   selfConfigCategoriesKeys : List String
-  subagentTargetsScopeKind : String
-  subagentTargetsKeys : List String
+  agentTargetsScopeKind : String
+  agentTargetsKeys : List String
   backgroundToolsScopeKind : String
   backgroundToolsKeys : List String
   writeProbe : String × String
@@ -71,7 +71,7 @@ structure SurfaceView where
 
 structure Case where
   name : String
-  behavior : SurfaceView
+  agent : SurfaceView
   ceiling : SurfaceView
   runtime : SurfaceView
   expected : SurfaceView
@@ -109,9 +109,9 @@ def knownEthMethods : List String :=
 def probeQuery : String × String := ("qt", "coll")
 
 def knownSelfConfigCategories : List String :=
-  ["automation", "backend", "behavior", "mcp_service", "profile", "tools"]
+  ["agent", "automation", "backend", "mcp_service", "profile", "tools"]
 
-def knownSubagentTargets : List (String × String) :=
+def knownAgentTargets : List (String × String) :=
   [("did-a", "beh-a"), ("did-b", "beh-b")]
 
 def knownFieldNames : List String :=
@@ -136,9 +136,9 @@ def selfConfigScopeKeys {V : Type} : EndpointScope ToolId V → List String
   | .all => []
   | .none => []
 
-def subagentScopeKeys {V : Type} : EndpointScope (String × String) V → List String
+def agentTargetScopeKeys {V : Type} : EndpointScope (String × String) V → List String
   | .only keys _ =>
-      knownSubagentTargets.filterMap (fun key =>
+      knownAgentTargets.filterMap (fun key =>
         if key ∈ keys then some (key.1 ++ "::" ++ key.2) else none)
   | .all => []
   | .none => []
@@ -182,7 +182,7 @@ def toolOnly (tool : ToolId) : EndpointScope ToolId Unit :=
 def toolsOnly (tools : List ToolId) : EndpointScope ToolId Unit :=
   unitOnly tools.toFinset
 
-def subagentOnly (keys : List (String × String)) :
+def agentTargetOnly (keys : List (String × String)) :
     EndpointScope (String × String) Unit :=
   unitOnly keys.toFinset
 
@@ -243,7 +243,7 @@ def surface (file : FileCap) (bash : BashPolicy)
   , defraCollections := .all
   , p2pCollections := .all
   , selfConfigCategories := .all
-  , subagentTargets := .all
+  , agentTargets := .all
   , backgroundTools := .all
   , writeTools := write
   , queryTools := .all
@@ -291,8 +291,8 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String)
   , p2pCollectionsKeys := toolScopeKeys s.p2pCollections
   , selfConfigCategoriesScopeKind := scopeKind s.selfConfigCategories
   , selfConfigCategoriesKeys := selfConfigScopeKeys s.selfConfigCategories
-  , subagentTargetsScopeKind := scopeKind s.subagentTargets
-  , subagentTargetsKeys := subagentScopeKeys s.subagentTargets
+  , agentTargetsScopeKind := scopeKind s.agentTargets
+  , agentTargetsKeys := agentTargetScopeKeys s.agentTargets
   , backgroundToolsScopeKind := scopeKind s.backgroundTools
   , backgroundToolsKeys := toolScopeKeys s.backgroundTools
   , writeProbe := writeProbe
@@ -351,7 +351,7 @@ def runtimeNoMcp : Surface :=
     (bashPolicy .unrestricted .enabled .all)
     true true true .none writeA
 
-def behaviorWriteB : Surface :=
+def agentWriteB : Surface :=
   surface .readWrite
     (bashPolicy .unrestricted .enabled .all)
     true true true .all writeB
@@ -367,7 +367,7 @@ def writeCollA : EndpointScope (String × String) (Finset String) :=
 def writeCollB : EndpointScope (String × String) (Finset String) :=
   writeOnly ("wt", "coll2") ["field_a"]
 
-def behaviorWriteCollA : Surface :=
+def agentWriteCollA : Surface :=
   surface .readWrite
     (bashPolicy .unrestricted .enabled .all)
     true true true .all writeCollA
@@ -377,7 +377,7 @@ def ceilingWriteCollB : Surface :=
     (bashPolicy .unrestricted .enabled .all)
     true true true .all writeCollB
 
-def behaviorDisjointOnly : Surface :=
+def agentDisjointOnly : Surface :=
   { surface .readWrite
       (bashPolicy .unrestricted .enabled allowedOnlyGit)
       true true true (toolOnly "svc-x") writeA with
@@ -389,12 +389,12 @@ def ceilingDisjointOnly : Surface :=
       true true true (toolOnly "svc-y") writeA with
     defraCollections := toolOnly "svc-y" }
 
-def behaviorEachCategory : Surface :=
+def agentEachCategory : Surface :=
   { wideOpen with
     cliTools := cliOnly [("svc-a", ["field_a", "field_b"]), ("svc-x", ["field_a"])]
   , defraCollections := toolsOnly ["svc-a", "svc-x"]
-  , selfConfigCategories := toolsOnly ["behavior", "profile", "tools"]
-  , subagentTargets := subagentOnly [("did-a", "beh-a"), ("did-b", "beh-b")]
+  , selfConfigCategories := toolsOnly ["agent", "profile", "tools"]
+  , agentTargets := agentTargetOnly [("did-a", "beh-a"), ("did-b", "beh-b")]
   , backgroundTools := toolsOnly ["svc-a", "svc-x"] }
 
 def ceilingClampsEachCategory : Surface :=
@@ -412,18 +412,18 @@ def ceilingClampsEachCategory : Surface :=
   , cliTools := cliOnly [("svc-a", ["field_a"])]
   , defraCollections := toolOnly "svc-a"
   , selfConfigCategories := toolsOnly ["tools"]
-  , subagentTargets := subagentOnly [("did-a", "beh-a")]
+  , agentTargets := agentTargetOnly [("did-a", "beh-a")]
   , backgroundTools := toolOnly "svc-a" }
 
 def ceilingScopesOnly : Surface :=
   { wideOpen with
     cliTools := cliOnly [("svc-a", ["field_a"])]
   , defraCollections := toolOnly "svc-a"
-  , selfConfigCategories := toolsOnly ["behavior"]
-  , subagentTargets := subagentOnly [("did-a", "beh-a")]
+  , selfConfigCategories := toolsOnly ["agent"]
+  , agentTargets := agentTargetOnly [("did-a", "beh-a")]
   , backgroundTools := toolOnly "svc-a" }
 
-def behaviorBashRich : Surface :=
+def agentBashRich : Surface :=
   surface .readWrite
     (bashPolicyRich [["rm"]] (readOnlyOnly ["cat", "ls"]))
     true true true .all writeA
@@ -439,13 +439,13 @@ def queryA : EndpointScope (String × String) (Finset String) :=
 def queryB : EndpointScope (String × String) (Finset String) :=
   writeOnly probeQuery ["field_b"]
 
-def behaviorQueryA : Surface :=
+def agentQueryA : Surface :=
   { surface .readWrite
       (bashPolicy .unrestricted .enabled .all)
       true true true .all writeA with
     queryTools := queryA }
 
-def behaviorQueryB : Surface :=
+def agentQueryB : Surface :=
   { surface .readWrite
       (bashPolicy .unrestricted .enabled .all)
       true true true .all writeA with
@@ -470,7 +470,7 @@ def ethMethodsA : EndpointScope String Unit :=
 def ethMethodsB : EndpointScope String Unit :=
   unitOnly ["eth_blockNumber", "eth_call"].toFinset
 
-def behaviorEthA : Surface :=
+def agentEthA : Surface :=
   { wideOpen with ethQueryMethods := ethMethodsA }
 
 def ceilingEthB : Surface :=
@@ -479,7 +479,7 @@ def ceilingEthB : Surface :=
 def runtimeEthAll : Surface :=
   { wideOpen with ethQueryMethods := .all, ethCallTools := .all }
 
-def behaviorPluginsAX : Surface :=
+def agentPluginsAX : Surface :=
   { wideOpen with pluginTools := toolsOnly ["svc-a", "svc-x"] }
 
 def ceilingPluginsXY : Surface :=
@@ -488,23 +488,23 @@ def ceilingPluginsXY : Surface :=
 def runtimePluginsAll : Surface :=
   { wideOpen with pluginTools := .all }
 
-def behaviorGoalOnly : Surface :=
+def agentGoalOnly : Surface :=
   { secureMinimal with goalTools := true, goalCreate := false }
 
-def behaviorGoalCreate : Surface :=
+def agentGoalCreate : Surface :=
   { secureMinimal with goalTools := true, goalCreate := true }
 
 def ceilingDeniesGoalCreate : Surface :=
   { wideOpen with goalCreate := false }
 
-def behaviorWithoutGoals : Surface :=
+def agentWithoutGoals : Surface :=
   { wideOpen with goalTools := false, goalCreate := false }
 
 def mkCase (name : String) (b c : Surface) (r : Avail)
     (mcpProbe : String) (writeProbe : String × String)
     (p2pBefore : List String := ["PrivateNote"]) (p2pAfter : List String := ["DeploymentNote"]) : Case :=
   { name := name
-  , behavior := view b mcpProbe writeProbe p2pBefore p2pAfter
+  , agent := view b mcpProbe writeProbe p2pBefore p2pAfter
   , ceiling := view c mcpProbe writeProbe p2pBefore p2pAfter
   , runtime := view r mcpProbe writeProbe p2pBefore p2pAfter
   , expected := view (effective b c r) mcpProbe writeProbe p2pBefore p2pAfter }
@@ -512,40 +512,40 @@ def mkCase (name : String) (b c : Surface) (r : Avail)
 def cases : List Case :=
   [ mkCase "wide_open_clamped_by_secure_ceiling"
       wideOpen secureMinimal wideOpen "svc-a" probeWrite
-  , mkCase "ceiling_mcp_only_clamps_behavior"
+  , mkCase "ceiling_mcp_only_clamps_agent"
       wideOpen ceilingMcpOnly wideOpen "svc-a" probeWrite
   , mkCase "runtime_offline_drops_permitted_mcp"
       wideOpen wideOpen runtimeNoMcp "svc-a" probeWrite
   , mkCase "write_fields_narrowed_by_ceiling"
-      behaviorWriteB ceilingWriteFieldsNarrowed wideOpen "svc-a" probeWrite
+      agentWriteB ceilingWriteFieldsNarrowed wideOpen "svc-a" probeWrite
   , mkCase "write_tool_collection_mismatch_denies"
-      behaviorWriteCollA ceilingWriteCollB wideOpen "svc-a" ("wt", "coll1")
+      agentWriteCollA ceilingWriteCollB wideOpen "svc-a" ("wt", "coll1")
   , mkCase "disjoint_only_scopes_intersect_to_empty"
-      behaviorDisjointOnly ceilingDisjointOnly wideOpen "svc-x" probeWrite
+      agentDisjointOnly ceilingDisjointOnly wideOpen "svc-x" probeWrite
   , mkCase "bash_all_allowed_kind_idempotent"
       wideOpen wideOpen wideOpen "svc-a" probeWrite
   , mkCase "ceiling_clamps_each_category"
-      behaviorEachCategory ceilingClampsEachCategory wideOpen "svc-a" probeWrite
-  , mkCase "behavior_all_scopes_clamped_by_ceiling_only"
+      agentEachCategory ceilingClampsEachCategory wideOpen "svc-a" probeWrite
+  , mkCase "agent_all_scopes_clamped_by_ceiling_only"
       wideOpen ceilingScopesOnly wideOpen "svc-a" probeWrite
   , mkCase "bash_forbidden_union_and_readonly_intersection"
-      behaviorBashRich ceilingBashRich wideOpen "svc-a" probeWrite
+      agentBashRich ceilingBashRich wideOpen "svc-a" probeWrite
   , mkCase "query_fields_narrowed_by_ceiling"
-      behaviorQueryB ceilingQueryA wideOpen "svc-a" probeWrite
+      agentQueryB ceilingQueryA wideOpen "svc-a" probeWrite
   , mkCase "write_all_does_not_grant_query"
-      behaviorQueryA writeAllNoQuery wideOpen "svc-a" probeWrite
+      agentQueryA writeAllNoQuery wideOpen "svc-a" probeWrite
   , mkCase "eth_query_methods_intersect"
-      behaviorEthA ceilingEthB runtimeEthAll "svc-a" probeWrite
+      agentEthA ceilingEthB runtimeEthAll "svc-a" probeWrite
   , mkCase "plugin_tools_intersect"
-      behaviorPluginsAX ceilingPluginsXY runtimePluginsAll "svc-a" probeWrite
+      agentPluginsAX ceilingPluginsXY runtimePluginsAll "svc-a" probeWrite
   , mkCase "plugin_tools_absent_from_runtime_are_denied"
-      behaviorPluginsAX wideOpen wideOpen "svc-a" probeWrite
+      agentPluginsAX wideOpen wideOpen "svc-a" probeWrite
   , mkCase "goal_tools_explicit"
-      behaviorGoalOnly wideOpen wideOpen "svc-a" probeWrite
+      agentGoalOnly wideOpen wideOpen "svc-a" probeWrite
   , mkCase "goal_create_granted_when_all_layers_allow"
-      behaviorGoalCreate wideOpen wideOpen "svc-a" probeWrite
+      agentGoalCreate wideOpen wideOpen "svc-a" probeWrite
   , mkCase "goal_create_clamped_by_ceiling"
-      behaviorGoalCreate ceilingDeniesGoalCreate wideOpen "svc-a" probeWrite
+      agentGoalCreate ceilingDeniesGoalCreate wideOpen "svc-a" probeWrite
   , mkCase "schema_independent_of_config"
       { secureMinimal with schemaManagement := true } wideOpen wideOpen "svc-a" probeWrite
   , mkCase "schema_requires_authored_grant"
@@ -586,7 +586,7 @@ def cases : List Case :=
       { wideOpen with writeTools := writeOnly ("write", "Shipment") ["*"] }
       wideOpen { wideOpen with writeTools := .none } "svc-a" ("write", "Shipment")
   , mkCase "other_capabilities_do_not_enable_goals"
-      behaviorWithoutGoals wideOpen wideOpen "svc-a" probeWrite
+      agentWithoutGoals wideOpen wideOpen "svc-a" probeWrite
   ]
 
 end ToolPolicy.ContractCases

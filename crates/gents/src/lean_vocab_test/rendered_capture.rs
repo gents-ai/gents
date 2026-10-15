@@ -18,7 +18,7 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanRenderedCaptureCase {
     pub(crate) name: String,
-    pub(crate) agent_did: u64,
+    pub(crate) node_did: u64,
     pub(crate) session_id: u64,
     pub(crate) request_id: u64,
     pub(crate) turn_index: usize,
@@ -67,12 +67,12 @@ pub(crate) struct LeanRenderedCaptureManifestBlock {
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanRenderedCaptureKeyCase {
     pub(crate) name: String,
-    pub(crate) left_agent_did: u64,
+    pub(crate) left_node_did: u64,
     pub(crate) left_session_id: u64,
     pub(crate) left_request_id: u64,
     pub(crate) left_turn_index: usize,
     pub(crate) left_attempt: u32,
-    pub(crate) right_agent_did: u64,
+    pub(crate) right_node_did: u64,
     pub(crate) right_session_id: u64,
     pub(crate) right_request_id: u64,
     pub(crate) right_turn_index: usize,

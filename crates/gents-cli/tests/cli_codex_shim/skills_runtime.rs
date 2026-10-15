@@ -11,19 +11,19 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
     let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-skill-live-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-skill-live-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -45,11 +45,11 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
-    let gen0 = wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+    let gen0 = wait_for_runtime_quiescence(&graphql, &node_did, 1, Duration::from_secs(2)).await?;
 
     let catalog_phrase = format!("cite-sources-{}", Uuid::new_v4().simple());
     run_cli_json(
@@ -60,8 +60,8 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
             "add",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--skill-id",
             "live-skill",
             "--enabled",
@@ -73,8 +73,8 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
             "Always cite your sources.",
         ],
     )?;
-    select_default_behavior_skills(&graphql, &agent_did, &["live-skill"]).await?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, gen0 + 1, Duration::from_secs(2)).await?;
+    select_default_agent_skills(&graphql, &node_did, &["live-skill"]).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, gen0 + 1, Duration::from_secs(2)).await?;
 
     let (mut ws, _) = serve
         .capturing(async {
@@ -158,19 +158,19 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
     let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-skill-toggle-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-skill-toggle-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -192,11 +192,11 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
-    let gen0 = wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+    let gen0 = wait_for_runtime_quiescence(&graphql, &node_did, 1, Duration::from_secs(2)).await?;
 
     let catalog_phrase = format!("toggle-cite-{}", Uuid::new_v4().simple());
     run_cli_json(
@@ -207,8 +207,8 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
             "add",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--skill-id",
             "toggle-skill",
             "--enabled",
@@ -220,9 +220,9 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
             "Always cite your sources.",
         ],
     )?;
-    select_default_behavior_skills(&graphql, &agent_did, &["toggle-skill"]).await?;
+    select_default_agent_skills(&graphql, &node_did, &["toggle-skill"]).await?;
     let gen1 =
-        wait_for_runtime_quiescence(&graphql, &agent_did, gen0 + 1, Duration::from_secs(2)).await?;
+        wait_for_runtime_quiescence(&graphql, &node_did, gen0 + 1, Duration::from_secs(2)).await?;
 
     let (mut ws, _) = serve
         .capturing(async {
@@ -311,7 +311,7 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
         "shim should report the skill disabled"
     );
 
-    wait_for_runtime_quiescence(&graphql, &agent_did, gen1 + 1, Duration::from_secs(2)).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, gen1 + 1, Duration::from_secs(2)).await?;
 
     send_client_request(
         &mut ws,

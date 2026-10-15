@@ -634,12 +634,12 @@ mod tests {
 
     async fn insert_request(home: &EmbeddedHome, request_id: &str, lifecycle_state: &str) {
         let request_id = crate::graphql::escape_graphql_string(request_id);
-        let agent_did = crate::graphql::escape_graphql_string(home.did());
+        let node_did = crate::graphql::escape_graphql_string(home.did());
         let lifecycle_state = crate::graphql::escape_graphql_string(lifecycle_state);
         // AgentRequest SDL fields are nillable. Supply the identity and state the
         // observer reads; do not emit an empty list.
         let mutation = format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", agent_did: "{agent_did}", requester_did: "{agent_did}", behavior_id: "observe", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "{lifecycle_state}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "observe", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "{lifecycle_state}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
         );
         let response = home.node.execute(&mutation).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
@@ -733,7 +733,7 @@ mod tests {
         let response = home
             .node
             .execute(&format!(
-                r#"mutation {{ create_InferenceCall(input: {{ request_id: "req-evidence", request_doc_id: "{request_doc_id}", agent_did: "{did_literal}", call_id: "inference-1", call_kind: "inference", attempt: 0, call_seq: 3, call_state: "failed", failure_reason: "HTTP 503", prompt_tokens: 11, completion_tokens: 7, queued_at: "2026-01-01T00:00:00Z", started_at: "2026-01-01T00:00:01Z", ended_at: "2026-01-01T00:00:02Z" }}) {{ _docID }} }}"#
+                r#"mutation {{ create_InferenceCall(input: {{ request_id: "req-evidence", request_doc_id: "{request_doc_id}", node_did: "{did_literal}", call_id: "inference-1", call_kind: "inference", attempt: 0, call_seq: 3, call_state: "failed", failure_reason: "HTTP 503", prompt_tokens: 11, completion_tokens: 7, queued_at: "2026-01-01T00:00:00Z", started_at: "2026-01-01T00:00:01Z", ended_at: "2026-01-01T00:00:02Z" }}) {{ _docID }} }}"#
             ))
             .await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);

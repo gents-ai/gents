@@ -2,11 +2,24 @@ import { useEffect, useRef, useState } from "react";
 import { FolderOpen } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@gents/ui/components/select";
 import type { ManagedServerAuthorityInput } from "@source-inc/gents-desktop-client";
 import { authoritySummary } from "@/lib/managedRuntimeAuthority";
-import { pickDirectory } from "@/lib/pickDirectory";
+import { pickDirectory } from "../../lib/nativeShell";
 
 type ToolCeiling = ManagedServerAuthorityInput["toolCeiling"];
+
+const CEILINGS: { value: ToolCeiling; label: string }[] = [
+  { value: "readwrite", label: "Read / write" },
+  { value: "readonly", label: "Read only" },
+  { value: "meta-only", label: "Metatools only" },
+];
 
 export function ManagedRuntimeAuthorityPicker({
   home,
@@ -85,21 +98,31 @@ export function ManagedRuntimeAuthorityPicker({
   };
   return (
     <div className="grid gap-3">
-      <label className="grid gap-1 text-xs text-muted-foreground">
-        Tool ceiling
-        <select
-          className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground"
+      <div className="grid gap-1">
+        <span id="managed-tool-ceiling" className="text-xs text-muted-foreground">
+          Tool ceiling
+        </span>
+        <Select
+          items={CEILINGS}
           value={toolCeiling}
-          onChange={(event) => {
+          onValueChange={(next) => {
+            if (!next) return;
             onError(null);
-            onCeilingChange(event.target.value as ToolCeiling);
+            onCeilingChange(next as ToolCeiling);
           }}
         >
-          <option value="readwrite">Read / write</option>
-          <option value="readonly">Read only</option>
-          <option value="meta-only">Metatools only</option>
-        </select>
-      </label>
+          <SelectTrigger className="w-full" aria-labelledby="managed-tool-ceiling">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {CEILINGS.map((ceiling) => (
+              <SelectItem key={ceiling.value} value={ceiling.value}>
+                {ceiling.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
       <div className="grid gap-1">
         <label className="text-xs text-muted-foreground" htmlFor="managed-tool-root">
           Tool root
@@ -141,7 +164,7 @@ export function ManagedRuntimeAuthorityPicker({
           : toolCeiling === "readonly"
             ? "Read files and run restricted read-only commands."
             : "No host files or commands. Configuration and separately enabled remote tools remain available."}{" "}
-        Individual behaviors can use less access, never more.
+        Individual agents can use less access, never more.
       </p>
       {validating && toolCeiling !== "meta-only" ? (
         <p className="text-xs text-muted-foreground">Checking…</p>
@@ -173,8 +196,8 @@ export function ManagedRuntimeAuthorityReview({
         <p className="text-sm">{authoritySummary(authority)}</p>
       </div>
       <p className="text-xs text-muted-foreground">
-        Setup remains a narrow configurator. A behavior can reduce this ceiling but
-        cannot expand it.
+        Setup remains a narrow configurator. An agent can reduce this ceiling but cannot
+        expand it.
       </p>
     </div>
   );

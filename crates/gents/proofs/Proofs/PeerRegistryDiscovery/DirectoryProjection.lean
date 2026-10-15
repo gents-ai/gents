@@ -5,12 +5,10 @@ import Mathlib.Data.Finset.Image
 namespace DirectoryProjection
 
 /-- The projected row's contents are abstracted as an opaque `payload`
-string: display name, behavior name/id arrays, runtime state — and, since
-the persona catalog (#986), the per-behavior dimension arrays
-(models/roots/presets/profiles) and home-level composer option lists. All
-of these ride below this abstraction; only the (source, did) identity and
+string: display name, agent name/id arrays, and runtime state. All of
+these ride below this abstraction; only the (source, did) identity and
 payload-equality drive the projection theorems. -/
-structure Principal where
+structure Node where
   did : String
   payload : String
   deriving DecidableEq, Repr
@@ -24,13 +22,13 @@ structure Entry where
   payload : String
   deriving DecidableEq, Repr
 
-def project (source : String) (principals : Finset Principal) : Finset Entry :=
-  principals.image (fun p => {
+def project (source : String) (nodes : Finset Node) : Finset Entry :=
+  nodes.image (fun p => {
     key := directoryKey source p.did, source, did := p.did, payload := p.payload })
 
 structure DirectoryState where
   source : String
-  principals : Finset Principal
+  nodes : Finset Node
   ownedEntries : Finset Entry
   foreignEntries : Finset Entry
   deriving DecidableEq
@@ -38,21 +36,21 @@ structure DirectoryState where
 namespace DirectoryState
 
 def settled (s : DirectoryState) : Prop :=
-  s.ownedEntries = project s.source s.principals
+  s.ownedEntries = project s.source s.nodes
 
 instance (s : DirectoryState) : Decidable s.settled := by
   unfold settled; infer_instance
 
 def projectStep (s : DirectoryState) : DirectoryState :=
-  { s with ownedEntries := project s.source s.principals }
+  { s with ownedEntries := project s.source s.nodes }
 
 end DirectoryState
 
 open DirectoryState
 
-theorem mem_project {source : String} {principals : Finset Principal} {e : Entry} :
-    e ∈ project source principals ↔
-      ∃ p ∈ principals,
+theorem mem_project {source : String} {nodes : Finset Node} {e : Entry} :
+    e ∈ project source nodes ↔
+      ∃ p ∈ nodes,
         e = { key := directoryKey source p.did, source, did := p.did, payload := p.payload } := by
   unfold project
   simp [Finset.mem_image, eq_comm]
@@ -81,9 +79,9 @@ theorem settled_fixpoint {s : DirectoryState} (h : s.settled) :
   cases s
   simp_all
 
-theorem mem_project_erase {source : String} {principals : Finset Principal} {p : Principal}
-    {e : Entry} (h : e ∈ project source (principals.erase p)) :
-    ∃ q ∈ principals, q ≠ p ∧
+theorem mem_project_erase {source : String} {nodes : Finset Node} {p : Node}
+    {e : Entry} (h : e ∈ project source (nodes.erase p)) :
+    ∃ q ∈ nodes, q ≠ p ∧
       e = { key := directoryKey source q.did, source, did := q.did, payload := q.payload } := by
   rw [mem_project] at h
   obtain ⟨q, hq, he⟩ := h

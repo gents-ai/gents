@@ -1,5 +1,7 @@
 import Proofs.CanonicalOutput.Message
+import Proofs.ToolPolicy.PluginCalls
 import Mathlib.Data.List.Dedup
+import Mathlib.Order.Interval.Finset.Nat
 
 /-!
 # Authorized session-hydration closure
@@ -13,6 +15,11 @@ only after its existing owner returns an explicit access observation.
 There is deliberately no input for cross-session provenance. A request's
 `caused_by_parent_*` lineage explains why it exists; it is not a capability,
 hydration root, or grant of the calling session's output documents.
+
+Composed plugin children point back at their parent, so no message reaches
+them. They are retained only from a tool call already in the closure, through
+their single persisted-provenance decoder, with their argument and terminal
+audit payloads.
 -/
 namespace CanonicalOutput.Hydration
 
@@ -86,7 +93,7 @@ inductive AccessState where
 structure AuthorizationScope where
   peer : String
   requester : String
-  agent : String
+  node : String
   session : String
   nativeSession : SessionId
   deriving DecidableEq, Repr
@@ -266,6 +273,185 @@ def collectRoots (scope : AuthorizationScope) (messages : List MessageEnvelope) 
       collectRoots scope messages segments provenance deniedHeaders deniedSegments
         dependencyDenials fuel rest visited manifest
 
+/-- One observed AgentToolCall's persisted plugin-effect provenance, before
+decoding. `terminal` is the `terminal_output` reference of a settled child. -/
+structure EffectRow where
+  id : DocId
+  parent : Option DocId
+  ordinal : Option Nat
+  spawned : Bool
+  toolCallId : String
+  terminal : Option PayloadRef := none
+  deriving DecidableEq, Repr
+
+def effectIdentity (parent : DocId) (ordinal : Nat) : String :=
+  "plugin-effect:" ++ toString parent ++ ":" ++ toString ordinal
+
+/-- `PluginEffectBinding::decode`, the only reader of stored child provenance.
+A row it refuses is not a child: hydration skips it instead of re-deriving a
+parent from its identity string. -/
+def decodeEffect (row : EffectRow) : Option (DocId × Nat) :=
+  match row.parent, row.ordinal with
+  | some parent, some ordinal =>
+      if 0 < ordinal && ordinal ≤ ToolPolicy.PluginCalls.maxEffects && !row.spawned &&
+          row.toolCallId == effectIdentity parent ordinal then some (parent, ordinal)
+      else none
+  | _, _ => none
+
+def isEffect (effects : List EffectRow) (id : DocId) : Bool :=
+  effects.any fun row => row.id == id && (decodeEffect row).isSome
+
+/-- Children of tool calls already retained. A child is dispatched without a
+delegation service (`ToolPolicy.PluginCalls.children_cannot_delegate`), so an
+effect is never followed as a parent. -/
+def selectedChildren (effects : List EffectRow) (retained : List DocumentKey) :
+    List EffectRow :=
+  effects.dedup.filter fun row => match decodeEffect row with
+    | some (parent, _) =>
+        retained.contains ⟨.agentToolCall, parent⟩ && !isEffect effects parent
+    | none => false
+
+/-- Rows the native owner observes. Document ACP filters the reverse lookup, so
+a missing or denied child is unobserved: it is not hydrated and does not fail
+the manifest. -/
+def observedEffects (scope : AuthorizationScope) (provenance : List ProvenanceAccess)
+    (effects : List EffectRow) : List EffectRow :=
+  effects.filter fun row =>
+    match validateProvenance scope provenance ⟨.agentToolCall, row.id⟩ with
+    | .ok _ => true
+    | .error _ => false
+
+/-- Distinct rows may not share a physical identity or a `(parent, ordinal)`
+slot; admission replays one row per slot. Incoherent observed children fail
+the manifest rather than being skipped: their writer is already trusted with
+the session's base rows, message and segment conflicts fail the same way, and
+skipping would leave which row is authoritative ambiguous. Missing arguments
+and a terminal naming a foreign source fail closed for the same reason. -/
+def childrenCoherent (children : List EffectRow) : Bool :=
+  decide (children.map decodeEffect).Nodup && decide (children.map (·.id)).Nodup
+
+def childConflict (children : List EffectRow) : DocId :=
+  ((children.find? fun row => children.any fun other =>
+    other != row && (other.id == row.id || decodeEffect other == decodeEffect row)).map
+      (·.id)).getD 0
+
+/-- The child's arguments are its one closed `ToolEffectArguments` source. -/
+def effectArguments (segments : List Segment) (child : DocId) : Except Error PayloadRef :=
+  match uniqueRecord (Error.reference (.lookup .unavailable))
+      (Error.reference (.lookup .conflictingClosures))
+      (segments.filter fun segment =>
+        segment.coordinate.source == .toolEffectArguments child && segment.close.isSome) with
+  | .ok closing => .ok ⟨closing.id, 0⟩
+  | .error error => .error error
+
+/-- A settled child's terminal names its own tool source. -/
+def effectTerminal (segments : List Segment) (deniedSegments : List DocId) (child : DocId)
+    (reference : PayloadRef) : Except Error PayloadRef :=
+  match resolveClose segments deniedSegments reference with
+  | .ok closing =>
+      if closing.coordinate.source == .tool child then .ok reference
+      else .error (.reference (.lookup .invalidReference))
+  | .error error => .error (.reference (.lookup error))
+
+def effectDocuments (scope : AuthorizationScope) (segments : List Segment)
+    (deniedSegments : List DocId) (dependencyDenials : List DependencyDenial)
+    (provenance : List ProvenanceAccess) (row : EffectRow) :
+    Except Error (List DocumentKey) := do
+  let arguments ← effectArguments segments row.id
+  let terminal ← row.terminal.toList.mapM (effectTerminal segments deniedSegments row.id)
+  let payload ← referenceListDocuments scope segments deniedSegments dependencyDenials
+    provenance (arguments :: terminal)
+  .ok (⟨.agentToolCall, row.id⟩ :: payload)
+
+def effectClosure (scope : AuthorizationScope) (segments : List Segment)
+    (deniedSegments : List DocId) (dependencyDenials : List DependencyDenial)
+    (provenance : List ProvenanceAccess) (effects : List EffectRow)
+    (retained : List DocumentKey) : Except Error (List DocumentKey) := do
+  let children := selectedChildren (observedEffects scope provenance effects) retained
+  if !childrenCoherent children then
+    .error (.provenanceConflict ⟨.agentToolCall, childConflict children⟩)
+  else
+    let documents ← children.mapM
+      (effectDocuments scope segments deniedSegments dependencyDenials provenance)
+    .ok documents.flatten
+
+theorem undecodable_row_is_not_a_child (effects : List EffectRow)
+    (retained : List DocumentKey) (row : EffectRow) (h : decodeEffect row = none) :
+    row ∉ selectedChildren effects retained := by
+  simp [selectedChildren, h]
+
+theorem unobserved_row_is_not_a_child (scope : AuthorizationScope)
+    (provenance : List ProvenanceAccess) (effects : List EffectRow)
+    (retained : List DocumentKey) (row : EffectRow)
+    (h : ∀ key, validateProvenance scope provenance ⟨.agentToolCall, row.id⟩ ≠ .ok key) :
+    row ∉ selectedChildren (observedEffects scope provenance effects) retained := by
+  intro hmem
+  simp only [selectedChildren, List.mem_filter, List.mem_dedup, observedEffects] at hmem
+  obtain ⟨⟨_, hobserved⟩, _⟩ := hmem
+  split at hobserved
+  · rename_i key hok
+    exact h key hok
+  · contradiction
+
+theorem child_requires_retained_direct_parent (effects : List EffectRow)
+    (retained : List DocumentKey) (row : EffectRow)
+    (h : row ∈ selectedChildren effects retained) :
+    ∃ parent ordinal, decodeEffect row = some (parent, ordinal) ∧
+      ⟨.agentToolCall, parent⟩ ∈ retained ∧ isEffect effects parent = false := by
+  simp only [selectedChildren, List.mem_filter] at h
+  obtain ⟨_, hsel⟩ := h
+  cases hdecode : decodeEffect row with
+  | none => simp [hdecode] at hsel
+  | some decoded =>
+      obtain ⟨parent, ordinal⟩ := decoded
+      simp only [hdecode, Bool.and_eq_true, List.contains_iff_mem, Bool.not_eq_true'] at hsel
+      exact ⟨parent, ordinal, rfl, hsel.1, hsel.2⟩
+
+theorem decoded_ordinal_bounded (row : EffectRow) (parent ordinal : Nat)
+    (h : decodeEffect row = some (parent, ordinal)) :
+    0 < ordinal ∧ ordinal ≤ ToolPolicy.PluginCalls.maxEffects := by
+  unfold decodeEffect at h
+  split at h
+  · split at h
+    · rename_i hguard
+      simp only [Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨_, rfl⟩ := h
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hguard
+      exact ⟨hguard.1.1.1, hguard.1.1.2⟩
+    · contradiction
+  · contradiction
+
+/-- Coherent children of one parent occupy distinct bounded ordinals. -/
+theorem children_per_parent_bounded (children : List EffectRow) (parent : DocId)
+    (h : childrenCoherent children = true) :
+    (children.filter fun row => (decodeEffect row).map Prod.fst == some parent).length ≤
+      ToolPolicy.PluginCalls.maxEffects := by
+  simp only [childrenCoherent, Bool.and_eq_true, decide_eq_true_eq] at h
+  let siblings := children.filter fun row => (decodeEffect row).map Prod.fst == some parent
+  have hnodup : (siblings.map decodeEffect).Nodup :=
+    h.1.sublist ((List.filter_sublist children).map _)
+  have hsub : (siblings.map decodeEffect).toFinset ⊆
+      (Finset.Icc 1 ToolPolicy.PluginCalls.maxEffects).image
+        (fun ordinal => some (parent, ordinal)) := by
+    intro value hvalue
+    simp only [List.mem_toFinset, List.mem_map] at hvalue
+    obtain ⟨row, hrow, rfl⟩ := hvalue
+    simp only [siblings, List.mem_filter] at hrow
+    cases hdecode : decodeEffect row with
+    | none => simp [hdecode] at hrow
+    | some decoded =>
+        obtain ⟨rowParent, ordinal⟩ := decoded
+        simp only [hdecode, Option.map_some', beq_iff_eq, Option.some.injEq] at hrow
+        have hbound := decoded_ordinal_bounded row rowParent ordinal hdecode
+        simp only [Finset.mem_image, Finset.mem_Icc]
+        exact ⟨ordinal, ⟨hbound.1, hbound.2⟩, by rw [hrow.2]⟩
+  calc siblings.length = (siblings.map decodeEffect).length := (List.length_map siblings decodeEffect).symm
+    _ = (siblings.map decodeEffect).toFinset.card := (List.toFinset_card_of_nodup hnodup).symm
+    _ ≤ ((Finset.Icc 1 ToolPolicy.PluginCalls.maxEffects).image
+          (fun ordinal => some (parent, ordinal))).card := Finset.card_le_card hsub
+    _ ≤ (Finset.Icc 1 ToolPolicy.PluginCalls.maxEffects).card := Finset.card_image_le
+    _ = ToolPolicy.PluginCalls.maxEffects := by simp
+
 def validateRootSession (targetSession : SessionId) (messages : List MessageEnvelope)
     (deniedHeaders : List DocId) (id : DocId) : Except Error DocId := do
   let message ← lookupMessage messages deniedHeaders id
@@ -276,7 +462,8 @@ def buildManifest (scope : AuthorizationScope) (targetSession : SessionId)
     (requirements : List TerminalRequirement) (messages : List MessageEnvelope)
     (segments : List Segment) (provenance : List ProvenanceAccess)
     (deniedHeaders deniedSegments : List DocId)
-    (dependencyDenials : List DependencyDenial := []) : Except Error (List DocumentKey) := do
+    (dependencyDenials : List DependencyDenial := []) (effects : List EffectRow := []) :
+    Except Error (List DocumentKey) := do
   if scope.nativeSession != targetSession then .error .rootSessionMismatch else pure ()
   let explicitRoots ← authorizedRootMessages.mapM
     (validateRootSession targetSession messages deniedHeaders)
@@ -288,7 +475,10 @@ def buildManifest (scope : AuthorizationScope) (targetSession : SessionId)
   let roots := (explicitRoots ++ selectedRoots).dedup
   let closure ← collectRoots scope messages segments provenance deniedHeaders deniedSegments
     dependencyDenials (messages.length + 1) roots [] []
-  .ok (canonicalManifest (baseKeys ++ terminalOwners ++ closure))
+  let retained := baseKeys ++ terminalOwners ++ closure
+  let children ← effectClosure scope segments deniedSegments dependencyDenials provenance
+    effects retained
+  .ok (canonicalManifest (retained ++ children))
 
 def canDelete (manifest : List DocumentKey) (key : DocumentKey) : Bool :=
   !manifest.contains key
@@ -475,6 +665,98 @@ example : isMessageConflict (lookupMessage [originMessage, sameKeyTwin] []
 
 example : isMessageConflict (lookupMessage [originMessage, sameSequenceTwin] []
     originMessage.header.id) = true := by native_decide
+
+def effectSegment (id : DocId) (source : Source) (writer : Writer) (kind : PayloadKind)
+    (tool : Option ToolIdentity) (payload : List UInt8) : Segment :=
+  { id, coordinate := ⟨10, source⟩, writer
+  , flush := some
+      { ordinal := 0
+      , runs := [{ stream := 0, bytes := payload.length
+                 , declaration := some { block := 0, part := 0, kind, tool } }]
+      , payload }
+  , close := some (.closed .complete 1 [payload.length]), createdAt := 1 }
+
+def parentOutput : Segment := effectSegment 301 (.tool 300) (.tool 300) .toolOutput none [111, 107]
+
+def parentDelivery : MessageEnvelope :=
+  { header :=
+      { id := 220, session := 2, request := some 10, origin := none
+      , refs := [⟨301, 0⟩], outcome := .complete, role := .user
+      , publication := .toolDelivery 300 }
+  , key := "delivery", sequence := 1, nativeId := none
+  , blocks := [.toolResult 300 "parent" none [.text ⟨⟨301, 0⟩, .full⟩]], createdAt := 3 }
+
+def childArguments : Segment :=
+  effectSegment 410 (.toolEffectArguments 400) (.request 7) .arguments
+    (some ⟨effectIdentity 300 1, none, "echo"⟩) [123, 125]
+
+def childOutput : Segment := effectSegment 411 (.tool 400) (.tool 400) .toolOutput none [100]
+
+def child : EffectRow :=
+  { id := 400, parent := some 300, ordinal := some 1, spawned := false
+  , toolCallId := effectIdentity 300 1, terminal := some ⟨411, 0⟩ }
+
+/-- Claims the parent with an identity its decoder refuses. -/
+def forgedChild : EffectRow :=
+  { id := 401, parent := some 300, ordinal := some 2, spawned := false, toolCallId := "forged" }
+
+/-- A decodable child whose parent is not retained. -/
+def unreachableChild : EffectRow :=
+  { id := 402, parent := some 399, ordinal := some 1, spawned := false
+  , toolCallId := effectIdentity 399 1 }
+
+def effectAccess : List ProvenanceAccess :=
+  access ++ [220, 300, 301, 400, 401, 402, 410, 411].flatMap fun id =>
+    [ ⟨scope, ⟨.agentMessage, id⟩, .authorized⟩, ⟨scope, ⟨.agentToolCall, id⟩, .authorized⟩
+    , ⟨scope, ⟨.agentOutputSegment, id⟩, .authorized⟩ ]
+
+def effectSegments : List Segment := [parentOutput, childArguments, childOutput]
+
+example : resultMatches
+    (buildManifest scope 2 [] [220] [] [parentDelivery] effectSegments effectAccess [] [] []
+      [child, forgedChild, unreachableChild])
+    (.ok [⟨.agentRequest, 10⟩, ⟨.agentMessage, 220⟩, ⟨.agentToolCall, 300⟩,
+      ⟨.agentToolCall, 400⟩, ⟨.agentOutputSegment, 301⟩, ⟨.agentOutputSegment, 410⟩,
+      ⟨.agentOutputSegment, 411⟩]) = true := by native_decide
+
+/-- Without its parent in the closure, the same child is not reachable. -/
+example : resultMatches
+    (buildManifest scope 2 [] [201] [] [originMessage, childMessage, parentDelivery]
+      (closing :: effectSegments) effectAccess [] [] [] [child])
+    (.ok [⟨.agentRequest, 10⟩, ⟨.agentMessage, 200⟩, ⟨.agentMessage, 201⟩,
+      ⟨.agentOutputSegment, 100⟩]) = true := by native_decide
+
+example : resultMatches
+    (buildManifest scope 2 [] [220] [] [parentDelivery] effectSegments
+      (effectAccess ++ [⟨scope, ⟨.agentToolCall, 403⟩, .authorized⟩]) [] [] []
+      [child, { child with id := 403, terminal := none }])
+    (.error (.provenanceConflict ⟨.agentToolCall, 400⟩)) = true := by native_decide
+
+example : resultMatches
+    (buildManifest scope 2 [] [220] [] [parentDelivery] [parentOutput, childOutput]
+      effectAccess [] [] [] [child])
+    (.error (.reference (.lookup .unavailable))) = true := by native_decide
+
+example : resultMatches
+    (buildManifest scope 2 [] [220] [] [parentDelivery] effectSegments effectAccess [] [] []
+      [{ child with terminal := some ⟨301, 0⟩ }])
+    (.error (.reference (.lookup .invalidReference))) = true := by native_decide
+
+/-- A running or undelivered parent is retained as a session base; its child
+is reachable without any delivery message. -/
+example : resultMatches
+    (buildManifest scope 2 [.toolCall 300] [] [] [] [childArguments, childOutput] effectAccess
+      [] [] [] [child, forgedChild])
+    (.ok [⟨.agentRequest, 10⟩, ⟨.agentToolCall, 300⟩, ⟨.agentToolCall, 400⟩,
+      ⟨.agentOutputSegment, 410⟩, ⟨.agentOutputSegment, 411⟩]) = true := by native_decide
+
+/-- A child the peer may not read is unobserved, not a failed manifest. -/
+example : resultMatches
+    (buildManifest scope 2 [.toolCall 300] [] [] [] [childArguments, childOutput]
+      (effectAccess.map fun observation =>
+        if observation.key = ⟨.agentToolCall, 400⟩ then { observation with state := .denied }
+        else observation) [] [] [] [child])
+    (.ok [⟨.agentToolCall, 300⟩]) = true := by native_decide
 
 end Examples
 end CanonicalOutput.Hydration

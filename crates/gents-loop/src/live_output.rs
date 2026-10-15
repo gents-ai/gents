@@ -38,6 +38,7 @@ struct LiveToolOutputState {
     /// Channel-to-canonical byte coordinates, never captured payload bytes.
     receipts: [Vec<OutputReceipt>; 2],
     prepared: Option<PreparedToolPresentation>,
+    plugin_receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +99,17 @@ impl LiveToolOutputRegistry {
             append_gate: Arc::new(Mutex::new(())),
             pending_utf8: Arc::new(Mutex::new(std::array::from_fn(|_| Vec::new()))),
         }
+    }
+
+    pub async fn plugin_receipt(
+        &self,
+        tool_call_doc_id: &str,
+    ) -> Option<gents_protocol::plugin::PluginExecutionReceipt> {
+        self.inner
+            .lock()
+            .await
+            .get(tool_call_doc_id)
+            .and_then(|state| state.plugin_receipt.clone())
     }
 
     /// Ids of every tool call currently holding a live buffer.
@@ -201,11 +213,11 @@ impl LiveToolOutputRegistry {
                     "command metadata did not serialize as a JSON object"
                 );
                 let metadata_fields = &metadata_json[1..metadata_json.len() - 1];
-                push_literal(&mut parts, format!(r#"{{{metadata_fields},"stdout":""#));
+                push_literal(&mut parts, r#"{"stdout":""#.to_owned());
                 append_json_channel(&mut parts, stdout.raw, &stdout_plan, &state.receipts[0])?;
                 push_literal(&mut parts, r#"","stderr":""#.to_owned());
                 append_json_channel(&mut parts, stderr.raw, &stderr_plan, &state.receipts[1])?;
-                push_literal(&mut parts, "\"}".to_owned());
+                push_literal(&mut parts, format!("\",{metadata_fields}}}"));
             }
             CommandPresentationLayout::Labeled {
                 head,
@@ -242,8 +254,7 @@ impl LiveToolOutputRegistry {
 /// How a finished command's text frames its two captured channels.
 #[derive(Debug, Clone, Copy)]
 pub enum CommandPresentationLayout<'a> {
-    /// One JSON object: the metadata object's fields, then `stdout` and
-    /// `stderr` string fields.
+    /// One JSON object: `stdout` and `stderr` string fields, then metadata.
     JsonObject { metadata_json: &'a str },
     /// `{head}stdout:\n{stdout}\nstderr:\n{stderr}`, with `(empty)` for an
     /// empty channel; `json_string` encodes the whole text as one JSON string.
@@ -438,6 +449,25 @@ pub struct LiveToolOutputWriter {
 }
 
 impl LiveToolOutputWriter {
+    pub async fn record_plugin_receipt(
+        &self,
+        receipt: gents_protocol::plugin::PluginExecutionReceipt,
+    ) -> anyhow::Result<()> {
+        let mut states = self.registry.inner.lock().await;
+        let state = states
+            .get_mut(&self.tool_call_id)
+            .context("plugin receipt has no registered physical tool invocation")?;
+        anyhow::ensure!(
+            state
+                .plugin_receipt
+                .as_ref()
+                .is_none_or(|existing| existing == &receipt),
+            "plugin execution receipt conflicts with this physical tool invocation"
+        );
+        state.plugin_receipt = Some(receipt);
+        Ok(())
+    }
+
     pub async fn prepare_command_presentation(
         &self,
         expected_text: &str,
@@ -667,7 +697,7 @@ mod tests {
         let metadata = r#"{"ok":true}"#;
 
         let object = format!(
-            r#"{{"ok":true,"stdout":{},"stderr":{}}}"#,
+            r#"{{"stdout":{},"stderr":{},"ok":true}}"#,
             serde_json::to_string(stdout).unwrap(),
             serde_json::to_string(stderr).unwrap(),
         );

@@ -16,7 +16,7 @@ async fn config_export_writes_one_canonical_bundle() -> Result<()> {
     let init = run_init_json(
         &home,
         &[
-            "--agent-name",
+            "--node-name",
             "export-agent",
             "--model-name",
             &model,
@@ -24,14 +24,14 @@ async fn config_export_writes_one_canonical_bundle() -> Result<()> {
             endpoint.endpoint(),
         ],
     )?;
-    let owner = agent_did_from_init(&init)?;
+    let owner = node_did_from_init(&init)?;
 
     run_cli_text(
         &home,
         &["config", "export", "--root", root.to_str().unwrap()],
     )?;
     let config = read_json_file(&root.join("pack_config.json"))?;
-    assert_eq!(config["agent_principal"]["agent_did"], owner);
+    assert_eq!(config["node"]["node_did"], owner);
     assert_eq!(config["contexts"].as_array().map(Vec::len), Some(1));
     assert_eq!(config["tools"].as_array().map(Vec::len), Some(2));
     assert!(config.get("format").is_none());
@@ -45,7 +45,7 @@ async fn config_export_apply_round_trips_canonical_context_documents() -> Result
     let home = tempdir.path().join("home");
     let root = tempdir.path().join("export");
     fs::create_dir_all(&home)?;
-    run_init_json(&home, &["--agent-name", "roundtrip-agent"])?;
+    run_init_json(&home, &["--node-name", "roundtrip-agent"])?;
     run_cli_text(
         &home,
         &["config", "export", "--root", root.to_str().unwrap()],

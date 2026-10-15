@@ -106,8 +106,8 @@ fn pair_scope_from_keys(kind: &str, keys: &[String]) -> EndpointScope<(String, S
         "none" => EndpointScope::None,
         "all" => EndpointScope::All,
         "only" => EndpointScope::<(String, String), ()>::only_units(keys.iter().map(|key| {
-            let (did, behavior) = key.split_once("::").unwrap_or((key.as_str(), ""));
-            (did.to_string(), behavior.to_string())
+            let (did, agent) = key.split_once("::").unwrap_or((key.as_str(), ""));
+            (did.to_string(), agent.to_string())
         })),
         other => panic!("unknown pair scope kind {other:?}"),
     }
@@ -117,7 +117,7 @@ fn encode_pair_keys(scope: &EndpointScope<(String, String), ()>) -> Vec<String> 
     scope
         .keys()
         .into_iter()
-        .map(|(did, behavior)| format!("{did}::{behavior}"))
+        .map(|(did, agent)| format!("{did}::{agent}"))
         .collect()
 }
 
@@ -220,9 +220,9 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
             &view.self_config_categories_scope_kind,
             &view.self_config_categories_keys,
         ),
-        subagent_targets: pair_scope_from_keys(
-            &view.subagent_targets_scope_kind,
-            &view.subagent_targets_keys,
+        agent_targets: pair_scope_from_keys(
+            &view.agent_targets_scope_kind,
+            &view.agent_targets_keys,
         ),
         background_tools: unit_scope_from_strings(
             &view.background_tools_scope_kind,
@@ -303,8 +303,8 @@ fn view_from_surface(
         p2p_collections_keys: surface.p2p_collections.keys(),
         self_config_categories_scope_kind: surface.self_config_categories.kind().to_string(),
         self_config_categories_keys: surface.self_config_categories.keys(),
-        subagent_targets_scope_kind: surface.subagent_targets.kind().to_string(),
-        subagent_targets_keys: encode_pair_keys(&surface.subagent_targets),
+        agent_targets_scope_kind: surface.agent_targets.kind().to_string(),
+        agent_targets_keys: encode_pair_keys(&surface.agent_targets),
         background_tools_scope_kind: surface.background_tools.kind().to_string(),
         background_tools_keys: surface.background_tools.keys(),
         write_probe_tool,
@@ -330,18 +330,17 @@ fn view_from_surface(
     }
 }
 
-pub(super) fn compose(behavior: &View, ceiling: &View, runtime: &View) -> View {
-    let behavior_policy = surface_from_view(behavior);
+pub(super) fn compose(agent: &View, ceiling: &View, runtime: &View) -> View {
+    let agent_policy = surface_from_view(agent);
     let ceiling_policy = surface_from_view(ceiling);
     let runtime_policy = surface_from_view(runtime);
-    let effective =
-        ToolPolicySurface::effective(&behavior_policy, &ceiling_policy, &runtime_policy);
+    let effective = ToolPolicySurface::effective(&agent_policy, &ceiling_policy, &runtime_policy);
     view_from_surface(
         &effective,
-        behavior.mcp_probe.clone(),
-        behavior.write_probe_tool.clone(),
-        behavior.write_probe_collection.clone(),
-        behavior.p2p_overlay_before.clone(),
-        behavior.p2p_overlay_after.clone(),
+        agent.mcp_probe.clone(),
+        agent.write_probe_tool.clone(),
+        agent.write_probe_collection.clone(),
+        agent.p2p_overlay_before.clone(),
+        agent.p2p_overlay_after.clone(),
     )
 }

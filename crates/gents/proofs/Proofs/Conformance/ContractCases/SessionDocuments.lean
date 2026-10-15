@@ -10,7 +10,7 @@ open AgentSession
 def scope : Scope := ⟨1, 10, some 2⟩
 def session : Document :=
   { scope := scope
-    behavior := 3
+    agent:= 3
     createdAt := 1
     tags := ["review", "session-test"]
     provenance := some
@@ -19,12 +19,12 @@ def session : Document :=
         parentRequestDoc := some 6
         fork := some ⟨7, 2⟩ } }
 def request (id time : Nat) : RequestFact :=
-  { purpose := .normal, scope, behavior := 3, createdAt := time, observed := ⟨id + 100, id, .failed⟩ }
+  { purpose := .normal, scope, agent:= 3, createdAt := time, observed := ⟨id + 100, id, .failed⟩ }
 def old := request 1 2
 def newerRequest := request 2 2
 
 def titleRequest := { request 3 99 with purpose := .titleAudit }
-example : latest [old, titleRequest] scope.agent scope.session none = some old := by decide
+example : latest [old, titleRequest] scope.node scope.session none = some old := by decide
 example : advance session [old, titleRequest] titleRequest "title" 100 = session := by decide
 example : observedRequest [titleRequest] titleRequest.observed = none := by decide
 
@@ -48,12 +48,12 @@ example : (refresh indexed [completedRequest] processingEvent.observed 4).observ
 example : refresh indexed [] newerRequest.observed 4 = indexed := by decide
 example : refresh indexed [{ completedRequest with scope := { scope with requester := some 99 } }]
     newerRequest.observed 4 = indexed := by decide
-example : refresh indexed [{ completedRequest with behavior := 99 }]
+example : refresh indexed [{ completedRequest with agent:= 99 }]
     newerRequest.observed 4 = indexed := by decide
 
 def retryState : SessionState :=
   { sessionId := 10
-    behaviorId := 3
+    agentId := 3
     requestIds := {1}
     latest := 1
     ctx := fun _ =>
@@ -109,7 +109,7 @@ def childKey (key : String) := "child:" ++ key
 def sourceAuthorization : SessionFork.SourceAuthorization :=
   ⟨scope, history.messages.map (·.header.id), history.compactions.map (·.id)⟩
 def wrongAgentAuthorization : SessionFork.SourceAuthorization :=
-  ⟨{ scope with agent := 99 }, history.messages.map (·.header.id), history.compactions.map (·.id)⟩
+  ⟨{ scope with node := 99 }, history.messages.map (·.header.id), history.compactions.map (·.id)⟩
 
 def copied := copyPrefix history child remap childKey 1
 example : publish history scope child remap childKey 1 sourceAuthorization true true = some copied := by decide
@@ -126,7 +126,7 @@ example : publish history scope { child with requester := none } remap childKey 
 example : publish history scope child remap childKey 1 sourceAuthorization false true = none := by decide
 example : publish history scope child remap childKey 1 sourceAuthorization true false = none := by decide
 example : publish history scope child remap childKey 1 wrongAgentAuthorization true true = none := by decide
-example : publish history scope { child with agent := 99 } remap childKey 1 sourceAuthorization true true = none := by decide
+example : publish history scope { child with node := 99 } remap childKey 1 sourceAuthorization true true = none := by decide
 example : (copyPrefix history child remap childKey 0) = ⟨[], []⟩ := by decide
 example : publish { history with compactions := [⟨4, scope.session, 2, 0⟩] }
     scope child remap childKey 1 sourceAuthorization true true = none := by decide

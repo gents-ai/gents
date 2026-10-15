@@ -2,6 +2,8 @@
 
 mod support;
 
+#[path = "suites/cli_config_agent.rs"]
+mod cli_config_agent;
 #[path = "suites/cli_config_apply_e2e.rs"]
 mod cli_config_apply_e2e;
 #[path = "suites/cli_config_apply_graphql.rs"]
@@ -14,8 +16,6 @@ mod cli_config_apply_running;
 mod cli_config_apply_transactional_rollback;
 #[path = "suites/cli_config_backend.rs"]
 mod cli_config_backend;
-#[path = "suites/cli_config_behavior_persona.rs"]
-mod cli_config_behavior_persona;
 #[path = "suites/cli_config_crud.rs"]
 mod cli_config_crud;
 #[path = "suites/cli_config_read.rs"]

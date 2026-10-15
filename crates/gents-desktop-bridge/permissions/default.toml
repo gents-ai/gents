@@ -8,6 +8,6 @@ permissions = [
   "allow-desktop-observer-metrics",
   "allow-desktop-client-start",
   "allow-desktop-client-shutdown",
-  "allow-desktop-set-selected-agent",
+  "allow-desktop-set-selected-node",
   "allow-desktop-app-quit",
 ]

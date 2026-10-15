@@ -6,7 +6,7 @@ import Proofs.ClientShell.Projection
 The React composer owns only its local text. For a non-empty local draft it
 must present the canonical shell decision unchanged; an empty local draft adds
 only the canonical `composerEmpty` blocker. It never reconstructs readiness
-from transport, deployment, behavior, or turn observations.
+from transport, deployment, agent, or turn observations.
 -/
 
 namespace ClientShell
@@ -25,6 +25,10 @@ theorem canonical_blocker_preserved
     (reason : SendBlockedReason) (composerNonEmpty : Bool)
     (h : adaptLocalDraft composerNonEmpty (.blocked reason) = .ready) : False := by
   cases composerNonEmpty <;> simp [adaptLocalDraft] at h
+
+theorem canonical_queue_preserved
+    (turn : ClientTurnState) :
+    adaptLocalDraft true (.queue turn) = .queue turn := rfl
 
 theorem presented_ready_iff_nonempty_and_canonical_ready
     (composerNonEmpty : Bool) (canonical : SendDecision) :

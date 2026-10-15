@@ -2,10 +2,12 @@
 # Run native onboarding evals with a live browser or terminal view.
 #
 #   scripts/evals/run-ladder.sh [SUITE|all|list] [TRIALS] [CONCURRENCY]
+#       [--backend TARGET | --target TARGET] [--trials N] [--concurrency N]
 #
 # `all` runs L1-L5 and the configuration-only capstone. L6 is an explicit
 # capability probe, excluded from acceptance while graph authoring is missing.
-# Defaults: 3 trials per case; 4 concurrent inference calls; train + validation.
+# Defaults: 3 trials per case; global trial cap floor(4 / PER_TRIAL); train + validation.
+# The cap covers active trials across all runs, not every provider/background call.
 # Held-out cases run only with GENTS_EVAL_SPLITS=held_out.
 #
 # GENTS_EVAL_TARGET: target file name (default workstation-1).
@@ -18,21 +20,35 @@
 # GENTS_BIN: existing gents binary; otherwise builds this checkout.
 set -euo pipefail
 
-usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
-[ $# -le 3 ] || usage
-SELECTION=${1:-all}
+usage() { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+POSITIONAL=()
+TARGET=${GENTS_EVAL_TARGET:-workstation-1}
+NAMED_TRIALS=
+NAMED_CONCURRENCY=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --backend|--target) [ $# -ge 2 ] || usage; TARGET=$2; shift 2 ;;
+    --trials) [ $# -ge 2 ] || usage; NAMED_TRIALS=$2; shift 2 ;;
+    --concurrency) [ $# -ge 2 ] || usage; NAMED_CONCURRENCY=$2; shift 2 ;;
+    -h|--help) usage 0 ;;
+    --*) usage ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+[ ${#POSITIONAL[@]} -le 3 ] || usage
+SELECTION=${POSITIONAL[0]:-all}
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 FIXTURES="$ROOT/crates/gents/tests/fixtures/configurator_evals"
 LADDER="$FIXTURES/ladder"
 MATRIX="$ROOT/scripts/evals/matrix.json"
 SHA=$(git -C "$ROOT" rev-parse --short HEAD)
-TRIALS=${2:-3}
-CONCURRENCY=${3:-4}
+TRIALS=${NAMED_TRIALS:-${POSITIONAL[1]:-3}}
+CONCURRENCY=${NAMED_CONCURRENCY:-${POSITIONAL[2]:-4}}
 PER_TRIAL=${GENTS_EVAL_PER_TRIAL:-1}
-TARGET=${GENTS_EVAL_TARGET:-workstation-1}
 SPLITS=${GENTS_EVAL_SPLITS:-train validation}
 EVAL_HOME=${GENTS_EVAL_HOME:-$HOME/gents-eval-homes/ladder-$SHA-$TARGET}
+EVAL_HOME=$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$EVAL_HOME")
 PORT_OVERRIDE=${GENTS_EVAL_PORT:-}
 PORT=$(python3 - "$EVAL_HOME/runtime.json" "$PORT_OVERRIDE" "$TARGET" <<'PYPORT'
 import json, pathlib, sys, urllib.parse
@@ -76,7 +92,7 @@ PYLIST
   exit 0
 fi
 SELECTED=()
-while IFS= read -r level; do SELECTED+=("$level"); done < <(python3 - "$MATRIX" "$SELECTION" "${GENTS_EVAL_SHARD:-1/1}" <<'PYSELECT'
+SELECTED_TEXT=$(python3 - "$MATRIX" "$SELECTION" "${GENTS_EVAL_SHARD:-1/1}" <<'PYSELECT'
 import json,sys
 m=json.load(open(sys.argv[1])); selection=sys.argv[2]
 try:
@@ -93,12 +109,19 @@ if not selected: sys.exit('this shard selects no suites')
 print('\n'.join(selected))
 PYSELECT
 )
+while IFS= read -r level; do [ -z "$level" ] || SELECTED+=("$level"); done <<< "$SELECTED_TEXT"
 [ ${#SELECTED[@]} -gt 0 ] || { echo "no suites selected for $SELECTION and shard ${GENTS_EVAL_SHARD:-1/1}; use list" >&2; exit 2; }
 [[ "$TRIALS" =~ ^[1-9][0-9]*$ && "$CONCURRENCY" =~ ^[1-9][0-9]*$ && "$PER_TRIAL" =~ ^[1-9][0-9]*$ ]] || usage
 [ -f "$TARGET_FILE" ] || { echo "no target $TARGET_FILE" >&2; exit 2; }
 [ "$PORT" != 9191 ] || { echo "port 9191 belongs to the desktop node; pick another GENTS_EVAL_PORT" >&2; exit 2; }
 (( PER_TRIAL >= 1 && CONCURRENCY >= PER_TRIAL )) || { echo "CONCURRENCY must be at least GENTS_EVAL_PER_TRIAL" >&2; exit 2; }
 TRIAL_CONCURRENCY=$(( CONCURRENCY / PER_TRIAL ))
+python3 - "$SPLITS" <<'PYVALIDATESPLITS'
+import sys
+splits = sys.argv[1].split()
+if not splits or len(splits) != len(set(splits)) or any(s not in {"train", "validation", "held_out"} for s in splits):
+    sys.exit("GENTS_EVAL_SPLITS must contain distinct train, validation or held_out splits")
+PYVALIDATESPLITS
 
 if [ -n "${GENTS_BIN:-}" ]; then
   GENTS=$GENTS_BIN
@@ -140,15 +163,15 @@ if [ ! -f "$EVAL_HOME/init.json" ]; then
   (cd "$EVAL_HOME/work" && "$GENTS" init --home "$EVAL_HOME" --write --inference-url "$ENDPOINT" \
     --model-name "$MODEL" --max-concurrent "$PER_TRIAL" --tool-root "$EVAL_HOME/work" >/dev/null)
 fi
-DID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["agent_did"])' "$EVAL_HOME/init.json")
+DID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["node_did"])' "$EVAL_HOME/init.json")
 
 GRAPHQL="http://127.0.0.1:$PORT/api/v0/graphql"
 # Served means the endpoint answers and runtime.json names it: CLI commands
 # with --home fall back to opening the store themselves until runtime.json does.
 served() {
   grep -qF "127.0.0.1:$PORT/" "$EVAL_HOME/runtime.json" 2>/dev/null &&
-    "$GENTS" query --home "$EVAL_HOME" --graphql "$GRAPHQL" --collection AgentPrincipal --field agent_did 2>/dev/null |
-      python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if any(r.get("agent_did")==sys.argv[1] for r in d.get("results",[])) else 1)' "$DID" 2>/dev/null
+    "$GENTS" query --home "$EVAL_HOME" --graphql "$GRAPHQL" --collection Node --field node_did 2>/dev/null |
+      python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if any(r.get("node_did")==sys.argv[1] for r in d.get("results",[])) else 1)' "$DID" 2>/dev/null
 }
 if ! served; then
   if [ -z "$PORT_OVERRIDE" ]; then
@@ -193,10 +216,10 @@ target, did, per_trial, root, reasoning, temperature, top_p = sys.argv[1:8]
 t = json.load(open(target))
 name = os.path.basename(target)[:-5]
 backend = dict(t["inference_backends"][0])
-backend.update(backend_id=f"{did}:ladder-{name}", agent_did=did, max_concurrent=int(per_trial))
-sampling = {"sampling_id": f"{did}:ladder-{name}-sampling", "agent_did": did,
+backend.update(backend_id=f"{did}:ladder-{name}", node_did=did, max_concurrent=int(per_trial))
+sampling = {"sampling_id": f"{did}:ladder-{name}-sampling", "node_did": did,
             "display_name": f"Ladder {name}", "temperature": float(temperature), "top_p": float(top_p)}
-profile = {"profile_id": f"{did}:ladder-{name}", "agent_did": did, "display_name": f"Ladder {name}",
+profile = {"profile_id": f"{did}:ladder-{name}", "node_did": did, "display_name": f"Ladder {name}",
            "backend_id": backend["backend_id"], "model_name": t["inference_profiles"][0]["model_name"],
            "reasoning_effort": reasoning, "sampling_id": sampling["sampling_id"],
            "execution_id": f"{did}:default-profile-execution"}
@@ -205,18 +228,18 @@ json.dump({"manifest_version": 1, "name": "ladder_inference", "version": "0.1.0"
            "description": "The ladder's trial inference binding", "authors": ["gents-ai contributors"],
            "tags": ["eval"], "kind": "documents", "assets": ["pack_config.json"], "config": "pack_config.json"},
           open(f"{root}/manifest.json", "w"))
-json.dump({"agent_principal": {"default_behavior_id": f"{did}:default"}, "inference_backends": [backend], "inference_sampling": [sampling],
+json.dump({"node": {"default_agent_id": f"{did}:default"}, "inference_backends": [backend], "inference_sampling": [sampling],
            "inference_profiles": [profile]}, open(f"{root}/pack_config.json", "w"), indent=2)
 PY
-"$GENTS" config apply --root "$INFERENCE" --bind-agent-did home --home "$EVAL_HOME" >/dev/null
+"$GENTS" config apply --root "$INFERENCE" --bind-node-did home --home "$EVAL_HOME" >/dev/null
 echo "profile $PROFILE_ID: $MODEL, reasoning $REASONING, temperature $TEMPERATURE, top_p $TOP_P, $PER_TRIAL call(s) per trial" >&2
 
-# The subject is the Engineer this checkout seeds: its Setup prompt and grant,
+# The subject is the Engineer this checkout seeds: its canonical prompt and grant,
 # copied over the pack's so the cell never drifts from gents_protocol.
 SUBJECT="$EVAL_HOME/engineer_subject-$SHA"
 rm -rf "$SUBJECT" && cp -R "${GENTS_EVAL_SUBJECT:-$LADDER/engineer_subject}" "$SUBJECT"
-cp "$ROOT/crates/gents-protocol/prompts/setup.md" "$SUBJECT/agent_behaviors/engineer/system_prompt.md"
-python3 - "$SUBJECT/pack_config.json" "$ROOT/crates/gents-protocol/presets/setup-self-config.json" <<'PY'
+cp "$ROOT/crates/gents-protocol/prompts/engineer.md" "$SUBJECT/agents/engineer/system_prompt.md"
+python3 - "$SUBJECT/pack_config.json" "$ROOT/crates/gents-protocol/presets/engineer-self-config.json" <<'PY'
 import json, sys
 config, grant = sys.argv[1], sys.argv[2]
 c = json.load(open(config))
@@ -224,8 +247,10 @@ c["tools"][0]["self_config"] = json.load(open(grant))
 json.dump(c, open(config, "w"), indent=2)
 PY
 
-STAMP=$(date +%Y%m%d-%H%M%S)
-MATRIX_STATUS=0
+STAMP=$(python3 -c 'import datetime,uuid; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S-%f") + "-" + uuid.uuid4().hex[:8])')
+PLAN="$EVAL_HOME/batch-$STAMP.json"
+PLAN_DRAFT="$PLAN.tmp"
+printf '{"runs":[]}\n' >"$PLAN_DRAFT"
 WATCH=${GENTS_EVAL_WATCH:-auto}
 if [ "$WATCH" = auto ]; then WATCH=0; [ ! -t 1 ] || WATCH=1; fi
 if [ "$WATCH" = 1 ] || [ "$WATCH" = web ]; then
@@ -244,8 +269,8 @@ for level in "${SELECTED[@]}"; do
     RUN_SUBJECT="$EVAL_HOME/sessions_subject-$SHA"
     rm -rf "$RUN_SUBJECT"
     cp -R "$FIXTURES/sessions/subject" "$RUN_SUBJECT"
-    cp "$ROOT/crates/gents-protocol/prompts/setup.md" "$RUN_SUBJECT/agent_behaviors/engineer/system_prompt.md"
-    python3 - "$RUN_SUBJECT/pack_config.json" "$ROOT/crates/gents-protocol/presets/setup-self-config.json" <<'PYSESSIONS'
+    cp "$ROOT/crates/gents-protocol/prompts/engineer.md" "$RUN_SUBJECT/agents/engineer/system_prompt.md"
+    python3 - "$RUN_SUBJECT/pack_config.json" "$ROOT/crates/gents-protocol/presets/engineer-self-config.json" <<'PYSESSIONS'
 import json, sys
 config, grant = sys.argv[1:]
 c = json.load(open(config))
@@ -257,17 +282,73 @@ PYSESSIONS
     RUN_SUBJECT="$EVAL_HOME/factory_subject-$SHA"
     rm -rf "$RUN_SUBJECT"
     cp -R "$FIXTURES/factory_setup/engineer_kspec" "$RUN_SUBJECT"
-    cp "$ROOT/crates/gents-protocol/prompts/setup.md" "$RUN_SUBJECT/engineer/system_prompt.md"
+    cp "$ROOT/crates/gents-protocol/prompts/engineer.md" "$RUN_SUBJECT/engineer/system_prompt.md"
   fi
-  # A definition pack's empty agent_principal would clear the home's default
-  # behavior, and the served home then refuses to restart; keep the default.
+  # A definition pack's empty node would clear the home's default
+  # agent, and the served home then refuses to restart; keep the default.
   DEFINITION="$EVAL_HOME/definitions/$level"
   rm -rf "$DEFINITION" && mkdir -p "$EVAL_HOME/definitions" && cp -R "${GENTS_EVAL_DEFINITION_SOURCE:-$FIXTURES/$SUITE_PATH}" "$DEFINITION"
-  python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["agent_principal"]={"default_behavior_id": sys.argv[2]}; json.dump(c, open(p,"w"), indent=2)' \
+  python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["node"]={"default_agent_id": sys.argv[2]}; json.dump(c, open(p,"w"), indent=2)' \
     "$DEFINITION/pack_config.json" "$DID:default"
-  "$GENTS" config apply --root "$DEFINITION" --bind-agent-did home --home "$EVAL_HOME" >/dev/null
+  python3 - "$DEFINITION" "$RUN_SUBJECT" <<'PYENGINEERBASELINE'
+import json, pathlib, sys
+root, subject = map(pathlib.Path, sys.argv[1:])
+config = json.loads((subject / "pack_config.json").read_text())
+engineers = [agent for agent in config.get("agents", []) if agent.get("agent_id") == "engineer"]
+if len(engineers) == 1:
+    contexts = [context for context in config.get("contexts", []) if context.get("context_id") == engineers[0].get("context_id")]
+    tools = [tool for tool in config.get("tools", []) if len(contexts) == 1 and tool.get("tools_id") == contexts[0].get("tools_id")]
+    if len(tools) == 1:
+        definition = json.loads((root / "pack_config.json").read_text())
+        for evaluation in definition.get("eval_definitions", []):
+            for relative in evaluation.get("cases", []):
+                path = root / relative
+                case = json.loads(path.read_text())
+                changed = False
+                for stage in case.get("stages", []):
+                    captures = {capture.get("name"): capture for capture in stage.get("capture", [])}
+                    for check in stage.get("checks", []):
+                        group = check.get("params", {}).get("agents", {})
+                        if check.get("check") != "crew_spec_match" or not isinstance(group, dict):
+                            continue
+                        if not all(captures.get(group.get(key), {}).get("collection") == collection
+                                   and captures.get(group.get(key), {}).get("filter") == {"node_did": {"_eq": "$trial"}}
+                                   for key, collection in [("agents", "Agent"), ("contexts", "AgentContext"), ("tools", "Tools")]):
+                            continue
+                        for expected in group.get("expect", []):
+                            if expected.get("agent_id") != "engineer" or not any(
+                                item.get("field") == "tools_id" and item.get("equals") == tools[0]["tools_id"]
+                                for item in expected.get("context", [])
+                            ):
+                                continue
+                            for assertion in expected.get("tools", []):
+                                if "equals" not in assertion:
+                                    continue
+                                value = tools[0]
+                                for part in assertion["field"].split("."):
+                                    value = value.get(part) if isinstance(value, dict) else None
+                                if assertion["equals"] == value:
+                                    continue
+                                known_baselines = {
+                                    "built_ins": (None, {"enable_schema_tool": True}),
+                                    "self_config.self_config_categories": (
+                                        ["agent", "tools", "profile", "node", "backend", "mcp_service", "automation"],
+                                        ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation"],
+                                    ),
+                                }
+                                baseline = known_baselines.get(assertion["field"])
+                                if baseline is None or assertion["equals"] != baseline[0] or value != baseline[1]:
+                                    raise ValueError(
+                                        f"{path}: unexpected Engineer invariant mismatch for {assertion['field']}: "
+                                        f"expected {assertion['equals']!r}, input {value!r}"
+                                    )
+                                assertion["equals"] = value
+                                changed = True
+                if changed:
+                    path.write_text(json.dumps(case, indent=2) + "\n")
+PYENGINEERBASELINE
+  "$GENTS" config apply --root "$DEFINITION" --bind-node-did home --home "$EVAL_HOME" >/dev/null
   for split in $SPLITS; do
-    [ "$split" != none ] || continue
     if ! python3 - "$DEFINITION" "$split" <<'PYSPLIT'
 import json,pathlib,sys
 root=pathlib.Path(sys.argv[1]); definition=json.load(open(root/'pack_config.json'))['eval_definitions'][0]
@@ -280,41 +361,53 @@ PYSPLIT
 == $level ($split): $TRIALS trials per case, $TRIAL_CONCURRENCY trials at once, $PER_TRIAL call(s) per trial, $MODEL at $ENDPOINT
 watch:  $GENTS eval watch $RUN_ID --home $EVAL_HOME
 EOF
-    status=0
-    RUN_LOG="$EVAL_HOME/$RUN_ID.log"
-    (cd "$EVAL_HOME/work" && exec "$GENTS" eval run "$DEFINITION_ID" \
-      --cell "engineer=$RUN_SUBJECT:engineer" --profile "engineer=$PROFILE_ID" \
-      --split "$split" --trials "$TRIALS" --concurrency "$TRIAL_CONCURRENCY" \
-      --run-id "$RUN_ID" --home "$EVAL_HOME") >"$RUN_LOG" 2>&1 &
-    RUN_PID=$!
-    WATCH_COMMAND="$GENTS eval watch $RUN_ID --home $EVAL_HOME"
-    if [ "$WATCH" = web ]; then WATCH_COMMAND="http://127.0.0.1:$WEB_PORT"; fi
-    trap 'echo "Eval continues in process $RUN_PID. Watch: $WATCH_COMMAND" >&2; disown "$RUN_PID" 2>/dev/null || true; exit 130' INT
-    if [ "$WATCH" = tui ]; then
-      while kill -0 "$RUN_PID" 2>/dev/null; do
-        if [ -f "$EVAL_HOME/eval/runs/$RUN_ID/progress.json" ] || [ -f "$EVAL_HOME/eval/runs/$RUN_ID/report.json" ]; then
-          "$GENTS" eval watch "$RUN_ID" --home "$EVAL_HOME" || true
-          break
-        fi
-        sleep 1
-      done
-    else
-      echo "run log: $RUN_LOG" >&2
-    fi
-    wait "$RUN_PID" || status=$?
-    trap - INT
-    if [ "$status" != 0 ]; then MATRIX_STATUS=$status; tail -n 20 "$RUN_LOG" >&2; fi
-    cat >&2 <<EOF
-report: $GENTS eval show $RUN_ID --home $EVAL_HOME
-trial:  $GENTS eval trial $RUN_ID engineer <case_id> [index] --home $EVAL_HOME
-EOF
-    if [ "$status" != 0 ]; then
-      echo "matrix stopped after an execution error; resume with: $GENTS eval resume $RUN_ID --home $EVAL_HOME" >&2
-      echo "the eval home stays served on $PORT" >&2
-      exit "$status"
-    fi
+    python3 - "$PLAN_DRAFT" "$DEFINITION_ID" "$RUN_SUBJECT" "$PROFILE_ID" "$split" "$TRIALS" "$TRIAL_CONCURRENCY" "$RUN_ID" <<'PYPLAN'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+definition, subject, profile, split, trials, concurrency, run_id = sys.argv[2:]
+plan = json.loads(path.read_text())
+args = [definition, "--cell", f"engineer={subject}:engineer", "--profile", f"engineer={profile}",
+        "--split", split, "--trials", trials, "--concurrency", concurrency, "--run-id", run_id]
+if any(run["args"][run["args"].index("--run-id") + 1] == run_id for run in plan["runs"]):
+    sys.exit(f"duplicate run id: {run_id}")
+plan["runs"].append({"args": args})
+path.write_text(json.dumps(plan, indent=2) + "\n")
+PYPLAN
   done
 done
+python3 - "$PLAN_DRAFT" "$PLAN" <<'PYFINALPLAN'
+import json, os, pathlib, sys
+source, destination = map(pathlib.Path, sys.argv[1:])
+plan = json.loads(source.read_text())
+if not plan["runs"]:
+    sys.exit("selected suites and splits contain no runs")
+os.link(source, destination)
+source.unlink()
+PYFINALPLAN
+BATCH_LOG="$EVAL_HOME/batch-$STAMP.log"
+FIRST_RUN_ID=$(python3 -c 'import json,sys; a=json.load(open(sys.argv[1]))["runs"][0]["args"]; print(a[a.index("--run-id")+1])' "$PLAN")
+echo "saved batch plan: $PLAN" >&2
+echo "global active trial cap: $TRIAL_CONCURRENCY (floor($CONCURRENCY / $PER_TRIAL)); provider/background calls are not globally capped" >&2
+(cd "$EVAL_HOME/work" && exec "$GENTS" eval batch --plan "$PLAN" --concurrency "$TRIAL_CONCURRENCY" --home "$EVAL_HOME") >"$BATCH_LOG" 2>&1 &
+BATCH_PID=$!
+WATCH_COMMAND="$GENTS eval watch $FIRST_RUN_ID --home $EVAL_HOME"
+if [ "$WATCH" = web ]; then WATCH_COMMAND="http://127.0.0.1:$WEB_PORT"; fi
+trap 'echo "Batch continues in process $BATCH_PID. Plan: $PLAN. Watch: $WATCH_COMMAND" >&2; disown "$BATCH_PID" 2>/dev/null || true; exit 130' INT
+echo "batch log: $BATCH_LOG" >&2
+if [ "$WATCH" = tui ]; then
+  while kill -0 "$BATCH_PID" 2>/dev/null; do
+    if [ -f "$EVAL_HOME/eval/runs/$FIRST_RUN_ID/progress.json" ] || [ -f "$EVAL_HOME/eval/runs/$FIRST_RUN_ID/report.json" ]; then
+      "$GENTS" eval watch "$FIRST_RUN_ID" --home "$EVAL_HOME" || true
+      break
+    fi
+    sleep 1
+  done
+fi
+status=0
+wait "$BATCH_PID" || status=$?
+trap - INT
+if [ "$status" != 0 ]; then tail -n 20 "$BATCH_LOG" >&2; fi
+echo "resume saved batch: $GENTS eval batch --plan $PLAN --concurrency $TRIAL_CONCURRENCY --home $EVAL_HOME" >&2
+echo "saved plan: $PLAN; inspect each run with $GENTS eval show <run-id> --home $EVAL_HOME" >&2
 echo "the eval home stays served on $PORT; stop it with: kill \$(cat $EVAL_HOME/server.pid)" >&2
-
-exit "$MATRIX_STATUS"
+exit "$status"

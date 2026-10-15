@@ -12,20 +12,20 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
 
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
-    let default_backend_id = default_backend_id(&agent_did);
+    let node_did = node_did_from_init(&init)?;
+    let default_backend_id = default_backend_id(&node_did);
     let default_model_selection = gents_model_selection_id(&default_backend_id, &model_name);
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -47,7 +47,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -98,7 +98,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     assert_eq!(
         config.config.model.as_deref(),
         Some(default_model_selection.as_str()),
-        "ConfigRead.model should be the bound behavior's backend-qualified model selection"
+        "ConfigRead.model should be the bound agent's backend-qualified model selection"
     );
 
     send_client_request(
@@ -175,20 +175,20 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
                 r#"{{
                 AgentSession(filter: {{
                     session_id: {{ _eq: "{}" }},
-                    agent_did: {{ _eq: "{}" }},
+                    node_did: {{ _eq: "{}" }},
                     requester_did: {{ _eq: "{}" }}
                 }}, limit: 1) {{
                     session_id
-                    agent_did
+                    node_did
                     requester_did
-                    behavior_id
+                    agent_id
                     created_at
                     closed_at
                 }}
             }}"#,
                 escape_graphql_string(&thread_id),
-                escape_graphql_string(&agent_did),
-                escape_graphql_string(&agent_did),
+                escape_graphql_string(&node_did),
+                escape_graphql_string(&node_did),
             ),
         ))
         .await?;
@@ -198,17 +198,17 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         Some(thread_id.as_str())
     );
     assert_eq!(
-        session.get("agent_did").and_then(Value::as_str),
-        Some(agent_did.as_str())
+        session.get("node_did").and_then(Value::as_str),
+        Some(node_did.as_str())
     );
-    let expected_behavior_id = format!("{agent_did}:default");
+    let expected_agent_id = format!("{node_did}:default");
     assert_eq!(
-        session.get("behavior_id").and_then(Value::as_str),
-        Some(expected_behavior_id.as_str())
+        session.get("agent_id").and_then(Value::as_str),
+        Some(expected_agent_id.as_str())
     );
     assert_eq!(
         session.get("requester_did").and_then(Value::as_str),
-        Some(agent_did.as_str())
+        Some(node_did.as_str())
     );
     assert_eq!(session.get("closed_at"), Some(&Value::Null));
     assert!(
@@ -514,8 +514,8 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         goal_after_turn.tokens_used
     );
 
-    let (_request_id, session_id, _behavior_id) =
-        wait_for_request(&graphql, &agent_did, &prompt).await?;
+    let (_request_id, session_id, _agent_id) =
+        wait_for_request(&graphql, &node_did, &prompt).await?;
     assert_eq!(session_id, thread_id);
     let captured_requests = mock_endpoint.captured_chat_requests();
     assert!(
@@ -679,19 +679,19 @@ async fn codex_shim_completes_blank_materialized_terminal_message() -> Result<()
 
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-blank-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-blank-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -712,7 +712,7 @@ async fn codex_shim_completes_blank_materialized_terminal_message() -> Result<()
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -729,11 +729,9 @@ async fn codex_shim_completes_blank_materialized_terminal_message() -> Result<()
 
     let prompt = "Read notes.txt, then finish without visible final text.";
     send_turn(&mut ws, &thread_id, prompt).await?;
-    let (request_id, session_id, behavior_id) =
-        wait_for_request(&graphql, &agent_did, prompt).await?;
+    let (request_id, session_id, agent_id) = wait_for_request(&graphql, &node_did, prompt).await?;
     assert_eq!(session_id, thread_id);
-    seed_blank_materialized_completion(&graphql, &request_id, &agent_did, &behavior_id, &thread_id)
-        .await?;
+    seed_blank_materialized_completion(&graphql, &request_id, &node_did, &thread_id).await?;
 
     let capture = tokio::time::timeout(Duration::from_secs(15), read_turn_capture(&mut ws))
         .await

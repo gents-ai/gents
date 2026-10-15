@@ -8,9 +8,9 @@ Executable formal model of the configuration refactor contracts:
 
 * Install scope fills omitted owners and rejects mismatched owners, while
   preserving explicit foreign delegation identities verbatim. Owners are
-  string DIDs (`agent_did`); no separate principal schema is introduced.
-* A behavior composes context and inference into one session configuration.
-  `Task -> Behavior -> {Context, InferenceProfile -> Backend}` resolution fails
+  string DIDs (`node_did`); no separate node schema is introduced.
+* A agent composes context and inference into one session configuration.
+  `Task -> Agent -> {Context, InferenceProfile -> Backend}` resolution fails
   closed on missing or foreign references and disabled executable documents.
   `resolveTask` is the single Task resolver (owner-checked Task record); graph
   invocation reuses exactly this resolver.
@@ -108,11 +108,11 @@ structure AdvertisedModel where
   deriving DecidableEq, Repr
 
 /-- Projection of BackendModelCatalog. None is shared backend credentials;
-Some DID is the principal whose OAuth credential performed discovery. -/
+Some DID is the node whose OAuth credential performed discovery. -/
 structure DiscoveryObservation where
   /-- Backend identity inherited from the containing backend observation. -/
   backendId : String
-  agentDid : Option String
+  nodeDid : Option String
   models : List AdvertisedModel
   deriving DecidableEq, Repr
 
@@ -122,21 +122,21 @@ ownership. Discovery cannot rewrite inference selection. -/
 def catalogFor (owner backendId : String) (credentialScope : Option String)
     (observation : Option (Owned DiscoveryObservation)) : Option DiscoveryObservation :=
   (observation.filter fun catalog => catalog.owner == owner &&
-    catalog.value.agentDid == credentialScope && catalog.value.backendId == backendId).map (·.value)
+    catalog.value.nodeDid == credentialScope && catalog.value.backendId == backendId).map (·.value)
 
 /-- Exact catalog admission covers matching discovery, missing observations, and
 foreign owner/backend/credential rejection with one contract. -/
 theorem catalogFor_some_iff (owner backendId : String) (scope : Option String)
     (observation : Option (Owned DiscoveryObservation)) (catalog : DiscoveryObservation) :
     catalogFor owner backendId scope observation = some catalog ↔
-      observation = some ⟨owner, catalog⟩ ∧ catalog.agentDid = scope ∧ catalog.backendId = backendId := by
+      observation = some ⟨owner, catalog⟩ ∧ catalog.nodeDid = scope ∧ catalog.backendId = backendId := by
   cases observation with
   | none => simp [catalogFor, Option.filter]
   | some observed =>
     cases observed with
     | mk observedOwner value =>
       by_cases ho : observedOwner = owner <;>
-        by_cases hs : value.agentDid = scope <;>
+        by_cases hs : value.nodeDid = scope <;>
         by_cases hb : value.backendId = backendId <;>
         simp_all [catalogFor, Option.filter, Owned.mk.injEq] <;> aesop
 
@@ -182,7 +182,7 @@ structure Context where
 
 def defaultContext : Context := {}
 
-/-- A session derives both its context and inference from one behavior. There
+/-- A session derives both its context and inference from one agent. There
 is no independent context defaulting or graph-specific model selection path. -/
 structure ResolvedSessionConfig where
   context : Context
@@ -191,7 +191,7 @@ structure ResolvedSessionConfig where
 
 /-! ## One owned reference resolver, one composed session configuration -/
 
-structure Behavior where
+structure Agent where
   contextId : Option String
   profileId : String
   enabled : Bool
@@ -202,23 +202,23 @@ structure Backend where
   deriving DecidableEq, Repr
 
 structure Task where
-  behaviorId : String
+  agentId : String
   enabled : Bool
   deriving DecidableEq, Repr
 
 /-- The profile projection is its required inference selection. Context payloads
 have already had their nested same-owner references resolved by the loader.
-Lookup keys include agent_did and the authored logical ID. Identical labels
-can coexist across principals; returned ownership is still checked against the key. -/
+Lookup keys include node_did and the authored logical ID. Identical labels
+can coexist across nodes; returned ownership is still checked against the key. -/
 structure Registry where
   tasks : String → String → Option (Owned Task)
-  behaviors : String → String → Option (Owned Behavior)
+  agents : String → String → Option (Owned Agent)
   contexts : String → String → Option (Owned Context)
   profiles : String → String → Option (Owned SelectedModel)
   backends : String → String → Option (Owned Backend)
 
 inductive ResolveError where
-  | missingBehavior | disabledBehavior | foreignBehavior
+  | missingAgent | disabledAgent | foreignAgent
   | missingContext | foreignContext
   | missingProfile | foreignProfile
   | missingBackend | disabledBackend | foreignBackend
@@ -267,12 +267,12 @@ def resolveContext (reg : Registry) (scope : String) : Option String → Except 
       | some key => reg.contexts scope key = some ⟨scope, context⟩ := by
   cases id <;> simp [resolveContext, eq_comm]
 
-def resolveBehavior (reg : Registry) (scope behaviorId : String) :
+def resolveAgent (reg : Registry) (scope agentId : String) :
     Except ResolveError ResolvedSessionConfig := do
-  let behavior ← lookupOwned reg.behaviors scope behaviorId .missingBehavior .foreignBehavior
-  if !behavior.enabled then .error .disabledBehavior else do
-    let context ← resolveContext reg scope behavior.contextId
-    let inference ← lookupOwned reg.profiles scope behavior.profileId .missingProfile .foreignProfile
+  let agent ← lookupOwned reg.agents scope agentId .missingAgent .foreignAgent
+  if !agent.enabled then .error .disabledAgent else do
+    let context ← resolveContext reg scope agent.contextId
+    let inference ← lookupOwned reg.profiles scope agent.profileId .missingProfile .foreignProfile
     let backend ← lookupOwned reg.backends scope inference.backendId .missingBackend .foreignBackend
     if !backend.enabled then .error .disabledBackend
     else .ok ⟨context, inference⟩
@@ -283,46 +283,46 @@ def resolveTask (reg : Registry) (scope taskId : String) :
     Except ResolveError ResolvedSessionConfig := do
   let task ← lookupOwned reg.tasks scope taskId .missingTask .foreignTask
   if !task.enabled then .error .disabledTask
-  else resolveBehavior reg scope task.behaviorId
+  else resolveAgent reg scope task.agentId
 
 /-- Complete characterization: a successful session has the exact context and
-inference selected by one owned enabled behavior and an owned enabled backend. -/
-theorem resolveBehavior_ok_iff (reg : Registry) (scope behaviorId : String)
+inference selected by one owned enabled agent and an owned enabled backend. -/
+theorem resolveAgent_ok_iff (reg : Registry) (scope agentId : String)
     (session : ResolvedSessionConfig) :
-    resolveBehavior reg scope behaviorId = .ok session ↔
-      ∃ behavior backend, reg.behaviors scope behaviorId = some ⟨scope, behavior⟩ ∧
-        behavior.enabled = true ∧
-        resolveContext reg scope behavior.contextId = .ok session.context ∧
-        reg.profiles scope behavior.profileId = some ⟨scope, session.inference⟩ ∧
+    resolveAgent reg scope agentId = .ok session ↔
+      ∃ agent backend, reg.agents scope agentId = some ⟨scope, agent⟩ ∧
+        agent.enabled = true ∧
+        resolveContext reg scope agent.contextId = .ok session.context ∧
+        reg.profiles scope agent.profileId = some ⟨scope, session.inference⟩ ∧
         reg.backends scope session.inference.backendId = some ⟨scope, backend⟩ ∧
         backend.enabled = true := by
   cases session with
   | mk context inference =>
-    simp [resolveBehavior, bind, resolution_bind_ok_iff, ite_eq_iff]
+    simp [resolveAgent, bind, resolution_bind_ok_iff, ite_eq_iff]
     aesop
 
 theorem resolveTask_ok_iff (reg : Registry) (scope taskId : String)
     (session : ResolvedSessionConfig) :
     resolveTask reg scope taskId = .ok session ↔
       ∃ task, reg.tasks scope taskId = some ⟨scope, task⟩ ∧ task.enabled = true ∧
-        resolveBehavior reg scope task.behaviorId = .ok session := by
+        resolveAgent reg scope task.agentId = .ok session := by
   simp [resolveTask, bind, resolution_bind_ok_iff, ite_eq_iff]
 
-/-- Omission removes capabilities rather than inheriting another behavior's
+/-- Omission removes capabilities rather than inheriting another agent's
 context. This applies to successful session resolution, not just a default value. -/
-theorem omitted_behavior_context_is_empty (reg : Registry) (scope id : String)
-    (behavior : Behavior) (session : ResolvedSessionConfig)
-    (hb : reg.behaviors scope id = some ⟨scope, behavior⟩) (ho : behavior.contextId = none)
-    (h : resolveBehavior reg scope id = .ok session) : session.context = defaultContext := by
-  obtain ⟨found, backend, hf, _, hc, _⟩ := (resolveBehavior_ok_iff reg scope id session).mp h
-  have he : found = behavior := by simpa [hb] using hf.symm
+theorem omitted_agent_context_is_empty (reg : Registry) (scope id : String)
+    (agent : Agent) (session : ResolvedSessionConfig)
+    (hb : reg.agents scope id = some ⟨scope, agent⟩) (ho : agent.contextId = none)
+    (h : resolveAgent reg scope id = .ok session) : session.context = defaultContext := by
+  obtain ⟨found, backend, hf, _, hc, _⟩ := (resolveAgent_ok_iff reg scope id session).mp h
+  have he : found = agent := by simpa [hb] using hf.symm
   subst found
   simpa [resolveContext, ho] using hc.symm
 
-/-- An owned enabled task delegates to exactly the common behavior resolver. -/
+/-- An owned enabled task delegates to exactly the common agent resolver. -/
 theorem resolveTask_owned_delegates (reg : Registry) (scope id : String) (task : Task)
     (ht : reg.tasks scope id = some ⟨scope, task⟩) (he : task.enabled = true) :
-    resolveTask reg scope id = resolveBehavior reg scope task.behaviorId := by
+    resolveTask reg scope id = resolveAgent reg scope task.agentId := by
   simp [resolveTask, lookupOwned, ht, he, bind, Except.bind]
 
 theorem resolveTask_missing_rejected (reg : Registry) (scope id : String)
@@ -339,46 +339,46 @@ theorem disabled_owned_task_rejected (reg : Registry) (scope id : String) (task 
     resolveTask reg scope id = .error .disabledTask := by
   simp [resolveTask, lookupOwned, ht, he, bind, Except.bind]
 
-theorem disabled_behavior_rejected (reg : Registry) (scope id : String) (behavior : Behavior)
-    (hb : reg.behaviors scope id = some ⟨scope, behavior⟩) (he : behavior.enabled = false) :
-    resolveBehavior reg scope id = .error .disabledBehavior := by
-  simp [resolveBehavior, lookupOwned, hb, he, bind, Except.bind]
+theorem disabled_agent_rejected (reg : Registry) (scope id : String) (agent : Agent)
+    (hb : reg.agents scope id = some ⟨scope, agent⟩) (he : agent.enabled = false) :
+    resolveAgent reg scope id = .error .disabledAgent := by
+  simp [resolveAgent, lookupOwned, hb, he, bind, Except.bind]
 
-/-- A principal's `default_behavior_id` selects the behavior for requests that
-name none, so a default must be an owned, enabled behavior. A disabled default
-would leave every such request to fail with `disabledBehavior`; publication
+/-- A node's `default_agent_id` selects the agent for requests that
+name none, so a default must be an owned, enabled agent. A disabled default
+would leave every such request to fail with `disabledAgent`; publication
 (`ConfigReferences`) rejects the candidate instead, whichever write disables the
-default or points the default at a disabled behavior. Clients that couple the
+default or points the default at a disabled agent. Clients that couple the
 Default and Enabled controls only guide input toward this rule. -/
-def defaultBehaviorPublishable (reg : Registry) (scope : String) : Option String → Bool
+def defaultAgentPublishable (reg : Registry) (scope : String) : Option String → Bool
   | none => true
   | some id =>
-    match lookupOwned reg.behaviors scope id .missingBehavior .foreignBehavior with
-    | .ok behavior => behavior.enabled
+    match lookupOwned reg.agents scope id .missingAgent .foreignAgent with
+    | .ok agent => agent.enabled
     | .error _ => false
 
-/-- Bootstrap may publish a principal before selecting its first behavior.
+/-- Bootstrap may publish a node before selecting its first agent.
 Once configured, clearing that selection prevents runtime readiness on the next
 start. Full replacements must name a default explicitly; omission is not a patch.
-Reference validity remains with `defaultBehaviorPublishable`. -/
-def defaultBehaviorReplacementAllowed (current candidate : Option String) : Bool :=
+Reference validity remains with `defaultAgentPublishable`. -/
+def defaultAgentReplacementAllowed (current candidate : Option String) : Bool :=
   current.isNone || candidate.isSome
 
 theorem configured_default_cannot_be_cleared (current : String) :
-    defaultBehaviorReplacementAllowed (some current) none = false := by rfl
+    defaultAgentReplacementAllowed (some current) none = false := by rfl
 
 theorem bootstrap_default_may_be_omitted :
-    defaultBehaviorReplacementAllowed none none = true := by rfl
+    defaultAgentReplacementAllowed none none = true := by rfl
 
 theorem explicit_default_replacement_allowed (current : Option String) (candidate : String) :
-    defaultBehaviorReplacementAllowed current (some candidate) = true := by
-  simp [defaultBehaviorReplacementAllowed]
+    defaultAgentReplacementAllowed current (some candidate) = true := by
+  simp [defaultAgentReplacementAllowed]
 
 theorem disabled_default_not_publishable (reg : Registry) (scope id : String)
-    (behavior : Behavior) (hb : reg.behaviors scope id = some ⟨scope, behavior⟩)
-    (he : behavior.enabled = false) :
-    defaultBehaviorPublishable reg scope (some id) = false := by
-  simp [defaultBehaviorPublishable, lookupOwned, hb, he]
+    (agent : Agent) (hb : reg.agents scope id = some ⟨scope, agent⟩)
+    (he : agent.enabled = false) :
+    defaultAgentPublishable reg scope (some id) = false := by
+  simp [defaultAgentPublishable, lookupOwned, hb, he]
 
 private theorem lookupOwned_error_cases {α : Type} {docs : String → String → Option (Owned α)}
     {scope id : String} {missing foreign e : ResolveError}
@@ -390,28 +390,28 @@ private theorem lookupOwned_error_cases {α : Type} {docs : String → String �
     · contradiction
     · exact Or.inr (Except.error.inj h).symm
 
-/-- A publishable default never resolves to `disabledBehavior`. -/
+/-- A publishable default never resolves to `disabledAgent`. -/
 theorem publishable_default_not_disabled (reg : Registry) (scope id : String)
-    (h : defaultBehaviorPublishable reg scope (some id) = true) :
-    resolveBehavior reg scope id ≠ .error .disabledBehavior := by
-  cases hl : lookupOwned reg.behaviors scope id .missingBehavior .foreignBehavior with
-  | error e => simp [defaultBehaviorPublishable, hl] at h
-  | ok behavior =>
-    have he : behavior.enabled = true := by simpa [defaultBehaviorPublishable, hl] using h
+    (h : defaultAgentPublishable reg scope (some id) = true) :
+    resolveAgent reg scope id ≠ .error .disabledAgent := by
+  cases hl : lookupOwned reg.agents scope id .missingAgent .foreignAgent with
+  | error e => simp [defaultAgentPublishable, hl] at h
+  | ok agent =>
+    have he : agent.enabled = true := by simpa [defaultAgentPublishable, hl] using h
     intro hr
-    simp only [resolveBehavior, hl, he, bind, Except.bind] at hr
-    cases hc : resolveContext reg scope behavior.contextId with
+    simp only [resolveAgent, hl, he, bind, Except.bind] at hr
+    cases hc : resolveContext reg scope agent.contextId with
     | error e =>
       simp only [hc, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Except.error.injEq] at hr
       subst hr
-      cases hid : behavior.contextId with
+      cases hid : agent.contextId with
       | none => simp [resolveContext, hid] at hc
       | some key =>
         simp only [resolveContext, hid] at hc
         rcases lookupOwned_error_cases hc with h | h <;> cases h
     | ok context =>
       simp only [hc] at hr
-      cases hp : lookupOwned reg.profiles scope behavior.profileId .missingProfile .foreignProfile with
+      cases hp : lookupOwned reg.profiles scope agent.profileId .missingProfile .foreignProfile with
       | error e =>
         simp only [hp, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Except.error.injEq] at hr
         subst hr
@@ -427,12 +427,12 @@ theorem publishable_default_not_disabled (reg : Registry) (scope id : String)
           simp only [hk] at hr
           by_cases hb : backend.enabled = false <;> simp [hb] at hr
 
-theorem behavior_missing_selected_context_rejected (reg : Registry) (scope id key : String)
-    (behavior : Behavior) (hb : reg.behaviors scope id = some ⟨scope, behavior⟩)
-    (he : behavior.enabled = true) (hr : behavior.contextId = some key)
+theorem agent_missing_selected_context_rejected (reg : Registry) (scope id key : String)
+    (agent : Agent) (hb : reg.agents scope id = some ⟨scope, agent⟩)
+    (he : agent.enabled = true) (hr : agent.contextId = some key)
     (hc : reg.contexts scope key = none) :
-    resolveBehavior reg scope id = .error .missingContext := by
-  simp [resolveBehavior, resolveContext, lookupOwned, hb, he, hr, hc, bind, Except.bind]
+    resolveAgent reg scope id = .error .missingContext := by
+  simp [resolveAgent, resolveContext, lookupOwned, hb, he, hr, hc, bind, Except.bind]
 
 theorem selected_context_missing_rejected (reg : Registry) (scope id : String)
     (h : reg.contexts scope id = none) : resolveContext reg scope (some id) = .error .missingContext := by
@@ -448,23 +448,23 @@ theorem omitted_context_capabilities_empty :
       defaultContext.toolNames = [] ∧ defaultContext.compaction = defaultCompaction := by
   exact ⟨rfl, rfl, rfl, rfl⟩
 
-/-- Auth is explicit. OAuth lookup uses the executing principal and existing
+/-- Auth is explicit. OAuth lookup uses the executing node and existing
 credential owner; the backend contains no copied OAuth tokens or host identity.
-A principal-OAuth `account` is an opaque, DID-free reference minted when an
+A node-OAuth `account` is an opaque, DID-free reference minted when an
 account is first stored; `none` is the provider's original account. -/
 inductive BackendAuth where
   | unauthenticated
   | apiKey (key : String)
   | environment (name : String)
-  | principalOAuth (account : Option String)
+  | nodeOAuth (account : Option String)
   deriving DecidableEq, Repr
 
 def oauthLookupOwner (scope : String) : BackendAuth → Option String
-  | .principalOAuth _ => some scope
+  | .nodeOAuth _ => some scope
   | _ => none
 
 theorem oauth_uses_execution_scope (scope : String) (account : Option String) :
-    oauthLookupOwner scope (.principalOAuth account) = some scope := rfl
+    oauthLookupOwner scope (.nodeOAuth account) = some scope := rfl
 
 /-- A stored OAuth sign-in: owner DID, provider kind, account reference (`none`
 is the provider's original account) and enabled flag. -/
@@ -475,11 +475,11 @@ structure OAuthAccountRow where
   enabled : Bool
   deriving DecidableEq, Repr
 
-/-- The executing principal's enabled row of `kind` with exactly the requested
+/-- The executing node's enabled row of `kind` with exactly the requested
 account reference: a reference never falls back to another account, and another
-principal's row never resolves. Order among equal matches is the Rust resolver's
+node's row never resolves. Order among equal matches is the Rust resolver's
 (earliest-connected enabled first, `oauth_credential.rs`); it is not modeled,
-because it only matters once a principal holds several accounts. -/
+because it only matters once a node holds several accounts. -/
 def oauthResolve (scope kind : String) (account : Option String)
     (rows : List OAuthAccountRow) : Option OAuthAccountRow :=
   rows.find? fun r => r.owner == scope && r.kind == kind && r.account == account && r.enabled

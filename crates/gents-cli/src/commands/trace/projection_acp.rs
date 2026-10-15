@@ -41,9 +41,9 @@ pub(super) struct ProjectionAcpBindingRow {
     #[serde(default)]
     binding_id: String,
     #[serde(default)]
-    agent_did: Option<String>,
+    node_did: Option<String>,
     #[serde(default)]
-    behavior_id: Option<String>,
+    agent_id: Option<String>,
     #[serde(default)]
     projection_id: Option<String>,
     #[serde(default)]
@@ -104,7 +104,7 @@ pub(super) async fn discover_projection_acp_binding(
     projection_kind: AdapterProjectionKind,
     request: &TimelineRequestRow,
 ) -> Result<Option<ProjectionAcpBindingRow>> {
-    let Some(agent_did) = normalize_projection_binding_field(request.agent_did.as_deref()) else {
+    let Some(node_did) = normalize_projection_binding_field(request.node_did.as_deref()) else {
         return Ok(None);
     };
     let query = format!(
@@ -112,12 +112,12 @@ pub(super) async fn discover_projection_acp_binding(
             ProjectionAcpBinding(
                 filter: {{
                     enabled: {{ _eq: true }}
-                    agent_did: {{ _eq: "{agent_did}" }}
+                    node_did: {{ _eq: "{node_did}" }}
                 }}
             ) {{
                 binding_id
-                agent_did
-                behavior_id
+                node_did
+                agent_id
                 projection_id
                 policy_id
                 staged_policy_id
@@ -127,7 +127,7 @@ pub(super) async fn discover_projection_acp_binding(
                 enabled
             }}
         }}"#,
-        agent_did = escape_graphql_string(agent_did),
+        node_did = escape_graphql_string(node_did),
     );
     let rows = load_rows::<ProjectionAcpBindingRow>(access, "ProjectionAcpBinding", &query).await?;
     select_projection_acp_binding(rows, projection_kind, request)
@@ -180,8 +180,8 @@ pub(super) fn projection_binding_scope_mask(
     projection_id: &str,
     request: &TimelineRequestRow,
 ) -> Option<u8> {
-    let row_agent_did = normalize_projection_binding_field(row.agent_did.as_deref())?;
-    if request.agent_did.as_deref() != Some(row_agent_did) {
+    let row_node_did = normalize_projection_binding_field(row.node_did.as_deref())?;
+    if request.node_did.as_deref() != Some(row_node_did) {
         return None;
     }
     let mut scope_mask = PROJECTION_ACP_BINDING_AGENT_SCOPE;
@@ -193,8 +193,8 @@ pub(super) fn projection_binding_scope_mask(
         }
         scope_mask |= PROJECTION_ACP_BINDING_PROJECTION_SCOPE;
     }
-    if let Some(row_behavior_id) = normalize_projection_binding_field(row.behavior_id.as_deref()) {
-        if request.behavior_id.as_deref() != Some(row_behavior_id) {
+    if let Some(row_agent_id) = normalize_projection_binding_field(row.agent_id.as_deref()) {
+        if request.agent_id.as_deref() != Some(row_agent_id) {
             return None;
         }
         scope_mask |= PROJECTION_ACP_BINDING_BEHAVIOR_SCOPE;
@@ -545,23 +545,23 @@ pub(super) fn required_doc_id<'a>(
 
 #[derive(Debug, Default)]
 pub(super) struct ProjectionDocumentScope {
-    pub(super) agent_did: Option<String>,
-    pub(super) behavior_id: Option<String>,
+    pub(super) node_did: Option<String>,
+    pub(super) agent_id: Option<String>,
     pub(super) session_id: Option<String>,
 }
 
 impl ProjectionDocumentScope {
     fn has_filters(&self) -> bool {
-        self.agent_did.is_some() || self.behavior_id.is_some() || self.session_id.is_some()
+        self.node_did.is_some() || self.agent_id.is_some() || self.session_id.is_some()
     }
 
     fn description(&self) -> String {
         let mut parts = Vec::new();
-        if let Some(agent_did) = self.agent_did.as_deref() {
-            parts.push(format!("agent_did={agent_did}"));
+        if let Some(node_did) = self.node_did.as_deref() {
+            parts.push(format!("node_did={node_did}"));
         }
-        if let Some(behavior_id) = self.behavior_id.as_deref() {
-            parts.push(format!("behavior_id={behavior_id}"));
+        if let Some(agent_id) = self.agent_id.as_deref() {
+            parts.push(format!("agent_id={agent_id}"));
         }
         if let Some(session_id) = self.session_id.as_deref() {
             parts.push(format!("session_id={session_id}"));
@@ -598,16 +598,16 @@ pub(super) fn timeline_root_matches_scope(
     scope: &ProjectionDocumentScope,
 ) -> bool {
     scope_value_matches(
-        scope.agent_did.as_deref(),
+        scope.node_did.as_deref(),
         [
-            timeline.request.agent_did.as_deref(),
-            timeline.agent_did.as_deref(),
+            timeline.request.node_did.as_deref(),
+            timeline.node_did.as_deref(),
         ],
     ) && scope_value_matches(
-        scope.behavior_id.as_deref(),
+        scope.agent_id.as_deref(),
         [
-            timeline.request.behavior_id.as_deref(),
-            timeline.behavior_id.as_deref(),
+            timeline.request.agent_id.as_deref(),
+            timeline.agent_id.as_deref(),
         ],
     ) && scope_value_matches(
         scope.session_id.as_deref(),
@@ -637,11 +637,8 @@ pub(super) fn request_event_matches_scope(
     request: &TimelineRequestEvent,
     scope: &ProjectionDocumentScope,
 ) -> bool {
-    scope_value_matches(scope.agent_did.as_deref(), [request.agent_did.as_deref()])
-        && scope_value_matches(
-            scope.behavior_id.as_deref(),
-            [request.behavior_id.as_deref()],
-        )
+    scope_value_matches(scope.node_did.as_deref(), [request.node_did.as_deref()])
+        && scope_value_matches(scope.agent_id.as_deref(), [request.agent_id.as_deref()])
         && scope_value_matches(scope.session_id.as_deref(), [request.session_id.as_deref()])
 }
 
@@ -684,7 +681,7 @@ pub(super) fn should_keep_scoped_timeline_event(
         }
 
         RunTimelineEvent::GoalTransition(goal) => {
-            scope_value_matches(scope.agent_did.as_deref(), [Some(goal.agent_did.as_str())])
+            scope_value_matches(scope.node_did.as_deref(), [Some(goal.node_did.as_str())])
                 && scope_value_matches(
                     scope.session_id.as_deref(),
                     [Some(goal.session_id.as_str())],
@@ -715,8 +712,8 @@ pub(super) fn scoped_request_id_allowed(
     request_id
         .map(|request_id| allowed_request_ids.contains(request_id))
         .unwrap_or_else(|| {
-            scope.agent_did.is_none()
-                && scope.behavior_id.is_none()
+            scope.node_did.is_none()
+                && scope.agent_id.is_none()
                 && scope_value_matches(scope.session_id.as_deref(), [session_id])
         })
 }
@@ -803,8 +800,8 @@ mod tests {
     fn projection_acp_binding_selects_most_specific_matching_row() -> Result<()> {
         let request = TimelineRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
-            behavior_id: Some("amy:default".to_string()),
+            node_did: Some("did:test:amy".to_string()),
+            agent_id: Some("amy:default".to_string()),
             ..TimelineRequestRow::default()
         };
         let selected = select_projection_acp_binding(
@@ -837,7 +834,7 @@ mod tests {
     fn projection_acp_binding_rejects_ambiguous_rows() {
         let request = TimelineRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
+            node_did: Some("did:test:amy".to_string()),
             ..TimelineRequestRow::default()
         };
         let error = select_projection_acp_binding(
@@ -862,13 +859,13 @@ mod tests {
     fn projection_acp_binding_rejects_incomparable_matching_scopes() {
         let request = TimelineRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
-            behavior_id: Some("amy:default".to_string()),
+            node_did: Some("did:test:amy".to_string()),
+            agent_id: Some("amy:default".to_string()),
             ..TimelineRequestRow::default()
         };
         let error = select_projection_acp_binding(
             vec![
-                projection_binding("behavior", Some("did:test:amy"), Some("amy:default"), None),
+                projection_binding("agent", Some("did:test:amy"), Some("amy:default"), None),
                 projection_binding(
                     "projection",
                     Some("did:test:amy"),
@@ -893,7 +890,7 @@ mod tests {
     fn projection_acp_binding_ignores_unscoped_rows() -> Result<()> {
         let request = TimelineRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
+            node_did: Some("did:test:amy".to_string()),
             ..TimelineRequestRow::default()
         };
         let selected = select_projection_acp_binding(
@@ -914,7 +911,7 @@ mod tests {
     fn projection_acp_binding_rejects_enabled_non_operational_status() {
         let request = TimelineRequestRow {
             request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
+            node_did: Some("did:test:amy".to_string()),
             ..TimelineRequestRow::default()
         };
         let mut binding = projection_binding("draft", Some("did:test:amy"), None, None);
@@ -1110,9 +1107,9 @@ mod tests {
                 doc_id: Some("doc-session".to_string()),
                 session: gents_protocol::session::AgentSession {
                     session_id: "session-acp".to_string(),
-                    agent_did: "did:test:agent".to_string(),
+                    node_did: "did:test:agent".to_string(),
                     requester_did: None,
-                    behavior_id: "general".to_string(),
+                    agent_id: "general".to_string(),
                     created_at: "2026-01-01T00:00:00Z".to_string(),
                     closed_at: None,
                     title: None,
@@ -1179,7 +1176,7 @@ mod tests {
                     goal_doc_id: "doc-goal-allowed".to_string(),
                     goal_id: "goal-allowed".to_string(),
                     session_id: "session-acp".to_string(),
-                    agent_did: "did:test:agent".to_string(),
+                    node_did: "did:test:agent".to_string(),
                     commit_cid: "bafy-goal-allowed".to_string(),
                     status: "active".to_string(),
                     ..TimelineGoalVersionRow::default()
@@ -1188,7 +1185,7 @@ mod tests {
                     goal_doc_id: "doc-goal-denied".to_string(),
                     goal_id: "goal-denied".to_string(),
                     session_id: "session-acp".to_string(),
-                    agent_did: "did:test:agent".to_string(),
+                    node_did: "did:test:agent".to_string(),
                     commit_cid: "bafy-goal-denied".to_string(),
                     status: "blocked".to_string(),
                     ..TimelineGoalVersionRow::default()
@@ -1250,11 +1247,11 @@ mod tests {
             request_doc_id: Some(request_doc_id.to_string()),
             sequence: i64::from(sequence),
             timestamp: None,
-            agent_did: None,
+            node_did: None,
             header: gents_protocol::output::TranscriptMessage {
                 message_key: format!("{session_id}:{sequence}"),
                 session_id,
-                agent_did: "did:test:agent".to_string(),
+                node_did: "did:test:agent".to_string(),
                 requester_did: None,
                 request_doc_id: Some(request_doc_id.to_string()),
                 publication: gents_protocol::output::MessagePublication::RequestExecution {
@@ -1283,14 +1280,14 @@ mod tests {
 
     fn projection_binding(
         binding_id: &str,
-        agent_did: Option<&str>,
-        behavior_id: Option<&str>,
+        node_did: Option<&str>,
+        agent_id: Option<&str>,
         projection_id: Option<&str>,
     ) -> ProjectionAcpBindingRow {
         ProjectionAcpBindingRow {
             binding_id: binding_id.to_string(),
-            agent_did: agent_did.map(ToOwned::to_owned),
-            behavior_id: behavior_id.map(ToOwned::to_owned),
+            node_did: node_did.map(ToOwned::to_owned),
+            agent_id: agent_id.map(ToOwned::to_owned),
             projection_id: projection_id.map(ToOwned::to_owned),
             policy_id: "projection-policy".to_string(),
             staged_policy_id: None,

@@ -421,7 +421,7 @@ async fn restart_clears_and_defers_persisted_enrollment_until_current_authority(
     let route_manager = Arc::new(super::route_manager::ClientRouteManager::new(
         core.node_arc(),
         Arc::clone(&p2p),
-        Arc::new(core.principal().clone()),
+        Arc::new(core.node_identity().clone()),
     ));
     let options = ClientCoreOptions {
         install_replicators_on_bootstrap: true,
@@ -432,7 +432,7 @@ async fn restart_clears_and_defers_persisted_enrollment_until_current_authority(
         &p2p,
         &owner.records(),
         &options,
-        core.principal(),
+        core.node_identity(),
         &route_manager,
         &mut || {},
     )
@@ -551,7 +551,7 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
     core.update_peer_status(ClientPeerStatus {
         peer_id: record.peer_id.clone(),
         label: record.label.clone(),
-        agent_did: record.agent_did.clone(),
+        node_did: record.node_did.clone(),
         addr: record.addr.clone(),
         dial_succeeded: true,
         last_error: None,
@@ -567,7 +567,7 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         record.peer_id.clone(),
         "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
         "did:key:desktop-requester",
-        record.agent_did.clone(),
+        record.node_did.clone(),
     )
     .expect("valid route fixture");
     let lifecycle = core.route_manager.lock().await;
@@ -614,7 +614,7 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
     let response = core
         .node()
         .execute(&format!(
-            r#"query {{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID agent_did profiles collections template replicator_addresses }} }}"#
+            r#"query {{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID node_did replicator_addresses template source }} }}"#
         ))
         .await;
     assert!(!response.has_errors());
@@ -648,7 +648,7 @@ async fn repair_saved_peer_refreshes_network_before_redial() {
         Some(ClientPeerStatus {
             peer_id: record.peer_id.clone(),
             label: record.label.clone(),
-            agent_did: record.agent_did.clone(),
+            node_did: record.node_did.clone(),
             addr: record.addr.clone(),
             dial_succeeded: false,
             last_error: Some("peer Workshop Bay dial failed".to_string()),
@@ -684,7 +684,7 @@ async fn failed_redial_clears_stale_configured_peer_connectivity() {
         Some(ClientPeerStatus {
             peer_id: record.peer_id.clone(),
             label: record.label.clone(),
-            agent_did: record.agent_did.clone(),
+            node_did: record.node_did.clone(),
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
@@ -722,7 +722,7 @@ async fn repair_saved_graphql_peer_leaves_replicator_installation_to_route_manag
         Some(ClientPeerStatus {
             peer_id: record.peer_id.clone(),
             label: record.label.clone(),
-            agent_did: record.agent_did.clone(),
+            node_did: record.node_did.clone(),
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
@@ -761,7 +761,7 @@ async fn saved_peer_needs_repair_when_live_connection_has_dropped() {
         Some(&ClientPeerStatus {
             peer_id: record.peer_id.clone(),
             label: record.label.clone(),
-            agent_did: record.agent_did.clone(),
+            node_did: record.node_did.clone(),
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
@@ -791,7 +791,7 @@ async fn saved_peer_does_not_need_repair_while_live_connection_is_healthy() {
         Some(&ClientPeerStatus {
             peer_id: record.peer_id.clone(),
             label: record.label.clone(),
-            agent_did: record.agent_did.clone(),
+            node_did: record.node_did.clone(),
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
@@ -959,7 +959,7 @@ fn p2p_health_materially_changed_ignores_probe_timestamps() {
 }
 
 #[tokio::test]
-async fn selected_agent_did_channel_updates_subscribers() {
+async fn selected_node_did_channel_updates_subscribers() {
     use crate::client::paths::DesktopPaths;
 
     let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -969,14 +969,14 @@ async fn selected_agent_did_channel_updates_subscribers() {
         .await
         .expect("client core");
 
-    let mut rx = core.selected_agent_did_rx();
+    let mut rx = core.selected_node_did_rx();
     assert_eq!(rx.borrow().clone(), None);
 
-    core.set_selected_agent_did(Some("did:alpha".to_string()));
+    core.set_selected_node_did(Some("did:alpha".to_string()));
     rx.changed().await.expect("watch update");
     assert_eq!(rx.borrow().clone(), Some("did:alpha".to_string()));
 
-    core.set_selected_agent_did(None);
+    core.set_selected_node_did(None);
     rx.changed().await.expect("watch update");
     assert_eq!(rx.borrow().clone(), None);
 
@@ -996,7 +996,7 @@ async fn refresh_store_succeeds_with_selection_set() {
 
     core.refresh_store().await.expect("refresh full");
 
-    core.set_selected_agent_did(Some("did:any".to_string()));
+    core.set_selected_node_did(Some("did:any".to_string()));
     core.refresh_store().await.expect("refresh scoped");
 
     core.shutdown().await.expect("shutdown");
@@ -1032,7 +1032,7 @@ async fn resending_an_unknown_enrollment_request_fails_without_pushing() {
 }
 
 #[tokio::test]
-async fn ensure_agent_loaded_debounces_repeats() {
+async fn ensure_node_loaded_debounces_repeats() {
     use crate::client::paths::DesktopPaths;
 
     let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -1041,8 +1041,8 @@ async fn ensure_agent_loaded_debounces_repeats() {
         .await
         .expect("core");
 
-    let first = core.ensure_agent_loaded("did:alpha").await.expect("first");
-    let second = core.ensure_agent_loaded("did:alpha").await.expect("second");
+    let first = core.ensure_node_loaded("did:alpha").await.expect("first");
+    let second = core.ensure_node_loaded("did:alpha").await.expect("second");
     assert!(first, "first call should load");
     assert!(
         !second,
@@ -1053,7 +1053,7 @@ async fn ensure_agent_loaded_debounces_repeats() {
 }
 
 #[tokio::test]
-async fn ensure_agent_loaded_distinguishes_agents() {
+async fn ensure_node_loaded_distinguishes_nodes() {
     use crate::client::paths::DesktopPaths;
 
     let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -1062,8 +1062,8 @@ async fn ensure_agent_loaded_distinguishes_agents() {
         .await
         .expect("core");
 
-    assert!(core.ensure_agent_loaded("did:alpha").await.expect("alpha"));
-    assert!(core.ensure_agent_loaded("did:beta").await.expect("beta"));
+    assert!(core.ensure_node_loaded("did:alpha").await.expect("alpha"));
+    assert!(core.ensure_node_loaded("did:beta").await.expect("beta"));
 
     core.shutdown().await.expect("shutdown");
 }
@@ -1167,7 +1167,7 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         local.get("AgentOutputSegment")
     );
     let request_skew = serde_json::json!({
-        "agent_did": runtime_did,
+        "node_did": runtime_did,
         "enrollment": { "token": &offer },
         STATUS_REPLICATED_SCHEMA_FIELD: changed_request,
     });
@@ -1183,7 +1183,7 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         "{error}"
     );
     let skewed = serde_json::json!({
-        "agent_did": runtime_did,
+        "node_did": runtime_did,
         "enrollment": { "token": offer },
         STATUS_REPLICATED_SCHEMA_FIELD: next_release,
     });
@@ -1218,7 +1218,7 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         .is_some_and(|error| error.contains("AgentSession")));
 
     let matching = serde_json::json!({
-        "agent_did": runtime_did,
+        "node_did": runtime_did,
         STATUS_REPLICATED_SCHEMA_FIELD: local,
     });
     let observation = core

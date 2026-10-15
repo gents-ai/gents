@@ -39,7 +39,7 @@ pub struct TrialSpec {
     /// Materialized pack for this cell.
     pub pack_dir: PathBuf,
     pub pack_digest: String,
-    pub behavior_id: String,
+    pub agent_id: String,
     /// Profile and backend documents copied verbatim, plus the trial's seed.
     pub inference: InferenceBinding,
     pub fixtures: TrialFixtures,
@@ -72,7 +72,7 @@ impl TrialSpec {
             trial_id: trial_id.to_string(),
             pack_dir: PathBuf::new(),
             pack_digest: String::new(),
-            behavior_id: String::new(),
+            agent_id: String::new(),
             inference: InferenceBinding {
                 profile: Value::Null,
                 backend: Value::Null,
@@ -200,7 +200,7 @@ impl From<&EvalCapture> for Capture {
 /// Where a trial's durable evidence lives once it has been provisioned.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrialLocator {
-    pub trial_agent_did: String,
+    pub trial_node_did: String,
     pub session_id: String,
     /// A locator only. Never identity.
     pub home_hint: Option<String>,
@@ -377,7 +377,7 @@ pub trait TrialExecutor: Send + Sync {
 
     /// Creates the trial's identity (and, for embedded, its home) so the
     /// `EvalTrial` row can be written before execution. Never returns `Err`: a
-    /// failed provisioning returns a locator whose `trial_agent_did` is
+    /// failed provisioning returns a locator whose `trial_node_did` is
     /// `"did:unprovisioned"`, and [`Self::execute`] then returns
     /// [`TrialEvidence::infrastructure`] — evidence holding no stage, which
     /// [`crate::eval::runner::grade`] grades as
@@ -429,7 +429,7 @@ mod tests {
         );
         let mut b = a.clone();
         b.locator.home_hint = Some("elsewhere".into());
-        b.locator.trial_agent_did = "did:b".into();
+        b.locator.trial_node_did = "did:b".into();
         assert_eq!(a.evidence_digest, b.evidence_digest);
         let c = ScriptedExecutor::passed_evidence(
             "did:a",

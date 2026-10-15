@@ -27,7 +27,7 @@ impl NotificationIdentity {
     ) -> Result<String> {
         anyhow::ensure!(
             !agent.trim().is_empty(),
-            "notification requires agent identity"
+            "notification requires node identity"
         );
         anyhow::ensure!(
             !requester.trim().is_empty(),
@@ -35,7 +35,7 @@ impl NotificationIdentity {
         );
         anyhow::ensure!(
             !behavior.trim().is_empty(),
-            "notification requires behavior identity"
+            "notification requires agent identity"
         );
         let (mode, value) = match self {
             Self::Event => ("event", event_id),
@@ -129,7 +129,7 @@ pub(super) async fn request_provenance(
     context: &MailboxStampContext,
 ) -> Result<gents_protocol::row::AgentRequestRow> {
     let response = graphql_with_transaction_retry(node, &format!(
-        "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{request_id agent_did requester_did behavior_id session_id caused_by_source_doc_id}} }}",
+        "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{request_id node_did requester_did agent_id session_id caused_by_source_doc_id}} }}",
         escape_graphql_string(request_id)), "mailbox request provenance").await?;
     let mut values: Vec<gents_protocol::row::AgentRequestRow> = rows(&response, "AgentRequest")?;
     anyhow::ensure!(
@@ -138,12 +138,12 @@ pub(super) async fn request_provenance(
     );
     let request = values.remove(0);
     anyhow::ensure!(
-        request.agent_did.as_deref() == Some(context.agent_did.as_str())
+        request.node_did.as_deref() == Some(context.node_did.as_str())
             && request.requester_did.as_deref() == Some(context.requester_did.as_str())
             && request
-                .behavior_id
+                .agent_id
                 .as_deref()
-                .is_none_or(|id| id == context.behavior_id)
+                .is_none_or(|id| id == context.agent_id)
             && request
                 .session_id
                 .as_ref()
@@ -160,9 +160,9 @@ fn validate_existing_notification(
 ) -> Result<()> {
     anyhow::ensure!(
         item.requester_did == context.requester_did
-            && item.agent_did == context.agent_did
-            && item.target_agent_did == context.agent_did
-            && item.target_behavior_id == context.behavior_id
+            && item.node_did == context.node_did
+            && item.target_node_did == context.node_did
+            && item.target_agent_id == context.agent_id
             && item.source_id == args.source_id
             && item.source_kind == args.source_kind.as_str()
             && item.kind == args.kind.as_str(),

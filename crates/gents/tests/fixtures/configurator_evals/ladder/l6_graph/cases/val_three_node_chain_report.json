@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "build_and_run",
-      "prompt": "Build a three-node graph and run it. Graph id 'g-chain-report'. 1) Create three tasks bound to this engineer behavior: 't-pick-word' receives a phrase and emits the last word of it on port 'out'; 't-upper-word' uppercases its input; 't-prefix' prepends 'READY: ' to its input and emits on port 'out'. 2) Author the graph: node 'pick' bound to t-pick-word, node 'upper' bound to t-upper-word, node 'prefix' bound to t-prefix; edges pick.out -> upper.in and upper.out -> prefix.in; declared input entry 'text' feeding node 'pick'; result 'report' from node 'prefix' port 'out', cardinality one. 3) Preview; fix and re-preview on validation errors; never run an invalid graph. 4) Run it with input {\"text\": \"deploy the pipeline\"}. 5) Read the run back with get_graph_run and its result with get_graph_result.",
+      "prompt": "Build a three-node graph and run it. Graph id 'g-chain-report'. 1) Create three tasks bound to this engineer agent: 't-pick-word' receives a phrase and emits the last word of it on port 'out'; 't-upper-word' uppercases its input; 't-prefix' prepends 'READY: ' to its input and emits on port 'out'. 2) Author the graph: node 'pick' bound to t-pick-word, node 'upper' bound to t-upper-word, node 'prefix' bound to t-prefix; edges pick.out -> upper.in and upper.out -> prefix.in; declared input entry 'text' feeding node 'pick'; result 'report' from node 'prefix' port 'out', cardinality one. 3) Preview; fix and re-preview on validation errors; never run an invalid graph. 4) Run it with input {\"text\": \"deploy the pipeline\"}. 5) Read the run back with get_graph_run and its result with get_graph_result.",
       "deadline_secs": 600,
       "checks": [
         {
@@ -86,7 +86,7 @@
           "name": "preview_calls",
           "collection": "AgentToolCall",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "tool_name": {

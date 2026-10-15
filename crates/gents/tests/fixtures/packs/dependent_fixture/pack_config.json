@@ -1,10 +1,10 @@
 {
-  "agent_principal": {},
-  "agent_behaviors": [
+  "node": {},
+  "agents": [
     {
-      "behavior_id": "fixture-dependent",
+      "agent_id": "fixture-dependent",
       "display_name": "Fixture dependent",
-      "description": "A tool-less behavior bound to the worker slot.",
+      "description": "A tool-less agent bound to the worker slot.",
       "context_id": "fixture-dependent-context",
       "inference_profile_id": "gents:inference-slot:worker"
     }
@@ -13,7 +13,7 @@
     {
       "context_id": "fixture-dependent-context",
       "display_name": "Fixture dependent",
-      "system_prompt": "./agent_behaviors/fixture_dependent/system_prompt.md",
+      "system_prompt": "./agents/fixture_dependent/system_prompt.md",
       "tools_id": "fixture-dependent-tools"
     }
   ],

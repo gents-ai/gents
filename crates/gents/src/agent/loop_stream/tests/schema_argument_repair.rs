@@ -155,16 +155,16 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
 #[tokio::test]
 async fn config_container_repairs_preserve_native_validation_and_the_invalid_budget() {
     let identity_dir = tempfile::tempdir().unwrap();
-    let identity: Arc<dyn crate::AgentIdentity> = Arc::new(
+    let identity: Arc<dyn crate::NodeIdentity> = Arc::new(
         crate::KeyIdentity::load_or_create(identity_dir.path().join("config-repair.key"), None)
             .unwrap(),
     );
     let owner = identity.did().to_owned();
     let (node, hook, writer, mut lifecycle) = owned_test_hook_with_identity(identity.clone()).await;
-    crate::test_support::install_test_behavior(&node, &owner, "general").await;
+    crate::test_support::install_test_agent(&node, &owner, "general").await;
     let grants = crate::tool_surface::SelfConfigToolConfig {
         enabled: true,
-        behavior_id: "general".into(),
+        agent_id: "general".into(),
         categories: ["profile".to_string()].into_iter().collect(),
         preview: true,
         no_lockout: false,
@@ -185,7 +185,7 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
                 serde_json::json!({
                     "argv": ["profile", "preview"],
                     "set": serde_json::json!({"display_name": "{\"literal\":true}"}).to_string(),
-                    "options": serde_json::json!({"behavior": "general"}).to_string()
+                    "options": serde_json::json!({"agent": "general"}).to_string()
                 }),
             ))
         })
@@ -196,7 +196,7 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
         serde_json::json!({
             "argv": ["profile", "preview"],
             "set": serde_json::json!({"display_name": []}).to_string(),
-            "options": serde_json::json!({"behavior": "general"}).to_string()
+            "options": serde_json::json!({"agent": "general"}).to_string()
         }),
     )));
     calls.push(RawStreamingChoice::FinalResponse(()));

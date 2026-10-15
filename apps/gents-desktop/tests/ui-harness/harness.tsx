@@ -2,7 +2,7 @@ import React, { Profiler } from "react";
 import ReactDOM from "react-dom/client";
 
 import App from "../../src/App";
-import { setDesktopShellTimingConfigForTests } from "../../src/hooks/desktopShellRuntime";
+import { setTimingForTests } from "../../src/hooks/timing";
 import { createDesktopUiHarness } from "./desktopHarness";
 import { createLiveDesktopUiHarness } from "./liveBridgeHarness";
 
@@ -22,7 +22,12 @@ const backend = params.get("backend") === "live" ? "live" : "deterministic";
 const harness =
   backend === "live"
     ? createLiveDesktopUiHarness({ bridgeUrl: params.get("bridgeUrl") })
-    : createDesktopUiHarness({ scenario: params.get("scenario") });
+    : createDesktopUiHarness({
+        scenario: params.get("scenario"),
+        sessionIndexCount: params.has("sessions")
+          ? Number(params.get("sessions"))
+          : undefined,
+      });
 
 // Exercise retry/error UX through the same adapter boundary as native IPC.
 if (backend === "deterministic" && params.get("configApplyFailure") === "once") {
@@ -50,7 +55,7 @@ if ("sessionSync" in harness && harness.sessionSync) {
   window.__GENTS_SESSION_SYNC__ = harness.sessionSync;
 }
 
-setDesktopShellTimingConfigForTests({
+setTimingForTests({
   clientRestartBackoffMs: 1,
   clientRestartMaxAttempts: 2,
   p2pAutoRestartCooldownMs: 10,

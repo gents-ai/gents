@@ -11,7 +11,7 @@ use super::super::protocol::{
 };
 use super::super::{Outbound, ShimState};
 use super::models::{
-    apply_config_writes, available_model_backends, load_bound_behavior, model_list_entries,
+    apply_config_writes, available_model_backends, load_bound_agent, model_list_entries,
 };
 use super::skills::load_skill_metadata;
 use crate::config_writes::ConfigAccess;
@@ -55,13 +55,13 @@ pub(super) async fn handle_basic_request(
             .await
         }
         codex::ClientRequest::ModelList { request_id, .. } => {
-            let behavior = load_bound_behavior(state)
+            let agent = load_bound_agent(state)
                 .await
-                .context("loading bound AgentBehavior for ModelList")?;
+                .context("loading bound Agent for ModelList")?;
             let backends = available_model_backends(state)
                 .await
                 .context("listing available backend models for ModelList")?;
-            let entries = model_list_entries(&backends, &behavior);
+            let entries = model_list_entries(&backends, &agent);
             send_typed_json_result::<codex::ModelListResponse>(
                 outbound,
                 request_id,
@@ -87,8 +87,8 @@ pub(super) async fn handle_basic_request(
         codex::ClientRequest::ConfigRead { request_id, .. } => {
             let model_id = load_bound_model_selection_id_for_state(
                 state.node.as_ref(),
-                &state.agent_did,
-                &state.behavior_id,
+                &state.node_did,
+                &state.agent_id,
             )
             .await
             .context("resolving current model selection for ConfigRead")?;
@@ -249,25 +249,21 @@ pub(super) async fn handle_basic_request(
 /// gates nothing, so a failed load answers as if nothing were stored.
 async fn session_usage(state: &ShimState) -> Option<StoredUsage> {
     let load = async {
-        let profile = load_bound_behavior(state).await?.inference_profile;
-        let agent_did = state.agent_did.as_ref();
+        let profile = load_bound_agent(state).await?.inference_profile;
+        let node_did = state.node_did.as_ref();
         let backend_id = profile.backend_id.as_str();
         let backend =
             ConfigAccess::transact_local(state.node.as_ref(), None, "codex.usage", |txn| {
                 Box::pin(
-                    async move { load_inference_backend_in_txn(txn, agent_did, backend_id).await },
+                    async move { load_inference_backend_in_txn(txn, node_did, backend_id).await },
                 )
             })
             .await?;
         let Some(backend) = backend else {
             return Ok(None);
         };
-        let mut stored = usage_for_backend(
-            &ConfigAccess::Local(state.node.clone()),
-            agent_did,
-            &backend,
-        )
-        .await?;
+        let mut stored =
+            usage_for_backend(&ConfigAccess::Local(state.node.clone()), node_did, &backend).await?;
         if backend.provider_kind != gents::BackendProviderKind::ChatGptCodex {
             if let Some(stored) = stored.as_mut() {
                 stored.report.plan = None;
@@ -305,7 +301,7 @@ mod tests {
 
     use super::super::super::{CodexSidecar, ShimState};
     use super::*;
-    use crate::config_writes::{write_agent_behavior_document, ConfigAccess};
+    use crate::config_writes::{write_agent_document, ConfigAccess};
 
     const DID: &str = "did:test:codex-shim-usage";
 
@@ -320,8 +316,8 @@ mod tests {
             node,
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
             graphql: gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1/graphql"),
-            agent_did: Arc::from(DID),
-            behavior_id: Arc::from("default"),
+            node_did: Arc::from(DID),
+            agent_id: Arc::from("default"),
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),
             poll_interval: Duration::from_millis(10),
@@ -330,7 +326,7 @@ mod tests {
         }
     }
 
-    /// Binds the session's behavior to `backend` through one profile.
+    /// Binds the session's agent to `backend` through one profile.
     async fn bind(node: &Arc<EmbeddedNode>, backend: InferenceBackend) {
         let access = ConfigAccess::Local(node.clone());
         write_inference_backend_document(&access, &backend)
@@ -343,7 +339,7 @@ mod tests {
                     txn,
                     backend,
                     BackendModelCatalog {
-                        agent_did: backend.catalog_scope().map(str::to_owned),
+                        node_did: backend.catalog_scope().map(str::to_owned),
                         observed_at: Utc::now().to_rfc3339(),
                         models: vec![AdvertisedModel {
                             model_name: "model-a".into(),
@@ -363,7 +359,7 @@ mod tests {
         write_inference_profile_document(
             &access,
             &InferenceProfile {
-                agent_did: DID.into(),
+                node_did: DID.into(),
                 profile_id: "profile-a".into(),
                 display_name: None,
                 description: None,
@@ -379,11 +375,11 @@ mod tests {
         )
         .await
         .expect("profile");
-        write_agent_behavior_document(
+        write_agent_document(
             &access,
-            &gents::AgentBehaviorDocument {
-                behavior_id: "default".into(),
-                agent_did: DID.into(),
+            &gents::AgentDocument {
+                agent_id: "default".into(),
+                node_did: DID.into(),
                 display_name: None,
                 description: None,
                 context_id: None,
@@ -394,12 +390,12 @@ mod tests {
             },
         )
         .await
-        .expect("behavior");
+        .expect("agent");
     }
 
     fn backend(provider_kind: BackendProviderKind, auth: BackendAuth) -> InferenceBackend {
         InferenceBackend {
-            agent_did: DID.into(),
+            node_did: DID.into(),
             backend_id: "backend-usage-a".into(),
             name: "backend-usage-a".into(),
             provider_kind,
@@ -439,7 +435,7 @@ mod tests {
             &OAuthCredential {
                 doc_id: None,
                 credential_id: oauth_credential_id(DID, provider),
-                agent_did: DID.into(),
+                node_did: DID.into(),
                 provider: provider.into(),
                 access_token: "access-TEST".into(),
                 refresh_token: "refresh-TEST".into(),
@@ -462,13 +458,13 @@ mod tests {
             &node,
             backend(
                 BackendProviderKind::ChatGptCodex,
-                BackendAuth::PrincipalOAuth { account_ref: None },
+                BackendAuth::NodeOAuth { account_ref: None },
             ),
         )
         .await;
         let account = UsageAccount::Credential {
             doc_id: None,
-            agent_did: DID.into(),
+            node_did: DID.into(),
             provider: provider.into(),
             account_ref: None,
         };
@@ -507,7 +503,7 @@ mod tests {
         OAuthCredential {
             doc_id: None,
             credential_id: oauth_credential_id(DID, provider),
-            agent_did: DID.into(),
+            node_did: DID.into(),
             provider: provider.into(),
             access_token: "access-TEST".into(),
             refresh_token: "refresh-TEST".into(),
@@ -537,7 +533,7 @@ mod tests {
             &node,
             backend(
                 BackendProviderKind::XaiGrokOAuth,
-                BackendAuth::PrincipalOAuth { account_ref: None },
+                BackendAuth::NodeOAuth { account_ref: None },
             ),
         )
         .await;
@@ -545,7 +541,7 @@ mod tests {
             &node,
             &UsageAccount::Credential {
                 doc_id: None,
-                agent_did: DID.into(),
+                node_did: DID.into(),
                 provider: "xai-oauth".into(),
                 account_ref: None,
             },
@@ -579,7 +575,7 @@ mod tests {
         let tempdir = tempfile::tempdir().unwrap();
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        // No behavior is bound, so loading the session's account fails.
+        // No agent is bound, so loading the session's account fails.
         let state = state(node, &tempdir);
         let (outbound, mut received) = mpsc::unbounded_channel();
         let request: codex::ClientRequest =
@@ -609,7 +605,7 @@ mod tests {
             &node,
             backend(
                 BackendProviderKind::ChatGptCodex,
-                BackendAuth::PrincipalOAuth { account_ref: None },
+                BackendAuth::NodeOAuth { account_ref: None },
             ),
         )
         .await;

@@ -1,8 +1,8 @@
 # Reusable cadence. Trigger owns task selection, enablement and concurrency.
 # Runtime observations live on each referencing Trigger.
-type Schedule @branchable @index(fields: ["agent_did", "schedule_id"], unique: true) {
+type Schedule @branchable @index(fields: ["node_did", "schedule_id"], unique: true) {
     schedule_id: String
-    agent_did: String @index
+    node_did: String @index
     display_name: String
     cadence: JSON
     created_at: DateTime @index(direction: DESC)

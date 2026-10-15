@@ -44,3 +44,5 @@ pub(crate) mod trace;
 pub(crate) mod ux;
 
 pub(crate) mod write;
+
+pub(crate) mod desktop;

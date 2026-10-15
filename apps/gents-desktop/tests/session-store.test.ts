@@ -72,6 +72,18 @@ describe("session facts", () => {
     expect(second.tools).toBe(first.tools);
   });
 
+  it("counts a folded input by its own identity while excluding its host context", () => {
+    const folded = {
+      kind: "userMessage",
+      itemKey: "authored:doc-head:folded:doc-r2",
+      requestId: "head",
+      inputRequestId: "r2",
+      ownsTurn: false,
+    } as RenderedTimelineItem;
+    const store = createSessionStore(session([context("head"), folded]));
+    expect(store.getState().facts.userRequestIds).toEqual(new Set(["r2"]));
+  });
+
   it("leave a request's context row out: saved, but not a turn", () => {
     const store = createSessionStore(session([user("r1"), context("r2")]));
     expect(store.getState().facts.userRequestIds).toEqual(new Set(["r1"]));
@@ -88,11 +100,18 @@ describe("whether the bridge holds a sent request", () => {
       itemKey: `pending-${requestId}`,
       requestId,
     }) as RenderedTimelineItem;
-  const read = (latestRequestId: string | null, items: RenderedTimelineItem[]) =>
+  const read = (
+    latestRequestId: string | null,
+    items: RenderedTimelineItem[],
+    lists: Partial<Pick<DesktopSessionSnapshot, "queuedTurns" | "foldedInputs">> = {},
+  ) =>
     createSessionStore({
       sessionId: "s",
       latestRequestId,
       timelineItems: items,
+      queuedTurns: [],
+      foldedInputs: [],
+      ...lists,
     } as unknown as DesktopSessionSnapshot).getState();
   const sent = { sessionId: "s", requestId: "r2", latestWhenSent: "r1" };
 
@@ -118,6 +137,35 @@ describe("whether the bridge holds a sent request", () => {
 
   it("once the latest request has moved past the one there when it was sent", () => {
     expect(holdsRequest(read("r3", [user("r1")]), sent)).toBe(true);
+  });
+
+  it("once it is queued behind the running turn, which stays the latest", () => {
+    const queued = { requestId: "r2" } as DesktopSessionSnapshot["queuedTurns"][number];
+    expect(
+      holdsRequest(read("r1", [user("doc-r1")], { queuedTurns: [queued] }), sent),
+    ).toBe(true);
+  });
+
+  it("once it was folded into the running turn", () => {
+    expect(
+      holdsRequest(
+        read("r1", [user("doc-r1")], {
+          foldedInputs: [{ requestId: "r2", foldedIntoRequestId: "r1" }],
+        }),
+        sent,
+      ),
+    ).toBe(true);
+  });
+
+  it("once its folded entry is in the transcript under the request that answered it", () => {
+    const folded = {
+      kind: "userMessage",
+      itemKey: "authored:doc-r1:folded:doc-r2",
+      requestId: "doc-r1",
+      inputRequestId: "r2",
+      ownsTurn: false,
+    } as RenderedTimelineItem;
+    expect(holdsRequest(read("r1", [user("doc-r1"), folded]), sent)).toBe(true);
   });
 
   it("never in another session", () => {

@@ -102,7 +102,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
             let predecessor = persist(
                 &node,
                 NewProviderContextReduction {
-                    agent_did: "did:key:agent",
+                    node_did: "did:key:agent",
                     requester_did: None,
                     session_id: "session-11",
                     request_id: "request-11",
@@ -136,7 +136,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
             let row = persist(
                 &node,
                 NewProviderContextReduction {
-                    agent_did: "did:key:agent",
+                    node_did: "did:key:agent",
                     requester_did: None,
                     session_id: "session-11",
                     request_id: "request-11",
@@ -178,7 +178,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
         let result = persist(
             &node,
             NewProviderContextReduction {
-                agent_did: "did:key:agent",
+                node_did: "did:key:agent",
                 requester_did: None,
                 session_id: "session-11",
                 request_id: "request-11",

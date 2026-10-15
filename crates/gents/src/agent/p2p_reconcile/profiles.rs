@@ -83,12 +83,12 @@ pub fn expand_p2p_collection_profile_ids<'a>(
 }
 
 const RUNTIME_COLLECTIONS: &[&str] = &[
-    "AgentPrincipal",
-    "AgentBehavior",
+    "Node",
+    "Agent",
     "AgentContext",
     "CompactionConfig",
     "Tools",
-    "SubagentTarget",
+    "AgentTarget",
     "InferenceProfile",
     "InferenceSampling",
     "InferenceExecution",
@@ -99,9 +99,10 @@ const RUNTIME_COLLECTIONS: &[&str] = &[
     "ChainKeyBinding",
     "EthTool",
     "InferenceBackend",
-    "AgentRuntime",
-    "AgentBehaviorReadiness",
+    "NodeRuntime",
+    "NodeReadiness",
     "AgentRequest",
+    "AgentSessionInputEdit",
     "AgentOutputSegment",
     "AgentSession",
     "AgentMessage",
@@ -115,12 +116,12 @@ const RUNTIME_COLLECTIONS: &[&str] = &[
 ];
 
 const AGENT_COLLECTIONS: &[&str] = &[
-    "AgentPrincipal",
-    "AgentBehavior",
+    "Node",
+    "Agent",
     "AgentContext",
     "CompactionConfig",
     "Tools",
-    "SubagentTarget",
+    "AgentTarget",
     "InferenceProfile",
     "InferenceSampling",
     "InferenceExecution",
@@ -131,17 +132,17 @@ const AGENT_COLLECTIONS: &[&str] = &[
     "ChainKeyBinding",
     "EthTool",
     "InferenceBackend",
-    "AgentRuntime",
-    "AgentBehaviorReadiness",
+    "NodeRuntime",
+    "NodeReadiness",
 ];
 
 const DESKTOP_CONFIG_COLLECTIONS: &[&str] = &[
-    "AgentPrincipal",
-    "AgentBehavior",
+    "Node",
+    "Agent",
     "AgentContext",
     "CompactionConfig",
     "Tools",
-    "SubagentTarget",
+    "AgentTarget",
     "InferenceProfile",
     "InferenceSampling",
     "InferenceExecution",
@@ -159,6 +160,7 @@ const DESKTOP_CONFIG_COLLECTIONS: &[&str] = &[
 
 const CHAT_REQUEST_COLLECTIONS: &[&str] = &[
     "AgentRequest",
+    "AgentSessionInputEdit",
     "AgentOutputSegment",
     "AgentSession",
     "AgentMessage",
@@ -170,12 +172,12 @@ const TOOL_SERVICE_COLLECTIONS: &[&str] = &["ToolServiceRegistry"];
 
 const DISCOVERY_COLLECTIONS: &[&str] = &[
     "PeerRegistry",
-    "AgentPrincipal",
-    "AgentBehavior",
+    "Node",
+    "Agent",
     "AgentContext",
     "CompactionConfig",
     "Tools",
-    "SubagentTarget",
+    "AgentTarget",
     "InferenceProfile",
     "InferenceSampling",
     "InferenceExecution",
@@ -185,8 +187,8 @@ const DISCOVERY_COLLECTIONS: &[&str] = &[
     "DatastoreToolSurface",
     "ChainKeyBinding",
     "EthTool",
-    "AgentRuntime",
-    "AgentBehaviorReadiness",
+    "NodeRuntime",
+    "NodeReadiness",
 ];
 
 #[cfg(test)]
@@ -261,6 +263,18 @@ mod tests {
             for secret in gents_protocol::schemas::CREDENTIAL_COLLECTION_NAMES {
                 assert!(!profile.collection_names().contains(secret));
             }
+        }
+        for profile in [
+            P2pCollectionProfile::Runtime,
+            P2pCollectionProfile::ChatRequests,
+        ] {
+            assert!(
+                profile
+                    .collection_names()
+                    .contains(&"AgentSessionInputEdit"),
+                "{} must carry signed pending-input edits and their receipts",
+                profile.id()
+            );
         }
         let operator = super::super::templates::resolve_template("agent-config").unwrap();
         for profile in [P2pCollectionProfile::Runtime, P2pCollectionProfile::Agent] {

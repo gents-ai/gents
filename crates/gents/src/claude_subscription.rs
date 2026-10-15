@@ -66,12 +66,12 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
     /// Fails closed with the `claude-login` hint when no enabled credential exists.
     pub async fn build(
         node: Arc<EmbeddedNode>,
-        agent_did: &str,
+        node_did: &str,
         account_ref: Option<&str>,
     ) -> Result<Self> {
         let (bearer, credential) = crate::oauth_http::bootstrap_oauth_client(
             node.clone(),
-            agent_did,
+            node_did,
             CLAUDE_OAUTH_PROVIDER,
             OAuthRefreshKind::Claude,
             CLAUDE_OAUTH_PRODUCT,

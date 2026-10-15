@@ -6,7 +6,7 @@
 type MailboxItem @branchable {
     item_key: String @index(unique: true) @immutable
     requester_did: String @index @immutable
-    agent_did: String @index @immutable
+    node_did: String @index @immutable
     status: String @index
 
     kind: String @index @immutable
@@ -22,8 +22,8 @@ type MailboxItem @branchable {
     graph_run_id: String @index @immutable
     cause_doc_id: String @index @immutable
 
-    target_agent_did: String @index @immutable
-    target_behavior_id: String @index @immutable
+    target_node_did: String @index @immutable
+    target_agent_id: String @index @immutable
     expected_collection: String @immutable
     parent_item_id: String @index @immutable
     deadline_at: DateTime @immutable

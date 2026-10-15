@@ -237,7 +237,7 @@ fn require_unoccupied_key_file(key_file: &Path) -> Result<()> {
     Ok(())
 }
 
-/// A gents home's store key file. Agent identity names always end in `.key`,
+/// A gents home's store key file. Node identity names always end in `.key`,
 /// so the encryption key uses a separate filename namespace.
 pub fn home_key_file(home_dir: &Path) -> PathBuf {
     crate::home::keys_dir(home_dir).join("store.aes256")

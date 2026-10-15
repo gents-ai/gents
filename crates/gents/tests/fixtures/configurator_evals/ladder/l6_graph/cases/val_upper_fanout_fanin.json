@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "build_and_run",
-      "prompt": "I need a fan-out/fan-in graph. Graph id 'g-upper-fanout'. 1) Create three tasks bound to this engineer behavior: 't-upper-a' uppercases the text on its input and emits it on port 'out'; 't-upper-b' does the same; 't-join' receives two texts and emits them joined with a single space on port 'out'. 2) Author the graph: node 'up_a' bound to t-upper-a, node 'up_b' bound to t-upper-b, node 'join' bound to t-join; wire the declared inputs so 'w1' feeds up_a and 'w2' feeds up_b (fan-out), and both up_a.out and up_b.out feed join.in (fan-in); declare one result 'joined' from node 'join' port 'out', cardinality one. 3) Preview; fix and re-preview on validation errors; never run an invalid graph. 4) Run it with input {\"w1\": \"alpha\", \"w2\": \"beta\"}. 5) Read the run back with get_graph_run and its result with get_graph_result.",
+      "prompt": "I need a fan-out/fan-in graph. Graph id 'g-upper-fanout'. 1) Create three tasks bound to this engineer agent: 't-upper-a' uppercases the text on its input and emits it on port 'out'; 't-upper-b' does the same; 't-join' receives two texts and emits them joined with a single space on port 'out'. 2) Author the graph: node 'up_a' bound to t-upper-a, node 'up_b' bound to t-upper-b, node 'join' bound to t-join; wire the declared inputs so 'w1' feeds up_a and 'w2' feeds up_b (fan-out), and both up_a.out and up_b.out feed join.in (fan-in); declare one result 'joined' from node 'join' port 'out', cardinality one. 3) Preview; fix and re-preview on validation errors; never run an invalid graph. 4) Run it with input {\"w1\": \"alpha\", \"w2\": \"beta\"}. 5) Read the run back with get_graph_run and its result with get_graph_result.",
       "deadline_secs": 600,
       "checks": [
         {
@@ -86,7 +86,7 @@
           "name": "preview_calls",
           "collection": "AgentToolCall",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "tool_name": {

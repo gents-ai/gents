@@ -25,12 +25,12 @@
           "check": "crew_spec_match",
           "params": {
             "agents": {
-              "behaviors": "behaviors",
+              "agents": "agents",
               "contexts": "contexts",
               "tools": "tools",
               "expect": [
                 {
-                  "behavior_id": "engineer",
+                  "agent_id": "engineer",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [],
@@ -83,15 +83,15 @@
       "capture": [
         {
           "kind": "documents",
-          "name": "behaviors",
-          "collection": "AgentBehavior",
+          "name": "agents",
+          "collection": "Agent",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
-            "behavior_id",
+            "agent_id",
             "display_name",
             "context_id",
             "enabled",
@@ -103,7 +103,7 @@
           "name": "contexts",
           "collection": "AgentContext",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -118,7 +118,7 @@
           "name": "tools",
           "collection": "Tools",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -126,7 +126,7 @@
             "tools_id",
             "host",
             "datastore",
-            "subagents",
+            "agents",
             "self_config"
           ]
         },
@@ -135,13 +135,13 @@
           "name": "surfaces",
           "collection": "DatastoreToolSurface",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
             "surface_id",
-            "agent_did",
+            "node_did",
             "display_name",
             "enabled",
             "entries"
@@ -171,12 +171,12 @@
           "check": "crew_spec_match",
           "params": {
             "agents": {
-              "behaviors": "behaviors",
+              "agents": "agents",
               "contexts": "contexts",
               "tools": "tools",
               "expect": [
                 {
-                  "behavior_id": "engineer",
+                  "agent_id": "engineer",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -220,15 +220,15 @@
       "capture": [
         {
           "kind": "documents",
-          "name": "behaviors",
-          "collection": "AgentBehavior",
+          "name": "agents",
+          "collection": "Agent",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
-            "behavior_id",
+            "agent_id",
             "display_name",
             "context_id",
             "enabled",
@@ -240,7 +240,7 @@
           "name": "contexts",
           "collection": "AgentContext",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -255,7 +255,7 @@
           "name": "tools",
           "collection": "Tools",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -263,7 +263,7 @@
             "tools_id",
             "host",
             "datastore",
-            "subagents",
+            "agents",
             "self_config"
           ]
         },
@@ -272,13 +272,13 @@
           "name": "surfaces",
           "collection": "DatastoreToolSurface",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
             "surface_id",
-            "agent_did",
+            "node_did",
             "display_name",
             "enabled",
             "entries"
@@ -345,12 +345,12 @@
           "check": "crew_spec_match",
           "params": {
             "agents": {
-              "behaviors": "behaviors",
+              "agents": "agents",
               "contexts": "contexts",
               "tools": "tools",
               "expect": [
                 {
-                  "behavior_id": "engineer",
+                  "agent_id": "engineer",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -404,15 +404,15 @@
         },
         {
           "kind": "documents",
-          "name": "behaviors",
-          "collection": "AgentBehavior",
+          "name": "agents",
+          "collection": "Agent",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
-            "behavior_id",
+            "agent_id",
             "display_name",
             "context_id",
             "enabled",
@@ -424,7 +424,7 @@
           "name": "contexts",
           "collection": "AgentContext",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -439,7 +439,7 @@
           "name": "tools",
           "collection": "Tools",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -447,7 +447,7 @@
             "tools_id",
             "host",
             "datastore",
-            "subagents",
+            "agents",
             "self_config"
           ]
         },
@@ -456,13 +456,13 @@
           "name": "surfaces",
           "collection": "DatastoreToolSurface",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
             "surface_id",
-            "agent_did",
+            "node_did",
             "display_name",
             "enabled",
             "entries"

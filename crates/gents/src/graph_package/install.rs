@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphPackageInstallBindings {
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inference_slots: crate::pack::PackInferenceBindings,
 }
@@ -93,15 +93,15 @@ async fn validate_owner(access: &ConfigAccess, owner: &str) -> Result<()> {
             Box::pin(async move {
                 let principal = crate::config_client::read_desired_state_document_in_txn(
                     txn,
-                    Collection::AgentPrincipal,
+                    Collection::Node,
                     owner,
                     owner,
                 )
                 .await?
-                .context("package owner principal is missing")?;
+                .context("package owner node is missing")?;
                 anyhow::ensure!(
                     principal["enabled"].as_bool() == Some(true),
-                    "package owner principal is disabled"
+                    "package owner node is disabled"
                 );
                 Ok(())
             })
@@ -109,7 +109,7 @@ async fn validate_owner(access: &ConfigAccess, owner: &str) -> Result<()> {
         .await
 }
 
-/// Select an existing principal without inventing host, model, or role
+/// Select an existing node without inventing host, model, or role
 /// defaults, for a package already resolved from any source (a directory, a
 /// `.pack`, the home's store, or the registry).
 pub async fn default_graph_package_install_bindings(
@@ -127,13 +127,13 @@ pub async fn default_graph_package_install_bindings(
     )
     .await?;
     Ok(GraphPackageInstallBindings {
-        agent_did: owner_did.to_owned(),
+        node_did: owner_did.to_owned(),
         inference_slots: preview.bindings,
     })
 }
 
 /// Select installed package state without re-reading installation environment.
-/// The runtime plan reader retains principal, revision and digest verification.
+/// The runtime plan reader retains node ownership, revision and digest verification.
 pub async fn load_installed_package_plan(
     access: &ConfigAccess,
     package_name: &str,
@@ -144,9 +144,9 @@ pub async fn load_installed_package_plan(
             Box::pin(async move {
                 let response = txn
                     .execute(&format!(
-                "{{ GraphDefinition(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{graph_id}} }}",
-                crate::graphql::escape_graphql_string(owner_did),
-            ))
+                        "{{ GraphDefinition(filter: {{node_did: {{_eq: \"{}\"}}}}) {{graph_id}} }}",
+                        crate::graphql::escape_graphql_string(owner_did),
+                    ))
                     .await?;
                 let mut selected = None;
                 for definition in response_rows(&response, "GraphDefinition") {
@@ -178,6 +178,77 @@ pub async fn load_installed_package_plan(
         .await
 }
 
+/// Which active graph plan a run starts.
+#[derive(Clone, Copy, Debug)]
+pub enum GraphRunSelector<'a> {
+    /// An installed graph package by its plan name (`PackagePlan.name`, the
+    /// `run_with.package` that `list_graphs` reports). With `coordinate`
+    /// (`namespace/name`), the active revision must also match that
+    /// coordinate's installation record.
+    Package {
+        name: &'a str,
+        coordinate: Option<&'a str>,
+    },
+    /// A graph by id, pinned to the digest of its active revision.
+    Pinned { graph_id: &'a str, digest: &'a str },
+}
+
+/// The one selection owner for graph runs (`gents graph run` and the
+/// `run_graph` tool). `None` when nothing is installed or active under the
+/// selector, so each surface names its own next step.
+pub async fn select_run_plan(
+    access: &ConfigAccess,
+    owner_did: &str,
+    selector: &GraphRunSelector<'_>,
+) -> Result<Option<GraphPlan>> {
+    match *selector {
+        GraphRunSelector::Package { name, coordinate } => {
+            let Some(plan) = load_installed_package_plan(access, name, owner_did).await? else {
+                return Ok(None);
+            };
+            let attribution = plan
+                .package
+                .as_ref()
+                .context("active graph revision has no package attribution")?;
+            anyhow::ensure!(
+                attribution.name == name,
+                "the active revision of graph {} belongs to package {:?}, not {name:?}; list the installed graphs again",
+                plan.graph_id,
+                attribution.name
+            );
+            if let Some(coordinate) = coordinate {
+                let record = crate::pack::read_installed_pack(access, owner_did, coordinate)
+                    .await?
+                    .with_context(|| {
+                        format!("{coordinate} has no installation record; install it again under that coordinate")
+                    })?;
+                anyhow::ensure!(
+                    attribution.package_digest == record.digest,
+                    "the active revision of {coordinate} was built from {} but the installed pack is {}; install {coordinate} again",
+                    attribution.package_digest,
+                    record.digest
+                );
+            }
+            Ok(Some(plan))
+        }
+        GraphRunSelector::Pinned { graph_id, digest } => {
+            let Some(plan) = crate::graph_pipeline::load_active_graph_plan_with_access(
+                access, owner_did, graph_id,
+            )
+            .await?
+            else {
+                return Ok(None);
+            };
+            anyhow::ensure!(
+                plan.digest == digest,
+                "graph {graph_id} is active at revision {}, not {digest}; pass the active digest to run it",
+                plan.digest
+            );
+            Ok(Some(plan))
+        }
+    }
+}
+
 fn response_rows<'a>(response: &'a Value, collection: &str) -> &'a [Value] {
     response
         .get("data")
@@ -194,7 +265,7 @@ fn digest_bytes(bytes: &[u8]) -> String {
 /// re-read inside the commit transaction through [`active_revision_digest`].
 fn active_revision_digest_query(owner: &str, graph_id: &str) -> String {
     format!(
-        r#"{{ GraphDefinition(filter: {{ agent_did: {{ _eq: "{}" }}, graph_id: {{ _eq: "{}" }} }}, limit: 2) {{ active_revision_digest }} }}"#,
+        r#"{{ GraphDefinition(filter: {{ node_did: {{ _eq: "{}" }}, graph_id: {{ _eq: "{}" }} }}, limit: 2) {{ active_revision_digest }} }}"#,
         crate::graphql::escape_graphql_string(owner),
         crate::graphql::escape_graphql_string(graph_id)
     )
@@ -282,11 +353,11 @@ async fn prepare_package(
     options: &GraphPackageInstallBindings,
     graph_id: Option<&str>,
 ) -> Result<PreparedGraphPackageInstall> {
-    validate_owner(access, &options.agent_did).await?;
+    validate_owner(access, &options.node_did).await?;
     let preview = crate::pack::preview_pack_inference_bindings(
         access,
         &package.manifest,
-        &options.agent_did,
+        &options.node_did,
         &options.inference_slots,
     )
     .await?;
@@ -297,24 +368,24 @@ async fn prepare_package(
     )?;
     let intent = selected_intent(&config.graph_intents, graph_id)?;
     anyhow::ensure!(
-        intent.agent_did == options.agent_did,
+        intent.node_did == options.node_did,
         "graph owner differs from installation scope"
     );
-    // The existing principal is shared identity, never graph-owned replacement
+    // The existing node is shared identity, never graph-owned replacement
     // configuration. Every other authored document uses the ordinary apply owner.
     let bundle = DesiredStateApplyPlan::from_pack_config(&config)?;
     let desired_state = DesiredStateApplyPlan::new(
         bundle
             .documents()
             .iter()
-            .filter(|document| document.collection != Collection::AgentPrincipal)
+            .filter(|document| document.collection != Collection::Node)
             .cloned()
             .collect(),
     )?;
     let base = compile_graph(
         intent,
         &config.graph_capabilities,
-        &options.agent_did,
+        &options.node_did,
         &CompilerPolicy::default(),
     )?;
     super::catalog::verify_shipped_plan(&base, &|path| {
@@ -396,7 +467,7 @@ async fn prepare_package(
         artifacts,
         required_schema_digests: schema_digests.clone(),
     };
-    let active = active_revision_plan(access, &options.agent_did, &intent.graph_id).await?;
+    let active = active_revision_plan(access, &options.node_did, &intent.graph_id).await?;
     let same_active = active
         .as_ref()
         .is_some_and(|active| same_install_configuration(active, &base, &package_plan));
@@ -469,11 +540,11 @@ pub async fn install_loaded_graph_package(
     record: &GraphInstallRecord,
 ) -> Result<GraphPackageInstallReceipt> {
     anyhow::ensure!(
-        actor_did == options.agent_did,
+        actor_did == options.node_did,
         "package install requires graph owner authority"
     );
     let prepared = prepare_package(access, package, options, graph_id).await?;
-    commit_prepared_graph_package_install(access, &options.agent_did, package, &prepared, record)
+    commit_prepared_graph_package_install(access, &options.node_did, package, &prepared, record)
         .await
 }
 

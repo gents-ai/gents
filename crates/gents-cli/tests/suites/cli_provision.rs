@@ -53,8 +53,8 @@ async fn provision_initializes_home_binds_manifest_and_diff_exact() -> Result<()
         report.pointer("/diff/ok").and_then(Value::as_bool),
         Some(true)
     );
-    let agent_did = agent_did_from_report(&report)?;
-    assert_ne!(agent_did, placeholder_did);
+    let node_did = node_did_from_report(&report)?;
+    assert_ne!(node_did, placeholder_did);
 
     let reexport_root = tempdir.path().join("reexport");
     run_cli_text(
@@ -68,7 +68,7 @@ async fn provision_initializes_home_binds_manifest_and_diff_exact() -> Result<()
             target_home.to_str().expect("utf-8 home"),
         ],
     )?;
-    assert_manifest_agent_dids(&reexport_root, &agent_did)?;
+    assert_manifest_node_dids(&reexport_root, &node_did)?;
     assert!(!manifest_contains(&reexport_root, placeholder_did)?);
 
     Ok(())
@@ -89,13 +89,13 @@ async fn provision_rejects_initialized_home_without_loadable_identity() -> Resul
     fs::create_dir_all(&home)?;
 
     let placeholder_did = "did:test:mini-2-steward";
-    let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
+    let node_did = format!("did:key:z{}", Uuid::new_v4().simple());
     write_json_file(
         &home.join("init.json"),
         &serde_json::json!({
             "home": home.to_string_lossy(),
-            "agent_name": "mini-2-steward",
-            "agent_did": agent_did,
+            "node_name": "mini-2-steward",
+            "node_did": node_did,
             "key_path": null,
             "tool_ceiling": "Readonly",
             "tool_root": tempdir.path().to_string_lossy()
@@ -187,7 +187,7 @@ fn write_portable_manifest_root(
     run_init_json(
         &source_home_env,
         &[
-            "--agent-name",
+            "--node-name",
             agent_name,
             "--model-name",
             &model_name,
@@ -204,18 +204,18 @@ fn write_portable_manifest_root(
             root.to_str().expect("utf-8 manifest root"),
         ],
     )?;
-    rewrite_manifest_agent_dids(root, placeholder_did)?;
+    rewrite_manifest_node_dids(root, placeholder_did)?;
     Ok(())
 }
 
-fn agent_did_from_report(report: &Value) -> Result<String> {
-    let agent_did = report
-        .get("agent_did")
+fn node_did_from_report(report: &Value) -> Result<String> {
+    let node_did = report
+        .get("node_did")
         .and_then(Value::as_str)
-        .context("provision report missing agent_did")?;
+        .context("provision report missing node_did")?;
     anyhow::ensure!(
-        !agent_did.starts_with("did:test:"),
-        "provision returned placeholder DID: {agent_did}"
+        !node_did.starts_with("did:test:"),
+        "provision returned placeholder DID: {node_did}"
     );
-    Ok(agent_did.to_string())
+    Ok(node_did.to_string())
 }

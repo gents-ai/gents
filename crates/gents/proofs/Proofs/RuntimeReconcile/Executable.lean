@@ -12,10 +12,10 @@ inductive Action where
   | publish (resolved : ResolvedSnapshot)
   | applyFailed
   | routerObserve (process : ProcessState)
-  /-- Mandatory behavior is decoded from the authenticated request; absent/blank
+  /-- Mandatory agent is decoded from the authenticated request; absent/blank
   identifiers are rejected before this Nat identifier abstraction. -/
   | acceptRequest (process : ProcessState) (sessionId : SessionId) (requestId : RequestId)
-      (requested : BehaviorId)
+      (requested : AgentId)
   | finishRequest (requestId : RequestId)
   | retireGeneration (generation : Generation)
   deriving DecidableEq, Repr
@@ -99,8 +99,8 @@ def step? (pre : RuntimeState) : Action → Option RuntimeState
           , inFlight := insert requestId pre.inFlight
           , requestGeneration := Function.update pre.requestGeneration requestId pre.routerObservedGeneration
           , requestSession := Function.update pre.requestSession requestId sessionId
-          , requestBehavior := Function.update pre.requestBehavior requestId requested
-          , sessionBehavior := pre.bindSessionIfNeeded sessionId requested
+          , requestAgent := Function.update pre.requestAgent requestId requested
+          , sessionAgent := pre.bindSessionIfNeeded sessionId requested
           }
       else
         none
@@ -272,16 +272,16 @@ theorem publish_step_resolved_wellFormed
   simp [step?] at h_step
   exact (h_pending resolved h_step.1.2.1).2
 
-/-- A behavior can only be published into the runnable dispatcher set after
+/-- An agent can only be published into the runnable dispatcher set after
 all dependencies declared during resolution were satisfied. -/
 theorem publish_step_runnable_dependencies_satisfied
     {pre post : RuntimeState}
     {resolved : ResolvedSnapshot}
-    {behaviorId : BehaviorId}
+    {agentId : AgentId}
     (h_coherent : pre.coherent)
     (h_step : step? pre (.publish resolved) = some post)
-    (h_runnable : behaviorId ∈ post.active.runnable) :
-    behaviorId ∈ post.active.dependenciesSatisfied := by
+    (h_runnable : agentId ∈ post.active.runnable) :
+    agentId ∈ post.active.dependenciesSatisfied := by
   have h_wellFormed := publish_step_resolved_wellFormed h_coherent h_step
   simp [step?] at h_step
   rcases h_step with ⟨_, h_post⟩
@@ -293,7 +293,7 @@ theorem accept_step_router_observed_ready_live
     {process : ProcessState}
     {sessionId : SessionId}
     {requestId : RequestId}
-    {requested : BehaviorId}
+    {requested : AgentId}
     (h_coherent : pre.coherent)
     (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
     pre.routerObservedGeneration = pre.active.generation ∧
@@ -310,40 +310,40 @@ theorem accept_step_binding_coherent
     {process : ProcessState}
     {sessionId : SessionId}
     {requestId : RequestId}
-    {requested : BehaviorId}
+    {requested : AgentId}
     (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
     requestId ∈ post.accepted ∧
       requestId ∈ post.inFlight ∧
       post.requestGeneration requestId = pre.routerObservedGeneration ∧
       post.requestSession requestId = sessionId ∧
-      post.requestBehavior requestId = requested ∧
-      post.sessionBehavior (post.requestSession requestId) =
-        some (post.requestBehavior requestId) := by
+      post.requestAgent requestId = requested ∧
+      post.sessionAgent (post.requestSession requestId) =
+        some (post.requestAgent requestId) := by
   simp [step?] at h_step
   rcases h_step with ⟨h_can, h_post⟩
   rcases h_can with ⟨_, h_fresh, _, h_binding⟩
   cases h_post
   simp [Function.update, bindSessionIfNeeded_requested pre sessionId requested h_binding, h_fresh]
 
-theorem mismatched_session_behavior_denied
+theorem mismatched_session_agent_denied
     (pre : RuntimeState) (process : ProcessState) (sessionId : SessionId)
     (requestId requested bound : Nat)
-    (hbound : pre.sessionBehavior sessionId = some bound) (hne : bound ≠ requested) :
+    (hbound : pre.sessionAgent sessionId = some bound) (hne : bound ≠ requested) :
     step? pre (.acceptRequest process sessionId requestId requested) = none := by
   simp [step?, CanAdmitRequest, hbound, hne]
 
 /-- Admission is the atomic boundary: an accepted request already owns its
-session/behavior projection; there is no later repair transition. -/
+session/agent projection; there is no later repair transition. -/
 theorem accept_step_projects_session_atomically
     {pre post : RuntimeState}
     {process : ProcessState}
     {sessionId : SessionId}
     {requestId : RequestId}
-    {requested : BehaviorId}
+    {requested : AgentId}
     (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
     requestId ∈ post.accepted ∧
       post.requestSession requestId = sessionId ∧
-      post.sessionBehavior sessionId = some (post.requestBehavior requestId) := by
+      post.sessionAgent sessionId = some (post.requestAgent requestId) := by
   have h := accept_step_binding_coherent h_step
   exact ⟨h.1, h.2.2.2.1, by simpa [h.2.2.2.1] using h.2.2.2.2.2⟩
 
@@ -352,7 +352,7 @@ theorem accept_step_replay_rejected
     {process : ProcessState}
     {sessionId : SessionId}
     {requestId : RequestId}
-    {requested : BehaviorId}
+    {requested : AgentId}
     (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
     step? post (.acceptRequest process sessionId requestId requested) = none := by
   simp [step?] at h_step

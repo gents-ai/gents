@@ -38,9 +38,9 @@ describe("a worker's age in the workers surface", () => {
   it("advances with the clock", () => {
     const summary = (sessionId: string, over: Record<string, unknown> = {}) => ({
       sessionId,
-      agentDid: "did:key:a",
+      nodeDid: "did:key:a",
       requesterDid: null,
-      behaviorId: null,
+      agentId: null,
       title: sessionId,
       turnState: "completed",
       updatedAt: "2026-10-03T11:56:00Z",
@@ -50,12 +50,12 @@ describe("a worker's age in the workers surface", () => {
     const app = testApp({
       deployments: [
         node({
-          agentDid: "did:key:a",
+          nodeDid: "did:key:a",
           sessions: [
             summary("parent"),
             summary("worker", {
               startedBy: {
-                agentDid: "did:key:a",
+                nodeDid: "did:key:a",
                 sessionId: "parent",
                 requesterDid: null,
               },

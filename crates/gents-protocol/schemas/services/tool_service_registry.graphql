@@ -1,6 +1,6 @@
-type ToolServiceRegistry @branchable @index(fields: ["agent_did", "service_id"], unique: true) {
+type ToolServiceRegistry @branchable @index(fields: ["node_did", "service_id"], unique: true) {
     service_id: String @index
-    agent_did: String @index
+    node_did: String @index
     display_name: String
     description: String
     hostname: String @index
@@ -8,7 +8,7 @@ type ToolServiceRegistry @branchable @index(fields: ["agent_did", "service_id"],
     lan_ip: String
     mcp_port: Int
     mcp_path: String
-    send_agent_did: Boolean
+    send_node_did: Boolean
     enabled: Boolean @index
     tags: [String]
     status: String @index

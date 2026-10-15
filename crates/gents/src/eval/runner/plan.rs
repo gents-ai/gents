@@ -255,7 +255,7 @@ mod tests {
                     label: c.to_string(),
                     subject: SubjectRef {
                         pack_digest: "p".into(),
-                        behavior_id: "b".into(),
+                        agent_id: "b".into(),
                     },
                     inference_profile_id: "prof".into(),
                 })
@@ -324,7 +324,7 @@ mod tests {
                 case_id: case.into(),
                 trial_index: index,
                 attempt,
-                trial_agent_did: "did:x".into(),
+                trial_node_did: "did:x".into(),
                 session_id: "s".into(),
                 seed: 100 + index as i64,
                 home_hint: None,

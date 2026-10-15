@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "build_and_run",
-      "prompt": "Set up a graph automation on this node and run it once, end to end. Use graph id 'g-upper-linear'. 1) Create two tasks bound to this engineer behavior: task 't-extract-word' whose prompt_template renders the word it receives on its input and emits it on output port 'out'; task 't-upper-word' whose prompt_template receives text on input port 'in' and emits the uppercase version on output port 'out'. 2) Author the graph with those capabilities: node 'extract' bound to t-extract-word, node 'upper' bound to t-upper-word, edge extract.out -> upper.in, a declared input entry named 'word' feeding node 'extract', and one result named 'uppercased' from node 'upper' port 'out' with cardinality one. 3) Preview the graph with the graph preview tool; if validation reports a problem, fix the definition and preview again \u2014 never run a graph that failed preview. 4) Run it, supplying the declared input {\"word\": \"correlation\"}. 5) Read the run back with get_graph_run and its result with get_graph_result, and tell me the run id and final status.",
+      "prompt": "Set up a graph automation on this node and run it once, end to end. Use graph id 'g-upper-linear'. 1) Create two tasks bound to this engineer agent: task 't-extract-word' whose prompt_template renders the word it receives on its input and emits it on output port 'out'; task 't-upper-word' whose prompt_template receives text on input port 'in' and emits the uppercase version on output port 'out'. 2) Author the graph with those capabilities: node 'extract' bound to t-extract-word, node 'upper' bound to t-upper-word, edge extract.out -> upper.in, a declared input entry named 'word' feeding node 'extract', and one result named 'uppercased' from node 'upper' port 'out' with cardinality one. 3) Preview the graph with the graph preview tool; if validation reports a problem, fix the definition and preview again \u2014 never run a graph that failed preview. 4) Run it, supplying the declared input {\"word\": \"correlation\"}. 5) Read the run back with get_graph_run and its result with get_graph_result, and tell me the run id and final status.",
       "deadline_secs": 600,
       "checks": [
         {
@@ -82,7 +82,7 @@
           "name": "preview_calls",
           "collection": "AgentToolCall",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "tool_name": {

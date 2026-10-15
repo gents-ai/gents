@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use gents::AgentIdentity;
+use gents::NodeIdentity as _;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths, PrincipalIdentity};
 use gents_protocol::session_hydration::{
     canonical_manifest_json, SessionHydrationReceipt, SESSION_HYDRATION_RECEIPT_VERSION,
@@ -12,7 +12,7 @@ use tokio::time::{sleep, Instant};
 async fn signed_empty_hydration_receipt(
     core: &ClientCore,
     request_key: &str,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     status: &str,
     detail: &str,
@@ -20,17 +20,20 @@ async fn signed_empty_hydration_receipt(
     let mut receipt = SessionHydrationReceipt {
         version: SESSION_HYDRATION_RECEIPT_VERSION,
         request_key: request_key.to_string(),
-        requester_did: core.principal().did().to_string(),
-        agent_did: agent_did.to_string(),
+        requester_did: core.node_identity().did().to_string(),
+        node_did: node_did.to_string(),
         session_id: session_id.to_string(),
         status: status.to_string(),
         status_detail: detail.to_string(),
         served_manifest: Vec::new(),
         processed_at: "2026-08-28T00:00:01Z".to_string(),
-        signer_did: core.principal().did().to_string(),
+        signer_did: core.node_identity().did().to_string(),
         signature: Vec::new(),
     };
-    receipt.signature = core.principal().sign(&receipt.signing_payload()?).await?;
+    receipt.signature = core
+        .node_identity()
+        .sign(&receipt.signing_payload()?)
+        .await?;
     Ok((
         gents::graphql::escape_graphql_string(&canonical_manifest_json(&receipt.served_manifest)?),
         gents::graphql::escape_graphql_string(&receipt.signer_did),
@@ -80,23 +83,71 @@ async fn live_core_persists_managed_server_peer_through_watched_owner() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn message_preparation_uses_the_hosted_head_when_the_replica_lags() -> Result<()> {
+    use wiremock::matchers::{body_string_contains, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let node_did = "did:key:hosted-message-owner";
+    Mock::given(method("POST"))
+        .and(body_string_contains("AgentRequest"))
+        .and(body_string_contains(node_did))
+        .and(body_string_contains("hosted-session"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {"AgentRequest": [{"_docID": "hosted-head-doc", "request_id": "hosted-head"}]}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let root = tempfile::tempdir()?;
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(root.path()),
+        ClientCoreOptions::local_only(),
+    )
+    .await?;
+    core.persist_local_standard_peer(
+        "Hosted runtime",
+        "endpoint:hosted-message-owner",
+        node_did,
+        &format!("{}/api/v0/graphql", server.uri()),
+        "/tmp/test-hosted-message-home",
+    )
+    .await?;
+    assert!(core.store().snapshot().requests.is_empty());
+    let input = core
+        .prepare_user_message_input(node_did, "hosted-session", Default::default())
+        .await?;
+    let queue = input.queue.context("prepared user queue")?;
+    assert_eq!(
+        queue.queued_after_request_id.as_deref(),
+        Some("hosted-head")
+    );
+    assert_eq!(
+        queue.delivery,
+        gents_protocol::request_input::QueueDelivery::Steer
+    );
+    core.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn managed_config_write_never_falls_back_to_the_desktop_replica() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());
     let core =
         ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
-    let agent_did = "did:key:managed-config-owner";
+    let node_did = "did:key:managed-config-owner";
     core.persist_local_standard_peer(
         "Managed local runtime",
         "endpoint:managed-config",
-        agent_did,
+        node_did,
         "http://127.0.0.1:1/api/v0/graphql",
         "/tmp/test-managed-config-home",
     )
     .await?;
 
     let tools: gents::Tools = serde_json::from_value(serde_json::json!({
-        "agent_did": agent_did,
+        "node_did": node_did,
         "tools_id": "must-not-be-local",
         "host": { "files": { "mode": "ReadOnly" } }
     }))?;
@@ -112,8 +163,8 @@ async fn managed_config_write_never_falls_back_to_the_desktop_replica() -> Resul
     let response = core
         .node()
         .execute(&format!(
-            r#"{{ Tools(filter: {{ agent_did: {{ _eq: "{}" }}, tools_id: {{ _eq: "must-not-be-local" }} }}) {{ _docID }} }}"#,
-            gents::graphql::escape_graphql_string(agent_did)
+            r#"{{ Tools(filter: {{ node_did: {{ _eq: "{}" }}, tools_id: {{ _eq: "must-not-be-local" }} }}) {{ _docID }} }}"#,
+            gents::graphql::escape_graphql_string(node_did)
         ))
         .await;
     assert!(
@@ -159,9 +210,9 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
     let core =
         ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_simulated_route())
             .await?;
-    let requester_did = gents::graphql::escape_graphql_string(core.principal().did());
-    let agent_did = "did:test:amy";
-    persist_local_route(&core, agent_did).await?;
+    let requester_did = gents::graphql::escape_graphql_string(core.node_identity().did());
+    let node_did = "did:test:amy";
+    persist_local_route(&core, node_did).await?;
     let session_id = "session-with-local-failed-turn";
     let response = core
         .node()
@@ -170,8 +221,8 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
                 request: create_AgentRequest(input: {{
                     request_id: "local-request"
                     requester_did: "{requester_did}"
-                    agent_did: "{agent_did}"
-                    behavior_id: "default"
+                    node_did: "{node_did}"
+                    agent_id: "default"
                     session_id: "{session_id}"
                     content: "hello"
                     lifecycle_state: "failed"
@@ -185,11 +236,11 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
         response.errors
     );
 
-    core.ensure_session_hydration_started(session_id, agent_did)
+    core.ensure_session_hydration_started(session_id, node_did)
         .await?;
 
     let progress = core
-        .session_hydration_progress(session_id, agent_did)
+        .session_hydration_progress(session_id, node_did)
         .await?;
     assert_eq!(progress.phase.as_str(), "serving");
     assert_eq!(progress.merged_count, 1);
@@ -239,15 +290,15 @@ async fn initial_session_hydration_waits_for_existing_or_terminal_session_eviden
         ClientCoreOptions::local_simulated_route(),
     )
     .await?;
-    let requester_did = gents::graphql::escape_graphql_string(core.principal().did());
-    let agent_did = "did:test:amy";
+    let requester_did = gents::graphql::escape_graphql_string(core.node_identity().did());
+    let node_did = "did:test:amy";
     let session_id = "brand-new-session";
-    persist_local_route(&core, agent_did).await?;
+    persist_local_route(&core, node_did).await?;
 
-    core.ensure_session_hydration_started(session_id, agent_did)
+    core.ensure_session_hydration_started(session_id, node_did)
         .await?;
     assert_eq!(
-        core.session_hydration_progress(session_id, agent_did)
+        core.session_hydration_progress(session_id, node_did)
             .await?
             .phase
             .as_str(),
@@ -262,8 +313,8 @@ async fn initial_session_hydration_waits_for_existing_or_terminal_session_eviden
                 create_AgentRequest(input: {{
                     request_id: "pending-local-request"
                     requester_did: "{requester_did}"
-                    agent_did: "{agent_did}"
-                    behavior_id: "default"
+                    node_did: "{node_did}"
+                    agent_id: "default"
                     session_id: "{session_id}"
                     content: "hello"
                     lifecycle_state: "pending"
@@ -276,10 +327,10 @@ async fn initial_session_hydration_waits_for_existing_or_terminal_session_eviden
         "seed pending request: {:?}",
         response.errors
     );
-    core.ensure_session_hydration_started(session_id, agent_did)
+    core.ensure_session_hydration_started(session_id, node_did)
         .await?;
     assert_eq!(
-        core.session_hydration_progress(session_id, agent_did)
+        core.session_hydration_progress(session_id, node_did)
             .await?
             .phase
             .as_str(),
@@ -299,15 +350,15 @@ async fn durable_served_hydration_row_drives_exact_session_progress() -> Result<
         ClientCoreOptions::local_only(),
     )
     .await?;
-    let requester_did = gents::graphql::escape_graphql_string(core.principal().did());
-    let agent_did = core.principal().did().to_string();
+    let requester_did = gents::graphql::escape_graphql_string(core.node_identity().did());
+    let node_did = core.node_identity().did().to_string();
     let session_id = "session-served-empty";
     let raw_request_key = format!("{}:{session_id}", core.local_peer_id());
     let request_key = gents::graphql::escape_graphql_string(&raw_request_key);
     let (manifest, signer, signature) = signed_empty_hydration_receipt(
         &core,
         &raw_request_key,
-        &agent_did,
+        &node_did,
         session_id,
         "served",
         "served 0 documents",
@@ -320,7 +371,7 @@ async fn durable_served_hydration_row_drives_exact_session_progress() -> Result<
                 create_SessionHydrationRequest(input: {{
                     request_key: "{request_key}"
                     requester_did: "{requester_did}"
-                    agent_did: "{agent_did}"
+                    node_did: "{node_did}"
                     session_id: "{session_id}"
                     created_at: "2026-08-28T00:00:00Z"
                     status: "served"
@@ -341,7 +392,7 @@ async fn durable_served_hydration_row_drives_exact_session_progress() -> Result<
     );
 
     let progress = core
-        .session_hydration_progress(session_id, &agent_did)
+        .session_hydration_progress(session_id, &node_did)
         .await?;
     assert_eq!(progress.phase.as_str(), "complete");
     assert_eq!(progress.merged_count, 0);
@@ -359,15 +410,15 @@ async fn forged_terminal_hydration_receipt_fails_closed() -> Result<()> {
         ClientCoreOptions::local_only(),
     )
     .await?;
-    let requester_did = gents::graphql::escape_graphql_string(core.principal().did());
-    let agent_did = core.principal().did().to_string();
+    let requester_did = gents::graphql::escape_graphql_string(core.node_identity().did());
+    let node_did = core.node_identity().did().to_string();
     let session_id = "session-forged-receipt";
     let raw_request_key = format!("{}:{session_id}", core.local_peer_id());
     let request_key = gents::graphql::escape_graphql_string(&raw_request_key);
     let (manifest, signer, signature) = signed_empty_hydration_receipt(
         &core,
         &raw_request_key,
-        &agent_did,
+        &node_did,
         session_id,
         "served",
         "signed detail",
@@ -380,7 +431,7 @@ async fn forged_terminal_hydration_receipt_fails_closed() -> Result<()> {
                 create_SessionHydrationRequest(input: {{
                     request_key: "{request_key}"
                     requester_did: "{requester_did}"
-                    agent_did: "{agent_did}"
+                    node_did: "{node_did}"
                     session_id: "{session_id}"
                     created_at: "2026-08-28T00:00:00Z"
                     status: "served"
@@ -401,7 +452,7 @@ async fn forged_terminal_hydration_receipt_fails_closed() -> Result<()> {
     );
 
     let error = core
-        .session_hydration_progress(session_id, &agent_did)
+        .session_hydration_progress(session_id, &node_did)
         .await
         .expect_err("tampered terminal receipt must not produce hydration progress");
     assert!(
@@ -422,9 +473,9 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
         ClientCoreOptions::local_simulated_route(),
     )
     .await?;
-    let requester_did = gents::graphql::escape_graphql_string(core.principal().did());
-    let agent_did = core.principal().did().to_string();
-    persist_local_route(&core, &agent_did).await?;
+    let requester_did = gents::graphql::escape_graphql_string(core.node_identity().did());
+    let node_did = core.node_identity().did().to_string();
+    persist_local_route(&core, &node_did).await?;
     let session_id = "session-rejected";
     let other_session_id = "session-other";
     let raw_request_key = format!("{}:{session_id}", core.local_peer_id());
@@ -436,7 +487,7 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
     let (manifest, signer, signature) = signed_empty_hydration_receipt(
         &core,
         &raw_request_key,
-        &agent_did,
+        &node_did,
         session_id,
         "rejected",
         "membership missing",
@@ -449,7 +500,7 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
                 create_SessionHydrationRequest(input: {{
                     request_key: "{request_key}"
                     requester_did: "{requester_did}"
-                    agent_did: "{agent_did}"
+                    node_did: "{node_did}"
                     session_id: "{session_id}"
                     created_at: "2026-08-28T00:00:00Z"
                     status: "rejected"
@@ -463,7 +514,7 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
                 other: create_SessionHydrationRequest(input: {{
                     request_key: "{other_request_key}"
                     requester_did: "{requester_did}"
-                    agent_did: "{agent_did}"
+                    node_did: "{node_did}"
                     session_id: "{other_session_id}"
                     created_at: "2026-08-28T00:00:00Z"
                     status: "pending"
@@ -479,12 +530,12 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
         response.errors
     );
 
-    core.ensure_session_hydration_started(session_id, &agent_did)
+    core.ensure_session_hydration_started(session_id, &node_did)
         .await?;
-    core.ensure_session_hydration_started(session_id, &agent_did)
+    core.ensure_session_hydration_started(session_id, &node_did)
         .await?;
     assert_eq!(
-        core.session_hydration_progress(session_id, &agent_did)
+        core.session_hydration_progress(session_id, &node_did)
             .await?
             .phase
             .as_str(),
@@ -502,14 +553,14 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
     let core =
         ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_simulated_route())
             .await?;
-    core.add_local_standard_peer_for_test(&agent_did).await?;
+    core.add_local_standard_peer_for_test(&node_did).await?;
     assert_eq!(
         core.local_peer_id(),
         peer_id_before_restart,
         "durable hydration request keys require a stable client peer identity"
     );
     assert_eq!(
-        core.session_hydration_progress(session_id, &agent_did)
+        core.session_hydration_progress(session_id, &node_did)
             .await?
             .phase
             .as_str(),
@@ -518,28 +569,28 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
     );
 
     let failed_progress = core
-        .session_hydration_progress(session_id, &agent_did)
+        .session_hydration_progress(session_id, &node_did)
         .await?;
     let other_progress = core
-        .session_hydration_progress(other_session_id, &agent_did)
+        .session_hydration_progress(other_session_id, &node_did)
         .await?;
     assert_eq!(other_progress.phase.as_str(), "requested");
     assert!(core
-        .ensure_session_hydration_started(session_id, "did:test:wrong-agent")
+        .ensure_session_hydration_started(session_id, "did:test:wrong-node")
         .await
         .is_err());
     assert_eq!(
-        core.session_hydration_progress(session_id, &agent_did)
+        core.session_hydration_progress(session_id, &node_did)
             .await?,
         failed_progress,
         "a mismatched passive start must not alter the original target"
     );
     assert!(core
-        .retry_session_hydration(session_id, "did:test:wrong-agent")
+        .retry_session_hydration(session_id, "did:test:wrong-node")
         .await
         .is_err());
     assert_eq!(
-        core.session_hydration_progress(session_id, &agent_did)
+        core.session_hydration_progress(session_id, &node_did)
             .await?,
         failed_progress,
         "a rejected retry must not alter the original target"
@@ -550,15 +601,15 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
         "a rejected retry must not rewrite the terminal request"
     );
     assert_eq!(
-        core.session_hydration_progress(other_session_id, &agent_did)
+        core.session_hydration_progress(other_session_id, &node_did)
             .await?,
         other_progress,
         "observing and rejecting another target must not overwrite this session"
     );
 
-    core.retry_session_hydration(session_id, &agent_did).await?;
+    core.retry_session_hydration(session_id, &node_did).await?;
     assert_eq!(
-        core.session_hydration_progress(session_id, &agent_did)
+        core.session_hydration_progress(session_id, &node_did)
             .await?
             .phase
             .as_str(),
@@ -604,8 +655,8 @@ async fn hydration_request_status(core: &ClientCore, request_key: &str) -> Resul
         .map(str::to_string))
 }
 
-async fn persist_local_route(core: &ClientCore, agent_did: &str) -> Result<()> {
-    core.add_local_standard_peer_for_test(agent_did).await?;
+async fn persist_local_route(core: &ClientCore, node_did: &str) -> Result<()> {
+    core.add_local_standard_peer_for_test(node_did).await?;
     Ok(())
 }
 

@@ -12,8 +12,8 @@ async fn config_tools_list_show_and_remove_canonical_document() -> Result<()> {
     fs::create_dir_all(&home)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let init = run_init_json(&home, &["--agent-name", "crud-agent"])?;
-    let owner = agent_did_from_init(&init)?;
+    let init = run_init_json(&home, &["--node-name", "crud-agent"])?;
+    let owner = node_did_from_init(&init)?;
     let mut server = spawn_server(&home, port)?;
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
@@ -21,7 +21,7 @@ async fn config_tools_list_show_and_remove_canonical_document() -> Result<()> {
     let file = tempdir.path().join("tools.json");
     write_json_file(
         &file,
-        &json!({"agent_did":owner,"tools_id":"extra-tools","built_ins":{"enable_goal_tools":true}}),
+        &json!({"node_did":owner,"tools_id":"extra-tools","built_ins":{"enable_goal_tools":true}}),
     )?;
     run_cli_json(
         &home,
@@ -41,14 +41,14 @@ async fn config_tools_list_show_and_remove_canonical_document() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn behavior_set_rejects_missing_context() -> Result<()> {
+async fn agent_set_rejects_missing_context() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let home = tempdir.path().join("home");
     fs::create_dir_all(&home)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let init = run_init_json(&home, &["--agent-name", "behavior-crud-agent"])?;
-    let owner = agent_did_from_init(&init)?;
+    let init = run_init_json(&home, &["--node-name", "agent-crud-agent"])?;
+    let owner = node_did_from_init(&init)?;
     let profile = init["init"]["inference_profile_id"]
         .as_str()
         .context("profile")?;
@@ -60,13 +60,13 @@ async fn behavior_set_rejects_missing_context() -> Result<()> {
         &home,
         &[
             "config",
-            "behavior",
+            "agent",
             "set",
             "--graphql",
             &graphql,
-            "--agent-did",
+            "--node-did",
             &owner,
-            "--behavior-id",
+            "--agent-id",
             "broken",
             "--context-id",
             "missing-context",

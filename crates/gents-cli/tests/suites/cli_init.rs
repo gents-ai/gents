@@ -6,20 +6,20 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use gents::default_behavior_id_for_agent;
+use gents::default_agent_id_for_node;
 use serde_json::Value;
 use uuid::Uuid;
 
-fn generated_backend_id_for_agent(agent_did: &str) -> String {
-    format!("{agent_did}:backend")
+fn generated_backend_id_for_agent(node_did: &str) -> String {
+    format!("{node_did}:backend")
 }
 
-fn generated_tools_id_for_agent(agent_did: &str) -> String {
-    let default_behavior_id = default_behavior_id_for_agent(agent_did);
-    format!("{default_behavior_id}-tools")
+fn generated_tools_id_for_agent(node_did: &str) -> String {
+    let default_agent_id = default_agent_id_for_node(node_did);
+    format!("{default_agent_id}-tools")
 }
 
-fn add_principal_skill_pair(root: &Path, agent_did: &str) -> Result<()> {
+fn add_principal_skill_pair(root: &Path, node_did: &str) -> Result<()> {
     let config_path = root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
     let skills = config
@@ -30,10 +30,10 @@ fn add_principal_skill_pair(root: &Path, agent_did: &str) -> Result<()> {
         .as_array_mut()
         .context("exported skills is not an array")?;
     for suffix in ["alpha", "zeta"] {
-        let skill_id = format!("{agent_did}:skill-{suffix}");
+        let skill_id = format!("{node_did}:skill-{suffix}");
         skills.push(serde_json::json!({
             "skill_id": skill_id,
-            "agent_did": agent_did,
+            "node_did": node_did,
             "name": format!("Skill {suffix}"),
             "description": null,
             "instructions": format!("Instructions for skill {suffix}."),
@@ -47,7 +47,7 @@ fn add_principal_skill_pair(root: &Path, agent_did: &str) -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_bootstraps_backend_default_behavior_and_tools_idempotently() -> Result<()> {
+async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -62,7 +62,7 @@ async fn init_bootstraps_backend_default_behavior_and_tools_idempotently() -> Re
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -78,16 +78,16 @@ async fn init_bootstraps_backend_default_behavior_and_tools_idempotently() -> Re
         init.pointer("/init/tool_ceiling").and_then(Value::as_str),
         Some("Readonly")
     );
-    let agent_did = agent_did_from_init(&init)?;
-    let backend_id = generated_backend_id_for_agent(&agent_did);
-    let tools_id = generated_tools_id_for_agent(&agent_did);
+    let node_did = node_did_from_init(&init)?;
+    let backend_id = generated_backend_id_for_agent(&node_did);
+    let tools_id = generated_tools_id_for_agent(&node_did);
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await
@@ -95,7 +95,7 @@ async fn init_bootstraps_backend_default_behavior_and_tools_idempotently() -> Re
 
     assert_runtime_init_state(
         &graphql,
-        &agent_did,
+        &node_did,
         &backend_id,
         mock_endpoint.endpoint(),
         "OpenAiCompatible",
@@ -114,7 +114,7 @@ async fn init_bootstraps_backend_default_behavior_and_tools_idempotently() -> Re
     run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -127,7 +127,7 @@ async fn init_bootstraps_backend_default_behavior_and_tools_idempotently() -> Re
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await
@@ -135,7 +135,7 @@ async fn init_bootstraps_backend_default_behavior_and_tools_idempotently() -> Re
 
     assert_runtime_init_state(
         &graphql,
-        &agent_did,
+        &node_did,
         &backend_id,
         mock_endpoint.endpoint(),
         "OpenAiCompatible",
@@ -169,21 +169,21 @@ async fn init_bootstraps_backend_default_behavior_and_tools_idempotently() -> Re
         Some(1)
     );
 
-    let behavior_rows = graphql_query(
+    let agent_rows = graphql_query(
         &graphql,
         &format!(
             r#"{{
-                AgentBehavior(filter: {{ agent_did: {{ _eq: "{}" }} }}) {{
-                    behavior_id
+                Agent(filter: {{ node_did: {{ _eq: "{}" }} }}) {{
+                    agent_id
                 }}
             }}"#,
-            escape_graphql_string(&agent_did),
+            escape_graphql_string(&node_did),
         ),
     )
     .await?;
     assert_eq!(
-        behavior_rows
-            .pointer("/data/AgentBehavior")
+        agent_rows
+            .pointer("/data/Agent")
             .and_then(Value::as_array)
             .map(Vec::len),
         Some(1)
@@ -217,7 +217,7 @@ async fn init_bootstraps_backend_default_behavior_and_tools_idempotently() -> Re
             .and_then(Value::as_bool),
         None
     );
-    let preset: Value = serde_json::from_str(gents_protocol::SETUP_SELF_CONFIG_JSON)?;
+    let preset: Value = serde_json::from_str(gents_protocol::ENGINEER_SELF_CONFIG_JSON)?;
     for (field, expected) in preset.as_object().context("preset object")? {
         assert_eq!(
             tools.pointer(&format!("/self_config/{field}")),
@@ -248,7 +248,7 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -256,7 +256,7 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
 
     run_cli_text(
         &home_dir,
@@ -269,26 +269,26 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
     )?;
     let config_path = pack_root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let original_behavior_id = config["agent_principal"]
-        .get("default_behavior_id")
+    let original_agent_id = config["node"]
+        .get("default_agent_id")
         .and_then(Value::as_str)
-        .context("exported principal missing default behavior")?
+        .context("exported principal missing default agent")?
         .to_string();
-    let applied_behavior_id = format!("{agent_did}:applied-default");
-    let mut applied_behavior = config["agent_behaviors"]
+    let applied_agent_id = format!("{node_did}:applied-default");
+    let mut applied_agent = config["agents"]
         .as_array()
-        .context("agent_behaviors is not an array")?
+        .context("agents is not an array")?
         .iter()
-        .find(|behavior| behavior["behavior_id"] == original_behavior_id)
-        .context("exported default behavior is missing")?
+        .find(|agent| agent["agent_id"] == original_agent_id)
+        .context("exported default agent is missing")?
         .clone();
-    applied_behavior["behavior_id"] = Value::String(applied_behavior_id.clone());
-    applied_behavior["display_name"] = Value::String("Applied default".to_string());
-    config["agent_behaviors"]
+    applied_agent["agent_id"] = Value::String(applied_agent_id.clone());
+    applied_agent["display_name"] = Value::String("Applied default".to_string());
+    config["agents"]
         .as_array_mut()
-        .context("agent_behaviors is not an array")?
-        .push(applied_behavior);
-    config["agent_principal"]["default_behavior_id"] = Value::String(applied_behavior_id.clone());
+        .context("agents is not an array")?
+        .push(applied_agent);
+    config["node"]["default_agent_id"] = Value::String(applied_agent_id.clone());
     write_json_file(&config_path, &config)?;
 
     let port = allocate_port()?;
@@ -297,21 +297,20 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
         spawn_server_with_ready_json(&home_dir, port, &["--apply-root", pack_root_arg], &[])?;
 
     assert_eq!(
-        readiness.get("default_behavior_id").and_then(Value::as_str),
-        Some(applied_behavior_id.as_str())
+        readiness.get("default_agent_id").and_then(Value::as_str),
+        Some(applied_agent_id.as_str())
     );
     assert_eq!(
         readiness
-            .pointer("/behavior_readiness/default_behavior_id")
+            .pointer("/node_readiness/default_agent_id")
             .and_then(Value::as_str),
-        Some(applied_behavior_id.as_str())
+        Some(applied_agent_id.as_str())
     );
     assert!(readiness
-        .pointer("/behavior_readiness/behaviors")
+        .pointer("/node_readiness/agents")
         .and_then(Value::as_array)
-        .is_some_and(|behaviors| behaviors.iter().any(|behavior| {
-            behavior.get("behavior_id").and_then(Value::as_str)
-                == Some(applied_behavior_id.as_str())
+        .is_some_and(|agents| agents.iter().any(|agent| {
+            agent.get("agent_id").and_then(Value::as_str) == Some(applied_agent_id.as_str())
         })));
     assert_eq!(
         readiness
@@ -335,7 +334,7 @@ async fn server_apply_root_accepts_metadata_only_change_without_generation_advan
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &format!("metadata-apply-{}", Uuid::new_v4().simple()),
             "--model-name",
             &model_name,
@@ -343,7 +342,7 @@ async fn server_apply_root_accepts_metadata_only_change_without_generation_advan
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     run_cli_text(
         &home_dir,
         &[
@@ -353,7 +352,7 @@ async fn server_apply_root_accepts_metadata_only_change_without_generation_advan
             pack_root.to_str().context("pack root utf8")?,
         ],
     )?;
-    add_principal_skill_pair(&pack_root, &agent_did)?;
+    add_principal_skill_pair(&pack_root, &node_did)?;
     run_cli_json(
         &home_dir,
         &[
@@ -365,7 +364,7 @@ async fn server_apply_root_accepts_metadata_only_change_without_generation_advan
     )?;
     let config_path = pack_root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    config["agent_principal"]["display_name"] = Value::String("Metadata-only rename".to_string());
+    config["node"]["display_name"] = Value::String("Metadata-only rename".to_string());
     write_json_file(&config_path, &config)?;
 
     let port = allocate_port()?;
@@ -381,7 +380,7 @@ async fn server_apply_root_accepts_metadata_only_change_without_generation_advan
 
     assert_eq!(
         readiness
-            .pointer("/behavior_readiness/active_generation")
+            .pointer("/node_readiness/active_generation")
             .and_then(Value::as_u64),
         Some(1),
         "principal display name is not part of runtime operational identity",
@@ -401,7 +400,7 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &format!("task-apply-{}", Uuid::new_v4().simple()),
             "--model-name",
             &model_name,
@@ -409,7 +408,7 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     run_cli_text(
         &home_dir,
         &[
@@ -419,7 +418,7 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
             pack_root.to_str().context("pack root utf8")?,
         ],
     )?;
-    add_principal_skill_pair(&pack_root, &agent_did)?;
+    add_principal_skill_pair(&pack_root, &node_did)?;
     run_cli_json(
         &home_dir,
         &[
@@ -431,10 +430,10 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
     )?;
     let config_path = pack_root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let behavior_id = config["agent_principal"]
-        .get("default_behavior_id")
+    let agent_id = config["node"]
+        .get("default_agent_id")
         .and_then(Value::as_str)
-        .context("exported principal missing default behavior")?
+        .context("exported principal missing default agent")?
         .to_string();
     let task_id = format!("post-apply-task-{}", Uuid::new_v4().simple());
     config
@@ -448,7 +447,7 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
             "task_id": task_id,
             "display_name": "Post-apply task",
             "description": null,
-            "behavior_id": behavior_id,
+            "agent_id": agent_id,
             "prompt_template": "Exercise the post-apply runtime generation.",
             "enabled": true,
             "output_schema_ref": null,
@@ -468,7 +467,7 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
 
     assert!(
         readiness
-            .pointer("/behavior_readiness/active_generation")
+            .pointer("/node_readiness/active_generation")
             .and_then(Value::as_u64)
             .is_some_and(|generation| generation > 1),
         "task-only apply must wait for a newer runtime generation: {readiness}",
@@ -498,7 +497,7 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--provider-kind",
             "OpenRouter",
@@ -518,17 +517,17 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
         init.pointer("/init/api_key").and_then(Value::as_str),
         Some("<redacted>")
     );
-    let agent_did = agent_did_from_init(&init)?;
-    let backend_id = generated_backend_id_for_agent(&agent_did);
-    let tools_id = generated_tools_id_for_agent(&agent_did);
+    let node_did = node_did_from_init(&init)?;
+    let backend_id = generated_backend_id_for_agent(&node_did);
+    let tools_id = generated_tools_id_for_agent(&node_did);
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     assert_runtime_init_state(
         &graphql,
-        &agent_did,
+        &node_did,
         &backend_id,
         mock_endpoint.endpoint(),
         "OpenRouter",
@@ -556,7 +555,7 @@ async fn init_openrouter_preset_applies_hosted_defaults() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--backend-preset",
             "openrouter",
@@ -593,7 +592,7 @@ fn init_hosted_preset_error_can_retry_with_the_same_identity_and_store_key() -> 
         .env("RUST_LOG", "error")
         .arg("init")
         .args(["--store-key-custody", "file"])
-        .args(["--agent-name", "retry-original-identity"])
+        .args(["--node-name", "retry-original-identity"])
         .arg("--backend-preset")
         .arg("openai")
         .output()
@@ -608,7 +607,7 @@ fn init_hosted_preset_error_can_retry_with_the_same_identity_and_store_key() -> 
 
     let runtime_home = home_dir.join(".gents");
     let stored = read_json_file(&runtime_home.join("init.json"))?;
-    let agent_did = stored["agent_did"].as_str().context("recorded identity")?;
+    let node_did = stored["node_did"].as_str().context("recorded identity")?;
     let identity_path = stored["key_path"].as_str().context("recorded key path")?;
     let identity_bytes = fs::read(identity_path)?;
     let store_key_path = gents::store_key::home_key_file(&runtime_home);
@@ -616,7 +615,7 @@ fn init_hosted_preset_error_can_retry_with_the_same_identity_and_store_key() -> 
     assert!(runtime_home.join("data/MANIFEST").exists());
 
     let retried = run_init_json(&home_dir, &["--model-name", "retry-model"])?;
-    assert_eq!(retried["agent_did"], agent_did);
+    assert_eq!(retried["node_did"], node_did);
     assert_eq!(fs::read(identity_path)?, identity_bytes);
     assert_eq!(fs::read(store_key_path)?, store_key_bytes);
 
@@ -630,7 +629,7 @@ async fn init_defaults_to_local_llama_server_and_surfaces_identity() -> Result<(
     fs::create_dir_all(&home_dir)?;
 
     let agent_name = format!("cli-defaults-{}", Uuid::new_v4().simple());
-    let init = run_init_json(&home_dir, &["--agent-name", &agent_name])?;
+    let init = run_init_json(&home_dir, &["--node-name", &agent_name])?;
 
     assert_eq!(
         init.pointer("/init/endpoint").and_then(Value::as_str),
@@ -682,8 +681,8 @@ async fn init_identity_only_writes_stable_real_did_without_runtime_config() -> R
     fs::create_dir_all(&home_dir)?;
 
     let agent_name = "store";
-    let first = run_init_json(&home_dir, &["--identity-only", "--agent-name", &agent_name])?;
-    let first_agent_did = agent_did_from_init(&first)?;
+    let first = run_init_json(&home_dir, &["--identity-only", "--node-name", &agent_name])?;
+    let first_node_did = node_did_from_init(&first)?;
     let identity_path = gents::home::default_key_path(&home_dir.join(".gents"), agent_name);
     let identity_bytes = fs::read(&identity_path)?;
     assert_ne!(
@@ -698,15 +697,15 @@ async fn init_identity_only_writes_stable_real_did_without_runtime_config() -> R
     );
     assert_eq!(first.get("init"), Some(&Value::Null));
 
-    let second = run_init_json(&home_dir, &["--identity-only", "--agent-name", &agent_name])?;
-    let second_agent_did = agent_did_from_init(&second)?;
-    assert_eq!(second_agent_did, first_agent_did);
+    let second = run_init_json(&home_dir, &["--identity-only", "--node-name", &agent_name])?;
+    let second_node_did = node_did_from_init(&second)?;
+    assert_eq!(second_node_did, first_node_did);
     assert_eq!(fs::read(identity_path)?, identity_bytes);
 
     let init_json = read_json_file(&home_dir.join(".gents").join("init.json"))?;
     assert_eq!(
-        init_json.get("agent_did").and_then(Value::as_str),
-        Some(first_agent_did.as_str())
+        init_json.get("node_did").and_then(Value::as_str),
+        Some(first_node_did.as_str())
     );
 
     Ok(())
@@ -757,7 +756,7 @@ async fn init_dangerously_overwrite_replaces_existing_home() -> Result<()> {
     run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -775,7 +774,7 @@ async fn init_dangerously_overwrite_replaces_existing_home() -> Result<()> {
         &home_dir,
         &[
             "--dangerously-overwrite",
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -813,7 +812,7 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -823,15 +822,15 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
-    let tools_id = generated_tools_id_for_agent(&agent_did);
+    let node_did = node_did_from_init(&init)?;
+    let tools_id = generated_tools_id_for_agent(&node_did);
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     assert_runtime_init_state(
         &graphql,
-        &agent_did,
+        &node_did,
         &backend_id,
         mock_endpoint.endpoint(),
         "OpenAiCompatible",
@@ -863,7 +862,7 @@ fn init_accepts_tool_root_for_readonly_defaults() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -886,8 +885,75 @@ fn init_accepts_tool_root_for_readonly_defaults() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn serve_startup_logs_the_tool_root_that_escapes_the_ceiling() -> Result<()> {
+/// Pin `Tools.host.root` on the default agent's Tools document, as homes
+/// created before init stopped copying the operator root into Tools still
+/// carry, so a serve run can be driven against a live authored grant.
+async fn pin_default_tools_root(
+    home_dir: &Path,
+    node_did: &str,
+    root: &str,
+    scratch_dir: &Path,
+) -> Result<()> {
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut serve = spawn_server_with_env(home_dir, port, &[], &[])?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, node_did, Duration::from_secs(30)).await?;
+    let response = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{ Tools(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ tools_id node_did display_name host remote agents built_ins datastore integrations self_config tags }} }}"#,
+            gents::graphql::escape_graphql_string(node_did)
+        ),
+    )
+    .await?;
+    let tools_id = generated_tools_id_for_agent(node_did);
+    let mut tools = response
+        .pointer("/data/Tools")
+        .and_then(Value::as_array)
+        .context("Tools rows")?
+        .iter()
+        .map(|row| {
+            row.as_object()
+                .expect("Tools row object")
+                .iter()
+                .filter(|(_, value)| !value.is_null())
+                .map(|(field, value)| {
+                    let value = value
+                        .as_str()
+                        .and_then(|encoded| serde_json::from_str::<Value>(encoded).ok())
+                        .filter(|decoded| decoded.is_object())
+                        .unwrap_or_else(|| value.clone());
+                    (field.clone(), value)
+                })
+                .collect::<serde_json::Map<_, _>>()
+        })
+        .find(|row| row.get("tools_id").and_then(Value::as_str) == Some(&tools_id))
+        .context("the Tools document init created for the default agent")?;
+    tools["host"]["root"] = Value::from(root);
+    let tools_path = scratch_dir.join("tools.json");
+    write_json_file(&tools_path, &Value::Object(tools))?;
+    run_cli_json(
+        home_dir,
+        &[
+            "config",
+            "tools",
+            "set",
+            "--graphql",
+            &graphql,
+            "--file",
+            tools_path.to_str().context("utf-8 tools path")?,
+        ],
+    )?;
+    serve.child.kill()?;
+    serve.child.wait()?;
+    Ok(())
+}
+
+/// A persisted `Tools.host.root` disjoint from a later `--tool-root` must be
+/// refused at startup with a diagnostic naming both roots.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_startup_logs_the_tool_root_that_escapes_the_ceiling() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     let recorded_root = tempdir.path().join("recorded-root");
@@ -901,10 +967,10 @@ fn serve_startup_logs_the_tool_root_that_escapes_the_ceiling() -> Result<()> {
     let model_name = format!("tool-root-conflict-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
     let agent_name = format!("cli-tool-root-conflict-{}", Uuid::new_v4().simple());
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -914,6 +980,8 @@ fn serve_startup_logs_the_tool_root_that_escapes_the_ceiling() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
+    let node_did = node_did_from_init(&init)?;
+    pin_default_tools_root(&home_dir, &node_did, recorded_root, tempdir.path()).await?;
 
     let port = allocate_port()?;
     let stderr = run_cli_failure_stderr(
@@ -938,6 +1006,64 @@ fn serve_startup_logs_the_tool_root_that_escapes_the_ceiling() -> Result<()> {
     Ok(())
 }
 
+/// Service mode drops the console tracing layer, so the exit-error sink the
+/// service manager appends to runtime-errors.log must still carry the
+/// root-admission diagnostic; the presentation-safe bail alone names no root.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_service_mode_writes_the_startup_diagnostic_to_stderr() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let recorded_root = tempdir.path().join("recorded-root");
+    let explicit_root = tempdir.path().join("explicit-root");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&recorded_root)?;
+    fs::create_dir_all(&explicit_root)?;
+    let recorded_root = recorded_root.to_str().context("utf-8 recorded root")?;
+    let explicit_root = explicit_root.to_str().context("utf-8 explicit root")?;
+
+    let model_name = format!("service-diagnostic-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-service-diagnostic-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--node-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--tool-root",
+            recorded_root,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let node_did = node_did_from_init(&init)?;
+    pin_default_tools_root(&home_dir, &node_did, recorded_root, tempdir.path()).await?;
+
+    let port = allocate_port()?;
+    let stderr = run_cli_failure_stderr_with_env(
+        &home_dir,
+        &[
+            "server",
+            "--http-port",
+            &port.to_string(),
+            "--tool-root",
+            explicit_root,
+        ],
+        &[("GENTS_SYSTEM_LOG", "1")],
+    )?;
+
+    assert!(
+        stderr.contains("escapes operator tool root"),
+        "expected the service-mode stderr sink to carry the root-admission diagnostic, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(recorded_root) && stderr.contains(explicit_root),
+        "expected the mirrored diagnostic to name both the Tools root and --tool-root, got:\n{stderr}"
+    );
+    Ok(())
+}
+
 /// The live `Tools.host.root`, not the root `gents init` recorded, is what
 /// `--tool-root` must admit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -957,7 +1083,7 @@ async fn serve_admits_a_narrower_tool_root_after_the_live_root_moved() -> Result
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -967,65 +1093,8 @@ async fn serve_admits_a_narrower_tool_root_after_the_live_root_moved() -> Result
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
-
-    let port = allocate_port()?;
-    let graphql = graphql_url(port);
-    let mut serve = spawn_server_with_env(&home_dir, port, &[], &[])?;
-    wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
-    let response = graphql_query(
-        &graphql,
-        &format!(
-            r#"{{ Tools(filter: {{ agent_did: {{ _eq: "{}" }} }}) {{ tools_id agent_did display_name host remote subagents built_ins datastore integrations self_config tags }} }}"#,
-            gents::graphql::escape_graphql_string(&agent_did)
-        ),
-    )
-    .await?;
-    let mut tools = response
-        .pointer("/data/Tools")
-        .and_then(Value::as_array)
-        .context("Tools rows")?
-        .iter()
-        .map(|row| {
-            row.as_object()
-                .expect("Tools row object")
-                .iter()
-                .filter(|(_, value)| !value.is_null())
-                .map(|(field, value)| {
-                    let value = value
-                        .as_str()
-                        .and_then(|encoded| serde_json::from_str::<Value>(encoded).ok())
-                        .filter(|decoded| decoded.is_object())
-                        .unwrap_or_else(|| value.clone());
-                    (field.clone(), value)
-                })
-                .collect::<serde_json::Map<_, _>>()
-        })
-        .find(|row| {
-            row.get("host")
-                .and_then(|host| host.get("root"))
-                .and_then(Value::as_str)
-                == Some(workspace_root)
-        })
-        .context("the Tools document init rooted at the workspace")?;
-    tools["host"]["root"] = Value::from(project_root);
-    let tools_path = tempdir.path().join("tools.json");
-    write_json_file(&tools_path, &Value::Object(tools))?;
-    run_cli_json(
-        &home_dir,
-        &[
-            "config",
-            "tools",
-            "set",
-            "--graphql",
-            &graphql,
-            "--file",
-            tools_path.to_str().context("utf-8 tools path")?,
-        ],
-    )?;
-    serve.child.kill()?;
-    serve.child.wait()?;
+    let node_did = node_did_from_init(&init)?;
+    pin_default_tools_root(&home_dir, &node_did, project_root, tempdir.path()).await?;
 
     let port = allocate_port()?;
     let graphql = graphql_url(port);
@@ -1036,7 +1105,161 @@ async fn serve_admits_a_narrower_tool_root_after_the_live_root_moved() -> Result
         &[],
     )?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
+    Ok(())
+}
+
+/// A Tools grant that still contains a narrowed operator root must clamp to
+/// the operator root instead of stranding the only behavior: this is the
+/// desktop "Change access" flow for homes whose Tools document pins the wider
+/// root `gents init` recorded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_clamps_the_default_tools_root_to_a_narrowed_operator_root() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let workspace_root = tempdir.path().join("workspace");
+    let project_root = workspace_root.join("project");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&project_root)?;
+    let workspace_root = workspace_root.to_str().context("utf-8 workspace root")?;
+    let project_root = project_root.to_str().context("utf-8 project root")?;
+
+    let model_name = format!("clamped-tool-root-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-clamped-tool-root-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--node-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--tool-root",
+            workspace_root,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let node_did = node_did_from_init(&init)?;
+    // Pin the Tools grant at the workspace root, as homes created before init
+    // stopped copying the operator root into Tools still carry.
+    pin_default_tools_root(&home_dir, &node_did, workspace_root, tempdir.path()).await?;
+
+    // Narrowing the operator root below the persisted grant must still boot.
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        port,
+        &["--tool-ceiling", "readwrite", "--tool-root", project_root],
+        &[],
+    )?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
+    Ok(())
+}
+
+/// A home initialized while an explicit WorkspaceRoot policy exists must pin
+/// the operator root into `Tools.host.root`: the per-request execution guard
+/// refuses rootless host tools under configured policy, so a blank root would
+/// leave the home ready at startup but refuse every request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let workspace_root = tempdir.path().join("workspace");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&workspace_root)?;
+    let workspace_root = workspace_root.to_str().context("utf-8 workspace root")?;
+
+    let expected_reply = format!("pinned-root-{}", Uuid::new_v4().simple());
+    let model_name = format!("pinned-root-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
+    let agent_name = format!("cli-pinned-root-{}", Uuid::new_v4().simple());
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let init_args = [
+        "--node-name",
+        agent_name.as_str(),
+        "--model-name",
+        model_name.as_str(),
+        "--tool-root",
+        workspace_root,
+        "--inference-url",
+        mock_endpoint.endpoint(),
+    ];
+
+    let init = run_init_json(&home_dir, &init_args)?;
+    let node_did = node_did_from_init(&init)?;
+
+    // Author the explicit policy publishing the workspace root, then re-run
+    // init on the configured home.
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "workspace-root",
+            "set",
+            "--graphql",
+            &graphql,
+            "--path",
+            workspace_root,
+        ],
+    )?;
+    serve.child.kill()?;
+    serve.child.wait()?;
+
+    run_init_json(&home_dir, &init_args)?;
+
+    // The pinned Tools root keeps the home servable, so a request must pass
+    // the per-request WorkspaceRoot guard and reach the model.
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
+    let reply = run_cli_text(
+        &home_dir,
+        &["chat", "Reply with exactly the configured token."],
+    )?;
+    assert!(
+        reply.contains(&expected_reply),
+        "expected the pinned-root chat round trip to deliver the model reply, got:\n{reply}"
+    );
+    let tools_id = generated_tools_id_for_agent(&node_did);
+    let response = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{ Tools(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ tools_id host }} }}"#,
+            gents::graphql::escape_graphql_string(&node_did)
+        ),
+    )
+    .await?;
+    serve.child.kill()?;
+    serve.child.wait()?;
+
+    let pinned_root = response
+        .pointer("/data/Tools")
+        .and_then(Value::as_array)
+        .context("Tools rows")?
+        .iter()
+        .find(|row| row.get("tools_id").and_then(Value::as_str) == Some(&tools_id))
+        .and_then(|row| {
+            let host = row.get("host")?;
+            let decoded = host
+                .as_str()
+                .and_then(|encoded| serde_json::from_str::<Value>(encoded).ok())
+                .unwrap_or_else(|| host.clone());
+            decoded.get("root").cloned()
+        })
+        .and_then(|root| root.as_str().map(str::to_string))
+        .context("the Tools document init re-authored under explicit policy")?;
+    assert_eq!(
+        pinned_root, workspace_root,
+        "init must pin the resolved operator root into Tools.host.root under explicit policy"
+    );
     Ok(())
 }
 
@@ -1056,7 +1279,7 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -1069,17 +1292,17 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
         init.pointer("/init/tool_ceiling").and_then(Value::as_str),
         Some("Readwrite")
     );
-    let agent_did = agent_did_from_init(&init)?;
-    let backend_id = generated_backend_id_for_agent(&agent_did);
-    let tools_id = generated_tools_id_for_agent(&agent_did);
+    let node_did = node_did_from_init(&init)?;
+    let backend_id = generated_backend_id_for_agent(&node_did);
+    let tools_id = generated_tools_id_for_agent(&node_did);
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     assert_runtime_init_state(
         &graphql,
-        &agent_did,
+        &node_did,
         &backend_id,
         mock_endpoint.endpoint(),
         "OpenAiCompatible",
@@ -1142,13 +1365,13 @@ async fn readiness_wait_survives_preflight_listener_closing_before_server_start(
         .await
         .is_err());
     let snapshot = serde_json::json!({
-        "format_version": 1, "process_state": "ready",
+        "format_version": gents_protocol::node_readiness::NODE_READINESS_FORMAT_VERSION, "process_state": "ready",
         "active_generation": 1, "router_generation": 1,
-        "default_behavior_id": "default",
-        "behaviors": [{"behavior_id": "default", "state": "ready", "reason": null}]
+        "default_agent_id": "default",
+        "agents": [{"agent_id": "default", "state": "ready", "reason": null}]
     });
-    let response = serde_json::json!({"data": {"AgentBehaviorReadiness": [{
-        "agent_did": did, "snapshot_json": snapshot.to_string(),
+    let response = serde_json::json!({"data": {"NodeReadiness": [{
+        "node_did": did, "snapshot_json": snapshot.to_string(),
         "updated_at": chrono::Utc::now().to_rfc3339()
     }]}});
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
@@ -1170,7 +1393,7 @@ async fn init_reuses_recorded_store_custody_and_refuses_an_unrecorded_key() -> R
     let home = home_dir.join(".gents");
     let agent_name = format!("cli-store-key-{}", Uuid::new_v4().simple());
 
-    run_init_json(&home_dir, &["--identity-only", "--agent-name", &agent_name])?;
+    run_init_json(&home_dir, &["--identity-only", "--node-name", &agent_name])?;
     let config_path = gents::home::init_config_path(&home);
     let recorded = read_json_file(&config_path)?["store_encryption"].clone();
     assert_eq!(
@@ -1180,7 +1403,7 @@ async fn init_reuses_recorded_store_custody_and_refuses_an_unrecorded_key() -> R
     );
     let key_file = gents::store_key::home_key_file(&home);
     let key = fs::read(&key_file)?;
-    run_init_json(&home_dir, &["--identity-only", "--agent-name", &agent_name])?;
+    run_init_json(&home_dir, &["--identity-only", "--node-name", &agent_name])?;
     assert_eq!(fs::read(&key_file)?, key, "re-init reuses the recorded key");
 
     let mut legacy = read_json_file(&config_path)?;

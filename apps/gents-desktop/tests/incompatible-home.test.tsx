@@ -13,11 +13,15 @@ import {
 } from "@source-inc/gents-desktop-client";
 
 import App from "../src/App";
+import { SettingsMenu } from "../src/ui/app/SettingsMenu";
+import { IncompatibleHomeScreen } from "../src/components/IncompatibleHomeScreen";
+import { useStartup } from "../src/ui/hooks/useClient";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
 const HOME = "/Users/test/.gents";
 const DESKTOP = "/Users/test/Library/Application Support/gents/desktop";
+const BROWSER = "/Users/test/Library/WebKit/com.source-inc.gents";
 
 function managedStatus(
   overrides: Partial<ManagedServerStatus> = {},
@@ -25,8 +29,8 @@ function managedStatus(
   return {
     state: "disabled",
     autoStart: false,
-    agentName: null,
-    agentDid: null,
+    nodeName: null,
+    nodeDid: null,
     graphql: null,
     effectiveToolCeiling: null,
     effectiveToolRoot: null,
@@ -68,6 +72,8 @@ function preview(
       `${DESKTOP}/principal.ed25519.key`,
     ],
     retiredPaths: [],
+    browserPaths: [],
+    clearedBrowserPaths: [],
     retainedPaths: [`${HOME}/grok-port-home`],
     ...overrides,
   };
@@ -92,7 +98,7 @@ function snapshot(configured: boolean): DesktopClientSnapshot {
             {
               peerId: deployment.peerId,
               label: deployment.label,
-              agentDid: deployment.agentDid,
+              nodeDid: deployment.nodeDid,
               addr: deployment.addr,
               source: deployment.source,
               graphql: deployment.graphql,
@@ -122,7 +128,7 @@ function harness(api: Partial<DesktopApiAdapter>) {
   const full = {
     fetchDesktopSnapshot: vi.fn(async () => snapshot(false)),
     fetchSessionSnapshot: vi.fn(async () => null),
-    setSelectedAgent: vi.fn(async () => undefined),
+    setSelectedNode: vi.fn(async () => undefined),
     startDesktopClient: vi.fn(async () => snapshot(false)),
     shutdownDesktopClient: vi.fn(async () => snapshot(false)),
     startManagedServer: vi.fn(),
@@ -213,7 +219,7 @@ describe("a home this version cannot open", () => {
     expect(run.resetManagedServer).toHaveBeenCalledTimes(1);
     expect(
       screen.getByTestId("incompatible-home-delete-client-note"),
-    ).toHaveTextContent("pairings with remote agents");
+    ).toHaveTextContent("pairings with remote nodes");
     expect(screen.getByTestId("incompatible-home-delete-paths")).toHaveTextContent(
       `${HOME}/keys/local.key`,
     );
@@ -258,10 +264,10 @@ describe("a home this version cannot open", () => {
       managedServerStatus: vi.fn(async () =>
         managedStatus({
           state: "failed",
-          agentName: "Forge",
+          nodeName: "Forge",
           effectiveToolCeiling: "readwrite",
           effectiveToolRoot: "/Users/test",
-          error: "The background agent keeps exiting before it becomes ready.",
+          error: "The background node keeps exiting before it becomes ready.",
         }),
       ),
       restartManagedServer,
@@ -397,7 +403,7 @@ describe("setup start on a home this version cannot open", () => {
     };
     const app = testApp({
       api,
-      snapshot: { bootstrap: { ...bootstrap, initAgentName: "Forge" } },
+      snapshot: { bootstrap: { ...bootstrap, initNodeName: "Forge" } },
     });
     renderIn(app, <SetupScreen onDone={vi.fn()} />);
     const next = screen.getByTestId("setup-next");
@@ -411,4 +417,116 @@ describe("setup start on a home this version cannot open", () => {
     expect(app.stores.client.getState().home.report).not.toBeNull();
     expect(api.initLocalStandardRuntime).not.toHaveBeenCalled();
   });
+});
+
+function ResetSettings() {
+  const startup = useStartup();
+  return startup.incompatibleHome.report ? (
+    <IncompatibleHomeScreen home={startup.incompatibleHome} error={startup.error} />
+  ) : (
+    <SettingsMenu variant="row" showNav={false} />
+  );
+}
+
+describe("user-invoked desktop reset", () => {
+  it("previews healthy state from Settings and allows cancelling without retirement", async () => {
+    const user = userEvent.setup();
+    const resetManagedServer = vi.fn(async () =>
+      preview({ stores: [], browserPaths: [BROWSER] }),
+    );
+    const quitDesktop = vi.fn();
+    const app = testApp({ api: { resetManagedServer, quitDesktop } });
+    renderIn(app, <ResetSettings />);
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Reset Gents on this Mac" }),
+    );
+    expect(resetManagedServer).toHaveBeenCalledExactlyOnceWith(
+      undefined,
+      undefined,
+      true,
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Reset Gents on this Mac" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/created by an older Gents version/),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("reset-browser-clear")).toHaveTextContent(
+      "cleared permanently",
+    );
+    expect(screen.getByTestId("reset-browser-paths")).toHaveTextContent(BROWSER);
+    expect(screen.getByTestId("incompatible-home-planned")).not.toHaveTextContent(
+      BROWSER,
+    );
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
+    expect(resetManagedServer).toHaveBeenCalledTimes(1);
+    expect(quitDesktop).not.toHaveBeenCalled();
+  });
+
+  it("keeps controls disabled while the native helper waits for desktop exit", async () => {
+    const user = userEvent.setup();
+    const resetManagedServer = vi.fn(async () =>
+      preview({ stores: [], browserPaths: [BROWSER] }),
+    );
+    const app = testApp({ api: { resetManagedServer } });
+    renderIn(app, <ResetSettings />);
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Reset Gents on this Mac" }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Back up and start fresh" }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Closing Gents to finish the reset",
+    );
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Back up and start fresh" }),
+    ).toBeDisabled();
+    expect(app.stores.client.getState().error).toBeNull();
+  });
+
+  it.each(["archive", "delete"] as const)(
+    "confirms the full %s plan before retirement",
+    async (disposition) => {
+      const user = userEvent.setup();
+      const resetManagedServer = vi.fn(async (confirmation?: string) =>
+        preview({
+          stores: [],
+          completed: Boolean(confirmation),
+          disposition: confirmation ? disposition : null,
+          backupPath:
+            confirmation && disposition === "archive" ? "/Users/test/backup" : null,
+        }),
+      );
+      const app = testApp({ api: { resetManagedServer } });
+      renderIn(app, <ResetSettings />);
+      await user.click(screen.getByRole("button", { name: "Settings" }));
+      await user.click(
+        await screen.findByRole("menuitem", { name: "Reset Gents on this Mac" }),
+      );
+      if (disposition === "delete") {
+        await user.click(
+          await screen.findByRole("button", { name: "Delete and start fresh" }),
+        );
+        expect(resetManagedServer).toHaveBeenCalledTimes(1);
+        await user.click(screen.getByRole("button", { name: "Delete permanently" }));
+      } else {
+        await user.click(
+          await screen.findByRole("button", { name: "Back up and start fresh" }),
+        );
+      }
+      expect(resetManagedServer).toHaveBeenLastCalledWith(
+        disposition === "archive"
+          ? preview().confirmation
+          : preview().deleteConfirmation,
+        disposition,
+        true,
+      );
+      expect(await screen.findByTestId("incompatible-home-done")).toBeInTheDocument();
+    },
+  );
 });

@@ -1,6 +1,6 @@
 // The operator's request interrupt: an adapter over the canonical interrupt
 // owner (`gents::interrupt`). It resolves the one physical request the
-// operator named within the selected principal, then hands that exact scope
+// operator named within the selected node, then hands that exact scope
 // to the owner, which latches `interrupt_requested_at` and drains pending
 // automated wakes in the same transaction. It never reaches another
 // request; a session started by this one's tool call keeps running.
@@ -24,32 +24,27 @@ use crate::types::{DesktopInterruptRequest, InterruptRequestResult};
 /// The physical request an operator's interrupt names.
 struct Target {
     doc_id: String,
-    agent_did: String,
+    node_did: String,
     requester_did: Option<String>,
     interrupt_requested_at: Option<String>,
     terminal: bool,
 }
 
-/// The one request with this logical id within `agent_did`'s documents. Two
+/// The one request with this logical id within `node_did`'s documents. Two
 /// physical requests under one logical id are ambiguous and refused.
 async fn resolve(
     core: &Arc<ClientCore>,
     request_id: &str,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
 ) -> Result<Target, String> {
-    let agent_clause = agent_did
+    let node_clause = node_did
         .map(str::trim)
         .filter(|did| !did.is_empty())
-        .map(|did| {
-            format!(
-                r#", agent_did: {{ _eq: "{}" }}"#,
-                escape_graphql_string(did)
-            )
-        })
+        .map(|did| format!(r#", node_did: {{ _eq: "{}" }}"#, escape_graphql_string(did)))
         .unwrap_or_default();
     let query = format!(
-        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }}{agent_clause} }}, limit: 2) {{
-            _docID agent_did requester_did lifecycle_state interrupt_requested_at
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }}{node_clause} }}, limit: 2) {{
+            _docID node_did requester_did lifecycle_state interrupt_requested_at
         }} }}"#,
         escape_graphql_string(request_id)
     );
@@ -84,7 +79,7 @@ async fn resolve(
     };
     Ok(Target {
         doc_id: text("_docID").ok_or("interrupt target missing physical identity")?,
-        agent_did: text("agent_did").ok_or("interrupt target missing principal identity")?,
+        node_did: text("node_did").ok_or("interrupt target missing node identity")?,
         requester_did: text("requester_did"),
         interrupt_requested_at: text("interrupt_requested_at"),
         terminal: RequestLifecycleState::is_terminal_str(text("lifecycle_state").as_deref()),
@@ -103,7 +98,7 @@ pub async fn interrupt_request(
             req.cause
         ));
     }
-    let target = resolve(core, &req.request_id, req.agent_did.as_deref()).await?;
+    let target = resolve(core, &req.request_id, req.node_did.as_deref()).await?;
     let result = |interrupt_requested_at, already_interrupted| InterruptRequestResult {
         request_id: req.request_id.clone(),
         accepted: true,
@@ -125,7 +120,7 @@ pub async fn interrupt_request(
     gents::interrupt::interrupt_request_by_doc_id_with_access(
         &ConfigAccess::Local(core.node_arc()),
         &target.doc_id,
-        &target.agent_did,
+        &target.node_did,
         target.requester_did.as_deref(),
     )
     .await

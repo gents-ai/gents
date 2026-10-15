@@ -9,7 +9,7 @@ import { node, testApp, withApp } from "./app-fixture";
 
 /* the hover cards are not what these cases are about */
 vi.mock("../src/ui/screens/HoverCards", () => ({
-  BehaviorHoverCard: ({ children }: { children: ReactElement }) => children,
+  NodeHoverCard: ({ children }: { children: ReactElement }) => children,
   AgentHoverCard: ({ children }: { children: ReactElement }) => children,
 }));
 
@@ -18,7 +18,7 @@ const item = (over: Partial<MailboxItemView> = {}): MailboxItemView => ({
   itemKey: "key-1",
   requesterDid: "did:key:person",
   /* the node that lists the item: the bridge lists a node's own items */
-  agentDid: "did:key:node",
+  nodeDid: "did:key:node",
   status: "open",
   kind: "finished",
   action: "ack",
@@ -31,8 +31,8 @@ const item = (over: Partial<MailboxItemView> = {}): MailboxItemView => ({
   requestId: null,
   graphRunId: null,
   causeDocId: null,
-  targetAgentDid: "did:key:agent",
-  targetBehaviorId: "engineer",
+  targetNodeDid: "did:key:worker",
+  targetAgentId: "engineer",
   expectedCollection: null,
   parentItemId: null,
   deadlineAt: null,
@@ -47,9 +47,9 @@ const mailboxWith = (
 ) => testApp({ api: { sendChatMessage: send }, deployments: [deploymentWith(items)] });
 const deploymentWith = (items: MailboxItemView[]) =>
   node({
-    agentDid: "did:key:node",
+    nodeDid: "did:key:node",
     mailboxItems: items,
-    behaviors: [{ behaviorId: "engineer", displayName: "Engineer" }],
+    agents: [{ agentId: "engineer", displayName: "Engineer" }],
     sessions: [{ sessionId: "session-1", title: "Mailbox cleanup" }],
   });
 
@@ -75,7 +75,7 @@ describe("mailbox item", () => {
 
   it("names the source by agent, session and time, never its raw identity", () => {
     const sourceId =
-      '["event","did:key:agent","did:key:person","engineer","request-1"]';
+      '["event","did:key:worker","did:key:person","engineer","request-1"]';
     renderMailbox(mailboxWith([item({ sourceKind: "agent", sourceId })]));
     expect(screen.queryByText(sourceId, { exact: false })).toBeNull();
     expect(screen.queryByText(/did:key:/)).toBeNull();
@@ -262,10 +262,10 @@ describe("mailbox question", () => {
 
 describe("a mailbox opened from a node", () => {
   it("narrows to the node the route names, and keeps that choice", () => {
-    const nodeWith = (agentDid: string, title: string) =>
+    const nodeWith = (nodeDid: string, title: string) =>
       node({
-        agentDid,
-        mailboxItems: [item({ itemId: `${agentDid}-item`, agentDid, title })],
+        nodeDid,
+        mailboxItems: [item({ itemId: `${nodeDid}-item`, nodeDid, title })],
       });
     const app = testApp({
       deployments: [nodeWith("did:key:a", "From A"), nodeWith("did:key:b", "From B")],
@@ -284,12 +284,12 @@ describe("a mailbox opened from a node", () => {
     const app = testApp({
       deployments: [
         node({
-          agentDid: "did:key:a",
+          nodeDid: "did:key:a",
           mailboxItems: [
-            item({ itemId: "a-item", agentDid: "did:key:a", title: "From A" }),
+            item({ itemId: "a-item", nodeDid: "did:key:a", title: "From A" }),
           ],
         }),
-        node({ agentDid: "did:key:quiet", mailboxItems: [] }),
+        node({ nodeDid: "did:key:quiet", mailboxItems: [] }),
       ],
     });
     render(<MailboxScreen nodeDid="did:key:quiet" />, { wrapper: withApp(app) });

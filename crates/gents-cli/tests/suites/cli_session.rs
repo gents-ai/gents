@@ -23,7 +23,7 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -31,10 +31,10 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     run_cli_text(
@@ -42,10 +42,10 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
     let config = read_json_file(&root.join("pack_config.json"))?;
-    let behavior_id = config["agent_principal"]
-        .get("default_behavior_id")
+    let agent_id = config["node"]
+        .get("default_agent_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
+        .ok_or_else(|| anyhow!("missing default_agent_id after export"))?
         .to_string();
 
     let session_id = format!("session-{}", Uuid::new_v4().simple());
@@ -54,45 +54,45 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
             r#"mutation {{
                 create_AgentSession(input: {{
                     session_id: "{}",
-                    agent_did: "{}",
-                    behavior_id: "{}",
+                    node_did: "{}",
+                    agent_id: "{}",
                     created_at: "2026-06-12T10:00:00Z"
                 }}) {{ _docID }}
             }}"#,
             escape_graphql_string(&session_id),
-            escape_graphql_string(&agent_did),
-            escape_graphql_string(&behavior_id),
+            escape_graphql_string(&node_did),
+            escape_graphql_string(&agent_id),
         ),
         format!(
             r#"mutation {{
                 create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{}",
-                    agent_did: "{}",
-                    behavior_id: "{}",
+                    node_did: "{}",
+                    agent_id: "{}",
                     session_id: "{}",
                     lifecycle_state: "completed",
                     created_at: "2026-06-12T10:01:00Z"
                 }}) {{ _docID }}
             }}"#,
             escape_graphql_string(&format!("{session_id}-request-a")),
-            escape_graphql_string(&agent_did),
-            escape_graphql_string(&behavior_id),
+            escape_graphql_string(&node_did),
+            escape_graphql_string(&agent_id),
             escape_graphql_string(&session_id),
         ),
         format!(
             r#"mutation {{
                 create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{}",
-                    agent_did: "{}",
-                    behavior_id: "{}",
+                    node_did: "{}",
+                    agent_id: "{}",
                     session_id: "{}",
                     lifecycle_state: "completed",
                     created_at: "2026-06-12T10:02:00Z"
                 }}) {{ _docID }}
             }}"#,
             escape_graphql_string(&format!("{session_id}-request-b")),
-            escape_graphql_string(&agent_did),
-            escape_graphql_string(&behavior_id),
+            escape_graphql_string(&node_did),
+            escape_graphql_string(&agent_id),
             escape_graphql_string(&session_id),
         ),
     ] {
@@ -161,7 +161,7 @@ async fn session_fork_against_a_running_server_refuses_with_the_holder_and_the_g
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -169,7 +169,7 @@ async fn session_fork_against_a_running_server_refuses_with_the_holder_and_the_g
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
 
@@ -178,8 +178,8 @@ async fn session_fork_against_a_running_server_refuses_with_the_holder_and_the_g
         &[
             "session",
             "fork",
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--from",
             "any-session",
             "--at-user-turn",

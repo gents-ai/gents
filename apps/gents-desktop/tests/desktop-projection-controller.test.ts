@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
-import { createDesktopProjectionController } from "../src/hooks/desktopProjectionController";
+import {
+  createProjectionController,
+  desktopUpdateRefreshScope,
+} from "../src/hooks/projectionController";
 
 function deferred() {
   let resolve!: () => void;
@@ -12,9 +15,9 @@ function deferred() {
 }
 
 function controller(
-  overrides: Partial<Parameters<typeof createDesktopProjectionController>[0]> = {},
+  overrides: Partial<Parameters<typeof createProjectionController>[0]> = {},
 ) {
-  return createDesktopProjectionController({
+  return createProjectionController({
     currentSessionId: () => "session-1",
     refreshSnapshot: vi.fn(async () => {}),
     refreshSession: vi.fn(async () => null),
@@ -23,7 +26,7 @@ function controller(
   });
 }
 
-describe("createDesktopProjectionController", () => {
+describe("createProjectionController", () => {
   it("coalesces a synchronous delta wave and serializes one trailing wave", async () => {
     const passes = [deferred(), deferred()];
     const refreshSessionLiveDelta = vi.fn(async () => {
@@ -232,5 +235,18 @@ describe("createDesktopProjectionController", () => {
 
     expect(refreshSession).toHaveBeenCalledExactlyOnceWith(null);
     expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("desktopUpdateRefreshScope", () => {
+  it("uses ordinary store wakes to probe the canonical live cursor", () => {
+    expect(desktopUpdateRefreshScope("health", "session-1", "request-1")).toBe(
+      "snapshot",
+    );
+    expect(desktopUpdateRefreshScope("store", "session-1", "request-1")).toBe(
+      "sessionDelta",
+    );
+    expect(desktopUpdateRefreshScope("store", "session-1", null)).toBe("full");
+    expect(desktopUpdateRefreshScope("config", null, null)).toBe("full");
   });
 });

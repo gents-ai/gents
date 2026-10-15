@@ -11,8 +11,8 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 /// One operator-local `WorkspaceRoot` row. The schema intentionally has no
-/// principal field: these rows are host policy shared by every local
-/// principal and never replicate.
+/// node field: these rows are host policy shared by every local
+/// node and never replicate.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct WorkspaceRootDocument {
     pub root_path: Option<String>,
@@ -37,7 +37,7 @@ pub struct WorkspaceRootPolicy {
 /// TOCTOU guarantee.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RootExecutionGuard {
-    pub(crate) behavior_id: String,
+    pub(crate) agent_id: String,
     pub(crate) selected_root: Option<PathBuf>,
     pub(crate) ceiling_root: Option<PathBuf>,
 }
@@ -48,22 +48,22 @@ impl RootExecutionGuard {
         let Some(selected_root) = self.selected_root.as_deref() else {
             anyhow::ensure!(
                 !policy.configured,
-                "behavior {} has active host tools but no explicit root under current WorkspaceRoot policy",
-                self.behavior_id
+                "agent {} has active host tools but no explicit root under current WorkspaceRoot policy",
+                self.agent_id
             );
             return Ok(());
         };
         match policy.admit(selected_root)? {
             RootAdmission::Admitted(root) if root == selected_root => Ok(()),
             RootAdmission::Admitted(root) => anyhow::bail!(
-                "behavior {} persisted root {} re-resolved to {} at the execution boundary",
-                self.behavior_id,
+                "agent {} persisted root {} re-resolved to {} at the execution boundary",
+                self.agent_id,
                 selected_root.display(),
                 root.display()
             ),
             denied @ RootAdmission::Denied { .. } => anyhow::bail!(
-                "behavior {} persisted root {} is not admitted by current WorkspaceRoot policy at the execution boundary: {}",
-                self.behavior_id,
+                "agent {} persisted root {} is not admitted by current WorkspaceRoot policy at the execution boundary: {}",
+                self.agent_id,
                 selected_root.display(),
                 denied.denial_reason().expect("denied outcome has a reason")
             ),
@@ -170,16 +170,16 @@ pub(crate) async fn load_workspace_root_policy_in_txn(
     ))
 }
 
-pub(crate) async fn load_workspace_root_policy(
+pub async fn load_workspace_root_policy(
     node: &defra_node::EmbeddedNode,
     ceiling_root: Option<&Path>,
 ) -> Result<WorkspaceRootPolicy> {
-    let response = node
-        .execute("{ WorkspaceRoot { root_path enabled } }")
-        .await;
-    if response.has_errors() {
-        anyhow::bail!("querying WorkspaceRoot policy: {:?}", response.errors);
-    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        "{ WorkspaceRoot { root_path enabled } }",
+        "querying WorkspaceRoot policy",
+    )
+    .await?;
     let value = serde_json::json!({"data": response.data.unwrap_or(serde_json::Value::Null)});
     Ok(project_workspace_root_policy(
         decode_workspace_root_rows(&value)?,
@@ -187,13 +187,61 @@ pub(crate) async fn load_workspace_root_policy(
     ))
 }
 
+pub fn admit_authored_root(
+    policy: &WorkspaceRootPolicy,
+    authored_root: &str,
+    stored_grant: bool,
+) -> Result<Option<PathBuf>> {
+    let root = authored_root.trim();
+    if root.is_empty() {
+        anyhow::ensure!(
+            !policy.configured,
+            "configured WorkspaceRoot policy requires an explicit root"
+        );
+        return Ok(None);
+    }
+    match policy.admit(Path::new(root))? {
+        RootAdmission::Admitted(root) => Ok(Some(root)),
+        denied @ RootAdmission::Denied { .. } => {
+            // A stored grant containing a published root stays admitted
+            // unclamped: the operator narrowed authority below a grant the
+            // behavior already holds, and the selection/ceiling meet narrows
+            // the effective root before use. A grant authored by this write
+            // must be strictly admitted, so a behavior cannot pre-position a
+            // wide grant that silently activates when the operator later
+            // widens authority. Only a disjoint grant is refused.
+            if stored_grant {
+                let overlaps = policy.published.iter().any(|published| {
+                    matches!(
+                        resolve_admitted_tool_root(published, [Path::new(root)]),
+                        Ok(RootAdmission::Admitted(_))
+                    )
+                });
+                if overlaps {
+                    return resolve_configured_tool_root(Path::new(root)).map(Some);
+                }
+            }
+            anyhow::bail!(
+                "Tools.host.root {:?} is not admitted by published WorkspaceRoot policy: {}",
+                root,
+                denied.denial_reason().expect("denied outcome has a reason")
+            )
+        }
+    }
+}
+
 /// Validate and canonicalize the existing `Tools.host.root` field against a
-/// published policy. This mutates only the canonical Tools document shape; it
-/// does not introduce a parallel root field. Active host tools under explicit
-/// policy must name a root instead of inheriting the broader process ceiling.
-pub(crate) fn canonicalize_tools_root(
+/// published policy. `stored_root` is the `host.root` value the document held
+/// before this write; the containing-grant tolerance applies only when the
+/// authored root is that stored value (an edit that left `host.root` alone, or
+/// a read-side canonicalization of a persisted document). This mutates only
+/// the canonical Tools document shape; it does not introduce a parallel root
+/// field. Active host tools under explicit policy must name a root instead of
+/// inheriting the broader process ceiling.
+pub fn canonicalize_tools_root(
     tools: &mut crate::document_config::Tools,
     policy: &WorkspaceRootPolicy,
+    stored_root: Option<&str>,
 ) -> Result<()> {
     let selection = crate::tool_surface::ResolvedToolSelection::from_document(tools)?;
     let requires_root = selection.requires_filesystem_root();
@@ -215,14 +263,9 @@ pub(crate) fn canonicalize_tools_root(
         return Ok(());
     };
 
-    let canonical = match policy.admit(Path::new(authored_root))? {
-        RootAdmission::Admitted(root) => root,
-        denied @ RootAdmission::Denied { .. } => anyhow::bail!(
-            "Tools.host.root {:?} is not admitted by published WorkspaceRoot policy: {}",
-            authored_root,
-            denied.denial_reason().expect("denied outcome has a reason")
-        ),
-    };
+    let stored_grant = stored_root.map(str::trim) == Some(authored_root);
+    let canonical = admit_authored_root(policy, authored_root, stored_grant)?
+        .expect("nonblank authored root produces an admitted path");
     tools
         .host
         .as_mut()
@@ -289,7 +332,7 @@ impl RootAdmission {
 
 /// Resolve existing prefixes (including symlinks) and retain a normalized,
 /// nonexistent suffix. Broken or otherwise unresolvable symlinks fail closed.
-pub(crate) fn resolve_configured_tool_root(path: &Path) -> Result<PathBuf> {
+pub fn resolve_configured_tool_root(path: &Path) -> Result<PathBuf> {
     resolve_tool_root(path).map(|resolved| resolved.path)
 }
 
@@ -322,7 +365,7 @@ pub(crate) fn resolve_admitted_tool_root<'a>(
         {
             Ok(allowed) => allowed,
             // A malformed catalog row is not authoritative. Publication drops
-            // it; direct callers use the same behavior so BTree ordering cannot
+            // it; direct callers use the same policy so BTree ordering cannot
             // turn a bad sibling row into a candidate-resolution error.
             Err(_) => continue,
         };
@@ -605,9 +648,116 @@ mod tests {
             }),
             ..Default::default()
         };
-        let error = canonicalize_tools_root(&mut tools, &policy)
+        let error = canonicalize_tools_root(&mut tools, &policy, None)
             .expect_err("CLI uses the shared root and cannot inherit cwd under explicit policy");
         assert!(error.to_string().contains("require an explicit root"));
+    }
+
+    #[test]
+    fn stored_grant_containing_the_operator_root_canonicalizes_unclamped_under_default_policy() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let project = workspace.path().join("project");
+        std::fs::create_dir_all(&project).expect("narrowed operator root");
+        let policy = project_workspace_root_policy(Vec::new(), Some(&project));
+
+        assert_eq!(
+            admit_authored_root(
+                &policy,
+                workspace.path().to_str().expect("utf-8 root"),
+                true
+            )
+            .expect("a stored grant containing the operator root stays admitted"),
+            Some(std::fs::canonicalize(workspace.path()).expect("canonical workspace")),
+            "the grant is canonicalized unclamped; the selection/ceiling meet narrows it before use"
+        );
+    }
+
+    #[test]
+    fn newly_authored_grant_containing_the_operator_root_refuses_under_default_policy() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let project = workspace.path().join("project");
+        std::fs::create_dir_all(&project).expect("narrowed operator root");
+        let policy = project_workspace_root_policy(Vec::new(), Some(&project));
+
+        let error = admit_authored_root(
+            &policy,
+            workspace.path().to_str().expect("utf-8 root"),
+            false,
+        )
+        .expect_err("a grant authored by this write must be strictly admitted");
+        assert!(
+            error
+                .to_string()
+                .contains("is not admitted by published WorkspaceRoot policy"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn canonicalize_keeps_a_stored_grant_but_refuses_a_widening_set() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let project = workspace.path().join("project");
+        std::fs::create_dir_all(&project).expect("narrowed operator root");
+        let policy = project_workspace_root_policy(Vec::new(), Some(&project));
+        let workspace_root = workspace.path().to_string_lossy().into_owned();
+
+        let mut tools = crate::document_config::Tools {
+            host: Some(crate::document_config::HostTools {
+                root: Some(workspace_root.clone()),
+                files: Some(crate::document_config::FileTools {
+                    mode: crate::tool_surface::FileToolMode::ReadOnly,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        canonicalize_tools_root(&mut tools, &policy, Some(&workspace_root))
+            .expect("an edit that leaves the stored wide grant alone re-admits it");
+        assert_eq!(
+            tools.host.as_ref().and_then(|host| host.root.clone()),
+            Some(
+                std::fs::canonicalize(workspace.path())
+                    .expect("canonical workspace")
+                    .to_string_lossy()
+                    .into_owned()
+            )
+        );
+
+        let error = canonicalize_tools_root(&mut tools, &policy, Some("unrelated/old/root"))
+            .expect_err("a set that changes host.root must be strictly admitted");
+        assert!(
+            error
+                .to_string()
+                .contains("is not admitted by published WorkspaceRoot policy"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn disjoint_authored_root_still_refuses_under_configured_policy() {
+        let allowed = tempfile::tempdir().expect("allowed root");
+        let elsewhere = tempfile::tempdir().expect("disjoint root");
+        let policy = project_workspace_root_policy(
+            vec![WorkspaceRootDocument {
+                root_path: Some(allowed.path().to_string_lossy().into_owned()),
+                enabled: Some(true),
+            }],
+            None,
+        );
+
+        let error = admit_authored_root(
+            &policy,
+            elsewhere.path().to_str().expect("utf-8 root"),
+            true,
+        )
+        .expect_err("a grant disjoint from every published root must be refused");
+        assert!(
+            error
+                .to_string()
+                .contains("is not admitted by published WorkspaceRoot policy"),
+            "{error:#}"
+        );
     }
 
     #[test]
@@ -658,13 +808,13 @@ mod tests {
             }),
             ..Default::default()
         };
-        canonicalize_tools_root(&mut tools, &policy)
+        canonicalize_tools_root(&mut tools, &policy, None)
             .expect("absence of operator root policy retains the legacy runtime default");
 
         let authored = tempfile::tempdir().expect("authored root");
         tools.host.as_mut().expect("host tools").root =
             Some(authored.path().to_string_lossy().into_owned());
-        canonicalize_tools_root(&mut tools, &policy)
+        canonicalize_tools_root(&mut tools, &policy, None)
             .expect("an authored absolute root remains valid without policy or ceiling");
         assert_eq!(
             tools.host.and_then(|host| host.root),

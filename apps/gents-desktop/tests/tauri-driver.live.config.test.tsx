@@ -2,8 +2,8 @@ import { screen, waitFor } from "@testing-library/react";
 import { expect, it } from "vitest";
 
 import {
+  createAgent,
   createBackend,
-  createBehavior,
   createConfigFlowIds,
   createEventSource,
   createInferenceProfile,
@@ -26,7 +26,7 @@ import {
 } from "./tauri-driver-live/helpers";
 
 describeLive("Tauri app live bridge runner config flow", () => {
-  it("configures backend profile tools behavior task and runs it", async () => {
+  it("configures backend profile tools agent task and runs it", async () => {
     await withLiveDesktop(async ({ runner, driver }) => {
       const ids = createConfigFlowIds();
       const inferenceUrl =
@@ -42,7 +42,7 @@ describeLive("Tauri app live bridge runner config flow", () => {
       await createInferenceProfile({ runner, driver, ids });
       await createToolService({ runner, driver, ids });
       await createTools({ runner, driver, ids, fileToolRoot });
-      await createBehavior({ runner, driver, ids });
+      await createAgent({ runner, driver, ids });
       await createTask({ runner, driver, ids });
       await createSchedule({ runner, driver, ids });
       await createEventSource({ runner, driver, ids });
@@ -56,7 +56,7 @@ describeLive("Tauri app live bridge runner config flow", () => {
         expect(runner.taskRunResults).toHaveLength(1);
       });
       const taskRun = runner.taskRunResults[0];
-      expect(taskRun.behaviorId).toBe(ids.behaviorId);
+      expect(taskRun.agentId).toBe(ids.agentId);
       logTurn(`task run submitted taskId=${ids.taskId} requestId=${taskRun.requestId}`);
       const session = await runner.waitForRequestCompletion(taskRun);
       if (session.turnState !== "completed") {
@@ -80,9 +80,9 @@ describeLive("Tauri app live bridge runner config flow", () => {
           expect.objectContaining({
             requestId: taskRun.requestId,
             requestDocId: taskRun.requestDocId,
-            agentDid: runner.agentDid,
+            nodeDid: runner.nodeDid,
             backendId: ids.backendId,
-            behaviorId: ids.behaviorId,
+            agentId: ids.agentId,
             callKind: "inference",
             callState: "completed",
           }),

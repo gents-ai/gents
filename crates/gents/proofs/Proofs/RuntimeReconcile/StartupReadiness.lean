@@ -8,41 +8,41 @@ inductive BuildOutcome
   | failed
   deriving DecidableEq, Repr
 
-inductive BehaviorStanding
+inductive AgentStanding
   | pending (failures : Nat)
   | ready
   | demoted
   | superseded
   deriving DecidableEq, Repr
 
-namespace BehaviorStanding
+namespace AgentStanding
 
-def released : BehaviorStanding → Bool
+def released : AgentStanding → Bool
   | .pending _ => false
   | .ready => true
   | .demoted => true
   | .superseded => true
 
-end BehaviorStanding
+end AgentStanding
 
-def step (budget : Nat) : BehaviorStanding → BuildOutcome → BehaviorStanding
+def step (budget : Nat) : AgentStanding → BuildOutcome → AgentStanding
   | .pending _, .started => .ready
   | .pending failures, .failed =>
       if failures + 1 < budget then .pending (failures + 1) else .demoted
   | standing, _ => standing
 
-def run (budget : Nat) (standing : BehaviorStanding) (outcomes : List BuildOutcome) :
-    BehaviorStanding :=
+def run (budget : Nat) (standing : AgentStanding) (outcomes : List BuildOutcome) :
+    AgentStanding :=
   outcomes.foldl (step budget) standing
 
-def retire : BehaviorStanding → BehaviorStanding
+def retire : AgentStanding → AgentStanding
   | .pending _ => .superseded
   | standing => standing
 
-def seeded : BehaviorStanding := .pending 0
+def seeded : AgentStanding := .pending 0
 
-def processReady (standings : List BehaviorStanding) : Bool :=
-  standings.all BehaviorStanding.released
+def processReady (standings : List AgentStanding) : Bool :=
+  standings.all AgentStanding.released
 
 theorem ready_absorbing (budget : Nat) (outcome : BuildOutcome) :
     step budget .ready outcome = .ready := by
@@ -52,14 +52,14 @@ theorem demoted_absorbing (budget : Nat) (outcome : BuildOutcome) :
     step budget .demoted outcome = .demoted := by
   cases outcome <;> rfl
 
-theorem released_absorbing (budget : Nat) (standing : BehaviorStanding)
+theorem released_absorbing (budget : Nat) (standing : AgentStanding)
     (outcomes : List BuildOutcome) (hReleased : standing.released = true) :
     run budget standing outcomes = standing := by
   induction outcomes with
   | nil => rfl
   | cons outcome rest ih =>
       cases standing with
-      | pending _ => simp [BehaviorStanding.released] at hReleased
+      | pending _ => simp [AgentStanding.released] at hReleased
       | ready => simp [run, List.foldl_cons, step] at ih ⊢; cases outcome <;> simpa [step] using ih
       | demoted => simp [run, List.foldl_cons, step] at ih ⊢; cases outcome <;> simpa [step] using ih
       | superseded =>
@@ -80,7 +80,7 @@ theorem ready_requires_a_start (budget : Nat) (failures : Nat)
           · simp only [hBudget, if_true] at hReady
             exact List.mem_cons_of_mem _ (ih _ hReady)
           · simp only [hBudget, if_false] at hReady
-            rw [show List.foldl (step budget) BehaviorStanding.demoted rest
+            rw [show List.foldl (step budget) AgentStanding.demoted rest
                   = run budget .demoted rest from rfl,
                 released_absorbing budget .demoted rest rfl] at hReady
             exact absurd hReady (by simp)
@@ -98,7 +98,7 @@ theorem budgeted_attempts_release (budget : Nat) (failures : Nat)
       cases outcome with
       | started =>
           simp only [run, List.foldl_cons, step]
-          rw [show List.foldl (step budget) BehaviorStanding.ready rest
+          rw [show List.foldl (step budget) AgentStanding.ready rest
                 = run budget .ready rest from rfl,
               released_absorbing budget .ready rest rfl]
           rfl
@@ -110,7 +110,7 @@ theorem budgeted_attempts_release (budget : Nat) (failures : Nat)
               simp only [List.length_cons] at hEnough
               omega)
           · simp only [hBudget, if_false]
-            rw [show List.foldl (step budget) BehaviorStanding.demoted rest
+            rw [show List.foldl (step budget) AgentStanding.demoted rest
                   = run budget .demoted rest from rfl,
                 released_absorbing budget .demoted rest rfl]
             rfl
@@ -124,7 +124,7 @@ theorem start_within_budget_is_ready (budget : Nat) (failures : Nat)
     (rest : List BuildOutcome) :
     run budget (.pending failures) (.started :: rest) = .ready := by
   simp only [run, List.foldl_cons, step]
-  rw [show List.foldl (step budget) BehaviorStanding.ready rest
+  rw [show List.foldl (step budget) AgentStanding.ready rest
         = run budget .ready rest from rfl,
       released_absorbing budget .ready rest rfl]
 
@@ -149,23 +149,23 @@ theorem demoted_consumed_the_budget (budget : Nat) (failures : Nat)
           · simp only [List.length_cons]
             omega
 
-theorem process_ready_accounts (standings : List BehaviorStanding)
+theorem process_ready_accounts (standings : List AgentStanding)
     (hReady : processReady standings = true) :
     ∀ standing ∈ standings,
       standing = .ready ∨ standing = .demoted ∨ standing = .superseded := by
   intro standing hMem
   have := List.all_eq_true.mp hReady standing hMem
   cases standing with
-  | pending _ => simp [BehaviorStanding.released] at this
+  | pending _ => simp [AgentStanding.released] at this
   | ready => exact Or.inl rfl
   | demoted => exact Or.inr (Or.inl rfl)
   | superseded => exact Or.inr (Or.inr rfl)
 
-theorem retire_releases (standing : BehaviorStanding) :
+theorem retire_releases (standing : AgentStanding) :
     (retire standing).released = true := by
   cases standing <;> rfl
 
-theorem retire_never_claims_ready (standing : BehaviorStanding)
+theorem retire_never_claims_ready (standing : AgentStanding)
     (hNotReady : standing ≠ .ready) :
     retire standing ≠ .ready := by
   cases standing with
@@ -174,7 +174,7 @@ theorem retire_never_claims_ready (standing : BehaviorStanding)
   | demoted => simp [retire]
   | superseded => simp [retire]
 
-def acrossGeneration (changed : Bool) (standing : BehaviorStanding) : BehaviorStanding :=
+def acrossGeneration (changed : Bool) (standing : AgentStanding) : AgentStanding :=
   if changed then seeded else standing
 
 /- During a reconcile handoff the active and staged slots coexist. Startup
@@ -250,10 +250,10 @@ theorem old_demotion_is_not_visible_after_source_advance
     visibleDemotion newGeneration { generation := oldGeneration, active := true } = false := by
   simp [visibleDemotion, hDifferent]
 
-theorem demotion_persists_when_unchanged (standing : BehaviorStanding) :
+theorem demotion_persists_when_unchanged (standing : AgentStanding) :
     acrossGeneration false standing = standing := rfl
 
-theorem change_restores_the_budget (standing : BehaviorStanding) :
+theorem change_restores_the_budget (standing : AgentStanding) :
     acrossGeneration true standing = seeded := rfl
 
 /- Readiness is durable semantic state, not a transport lease. A newly

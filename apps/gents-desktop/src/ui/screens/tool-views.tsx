@@ -1,6 +1,6 @@
 /* A tool call, shown by what it did rather than by its raw document: the
    same summary and body the desktop's ToolGroup builds from the
-   presentation kinds (command, fileRead, fileEdit, subagent, process,
+   presentation kinds (command, fileRead, fileEdit, agent, process,
    mcp, generic). Used by the activity steps in the transcript and by the
    trace panel. */
 
@@ -9,7 +9,8 @@ import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
 import { Button } from "@gents/ui/components/button";
 import { toast } from "sonner";
-import { revealInFolder, revealInFolderLabel } from "../../lib/shellPlatform";
+import { revealInFolder } from "../../lib/nativeShell";
+import { revealInFolderLabel } from "../../lib/shellPlatform";
 import { useFollowTail, useScroller } from "../lib/scroll";
 import { useHomeDid, useSelectedNode } from "../hooks/useClient";
 import { isWorkingNode } from "../lib/nodes";
@@ -202,11 +203,13 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
               </ScrollArea>
             </div>
           )}
-          {p.path && tool.statusKind === "success" && <RevealFile path={p.path} />}
+          {(p.revealPath || p.path) && tool.statusKind === "success" && (
+            <RevealFile path={p.revealPath || p.path!} />
+          )}
           <Payload label="output" value={p.fallbackOutput} />
         </>
       )}
-      {p.kind === "subagent" && (
+      {p.kind === "agent" && (
         <>
           <Payload
             label={p.action === "start" ? "assignment" : "message"}

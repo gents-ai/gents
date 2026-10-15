@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) struct LivenessToolCallRow {
     pub(crate) request_id: String,
     #[serde(default)]
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) tool_call_id: String,
     pub(crate) tool_name: String,
     #[serde(default)]
@@ -33,7 +33,7 @@ pub(crate) struct LivenessActivityRow {
     /// agent count: another principal's row can name the same request
     /// document without being this request's progress.
     #[serde(default)]
-    pub(crate) agent_did: Option<String>,
+    pub(crate) node_did: Option<String>,
     #[serde(default)]
     pub(crate) started_at: Option<String>,
     #[serde(default)]
@@ -71,7 +71,7 @@ pub(crate) struct ActiveRequest {
     pub(crate) deadline_expired: bool,
     pub(crate) deadline_age_ms: Option<i64>,
     pub(crate) last_progress_age_ms: i64,
-    pub(crate) subagent_depth: i64,
+    pub(crate) request_hop: i64,
     pub(crate) caused_by_parent_request_id: Option<String>,
     pub(crate) caused_by_trigger_kind: Option<String>,
 }
@@ -90,31 +90,28 @@ pub(crate) struct ActiveToolCall {
 
 pub(crate) fn compute_request_liveness_summary(
     now: DateTime<Utc>,
-    local_agent_did: &str,
+    local_node_did: &str,
     requests: Vec<LivenessRequestRow>,
     tool_calls: Vec<LivenessToolCallRow>,
     activity: Vec<LivenessActivityRow>,
 ) -> RuntimeLivenessSnapshot {
-    let local_agent_did = local_agent_did.trim();
+    let local_node_did = local_node_did.trim();
     let local_request_count = requests
         .iter()
         .filter(|row| {
-            owns_liveness_row(
-                local_agent_did,
-                row.agent_did.as_deref().unwrap_or_default(),
-            )
+            owns_liveness_row(local_node_did, row.node_did.as_deref().unwrap_or_default())
         })
         .count();
     let ignored_foreign_processing_count =
         requests.len().saturating_sub(local_request_count) as i64;
     let ignored_foreign_tool_call_count = tool_calls
         .iter()
-        .filter(|row| !owns_liveness_row(local_agent_did, &row.agent_did))
+        .filter(|row| !owns_liveness_row(local_node_did, &row.node_did))
         .count() as i64;
 
     let active_tool_calls: Vec<ActiveToolCall> = tool_calls
         .iter()
-        .filter(|row| owns_liveness_row(local_agent_did, &row.agent_did))
+        .filter(|row| owns_liveness_row(local_node_did, &row.node_did))
         .map(|row| {
             let started_at = parse_optional_rfc3339(row.started_at.as_deref());
             let deadline_at = parse_optional_rfc3339(row.deadline_at.as_deref());
@@ -140,10 +137,7 @@ pub(crate) fn compute_request_liveness_summary(
     let mut expired_processing_count = 0i64;
 
     for row in requests.iter().filter(|row| {
-        owns_liveness_row(
-            local_agent_did,
-            row.agent_did.as_deref().unwrap_or_default(),
-        )
+        owns_liveness_row(local_node_did, row.node_did.as_deref().unwrap_or_default())
     }) {
         active_request_ids.push(row.request_id.clone());
         let claimed_at = parse_optional_rfc3339(row.claimed_at.as_deref());
@@ -155,14 +149,14 @@ pub(crate) fn compute_request_liveness_summary(
         let deadline_age_ms = deadline.map(|deadline| millis_between(deadline, now));
 
         let request_doc_id = row.doc_id.as_deref().map(str::trim);
-        let request_agent_did = row.agent_did.as_deref().map(str::trim);
+        let request_node_did = row.node_did.as_deref().map(str::trim);
         let progress_at = activity
             .iter()
             .filter(|activity| {
                 request_doc_id.is_some()
-                    && request_agent_did.is_some()
+                    && request_node_did.is_some()
                     && activity.request_doc_id.as_deref().map(str::trim) == request_doc_id
-                    && activity.agent_did.as_deref().map(str::trim) == request_agent_did
+                    && activity.node_did.as_deref().map(str::trim) == request_node_did
             })
             .filter_map(LivenessActivityRow::latest_at)
             .chain(claimed_at)
@@ -178,7 +172,7 @@ pub(crate) fn compute_request_liveness_summary(
             deadline_expired,
             deadline_age_ms,
             last_progress_age_ms,
-            subagent_depth: row.subagent_depth.unwrap_or(0),
+            request_hop: row.request_hop.unwrap_or(0),
             caused_by_parent_request_id: row.caused_by_parent_request_id.clone(),
             caused_by_trigger_kind: row.caused_by_trigger_kind.clone(),
         });
@@ -215,8 +209,8 @@ fn parse_optional_rfc3339(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
-pub(crate) fn owns_liveness_row(local_agent_did: &str, row_agent_did: &str) -> bool {
-    local_agent_did.is_empty() || row_agent_did.trim() == local_agent_did
+pub(crate) fn owns_liveness_row(local_node_did: &str, row_node_did: &str) -> bool {
+    local_node_did.is_empty() || row_node_did.trim() == local_node_did
 }
 
 fn millis_between(earlier: DateTime<Utc>, later: DateTime<Utc>) -> i64 {
@@ -244,7 +238,7 @@ mod tests {
         serde_json::from_value(serde_json::json!({
             "_docID": format!("doc-{request_id}"),
             "request_id": request_id,
-            "agent_did": "did:test:local",
+            "node_did": "did:test:local",
             "claimed_at": iso(claimed_offset_secs),
             "deadline": iso(deadline_offset_secs),
         }))
@@ -261,7 +255,7 @@ mod tests {
     ) -> LivenessToolCallRow {
         LivenessToolCallRow {
             request_id: request_id.to_string(),
-            agent_did: "did:test:local".to_string(),
+            node_did: "did:test:local".to_string(),
             tool_call_id: tool_call_id.to_string(),
             tool_name: tool_name.to_string(),
             started_at: Some(iso(started_offset_secs)),
@@ -353,7 +347,7 @@ mod tests {
     ) -> LivenessActivityRow {
         LivenessActivityRow {
             request_doc_id: Some(format!("doc-{request_id}")),
-            agent_did: Some("did:test:local".to_string()),
+            node_did: Some("did:test:local".to_string()),
             started_at: Some(iso(started_offset_secs)),
             completed_at: completed_offset_secs.map(iso),
             ended_at: None,
@@ -367,7 +361,7 @@ mod tests {
     ) -> LivenessActivityRow {
         LivenessActivityRow {
             request_doc_id: Some(format!("doc-{request_id}")),
-            agent_did: Some("did:test:local".to_string()),
+            node_did: Some("did:test:local".to_string()),
             started_at: Some(iso(started_offset_secs)),
             completed_at: None,
             ended_at: ended_offset_secs.map(iso),
@@ -434,9 +428,9 @@ mod tests {
     #[test]
     fn foreign_principal_row_on_same_request_doc_does_not_count_as_progress() {
         let mut foreign_tool = tool_activity("req-1", -2, Some(-1));
-        foreign_tool.agent_did = Some("did:test:foreign".to_string());
+        foreign_tool.node_did = Some("did:test:foreign".to_string());
         let mut foreign_inference = inference_activity("req-1", -1, None);
-        foreign_inference.agent_did = Some("did:test:foreign".to_string());
+        foreign_inference.node_did = Some("did:test:foreign".to_string());
         let own = tool_activity("req-1", -100, Some(-90));
         let age = progress_age_ms(
             now(),
@@ -529,7 +523,7 @@ mod tests {
     #[test]
     fn foreign_processing_requests_do_not_count_as_active_or_expired() {
         let mut foreign = request("req-foreign", -120, -30);
-        foreign.agent_did = Some("did:test:foreign".to_string());
+        foreign.node_did = Some("did:test:foreign".to_string());
         let requests = vec![request("req-local", -120, -30), foreign];
 
         let snapshot = compute_request_liveness_summary(
@@ -551,7 +545,7 @@ mod tests {
     fn foreign_running_tool_calls_are_ignored() {
         let requests = vec![request("req-local", -45, 60)];
         let mut foreign_tool = tool_call("req-foreign", "tc-foreign", "bash", -30, None, None);
-        foreign_tool.agent_did = "did:test:foreign".to_string();
+        foreign_tool.node_did = "did:test:foreign".to_string();
         let tools = vec![
             tool_call("req-local", "tc-local", "glob", -30, None, None),
             foreign_tool,

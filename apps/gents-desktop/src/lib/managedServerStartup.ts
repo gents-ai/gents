@@ -73,12 +73,12 @@ export function describeManagedServerWait(
   if (wait.kind === "updating") {
     return {
       label: "Updating data…",
-      detail: `The background agent is running and updating its data, which can take a while after an update. Gents continues by itself once it is ready. Waiting ${elapsed}.`,
+      detail: `The background node is running and updating its data, which can take a while after an update. Gents continues by itself once it is ready. Waiting ${elapsed}.`,
     };
   }
   return {
-    label: "Waiting for the background agent to finish starting",
-    detail: `Gents is starting the background agent. It has not reported ready yet. Waiting ${elapsed}.`,
+    label: "Waiting for the background node to finish starting",
+    detail: `Gents is starting the background node. It has not reported ready yet. Waiting ${elapsed}.`,
   };
 }
 
@@ -144,7 +144,7 @@ export async function observeManagedServerOperation(
   }
 }
 
-/** The background agent did not settle: it timed out waiting or reported a failure. */
+/** The background node did not settle: it timed out waiting or reported a failure. */
 export class ManagedServerStartupError extends Error {
   constructor(
     message: string,
@@ -168,13 +168,13 @@ export function unsettledManagedServerError(
   if (kind === "updating") return null;
   if (kind === "booting") {
     return new ManagedServerStartupError(
-      `The background agent did not report ready within ${MANAGED_SERVER_BOOT_TIMEOUT_MS / 60_000} minutes. Restart the agent, or try again.`,
+      `The background node did not report ready within ${MANAGED_SERVER_BOOT_TIMEOUT_MS / 60_000} minutes. Restart the node, or try again.`,
       status,
     );
   }
   if (status.state === "failed" && (status.error || status.errorCode)) {
     return new ManagedServerStartupError(
-      status.error ?? "The background agent could not start.",
+      status.error ?? "The background node could not start.",
       status,
     );
   }

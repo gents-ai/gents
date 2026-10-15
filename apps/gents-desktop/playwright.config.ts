@@ -32,9 +32,9 @@ export default defineConfig({
     video: "retain-on-failure",
   },
   webServer: {
-    command: `node ${viteBin} --host 127.0.0.1 --port ${port} --strictPort --clearScreen false`,
+    command: `node ${viteBin} --host 127.0.0.1 --port ${port} --strictPort --clearScreen false --mode browser-test`,
     url: `${baseURL}/tests/ui-harness/harness.html`,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 30_000,
   },
   projects: [
@@ -53,9 +53,10 @@ export default defineConfig({
       },
     },
     {
-      /* the desktop app draws in WebKit, which has no scroll anchoring */
+      /* the desktop app draws in WebKit, which has no scroll anchoring and
+         handles wheels its own way */
       name: "webkit-desktop",
-      testMatch: /transcript-.*\.spec\.ts/,
+      testMatch: /(transcript-.*|editor-sheet-wheel|sessions-window)\.spec\.ts/,
       use: {
         ...devices["Desktop Safari"],
         viewport: { width: 1280, height: 900 },

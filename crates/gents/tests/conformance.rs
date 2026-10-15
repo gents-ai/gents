@@ -35,8 +35,8 @@ use admission_slot_accounting::{
 use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
-    lean_backend_health_cases, lean_client_behavior_readiness_cases,
-    lean_codex_shim_behavior_selection_cases, lean_codex_shim_binding_cases,
+    lean_backend_health_cases, lean_client_agent_readiness_cases,
+    lean_codex_shim_agent_selection_cases, lean_codex_shim_binding_cases,
     lean_codex_shim_compaction_projection_cases, lean_codex_shim_context_usage_cases,
     lean_codex_shim_projection_case, lean_codex_shim_projection_cases,
     lean_codex_shim_reasoning_projection_cases, lean_codex_shim_thread_status_cases,
@@ -62,8 +62,8 @@ use support::snapshots::{
 use support::{
     build_request, create_agent_session, create_request, create_request_with_signed_fields,
     create_request_with_valid_until, first_optional_row, first_row, materialization_identity,
-    set_interrupt_requested_at, set_request_lifecycle_state, test_db, AGENT_DID, AGENT_NAME,
-    BACKEND_ID, DEADLINE_SECS,
+    set_interrupt_requested_at, set_request_lifecycle_state, test_db, AGENT_NAME, BACKEND_ID,
+    DEADLINE_SECS, NODE_DID,
 };
 
 #[path = "conformance/backend_health.rs"]
@@ -385,12 +385,12 @@ mod manual_run;
 mod pairing_invariant_tests;
 #[path = "conformance/pairing_reconcile.rs"]
 mod pairing_reconcile;
-#[path = "conformance/persona_request.rs"]
-mod persona_request;
 #[path = "conformance/prompt_assembly.rs"]
 mod prompt_assembly;
 #[path = "conformance/rendered_capture.rs"]
 mod rendered_capture;
+#[path = "conformance/root_admission.rs"]
+mod root_admission;
 #[path = "conformance/scope_templates.rs"]
 mod scope_templates;
 #[path = "conformance/self_config.rs"]

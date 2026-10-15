@@ -1,5 +1,5 @@
 use super::*;
-use crate::tool_surface::{BehaviorToolConfig, ResolvedToolSelection, ToolCeiling};
+use crate::tool_surface::{AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling};
 
 fn args(value: Value) -> SchemaParams {
     serde_json::from_value(value).unwrap()
@@ -128,7 +128,7 @@ async fn schema_publication_matches_executable_lean_contract() {
                 .unwrap();
         }
         let before = access.collection_version("Probe").await.unwrap();
-        let surface = BehaviorToolConfig::from_selection(
+        let surface = AgentToolSurfaceConfig::from_selection(
             "worker",
             ResolvedToolSelection {
                 enable_schema_tool: grant,
@@ -138,7 +138,7 @@ async fn schema_publication_matches_executable_lean_contract() {
             Vec::new(),
         )
         .unwrap()
-        .resolve(&node, "did:key:test")
+        .resolve(&node, "did:key:test", &Default::default())
         .await
         .unwrap();
         let mut intent = json!({"argv":["collection","preview","create"],"options":{"sdl":"type Probe { value: String }"}});
@@ -287,14 +287,14 @@ async fn schema_recovery_help_and_grant_are_independent_of_config() {
         self_config_categories: Some(vec!["automation".into()]),
         ..Default::default()
     };
-    let surface = BehaviorToolConfig::from_selection(
+    let surface = AgentToolSurfaceConfig::from_selection(
         "setup",
         selection,
         &ToolCeiling::meta_only(),
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:test")
+    .resolve(&node, "did:key:test", &Default::default())
     .await
     .unwrap();
     assert!(!surface.tool_names().contains(&SCHEMA_TOOL_NAME.to_owned()));

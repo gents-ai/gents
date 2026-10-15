@@ -238,10 +238,10 @@ async fn enrich_native_outcome_provenance(
 ) -> anyhow::Result<()> {
     let (work_unit_id, invocation_id) = match collection {
         "CallbackResult" => {
-            let source_owner = required_source_string(source, "owner_agent_did")?;
+            let source_owner = required_source_string(source, "owner_node_did")?;
             anyhow::ensure!(
                 source_owner == owner,
-                "CallbackResult owner does not match Task behavior"
+                "CallbackResult owner does not match Task agent"
             );
             (
                 required_source_string(source, "work_unit_id")?,
@@ -258,15 +258,15 @@ async fn enrich_native_outcome_provenance(
             )
             .await?
             .ok_or_else(|| {
-                anyhow::anyhow!("WorkspaceReceipt has no principal-scoped IsolatedWorkspace")
+                anyhow::anyhow!("WorkspaceReceipt has no node-scoped IsolatedWorkspace")
             })?;
             anyhow::ensure!(
                 workspace.workspace_id == workspace_id,
                 "workspace identity changed during lookup"
             );
             anyhow::ensure!(
-                workspace.owner_agent_did == owner,
-                "IsolatedWorkspace owner does not match Task behavior"
+                workspace.owner_node_did == owner,
+                "IsolatedWorkspace owner does not match Task agent"
             );
             anyhow::ensure!(
                 workspace.work_unit_id.as_deref() == Some(expected_work_unit.as_str()),
@@ -284,11 +284,9 @@ async fn enrich_native_outcome_provenance(
 
     let invocation = crate::callback::load_invocation(node, &invocation_id, owner)
         .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!("native source has no principal-scoped CallbackInvocation")
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("native source has no node-scoped CallbackInvocation"))?;
     anyhow::ensure!(
-        invocation.invocation_id == invocation_id && invocation.owner_agent_did == owner,
+        invocation.invocation_id == invocation_id && invocation.owner_node_did == owner,
         "CallbackInvocation identity changed during lookup"
     );
     let input = invocation
@@ -799,11 +797,11 @@ impl EventSource {
         // Documents of a graph run already underway on a trigger's own
         // revision are live work, never history, even when they predate this
         // engine noticing the trigger.
-        let live = match snapshot.principal.as_ref() {
-            Some(principal) => {
+        let live = match snapshot.node.as_ref() {
+            Some(node) => {
                 crate::graph_pipeline::live_run_correlations(
                     self.node.as_ref(),
-                    &principal.agent_did,
+                    &node.node_did,
                     trigger_ids.iter().map(String::as_str),
                 )
                 .await?
@@ -1121,7 +1119,7 @@ impl EventSource {
         doc: &serde_json::Value,
     ) -> anyhow::Result<Option<String>> {
         let fields = snapshot
-            .tool_surface(&trigger.task.behavior_id)
+            .tool_surface(&trigger.task.agent_id)
             .map(|surface| surface.source_fill_fields())
             .unwrap_or_default();
         let mut source_fields = std::collections::BTreeMap::new();
@@ -1159,11 +1157,11 @@ impl EventSource {
         snapshot: &'a ActiveRuntimeSnapshot,
         trigger: &'a crate::runtime_snapshot::ResolvedEventTrigger,
     ) -> anyhow::Result<Delivery<'a>> {
-        let behavior = snapshot
-            .behavior(&trigger.task.behavior_id)
-            .ok_or_else(|| anyhow::anyhow!("group trigger behavior is unavailable"))?;
+        let agent = snapshot
+            .agent(&trigger.task.agent_id)
+            .ok_or_else(|| anyhow::anyhow!("group trigger agent is unavailable"))?;
         Ok(Delivery::Trigger {
-            agent_did: behavior.agent_did(),
+            node_did: agent.node_did(),
             trigger,
         })
     }
@@ -1175,7 +1173,7 @@ impl EventSource {
         correlation: &str,
     ) -> (String, String) {
         let delivery = Delivery::Trigger {
-            agent_did: owner,
+            node_did: owner,
             trigger,
         };
         (delivery.group_key(correlation), delivery.config_key())
@@ -1405,13 +1403,16 @@ impl EventSource {
         if correlations.is_empty() {
             return HashSet::new();
         }
-        let Some(agent_did) = snapshot
-            .behavior(&trigger.task.behavior_id)
-            .map(|behavior| behavior.agent_did())
+        let Some(node_did) = snapshot
+            .agent(&trigger.task.agent_id)
+            .map(|agent| agent.node_did())
         else {
             return HashSet::new();
         };
-        let delivery = Delivery::Trigger { agent_did, trigger };
+        let delivery = Delivery::Trigger {
+            node_did: node_did,
+            trigger,
+        };
         let keys = correlations
             .iter()
             .map(|correlation| {
@@ -1432,14 +1433,14 @@ impl EventSource {
             r#"query {{
                 AgentRequest(
                     filter: {{
-                        agent_did: {{ _eq: "{agent_did}" }},
+                        node_did: {{ _eq: "{node_did}" }},
                         caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
                         caused_by_correlation: {{ _in: [{correlations}] }}
                     }},
                     limit: {limit}
                 ) {{ caused_by_correlation request_id retry_key }}
             }}"#,
-            agent_did = crate::graphql::escape_graphql_string(agent_did),
+            node_did = crate::graphql::escape_graphql_string(node_did),
             trigger_id = crate::graphql::escape_graphql_string(&trigger.trigger_id),
             limit = GROUP_RECOVERY_PAGE_SIZE,
         );
@@ -1471,7 +1472,7 @@ impl EventSource {
                 let correlation = row.get("caused_by_correlation")?.as_str()?;
                 let key = keys.get(correlation)?;
                 let request_id = row.get("request_id")?.as_str()?;
-                (event_delivery::request_matches_fire_key(agent_did, request_id, key)
+                (event_delivery::request_matches_fire_key(node_did, request_id, key)
                     || row["retry_key"].as_str() == Some(key.as_str()))
                 .then(|| correlation.to_owned())
             })
@@ -1501,7 +1502,7 @@ impl EventSource {
         let query = format!(
             r#"query {{
                 EventGroupState(
-                    filter: {{ agent_did: {{ _eq: "{owner}" }}, group_key: {{ _in: [{keys}] }} }},
+                    filter: {{ node_did: {{ _eq: "{owner}" }}, group_key: {{ _in: [{keys}] }} }},
                     limit: {limit}
                 ) {{ group_key quiesced_at }}
             }}"#,
@@ -1702,7 +1703,7 @@ impl EventSource {
 
     pub(super) fn spawn_runtime_field_write(
         node: Arc<EmbeddedNode>,
-        agent_did: String,
+        node_did: String,
         trigger_id: String,
         source_doc_id: String,
         result: crate::trigger_engine::FireResult,
@@ -1740,7 +1741,7 @@ impl EventSource {
             };
             if let Err(error) = crate::document_config::update_trigger_runtime_fields(
                 &node,
-                &agent_did,
+                &node_did,
                 &trigger_id,
                 update,
             )
@@ -1762,7 +1763,7 @@ impl EventSource {
     /// best-effort: outside a runtime it does nothing rather than panic.
     fn spawn_unacknowledged_field_write(
         node: Arc<EmbeddedNode>,
-        agent_did: String,
+        node_did: String,
         trigger_id: String,
         source_doc_id: String,
     ) {
@@ -1783,7 +1784,7 @@ impl EventSource {
             };
             if let Err(error) = crate::document_config::update_trigger_runtime_fields(
                 &node,
-                &agent_did,
+                &node_did,
                 &trigger_id,
                 update,
             )
@@ -1910,8 +1911,8 @@ impl EventSource {
                 )
             {
                 let Some(owner) = snapshot
-                    .behavior(&trigger.task.behavior_id)
-                    .map(|behavior| behavior.agent_did())
+                    .agent(&trigger.task.agent_id)
+                    .map(|agent| agent.node_did())
                 else {
                     build.correlation_pending = true;
                     build.deferred.push((
@@ -2119,7 +2120,7 @@ impl EventSource {
 /// fire from a configuration error.
 pub(super) struct UnacknowledgedGuard {
     node: Arc<EmbeddedNode>,
-    agent_did: String,
+    node_did: String,
     trigger_id: String,
     source_doc_id: String,
     armed: std::cell::Cell<bool>,
@@ -2128,13 +2129,13 @@ pub(super) struct UnacknowledgedGuard {
 impl UnacknowledgedGuard {
     pub(super) fn new(
         node: Arc<EmbeddedNode>,
-        agent_did: String,
+        node_did: String,
         trigger_id: String,
         source_doc_id: String,
     ) -> Self {
         Self {
             node,
-            agent_did,
+            node_did,
             trigger_id,
             source_doc_id,
             armed: std::cell::Cell::new(true),
@@ -2151,7 +2152,7 @@ impl Drop for UnacknowledgedGuard {
         if self.armed.get() {
             EventSource::spawn_unacknowledged_field_write(
                 self.node.clone(),
-                self.agent_did.clone(),
+                self.node_did.clone(),
                 self.trigger_id.clone(),
                 self.source_doc_id.clone(),
             );

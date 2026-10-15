@@ -4,7 +4,7 @@ use crate::toolset::CommandExecutionMode;
 
 fn tools_doc(bash_mode: &str) -> Tools {
     serde_json::from_value(serde_json::json!({
-        "tools_id": "tools", "agent_did": "did:key:zAgent",
+        "tools_id": "tools", "node_did": "did:key:zAgent",
         "host": {"bash": {"mode": bash_mode}}
     }))
     .unwrap()

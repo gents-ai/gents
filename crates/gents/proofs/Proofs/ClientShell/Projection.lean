@@ -135,7 +135,7 @@ def RequestProgressIndicator.label : RequestProgressIndicator → String
   | .failed          => "Failed"
   | .superseded      => "Superseded"
   | .expired         => "Expired"
-  | .interrupted     => "Interrupted"
+  | .interrupted     => "Stopped"
 
 def RequestProgressIndicator.animated : RequestProgressIndicator → Bool
   | .queued | .claimed | .working => true

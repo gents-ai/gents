@@ -54,7 +54,7 @@ mod state;
 
 #[allow(unused_imports)]
 pub(crate) use server::{
-    bind_codex_shim, resolve_codex_shim_behavior_id, BoundCodexShim, CodexShimBindArgs,
+    bind_codex_shim, resolve_codex_shim_agent_id, BoundCodexShim, CodexShimBindArgs,
     CodexShimBindError,
 };
 #[cfg(test)]

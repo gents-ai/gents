@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
-use gents::{default_behavior_id_for_agent, default_inference_profile_id_for_behavior};
+use gents::{default_agent_id_for_node, default_inference_profile_id_for_agent};
 use serde_json::Value;
 
 use super::graphql::escape_graphql_string;
@@ -40,18 +40,18 @@ pub fn read_json_file(path: &Path) -> Result<Value> {
     serde_json::from_slice(&bytes).with_context(|| format!("decoding JSON file {}", path.display()))
 }
 
-pub fn rewrite_manifest_agent_dids(root: &Path, agent_did: &str) -> Result<()> {
+pub fn rewrite_manifest_node_dids(root: &Path, node_did: &str) -> Result<()> {
     let path = root.join("pack_config.json");
     let mut config = read_json_file(&path)?;
-    config["agent_principal"]["agent_did"] = Value::String(agent_did.to_string());
+    config["node"]["node_did"] = Value::String(node_did.to_string());
     if let Some(object) = config.as_object_mut() {
         for value in object.values_mut() {
             let Some(rows) = value.as_array_mut() else {
                 continue;
             };
             for row in rows {
-                if row.get("agent_did").is_some() {
-                    row["agent_did"] = Value::String(agent_did.to_string());
+                if row.get("node_did").is_some() {
+                    row["node_did"] = Value::String(node_did.to_string());
                 }
             }
         }
@@ -60,12 +60,12 @@ pub fn rewrite_manifest_agent_dids(root: &Path, agent_did: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn assert_manifest_agent_dids(root: &Path, expected_agent_did: &str) -> Result<()> {
+pub fn assert_manifest_node_dids(root: &Path, expected_node_did: &str) -> Result<()> {
     let config = read_json_file(&root.join("pack_config.json"))?;
-    let principal = &config["agent_principal"];
+    let principal = &config["node"];
     assert_eq!(
-        principal.get("agent_did").and_then(Value::as_str),
-        Some(expected_agent_did)
+        principal.get("node_did").and_then(Value::as_str),
+        Some(expected_node_did)
     );
 
     if let Some(collections) = config.as_object() {
@@ -74,13 +74,13 @@ pub fn assert_manifest_agent_dids(root: &Path, expected_agent_did: &str) -> Resu
                 continue;
             };
             for object in rows {
-                if object.get("agent_did").is_none() {
+                if object.get("node_did").is_none() {
                     continue;
                 }
                 assert_eq!(
-                    object.get("agent_did").and_then(Value::as_str),
-                    Some(expected_agent_did),
-                    "wrong agent_did in {collection}"
+                    object.get("node_did").and_then(Value::as_str),
+                    Some(expected_node_did),
+                    "wrong node_did in {collection}"
                 );
             }
         }
@@ -126,7 +126,7 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
     let object = config
         .as_object_mut()
         .ok_or_else(|| anyhow!("exported configuration is not an object"))?;
-    for metadata in ["format", "agent_did", "exported_at", "access_mode"] {
+    for metadata in ["format", "node_did", "exported_at", "access_mode"] {
         object.remove(metadata);
     }
     write_json_file(&root.join("pack_config.json"), &config)
@@ -158,7 +158,7 @@ pub fn read_runtime_state_json(home_dir: &Path) -> Result<Value> {
 #[allow(clippy::too_many_arguments)]
 pub async fn assert_runtime_init_state(
     graphql: &str,
-    agent_did: &str,
+    node_did: &str,
     backend_id: &str,
     endpoint: &str,
     expected_provider_kind: &str,
@@ -172,22 +172,22 @@ pub async fn assert_runtime_init_state(
 ) -> Result<()> {
     use super::graphql::{first_graphql_row, graphql_query};
 
-    let default_behavior_id = default_behavior_id_for_agent(agent_did);
-    let default_profile_id = default_inference_profile_id_for_behavior(&default_behavior_id);
+    let default_agent_id = default_agent_id_for_node(node_did);
+    let default_profile_id = default_inference_profile_id_for_agent(&default_agent_id);
     let query = format!(
         r#"{{
-            AgentPrincipal(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{
-                agent_did
-                default_behavior_id
+            Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{
+                node_did
+                default_agent_id
                 enabled
             }}
-            AgentBehavior(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{
-                behavior_id
+            Agent(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{
+                agent_id
                 context_id
                 inference_profile_id
                 enabled
             }}
-            AgentContext(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{
+            AgentContext(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{
                 context_id
                 system_prompt
                 tools_id
@@ -207,33 +207,33 @@ pub async fn assert_runtime_init_state(
                 enabled
                 probe_status
             }}
-            Tools(filter: {{ agent_did: {{ _eq: "{}" }}, tools_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                tools_id agent_did host remote subagents built_ins datastore integrations self_config tags
+            Tools(filter: {{ node_did: {{ _eq: "{}" }}, tools_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                tools_id node_did host remote agents built_ins datastore integrations self_config tags
             }}
         }}"#,
-        escape_graphql_string(agent_did),
-        escape_graphql_string(agent_did),
-        escape_graphql_string(agent_did),
+        escape_graphql_string(node_did),
+        escape_graphql_string(node_did),
+        escape_graphql_string(node_did),
         escape_graphql_string(&default_profile_id),
         escape_graphql_string(backend_id),
-        escape_graphql_string(agent_did),
+        escape_graphql_string(node_did),
         escape_graphql_string(tools_id),
     );
     let response = graphql_query(graphql, &query).await?;
-    let principal = first_graphql_row(&response, "AgentPrincipal")?;
-    let behavior = first_graphql_row(&response, "AgentBehavior")?;
+    let principal = first_graphql_row(&response, "Node")?;
+    let agent = first_graphql_row(&response, "Agent")?;
     let context = first_graphql_row(&response, "AgentContext")?;
     let inference_profile = first_graphql_row(&response, "InferenceProfile")?;
     let backend = first_graphql_row(&response, "InferenceBackend")?;
     let tools = first_graphql_row(&response, "Tools")?;
 
     assert_eq!(
-        principal.get("agent_did").and_then(Value::as_str),
-        Some(agent_did)
+        principal.get("node_did").and_then(Value::as_str),
+        Some(node_did)
     );
     assert_eq!(
-        principal.get("default_behavior_id").and_then(Value::as_str),
-        Some(default_behavior_id.as_str())
+        principal.get("default_agent_id").and_then(Value::as_str),
+        Some(default_agent_id.as_str())
     );
     assert_eq!(
         principal.get("enabled").and_then(Value::as_bool),
@@ -241,11 +241,11 @@ pub async fn assert_runtime_init_state(
     );
 
     assert_eq!(
-        behavior.get("behavior_id").and_then(Value::as_str),
-        Some(default_behavior_id.as_str())
+        agent.get("agent_id").and_then(Value::as_str),
+        Some(default_agent_id.as_str())
     );
     assert_eq!(
-        behavior.get("inference_profile_id").and_then(Value::as_str),
+        agent.get("inference_profile_id").and_then(Value::as_str),
         Some(default_profile_id.as_str())
     );
     assert!(
@@ -259,7 +259,7 @@ pub async fn assert_runtime_init_state(
         context.get("tools_id").and_then(Value::as_str),
         Some(tools_id)
     );
-    assert_eq!(behavior.get("enabled").and_then(Value::as_bool), Some(true));
+    assert_eq!(agent.get("enabled").and_then(Value::as_bool), Some(true));
 
     assert_eq!(
         inference_profile.get("profile_id").and_then(Value::as_str),

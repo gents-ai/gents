@@ -19,7 +19,7 @@ def ordinaryEntry : SessionQueue.QueueEntry :=
 
 def ordinaryActivation : Handover.Activation :=
   { request :=
-      { document := 200, entry := ordinaryEntry, agent := 1, session := 1
+      { document := 200, entry := ordinaryEntry, node := 1, session := 1
       , requester := none, authenticated := true }
   , evidence := .ordinary
   , generation := 8, duration := 5, deadline := 11 }

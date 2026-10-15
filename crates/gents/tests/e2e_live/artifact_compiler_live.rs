@@ -1,18 +1,19 @@
 //! Run the built e2e_live executable directly, with no parent Cargo process.
 use crate::support::live_inference::wait_for_request_terminal;
+use crate::support::snapshots::fetch_tool_call_payloads_for_request;
 use crate::support::{
     interrupt::{wait_for_runtime_ready, BootedAgent},
     test_db,
 };
 use gents::document_config::{BashTools, FileTools, HostTools, Tools};
 use gents::{
-    graphql::escape_graphql_string, workspace::*, AgentIdentity, BashMode, CommandExecutionMode,
-    CommandNetworkMode, DocumentRuntimeOptions, FileToolMode, Gents, ToolCeiling,
+    graphql::escape_graphql_string, workspace::*, BashMode, CommandExecutionMode,
+    CommandNetworkMode, DocumentRuntimeOptions, FileToolMode, Gents, NodeIdentity, ToolCeiling,
 };
 use serde_json::{json, Value};
 use std::{collections::BTreeSet, path::Path, process::Command, sync::Arc, time::Duration};
 
-use crate::support::fixtures::configure_behavior_tools;
+use crate::support::fixtures::{bind_default_agent_backend, configure_agent_tools};
 
 const ENDPOINT: &str = "http://workstation-2:8000/v1";
 const MODEL: &str = "GLM-5.3-Flash-NVFP4";
@@ -46,22 +47,23 @@ async fn execute(node: &gents::defra_node::EmbeddedNode, query: &str) -> Value {
 async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     assert_eq!(std::env::var("GENTS_ARTIFACT_LIVE").as_deref(), Ok("1"));
     let db = test_db("artifact-compiler-live").await;
-    let identity: Arc<dyn AgentIdentity> = db.node_identity.clone();
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let did = identity.did().to_owned();
     let did_q = escape_graphql_string(&did);
     let endpoint_q = escape_graphql_string(ENDPOINT);
     let model_q = escape_graphql_string(MODEL);
-    let bootstrap = gents::ensure_agent_principal(&db.node, &did).await.unwrap();
-    let behavior_id = bootstrap
-        .default_behavior_id
+    bind_default_agent_backend(&db.node, &did, "artifact-live-backend", ENDPOINT).await;
+    let bootstrap = gents::ensure_node(&db.node, &did).await.unwrap();
+    let agent_id = bootstrap
+        .default_agent_id
         .clone()
-        .expect("principal has a default behavior");
-    let mut behavior = gents::load_agent_behavior(&db.node, &behavior_id)
+        .expect("node has a default agent");
+    let mut agent = gents::load_agent(&db.node, &agent_id)
         .await
         .unwrap()
-        .expect("default behavior exists");
-    execute(&db.node, &format!(r#"mutation {{ create_InferenceBackend(input: {{
-        agent_did: "{did_q}", backend_id: "artifact-live-backend", name: "Artifact live GLM", provider_kind: "OpenAiCompatible",
+        .expect("default agent exists");
+    execute(&db.node, &format!(r#"mutation {{ update_InferenceBackend(filter: {{node_did: {{_eq: "{did_q}"}}, backend_id: {{_eq: "artifact-live-backend"}}}}, input: {{
+        node_did: "{did_q}", backend_id: "artifact-live-backend", name: "Artifact live GLM", provider_kind: "OpenAiCompatible",
         openai_wire_api: "chat_completions", endpoint: "{endpoint_q}", auth: {{kind: "unauthenticated"}}, enabled: true,
         max_concurrent: 1, max_queue_depth: 4
     }}) {{ _docID }} }}"#)).await;
@@ -69,31 +71,29 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
         &db.node,
         &format!(r#"mutation {{
           create_InferenceExecution(input: {{
-            execution_id: "artifact-live-execution", agent_did: "{did_q}", max_turns: 8,
+            execution_id: "artifact-live-execution", node_did: "{did_q}", max_turns: 8,
         deadline_duration_secs: 600, stream_liveness_timeout_secs: 180
           }}) {{ _docID }}
           create_InferenceProfile(input: {{
-            profile_id: "artifact-live-profile", agent_did: "{did_q}", display_name: "Bounded artifact live QA",
+            profile_id: "artifact-live-profile", node_did: "{did_q}", display_name: "Bounded artifact live QA",
             backend_id: "artifact-live-backend", model_name: "{model_q}", max_output_tokens: 4096,
             execution_id: "artifact-live-execution"
           }}) {{ _docID }}
         }}"#),
     )
     .await;
-    behavior.inference_profile_id = "artifact-live-profile".into();
-    behavior.enabled = true;
-    gents::upsert_agent_behavior(&db.node, &behavior)
-        .await
-        .unwrap();
+    agent.inference_profile_id = "artifact-live-profile".into();
+    agent.enabled = true;
+    gents::upsert_agent(&db.node, &agent).await.unwrap();
 
-    configure_behavior_tools(
+    configure_agent_tools(
         &db.node,
         &did,
-        &behavior_id,
+        &agent_id,
         None,
         Tools {
             tools_id: "artifact-live-tools".into(),
-            agent_did: did.clone(),
+            node_did: did.clone(),
             host: Some(HostTools {
                 files: Some(FileTools {
                     mode: FileToolMode::ReadOnly,
@@ -135,10 +135,10 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     git(&repo, &["commit", "-m", "sealed compiler fixture"]);
     let mut documents = MemoryWorkspaceDocuments::default();
     let mut host = HostExecutorContext {
-        owner_agent_did: did.clone(),
+        owner_node_did: did.clone(),
         repository: RepositoryPlacementRef {
             repository_id: "artifact-live-repo".into(),
-            owner_agent_did: did.clone(),
+            owner_node_did: did.clone(),
             host_path: repo.clone(),
             enabled: true,
         },
@@ -201,7 +201,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
         .map(|file| (file, std::fs::read(gitdir.join(file)).unwrap()))
         .collect();
 
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
@@ -211,36 +211,43 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     )
     .await
     .unwrap();
-    let (tx, rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(rx));
-    let booted = BootedAgent::new(tx, handle, did.clone());
-    wait_for_runtime_ready(&db.node, &did).await;
-    let behavior_q = escape_graphql_string(&behavior_id);
-    execute(&db.node, &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "artifact-live-session",
-        agent_did: "{did_q}", behavior_id: "{behavior_q}", title: {{ text: "Artifact live QA", source: "generated" }},
-        created_at: "{now}" }}) {{ _docID }} }}"#)).await;
+    let mut session =
+        crate::support::session_document_in_scope(&did, "artifact-live-session", &agent_id, &now);
+    session.requester_did = Some(did.clone());
+    session.title = Some(gents_protocol::session::SessionTitle {
+        text: "Artifact live QA".into(),
+        source: gents_protocol::session::SessionTitleSource::Generated,
+    });
+    crate::support::create_session_document(&db.node, &session).await;
     let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
-        "artifact-live-request", &did, &did, &behavior_id, "artifact-live-session",
+        "artifact-live-request", &did, &did, &agent_id, "artifact-live-session",
         "Inspect Cargo.toml and src/lib.rs, then call bash exactly once with command cargo, args [\"test\",\"--locked\",\"--offline\"], raw_json true. This is a sealed read-only source with runtime-managed compiler artifacts. Do not edit source or set output directories. You must execute the test, not merely suggest it. After observing its actual result, report the test count and answer value. If the compiler fails, report the exact failure without claiming success.",
         "interactive", &now, gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did));
+    request.initial_lifecycle_state =
+        gents_protocol::request_lifecycle::RequestLifecycleState::WorkspaceBindingPending;
     request.workspace_id = Some(sealed.workspace.workspace_id.clone());
     request.workspace_authority = Some("readOnly".into());
-    request.workspace_owner_agent_did = Some(did.clone());
+    request.workspace_owner_node_did = Some(did.clone());
     request.workspace_seal_hash = sealed.workspace.seal_hash.clone();
     gents::sign_agent_request_create_as_registered_target(&mut request)
         .await
         .unwrap();
     execute(&db.node, &request.graphql_mutation().unwrap()).await;
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let handle = tokio::spawn(agent.run(rx));
+    let booted = BootedAgent::new(tx, handle, did.clone());
+    wait_for_runtime_ready(&db.node, &did).await;
     let terminal =
         wait_for_request_terminal(&db.node, "artifact-live-request", Duration::from_secs(600))
             .await;
     let evidence = execute(&db.node, r#"{
-        AgentRequest(filter: { request_id: { _eq: "artifact-live-request" } }) { _docID request_id lifecycle_state execution_generation workspace_id workspace_authority workspace_owner_agent_did workspace_seal_hash }
-        AgentToolCall(filter: { request_id: { _eq: "artifact-live-request" } }) { tool_call_id tool_name args result lifecycle_state request_doc_id }
+        AgentRequest(filter: { request_id: { _eq: "artifact-live-request" } }) { _docID request_id lifecycle_state failure_reason terminal_output execution_generation workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash }
+        AgentToolCall(filter: { request_id: { _eq: "artifact-live-request" } }) { tool_call_id tool_name lifecycle_state request_doc_id }
         InferenceCall(filter: { request_id: { _eq: "artifact-live-request" } }) { call_id backend_id request_doc_id call_state prompt_tokens completion_tokens }
-        WorkspaceBinding(filter: { request_id: { _eq: "artifact-live-request" } }) { request_doc_id workspace_id authority owner_agent_did seal_hash lifecycle_state }
+        WorkspaceBinding(filter: { request_id: { _eq: "artifact-live-request" } }) { request_doc_id workspace_id authority owner_node_did seal_hash lifecycle_state }
     }"#).await;
+    let payloads = fetch_tool_call_payloads_for_request(&db.node, "artifact-live-request").await;
     booted.shutdown().await;
     if let Some(path) = std::env::var_os("GENTS_ARTIFACT_LIVE_EVIDENCE") {
         std::fs::write(
@@ -258,12 +265,15 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     let calls = evidence["AgentToolCall"].as_array().unwrap();
     assert!(
         calls.iter().any(|call| {
-            let args = call["args"]
-                .as_str()
+            let payload = payloads.iter().find(|payload| {
+                call["tool_call_id"].as_str() == Some(payload.tool_call_id.as_str())
+            });
+            let args = payload
+                .and_then(|payload| payload.arguments.as_deref())
                 .and_then(|text| serde_json::from_str::<Value>(text).ok())
                 .unwrap_or(Value::Null);
-            let result = call["result"]
-                .as_str()
+            let result = payload
+                .and_then(|payload| payload.result.as_deref())
                 .and_then(|text| serde_json::from_str::<Value>(text).ok())
                 .unwrap_or(Value::Null);
             // UnrestrictedBashTool::NAME identifies shell-tool access; the
@@ -298,7 +308,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
         .as_u64()
         .is_some_and(|tokens| tokens > 0)));
     assert_eq!(row["workspace_id"], "artifact-live-workspace");
-    assert_eq!(row["workspace_owner_agent_did"], did);
+    assert_eq!(row["workspace_owner_node_did"], did);
     assert_eq!(row["workspace_authority"], "readOnly");
     assert_eq!(
         row["workspace_seal_hash"],

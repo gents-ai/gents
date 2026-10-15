@@ -1,5 +1,5 @@
 use super::*;
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 
 struct PanickingTool;
@@ -40,31 +40,21 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_behavior(&node, identity.did(), "general").await;
+    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
     let executions = BackgroundExecutionRegistry::default();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "panic-regression",
-        identity.did(),
-        FailurePolicy::default(),
-    )
-    .with_background_tool_registry(BackgroundToolRegistry::from_tools(
-        vec![Box::new(PanickingTool)],
-        &["panicking_tool".into()],
-    ))
-    .with_background_execution_registry(executions.clone());
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
+            .with_background_tool_registry(BackgroundToolRegistry::from_tools(
+                vec![Box::new(PanickingTool)],
+                &["panicking_tool".into()],
+            ))
+            .with_background_execution_registry(executions.clone());
     hook.on_completion_call(&user_text_message("run tool"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
-    crate::session::create_session_with_behavior_id(
-        &node,
-        &session_id,
-        "panic-regression",
-        &hook.agent_did,
-        "general",
-    )
-    .await
-    .unwrap();
+    crate::session::create_session_with_agent_id(&node, &session_id, &hook.node_did, "general")
+        .await
+        .unwrap();
     bind_interruptible_request(
         &node,
         &hook,
@@ -90,7 +80,7 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
         .as_str()
         .unwrap()
         .contains("intentional background tool panic"));
-    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
+    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
         .await
         .unwrap();
     let marker = format!("<tool-completion tool_call_id=\"{tool_call_id}\"");

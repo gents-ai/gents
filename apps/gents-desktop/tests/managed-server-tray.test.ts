@@ -6,12 +6,14 @@ import {
   MANAGED_SERVER_TRAY_START_EVENT,
   MANAGED_SERVER_TRAY_STOP_EVENT,
 } from "../src/lib/managedServerTray";
+import { trayServerFor } from "../src/hooks/useManagedServerTrayControls";
+import { testApp } from "./app-fixture";
 
 const stopped = {
   state: "stopped",
   autoStart: true,
-  agentName: "Workshop Agent",
-  agentDid: null,
+  nodeName: "Workshop Node",
+  nodeDid: null,
   graphql: null,
   effectiveToolCeiling: null,
   effectiveToolRoot: null,
@@ -31,7 +33,11 @@ describe("managed server tray listeners", () => {
       managedServerStatus: vi.fn(async () => stopped),
     } as unknown as DesktopApiAdapter;
 
-    const teardown = installManagedServerTrayListeners(api, listen, vi.fn());
+    const teardown = installManagedServerTrayListeners(
+      trayServerFor(testApp({ api })),
+      listen,
+      vi.fn(),
+    );
     teardown();
     resolvers.forEach((resolve, index) => resolve(cleanups[index]));
     await Promise.resolve();
@@ -47,7 +53,7 @@ describe("managed server tray listeners", () => {
       restartManagedServer: vi.fn(),
     } as unknown as DesktopApiAdapter;
     installManagedServerTrayListeners(
-      api,
+      trayServerFor(testApp({ api })),
       async (event, handler) => {
         handlers.set(event, handler);
         return () => {};
@@ -74,7 +80,7 @@ describe("managed server tray listeners", () => {
       startManagedServer: vi.fn(),
     } as unknown as DesktopApiAdapter;
     installManagedServerTrayListeners(
-      api,
+      trayServerFor(testApp({ api })),
       async (event, handler) => {
         handlers.set(event, handler);
         return () => {};
@@ -88,7 +94,7 @@ describe("managed server tray listeners", () => {
     await vi.waitFor(() => expect(showSetup).toHaveBeenCalledOnce());
     expect(api.startManagedServer).not.toHaveBeenCalled();
     expect(reportError).toHaveBeenCalledWith(
-      expect.stringContaining("Complete local agent setup"),
+      expect.stringContaining("Complete local node setup"),
     );
   });
 
@@ -109,7 +115,7 @@ describe("managed server tray listeners", () => {
       restartManagedServer: vi.fn(),
     } as unknown as DesktopApiAdapter;
     installManagedServerTrayListeners(
-      api,
+      trayServerFor(testApp({ api })),
       async (name, handler) => {
         handlers.set(name, handler);
         return () => {};

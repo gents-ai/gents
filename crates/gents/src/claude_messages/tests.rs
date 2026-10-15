@@ -807,9 +807,9 @@ async fn cancellation_drains_received_signature_without_polling_provider_again()
             request_doc_id: "doc-audit".into(),
             request_commit_cid: "bafy-audit".into(),
             request_id: "req-audit".into(),
-            agent_did: "did:key:agent".into(),
+            node_did: "did:key:agent".into(),
             requester_did: String::new(),
-            behavior_id: "behavior".into(),
+            agent_id: "behavior".into(),
             session_id: "session".into(),
             model_name: "claude".into(),
             provider_family: None,
@@ -1247,7 +1247,7 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
             let node =
                 std::sync::Arc::new(crate::oauth_credential::test_support::test_node().await);
             let account = crate::usage_observation::UsageAccount::Backend {
-                agent_did: "did:key:z6MkUsageWireClaudeLive".into(),
+                node_did: "did:key:z6MkUsageWireClaudeLive".into(),
                 provider: "ClaudeCliSubscription".into(),
                 backend_id: "backend-usage-claude".into(),
             };

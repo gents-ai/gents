@@ -12,7 +12,9 @@ use serde_json::{json, Value};
 use tokio::time::Instant;
 
 use crate::cli::args::{
-    RequestCommand, RequestInterruptArgs, RequestResendArgs, RequestShowArgs, RequestSubmitArgs,
+    RequestCommand, RequestEditPendingArgs, RequestInterruptArgs, RequestPendingArgs,
+    RequestPendingMutationArgs, RequestRemovePendingArgs, RequestReorderPendingArgs,
+    RequestResendArgs, RequestShowArgs, RequestSubmitArgs,
 };
 use crate::cli::output_format::OutputFormat;
 use crate::request_helpers::{
@@ -21,7 +23,7 @@ use crate::request_helpers::{
     RequestOutputEnvelope,
 };
 use crate::{
-    create_agent_request, post_graphql, print_json, resolve_agent_did, resolve_graphql_endpoint,
+    create_agent_request, post_graphql, print_json, resolve_graphql_endpoint, resolve_node_did,
     resolve_request_content, resolve_request_id, wait_for_terminal_response,
     write_json_output_file, RequestSubmitOptions,
 };
@@ -32,7 +34,157 @@ pub(crate) async fn dispatch(command: RequestCommand) -> Result<()> {
         RequestCommand::Show(args) => request_show(args).await,
         RequestCommand::Interrupt(args) => request_interrupt(args).await,
         RequestCommand::Resend(args) => request_resend(args).await,
+        RequestCommand::Pending(args) => request_pending(args).await,
+        RequestCommand::EditPending(args) => request_edit_pending(args).await,
+        RequestCommand::RemovePending(args) => request_remove_pending(args).await,
+        RequestCommand::ReorderPending(args) => request_reorder_pending(args).await,
     }
+}
+
+async fn pending_scope(
+    args: &RequestPendingArgs,
+) -> Result<(
+    ConfigAccess,
+    String,
+    std::sync::Arc<dyn gents::NodeIdentity>,
+)> {
+    anyhow::ensure!(
+        !args.session_id.trim().is_empty(),
+        "--session-id must not be empty"
+    );
+    let endpoint = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let node = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
+    let home = crate::resolve_home_dir(args.home.as_deref());
+    let config = crate::read_init_config(&home)?
+        .context("An initialized --home is required to identify the message author")?;
+    let signer = crate::load_initialized_home_identity(&home, &config)?;
+    Ok((ConfigAccess::Graphql(endpoint), node, signer))
+}
+
+async fn request_pending(args: RequestPendingArgs) -> Result<()> {
+    let (access, node, signer) = pending_scope(&args).await?;
+    let snapshot =
+        gents::lifecycle::pending_user_queue(&access, &node, &args.session_id, signer.did())
+            .await?;
+    match args
+        .output
+        .ensure_supported("request pending", &[OutputFormat::Text, OutputFormat::Json])?
+    {
+        OutputFormat::Json => print_json(&serde_json::to_value(&snapshot)?)?,
+        OutputFormat::Text => {
+            let mut output = std::io::stdout().lock();
+            use std::io::Write;
+            if snapshot.entries.is_empty() {
+                writeln!(output, "No pending user messages.")?;
+            }
+            for entry in snapshot.entries {
+                writeln!(
+                    output,
+                    "{}  {}  {}",
+                    entry.request_doc_id,
+                    if entry.editable {
+                        "editable"
+                    } else {
+                        "read-only"
+                    },
+                    entry.content
+                )?;
+            }
+        }
+        _ => unreachable!("validated output format"),
+    }
+    Ok(())
+}
+
+/// Selected IDs in queue order; the runtime owner validates the selection.
+fn selected_queue_ids(expected: &[String], requested: &[String]) -> Vec<String> {
+    let mut selected = requested.to_vec();
+    selected.sort_by_key(|id| expected.iter().position(|entry| entry == id));
+    selected
+}
+
+async fn apply_pending_edit(
+    args: RequestPendingMutationArgs,
+    selected: Vec<String>,
+    messages: Vec<gents::lifecycle::PendingMessageEdit>,
+) -> Result<()> {
+    let output = args.scope.output.ensure_supported(
+        "pending message edit",
+        &[OutputFormat::Text, OutputFormat::Json],
+    )?;
+    let (access, node, signer) = pending_scope(&args.scope).await?;
+    let receipt = gents::lifecycle::submit_pending_user_edit(
+        &access,
+        signer.as_ref(),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(signer.did()),
+        None,
+        &node,
+        &args.scope.session_id,
+        gents::lifecycle::PendingQueueEdit {
+            expected_request_doc_ids: args.expected_request_doc_ids,
+            selected_request_doc_ids: selected,
+            messages,
+        },
+    )
+    .await?;
+    match output {
+        OutputFormat::Json => print_json(&serde_json::to_value(&receipt)?)?,
+        OutputFormat::Text => {
+            use std::io::Write;
+            let mut output = std::io::stdout().lock();
+            if receipt.request_doc_ids.is_empty() {
+                writeln!(output, "Pending messages removed.")?;
+            }
+            for (request, physical) in receipt.request_ids.iter().zip(&receipt.request_doc_ids) {
+                writeln!(output, "{physical}  {request}")?;
+            }
+        }
+        _ => unreachable!("validated output format"),
+    }
+    Ok(())
+}
+
+async fn request_edit_pending(args: RequestEditPendingArgs) -> Result<()> {
+    let content = resolve_request_content(args.content.as_deref(), args.content_file.as_deref())?;
+    let selected = vec![args.request_doc_id.clone()];
+    let message = gents::lifecycle::PendingMessageEdit {
+        request_doc_id: args.request_doc_id,
+        content,
+    };
+    apply_pending_edit(args.queue, selected, vec![message]).await
+}
+
+async fn request_remove_pending(args: RequestRemovePendingArgs) -> Result<()> {
+    let selected = selected_queue_ids(&args.queue.expected_request_doc_ids, &args.request_doc_ids);
+    apply_pending_edit(args.queue, selected, Vec::new()).await
+}
+
+async fn request_reorder_pending(args: RequestReorderPendingArgs) -> Result<()> {
+    let selected = selected_queue_ids(&args.queue.expected_request_doc_ids, &args.request_doc_ids);
+    let (access, node, signer) = pending_scope(&args.queue.scope).await?;
+    let snapshot = gents::lifecycle::pending_user_queue(
+        &access,
+        &node,
+        &args.queue.scope.session_id,
+        signer.did(),
+    )
+    .await?;
+    let messages = args
+        .request_doc_ids
+        .into_iter()
+        .map(|id| {
+            let entry = snapshot
+                .entries
+                .iter()
+                .find(|entry| entry.request_doc_id == id)
+                .context("Selected message is no longer pending")?;
+            Ok(gents::lifecycle::PendingMessageEdit {
+                request_doc_id: id,
+                content: entry.content.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    apply_pending_edit(args.queue, selected, messages).await
 }
 
 /// Canonical `request create --wait` result: the submitted-request summary plus
@@ -56,37 +208,47 @@ fn wait_result(
 
 async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
+    let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let content = resolve_request_content(args.content.as_deref(), args.content_file.as_deref())?;
     let valid_until = parse_valid_until_flag(args.valid_until.as_deref())?;
-    ensure_local_request_signer(args.home.as_deref(), &agent_did)?;
+    ensure_local_request_signer(args.home.as_deref(), &node_did)?;
+    let session_id = args
+        .session_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let input = args
+        .input
+        .as_deref()
+        .map(serde_json::from_str::<RequestInput>)
+        .transpose()
+        .context("--input must be canonical RequestInput JSON")?
+        .unwrap_or_default();
+    let input = gents::lifecycle::prepare_user_message_input(
+        &ConfigAccess::Graphql(graphql.clone()),
+        &node_did,
+        &session_id,
+        input,
+        gents_protocol::request_input::QueueDelivery::Steer,
+    )
+    .await?;
     let submitted = create_agent_request(
         &graphql,
-        &agent_did,
+        &node_did,
         &content,
-        args.session_id.as_deref(),
-        args.behavior_id.as_deref(),
+        Some(&session_id),
+        args.agent_id.as_deref(),
         RequestSubmitOptions {
-            caused_by_source_doc_id: None,
-            input: args
-                .input
-                .as_deref()
-                .map(serde_json::from_str::<RequestInput>)
-                .transpose()
-                .context("--input must be canonical RequestInput JSON")?,
+            input: Some(input),
             valid_until,
-            retry_parent_request: None,
-            retry_parent_request_doc_id: None,
-            retry_root_request: None,
-            retry_key: None,
+            ..Default::default()
         },
     )
     .await?;
     let request_summary = json!({
         "request_id": submitted.request_id,
         "session_id": submitted.session_id,
-        "agent_did": submitted.agent_did,
-        "behavior_id": submitted.behavior_id,
+        "node_did": submitted.node_did,
+        "agent_id": submitted.agent_id,
         "input": submitted.input,
     });
     if args.no_wait {
@@ -164,8 +326,8 @@ struct RequestShowSnapshot {
 #[derive(Debug, Clone, Serialize)]
 struct RequestShowHeader {
     request_id: String,
-    agent_did: String,
-    behavior_id: String,
+    node_did: String,
+    agent_id: String,
     session_id: String,
     lifecycle_state: String,
     backend_id: Option<String>,
@@ -191,7 +353,7 @@ struct RequestShowHeader {
     caused_by_source_doc_id: Option<String>,
     workspace_id: Option<String>,
     workspace_authority: Option<String>,
-    workspace_owner_agent_did: Option<String>,
+    workspace_owner_node_did: Option<String>,
     workspace_seal_hash: Option<String>,
 }
 
@@ -209,7 +371,7 @@ struct RequestTransitionView {
 #[derive(Debug, Clone, Serialize)]
 struct RequestCancelCauseView {
     cause: String,
-    cancel_initiated_at: Option<String>,
+    interrupt_requested_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -258,10 +420,10 @@ struct NativeExecutorView {
 #[derive(Debug, Clone, Serialize)]
 struct ChildRequestView {
     request_id: String,
-    agent_did: String,
+    node_did: String,
     session_id: String,
     state: String,
-    behavior_id: String,
+    agent_id: String,
     created_at: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
 }
@@ -306,14 +468,14 @@ async fn load_request_show_snapshot(
         .collect::<Result<Vec<_>, _>>()?;
 
     let request_terminal = canonical_request.is_terminal();
-    let request_agent_did = canonical_request.agent_did.unwrap_or_default();
-    let blocked = gents::blocked_turn::blocked_turn(&access, &request_agent_did, request_id)
+    let request_node_did = canonical_request.node_did.unwrap_or_default();
+    let blocked = gents::blocked_turn::blocked_turn(&access, &request_node_did, request_id)
         .await
         .unwrap_or_else(|error| {
             tracing::warn!(request_id, error = %format!("{error:#}"), "blocked turn unreadable");
             None
         });
-    let liveness = crate::commands::status::load_liveness_value(graphql, &request_agent_did).await;
+    let liveness = crate::commands::status::load_liveness_value(graphql, &request_node_did).await;
     let active_tool_calls = active_tool_call_keys(&liveness);
     let native_executors_available = liveness
         .get("active_native_executors_available")
@@ -420,8 +582,8 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
         "_docID",
         "requester_did",
         "request_id",
-        "agent_did",
-        "behavior_id",
+        "node_did",
+        "agent_id",
         "session_id",
         "lifecycle_state",
         "backend_id",
@@ -447,21 +609,20 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
         "caused_by_correlation",
         "caused_by_trigger_context",
         "caused_by_source_doc_id",
-        "subagent_depth",
+        "request_hop",
     ];
     append_optional_fields(
         &mut fields,
         &schema.agent_request,
         &[
             "cancel_cause",
-            "cancel_initiated_at",
             "terminal_output",
             "execution_generation",
             "execution_lease_secs",
             "execution_lease_expires_at",
             "workspace_id",
             "workspace_authority",
-            "workspace_owner_agent_did",
+            "workspace_owner_node_did",
             "workspace_seal_hash",
         ],
     );
@@ -488,9 +649,9 @@ fn request_show_tool_calls_query(
         .context("request show missing physical identity")?;
     let scope = gents::session::session_scope_filter(
         request
-            .agent_did
+            .node_did
             .as_deref()
-            .context("request show missing principal")?,
+            .context("request show missing node")?,
         request
             .session_id
             .as_deref()
@@ -545,8 +706,8 @@ fn request_header_view(
 ) -> Result<RequestShowHeader> {
     Ok(RequestShowHeader {
         request_id: string_field_or_unknown(row, "request_id"),
-        agent_did: string_field_or_unknown(row, "agent_did"),
-        behavior_id: string_field_or_unknown(row, "behavior_id"),
+        node_did: string_field_or_unknown(row, "node_did"),
+        agent_id: string_field_or_unknown(row, "agent_id"),
         session_id: string_field_or_unknown(row, "session_id"),
         lifecycle_state: string_field_or_unknown(row, "lifecycle_state"),
         backend_id: string_field(row, "backend_id"),
@@ -578,7 +739,7 @@ fn request_header_view(
         caused_by_source_doc_id: string_field(row, "caused_by_source_doc_id"),
         workspace_id: string_field(row, "workspace_id"),
         workspace_authority: string_field(row, "workspace_authority"),
-        workspace_owner_agent_did: string_field(row, "workspace_owner_agent_did"),
+        workspace_owner_node_did: string_field(row, "workspace_owner_node_did"),
         workspace_seal_hash: string_field(row, "workspace_seal_hash"),
     })
 }
@@ -723,21 +884,17 @@ fn cause_suffix(cause: Option<&str>) -> String {
 
 fn request_cancel_cause_view(request: &Value) -> Option<RequestCancelCauseView> {
     let request_cause = string_field(request, "cancel_cause");
-    let request_cancel_at = string_field(request, "cancel_initiated_at");
     let interrupt_at = string_field(request, "interrupt_requested_at");
     let lifecycle_state = string_field(request, "lifecycle_state").unwrap_or_default();
     let is_interrupted = RequestLifecycleState::parse_opt(Some(lifecycle_state.as_str()))
         == Some(RequestLifecycleState::Interrupted);
-    let was_cancelled = is_interrupted
-        || request_cause.is_some()
-        || request_cancel_at.is_some()
-        || interrupt_at.is_some();
+    let was_cancelled = is_interrupted || request_cause.is_some() || interrupt_at.is_some();
     if !was_cancelled {
         return None;
     }
     Some(RequestCancelCauseView {
         cause: request_cause.unwrap_or_else(|| "unknown".to_string()),
-        cancel_initiated_at: request_cancel_at.or(interrupt_at),
+        interrupt_requested_at: interrupt_at,
     })
 }
 
@@ -789,10 +946,10 @@ fn backgrounded_tool_view(tool: &RequestToolCallView) -> BackgroundedToolView {
 fn child_request_view(row: &Value) -> ChildRequestView {
     ChildRequestView {
         request_id: string_field_or_unknown(row, "request_id"),
-        agent_did: string_field_or_unknown(row, "agent_did"),
+        node_did: string_field_or_unknown(row, "node_did"),
         session_id: string_field_or_unknown(row, "session_id"),
         state: string_field_or_unknown(row, "lifecycle_state"),
-        behavior_id: string_field_or_unknown(row, "behavior_id"),
+        agent_id: string_field_or_unknown(row, "agent_id"),
         created_at: string_field(row, "created_at"),
         caused_by_parent_tool_call_id: string_field(row, "caused_by_parent_tool_call_id"),
     }
@@ -920,8 +1077,8 @@ fn render_request_show_text(
     let request = &snapshot.request;
     lines.push(format!("Request {}", request.request_id));
     lines.push(format!("state: {}", request.lifecycle_state));
-    lines.push(format!("agent_did: {}", request.agent_did));
-    lines.push(format!("behavior_id: {}", request.behavior_id));
+    lines.push(format!("node_did: {}", request.node_did));
+    lines.push(format!("agent_id: {}", request.agent_id));
     lines.push(format!("session_id: {}", request.session_id));
     push_option_line(&mut lines, "backend_id", request.backend_id.as_deref());
     push_option_line(
@@ -971,8 +1128,8 @@ fn render_request_show_text(
         }
         lines.push(line);
         if let (Some(profile), Some(switch)) = (&blocked.profile, &blocked.switch_command) {
-            let users = blocked.behaviors_on_profile.len();
-            let noun = if users == 1 { "behavior" } else { "behaviors" };
+            let users = blocked.agents_on_profile.len();
+            let noun = if users == 1 { "agent" } else { "agents" };
             lines.push(format!(
                 "  profile {profile} (used by {users} {noun}); switch: {switch}"
             ));
@@ -1018,8 +1175,11 @@ fn render_request_show_text(
         lines.push("CancelCause:".to_string());
         lines.push(format!("  cause: {}", cancel.cause));
         lines.push(format!(
-            "  cancel_initiated_at: {}",
-            cancel.cancel_initiated_at.as_deref().unwrap_or("unknown")
+            "  interrupt_requested_at: {}",
+            cancel
+                .interrupt_requested_at
+                .as_deref()
+                .unwrap_or("unknown")
         ));
     }
 
@@ -1096,8 +1256,8 @@ fn render_request_show_text(
     } else {
         for child in &snapshot.child_requests {
             lines.push(format!(
-                "  - {} state={} behavior_id={} agent_did={} session_id={}",
-                child.request_id, child.state, child.behavior_id, child.agent_did, child.session_id
+                "  - {} state={} agent_id={} node_did={} session_id={}",
+                child.request_id, child.state, child.agent_id, child.node_did, child.session_id
             ));
             push_option_line(
                 &mut lines,
@@ -1177,27 +1337,27 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let request_id =
         resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
-    let cancel_cause: CancelCause = args.cause.into();
 
     let before = fetch_interrupt_request_row(&graphql, &request_id).await?;
     let already_interrupted = nonempty_owned(before.interrupt_requested_at.as_deref()).is_some();
     let already_terminal = before.is_terminal();
 
     if !already_interrupted && !already_terminal {
-        let now = chrono::Utc::now().to_rfc3339();
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                    input: {{ interrupt_requested_at: "{now_escaped}" }}
-                ) {{ _docID }}
-            }}"#,
-            request_id = escape_graphql_string(&request_id),
-            now_escaped = escape_graphql_string(&now),
-        );
-        ConfigAccess::Graphql(graphql.clone())
-            .write("cli.request.interrupt", &mutation)
-            .await?;
+        let physical = before
+            .doc_id
+            .as_deref()
+            .context("request has no physical identity")?;
+        let node = before
+            .node_did
+            .as_deref()
+            .context("request has no node identity")?;
+        gents::interrupt::interrupt_request_by_doc_id_with_access(
+            &ConfigAccess::Graphql(graphql.clone()),
+            physical,
+            node,
+            before.requester_did.as_deref(),
+        )
+        .await?;
     }
 
     let mut row = fetch_interrupt_request_row(&graphql, &request_id).await?;
@@ -1213,7 +1373,7 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
 
     let summary = request_interrupt_summary(
         &row,
-        cancel_cause.as_str(),
+        CancelCause::UserCancelled.as_str(),
         interrupt_landed_at.as_deref(),
         already_interrupted,
         already_terminal,
@@ -1237,12 +1397,11 @@ async fn fetch_interrupt_request_row(
         r#"{{
             AgentRequest(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                order: {{ created_at: DESC }},
-                limit: 1
+                limit: 2
             ) {{
-                request_id
-                agent_did
-                behavior_id
+                _docID request_id
+                node_did requester_did
+                agent_id
                 session_id
                 lifecycle_state
                 failure_reason
@@ -1258,13 +1417,16 @@ async fn fetch_interrupt_request_row(
         request_id = escape_graphql_string(request_id),
     );
     let response = post_graphql(graphql, &query).await?;
-    let row = response
+    let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
-    serde_json::from_value(row).with_context(|| format!("decoding AgentRequest {request_id}"))
+        .context("interrupt request query omitted rows")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "request {request_id} must resolve to exactly one accessible physical request"
+    );
+    serde_json::from_value(rows[0].clone())
+        .with_context(|| format!("decoding AgentRequest {request_id}"))
 }
 
 async fn wait_for_terminal_request_state(
@@ -1313,8 +1475,8 @@ fn request_interrupt_summary(
         .unwrap_or_default();
     json!({
         "request_id": row.request_id,
-        "agent_did": nonempty_owned(row.agent_did.as_deref()),
-        "behavior_id": nonempty_owned(row.behavior_id.as_deref()),
+        "node_did": nonempty_owned(row.node_did.as_deref()),
+        "agent_id": nonempty_owned(row.agent_id.as_deref()),
         "session_id": nonempty_owned(row.session_id.as_deref()),
         "lifecycle_state": lifecycle_state,
         "failure_reason": nonempty_owned(row.failure_reason.as_deref()),
@@ -1398,10 +1560,10 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
             stale.failure_reason.as_deref().unwrap_or("<missing>")
         );
     }
-    let stale_agent_did = stale
-        .agent_did
+    let stale_node_did = stale
+        .node_did
         .as_deref()
-        .context("stale request has no agent_did")?;
+        .context("stale request has no node_did")?;
     let stale_content = stale
         .content
         .as_deref()
@@ -1411,13 +1573,13 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
         .as_deref()
         .context("stale request has no _docID")?;
     let valid_until = Some(chrono::Utc::now() + chrono::Duration::minutes(5));
-    ensure_local_request_signer(args.home.as_deref(), stale_agent_did)?;
+    ensure_local_request_signer(args.home.as_deref(), stale_node_did)?;
     let submitted = create_agent_request(
         &graphql,
-        stale_agent_did,
+        stale_node_did,
         stale_content,
         None,
-        stale.behavior_id.as_deref(),
+        stale.agent_id.as_deref(),
         RequestSubmitOptions {
             caused_by_source_doc_id: None,
             input: stale.input.clone(),
@@ -1432,8 +1594,8 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
     let request_summary = json!({
         "request_id": submitted.request_id,
         "session_id": submitted.session_id,
-        "agent_did": submitted.agent_did,
-        "behavior_id": submitted.behavior_id,
+        "node_did": submitted.node_did,
+        "agent_id": submitted.agent_id,
         "retry_parent_request": stale_id,
         "retry_root_request": stale.retry_root_request,
     });
@@ -1474,9 +1636,9 @@ mod tests {
             request: crate::request_helpers::CliRequestMetadata {
                 request_doc_id: "request-doc".into(),
                 request_id: "request".into(),
-                agent_did: "did:key:agent".into(),
+                node_did: "did:key:agent".into(),
                 requester_did: Some("did:key:requester".into()),
-                behavior_id: Some("behavior".into()),
+                agent_id: Some("agent".into()),
                 session_id: "session".into(),
                 lifecycle_state: RequestLifecycleState::Completed,
                 failure_reason: None,
@@ -1514,7 +1676,7 @@ mod tests {
                 provider: "claude-subscription".into(),
             }),
             profile: Some("main".into()),
-            behaviors_on_profile: vec!["x".into(), "y".into()],
+            agents_on_profile: vec!["x".into(), "y".into()],
             resets_at,
             switch_command: Some("gents config profile set-account main".into()),
         }
@@ -1523,6 +1685,15 @@ mod tests {
     fn show_now() -> chrono::DateTime<chrono::Utc> {
         use chrono::TimeZone;
         chrono::Utc.with_ymd_and_hms(2026, 9, 25, 16, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn pending_selection_follows_queue_order() {
+        let expected = vec!["a".into(), "b".into(), "c".into()];
+        assert_eq!(
+            selected_queue_ids(&expected, &["c".into(), "b".into()]),
+            vec!["b", "c"]
+        );
     }
 
     #[test]
@@ -1538,7 +1709,7 @@ mod tests {
         );
         assert!(
             text.contains(
-                "profile main (used by 2 behaviors); switch: gents config profile set-account main"
+                "profile main (used by 2 agents); switch: gents config profile set-account main"
             ),
             "{text}"
         );
@@ -1646,8 +1817,8 @@ mod tests {
     fn request_show_json_retains_typed_input_and_aggregate_budget() {
         let request = json!({
             "request_id": "request-one",
-            "agent_did": "did:key:agent",
-            "behavior_id": "default",
+            "node_did": "did:key:agent",
+            "agent_id": "default",
             "session_id": "session-one",
             "lifecycle_state": "pending",
             "input": {"selected_skill_ids":["review"]},
@@ -1670,8 +1841,8 @@ mod tests {
     fn request_show_json_retains_null_aggregate_budget_key() {
         let request = json!({
             "request_id": "request-one",
-            "agent_did": "did:key:agent",
-            "behavior_id": "default",
+            "node_did": "did:key:agent",
+            "agent_id": "default",
             "session_id": "session-one",
             "lifecycle_state": "pending",
         });
@@ -1828,7 +1999,7 @@ mod tests {
         let cancel = request_cancel_cause_view(&request)
             .expect("interrupted requests should render CancelCause");
         assert_eq!(cancel.cause, "unknown");
-        assert_eq!(cancel.cancel_initiated_at, None);
+        assert_eq!(cancel.interrupt_requested_at, None);
 
         let request = json!({
             "lifecycle_state": "interrupted",
@@ -1839,7 +2010,7 @@ mod tests {
             .expect("interrupted requests should render CancelCause");
         assert_eq!(cancel.cause, "operator_interrupt");
         assert_eq!(
-            cancel.cancel_initiated_at.as_deref(),
+            cancel.interrupt_requested_at.as_deref(),
             Some("2026-05-20T10:00:03Z")
         );
     }

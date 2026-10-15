@@ -1,16 +1,16 @@
 use super::*;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-fn session(id: &str, agent: &str, latest: Option<(&str, RequestLifecycleState)>) -> AgentSession {
+fn session(id: &str, node: &str, latest: Option<(&str, RequestLifecycleState)>) -> AgentSession {
     AgentSession {
         session_id: id.to_string(),
-        agent_did: agent.to_string(),
+        node_did: node.to_string(),
         requester_did: None,
-        behavior_id: "default".to_string(),
+        agent_id: "default".to_string(),
         created_at: "2026-04-21T12:00:00Z".to_string(),
         closed_at: None,
         title: Some(SessionTitle {
-            text: format!("{agent} run"),
+            text: format!("{node} run"),
             source: SessionTitleSource::User,
         }),
         tags: Vec::new(),
@@ -32,8 +32,8 @@ fn request(id: &str, session_id: &str, state: RequestLifecycleState) -> AgentReq
         purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some(id.to_string()),
         request_id: id.to_string(),
-        agent_did: Some("did:test:amy".to_string()),
-        behavior_id: Some("default".to_string()),
+        node_did: Some("did:test:amy".to_string()),
+        agent_id: Some("default".to_string()),
         session_id: Some(session_id.to_string()),
         content: Some("follow up question".to_string()),
         lifecycle_state: Some(state),
@@ -44,7 +44,7 @@ fn request(id: &str, session_id: &str, state: RequestLifecycleState) -> AgentReq
 }
 
 #[test]
-fn session_snapshot_is_agent_scoped_when_session_ids_match() {
+fn session_snapshot_is_node_scoped_when_session_ids_match() {
     let mut rows = ClientStoreRows {
         sessions: vec![
             session("shared-session", "did:test:mini-1", None),
@@ -52,7 +52,7 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
         ],
         ..ClientStoreRows::default()
     };
-    push_canonical_text_message_for_agent(
+    push_canonical_text_message_for_node(
         &mut rows,
         "msg-mini-1",
         "shared-session",
@@ -63,7 +63,7 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
         "did:test:mini-1",
         None,
     );
-    push_canonical_text_message_for_agent(
+    push_canonical_text_message_for_node(
         &mut rows,
         "msg-mini-2",
         "shared-session",
@@ -74,14 +74,14 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
         "did:test:mini-2",
         None,
     );
-    let snapshot = build_session_snapshot_from_store_for_agent(
+    let snapshot = build_session_snapshot_from_store_for_node(
         &ClientStore::from_rows(rows),
         Some("did:test:mini-1"),
         "shared-session",
         None,
     )
     .expect("session snapshot");
-    assert_eq!(snapshot.agent_did.as_deref(), Some("did:test:mini-1"));
+    assert_eq!(snapshot.node_did.as_deref(), Some("did:test:mini-1"));
     assert_eq!(snapshot.title.as_deref(), Some("did:test:mini-1 run"));
     assert_eq!(snapshot.messages.len(), 1);
     assert_eq!(snapshot.messages[0].message_key, "msg-mini-1");
@@ -89,10 +89,10 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
 
 #[test]
 fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
-    let behavior = serde_json::from_value(serde_json::json!({"behavior_id":"default","agent_did":"did:test:amy","inference_profile_id":"large-context","context_id":"large-context-input"})).expect("behavior");
-    let profile = serde_json::from_value(serde_json::json!({"agent_did":"did:test:amy","profile_id":"large-context","backend_id":"backend","model_name":"model","context_window":10000})).expect("profile");
-    let context = serde_json::from_value(serde_json::json!({"agent_did":"did:test:amy","context_id":"large-context-input","compaction_id":"compact"})).expect("context");
-    let compaction = serde_json::from_value(serde_json::json!({"agent_did":"did:test:amy","compaction_id":"compact","strategy":"StripThenSummarize","threshold":0.57})).expect("compaction");
+    let agent = serde_json::from_value(serde_json::json!({"agent_id":"default","node_did":"did:test:amy","inference_profile_id":"large-context","context_id":"large-context-input"})).expect("agent");
+    let profile = serde_json::from_value(serde_json::json!({"node_did":"did:test:amy","profile_id":"large-context","backend_id":"backend","model_name":"model","context_window":10000})).expect("profile");
+    let context = serde_json::from_value(serde_json::json!({"node_did":"did:test:amy","context_id":"large-context-input","compaction_id":"compact"})).expect("context");
+    let compaction = serde_json::from_value(serde_json::json!({"node_did":"did:test:amy","compaction_id":"compact","strategy":"StripThenSummarize","threshold":0.57})).expect("compaction");
     let entry = serde_json::from_value(serde_json::json!({"compaction_key":"session-context:1","session_id":"session-context","sequence":1,"summary":"first turn","messages_compacted":1,"compacted_through_sequence":1,"original_tokens":1000,"compacted_tokens":200,"created_at":"2026-08-24T12:00:00Z"})).expect("compaction entry");
     let mut rows = ClientStoreRows {
         sessions: vec![session("session-context", "did:test:amy", None)],
@@ -101,7 +101,7 @@ fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
             "session-context",
             RequestLifecycleState::Completed,
         )],
-        behaviors: vec![behavior],
+        agents: vec![agent],
         inference_profiles: vec![profile],
         contexts: vec![context],
         compactions: vec![compaction],
@@ -135,7 +135,7 @@ fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
         MessageRole::User,
         "latest turn",
     );
-    let snapshot = build_session_snapshot_from_store_for_agent(
+    let snapshot = build_session_snapshot_from_store_for_node(
         &ClientStore::from_rows(rows),
         Some("did:test:amy"),
         "session-context",
@@ -154,27 +154,27 @@ fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
 
 #[test]
 fn session_context_window_follows_the_runtime_resolution_of_the_profile() {
-    let behavior = serde_json::json!({"behavior_id":"default","agent_did":"did:test:amy","inference_profile_id":"profile"});
-    let backend = serde_json::json!({"agent_did":"did:test:amy","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost/v1","auth":{"kind":"unauthenticated"}});
-    let advertised = |default: Option<i64>, maximum: Option<i64>| serde_json::json!({"backend_id":"backend","catalogs":[{"agent_did":null,"observed_at":"now","models":[{"model_name":"model","context_window":default,"max_context_window":maximum}]}]});
+    let agent = serde_json::json!({"agent_id":"default","node_did":"did:test:amy","inference_profile_id":"profile"});
+    let backend = serde_json::json!({"node_did":"did:test:amy","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost/v1","auth":{"kind":"unauthenticated"}});
+    let advertised = |default: Option<i64>, maximum: Option<i64>| serde_json::json!({"backend_id":"backend","catalogs":[{"node_did":null,"observed_at":"now","models":[{"model_name":"model","context_window":default,"max_context_window":maximum}]}]});
     let observation = advertised(Some(272_000), Some(872_000));
     let snapshot_with = |observation: &serde_json::Value, context_window: Option<i64>| {
-        let mut profile = serde_json::json!({"agent_did":"did:test:amy","profile_id":"profile","backend_id":"backend","model_name":"model"});
+        let mut profile = serde_json::json!({"node_did":"did:test:amy","profile_id":"profile","backend_id":"backend","model_name":"model"});
         if let Some(value) = context_window {
             profile["context_window"] = value.into();
         }
         let rows = ClientStoreRows {
             sessions: vec![session("session-window", "did:test:amy", None)],
-            behaviors: vec![serde_json::from_value(behavior.clone()).expect("behavior")],
+            agents: vec![serde_json::from_value(agent.clone()).expect("agent")],
             inference_backends: vec![serde_json::from_value(backend.clone()).expect("backend")],
             backend_observations: vec![
                 serde_json::from_value(observation.clone()).expect("observation")
             ],
-            backend_observation_source_agent_dids: vec![Some("did:test:amy".into())],
+            backend_observation_source_node_dids: vec![Some("did:test:amy".into())],
             inference_profiles: vec![serde_json::from_value(profile).expect("profile")],
             ..ClientStoreRows::default()
         };
-        build_session_snapshot_from_store_for_agent(
+        build_session_snapshot_from_store_for_node(
             &ClientStore::from_rows(rows),
             Some("did:test:amy"),
             "session-window",

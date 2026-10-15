@@ -8,11 +8,11 @@ use crate::task_hooks::effective_timeout_secs;
 fn task_with_hooks(task_id: &str, hooks: Vec<TaskHook>) -> Task {
     Task {
         emit_outcome: false,
-        agent_did: "did:key:z6MkTaskHookConformance".to_string(),
+        node_did: "did:key:z6MkTaskHookConformance".to_string(),
         task_id: task_id.to_string(),
         display_name: None,
         description: None,
-        behavior_id: "behavior-1".to_string(),
+        agent_id: "agent-1".to_string(),
         prompt_template: "run the task".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,

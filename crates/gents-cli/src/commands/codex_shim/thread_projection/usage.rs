@@ -14,8 +14,8 @@ use super::CodexThreadRecord;
 
 #[derive(Clone, Copy)]
 struct UsageScope<'a> {
-    agent_did: &'a str,
-    behavior_id: &'a str,
+    node_did: &'a str,
+    agent_id: &'a str,
     requester_did: Option<&'a str>,
 }
 
@@ -76,12 +76,12 @@ pub(in crate::commands::codex_shim) async fn submitted_token_usage(
     turn_request_ids: Option<&[String]>,
 ) -> Result<TokenTotals> {
     let scope = UsageScope {
-        agent_did: &request.agent_did,
+        node_did: &request.node_did,
         requester_did: request.requester_did.as_deref(),
-        behavior_id: request
-            .behavior_id
+        agent_id: request
+            .agent_id
             .as_deref()
-            .context("committed request missing behavior")?,
+            .context("committed request missing agent")?,
     };
     if let Some(ids) = turn_request_ids {
         latest_requests_token_usage_scoped(state, ids, scope).await
@@ -165,15 +165,15 @@ async fn session_request_ids(
     scope: UsageScope<'_>,
 ) -> Result<Vec<String>> {
     let session_scope =
-        gents::session::session_scope_filter(scope.agent_did, session_id, scope.requester_did);
+        gents::session::session_scope_filter(scope.node_did, session_id, scope.requester_did);
     let session_scope = gents::session::public_request_filter(&session_scope);
-    let escaped_behavior_id = escape_graphql_string(scope.behavior_id);
+    let escaped_agent_id = escape_graphql_string(scope.agent_id);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
                     {session_scope},
-                    behavior_id: {{ _eq: "{escaped_behavior_id}" }}
+                    agent_id: {{ _eq: "{escaped_agent_id}" }}
                 }},
                 order: {{ created_at: ASC }}
             ) {{
@@ -204,14 +204,14 @@ async fn scoped_request_doc_ids(
         .map(|id| format!("\"{}\"", escape_graphql_string(id)))
         .collect::<Vec<_>>()
         .join(",");
-    let owner = escape_graphql_string(scope.agent_did);
-    let behavior = escape_graphql_string(scope.behavior_id);
+    let owner = escape_graphql_string(scope.node_did);
+    let agent = escape_graphql_string(scope.agent_id);
     let requester = scope
         .requester_did
         .map(|did| format!("\"{}\"", escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
     let scope = gents::session::public_request_filter(&format!(
-        r#"request_id:{{_in:[{logical}]}},agent_did:{{_eq:"{owner}"}},behavior_id:{{_eq:"{behavior}"}},requester_did:{{_eq:{requester}}}"#
+        r#"request_id:{{_in:[{logical}]}},node_did:{{_eq:"{owner}"}},agent_id:{{_eq:"{agent}"}},requester_did:{{_eq:{requester}}}"#
     ));
     let response = query_node_json(
         &state.node,
@@ -264,15 +264,15 @@ async fn gather_request_usage(
         .map(|request_id| format!(r#""{}""#, escape_graphql_string(request_id)))
         .collect::<Vec<_>>()
         .join(", ");
-    let escaped_agent_did = escape_graphql_string(scope.agent_did);
-    let escaped_behavior_id = escape_graphql_string(scope.behavior_id);
+    let escaped_node_did = escape_graphql_string(scope.node_did);
+    let escaped_agent_id = escape_graphql_string(scope.agent_id);
     let query = format!(
         r#"{{
             InferenceCall(
                 filter: {{
                     request_doc_id: {{ _in: [{id_list}] }},
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    behavior_id: {{ _eq: "{escaped_behavior_id}" }},
+                    node_did: {{ _eq: "{escaped_node_did}" }},
+                    agent_id: {{ _eq: "{escaped_agent_id}" }},
                     call_kind: {{ _eq: "inference" }},
                     call_state: {{ _in: ["completed", "failed", "cancelled"] }}
                 }}
@@ -326,15 +326,15 @@ async fn latest_requests_token_usage_scoped(
         .map(|request_id| format!(r#""{}""#, escape_graphql_string(request_id)))
         .collect::<Vec<_>>()
         .join(", ");
-    let escaped_agent_did = escape_graphql_string(scope.agent_did);
-    let escaped_behavior_id = escape_graphql_string(scope.behavior_id);
+    let escaped_node_did = escape_graphql_string(scope.node_did);
+    let escaped_agent_id = escape_graphql_string(scope.agent_id);
     let query = format!(
         r#"{{
             InferenceCall(
                 filter: {{
                     request_doc_id: {{ _in: [{id_list}] }},
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    behavior_id: {{ _eq: "{escaped_behavior_id}" }},
+                    node_did: {{ _eq: "{escaped_node_did}" }},
+                    agent_id: {{ _eq: "{escaped_agent_id}" }},
                     call_kind: {{ _eq: "inference" }},
                     call_state: {{ _in: ["completed", "failed", "cancelled"] }}
                 }}
@@ -387,19 +387,19 @@ fn latest_usage_from_rows(
 
 fn root_usage_scope(state: &ShimState) -> UsageScope<'_> {
     UsageScope {
-        agent_did: state.agent_did.as_ref(),
-        behavior_id: state.behavior_id.as_ref(),
+        node_did: state.node_did.as_ref(),
+        agent_id: state.agent_id.as_ref(),
         requester_did: Some(state.local_requester_did()),
     }
 }
 
 fn record_usage_scope<'a>(state: &'a ShimState, record: &'a CodexThreadRecord) -> UsageScope<'a> {
     record
-        .subagent
+        .caused
         .as_ref()
         .map(|link| UsageScope {
-            agent_did: &link.agent_did,
-            behavior_id: &link.behavior_id,
+            node_did: &link.node_did,
+            agent_id: &link.agent_id,
             requester_did: link.requester_did.as_deref(),
         })
         .unwrap_or_else(|| root_usage_scope(state))

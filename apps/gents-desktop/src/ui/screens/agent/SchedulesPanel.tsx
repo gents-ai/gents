@@ -52,7 +52,7 @@ export function ScheduleEditor({
   } = useApp();
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "schedules",
   };
   const saved = {
@@ -109,7 +109,7 @@ export function ScheduleEditor({
     setRunning(true);
     const pending = runSchedule({
       scheduleId: schedule.schedule_id,
-      agentDid: schedule.agent_did,
+      nodeDid: schedule.node_did,
     });
     const intentGeneration = captureComposeIntent();
     try {
@@ -215,7 +215,7 @@ export function ScheduleEditor({
           onDelete={() =>
             changeConfig("deleteScheduleConfig", {
               scheduleId: schedule.schedule_id,
-              agentDid: deployment.agentDid,
+              nodeDid: deployment.nodeDid,
             })
           }
         />
@@ -234,7 +234,7 @@ export function SchedulesPanel({
   const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "schedules",
   };
   return (
@@ -267,7 +267,7 @@ export function SchedulesPanel({
             onDelete={() =>
               changeConfig("deleteScheduleConfig", {
                 scheduleId: s.schedule_id,
-                agentDid: deployment.agentDid,
+                nodeDid: deployment.nodeDid,
               })
             }
             warning={dependentsWarning(deployment, "schedule", s.schedule_id)}
@@ -280,7 +280,7 @@ export function SchedulesPanel({
         const schedule_id = newId("sched");
         await changeConfig("saveScheduleConfig", {
           document: {
-            agent_did: deployment.agentDid,
+            node_did: deployment.nodeDid,
             schedule_id,
             display_name: "New schedule",
             cadence: { kind: "cron", expression: "0 * * * *", timezone: "UTC" },
@@ -288,7 +288,7 @@ export function SchedulesPanel({
         });
         navigate({
           name: "agent",
-          agentDid: deployment.agentDid,
+          nodeDid: deployment.nodeDid,
           section: "schedules",
           item: schedule_id,
         });

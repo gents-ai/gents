@@ -11,7 +11,7 @@ export type ConfigFlowIds = {
   profileId: string;
   toolServiceId: string;
   toolsId: string;
-  behaviorId: string;
+  agentId: string;
   taskId: string;
   scheduleId: string;
   eventSourceId: string;
@@ -40,7 +40,7 @@ export function createConfigFlowIds(suffix = Date.now().toString()): ConfigFlowI
     profileId: `minimax-profile-${suffix}`,
     toolServiceId: `http-mcp-${suffix}`,
     toolsId: `repo-tools-${suffix}`,
-    behaviorId: `config-behavior-${suffix}`,
+    agentId: `config-agent-${suffix}`,
     taskId: `config-task-${suffix}`,
     scheduleId: `config-schedule-${suffix}`,
     eventSourceId: `config-event-source-${suffix}`,
@@ -259,7 +259,7 @@ export async function createTools({
   await chooseField(driver, `${ids.toolsId}-files`, /^Read \/ write$/);
   await chooseField(driver, `${ids.toolsId}-bash`, /^Read only$/);
   await driver.user.click(
-    screen.getByRole("switch", { name: "Start and message subagent sessions" }),
+    screen.getByRole("switch", { name: "Start and message agent sessions" }),
   );
   const serviceOption = screen.getByText("HTTP MCP Service").closest("label");
   if (!serviceOption) throw new Error("Remote service selection is missing");
@@ -276,39 +276,37 @@ export async function createTools({
     expect(tools?.host?.files?.mode).toBe("ReadWrite");
     expect(tools?.host?.bash?.mode).toBe("ReadOnly");
     expect(tools?.host?.root).toBe(fileToolRoot);
-    expect(tools?.subagents?.enabled).toBe(true);
+    expect(tools?.agents?.enabled).toBe(true);
   });
 }
 
-export async function createBehavior({ runner, driver, ids }: ConfigFlowContext) {
-  await driver.openConfigSection("behaviors");
-  await driver.user.click(screen.getByRole("button", { name: "New behavior" }));
+export async function createAgent({ runner, driver, ids }: ConfigFlowContext) {
+  await driver.openConfigSection("agents");
+  await driver.user.click(screen.getByRole("button", { name: "New agent" }));
   const name = screen.getByRole("textbox", { name: "Display name" });
-  ids.behaviorId = name.id.replace(/-name$/, "");
-  fireEvent.change(name, { target: { value: "Desktop Live Behavior" } });
+  ids.agentId = name.id.replace(/-name$/, "");
+  fireEvent.change(name, { target: { value: "Desktop Live Agent" } });
   changeField(
-    `${ids.behaviorId}-prompt`,
+    `${ids.agentId}-prompt`,
     `You are Amy running a desktop config acceptance flow. Include sentinel ${ids.suffix} when asked about this test.`,
   );
-  await chooseField(driver, `${ids.behaviorId}-tools`, /^Repo Audit Readonly Tools/);
-  await chooseField(driver, `${ids.behaviorId}-profile`, /Desktop Live Profile/);
+  await chooseField(driver, `${ids.agentId}-tools`, /^Repo Audit Readonly Tools/);
+  await chooseField(driver, `${ids.agentId}-profile`, /Desktop Live Profile/);
   await driver.user.click(screen.getByRole("button", { name: "Create" }));
   await waitForDeploymentDocument(runner, (current) => {
-    expect(
-      current.behaviors.some((candidate) => candidate.behaviorId === ids.behaviorId),
-    ).toBe(true);
+    expect(current.agents.some((candidate) => candidate.agentId === ids.agentId)).toBe(
+      true,
+    );
   });
   await driver.user.click(
-    await screen.findByRole("switch", { name: "Desktop Live Behavior is disabled" }),
+    await screen.findByRole("switch", { name: "Desktop Live Agent is disabled" }),
   );
   await waitForDeploymentDocument(runner, (current) => {
-    const behavior = current.behaviors.find(
-      (candidate) => candidate.behaviorId === ids.behaviorId,
-    );
-    expect(behavior?.inferenceProfileId).toBe(ids.profileId);
-    expect(behavior?.enabled).toBe(true);
+    const agent = current.agents.find((candidate) => candidate.agentId === ids.agentId);
+    expect(agent?.inferenceProfileId).toBe(ids.profileId);
+    expect(agent?.enabled).toBe(true);
     const context = current.contexts.find(
-      (candidate) => candidate.context_id === behavior?.contextId,
+      (candidate) => candidate.context_id === agent?.contextId,
     );
     expect(context?.tools_id).toBe(ids.toolsId);
     expect(context?.system_prompt).toContain(`${ids.suffix}`);
@@ -328,7 +326,7 @@ export async function createTask({ runner, driver, ids }: ConfigFlowContext) {
     "auto-prompt",
     `In one short paragraph, say the desktop config flow reached task execution and include sentinel ${ids.suffix}.`,
   );
-  await chooseField(driver, "auto-behavior", /^Desktop Live Behavior/);
+  await chooseField(driver, "auto-agent", /^Desktop Live Agent/);
   await driver.user.click(
     within(screen.getByRole("dialog", { name: "New task" })).getByRole("button", {
       name: "Create",
@@ -338,7 +336,7 @@ export async function createTask({ runner, driver, ids }: ConfigFlowContext) {
     const task = current.tasks.find((candidate) => !before.has(candidate.taskId));
     expect(task).toBeDefined();
     ids.taskId = task!.taskId;
-    expect(task!.behaviorId).toBe(ids.behaviorId);
+    expect(task!.agentId).toBe(ids.agentId);
   });
   await waitFor(
     () => {
@@ -460,13 +458,13 @@ export async function waitForConfigFlowReady(
       async () => {
         const current = (await runner.fetchSnapshot()).client?.deployments[0];
         expect(current).toBeDefined();
-        expect(current!.behaviorReadiness.source.state).toBe("current");
+        expect(current!.nodeReadiness.source.state).toBe("current");
         expect(current!.runtime?.lastReconcileResult).not.toBe("error");
-        expect(current!.behaviorReadiness.routerGeneration).toBe(
-          current!.behaviorReadiness.activeGeneration,
+        expect(current!.nodeReadiness.routerGeneration).toBe(
+          current!.nodeReadiness.activeGeneration,
         );
-        const readiness = current!.behaviorReadiness.behaviors.find(
-          (status) => status.behaviorId === ids.behaviorId,
+        const readiness = current!.nodeReadiness.agents.find(
+          (status) => status.agentId === ids.agentId,
         );
         expect(readiness?.state).toBe("ready");
       },
@@ -476,7 +474,7 @@ export async function waitForConfigFlowReady(
     const current = (await runner.fetchSnapshot()).client?.deployments[0];
     const health = await runner.adapter.listBackendsWithHealth();
     throw new Error(
-      `Config behavior did not become ready: ${String(error).split("\n")[0]}; readiness=${JSON.stringify(current?.behaviorReadiness)}; backendHealth=${JSON.stringify(health)}`,
+      `Config agent did not become ready: ${String(error).split("\n")[0]}; readiness=${JSON.stringify(current?.nodeReadiness)}; backendHealth=${JSON.stringify(health)}`,
     );
   }
 }

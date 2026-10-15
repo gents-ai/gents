@@ -9,11 +9,11 @@ import { resolveTargets } from "./resolveTargets.js";
 // Only facts read by the setup controller; the full snapshot remains the bridge's projection.
 function deployment(): DeploymentView {
   return {
-    agentDid: "did:test:owner",
-    agentPrincipal: { defaultBehaviorId: "behavior" },
-    behaviors: [
+    nodeDid: "did:test:owner",
+    node: { defaultAgentId: "agent" },
+    agents: [
       {
-        behaviorId: "behavior",
+        agentId: "agent",
         inferenceProfileId: " profile ",
         backendId: "retired-flat-binding",
       },
@@ -31,10 +31,10 @@ const options: PersistBackendOptions = {
   providerKind: "ChatGptCodex",
   endpoint: "https://example.test/v1",
   modelName: "selected",
-  auth: { kind: "principal_oauth" },
+  auth: { kind: "node_oauth" },
 };
 describe("canonical inference setup", () => {
-  it("resolves behavior through the profile and patches connection plus model atomically", async () => {
+  it("resolves agent through the profile and patches connection plus model atomically", async () => {
     const onPatchConfigComponents = vi.fn().mockResolvedValue(undefined);
     await persistInferenceBackend({
       deployment: deployment(),
@@ -43,7 +43,7 @@ describe("canonical inference setup", () => {
     });
     expect(onPatchConfigComponents).toHaveBeenCalledTimes(1);
     expect(onPatchConfigComponents).toHaveBeenCalledWith({
-      agentDid: "did:test:owner",
+      nodeDid: "did:test:owner",
       patches: [
         {
           collection: "InferenceBackend",
@@ -52,7 +52,7 @@ describe("canonical inference setup", () => {
             name: "Configured",
             provider_kind: "ChatGptCodex",
             endpoint: "https://example.test/v1",
-            auth: { kind: "principal_oauth" },
+            auth: { kind: "node_oauth" },
             openai_wire_api: null,
             enabled: true,
           },

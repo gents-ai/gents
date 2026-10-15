@@ -5,7 +5,7 @@ import {
   minimizeWindow,
   onMaximizedChange,
   toggleMaximizeWindow,
-} from "../../lib/windowControls";
+} from "../../lib/nativeShell";
 
 export function WindowControls() {
   const [maximized, setMaximized] = useState(false);

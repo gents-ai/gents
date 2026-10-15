@@ -1,7 +1,7 @@
 //! Real signed-row selector consumer; synthetic physical IDs deliberately do
 //! not claim database storage uniqueness, transaction, or replication coverage.
 use super::*;
-use crate::identity::{AgentIdentity, KeyIdentity};
+use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lifecycle::queue::prepare_goal_continuation;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use serde::Deserialize;
@@ -44,9 +44,9 @@ fn signed_row(create: &AgentRequestCreate, doc: u64) -> AgentRequestRow {
         purpose: Some(create.purpose),
         doc_id: Some(format!("physical-{doc}")),
         request_id: create.request_id.clone(),
-        agent_did: Some(create.agent_did.clone()),
+        node_did: Some(create.node_did.clone()),
         requester_did: Some(create.requester_did.clone()),
-        behavior_id: Some(create.behavior_id.clone()),
+        agent_id: Some(create.agent_id.clone()),
         session_id: Some(create.session_id.clone()),
         retry_parent_request: create.retry_parent_request.clone(),
         retry_parent_request_doc_id: create.retry_parent_request_doc_id.clone(),
@@ -65,14 +65,14 @@ fn signed_row(create: &AgentRequestCreate, doc: u64) -> AgentRequestRow {
         retry_count: Some(create.retry_count),
         max_retries: Some(create.max_retries),
         valid_until: create.valid_until.clone(),
-        subagent_depth: Some(i64::from(create.subagent_depth)),
+        request_hop: Some(i64::from(create.request_hop)),
         caused_by_parent_request_id: create.caused_by_parent_request_id.clone(),
         caused_by_parent_request_doc_id: create.caused_by_parent_request_doc_id.clone(),
         caused_by_parent_tool_call_id: create.caused_by_parent_tool_call_id.clone(),
         caused_by_parent_tool_call_doc_id: create.caused_by_parent_tool_call_doc_id.clone(),
         workspace_id: create.workspace_id.clone(),
         workspace_authority: create.workspace_authority.clone(),
-        workspace_owner_agent_did: create.workspace_owner_agent_did.clone(),
+        workspace_owner_node_did: create.workspace_owner_node_did.clone(),
         workspace_seal_hash: create.workspace_seal_hash.clone(),
         lifecycle_state: Some(RequestLifecycleState::Completed),
         admission_kind: Some(create.admission.kind.as_str().into()),
@@ -157,7 +157,7 @@ impl Fixture<'_> {
                 // Model fields name the claimed physical pair, independently of
                 // whether it matches any actual parent in the input snapshot.
                 parent.doc_id = model.parent_doc.map(|doc| format!("physical-{doc}"));
-                parent.agent_did = Some(self.identity(model.owner).did().into());
+                parent.node_did = Some(self.identity(model.owner).did().into());
                 parent.session_id = Some(format!("session-{}", model.session));
                 let parent = crate::watcher::AgentRequest::try_from(parent).unwrap();
                 prepare_goal_continuation(
@@ -168,7 +168,7 @@ impl Fixture<'_> {
                     i64::try_from(model.sequence).unwrap(),
                     false,
                     &now,
-                    parent.subagent_depth,
+                    parent.request_hop,
                 )
                 .unwrap()
             } else {
@@ -235,7 +235,7 @@ async fn generated_goal_request_head_cases_drive_signed_row_selector() {
     for case in snapshot.goal_request_head_cases {
         let goal: GoalDocument = serde_json::from_value(serde_json::json!({
             "_docID": "goal-doc", "goal_id": format!("goal-{}", case.scope.goal),
-            "agent_did": identities[(case.scope.owner - 1) as usize].did(),
+            "node_did": identities[(case.scope.owner - 1) as usize].did(),
             "session_id": format!("session-{}", case.scope.session), "status": "active",
         }))
         .unwrap();
@@ -360,7 +360,7 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
             sequence,
             false,
             "2026-01-01T00:00:02Z",
-            parent.subagent_depth,
+            parent.request_hop,
         )
         .unwrap();
         crate::sign_agent_request_create(&identity, &mut child)

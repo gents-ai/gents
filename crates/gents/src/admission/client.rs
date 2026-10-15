@@ -126,8 +126,8 @@ pub(crate) struct AdmissionCallContext {
     pub(super) request_id: String,
     pub(super) request_doc_id: String,
     pub(super) backend_id: String,
-    pub(super) behavior_id: String,
-    pub(super) agent_did: String,
+    pub(super) agent_id: String,
+    pub(super) node_did: String,
     pub(super) session_id: String,
     pub(super) call_kind: CallKind,
     pub(super) attempt: i64,
@@ -143,15 +143,15 @@ pub(crate) struct AdmissionCallContext {
 impl AdmissionCallContext {
     pub(crate) fn for_request(
         request: &AgentRequest,
-        behavior_id: impl Into<String>,
+        agent_id: impl Into<String>,
         backend_id: impl Into<String>,
     ) -> Self {
         Self {
             request_id: request.request_id.clone(),
             request_doc_id: request.doc_id.clone(),
             backend_id: backend_id.into(),
-            behavior_id: behavior_id.into(),
-            agent_did: request.agent_did.clone(),
+            agent_id: agent_id.into(),
+            node_did: request.node_did.clone(),
             session_id: request.session_id.clone(),
             call_kind: CallKind::Inference,
             attempt: 1,
@@ -171,8 +171,8 @@ impl AdmissionCallContext {
             request_doc_id: self.request_doc_id.clone(),
             call_seq,
             backend_id: self.backend_id.clone(),
-            behavior_id: self.behavior_id.clone(),
-            agent_did: self.agent_did.clone(),
+            agent_id: self.agent_id.clone(),
+            node_did: self.node_did.clone(),
             call_kind: self.call_kind,
             attempt: self.attempt,
         };
@@ -321,8 +321,8 @@ mod backend_scope_tests {
             request_id: "request-label".into(),
             request_doc_id: "physical-request".into(),
             backend_id: "primary".into(),
-            behavior_id: "behavior".into(),
-            agent_did: "did:key:owner".into(),
+            agent_id: "behavior".into(),
+            node_did: "did:key:owner".into(),
             session_id: "session".into(),
             call_kind: CallKind::Inference,
             attempt: 1,
@@ -348,7 +348,7 @@ mod backend_scope_tests {
             assert_eq!(second.backend_id, "summary");
             assert_eq!(third.backend_id, "primary");
             assert_eq!(second.request_doc_id, first.request_doc_id);
-            assert_eq!(second.agent_did, first.agent_did);
+            assert_eq!(second.node_did, first.node_did);
             assert_eq!(join.unwrap().call_id, second.call_id);
         })
         .await;

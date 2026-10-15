@@ -7,7 +7,7 @@
       {
         "collection": "AgentContext",
         "document": {
-          "agent_did": "$trial",
+          "node_did": "$trial",
           "context_id": "personal-notes",
           "display_name": "My notes",
           "system_prompt": "Keep my existing notes unchanged."
@@ -26,7 +26,7 @@
           "name": "installation",
           "collection": "PackInstallation",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "coordinate": {
@@ -44,7 +44,7 @@
           "name": "graphs",
           "collection": "GraphDefinition",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -70,12 +70,12 @@
         {
           "kind": "documents",
           "name": "roles",
-          "collection": "AgentBehavior",
+          "collection": "Agent",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
-            "behavior_id": {
+            "agent_id": {
               "_in": [
                 "review-recon",
                 "review-scan",
@@ -85,7 +85,7 @@
             }
           },
           "fields": [
-            "behavior_id",
+            "agent_id",
             "inference_profile_id"
           ]
         },
@@ -94,7 +94,7 @@
           "name": "profiles",
           "collection": "InferenceProfile",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -109,7 +109,7 @@
           "name": "notes",
           "collection": "AgentContext",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "context_id": {
@@ -222,7 +222,7 @@
           "name": "installation",
           "collection": "PackInstallation",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "coordinate": {
@@ -240,7 +240,7 @@
           "name": "graphs",
           "collection": "GraphDefinition",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -266,12 +266,12 @@
         {
           "kind": "documents",
           "name": "roles",
-          "collection": "AgentBehavior",
+          "collection": "Agent",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
-            "behavior_id": {
+            "agent_id": {
               "_in": [
                 "review-recon",
                 "review-scan",
@@ -281,7 +281,7 @@
             }
           },
           "fields": [
-            "behavior_id",
+            "agent_id",
             "inference_profile_id"
           ]
         },
@@ -290,7 +290,7 @@
           "name": "profiles",
           "collection": "InferenceProfile",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -305,7 +305,7 @@
           "name": "notes",
           "collection": "AgentContext",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "context_id": {

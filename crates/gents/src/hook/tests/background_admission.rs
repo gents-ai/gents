@@ -1,5 +1,5 @@
 use super::*;
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 
 #[tokio::test]
 async fn spawn_process_rejects_target_policy_before_spawned_admission() {
@@ -77,7 +77,7 @@ impl DeniedTarget {
                         health: crate::health_checker::ServiceHealthMap::new(),
                         local_hostname: "local".into(),
                         local_subnet: None,
-                        agent_did: "did:test:test".into(),
+                        node_did: "did:test:test".into(),
                         allowed_mcp_service_ids: vec!["selected-service".into()],
                         remote_tools: crate::document_config::RemoteTools {
                             services: vec![crate::document_config::RemoteServiceTools {
@@ -117,27 +117,17 @@ async fn admission_harness(
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_behavior(&node, identity.did(), "general").await;
+    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
     let root = tempfile::tempdir().unwrap();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        identity.did(),
-        FailurePolicy::default(),
-    )
-    .with_background_tool_registry(registry(&node, root.path()));
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
+            .with_background_tool_registry(registry(&node, root.path()));
     hook.on_completion_call(&user_text_message("run in the background"), &[])
         .await;
     let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_behavior_id(
-        &node,
-        &session,
-        "general",
-        identity.did(),
-        "general",
-    )
-    .await
-    .unwrap();
+    crate::session::create_session_with_agent_id(&node, &session, identity.did(), "general")
+        .await
+        .unwrap();
     let request_id = format!("admission-{}", uuid::Uuid::new_v4());
     bind_interruptible_request(
         &node,

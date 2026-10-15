@@ -14,7 +14,7 @@ fn projection_invalidation_reuses_the_observed_snapshot_allocation() {
     let held = store.snapshot();
     let pointer = Arc::as_ptr(&held);
     let initial = store.projection_revision();
-    store.invalidate_projection();
+    store.invalidate_projection(false);
     assert_eq!(Arc::as_ptr(&store.snapshot()), pointer);
     assert_eq!(
         store.projection_revision().store_version,
@@ -72,13 +72,12 @@ async fn build_observer_fixture() -> (
     (tempdir, node, store, handle)
 }
 
-async fn seed_principal(node: &EmbeddedNode, did: &str) {
+async fn seed_node(node: &EmbeddedNode, did: &str) {
     let mutation = format!(
         r#"mutation {{
-                create_AgentPrincipal(input: {{
-                    agent_did: "{did}",
+                create_Node(input: {{
+                    node_did: "{did}",
                     display_name: "{did}",
-                    default_behavior_id: "default",
                     enabled: true,
                     created_at: "2026-05-07T00:00:00Z",
                     created_by: "test"
@@ -95,7 +94,7 @@ async fn seed_message(node: &EmbeddedNode, session_id: &str, seq: i64, content: 
                 create_AgentMessage(input: {{
                     message_key: "{session_id}:{seq}",
                     session_id: "{session_id}",
-                    agent_did: "did:test:selected",
+                    node_did: "did:test:selected",
                     publication: {{kind: "fork", origin_message_doc_id: "{session_id}:source"}},
                     outcome: "complete",
                     sequence: {seq},
@@ -114,7 +113,7 @@ async fn seed_output_segment(node: &EmbeddedNode, ordinal: i64) {
     let mutation = format!(
         r#"mutation {{
             create_AgentOutputSegment(input: {{
-                agent_did: "did:alpha",
+                node_did: "did:alpha",
                 session_id: "sess-1",
                 request_doc_id: "request-physical",
                 source: {{kind: "authored", key: "burst"}},
@@ -162,11 +161,11 @@ async fn streaming_commits_converge_without_a_forced_batch_window() {
 #[tokio::test]
 async fn multi_collection_burst_fans_out_correctly() {
     let (_tempdir, node, store, handle) = build_observer_fixture().await;
-    seed_principal(node.as_ref(), "did:alpha").await;
+    seed_node(node.as_ref(), "did:alpha").await;
 
     for i in 1..=5 {
         let update_resp = format!(
-            r#"mutation {{ update_AgentPrincipal(filter: {{ agent_did: {{ _eq: "did:alpha" }} }}, input: {{ display_name: "alpha-{i}" }}) {{ _docID }} }}"#
+            r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "did:alpha" }} }}, input: {{ display_name: "alpha-{i}" }}) {{ _docID }} }}"#
         );
         node.execute(&update_resp).await;
 
@@ -177,9 +176,9 @@ async fn multi_collection_burst_fans_out_correctly() {
     let snap = store.snapshot();
 
     assert_eq!(
-        snap.agent_principals
+        snap.nodes
             .iter()
-            .find(|row| row.agent_did == "did:alpha")
+            .find(|row| row.node_did == "did:alpha")
             .and_then(|row| row.display_name.as_deref()),
         Some("alpha-5")
     );
@@ -196,13 +195,11 @@ async fn multi_collection_burst_fans_out_correctly() {
 #[tokio::test]
 async fn dropped_events_with_no_selection_falls_back_to_full() {
     let (_tempdir, node, store, handle) = build_observer_fixture().await;
-    seed_principal(node.as_ref(), "did:zero").await;
+    seed_node(node.as_ref(), "did:zero").await;
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     let snap = store.snapshot();
     assert!(
-        snap.agent_principals
-            .iter()
-            .any(|p| p.agent_did == "did:zero"),
+        snap.nodes.iter().any(|p| p.node_did == "did:zero"),
         "expected did:zero in store"
     );
     handle.shutdown().await;
@@ -243,7 +240,7 @@ async fn hydration_control_updates_only_invalidate_the_session_projection() {
                 create_SessionHydrationRequest(input: {
                     request_key: "peer-1:session-1"
                     requester_did: "did:test:requester"
-                    agent_did: "did:test:agent"
+                    node_did: "did:test:node"
                     session_id: "session-1"
                     created_at: "2026-08-28T00:00:00Z"
                     status: "pending"
@@ -309,5 +306,50 @@ async fn local_write_increments_redundant_fetch_counter() {
         "expected at least 1 local-write fetch; got {}",
         snap.local_write_redundant_fetches
     );
+    handle.shutdown().await;
+}
+
+#[tokio::test]
+async fn tool_call_invalidations_refresh_lineage_without_retaining_transcript() {
+    let (_tempdir, node, store, handle) = build_observer_fixture().await;
+    let mut changes = store.subscribe_changes();
+    let before = store.projection_revision();
+    gents::ConfigAccess::Local(node.clone())
+        .write(
+            "test.lineage_tool_invalidation",
+            r#"mutation {
+            create_AgentToolCall(input: {
+                tool_call_key: "lineage-call",
+                node_did: "did:test:remote",
+                session_id: "remote-session",
+                tool_name: "agent_message"
+            }) { _docID }
+        }"#,
+        )
+        .await
+        .expect("create lineage tool call");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while store.projection_revision().provenance_version == before.provenance_version {
+            changes.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("tool event must invalidate lineage");
+    let after_tool = store.projection_revision();
+    assert!(store.snapshot().tool_calls.is_empty());
+
+    seed_output_segment(node.as_ref(), 0).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while store.projection_revision().store_version == after_tool.store_version {
+            changes.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("stream event must invalidate transcript");
+    assert_eq!(
+        store.projection_revision().provenance_version,
+        after_tool.provenance_version
+    );
+    assert!(store.snapshot().output_segments.is_empty());
     handle.shutdown().await;
 }

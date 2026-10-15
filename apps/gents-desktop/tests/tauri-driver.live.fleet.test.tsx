@@ -1,5 +1,7 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { expect, it } from "vitest";
+
+import { href } from "@/lib/router";
 
 import { withLiveDesktop } from "./tauri-driver-live/harness";
 import { describeLive, logTurn } from "./tauri-driver-live/helpers";
@@ -10,7 +12,8 @@ describeLive("Tauri app live fleet add flow", () => {
       await driver.ready();
       logTurn(`fleet driver ready statusUrl=${runner.baseUrl}/status`);
 
-      await driver.user.click(screen.getByRole("button", { name: "Add Agent" }));
+      await driver.openNodes();
+      await driver.user.click(screen.getByRole("button", { name: "Add node" }));
       await driver.replaceInput("fleet-add-server-address", runner.baseUrl);
       await driver.user.click(screen.getByTestId("fleet-fetch-status"));
 
@@ -18,7 +21,7 @@ describeLive("Tauri app live fleet add flow", () => {
         async () => {
           const latest = await runner.fetchSnapshot();
           const deployment = latest.client?.deployments.find(
-            (candidate) => candidate.agentDid === runner.agentDid,
+            (candidate) => candidate.nodeDid === runner.nodeDid,
           );
           expect(deployment).toBeDefined();
           expect(deployment?.addr).toBe(firstDeployment.addr);
@@ -28,7 +31,14 @@ describeLive("Tauri app live fleet add flow", () => {
           ).not.toBeInTheDocument();
           const peerId = deployment?.peerId;
           expect(peerId).toBeTruthy();
-          expect(screen.getByTestId(`fleet-row-${peerId}`)).toBeInTheDocument();
+          expect(
+            screen.getByRole("link", {
+              name: `${deployment?.node.displayName ?? deployment?.label} sessions`,
+            }),
+          ).toHaveAttribute(
+            "href",
+            href({ name: "sessions", nodeDid: runner.nodeDid }),
+          );
         },
         { timeout: 60_000 },
       );
@@ -43,15 +53,16 @@ describeLive("Tauri app live fleet add flow", () => {
       const initialDeploymentCount =
         (await runner.fetchSnapshot()).client?.deployments.length ?? 0;
 
-      await driver.user.click(screen.getByRole("button", { name: "Add Agent" }));
+      await driver.openNodes();
+      await driver.user.click(screen.getByRole("button", { name: "Add node" }));
       await driver.replaceInput("fleet-add-server-address", "http://127.0.0.1:9");
       await driver.user.click(screen.getByTestId("fleet-fetch-status"));
 
       await waitFor(
         () => {
-          expect(screen.getByTestId("error-banner")).toHaveTextContent(
-            /error|connect|connection|refused|fetch failed/i,
-          );
+          expect(
+            within(screen.getByRole("dialog", { name: "Add node" })).getByRole("alert"),
+          ).toHaveTextContent(/error|connect|connection|refused|fetch failed/i);
         },
         { timeout: 30_000 },
       );

@@ -4,9 +4,9 @@ use std::time::Duration;
 use gents::document_config::{DatastoreTools, SurfaceToolDecl, Tools};
 use gents::graphql::escape_graphql_string;
 use gents::mailbox::{canonical_mailbox_write_decl, list_mailbox_items, MailboxStatus};
-use gents::{AgentIdentity, Collection, DatastoreToolSurfaceDocument};
+use gents::{Collection, DatastoreToolSurfaceDocument, NodeIdentity};
 
-use crate::support::fixtures::{configure_behavior_tools, test_identity};
+use crate::support::fixtures::{configure_agent_tools, test_identity};
 use crate::support::interrupt::create_runtime_request_caused_by_source;
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, wait_for_request_terminal,
@@ -19,17 +19,17 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     let target = live_target();
 
     let db = test_db("mailbox-real-inference").await;
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("mailbox-real-inference"));
-    let (agent_did, behavior_id) = bind_target(db.node.as_ref(), identity.as_ref(), &target).await;
+    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("mailbox-real-inference"));
+    let (node_did, agent_id) = bind_target(db.node.as_ref(), identity.as_ref(), &target).await;
     let surface_id = "mailbox-live-surface";
-    configure_behavior_tools(
+    configure_agent_tools(
         db.node.as_ref(),
-        &agent_did,
-        &behavior_id,
+        &node_did,
+        &agent_id,
         None,
         Tools {
             tools_id: "mailbox-live-tools".into(),
-            agent_did: agent_did.clone(),
+            node_did: node_did.clone(),
             datastore: Some(DatastoreTools {
                 datastore_tool_surface_ids: Some(vec![surface_id.into()]),
                 ..Default::default()
@@ -40,7 +40,7 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
             Collection::DatastoreToolSurface,
             serde_json::to_value(DatastoreToolSurfaceDocument {
                 surface_id: surface_id.into(),
-                agent_did: agent_did.clone(),
+                node_did: node_did.clone(),
                 display_name: Some("Mailbox live surface".into()),
                 enabled: true,
                 entries: Some(vec![
@@ -90,8 +90,8 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     let prompt = "Call file_mailbox_item exactly once with title='Mailbox live verified', then answer MAILBOX_FILED. The tool owns notification identity and handling.";
     create_runtime_request_caused_by_source(
         db.node.as_ref(),
-        &agent_did,
-        &behavior_id,
+        &node_did,
+        &agent_id,
         request_id,
         session_id,
         &source_id,
@@ -109,13 +109,13 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].title, "Mailbox live verified");
     assert_eq!(items[0].requester_did, identity.did());
-    assert_eq!(items[0].agent_did, agent_did);
-    assert_eq!(items[0].target_behavior_id, behavior_id);
+    assert_eq!(items[0].node_did, node_did);
+    assert_eq!(items[0].target_agent_id, agent_id);
     assert_eq!(items[0].source_kind, "agent");
     assert_eq!(
         items[0].source_id,
         gents::mailbox::NotificationIdentity::Event
-            .source_id(&agent_did, identity.did(), &behavior_id, request_id)
+            .source_id(&node_did, identity.did(), &agent_id, request_id)
             .unwrap()
     );
     assert_eq!(items[0].cause_doc_id.as_deref(), Some(source_id.as_str()));

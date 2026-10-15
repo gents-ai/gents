@@ -11,6 +11,7 @@ pub(crate) struct DurableClaimReceipt {
     valid_until_at_claim: Option<chrono::DateTime<chrono::Utc>>,
     execution_generation: String,
     lease_ms: u64,
+    folded_selection: Vec<super::queue::FoldedInput>,
 }
 
 pub(crate) enum DurableClaimOutcome {
@@ -53,8 +54,15 @@ async fn claim_request_with_projection<F>(
     capture_background_snapshot: bool,
     request: &AgentRequest,
     claimed_at: &str,
+    fold_admitted: &[String],
     build_mutation: F,
-) -> Result<Option<(defra_node::QueryResponse, BackgroundCompletionClaimSnapshot)>>
+) -> Result<
+    Option<(
+        defra_node::QueryResponse,
+        BackgroundCompletionClaimSnapshot,
+        Vec<super::queue::FoldedInput>,
+    )>,
+>
 where
     F: Fn(&str) -> String + Sync,
 {
@@ -134,6 +142,7 @@ where
                     .unwrap_or_default();
                 let mutation = build_mutation(&snapshot_fields);
                 let claimed = txn.execute_local_response(&mutation).await?;
+                let mut folded_selection = Vec::new();
                 if request.purpose == gents_protocol::request_admission::RequestPurpose::Normal
                     && claimed
                         .data
@@ -145,8 +154,15 @@ where
                     crate::mailbox::claim_reply_in_txn(&txn, request, claimed_at).await?;
                     super::materialize::apply_request_session_projection(&txn, request, claimed_at)
                         .await?;
+                    folded_selection = super::queue::select_fold_in_claim_txn(
+                        &txn,
+                        request,
+                        fold_admitted,
+                        claimed_at,
+                    )
+                    .await?;
                 }
-                Ok::<_, anyhow::Error>(Some((claimed, snapshot)))
+                Ok::<_, anyhow::Error>(Some((claimed, snapshot, folded_selection)))
             })
         },
     )
@@ -251,7 +267,10 @@ impl RequestLifecycle {
 
     /// Commit the modeled claimed → processing boundary before allocating a
     /// local stream buffer. Beginning creates no output document and does not
-    /// renew the lease. A committed begin is the durable replay fact.
+    /// renew the lease. A committed begin is the durable replay fact. Every
+    /// provider-capable path, including title dispatch and pre-inference
+    /// compaction, must cross this fence before starting: terminalization uses
+    /// an owned Claimed state as positive evidence of no provider work.
     pub async fn begin_owned_execution(
         &mut self,
         stream_writer: &crate::streaming::DefraStreamWriter,
@@ -346,14 +365,14 @@ impl RequestLifecycle {
 
     async fn transition_pending_to_interrupted(&mut self, _interrupt_at: &str) -> Result<()> {
         let doc_id = escape_graphql_string(&self.request.doc_id);
-        let agent_did = escape_graphql_string(&self.request.agent_did);
+        let node_did = escape_graphql_string(&self.request.node_did);
         let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
                     docID: "{doc_id}", filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
-                        agent_did: {{ _eq: "{agent_did}" }},
+                        node_did: {{ _eq: "{node_did}" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
                     input: {{
@@ -361,7 +380,7 @@ impl RequestLifecycle {
                         terminalized_at: "{terminalized_at}",
                         terminal_redrive_attempts: 0
                     }}
-                ) {{ _docID request_id workspace_id workspace_owner_agent_did }}
+                ) {{ _docID request_id workspace_id workspace_owner_node_did }}
             }}"#
         );
         let request = &self.request;
@@ -387,7 +406,7 @@ impl RequestLifecycle {
                         }
                         crate::trigger_engine::durable::publish_request_outcome(
                             txn,
-                            &request.agent_did,
+                            &request.node_did,
                             &request.request_id,
                             "interrupted",
                             "interrupted before claim",
@@ -428,14 +447,14 @@ impl RequestLifecycle {
 
     async fn transition_pending_to_dead_stale(&mut self) -> Result<()> {
         let doc_id = escape_graphql_string(&self.request.doc_id);
-        let agent_did = escape_graphql_string(&self.request.agent_did);
+        let node_did = escape_graphql_string(&self.request.node_did);
         let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
                     docID: "{doc_id}", filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
-                        agent_did: {{ _eq: "{agent_did}" }},
+                        node_did: {{ _eq: "{node_did}" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
                     input: {{
@@ -444,7 +463,7 @@ impl RequestLifecycle {
                         terminalized_at: "{terminalized_at}",
                         terminal_redrive_attempts: 0
                     }}
-                ) {{ _docID request_id workspace_id workspace_owner_agent_did }}
+                ) {{ _docID request_id workspace_id workspace_owner_node_did }}
             }}"#
         );
         let request = &self.request;
@@ -470,7 +489,7 @@ impl RequestLifecycle {
                         }
                         crate::trigger_engine::durable::publish_request_outcome(
                             txn,
-                            &request.agent_did,
+                            &request.node_did,
                             &request.request_id,
                             "dead",
                             "Stale",
@@ -513,7 +532,7 @@ impl RequestLifecycle {
     pub async fn reject_admission(&mut self, reason: &str) -> Result<()> {
         self.ensure_state(&[LocalLifecycleState::Pending], "reject_admission")?;
         let request_doc_id = escape_graphql_string(&self.request.doc_id);
-        let agent_did = escape_graphql_string(&self.request.agent_did);
+        let node_did = escape_graphql_string(&self.request.node_did);
         let reason_text = reason.to_string();
         let reason = escape_graphql_string(&reason_text);
         let terminalized_at_value = chrono::Utc::now().to_rfc3339();
@@ -523,7 +542,7 @@ impl RequestLifecycle {
                 update_AgentRequest(
                     docID: "{request_doc_id}", filter: {{
                         _docID: {{ _eq: "{request_doc_id}" }},
-                        agent_did: {{ _eq: "{agent_did}" }},
+                        node_did: {{ _eq: "{node_did}" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
                     input: {{
@@ -533,7 +552,7 @@ impl RequestLifecycle {
                         terminal_redrive_attempts: 0,
                         terminal_output: $terminal_output
                     }}
-                ) {{ _docID request_id workspace_id workspace_owner_agent_did }}
+                ) {{ _docID request_id workspace_id workspace_owner_node_did }}
             }}"#
         );
         let request_mutation = &request_mutation;
@@ -567,10 +586,16 @@ impl RequestLifecycle {
                         }
                         crate::trigger_engine::durable::publish_request_outcome(
                             txn,
-                            &request.agent_did,
+                            &request.node_did,
                             &request.request_id,
                             "failed",
                             outcome_reason,
+                            outcome_time,
+                        )
+                        .await?;
+                        super::materialize::project_refused_request_session_in_txn(
+                            txn,
+                            request,
                             outcome_time,
                         )
                         .await?;
@@ -622,6 +647,7 @@ impl RequestLifecycle {
         self.background_completion_input_through_sequence =
             receipt.background_completion_input_through_sequence;
         self.valid_until_at_claim = receipt.valid_until_at_claim;
+        self.folded_selection = receipt.folded_selection;
         self.execution_lease = Some(RequestExecutionLease::new(
             receipt.execution_generation.clone(),
         ));
@@ -737,12 +763,13 @@ impl RequestLifecycle {
         let is_background_completion = self.request.purpose
             == gents_protocol::request_admission::RequestPurpose::Normal
             && crate::lifecycle::is_background_completion_request(&self.request.input);
-        let Some((resp, snapshot)) = claim_request_with_projection(
+        let Some((resp, snapshot, folded_selection)) = claim_request_with_projection(
             self.node.as_ref(),
             &self.request.session_id,
             is_background_completion,
             &self.request,
             &claimed_at,
+            &self.fold_admitted,
             &build_mutation,
         )
         .await?
@@ -792,6 +819,7 @@ impl RequestLifecycle {
             valid_until_at_claim: self.valid_until_at_claim,
             execution_generation,
             lease_ms: lease_ms as u64,
+            folded_selection,
         }))
     }
 }
@@ -802,8 +830,8 @@ mod tests {
 
     use super::*;
 
-    const TEST_AGENT_DID: &str = "did:test:claim-order-test";
-    const TEST_BEHAVIOR_ID: &str = "general";
+    const TEST_NODE_DID: &str = "did:test:claim-order-test";
+    const TEST_AGENT_ID: &str = "general";
     const TEST_BACKEND_ID: &str = "backend-order";
 
     async fn test_node() -> Arc<EmbeddedNode> {
@@ -912,7 +940,7 @@ mod tests {
     ) -> AgentRequest {
         insert_pending_request_for_owner(
             node,
-            TEST_AGENT_DID,
+            TEST_NODE_DID,
             request_id,
             session_id,
             created_at,
@@ -944,8 +972,8 @@ mod tests {
                 create_AgentRequest(input: {{
                     request_id: "{escaped_request_id}",
                     purpose: "normal",
-                    agent_did: "{escaped_owner}",
-                    behavior_id: "{TEST_BEHAVIOR_ID}",
+                    node_did: "{escaped_owner}",
+                    agent_id: "{TEST_AGENT_ID}",
                     session_id: "{escaped_session_id}",
                     retry_parent_request: "",
                     retry_root_request: "{escaped_request_id}",
@@ -959,7 +987,7 @@ mod tests {
                     created_at: "{escaped_created_at}",
                     retry_count: 0,
                     max_retries: {max_retries},
-                    subagent_depth: 0
+                    request_hop: 0
                 }}) {{ {fields} }}
             }}"#,
             max_retries = DEFAULT_REQUEST_MAX_RETRIES,
@@ -1007,8 +1035,8 @@ mod tests {
         let doc_id = request.doc_id.clone();
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_BEHAVIOR_ID,
-            TEST_AGENT_DID,
+            TEST_AGENT_ID,
+            TEST_NODE_DID,
             request,
             60,
             ExecutionOrigin::Interactive,
@@ -1134,7 +1162,7 @@ mod tests {
                 let session = "task-goal-session";
                 let original = crate::goal::set_goal(
                     &node,
-                    TEST_AGENT_DID,
+                    TEST_NODE_DID,
                     session,
                     Some("finish original work"),
                     Some(crate::goal::GoalStatus::Active),
@@ -1163,7 +1191,7 @@ mod tests {
                 .await;
                 let assigned_doc_id = second.doc_id.clone();
                 let receipt = serde_json::json!({
-                    "fire_key": "task-goal-fire", "owner_did": TEST_AGENT_DID,
+                    "fire_key": "task-goal-fire", "owner_did": TEST_NODE_DID,
                     "task_id": "goal-task", "created_at": "2026-01-01T00:00:01Z",
                     "trigger_id": "task-goal-trigger", "source_collection": "Work",
                     "source_doc_id": "assignment", "request_id": second.request_id,
@@ -1181,8 +1209,8 @@ mod tests {
         }).await.unwrap();
                 let mut first_lifecycle = RequestLifecycle::new_with_execution_binding(
                     node.clone(),
-                    TEST_BEHAVIOR_ID,
-                    TEST_AGENT_DID,
+                    TEST_AGENT_ID,
+                    TEST_NODE_DID,
                     first,
                     60,
                     ExecutionOrigin::Interactive,
@@ -1190,8 +1218,8 @@ mod tests {
                 );
                 let mut second_lifecycle = RequestLifecycle::new_with_execution_binding(
                     node.clone(),
-                    TEST_BEHAVIOR_ID,
-                    TEST_AGENT_DID,
+                    TEST_AGENT_ID,
+                    TEST_NODE_DID,
                     second,
                     60,
                     ExecutionOrigin::Interactive,
@@ -1210,7 +1238,7 @@ mod tests {
                         .unwrap(),
                     DurableClaimOutcome::NotClaimed(ClaimOutcome::Queued)
                 ));
-                let unchanged = crate::goal::load_canonical_goal(&node, TEST_AGENT_DID, session)
+                let unchanged = crate::goal::load_canonical_goal(&node, TEST_NODE_DID, session)
                     .await
                     .unwrap()
                     .unwrap();
@@ -1222,7 +1250,7 @@ mod tests {
                 let finish = format!(
                     r#"mutation {{
             update_AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, input: {{lifecycle_state: "completed"}}) {{_docID}}
-            create_InferenceCall(input: {{call_id: "prior-usage", request_id: "prior-request", agent_did: "{TEST_AGENT_DID}", prompt_tokens: 100, completion_tokens: 0}}) {{_docID}}
+            create_InferenceCall(input: {{call_id: "prior-usage", request_id: "prior-request", node_did: "{TEST_NODE_DID}", prompt_tokens: 100, completion_tokens: 0}}) {{_docID}}
         }}"#,
                     escape_graphql_string(&first_doc_id)
                 );
@@ -1243,7 +1271,7 @@ mod tests {
                 if stopped {
                     crate::goal::set_goal(
                         &node,
-                        TEST_AGENT_DID,
+                        TEST_NODE_DID,
                         session,
                         None,
                         Some(crate::goal::GoalStatus::Complete),
@@ -1257,7 +1285,7 @@ mod tests {
                     .await
                     .unwrap()
                     .was_claimed());
-                let assigned = crate::goal::load_canonical_goal(&node, TEST_AGENT_DID, session)
+                let assigned = crate::goal::load_canonical_goal(&node, TEST_NODE_DID, session)
                     .await
                     .unwrap()
                     .unwrap();
@@ -1322,7 +1350,7 @@ mod tests {
         for request in [&first, &second] {
             let input = serde_json::json!({
                 "fire_key": format!("test-fire:{}", request.request_id),
-                "owner_did": TEST_AGENT_DID,
+                "owner_did": TEST_NODE_DID,
                 "trigger_id": "queued-serial-trigger",
                 "source_collection": "Work",
                 "source_doc_id": request.request_id,
@@ -1348,8 +1376,8 @@ mod tests {
         let second_doc_id = second.doc_id.clone();
         let mut first_lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_BEHAVIOR_ID,
-            TEST_AGENT_DID,
+            TEST_AGENT_ID,
+            TEST_NODE_DID,
             first,
             60,
             ExecutionOrigin::Interactive,
@@ -1357,8 +1385,8 @@ mod tests {
         );
         let mut second_lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_BEHAVIOR_ID,
-            TEST_AGENT_DID,
+            TEST_AGENT_ID,
+            TEST_NODE_DID,
             second,
             60,
             ExecutionOrigin::Interactive,
@@ -1435,8 +1463,8 @@ mod tests {
 
         let mut first_lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_BEHAVIOR_ID,
-            TEST_AGENT_DID,
+            TEST_AGENT_ID,
+            TEST_NODE_DID,
             first,
             60,
             ExecutionOrigin::Interactive,
@@ -1444,8 +1472,8 @@ mod tests {
         );
         let mut second_lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_BEHAVIOR_ID,
-            TEST_AGENT_DID,
+            TEST_AGENT_ID,
+            TEST_NODE_DID,
             second,
             60,
             ExecutionOrigin::Interactive,
@@ -1495,6 +1523,8 @@ mod tests {
         use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
         let input = RequestInput {
             queue: Some(RequestQueue {
+                delivery: Default::default(),
+                position: None,
                 source: QueueSource::BackgroundCompletion,
                 policy: QueuePolicy::Coalesce,
                 key: Some(format!("background_completion:{session_id}")),
@@ -1519,10 +1549,10 @@ mod tests {
             &node,
             "prior-request-doc",
             session_id,
-            TEST_AGENT_DID,
+            TEST_NODE_DID,
             None,
             "first notification",
-            "background-completion-notification:child-1:subagent",
+            "background-completion-notification:child-1:agent",
             1,
             None,
         )
@@ -1531,7 +1561,7 @@ mod tests {
             &node,
             "prior-request-doc",
             session_id,
-            TEST_AGENT_DID,
+            TEST_NODE_DID,
             None,
             "prior context",
             "prior-context",
@@ -1543,8 +1573,8 @@ mod tests {
         let request_doc_id = request.doc_id.clone();
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            TEST_BEHAVIOR_ID,
-            TEST_AGENT_DID,
+            TEST_AGENT_ID,
+            TEST_NODE_DID,
             request,
             60,
             ExecutionOrigin::Scheduled,
@@ -1584,17 +1614,17 @@ mod tests {
                     .unwrap()
             )
             .unwrap(),
-            vec!["background-completion-notification:child-1:subagent"]
+            vec!["background-completion-notification:child-1:agent"]
         );
 
         session::import_history_observation(
             &node,
             "successor-request-doc",
             session_id,
-            TEST_AGENT_DID,
+            TEST_NODE_DID,
             None,
             "successor notification",
-            "background-completion-notification:child-2:subagent",
+            "background-completion-notification:child-2:agent",
             3,
             None,
         )
@@ -1602,7 +1632,7 @@ mod tests {
         let history = session::load_history_through_sequence(
             node.as_ref(),
             session_id,
-            TEST_AGENT_DID,
+            TEST_NODE_DID,
             None,
             lifecycle.background_completion_input_through_sequence(),
         )
@@ -1636,8 +1666,8 @@ mod tests {
             request.max_total_tokens = Some(999);
             let mut first = RequestLifecycle::new_with_execution_binding(
                 node.clone(),
-                TEST_BEHAVIOR_ID,
-                TEST_AGENT_DID,
+                TEST_AGENT_ID,
+                TEST_NODE_DID,
                 request,
                 3600,
                 ExecutionOrigin::Interactive,
@@ -1671,8 +1701,8 @@ mod tests {
             resumed_request.max_total_tokens = expected;
             let mut resumed = RequestLifecycle::new_with_execution_binding(
                 node.clone(),
-                TEST_BEHAVIOR_ID,
-                TEST_AGENT_DID,
+                TEST_AGENT_ID,
+                TEST_NODE_DID,
                 resumed_request,
                 3600,
                 ExecutionOrigin::Interactive,

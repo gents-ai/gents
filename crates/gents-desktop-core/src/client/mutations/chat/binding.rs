@@ -5,13 +5,13 @@ use crate::client::store::ClientStore;
 use super::super::graphql::normalize_optional_string;
 
 pub(super) struct ResolvedAgentBinding {
-    pub(super) behavior_id: Option<String>,
+    pub(super) agent_id: Option<String>,
 }
 
 pub(super) fn resolve_agent_binding(
     store: &ClientStore,
-    agent_did: &str,
-    requested_behavior_id: Option<&str>,
+    node_did: &str,
+    requested_agent_id: Option<&str>,
     session_id: Option<&str>,
 ) -> Result<ResolvedAgentBinding> {
     let existing_session = session_id.and_then(|session_id| {
@@ -21,55 +21,53 @@ pub(super) fn resolve_agent_binding(
             .enumerate()
             .find(|(index, row)| {
                 row.session_id == session_id
-                    && row.agent_did == agent_did
+                    && row.node_did == node_did
                     && store
-                        .session_source_agent_dids
+                        .session_source_node_dids
                         .get(*index)
                         .and_then(|source| source.as_deref())
-                        .is_none_or(|source| source == agent_did)
+                        .is_none_or(|source| source == node_did)
             })
             .map(|(_index, row)| row)
     });
 
-    let behavior_id = resolve_behavior_id(
+    let agent_id = resolve_agent_id(
         store,
-        agent_did,
-        requested_behavior_id,
-        existing_session.map(|row| row.behavior_id.as_str()),
+        node_did,
+        requested_agent_id,
+        existing_session.map(|row| row.agent_id.as_str()),
     )?;
-    Ok(ResolvedAgentBinding { behavior_id })
+    Ok(ResolvedAgentBinding { agent_id })
 }
 
-fn resolve_behavior_id(
+fn resolve_agent_id(
     store: &ClientStore,
-    agent_did: &str,
-    requested_behavior_id: Option<&str>,
-    existing_session_behavior_id: Option<&str>,
+    node_did: &str,
+    requested_agent_id: Option<&str>,
+    existing_session_agent_id: Option<&str>,
 ) -> Result<Option<String>> {
-    let requested = normalize_optional_string(requested_behavior_id);
+    let requested = normalize_optional_string(requested_agent_id);
 
-    let session_behavior = normalize_optional_string(existing_session_behavior_id);
+    let session_agent = normalize_optional_string(existing_session_agent_id);
 
-    if let (Some(existing), Some(requested)) = (session_behavior, requested) {
+    if let (Some(existing), Some(requested)) = (session_agent, requested) {
         if existing != requested {
-            bail!(
-                "AgentSession session behavior mismatch: existing={existing} requested={requested}"
-            );
+            bail!("AgentSession session agent mismatch: existing={existing} requested={requested}");
         }
     }
 
-    let resolved = session_behavior
+    let resolved = session_agent
         .or(requested)
         .or_else(|| {
             store
-                .agent_principals
+                .nodes
                 .iter()
-                .find(|row| row.agent_did == agent_did)
-                .and_then(|row| normalize_optional_string(row.default_behavior_id.as_deref()))
+                .find(|row| row.node_did == node_did)
+                .and_then(|row| normalize_optional_string(row.default_agent_id.as_deref()))
         })
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "no behavior is bound to this session and AgentPrincipal {agent_did} has no default_behavior_id"
+                "no agent is bound to this session and Node {node_did} has no default_agent_id"
             )
         })?
         .to_owned();

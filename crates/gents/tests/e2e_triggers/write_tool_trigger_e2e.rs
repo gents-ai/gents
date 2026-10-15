@@ -6,11 +6,11 @@ use gents::defra_write::BoundedWriteTool;
 use gents::document_config::{WriteToolDecl, WriteToolField};
 use gents::graphql::escape_graphql_string;
 use gents::llm::tool::Tool;
-use gents::{AgentIdentity, Collection, DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
 
-use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
+use crate::support::fixtures::{bind_default_agent_backend, test_identity};
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{fetch_runtime_snapshot, is_routed_ready_after, RuntimeSnapshot};
 use crate::support::test_db;
@@ -36,7 +36,7 @@ async fn register_action_request_schema(node: &EmbeddedNode) {
 }
 
 /// Publish canonical desired-state documents through the shared apply owner.
-/// Exact owner (agent_did) is authored on every document; the desired-state
+/// Exact owner (node_did) is authored on every document; the desired-state
 /// owner validates same-owner references before committing.
 async fn apply_documents(node: &EmbeddedNode, documents: Vec<(Collection, serde_json::Value)>) {
     use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
@@ -64,21 +64,21 @@ async fn configure_action_trigger(
     owner: &str,
     task_id: &str,
     trigger_id: &str,
-    behavior_id: &str,
+    agent_id: &str,
     prompt_template: &str,
 ) {
     apply_documents(node, vec![
         (
             Collection::Task,
-            serde_json::json!({"agent_did":owner,"task_id":task_id,"behavior_id":behavior_id,"prompt_template":prompt_template}),
+            serde_json::json!({"node_did":owner,"task_id":task_id,"agent_id":agent_id,"prompt_template":prompt_template}),
         ),
         (
             Collection::EventSource,
-            serde_json::json!({"agent_did":owner,"event_source_id":trigger_id,"source_collection":"ActionRequest","event_kind":"created"}),
+            serde_json::json!({"node_did":owner,"event_source_id":trigger_id,"source_collection":"ActionRequest","event_kind":"created"}),
         ),
         (
             Collection::Trigger,
-            serde_json::json!({"agent_did":owner,"trigger_id":trigger_id,"task_id":task_id,"source":{"kind":"event","event_source_id":trigger_id},"concurrency":"serial"}),
+            serde_json::json!({"node_did":owner,"trigger_id":trigger_id,"task_id":task_id,"source":{"kind":"event","event_source_id":trigger_id},"concurrency":"serial"}),
         ),
     ])
     .await;
@@ -86,7 +86,7 @@ async fn configure_action_trigger(
 
 async fn wait_for_runtime_snapshot<F>(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     runtime: &tokio::task::JoinHandle<anyhow::Result<()>>,
     predicate: F,
 ) -> RuntimeSnapshot
@@ -95,7 +95,7 @@ where
 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let last_snapshot = fetch_runtime_snapshot(node, agent_did).await;
+        let last_snapshot = fetch_runtime_snapshot(node, node_did).await;
         if let Some(snapshot) = last_snapshot.as_ref() {
             if predicate(snapshot) {
                 return snapshot.clone();
@@ -103,7 +103,7 @@ where
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {agent_did}; runtime_finished={}; \
+            "timed out waiting for runtime snapshot for {node_did}; runtime_finished={}; \
              last_snapshot={last_snapshot:?}",
             runtime.is_finished()
         );
@@ -118,7 +118,7 @@ fn routed_readiness_uses_generation_not_transient_reconcile_label() {
         reconcile_phase: "idle".into(),
         active_generation: 2,
         router_generation: 2,
-        default_behavior_id: "behavior".into(),
+        default_agent_id: "behavior".into(),
         last_reconcile_result: "noop".into(),
         last_reconcile_error: String::new(),
     };
@@ -265,7 +265,7 @@ async fn boot_agent_with_action_trigger(
 ) {
     let identity = Arc::new(test_identity(test_name));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         db.node.as_ref(),
         identity.did(),
         &format!("backend-{test_name}"),
@@ -273,7 +273,7 @@ async fn boot_agent_with_action_trigger(
     )
     .await;
 
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -283,13 +283,13 @@ async fn boot_agent_with_action_trigger(
     )
     .await
     .unwrap();
-    let agent_did = agent.agent_did().to_string();
-    let default_behavior_id = agent.default_behavior_id().to_string();
+    let node_did = agent.node_did().to_string();
+    let default_agent_id = agent.default_agent_id().to_string();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, &handle, |snapshot| {
+    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, &handle, |snapshot| {
         is_routed_ready_after(snapshot, 0)
     })
     .await;
@@ -302,15 +302,15 @@ async fn boot_agent_with_action_trigger(
 
     configure_action_trigger(
         db.node.as_ref(),
-        &agent_did,
+        &node_did,
         task_id,
         trigger_id,
-        &default_behavior_id,
+        &default_agent_id,
         PROMPT_TEMPLATE,
     )
     .await;
 
-    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, &handle, |snapshot| {
+    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, &handle, |snapshot| {
         is_routed_ready_after(snapshot, initial_generation)
     })
     .await;

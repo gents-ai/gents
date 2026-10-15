@@ -11,16 +11,14 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::request_lifecycle::RequestLifecycleState;
 
-pub use crate::behavior_readiness::{
-    decode_behavior_readiness_snapshot, effective_behavior_readiness_admission,
-    is_behavior_unavailable_rejection, project_behavior_readiness,
-    project_behavior_readiness_source, project_behavior_readiness_summary,
-    AgentBehaviorReadinessRow, BehaviorReadinessEntry, BehaviorReadinessProcessState,
-    BehaviorReadinessProjection, BehaviorReadinessSnapshot, BehaviorReadinessSourceEntry,
-    BehaviorReadinessState, BehaviorReadinessSummary, BehaviorReadinessUnavailableReason,
-    BehaviorReadinessUnknownReason, EffectiveBehaviorReadinessAdmission,
-    ProjectedBehaviorReadiness, ProjectedBehaviorReadinessSummary, BEHAVIOR_NOT_ASSIGNED_MESSAGE,
-    BEHAVIOR_READINESS_FORMAT_VERSION,
+pub use crate::node_readiness::{
+    decode_node_readiness_snapshot, effective_agent_readiness_admission,
+    is_behavior_unavailable_rejection, project_node_readiness, project_node_readiness_source,
+    project_node_readiness_summary, AgentReadinessEntry, AgentReadinessSourceEntry,
+    AgentReadinessState, AgentReadinessUnavailableReason, AgentReadinessUnknownReason,
+    EffectiveAgentReadinessAdmission, NodeReadinessProcessState, NodeReadinessProjection,
+    NodeReadinessRow, NodeReadinessSnapshot, NodeReadinessSummary, ProjectedAgentReadiness,
+    ProjectedNodeReadinessSummary, BEHAVIOR_NOT_ASSIGNED_MESSAGE, NODE_READINESS_FORMAT_VERSION,
 };
 
 pub(crate) fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
@@ -32,16 +30,16 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentRuntimeRow {
-    pub agent_did: String,
+pub struct NodeRuntimeRow {
+    pub node_did: String,
     #[serde(default)]
     pub reconcile_phase: Option<String>,
     #[serde(default)]
-    pub behavior_executor_capacity: Option<i64>,
+    pub agent_executor_capacity: Option<i64>,
     #[serde(default)]
-    pub behavior_executor_queue_depth: Option<i64>,
+    pub agent_executor_queue_depth: Option<i64>,
     #[serde(default)]
-    pub behavior_executor_status_json: Option<String>,
+    pub agent_executor_status_json: Option<String>,
     #[serde(default)]
     pub last_reconcile_result: Option<String>,
     #[serde(default)]
@@ -60,7 +58,7 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub purpose: Option<crate::request_admission::RequestPurpose>,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(default)]
     pub requester_did: Option<String>,
     #[serde(default)]
@@ -86,7 +84,7 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub runtime_source_kind: Option<String>,
     #[serde(default)]
-    pub behavior_id: Option<String>,
+    pub agent_id: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
@@ -169,15 +167,19 @@ pub struct AgentRequestRow {
     pub max_retries: Option<i64>,
     #[serde(default)]
     pub interrupt_requested_at: Option<String>,
+    /// Positive terminal-owner evidence that no provider-capable work began.
+    /// Missing/false never licenses inference from absent provider rows.
+    #[serde(default)]
+    pub stopped_before_running: Option<bool>,
     #[serde(default)]
     pub valid_until: Option<String>,
     #[serde(default)]
-    pub subagent_depth: Option<i64>,
+    pub request_hop: Option<i64>,
     #[serde(default)]
     pub workspace_id: Option<String>,
-    /// Signed workspace reference scope, independent of the executing principal.
+    /// Signed workspace reference scope, independent of the executing node.
     #[serde(default)]
-    pub workspace_owner_agent_did: Option<String>,
+    pub workspace_owner_node_did: Option<String>,
     #[serde(default)]
     pub workspace_authority: Option<String>,
     #[serde(default)]
@@ -207,7 +209,7 @@ pub struct MailboxItemRow {
     pub doc_id: String,
     pub item_key: String,
     pub requester_did: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub status: String,
     pub kind: String,
     pub action: String,
@@ -226,8 +228,8 @@ pub struct MailboxItemRow {
     pub graph_run_id: Option<String>,
     #[serde(default)]
     pub cause_doc_id: Option<String>,
-    pub target_agent_did: String,
-    pub target_behavior_id: String,
+    pub target_node_did: String,
+    pub target_agent_id: String,
     #[serde(default)]
     pub expected_collection: Option<String>,
     #[serde(default)]
@@ -257,7 +259,7 @@ pub struct GoalRow {
     )]
     pub tags: Vec<String>,
     pub session_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(default)]
     pub creation_key: Option<String>,
     #[serde(default)]
@@ -305,7 +307,7 @@ pub struct AgentToolCallRow {
     #[serde(default, rename = "_docID")]
     pub doc_id: Option<String>,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(default)]
     pub request_doc_id: Option<String>,
     pub tool_call_key: String,
@@ -330,6 +332,12 @@ pub struct AgentToolCallRow {
     #[serde(default)]
     pub spawned_by_tool_call_doc_id: Option<String>,
     #[serde(default)]
+    pub plugin_parent_tool_call_doc_id: Option<String>,
+    #[serde(default)]
+    pub plugin_effect_ordinal: Option<u32>,
+    #[serde(default)]
+    pub terminal_output: Option<crate::output::PresentedPayload>,
+    #[serde(default)]
     pub await_mode: Option<String>,
     #[serde(default)]
     pub started_at: Option<String>,
@@ -341,6 +349,8 @@ pub struct AgentToolCallRow {
     pub selected_service_id: Option<String>,
     #[serde(default)]
     pub selected_tool_name: Option<String>,
+    #[serde(default)]
+    pub plugin_execution_receipt: Option<crate::plugin::PluginExecutionReceipt>,
     #[serde(default)]
     pub tool_failure_class: Option<String>,
     #[serde(default)]
@@ -402,7 +412,7 @@ pub struct OAuthCredentialRow {
     pub doc_id: Option<String>,
     pub credential_id: String,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(default)]
     pub provider: Option<String>,
     #[serde(default)]
@@ -459,7 +469,7 @@ pub struct ToolServiceRegistryRow {
     #[serde(default)]
     pub mcp_path: Option<String>,
     #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub send_agent_did: bool,
+    pub send_node_did: bool,
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub tools: Vec<ToolServiceEntry>,
     #[serde(default)]
@@ -482,7 +492,7 @@ pub struct ToolServiceRegistryRow {
 pub struct ToolServiceHealthStateRow {
     pub service_id: String,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(default)]
     pub endpoint: Option<String>,
     #[serde(default)]
@@ -516,8 +526,8 @@ mod tests {
         let json = r#"{
             "_docID": "doc-1",
             "request_id": "req-1",
-            "agent_did": "did:test:amy",
-            "behavior_id": "amy-code",
+            "node_did": "did:test:amy",
+            "agent_id": "amy-code",
             "session_id": "s-1",
             "retry_parent_request": "",
             "retry_root_request": "req-1",
@@ -629,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_service_registry_defaults_send_agent_did_to_false() {
+    fn tool_service_registry_defaults_send_node_did_to_false() {
         let json = r#"{
             "service_id": "observability-mcp",
             "hostname": "studio-1",
@@ -637,19 +647,59 @@ mod tests {
             "mcp_path": "/mcp"
         }"#;
         let row: ToolServiceRegistryRow = serde_json::from_str(json).expect("parse");
-        assert!(!row.send_agent_did);
+        assert!(!row.send_node_did);
     }
 
     #[test]
-    fn tool_service_registry_treats_null_send_agent_did_as_false() {
+    fn tool_service_registry_treats_null_send_node_did_as_false() {
         let json = r#"{
             "service_id": "observability-mcp",
             "hostname": "studio-1",
             "mcp_port": 9201,
             "mcp_path": "/mcp",
-            "send_agent_did": null
+            "send_node_did": null
         }"#;
         let row: ToolServiceRegistryRow = serde_json::from_str(json).expect("parse");
-        assert!(!row.send_agent_did);
+        assert!(!row.send_node_did);
+    }
+}
+
+#[cfg(test)]
+mod plugin_receipt_tests {
+    use super::AgentToolCallRow;
+    use crate::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
+    use serde_json::json;
+
+    #[test]
+    fn tool_row_decodes_optional_receipt_from_graphql_json() {
+        let receipt = PluginExecutionReceipt {
+            coordinate: "team/plugin".into(),
+            artifact_digest: "sha256:artifact".into(),
+            input_digest: "sha256:input".into(),
+            output_digest: None,
+            authority: None,
+            limits: None,
+            verdict: PluginExecutionVerdict::AdmissionRefused,
+        };
+        let value = json!({"tool_call_key":"tool-1", "plugin_execution_receipt":receipt});
+        let row: AgentToolCallRow = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(row.plugin_execution_receipt, Some(receipt));
+        assert_eq!(
+            serde_json::to_value(row).unwrap()["plugin_execution_receipt"],
+            value["plugin_execution_receipt"]
+        );
+        for value in [
+            json!({"tool_call_key":"tool-1"}),
+            json!({"tool_call_key":"tool-1", "plugin_execution_receipt":null}),
+        ] {
+            assert!(serde_json::from_value::<AgentToolCallRow>(value)
+                .unwrap()
+                .plugin_execution_receipt
+                .is_none());
+        }
+        assert!(serde_json::from_value::<AgentToolCallRow>(
+            json!({"tool_call_key":"tool-1", "plugin_execution_receipt":"invalid"})
+        )
+        .is_err());
     }
 }

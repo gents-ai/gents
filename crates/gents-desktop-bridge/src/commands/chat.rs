@@ -2,17 +2,15 @@ use anyhow::{bail, Result};
 use gents_desktop_core::client::{ClientCore, SubmitRequestOptions};
 use uuid::Uuid;
 
-use super::super::types::{
-    turn_state_label, ChatSendRequest, ChatSendResult, SessionRenameRequest,
-};
+use super::super::types::{ChatSendRequest, ChatSendResult, SessionRenameRequest};
 
 pub async fn send_chat_message(
     core: &ClientCore,
     request: ChatSendRequest,
 ) -> Result<ChatSendResult> {
-    let agent_did = request.agent_did.trim().to_string();
-    if agent_did.is_empty() {
-        bail!("agent_did is required");
+    let node_did = request.node_did.trim().to_string();
+    if node_did.is_empty() {
+        bail!("node_did is required");
     }
 
     let content = match &request.answer {
@@ -24,7 +22,7 @@ pub async fn send_chat_message(
                 core,
                 request.caused_by_source_doc_id.as_deref(),
                 request.session_id.as_deref(),
-                &agent_did,
+                &node_did,
                 answer,
             )?
         }
@@ -34,8 +32,8 @@ pub async fn send_chat_message(
         bail!("content is required");
     }
 
-    let behavior_id = request
-        .behavior_id
+    let agent_id = request
+        .agent_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -50,35 +48,23 @@ pub async fn send_chat_message(
         .map(str::to_string)
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-    let store = core.store().snapshot();
-    let mut input = gents_protocol::request_input::RequestInput {
-        cwd: chat_folder(request.cwd.as_deref())?,
-        ..Default::default()
-    };
-    if let Some(turn_state) = store.derive_turn_for_agent(&session_id, &agent_did) {
-        if !turn_state.is_terminal() {
-            // An answer never waits for the asking turn: like a queued user
-            // turn, it is ordered behind the active request, which the
-            // runtime claims first; the reply claim then consumes the item.
-            let active = store
-                .latest_request_id_for_session_for_agent(&session_id, &agent_did)
-                .filter(|_| request.answer.is_some());
-            let Some(active) = active else {
-                bail!(
-                    "cannot send while current turn is {}",
-                    turn_state_label(turn_state)
-                );
-            };
-            input.queue = Some(queued_user_turn(active));
-        }
-    }
+    let input = core
+        .prepare_user_message_input(
+            &node_did,
+            &session_id,
+            gents_protocol::request_input::RequestInput {
+                cwd: chat_folder(request.cwd.as_deref())?,
+                ..Default::default()
+            },
+        )
+        .await?;
 
     let submitted = core
         .submit_request_with_options(
             &session_id,
-            &agent_did,
+            &node_did,
             &content,
-            behavior_id.as_deref(),
+            agent_id.as_deref(),
             SubmitRequestOptions {
                 caused_by_source_doc_id: request.caused_by_source_doc_id,
                 input,
@@ -90,8 +76,8 @@ pub async fn send_chat_message(
     Ok(ChatSendResult {
         session_id,
         request_id: submitted.request_id,
-        agent_did: submitted.agent_did,
-        behavior_id: submitted.behavior_id,
+        node_did: submitted.node_did,
+        agent_id: submitted.agent_id,
     })
 }
 
@@ -109,22 +95,10 @@ fn chat_folder(raw: Option<&str>) -> Result<Option<String>> {
     Ok(Some(raw.to_string()))
 }
 
-fn queued_user_turn(active_request_id: String) -> gents_protocol::request_input::RequestQueue {
-    use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestQueue};
-    RequestQueue {
-        source: QueueSource::User,
-        policy: QueuePolicy::Append,
-        key: None,
-        queued_after_request_id: Some(active_request_id),
-        interrupted_request_id: None,
-        background_completion_wake_version: None,
-    }
-}
-
 pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) -> Result<()> {
-    let agent_did = request.agent_did.trim().to_string();
-    if agent_did.is_empty() {
-        bail!("agent_did is required");
+    let node_did = request.node_did.trim().to_string();
+    if node_did.is_empty() {
+        bail!("node_did is required");
     }
     let session_id = request.session_id.trim().to_string();
     if session_id.is_empty() {
@@ -134,7 +108,7 @@ pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) ->
     if title.is_empty() {
         bail!("title is required");
     }
-    core.rename_session(&agent_did, &session_id, &title).await?;
+    core.rename_session(&node_did, &session_id, &title).await?;
     Ok(())
 }
 
@@ -171,4 +145,32 @@ mod tests {
             assert!(chat_folder(Some(&bad)).is_err(), "{bad}");
         }
     }
+}
+
+pub async fn edit_pending_queue(
+    core: &ClientCore,
+    request: super::super::types::PendingQueueEditRequest,
+) -> Result<super::super::types::PendingQueueEditResult> {
+    let result = core
+        .edit_pending_queue(
+            &request.node_did,
+            &request.session_id,
+            gents::lifecycle::PendingQueueEdit {
+                expected_request_doc_ids: request.expected_request_doc_ids,
+                selected_request_doc_ids: request.selected_request_doc_ids,
+                messages: request
+                    .messages
+                    .into_iter()
+                    .map(|message| gents::lifecycle::PendingMessageEdit {
+                        request_doc_id: message.request_doc_id,
+                        content: message.content,
+                    })
+                    .collect(),
+            },
+        )
+        .await?;
+    Ok(super::super::types::PendingQueueEditResult {
+        request_doc_ids: result.request_doc_ids,
+        request_ids: result.request_ids,
+    })
 }

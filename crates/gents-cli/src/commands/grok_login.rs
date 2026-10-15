@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 
 use crate::cli::args::GrokLoginArgs;
 use crate::config_writes::ConfigAccess;
-use crate::{print_json, resolve_agent_did, resolve_config_access};
+use crate::{print_json, resolve_config_access, resolve_node_did};
 
 pub(crate) struct GrokLoginOptions {
     pub(crate) provider: String,
@@ -17,10 +17,10 @@ pub(crate) struct GrokLoginOutcome {
 pub(crate) async fn grok_login(args: GrokLoginArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let agent_did = resolve_agent_did(Some(&home_dir), args.agent_did.as_deref())?;
+    let node_did = resolve_node_did(Some(&home_dir), args.node_did.as_deref())?;
     let outcome = run_grok_login(
         &access,
-        &agent_did,
+        &node_did,
         &GrokLoginOptions {
             provider: args.provider,
             label: args.label,
@@ -33,7 +33,7 @@ pub(crate) async fn grok_login(args: GrokLoginArgs) -> Result<()> {
 
 pub(crate) async fn run_grok_login(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     opts: &GrokLoginOptions,
 ) -> Result<GrokLoginOutcome> {
     let provider = gents::xai_grok_oauth::normalize_provider(&opts.provider);
@@ -45,7 +45,7 @@ pub(crate) async fn run_grok_login(
         .context("Grok / xAI device-code login failed")?;
 
     let credential = gents::xai_oauth_login::credential_from_login_tokens(
-        agent_did,
+        node_did,
         &provider,
         &tokens,
         chrono::Utc::now(),
@@ -69,7 +69,7 @@ pub(crate) fn grok_login_result_json(outcome: &GrokLoginOutcome) -> Value {
         "result": outcome.sign_in.result,
         "profiles": outcome.sign_in.profiles,
         "credential_id": credential.credential_id,
-        "agent_did": credential.agent_did,
+        "node_did": credential.node_did,
         "provider": credential.provider,
         "account_id": credential.account_id,
         "chatgpt_plan_type": credential.chatgpt_plan_type,

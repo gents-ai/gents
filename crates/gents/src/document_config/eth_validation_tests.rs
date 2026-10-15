@@ -8,9 +8,9 @@ fn validate(documents: Vec<(Collection, Value)>) -> anyhow::Result<()> {
 
 #[test]
 fn retained_eth_selection_validates_declarations_without_disabling_the_enable_gate() {
-    let tools = json!({"tools_id":"tools","agent_did":"owner",
+    let tools = json!({"tools_id":"tools","node_did":"owner",
         "integrations":{"eth_tool_ids":["eth"]}});
-    let eth = json!({"tool_id":"eth","agent_did":"owner","enabled":false,
+    let eth = json!({"tool_id":"eth","node_did":"owner","enabled":false,
         "chain_id":1,"rpc_url":"http://localhost:8545","query_methods":["eth_chainId"]});
     validate(vec![
         (Collection::Tools, tools.clone()),
@@ -33,20 +33,20 @@ fn retained_eth_selection_validates_declarations_without_disabling_the_enable_ga
     }
     validate(vec![(
         Collection::EthTool,
-        json!({"tool_id":"empty","agent_did":"owner"}),
+        json!({"tool_id":"empty","node_did":"owner"}),
     )])
     .unwrap();
 }
 
 #[test]
 fn retained_eth_expansion_intersects_existing_datastore_name_checks() {
-    let tools = json!({"tools_id":"tools","agent_did":"owner",
+    let tools = json!({"tools_id":"tools","node_did":"owner",
         "datastore":{"datastore_tool_surface_ids":["surface"]},
         "integrations":{"eth_tool_ids":["eth"]}});
-    let eth = json!({"tool_id":"eth","agent_did":"owner",
+    let eth = json!({"tool_id":"eth","node_did":"owner",
         "chain_id":1,"rpc_url":"http://localhost:8545","query_methods":["eth_chainId"]});
     let surface = |name| {
-        json!({"surface_id":"surface","agent_did":"owner",
+        json!({"surface_id":"surface","node_did":"owner",
         "entries":[{"kind":"query","tool_name":name,"collection":"Records","fields":["name"]}]})
     };
     let candidate = |eth, name| {
@@ -65,7 +65,7 @@ fn retained_eth_expansion_intersects_existing_datastore_name_checks() {
 
 #[test]
 fn chain_binding_intrinsics_use_signer_requirements_without_reading_host_keys() {
-    let binding = json!({"binding_id":"binding","agent_did":"owner",
+    let binding = json!({"binding_id":"binding","node_did":"owner",
         "address":"0x1111111111111111111111111111111111111111",
         "key_backend":crate::KEY_BACKEND_KEYRING,
         "attestation":"checked-by-signing-owner", "created_at":"2026-01-01T00:00:00Z"});

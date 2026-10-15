@@ -32,23 +32,23 @@ pub struct PackInferenceBindingPreview {
     pub automatic: bool,
 }
 
-/// Inspect declared slots and the principal's retained inference documents.
+/// Inspect declared slots and the node's retained inference documents.
 /// Requested bindings are validated when present, while missing slots remain
 /// visible so a model can discover the exact choices before constructing an
 /// install preview.
 pub async fn inspect_pack_inference_bindings(
     access: &ConfigAccess,
     manifest: &PackManifest,
-    agent_did: &str,
+    node_did: &str,
     requested: &PackInferenceBindings,
 ) -> Result<PackInferenceBindingPreview> {
     super::validate_pack_manifest(manifest)?;
     anyhow::ensure!(
-        !agent_did.trim().is_empty(),
+        !node_did.trim().is_empty(),
         "pack owner DID must not be blank"
     );
 
-    let options = inference_profile_options(access, agent_did).await?;
+    let options = inference_profile_options(access, node_did).await?;
 
     let slots = manifest.metadata.inference_slots.clone();
     let slot_names = slots
@@ -68,7 +68,7 @@ pub async fn inspect_pack_inference_bindings(
             .find(|profile| profile.profile_id == *profile_id)
             .with_context(|| {
                 format!(
-                    "inference slot {slot:?} references unknown profile {profile_id:?} for principal {agent_did}"
+                    "inference slot {slot:?} references unknown profile {profile_id:?} for node {node_did}"
                 )
             })?;
         anyhow::ensure!(
@@ -89,19 +89,19 @@ pub async fn inspect_pack_inference_bindings(
     })
 }
 
-/// The principal's inference profiles, each with whether a pack slot can be
-/// bound to it. Fails when the principal is missing or disabled.
+/// The node's inference profiles, each with whether a pack slot can be
+/// bound to it. Fails when the node is missing or disabled.
 pub async fn inference_profile_options(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<PackInferenceProfileOption>> {
-    let (principal_enabled, profiles, backends) = access
+    let (node_enabled, profiles, backends) = access
         .transact("pack.inference_binding_preview", |txn| {
             Box::pin(async move {
-                let refs = crate::ConfigReferences::load_in_txn(txn, agent_did).await?;
-                let principal_enabled = refs
+                let refs = crate::ConfigReferences::load_in_txn(txn, node_did).await?;
+                let node_enabled = refs
                     .documents()
-                    .find(|((collection, _), _)| *collection == Collection::AgentPrincipal)
+                    .find(|((collection, _), _)| *collection == Collection::Node)
                     .and_then(|(_, value)| value.get("enabled"))
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false);
@@ -119,14 +119,11 @@ pub async fn inference_profile_options(
                         Ok(serde_json::from_value::<InferenceBackend>(value.clone())?)
                     })
                     .collect::<Result<Vec<_>>>()?;
-                Ok((principal_enabled, profiles, backends))
+                Ok((node_enabled, profiles, backends))
             })
         })
         .await?;
-    anyhow::ensure!(
-        principal_enabled,
-        "pack owner principal is missing or disabled"
-    );
+    anyhow::ensure!(node_enabled, "pack owner node is missing or disabled");
 
     let backend_by_id: BTreeMap<_, _> = backends
         .iter()
@@ -160,17 +157,17 @@ pub async fn inference_profile_options(
     Ok(options)
 }
 
-/// Resolve every declared slot against the principal's retained inference
+/// Resolve every declared slot against the node's retained inference
 /// documents. This is read-only and is the strict preview used immediately
 /// before an authorized canonical installer transaction.
 pub async fn preview_pack_inference_bindings(
     access: &ConfigAccess,
     manifest: &PackManifest,
-    agent_did: &str,
+    node_did: &str,
     requested: &PackInferenceBindings,
 ) -> Result<PackInferenceBindingPreview> {
     let mut preview =
-        inspect_pack_inference_bindings(access, manifest, agent_did, requested).await?;
+        inspect_pack_inference_bindings(access, manifest, node_did, requested).await?;
     use crate::plugin::model_calls::{AccessModels, ModelBinding, ModelResolver};
     let models = AccessModels(access);
     for slot in manifest
@@ -182,7 +179,7 @@ pub async fn preview_pack_inference_bindings(
         if let Some(profile_id) = requested.get(slot) {
             models
                 .resolve(&ModelBinding {
-                    agent_did: agent_did.to_owned(),
+                    node_did: node_did.to_owned(),
                     profile_id: profile_id.clone(),
                 })
                 .await
@@ -206,7 +203,7 @@ pub async fn preview_pack_inference_bindings(
         .collect::<Vec<_>>();
     anyhow::ensure!(
         !usable.is_empty(),
-        "pack {} requires configured inference, but principal {agent_did} has no usable profile; finish Setup or use the existing inference configuration tools first",
+        "pack {} requires configured inference, but node {node_did} has no usable profile; finish Setup or use the existing inference configuration tools first",
         manifest.name
     );
     if requested.is_empty() && required.len() == 1 && usable.len() == 1 {
@@ -239,12 +236,12 @@ pub fn bind_pack_install_config(
 ) -> Result<PackConfig> {
     validate_pack_inference_authoring(manifest, config)?;
     let mut bound = config.clone();
-    for behavior in &mut bound.agent_behaviors {
-        let slot = behavior
+    for agent in &mut bound.agents {
+        let slot = agent
             .inference_profile_id
             .strip_prefix(INFERENCE_SLOT_REFERENCE_PREFIX)
-            .context("pack behavior does not reference an inference slot")?;
-        behavior.inference_profile_id = bindings
+            .context("pack agent does not reference an inference slot")?;
+        agent.inference_profile_id = bindings
             .get(slot)
             .with_context(|| format!("inference slot {slot:?} is unbound"))?
             .clone();
@@ -267,7 +264,7 @@ pub fn bind_pack_install_config(
     super::provenance::stamp_pack_origin(manifest, &bound)
 }
 
-/// Publish bound document-pack configuration without replacing its principal
+/// Publish bound document-pack configuration without replacing its node
 /// or the retained inference documents selected by the slot map.
 pub async fn install_pack_documents(
     access: &ConfigAccess,
@@ -297,29 +294,24 @@ pub(super) fn validate_pack_inference_authoring(
         .inference_slots
         .iter()
         .flat_map(|slot| {
-            slot.behaviors
+            slot.agents
                 .iter()
-                .map(move |behavior| (behavior.as_str(), slot.name.as_str()))
+                .map(move |agent_id| (agent_id.as_str(), slot.name.as_str()))
         })
         .collect::<BTreeMap<_, _>>();
     anyhow::ensure!(
-        declared.len() == config.agent_behaviors.len(),
-        "pack {} must assign every behavior to exactly one inference slot",
+        declared.len() == config.agents.len(),
+        "pack {} must assign every agent to exactly one inference slot",
         manifest.name
     );
-    for behavior in &config.agent_behaviors {
-        let slot = declared
-            .get(behavior.behavior_id.as_str())
-            .with_context(|| {
-                format!(
-                    "behavior {:?} is missing from inference slots",
-                    behavior.behavior_id
-                )
-            })?;
+    for agent in &config.agents {
+        let slot = declared.get(agent.agent_id.as_str()).with_context(|| {
+            format!("agent {:?} is missing from inference slots", agent.agent_id)
+        })?;
         anyhow::ensure!(
-            behavior.inference_profile_id == inference_slot_reference(slot),
-            "behavior {:?} must reference inference slot {:?}",
-            behavior.behavior_id,
+            agent.inference_profile_id == inference_slot_reference(slot),
+            "agent {:?} must reference inference slot {:?}",
+            agent.agent_id,
             slot
         );
     }
@@ -350,21 +342,21 @@ mod tests {
 
     fn config() -> PackConfig {
         serde_json::from_value(json!({
-            "agent_principal": {"agent_did": "did:key:pack-owner"},
-            "agent_behaviors": [
-                {"agent_did":"did:key:pack-owner","behavior_id":"plan","inference_profile_id":"gents:inference-slot:coordinator","tags":["authored"]},
-                {"agent_did":"did:key:pack-owner","behavior_id":"scan","inference_profile_id":"gents:inference-slot:worker"}
+            "node": {"node_did": "did:key:pack-owner"},
+            "agents": [
+                {"node_did":"did:key:pack-owner","agent_id":"plan","inference_profile_id":"gents:inference-slot:coordinator","tags":["authored"]},
+                {"node_did":"did:key:pack-owner","agent_id":"scan","inference_profile_id":"gents:inference-slot:worker"}
             ],
-            "contexts": [{"agent_did":"did:key:pack-owner","context_id":"context"}],
-            "tasks": [{"agent_did":"did:key:pack-owner","task_id":"task","behavior_id":"plan","prompt_template":"work"}]
+            "contexts": [{"node_did":"did:key:pack-owner","context_id":"context"}],
+            "tasks": [{"node_did":"did:key:pack-owner","task_id":"task","agent_id":"plan","prompt_template":"work"}]
         }))
         .unwrap()
     }
 
     fn two_slots() -> PackManifest {
         manifest(json!([
-            {"name":"coordinator","description":"plans","behaviors":["plan"]},
-            {"name":"worker","description":"scans","behaviors":["scan"]}
+            {"name":"coordinator","description":"plans","agents":["plan"]},
+            {"name":"worker","description":"scans","agents":["scan"]}
         ]))
     }
 
@@ -379,21 +371,18 @@ mod tests {
             ]),
         )
         .unwrap();
-        assert_eq!(bound.agent_behaviors[0].inference_profile_id, "claude");
-        assert_eq!(bound.agent_behaviors[1].inference_profile_id, "glm");
+        assert_eq!(bound.agents[0].inference_profile_id, "claude");
+        assert_eq!(bound.agents[1].inference_profile_id, "glm");
         for tags in [
-            &bound.agent_behaviors[0].tags,
-            &bound.agent_behaviors[1].tags,
+            &bound.agents[0].tags,
+            &bound.agents[1].tags,
             &bound.contexts[0].tags,
             &bound.tasks[0].tags,
         ] {
             assert!(tags.contains(&"gents:pack:test_pack".to_owned()));
         }
-        assert_eq!(
-            bound.agent_behaviors[0].tags,
-            ["authored", "gents:pack:test_pack"]
-        );
-        assert!(bound.agent_principal.tags.is_empty());
+        assert_eq!(bound.agents[0].tags, ["authored", "gents:pack:test_pack"]);
+        assert!(bound.node.tags.is_empty());
         assert!(bound.inference_profiles.is_empty());
         assert!(bound.inference_backends.is_empty());
     }
@@ -401,11 +390,11 @@ mod tests {
     #[test]
     fn authoring_requires_exact_declared_slot_coverage_and_no_inference_docs() {
         let mut invalid = config();
-        invalid.agent_behaviors[0].inference_profile_id = "user-profile".into();
+        invalid.agents[0].inference_profile_id = "user-profile".into();
         assert!(validate_pack_inference_authoring(&two_slots(), &invalid).is_err());
         let mut invalid = config();
         invalid.inference_profiles.push(InferenceProfile {
-            agent_did: "did:key:pack-owner".into(),
+            node_did: "did:key:pack-owner".into(),
             profile_id: "copy".into(),
             backend_id: "copy".into(),
             model_name: "copy".into(),
@@ -420,13 +409,13 @@ mod tests {
         let owner = "did:key:preview-owner";
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        crate::document_config::ensure_agent_principal(&node, owner)
+        crate::document_config::ensure_node(&node, owner)
             .await
             .unwrap();
-        crate::test_support::install_test_behavior(&node, owner, "only").await;
+        crate::test_support::install_test_agent(&node, owner, "only").await;
         let access = ConfigAccess::Local(node);
         let one = manifest(json!([
-            {"name":"worker","description":"works","behaviors":["work"]}
+            {"name":"worker","description":"works","agents":["work"]}
         ]));
         let preview = preview_pack_inference_bindings(&access, &one, owner, &BTreeMap::new())
             .await
@@ -444,16 +433,16 @@ mod tests {
         let owner = "did:key:binding-owner";
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        crate::document_config::ensure_agent_principal(&node, owner)
+        crate::document_config::ensure_node(&node, owner)
             .await
             .unwrap();
-        crate::test_support::install_test_behavior(&node, owner, "claude").await;
-        crate::test_support::install_test_behavior(&node, owner, "glm").await;
+        crate::test_support::install_test_agent(&node, owner, "claude").await;
+        crate::test_support::install_test_agent(&node, owner, "glm").await;
         let foreign_owner = "did:key:foreign-owner";
-        crate::document_config::ensure_agent_principal(&node, foreign_owner)
+        crate::document_config::ensure_node(&node, foreign_owner)
             .await
             .unwrap();
-        crate::test_support::install_test_behavior(&node, foreign_owner, "foreign").await;
+        crate::test_support::install_test_agent(&node, foreign_owner, "foreign").await;
         let access = ConfigAccess::Local(node.clone());
         for requested in [
             BTreeMap::from([
@@ -485,7 +474,7 @@ mod tests {
         let disabled = node
             .execute(
                 r#"mutation { update_InferenceBackend(filter: {
-                    agent_did: {_eq: "did:key:binding-owner"},
+                    node_did: {_eq: "did:key:binding-owner"},
                     backend_id: {_eq: "glm:backend"}
                 }, input: {enabled: false}) {_docID} }"#,
             )

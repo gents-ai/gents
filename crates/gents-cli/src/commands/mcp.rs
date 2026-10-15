@@ -72,7 +72,7 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
       {lan_ip_add}
       mcp_port: {port}
       mcp_path: "{path}"
-      send_agent_did: {send_agent_did}
+      send_node_did: {send_node_did}
       status: "online"
       version: "{version}"
     }}
@@ -84,7 +84,7 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
       {lan_ip_add}
       mcp_port: {port}
       mcp_path: "{path}"
-      send_agent_did: {send_agent_did}
+      send_node_did: {send_node_did}
       status: "online"
       version: "{version}"
     }}
@@ -94,7 +94,7 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
         display_name = escape_graphql_string(display_name),
         description = escape_graphql_string(description),
         path = escape_graphql_string(path),
-        send_agent_did = args.send_agent_did,
+        send_node_did = args.send_node_did,
         version = escape_graphql_string(args.version.trim()),
     );
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
@@ -177,7 +177,7 @@ async fn load_mcp_services(
                 lan_ip
                 mcp_port
                 mcp_path
-                send_agent_did
+                send_node_did
                 updated_at
             }}
         }}"#
@@ -414,7 +414,7 @@ mod tests {
                 .write(
                     "test.mcp.seed",
                     &format!(
-                        r#"mutation {{ create_ToolServiceRegistry(input: {{ service_id: "svc-1", agent_did: "did:key:{host}", hostname: "{host}", status: "pending", mcp_port: 1, mcp_path: "/mcp", enabled: true }}) {{ _docID }} }}"#
+                        r#"mutation {{ create_ToolServiceRegistry(input: {{ service_id: "svc-1", node_did: "did:key:{host}", hostname: "{host}", status: "pending", mcp_port: 1, mcp_path: "/mcp", enabled: true }}) {{ _docID }} }}"#
                     ),
                 )
                 .await

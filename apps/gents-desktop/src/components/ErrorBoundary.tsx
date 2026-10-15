@@ -2,6 +2,7 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 
 import { isWindowsTauriShell } from "../lib/shellPlatform";
 import { WindowControls } from "../ui/app/WindowControls";
+import { Disclosure } from "../ui/components/Disclosure";
 
 /// Last-resort boundary: without it a render exception anywhere below
 /// white-screens the whole desktop app. Class component by necessity —
@@ -47,15 +48,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               The view hit an unexpected error. Reloading usually recovers; your agents
               and data are unaffected.
             </p>
-            <details>
-              <summary>Error details</summary>
+            <Disclosure summary="Error details" className="min-w-0">
               <pre className="mt-2 overflow-auto font-mono text-xs">
                 {this.state.error.stack || message}
                 {this.state.componentStack
                   ? `\n\nComponent stack:${this.state.componentStack}`
                   : null}
               </pre>
-            </details>
+            </Disclosure>
             <button
               autoFocus
               className="inline-flex h-8 w-fit items-center rounded-lg bg-brand px-3 text-sm font-medium text-brand-foreground"

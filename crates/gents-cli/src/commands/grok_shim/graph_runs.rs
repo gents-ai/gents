@@ -502,7 +502,7 @@ mod tests {
 
     fn request(id: &str, node: &str, terminal: bool, succeeded: bool) -> Value {
         json!({"request_id": id, "session_id": format!("child-{id}"), "node_id": node,
-            "behavior_id": "worker", "lifecycle_state": null, "failure_reason": null,
+            "agent_id": "worker", "lifecycle_state": null, "failure_reason": null,
             "terminal": terminal, "succeeded": succeeded})
     }
 
@@ -1078,7 +1078,7 @@ mod tests {
         principal: &str,
     ) -> gents_protocol::row::AgentRequestRow {
         let principal = gents::graphql::escape_graphql_string(principal);
-        let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{id}", session_id: "{session}", agent_did: "{principal}", requester_did: "{principal}", behavior_id: "test", content: "test", lifecycle_state: "pending"}}) {{ _docID }} }}"#)).await;
+        let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{id}", session_id: "{session}", node_did: "{principal}", requester_did: "{principal}", agent_id: "test", content: "test", lifecycle_state: "pending"}}) {{ _docID }} }}"#)).await;
         gents::graphql::ensure_no_errors(&response, "seed request").unwrap();
         let doc = gents_protocol::graphql::extract_mutation_doc_id(
             &json!({"data": response.data}),
@@ -1087,7 +1087,7 @@ mod tests {
         .unwrap();
         serde_json::from_value(
             json!({"_docID": doc, "request_id": id, "session_id": session,
-            "agent_did": principal, "requester_did": principal}),
+            "node_did": principal, "requester_did": principal}),
         )
         .unwrap()
     }
@@ -1238,15 +1238,15 @@ mod tests {
         ] {
             node.add_schema(schema).await.unwrap();
         }
-        gents::ensure_agent_principal(node, owner).await.unwrap();
+        gents::ensure_node(node, owner).await.unwrap();
         let plan = DesiredStateApplyPlan::new(
             [
-                (Collection::AgentBehavior, json!({"agent_did": owner, "behavior_id": "worker", "context_id": "worker:context", "inference_profile_id": "worker:inference"})),
-                (Collection::AgentContext, json!({"agent_did": owner, "context_id": "worker:context", "tools_id": "worker:tools"})),
-                (Collection::Tools, json!({"agent_did": owner, "tools_id": "worker:tools"})),
-                (Collection::InferenceProfile, json!({"agent_did": owner, "profile_id": "worker:inference", "backend_id": "worker:backend", "model_name": "test-model"})),
-                (Collection::InferenceBackend, json!({"agent_did": owner, "backend_id": "worker:backend", "name": "Test inference", "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1", "auth": {"kind": "unauthenticated"}})),
-                (Collection::Task, json!({"agent_did": owner, "task_id": "worker-task", "behavior_id": "worker", "prompt_template": "operator approved prompt", "enabled": true})),
+                (Collection::Agent, json!({"node_did": owner, "agent_id": "worker", "context_id": "worker:context", "inference_profile_id": "worker:inference"})),
+                (Collection::AgentContext, json!({"node_did": owner, "context_id": "worker:context", "tools_id": "worker:tools"})),
+                (Collection::Tools, json!({"node_did": owner, "tools_id": "worker:tools"})),
+                (Collection::InferenceProfile, json!({"node_did": owner, "profile_id": "worker:inference", "backend_id": "worker:backend", "model_name": "test-model"})),
+                (Collection::InferenceBackend, json!({"node_did": owner, "backend_id": "worker:backend", "name": "Test inference", "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1", "auth": {"kind": "unauthenticated"}})),
+                (Collection::Task, json!({"node_did": owner, "task_id": "worker-task", "agent_id": "worker", "prompt_template": "operator approved prompt", "enabled": true})),
             ]
             .into_iter()
             .map(|(collection, value)| DesiredStateApplyDocument {
@@ -1284,7 +1284,7 @@ mod tests {
         };
         let plan = compile_graph(
             &GraphIntent {
-                agent_did: owner.to_owned(),
+                node_did: owner.to_owned(),
                 tags: vec![],
                 graph_id: "pipeline".to_owned(),
                 nodes: vec![GraphNode {
@@ -1319,7 +1319,7 @@ mod tests {
                 },
             },
             &[StageCapability {
-                agent_did: owner.to_owned(),
+                node_did: owner.to_owned(),
                 tags: vec![],
                 workspace_authority: None,
                 capability_id: "worker".to_owned(),
@@ -1363,14 +1363,14 @@ mod tests {
         receipt: &gents::graph_pipeline::GraphRunReceipt,
         request_id: &str,
     ) -> gents::RequestLifecycle {
-        use gents::AgentIdentity;
+        use gents::NodeIdentity;
         use gents_protocol::request_admission::{
             AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
         };
         let did = owner.did();
         let triggers = node
             .execute(&format!(
-                r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{}" }} }}) {{ _docID trigger_id }} }}"#,
+                r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ _docID trigger_id }} }}"#,
                 gents::graphql::escape_graphql_string(did),
             ))
             .await;
@@ -1412,7 +1412,7 @@ mod tests {
         gents::graphql::ensure_no_errors(&row, "stage request row").unwrap();
         let row: gents_protocol::row::AgentRequestRow =
             serde_json::from_value(row.data.unwrap()["AgentRequest"][0].clone()).unwrap();
-        gents::RequestLifecycle::new_with_agent_did(
+        gents::RequestLifecycle::new_with_node_did(
             node.clone(),
             "worker",
             did,
@@ -1427,7 +1427,7 @@ mod tests {
     #[tokio::test]
     async fn a_real_run_graph_reply_is_observed_through_the_canonical_loader() {
         let (_directory, node, projections, buffer, sender) = harness().await;
-        let owner = gents::AgentIdentity::did(&key_identity()).to_owned();
+        let owner = gents::NodeIdentity::did(&key_identity()).to_owned();
         let receipt = start_real_run(&node, &owner).await;
         let access = ConfigAccess::Local(node.clone());
         let observed = load_graph_run_view_with_access(&access, &owner, &receipt.run_id)
@@ -1550,7 +1550,7 @@ mod tests {
         use gents_protocol::output::TerminalOutput;
         let (_directory, node, projections, buffer, sender) = harness().await;
         let identity = key_identity();
-        let owner = gents::AgentIdentity::did(&identity).to_owned();
+        let owner = gents::NodeIdentity::did(&identity).to_owned();
         let receipt = start_real_run(&node, &owner).await;
         let access = ConfigAccess::Local(node.clone());
         let mut cursor = GraphRunCursor::default();

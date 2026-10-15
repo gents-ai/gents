@@ -146,11 +146,9 @@ test.describe("first-run install", () => {
     await expect(page.getByTestId("setup-screen")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Let’s get set up" })).toBeVisible();
 
-    await expect(page.getByRole("textbox", { name: "Agent name" })).toHaveValue(
-      "Forge",
-    );
-    await expect(page.getByRole("combobox", { name: "Tool ceiling" })).toHaveValue(
-      "readwrite",
+    await expect(page.getByRole("textbox", { name: "Node name" })).toHaveValue("Forge");
+    await expect(page.getByRole("combobox", { name: "Tool ceiling" })).toContainText(
+      "Read / write",
     );
     await expect(
       page.getByRole("textbox", { name: "Tool root", exact: true }),
@@ -206,9 +204,8 @@ test.describe("first-run install", () => {
     await openConfig(page);
     await expect(page.getByText("Local server")).toBeVisible();
     await page.getByRole("button", { name: "Change access…" }).click();
-    await page
-      .getByRole("combobox", { name: "Tool ceiling" })
-      .selectOption("meta-only");
+    await page.getByRole("combobox", { name: "Tool ceiling" }).click();
+    await page.getByRole("option", { name: "Metatools only" }).click();
     await page.getByRole("button", { name: "Review complete — restart" }).click();
     await expect(page.getByText("meta-only")).toBeVisible();
     await expect(page.getByText("No host path").first()).toBeVisible();
@@ -224,9 +221,8 @@ test.describe("first-run install", () => {
     await page.getByRole("textbox", { name: "Tool root", exact: true }).press("Tab");
     await expect(page.getByText(/Cannot access \/missing folder/)).toBeVisible();
     await expect(page.getByTestId("setup-next")).toBeDisabled();
-    await page
-      .getByRole("combobox", { name: "Tool ceiling" })
-      .selectOption("meta-only");
+    await page.getByRole("combobox", { name: "Tool ceiling" }).click();
+    await page.getByRole("option", { name: "Metatools only" }).click();
     await expect(
       page.getByRole("textbox", { name: "Tool root", exact: true }),
     ).toBeDisabled();
@@ -240,8 +236,9 @@ test.describe("first-run install", () => {
     page,
   }) => {
     await gotoHarness(page, "empty-fleet");
-    await page.getByRole("textbox", { name: "Agent name" }).fill("Read-only helper");
-    await page.getByRole("combobox", { name: "Tool ceiling" }).selectOption("readonly");
+    await page.getByRole("textbox", { name: "Node name" }).fill("Read-only helper");
+    await page.getByRole("combobox", { name: "Tool ceiling" }).click();
+    await page.getByRole("option", { name: "Read only" }).click();
     await page
       .getByRole("textbox", { name: "Tool root", exact: true })
       .fill("/tmp/my workspace");
@@ -251,12 +248,12 @@ test.describe("first-run install", () => {
     await expect(
       page.getByRole("textbox", { name: "Tool root", exact: true }),
     ).toHaveCount(0);
-    await page.getByRole("radio", { name: /Local agent/ }).click();
+    await page.getByRole("radio", { name: /Local node/ }).click();
     await expect(
       page.getByRole("textbox", { name: "Tool root", exact: true }),
     ).toHaveValue("/tmp/my workspace");
-    await expect(page.getByRole("combobox", { name: "Tool ceiling" })).toHaveValue(
-      "readonly",
+    await expect(page.getByRole("combobox", { name: "Tool ceiling" })).toContainText(
+      "Read only",
     );
     await page.getByTestId("setup-next").click();
     await expect(
@@ -274,7 +271,7 @@ test.describe("first-run install", () => {
       .getByRole("textbox", { name: "Server address" })
       .fill("https://agent.example.net:8787");
     await expect(page.getByRole("button", { name: "Request access" })).toBeEnabled();
-    await page.getByRole("radio", { name: /Local agent/ }).click();
+    await page.getByRole("radio", { name: /Local node/ }).click();
     await page.getByRole("radio", { name: /Remote connect/ }).click();
     await expect(page.getByRole("textbox", { name: "Server address" })).toHaveValue(
       "https://agent.example.net:8787",

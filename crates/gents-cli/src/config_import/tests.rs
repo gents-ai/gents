@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 fn config(owner: &str, tools: &str) -> desired_state::DesiredStateManifest {
     serde_json::from_value(json!({
-        "agent_principal":{"agent_did":owner},
-        "contexts":[{"agent_did":owner,"context_id":"context","tools_id":tools}],
-        "tools":[{"agent_did":owner,"tools_id":tools,"host":{"bash":{"allowed_argv_prefixes":[]}}}]
+        "node":{"node_did":owner},
+        "contexts":[{"node_did":owner,"context_id":"context","tools_id":tools}],
+        "tools":[{"node_did":owner,"tools_id":tools,"host":{"bash":{"allowed_argv_prefixes":[]}}}]
     }))
     .unwrap()
 }
@@ -17,12 +17,12 @@ async fn apply_config(
     live: Option<&desired_state::DesiredStateManifest>,
     prune: bool,
 ) -> Result<ConfigApplyCounts> {
-    let empty = serde_json::from_value(json!({"agent_principal":desired.agent_principal}))?;
+    let empty = serde_json::from_value(json!({"node":desired.node}))?;
     let mut report = desired_state::diff_manifests(
         std::path::Path::new("."),
         "test",
         desired,
-        live.map(|live| &live.agent_principal),
+        live.map(|live| &live.node),
         live.unwrap_or(&empty),
         false,
     );

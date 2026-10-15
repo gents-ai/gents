@@ -22,7 +22,7 @@ def isBound : ShimState → Bool
 end ShimState
 
 structure Shim where
-  boundBehavior : BehaviorId
+  boundAgent : AgentId
   state : ShimState
   deriving DecidableEq, Repr
 
@@ -34,7 +34,7 @@ def observePublish
   | .bound => s
   | .unbound .hostResource => s
   | .unbound .dependencyMissing =>
-      if s.boundBehavior ∈ snap.runnable then
+      if s.boundAgent ∈ snap.runnable then
         if hostCanListen then { s with state := .bound }
         else { s with state := .unbound .hostResource }
       else s
@@ -42,7 +42,7 @@ def observePublish
 theorem converges_when_dependency_published
     (s : Shim) (snap : ActiveRuntimeSnapshot)
     (hUnbound : s.state = .unbound .dependencyMissing)
-    (hRunnable : s.boundBehavior ∈ snap.runnable) :
+    (hRunnable : s.boundAgent ∈ snap.runnable) :
     (s.observePublish snap true).state = .bound := by
   unfold observePublish
   rw [hUnbound]
@@ -51,7 +51,7 @@ theorem converges_when_dependency_published
 theorem listen_failure_degrades_to_host_resource
     (s : Shim) (snap : ActiveRuntimeSnapshot)
     (hUnbound : s.state = .unbound .dependencyMissing)
-    (hRunnable : s.boundBehavior ∈ snap.runnable) :
+    (hRunnable : s.boundAgent ∈ snap.runnable) :
     (s.observePublish snap false).state = .unbound .hostResource := by
   unfold observePublish
   rw [hUnbound]
@@ -60,7 +60,7 @@ theorem listen_failure_degrades_to_host_resource
 theorem never_binds_unrunnable
     (s : Shim) (snap : ActiveRuntimeSnapshot) (hostCanListen : Bool)
     (hNotBound : s.state ≠ .bound)
-    (hNotRunnable : s.boundBehavior ∉ snap.runnable) :
+    (hNotRunnable : s.boundAgent ∉ snap.runnable) :
     (s.observePublish snap hostCanListen).state ≠ .bound := by
   unfold observePublish
   cases hs : s.state with
@@ -95,7 +95,7 @@ theorem observePublish_idempotent
       cases reason with
       | hostResource => simp [hs]
       | dependencyMissing =>
-          by_cases hr : s.boundBehavior ∈ snap.runnable <;>
+          by_cases hr : s.boundAgent ∈ snap.runnable <;>
             cases hostCanListen <;> simp [hs, hr]
 
 theorem bound_is_absorbing
@@ -106,7 +106,7 @@ theorem bound_is_absorbing
 
 theorem observePublish_preserves_target
     (s : Shim) (snap : ActiveRuntimeSnapshot) (hostCanListen : Bool) :
-    (s.observePublish snap hostCanListen).boundBehavior = s.boundBehavior := by
+    (s.observePublish snap hostCanListen).boundAgent = s.boundAgent := by
   unfold observePublish
   cases hs : s.state with
   | bound => simp [hs]
@@ -114,11 +114,11 @@ theorem observePublish_preserves_target
       cases reason with
       | hostResource => simp [hs]
       | dependencyMissing =>
-          by_cases hr : s.boundBehavior ∈ snap.runnable <;>
+          by_cases hr : s.boundAgent ∈ snap.runnable <;>
             cases hostCanListen <;> simp [hs, hr]
 
 def coherentWith (s : Shim) (snap : ActiveRuntimeSnapshot) : Prop :=
-  s.state = .bound → s.boundBehavior ∈ snap.runnable
+  s.state = .bound → s.boundAgent ∈ snap.runnable
 
 theorem observePublish_coherent
     (s : Shim) (snap : ActiveRuntimeSnapshot) (hostCanListen : Bool)
@@ -133,7 +133,7 @@ theorem observePublish_coherent
       cases reason with
       | hostResource => simp [hs]
       | dependencyMissing =>
-          by_cases hr : s.boundBehavior ∈ snap.runnable
+          by_cases hr : s.boundAgent ∈ snap.runnable
           · cases hostCanListen <;> simp [hs, hr]
           · simp [hs, hr]
 

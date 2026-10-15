@@ -16,6 +16,8 @@ use crate::document_config::WriteToolDecl;
 mod input;
 
 pub use input::can_hold_canonical_count;
+pub(crate) use input::parameters as field_parameters;
+pub(crate) use input::validate_input as validate_field_input;
 
 const PLACEHOLDER_TOOL_NAME: &str = "defra_write";
 
@@ -277,11 +279,11 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
             .get("_docID")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("write to {:?} returned no _docID", self.decl.collection))?;
-        Ok(
-            json!({"collection":self.decl.collection, "document_id":doc_id,
-            "document":document})
-            .to_string(),
-        )
+        Ok(crate::tool_output::render(
+            &json!({"collection":self.decl.collection, "document_id":doc_id,
+                "document":document}),
+            &["document", "document_id", "collection"],
+        )?)
     }
 }
 

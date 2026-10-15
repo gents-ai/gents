@@ -11,14 +11,14 @@ import {
 import { Kbd } from "@gents/ui/components/kbd";
 import { navigate } from "@/lib/router";
 import { isMacTauriShell } from "../../lib/shellPlatform";
-import { useSelectedAgentDid } from "@/hooks/useClient";
+import { useSelectedNodeDid } from "@/hooks/useClient";
 
 const IS_MAC = navigator.platform.toUpperCase().includes("MAC");
 const MOD = IS_MAC ? "⌘" : "Ctrl+";
 const IN_DESKTOP = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
 const DESKTOP_ONLY = new Set(["1", "2", "3", "n"]);
 const ROWS: [string, string][] = [
-  [`${MOD}1`, "Agents"],
+  [`${MOD}1`, "Nodes"],
   [`${MOD}2`, "Sessions"],
   [`${MOD}3`, "Configuration"],
   [`${MOD}N`, "New session"],
@@ -27,7 +27,7 @@ const ROWS: [string, string][] = [
 ];
 
 export function Shortcuts() {
-  const agentDid = useSelectedAgentDid();
+  const nodeDid = useSelectedNodeDid();
   const [open, setOpen] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -44,9 +44,7 @@ export function Shortcuts() {
           return go({ name: "sessions" });
         case "3":
           return go(
-            agentDid
-              ? { name: "agent", agentDid, section: "agent" }
-              : { name: "agents" },
+            nodeDid ? { name: "agent", nodeDid, section: "agent" } : { name: "agents" },
           );
         case "n":
           return go({ name: "session", sessionId: null });
@@ -62,7 +60,7 @@ export function Shortcuts() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [agentDid]);
+  }, [nodeDid]);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent

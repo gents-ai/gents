@@ -30,7 +30,7 @@ pub(super) async fn load_scoped_session(
         .map(|(session, _)| session))
 }
 
-/// A session another session started is a sub-agent thread under its
+/// A session another session started is a caused thread under its
 /// starter, never a root thread; its stored provenance says so.
 fn is_started(session: &AgentSession) -> bool {
     session
@@ -47,7 +47,7 @@ pub(super) async fn load_thread_state(
         Box::pin(async move {
             let Some(row) = load_agent_session_row_in_txn(
                 txn,
-                &state.agent_did,
+                &state.node_did,
                 session_id,
                 Some(state.local_requester_did()),
             )
@@ -55,7 +55,7 @@ pub(super) async fn load_thread_state(
             else {
                 return Ok(None);
             };
-            if row.session.behavior_id != state.behavior_id.as_ref() || is_started(&row.session) {
+            if row.session.agent_id != state.agent_id.as_ref() || is_started(&row.session) {
                 return Ok(None);
             }
             let head = load_head_in_txn(txn, state, session_id).await?;
@@ -82,7 +82,7 @@ async fn load_head_in_txn(
 ) -> Result<Option<GraphqlTurnState>> {
     let Some(head) = load_latest_request_in_txn(
         txn,
-        &state.agent_did,
+        &state.node_did,
         session_id,
         Some(Some(state.local_requester_did())),
     )
@@ -91,21 +91,25 @@ async fn load_head_in_txn(
         return Ok(None);
     };
     anyhow::ensure!(
-        head.behavior_id == state.behavior_id.as_ref(),
-        "thread request head conflicts with bound session behavior"
+        head.agent_id == state.agent_id.as_ref(),
+        "thread request head conflicts with bound session agent"
     );
     let doc_id = escape_graphql_string(&head.observed.request_doc_id);
     let scope = session_scope_filter(
-        &state.agent_did,
+        &state.node_did,
         session_id,
         Some(state.local_requester_did()),
     );
-    let response = txn.execute(&format!(r#"{{
+    let response = txn
+        .execute(&format!(
+            r#"{{
         AgentRequest(filter:{{{scope},_docID:{{_eq:"{doc_id}"}}}}) {{
-            _docID request_id agent_did requester_did session_id behavior_id created_at lifecycle_state
+            _docID request_id node_did requester_did session_id agent_id created_at lifecycle_state
             retry_parent_request superseded_by_request failure_reason content input
         }}
-    }}"#)).await?;
+    }}"#
+        ))
+        .await?;
     let requests = rows(&response, "AgentRequest")?;
     anyhow::ensure!(
         requests.len() == 1,
@@ -119,16 +123,16 @@ async fn load_head_in_txn(
 }
 
 pub(super) async fn list_scoped_sessions(state: &ShimState) -> Result<Vec<AgentSession>> {
-    let owner = escape_graphql_string(&state.agent_did);
-    let behavior = escape_graphql_string(&state.behavior_id);
+    let owner = escape_graphql_string(&state.node_did);
+    let agent = escape_graphql_string(&state.agent_id);
     ConfigAccess::transact_local(&state.node,None,"codex.thread.list",|txn| {
-        let query = format!(r#"{{AgentSession(filter:{{agent_did:{{_eq:"{owner}"}},requester_did:{{_eq:"{owner}"}},behavior_id:{{_eq:"{behavior}"}}}},order:{{created_at:DESC}}){{{AGENT_SESSION_FIELDS}}}}}"#);
+        let query = format!(r#"{{AgentSession(filter:{{node_did:{{_eq:"{owner}"}},requester_did:{{_eq:"{owner}"}},agent_id:{{_eq:"{agent}"}}}},order:{{created_at:DESC}}){{{AGENT_SESSION_FIELDS}}}}}"#);
         Box::pin(async move {
             let response = txn.execute(&query).await?;
             let mut identities = std::collections::HashSet::new();
             rows(&response,"AgentSession")?.iter().map(|row| {
                 let session = decode_session_row(row)?.session;
-                anyhow::ensure!(session.agent_did==state.agent_did.as_ref() && session.requester_did.as_deref()==Some(state.local_requester_did()) && session.behavior_id==state.behavior_id.as_ref(),"thread list crossed owner/requester/behavior scope");
+                anyhow::ensure!(session.node_did==state.node_did.as_ref() && session.requester_did.as_deref()==Some(state.local_requester_did()) && session.agent_id==state.agent_id.as_ref(),"thread list crossed owner/requester/agent scope");
                 anyhow::ensure!(identities.insert(session.session_id.clone()),"thread list has duplicate canonical session identity");
                 Ok(session)
             }).filter(|session| !matches!(session, Ok(session) if is_started(session))).collect()

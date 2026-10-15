@@ -102,7 +102,7 @@ async fn generated_notification_cases_drive_durable_writes() {
             .source_id(
                 "did:test:agent",
                 "did:test:owner",
-                &context.behavior_id,
+                &context.agent_id,
                 &format!("event-{index}"),
             )
             .unwrap();
@@ -221,7 +221,7 @@ async fn notification_updates_reject_route_policy_and_terminal_races() {
         .source_id(
             "did:test:agent",
             "did:test:owner",
-            &context.behavior_id,
+            &context.agent_id,
             "request",
         )
         .unwrap();
@@ -289,7 +289,7 @@ async fn content_tool_stamps_current_request_and_reuses_configured_condition() {
         ("two", "Disk 82%, Docker unavailable", "updated"),
     ] {
         let result = node.execute(&format!(
-            "mutation {{ create_AgentRequest(input: {{request_id: \"{request}\", purpose: \"normal\", agent_did: \"did:test:agent\", requester_did: \"did:test:owner\", behavior_id: \"operator\", caused_by_source_doc_id: \"input-{request}\"}}) {{_docID}} }}"
+            "mutation {{ create_AgentRequest(input: {{request_id: \"{request}\", purpose: \"normal\", node_did: \"did:test:agent\", requester_did: \"did:test:owner\", agent_id: \"operator\", caused_by_source_doc_id: \"input-{request}\"}}) {{_docID}} }}"
         )).await;
         assert!(!result.has_errors(), "{:?}", result.errors);
         let args = MailboxContentArgs {
@@ -300,8 +300,8 @@ async fn content_tool_stamps_current_request_and_reuses_configured_condition() {
         };
         let receipt = scope_tool_request_identity(
             Some(context.requester_did.clone()),
-            Some(context.agent_did.clone()),
-            Some(context.behavior_id.clone()),
+            Some(context.node_did.clone()),
+            Some(context.agent_id.clone()),
             Some(request.into()),
             scope_request_tool_execution(
                 None,
@@ -342,7 +342,7 @@ async fn concurrent_notifications_converge_without_cross_requester_collisions() 
     for owner in ["did:test:alice", "did:test:bob"] {
         let context = tests::context(owner);
         let source = identity
-            .source_id("did:test:agent", owner, &context.behavior_id, "request")
+            .source_id("did:test:agent", owner, &context.agent_id, "request")
             .unwrap();
         let args = tests::args(MailboxAction::Ack, &source);
         let receipts = futures::future::join_all((0..4).map(|_| {
@@ -383,14 +383,14 @@ async fn concurrent_notifications_converge_without_cross_requester_collisions() 
 async fn provenance_keeps_execution_owner_resolved_selection() {
     let node = tests::test_node().await;
     let context = tests::context("did:test:owner");
-    let response = node.execute("mutation { create_AgentRequest(input: {request_id: \"default-selection\", purpose: \"normal\", agent_did: \"did:test:agent\", requester_did: \"did:test:owner\"}) {_docID} }").await;
+    let response = node.execute("mutation { create_AgentRequest(input: {request_id: \"default-selection\", purpose: \"normal\", node_did: \"did:test:agent\", requester_did: \"did:test:owner\"}) {_docID} }").await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     // The execution owner may resolve the default behavior and create a session.
     notification::request_provenance(&node, "default-selection", &context)
         .await
         .unwrap();
     let mut foreign = context.clone();
-    foreign.agent_did = "did:test:other-agent".into();
+    foreign.node_did = "did:test:other-agent".into();
     assert!(
         notification::request_provenance(&node, "default-selection", &foreign)
             .await
@@ -411,7 +411,7 @@ async fn question_files_an_ask_whatever_the_surface_policy_and_refuses_invalid_p
     let node = tests::test_node().await;
     let context = tests::context("did:test:owner");
     let result = node.execute(
-        "mutation { create_AgentRequest(input: {request_id: \"ask\", purpose: \"normal\", agent_did: \"did:test:agent\", requester_did: \"did:test:owner\", behavior_id: \"operator\"}) {_docID} }"
+        "mutation { create_AgentRequest(input: {request_id: \"ask\", purpose: \"normal\", node_did: \"did:test:agent\", requester_did: \"did:test:owner\", agent_id: \"operator\"}) {_docID} }"
     ).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
     // The surface's default is an informational flag.
@@ -433,8 +433,8 @@ async fn question_files_an_ask_whatever_the_surface_policy_and_refuses_invalid_p
     let call = |args: MailboxContentArgs| {
         scope_tool_request_identity(
             Some(context.requester_did.clone()),
-            Some(context.agent_did.clone()),
-            Some(context.behavior_id.clone()),
+            Some(context.node_did.clone()),
+            Some(context.agent_id.clone()),
             Some("ask".into()),
             scope_request_tool_execution(
                 None,

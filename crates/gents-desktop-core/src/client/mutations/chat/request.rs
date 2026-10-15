@@ -23,13 +23,13 @@ use super::binding::resolve_agent_binding;
 pub struct SubmittedRequest {
     pub request_id: String,
     pub session_id: String,
-    pub agent_did: String,
-    pub behavior_id: Option<String>,
+    pub node_did: String,
+    pub agent_id: Option<String>,
 }
 
 /// Optional submission-time controls. All fields default to "unset"; the
 /// caller opts in to TTL enforcement or retry threading by populating them.
-/// Sampling and output limits are owned by the behavior's InferenceProfile;
+/// Sampling and output limits are owned by the agent's InferenceProfile;
 /// invocation facts ride the canonical typed `RequestInput`.
 #[derive(Debug, Clone, Default)]
 pub struct SubmitRequestOptions {
@@ -60,24 +60,24 @@ pub async fn submit_request(
     node: &EmbeddedNode,
     store: &ClientStore,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: &str,
-    signer: &dyn gents::identity::AgentIdentity,
+    signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     content: &str,
-    behavior_id: Option<&str>,
+    agent_id: Option<&str>,
     options: SubmitRequestOptions,
 ) -> Result<SubmittedRequest> {
     let (result, create) = build_request_submission(
         node,
         store,
         session_id,
-        agent_did,
+        node_did,
         requester_did,
         signer,
         admission,
         content,
-        behavior_id,
+        agent_id,
         options,
         None,
     )
@@ -93,12 +93,12 @@ pub async fn submit_goal_backed_request(
     store: &ClientStore,
     access: &ConfigAccess,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: &str,
-    signer: &dyn gents::identity::AgentIdentity,
+    signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     content: &str,
-    behavior_id: Option<&str>,
+    agent_id: Option<&str>,
     mut options: SubmitRequestOptions,
     objective: &str,
     token_budget: Option<i64>,
@@ -113,19 +113,19 @@ pub async fn submit_goal_backed_request(
         node,
         store,
         session_id,
-        agent_did,
+        node_did,
         requester_did,
         signer,
         admission,
         content,
-        behavior_id,
+        agent_id,
         options,
         None,
     )
     .await?;
     gents::goal::submit_goal_backed_request(
         access,
-        agent_did,
+        node_did,
         session_id,
         objective,
         token_budget,
@@ -142,10 +142,10 @@ pub async fn submit_task_request(
     access: &ConfigAccess,
     fire: &gents_protocol::trigger_delivery::TriggerFire,
     requester_did: &str,
-    signer: &dyn gents::identity::AgentIdentity,
+    signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     content: &str,
-    behavior_id: Option<&str>,
+    agent_id: Option<&str>,
     mut options: SubmitRequestOptions,
 ) -> Result<SubmittedRequest> {
     options.retry_key = Some(fire.fire_key.clone());
@@ -158,7 +158,7 @@ pub async fn submit_task_request(
         signer,
         admission,
         content,
-        behavior_id,
+        agent_id,
         options,
         Some(&fire.request_id),
     )
@@ -176,12 +176,12 @@ async fn build_request_submission(
     node: &EmbeddedNode,
     store: &ClientStore,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: &str,
-    signer: &dyn gents::identity::AgentIdentity,
+    signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     content: &str,
-    behavior_id: Option<&str>,
+    agent_id: Option<&str>,
     options: SubmitRequestOptions,
     request_id: Option<&str>,
 ) -> Result<(
@@ -189,14 +189,14 @@ async fn build_request_submission(
     gents_protocol::request_admission::AgentRequestCreate,
 )> {
     let session_id = normalize_required("session_id", session_id)?;
-    let agent_did = normalize_required("agent_did", agent_did)?;
+    let node_did = normalize_required("node_did", node_did)?;
     let requester_did = normalize_required("requester_did", requester_did)?;
     let content = normalize_required("content", content)?;
     let (content, options) = prepare_prompt_submission(content, options)?;
     let request_id = request_id
         .map(str::to_owned)
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(session_id))?;
+    let binding = resolve_agent_binding(store, node_did, agent_id, Some(session_id))?;
     if let Some(mailbox_item_id) = options
         .caused_by_source_doc_id
         .as_deref()
@@ -207,8 +207,8 @@ async fn build_request_submission(
             node,
             mailbox_item_id,
             requester_did,
-            agent_did,
-            binding.behavior_id.as_deref().unwrap_or(""),
+            node_did,
+            binding.agent_id.as_deref().unwrap_or(""),
             session_id,
         )
         .await?;
@@ -218,7 +218,7 @@ async fn build_request_submission(
     // the root of its own retry chain.
     let (retry_parent_request, retry_parent_request_doc_id, retry_root_request, parent_created_at) =
         if let Some(parent_id) = options.retry_parent_request.as_deref() {
-            let parent = fetch_retry_lineage(node, parent_id, agent_did, requester_did).await?;
+            let parent = fetch_retry_lineage(node, parent_id, node_did, requester_did).await?;
             (
                 parent_id.to_string(),
                 Some(parent.doc_id),
@@ -257,9 +257,9 @@ async fn build_request_submission(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 RequestIdentity {
                     request_id: request_id.clone(),
-                    agent_did: agent_did.to_string(),
+                    node_did: node_did.to_string(),
                     requester_did: Some(requester_did.to_string()),
-                    behavior_id: binding.behavior_id.clone().unwrap_or_default(),
+                    agent_id: binding.agent_id.clone().unwrap_or_default(),
                     session_id: session_id.to_string(),
                     content: content.to_string(),
                     execution_origin: ExecutionOrigin::Interactive,
@@ -275,8 +275,8 @@ async fn build_request_submission(
         SubmittedRequest {
             request_id,
             session_id: session_id.to_string(),
-            agent_did: agent_did.to_string(),
-            behavior_id: binding.behavior_id,
+            node_did: node_did.to_string(),
+            agent_id: binding.agent_id,
         },
         create,
     ))
@@ -286,14 +286,14 @@ async fn validate_mailbox_submission_cause(
     node: &EmbeddedNode,
     item_id: &str,
     requester_did: &str,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
     session_id: &str,
 ) -> Result<()> {
     let query = format!(
         r#"query {{
             MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{
-                requester_did status action target_agent_did target_behavior_id session_id
+                requester_did status action target_node_did target_agent_id session_id
             }}
         }}"#,
         escape_graphql_string(item_id)
@@ -324,8 +324,8 @@ async fn validate_mailbox_submission_cause(
     if !matches!(field("action"), "start_request" | "write_document") {
         bail!("mailbox submission cause does not open a compose surface");
     }
-    if field("target_agent_did") != agent_did || field("target_behavior_id") != behavior_id {
-        bail!("mailbox submission route does not match the target agent behavior");
+    if field("target_node_did") != node_did || field("target_agent_id") != agent_id {
+        bail!("mailbox submission route does not match the target agent");
     }
     if let Some(expected_session) = row
         .get("session_id")
@@ -358,7 +358,7 @@ pub async fn retry_request(
     store: &ClientStore,
     parent: &AgentRequestRow,
     requester_did: &str,
-    signer: &dyn gents::identity::AgentIdentity,
+    signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
 ) -> Result<SubmittedRequest> {
     retry_request_with_request_id(
@@ -378,18 +378,18 @@ async fn retry_request_with_request_id(
     store: &ClientStore,
     parent: &AgentRequestRow,
     requester_did: &str,
-    signer: &dyn gents::identity::AgentIdentity,
+    signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     request_id: String,
 ) -> Result<SubmittedRequest> {
     let request_id = normalize_required("new_request_id", &request_id)?.to_string();
     let parent_request_id = normalize_required("request_id", &parent.request_id)?;
-    let agent_did = normalize_required(
-        "agent_did",
+    let node_did = normalize_required(
+        "node_did",
         parent
-            .agent_did
+            .node_did
             .as_deref()
-            .context("retry parent request must have an agent_did")?,
+            .context("retry parent request must have a node_did")?,
     )?;
     let requester_did = normalize_required("requester_did", requester_did)?;
 
@@ -406,7 +406,7 @@ async fn retry_request_with_request_id(
                     txn,
                     store,
                     parent_request_id,
-                    agent_did,
+                    node_did,
                     requester_did,
                     signer,
                     admission,
@@ -423,14 +423,14 @@ async fn retry_request_in_txn(
     txn: &ConfigApplyTxn<'_>,
     store: &ClientStore,
     parent_request_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: &str,
-    signer: &dyn gents::identity::AgentIdentity,
+    signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     candidate_request_id: &str,
 ) -> Result<SubmittedRequest> {
     let (parent_doc_id, parent) =
-        load_retry_parent_in_txn(txn, parent_request_id, agent_did, requester_did).await?;
+        load_retry_parent_in_txn(txn, parent_request_id, node_did, requester_did).await?;
     let retry_key = retry_successor_key(&parent_doc_id);
     if let Some(existing) = load_retry_successor_in_txn(txn, &retry_key).await? {
         return Ok(existing);
@@ -463,7 +463,7 @@ async fn retry_request_in_txn(
     ensure_retry_parent_eligible(&parent, retry_count - 1, max_retries, execution_origin)?;
 
     let effective_latest_request_id =
-        latest_interactive_request_in_txn(txn, parent_session_id, agent_did, requester_did).await?;
+        latest_interactive_request_in_txn(txn, parent_session_id, node_did, requester_did).await?;
     if effective_latest_request_id != parent_request_id {
         bail!(
             "retry parent request must be latest for session {parent_session_id}, got latest_request_id={effective_latest_request_id}"
@@ -471,11 +471,11 @@ async fn retry_request_in_txn(
     }
     ensure_retry_candidate_is_fresh_in_txn(txn, parent_session_id, candidate_request_id).await?;
 
-    let behavior_id = normalize_optional_string(parent.behavior_id.as_deref());
+    let agent_id = normalize_optional_string(parent.agent_id.as_deref());
     let retry_root_request = normalize_optional_string(parent.retry_root_request.as_deref())
         .unwrap_or(parent_request_id);
     let created_at = canonical_request_created_at_after(parent.created_at.as_deref())?;
-    let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(parent_session_id))?;
+    let binding = resolve_agent_binding(store, node_did, agent_id, Some(parent_session_id))?;
     let create = build_signed_request(
         RequestSpec {
             retry: Some(RetryLink {
@@ -493,9 +493,9 @@ async fn retry_request_in_txn(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 RequestIdentity {
                     request_id: candidate_request_id.to_string(),
-                    agent_did: agent_did.to_string(),
+                    node_did: node_did.to_string(),
                     requester_did: Some(requester_did.to_string()),
-                    behavior_id: binding.behavior_id.clone().unwrap_or_default(),
+                    agent_id: binding.agent_id.clone().unwrap_or_default(),
                     session_id: parent_session_id.to_string(),
                     content: content.to_string(),
                     execution_origin: ExecutionOrigin::from_persisted(Some(execution_origin))?,
@@ -513,8 +513,8 @@ async fn retry_request_in_txn(
     Ok(SubmittedRequest {
         request_id: candidate_request_id.to_string(),
         session_id: parent_session_id.to_string(),
-        agent_did: agent_did.to_string(),
-        behavior_id: binding.behavior_id,
+        node_did: node_did.to_string(),
+        agent_id: binding.agent_id,
     })
 }
 
@@ -535,8 +535,8 @@ async fn load_retry_successor_in_txn(
             ) {{
                 request_id
                 session_id
-                agent_did
-                behavior_id
+                node_did
+                agent_id
             }}
         }}"#
     );
@@ -560,13 +560,13 @@ async fn load_retry_successor_in_txn(
             .and_then(Value::as_str)
             .context("retry successor has no session_id")?
             .to_string(),
-        agent_did: row
-            .get("agent_did")
+        node_did: row
+            .get("node_did")
             .and_then(Value::as_str)
-            .context("retry successor has no agent_did")?
+            .context("retry successor has no node_did")?
             .to_string(),
-        behavior_id: row
-            .get("behavior_id")
+        agent_id: row
+            .get("agent_id")
             .and_then(Value::as_str)
             .and_then(|value| normalize_optional_string(Some(value)))
             .map(str::to_string),
@@ -576,27 +576,27 @@ async fn load_retry_successor_in_txn(
 async fn load_retry_parent_in_txn(
     txn: &ConfigApplyTxn<'_>,
     parent_request_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: &str,
 ) -> Result<(String, AgentRequestRow)> {
     let parent_request_id = escape_graphql_string(parent_request_id);
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let requester_did = escape_graphql_string(requester_did);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
                     request_id: {{ _eq: "{parent_request_id}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     requester_did: {{ _eq: "{requester_did}" }}
                 }},
                 limit: 2
             ) {{
                 _docID
                 request_id
-                agent_did
+                node_did
                 requester_did
-                behavior_id
+                agent_id
                 session_id
                 retry_parent_request
                 retry_root_request
@@ -651,10 +651,10 @@ async fn load_retry_parent_in_txn(
 async fn latest_interactive_request_in_txn(
     txn: &ConfigApplyTxn<'_>,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: &str,
 ) -> Result<String> {
-    let agent = escape_graphql_string(agent_did);
+    let node = escape_graphql_string(node_did);
     let requester = escape_graphql_string(requester_did);
     let session = escape_graphql_string(session_id);
     let query = format!(
@@ -662,7 +662,7 @@ async fn latest_interactive_request_in_txn(
             AgentRequest(
                 filter: {{
                     session_id: {{ _eq: "{session}" }},
-                    agent_did: {{ _eq: "{agent}" }},
+                    node_did: {{ _eq: "{node}" }},
                     requester_did: {{ _eq: "{requester}" }}
                 }},
                 order: [{{ created_at: DESC }}, {{ request_id: DESC }}]
@@ -760,9 +760,9 @@ fn ensure_retry_parent_eligible(
 fn build_add_agent_request_field(
     alias: &str,
     request_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: &str,
-    behavior_id: &str,
+    agent_id: &str,
     session_id: &str,
     retry_parent_request: &str,
     retry_parent_request_doc_id: Option<&str>,
@@ -776,9 +776,9 @@ fn build_add_agent_request_field(
     extra_fields: &str,
 ) -> String {
     let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let escaped_requester_did = escape_graphql_string(requester_did);
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
+    let escaped_agent_id = escape_graphql_string(agent_id);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_retry_parent = escape_graphql_string(retry_parent_request);
     let retry_parent_doc_field = retry_parent_request_doc_id
@@ -794,9 +794,9 @@ fn build_add_agent_request_field(
     format!(
         r#"{alias}: add_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
-                agent_did: "{escaped_agent_did}",
+                node_did: "{escaped_node_did}",
                 requester_did: "{escaped_requester_did}",
-                behavior_id: "{escaped_behavior_id}",
+                agent_id: "{escaped_agent_id}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "{escaped_retry_parent}",
                 {retry_parent_doc_field}
@@ -823,12 +823,12 @@ pub async fn resend_request(
     node: &EmbeddedNode,
     store: &ClientStore,
     stale_request_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: &str,
-    signer: &dyn gents::identity::AgentIdentity,
+    signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
 ) -> Result<SubmittedRequest> {
-    let stale = fetch_request_view(node, stale_request_id, agent_did, requester_did).await?;
+    let stale = fetch_request_view(node, stale_request_id, node_did, requester_did).await?;
     if stale.lifecycle_state != Some(RequestLifecycleState::Dead)
         || stale.failure_reason.as_deref() != Some("Stale")
     {
@@ -840,10 +840,10 @@ pub async fn resend_request(
             stale.failure_reason.as_deref().unwrap_or("<missing>")
         );
     }
-    let stale_agent_did = stale
-        .agent_did
+    let stale_node_did = stale
+        .node_did
         .as_deref()
-        .context("stale request has no agent_did")?;
+        .context("stale request has no node_did")?;
     let stale_content = stale
         .content
         .as_deref()
@@ -853,17 +853,17 @@ pub async fn resend_request(
         node,
         store,
         &retry_session_id,
-        stale_agent_did,
+        stale_node_did,
         requester_did,
         signer,
         admission,
         stale_content,
-        stale.behavior_id.as_deref(),
+        stale.agent_id.as_deref(),
         SubmitRequestOptions {
             valid_until: Some(Utc::now() + chrono::Duration::minutes(5)),
             retry_parent_request: Some(stale_request_id.to_string()),
             // Preserve the exact typed invocation facts from the stale row.
-            // Sampling and output limits belong to the behavior's
+            // Sampling and output limits belong to the agent's
             // InferenceProfile; there are no per-request overrides to carry.
             input: stale.input.unwrap_or_default(),
             caused_by_source_doc_id: None,
@@ -877,25 +877,25 @@ pub async fn resend_request(
 async fn fetch_request_view(
     node: &EmbeddedNode,
     request_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: &str,
 ) -> Result<AgentRequestRow> {
     let escaped = escape_graphql_string(request_id);
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let requester_did = escape_graphql_string(requester_did);
     let query = format!(
         r#"query {{
             AgentRequest(
                 filter: {{
                     request_id: {{ _eq: "{escaped}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     requester_did: {{ _eq: "{requester_did}" }}
                 }},
                 limit: 1
             ) {{
                 request_id
-                agent_did
-                behavior_id
+                node_did
+                agent_id
                 content
                 input
                 lifecycle_state
@@ -926,18 +926,18 @@ struct RetryLineage {
 async fn fetch_retry_lineage(
     node: &EmbeddedNode,
     request_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: &str,
 ) -> Result<RetryLineage> {
     let escaped = escape_graphql_string(request_id);
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let requester_did = escape_graphql_string(requester_did);
     let query = format!(
         r#"query {{
             AgentRequest(
                 filter: {{
                     request_id: {{ _eq: "{escaped}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     requester_did: {{ _eq: "{requester_did}" }}
                 }},
                 limit: 2

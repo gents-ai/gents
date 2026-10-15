@@ -33,22 +33,22 @@ import {
 } from "@gents/ui/components/dropdown-menu";
 
 import { ScrollArea } from "@gents/ui/components/scroll-area";
-import { behaviorName } from "./behavior";
-import { AgentAvatar } from "./AgentAvatar";
+import { agentName } from "./behavior";
+import { NodeAvatar } from "./AgentAvatar";
 import { PanelMenu } from "@/app/PanelMenu";
 import { PaneBar } from "@/app/PaneBar";
 import { Slot } from "@/contrib/react/slot";
 import { SESSION_HEADER_ACTIONS_AREA } from "@/contrib/types";
-import { BehaviorPicker } from "./BehaviorPicker";
+import { AgentPicker } from "./BehaviorPicker";
 import { LoadingStatus } from "./LoadingStatus";
 import { SlashSkillMenu } from "./SlashSkillMenu";
 import { useSlashSkills } from "./useSlashSkills";
 import { isStopping } from "./activity-status";
 import { AccessSentence } from "./parts";
-import { NodeBehaviorStack } from "./NodeBehaviorStack";
+import { NodeAgentStack } from "./NodeBehaviorStack";
 import { isWorkingNode } from "@/lib/nodes";
 import { SessionLoading } from "./SessionLoading";
-import { SubagentList } from "./WorkerStep";
+import { WorkerList } from "./WorkerStep";
 import { useSessionProvenance, useWorkers } from "./workers";
 import { useParentWork } from "./parentWork";
 import { type WorkerActions } from "./WorkerActions";
@@ -71,9 +71,9 @@ import {
   useHomeDid,
   useInterruptVisible,
   useMailboxCause,
-  useSelectedAgentDid,
+  useSelectedNodeDid,
   useNodeCount,
-  useSelectedBehaviorId,
+  useSelectedAgentId,
   useSelectedNode,
   useSessionLoad,
 } from "@/hooks/useClient";
@@ -95,14 +95,14 @@ export function presentedComposerSendStatus(
       };
 }
 
-export function useBehaviorChoice() {
-  const selectedBehaviorId = useSelectedBehaviorId();
-  const { selectBehavior } = useApp().actions;
+export function useAgentChoice() {
+  const selectedAgentId = useSelectedAgentId();
+  const { selectAgent } = useApp().actions;
   return {
     // Read the same effective selection that owns composer admission. Defaults,
     // mailbox routing, and agent changes are resolved by the selection, not here.
-    behaviorId: selectedBehaviorId,
-    setPicked: selectBehavior,
+    agentId: selectedAgentId,
+    setPicked: selectAgent,
   };
 }
 
@@ -110,12 +110,12 @@ export function useBehaviorChoice() {
    button's own text, so the heading still reads as one sentence */
 function NodeChoice({
   name,
-  selectedAgentDid,
+  selectedNodeDid,
   onSelect,
 }: {
   name: string;
-  selectedAgentDid: string | null;
-  onSelect: (agentDid: string) => void;
+  selectedNodeDid: string | null;
+  onSelect: (nodeDid: string) => void;
 }) {
   const nodes = useFleet(useShallow(fleetNodes));
   const homeDid = useHomeDid();
@@ -134,22 +134,22 @@ function NodeChoice({
         <ChevronDown className="size-4 opacity-50" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
-        <DropdownMenuRadioGroup value={selectedAgentDid ?? ""} onValueChange={onSelect}>
+        <DropdownMenuRadioGroup value={selectedNodeDid ?? ""} onValueChange={onSelect}>
           {nodes.map((n, i, all) => (
-            <Fragment key={n.agentDid}>
+            <Fragment key={n.nodeDid}>
               {/* a faint line between the local node and the paired ones */}
               {i > 0 &&
                 isWorkingNode(all[i - 1]!, homeDid) &&
                 !isWorkingNode(n, homeDid) && (
                   <DropdownMenuSeparator className="opacity-60" />
                 )}
-              <DropdownMenuRadioItem value={n.agentDid} disabled={!n.dialSucceeded}>
-                <AgentAvatar
-                  name={n.agentPrincipal.displayName ?? n.label}
+              <DropdownMenuRadioItem value={n.nodeDid} disabled={!n.dialSucceeded}>
+                <NodeAvatar
+                  name={n.node.displayName ?? n.label}
                   className="size-5 text-[9px]"
                 />
                 <span className="min-w-0 flex-1 truncate">
-                  {n.agentPrincipal.displayName ?? n.label}
+                  {n.node.displayName ?? n.label}
                 </span>
                 {isWorkingNode(n, homeDid) && (
                   <span className="text-xs text-muted-foreground">local</span>
@@ -215,7 +215,7 @@ export function SessionScreen() {
       captureComposeIntent,
       interruptRequest,
       renameSession,
-      selectAgent,
+      selectNode,
       sendMessage,
       setChatFolder,
     },
@@ -226,7 +226,7 @@ export function SessionScreen() {
   const inFlight = useInterruptVisible();
   const mailboxCause = useMailboxCause();
   const sendStatus = useView((view) => view.shellProjection.nonEmptyContentSendStatus);
-  const selectedAgentDid = useSelectedAgentDid();
+  const selectedNodeDid = useSelectedNodeDid();
   const deployment = useSelectedNode();
   const selectedSessionId = stores.selection.use.sessionId();
   const sending = stores.chat.use.sending();
@@ -240,6 +240,7 @@ export function SessionScreen() {
      the bottom; a reader who has scrolled up is left where they are */
   const column = useRef<HTMLDivElement | null>(null);
   const [scroller, ownScroller] = useScroller();
+  const [content, setContent] = useState<HTMLDivElement | null>(null);
   const columnRef = useCallback(
     (element: HTMLDivElement | null) => {
       column.current = element;
@@ -251,12 +252,12 @@ export function SessionScreen() {
   const { atBottom, toBottom, settle } = useFollowTail(scroller, selectedSessionId);
   /* once the full header scrolls out, a condensed one sticks to the top */
   const [condensed, headerEnd] = useHeaderScrolledOut(scroller);
-  const choice = useBehaviorChoice();
+  const choice = useAgentChoice();
   const provenance = useSessionProvenance();
   const workers = useWorkers(provenance);
   const parentWork = useParentWork(provenance);
   const composer = useComposerRoom(column, settle);
-  /* a person stopping a subagent from here: the canonical interrupt of the
+  /* a person stopping a worker from here: the canonical interrupt of the
      one request that row's call caused; the row settles when that request
      is terminal */
   const workerActions = useMemo<WorkerActions>(
@@ -264,25 +265,24 @@ export function SessionScreen() {
       interrupt: (request) => {
         interruptRequest({
           requestId: request.requestId,
-          agentDid: request.agentDid,
+          nodeDid: request.nodeDid,
         }).catch((e: unknown) => toastFailure("stop", e));
       },
     }),
     [interruptRequest],
   );
-  /* the principal name, or the pairing label while a paired node has not
-     replicated its principal yet */
-  const agentName =
-    deployment?.agentPrincipal.displayName ?? deployment?.label ?? "the agent";
+  /* the node's name, or the pairing label while a paired node has not
+     replicated its configuration yet */
+  const nodeName = deployment?.node.displayName ?? deployment?.label ?? "the agent";
   /* the snapshot says what happened in a session; the summary says where it
      came from, which is the list's own view of it */
   const summary = useFleet((s) =>
-    listedSession(s, deployment?.agentDid, session?.sessionId),
+    listedSession(s, deployment?.nodeDid, session?.sessionId),
   );
-  const sessionNode = useFleet((s) => nodeOf(s, session?.agentDid));
+  const sessionNode = useFleet((s) => nodeOf(s, session?.nodeDid));
 
   const send = async (text: string) => {
-    const pending = sendMessage(text, session?.behaviorId ?? choice.behaviorId);
+    const pending = sendMessage(text, session?.agentId ?? choice.agentId);
     const intentGeneration = captureComposeIntent();
     const result = await pending;
     if (result) setDraft((current) => (current === text ? "" : current));
@@ -293,49 +293,47 @@ export function SessionScreen() {
     }
   };
 
-  const contextFor = (behaviorId?: string | null) => {
-    const b = agentOf(deployment, behaviorId);
+  const contextFor = (agentId?: string | null) => {
+    const b = agentOf(deployment, agentId);
     return deployment?.contexts.find((c) => c.context_id === b?.contextId);
   };
   const startSlash = useSlashSkills(
     draft,
     setDraft,
     deployment?.skills ?? [],
-    contextFor(choice.behaviorId),
+    contextFor(choice.agentId),
   );
   const slash = useSlashSkills(
     draft,
     setDraft,
     deployment?.skills ?? [],
-    contextFor(session?.behaviorId),
+    contextFor(session?.agentId),
   );
 
   /* ---- start a new session ---- */
   if (!selectedSessionId) {
-    const env = deployment?.behaviorEnvironments.find(
-      (e) => e.behaviorId === choice.behaviorId,
-    );
-    const chosenName = behaviorName(choice.behaviorId, deployment);
+    const env = deployment?.agentEnvironments.find((e) => e.agentId === choice.agentId);
+    const chosenName = agentName(choice.agentId, deployment);
     const startStatus = presentedComposerSendStatus(draft, sendStatus);
     return (
       <div
-        key={selectedAgentDid ?? "new"}
+        key={selectedNodeDid ?? "new"}
         data-testid="session-screen"
         className="mx-auto grid min-h-full max-w-2xl content-center gap-6 px-6 py-16 animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out fill-mode-both motion-reduce:animate-none"
       >
         <div className="flex items-start gap-3">
-          <AgentAvatar name={agentName} className="size-8" />
+          <NodeAvatar name={nodeName} className="size-8" />
           <div>
             <h1 className="font-heading text-lg font-medium text-heading">
               Start a new chat with{" "}
               {nodeCount > 1 ? (
                 <NodeChoice
-                  name={agentName}
-                  selectedAgentDid={selectedAgentDid}
-                  onSelect={selectAgent}
+                  name={nodeName}
+                  selectedNodeDid={selectedNodeDid}
+                  onSelect={selectNode}
                 />
               ) : (
-                agentName
+                nodeName
               )}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
@@ -365,9 +363,9 @@ export function SessionScreen() {
             onKeyDown={startSlash.onKeyDown}
             leading={
               <>
-                <BehaviorPicker
+                <AgentPicker
                   deployment={deployment}
-                  behaviorId={choice.behaviorId}
+                  agentId={choice.agentId}
                   onChange={choice.setPicked}
                 />
                 <ChatFolderPicker folder={chatFolder} onChange={setChatFolder} />
@@ -382,15 +380,15 @@ export function SessionScreen() {
         </div>
         <p className="text-xs text-muted-foreground">
           <AccessSentence name={chosenName} env={env} />
-          {deployment && choice.behaviorId && (
+          {deployment && choice.agentId && (
             <>
               {" "}
               <a
                 href={href({
                   name: "agent",
-                  agentDid: deployment.agentDid,
-                  section: "behaviors",
-                  item: choice.behaviorId,
+                  nodeDid: deployment.nodeDid,
+                  section: "agents",
+                  item: choice.agentId,
                 })}
                 className="underline decoration-border underline-offset-4 hover:text-foreground"
               >
@@ -423,7 +421,7 @@ export function SessionScreen() {
     const release = () =>
       setRequestedStop((current) => (current === requestId ? null : current));
     try {
-      await interruptRequest({ requestId, agentDid: selectedAgentDid });
+      await interruptRequest({ requestId, nodeDid: selectedNodeDid });
     } catch (e) {
       release();
       toastFailure("stop", e);
@@ -432,6 +430,7 @@ export function SessionScreen() {
 
   /* Local text plus the canonical shell admission decision. */
   const status = presentedComposerSendStatus(draft, sendStatus);
+  const queueing = status.kind === "queue";
 
   /* Until the session is here, nothing of its screen is. Drawn without it,
      the screen assembled under the reader's eye — chrome, then a title
@@ -467,6 +466,7 @@ export function SessionScreen() {
                   screen wide enough to give the width away. Elsewhere the
                   column keeps its even padding. */}
             <div
+              ref={setContent}
               className={cn(
                 "mx-auto flex min-h-full w-full max-w-page flex-col px-6 pt-4",
                 parentWork.hasSenders && "sm:pr-14",
@@ -486,9 +486,9 @@ export function SessionScreen() {
                       : "pointer-events-none translate-y-1 opacity-0",
                   )}
                 >
-                  <NodeBehaviorStack
-                    nodeDid={session?.agentDid}
-                    behaviorId={session?.behaviorId}
+                  <NodeAgentStack
+                    nodeDid={session?.nodeDid}
+                    agentId={session?.agentId}
                     size="sm"
                     keyboard
                     workers={sessionWorkers}
@@ -555,7 +555,7 @@ export function SessionScreen() {
                   )}
                   {workers.all.length > 0 && (
                     <div className="mt-1 mb-1">
-                      <SubagentList workers={workers} />
+                      <WorkerList workers={workers} />
                     </div>
                   )}
                   {summary &&
@@ -564,22 +564,22 @@ export function SessionScreen() {
                       <div className="mt-1 mb-1">
                         <StartedByAutomation
                           summary={summary}
-                          agentDid={deployment?.agentDid ?? null}
+                          nodeDid={deployment?.nodeDid ?? null}
                         />
                       </div>
                     )}
                   <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <NodeBehaviorStack
-                      nodeDid={session?.agentDid}
-                      behaviorId={session?.behaviorId}
+                    <NodeAgentStack
+                      nodeDid={session?.nodeDid}
+                      agentId={session?.agentId}
                       workers={sessionWorkers}
                     />
                     <span className="text-sm text-muted-foreground">
-                      {behaviorName(session?.behaviorId ?? null, deployment)}
+                      {agentName(session?.agentId ?? null, deployment)}
                       {/* the node only when it is not the local one, as the
                           marks beside it do */}
                       {sessionNode && !isWorkingNode(sessionNode, homeDid)
-                        ? ` on ${sessionNode.agentPrincipal.displayName ?? sessionNode.label}`
+                        ? ` on ${sessionNode.node.displayName ?? sessionNode.label}`
                         : null}
                     </span>
                     {session?.context && <SessionContext context={session.context} />}
@@ -592,6 +592,7 @@ export function SessionScreen() {
                 inFlight={inFlight}
                 stopping={stopping}
                 scroller={scroller}
+                content={content}
                 workers={workers}
                 parentWork={parentWork}
                 workerActions={workerActions}
@@ -653,10 +654,14 @@ export function SessionScreen() {
                     leading={
                       <ChatFolderPicker folder={chatFolder} onChange={setChatFolder} />
                     }
-                    sending={sending || inFlight}
+                    sending={sending || (inFlight && !queueing)}
                     onStop={inFlight && !stopping ? stop : undefined}
                     placeholder={
-                      inFlight ? "Ask anything" : placeholderFor(status, "Ask anything")
+                      inFlight
+                        ? sendStatus.kind === "queue"
+                          ? "Add a message; it waits for this turn"
+                          : "Ask anything"
+                        : placeholderFor(status, "Ask anything")
                     }
                   />
                 </div>
@@ -692,8 +697,8 @@ function SelectedTranscript(
 type ScreenFacts = Pick<
   DesktopSessionSnapshot,
   | "sessionId"
-  | "agentDid"
-  | "behaviorId"
+  | "nodeDid"
+  | "agentId"
   | "title"
   | "context"
   | "goal"
@@ -705,8 +710,8 @@ function selectScreenFacts(session: DesktopSessionSnapshot | null): ScreenFacts 
   if (!session) return null;
   return {
     sessionId: session.sessionId,
-    agentDid: session.agentDid,
-    behaviorId: session.behaviorId,
+    nodeDid: session.nodeDid,
+    agentId: session.agentId,
     title: session.title,
     context: session.context,
     goal: session.goal,

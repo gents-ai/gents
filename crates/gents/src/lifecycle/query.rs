@@ -45,7 +45,7 @@ pub(super) async fn claim_queue_allows(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
 ) -> Result<bool> {
-    let owner = escape_graphql_string(&request.agent_did);
+    let owner = escape_graphql_string(&request.node_did);
     let nonterminal = RequestLifecycleState::graphql_list(
         RequestLifecycleState::ALL
             .into_iter()
@@ -53,7 +53,7 @@ pub(super) async fn claim_queue_allows(
     );
     let response = txn
         .execute_local_response(&format!(
-            r#"{{ AgentRequest(filter: {{ agent_did: {{ _eq: "{owner}" }},
+            r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{owner}" }},
             purpose: {{ _eq: "normal" }}, lifecycle_state: {{ _in: {nonterminal} }} }}) {{
             _docID request_id session_id lifecycle_state
         }} }}"#,
@@ -80,7 +80,7 @@ pub(super) async fn claim_queue_allows(
             let receipt = by_request.get(row.request_id.as_str());
             crate::trigger_engine::durable::ClaimObservation {
                 document: row.doc_id.clone().unwrap_or_default(),
-                owner: request.agent_did.clone(),
+                owner: request.node_did.clone(),
                 session: row.session_id.clone().unwrap_or_default(),
                 trigger: receipt.map(|r| r.trigger_id.clone()).unwrap_or_default(),
                 serial: receipt.is_some_and(|r| r.queued_serial),

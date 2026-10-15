@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   applyMockInference,
   DEFAULT_MOCK_MODEL_NAME,
   resolveLivePlaywrightOptions,
 } from "./live-playwright-options.mjs";
+
+import { liveRunnerOptionsFromEnv } from "./tauri-driver-live/harness";
 
 describe("live Playwright option resolution", () => {
   it("uses mock inference by default when no live backend is configured", () => {
@@ -88,6 +90,38 @@ describe("live Playwright option resolution", () => {
 
     expect(options.shouldStartMockInference).toBe(false);
     expect(options.env.OPENROUTER_API_KEY).toBe("test-openrouter-key");
+  });
+
+  it("delivers explicit target flags through the environment to the native runner", () => {
+    const options = resolveLivePlaywrightOptions(
+      [
+        "--agent-target-inference-url",
+        "https://target.example.test/v1",
+        "--agent-target-model-name",
+        "target-model",
+        "--agent-target-provider",
+        "OpenAiCompatible",
+        "--agent-target-api-key",
+        "target-test-key",
+        "--agent-target-api-key-env-var",
+        "TARGET_TEST_KEY",
+      ],
+      {},
+    );
+    try {
+      for (const [name, value] of Object.entries(options.env)) {
+        vi.stubEnv(name, value as string);
+      }
+      expect(liveRunnerOptionsFromEnv()).toMatchObject({
+        agentTargetInferenceUrl: "https://target.example.test/v1",
+        agentTargetModelName: "target-model",
+        agentTargetProvider: "OpenAiCompatible",
+        agentTargetApiKey: "target-test-key",
+        agentTargetApiKeyEnvVar: "TARGET_TEST_KEY",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("rejects flags missing a value before launching Playwright", () => {

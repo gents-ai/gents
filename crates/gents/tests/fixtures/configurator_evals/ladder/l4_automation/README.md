@@ -5,7 +5,7 @@ Draft component eval of the configurator ladder. The Engineer configures an Even
 quality is graded data, not a gate.
 
 ```sh
-gents config apply --root <this directory> --bind-agent-did home --home <served home>
+gents config apply --root <this directory> --bind-node-did home --home <served home>
 gents eval run configurator-l4-automation --cell engineer=<ladder>/engineer_subject:engineer \
   --profile engineer=<profile without execution_id> --split train --trials 1 --home <served home>
 ```

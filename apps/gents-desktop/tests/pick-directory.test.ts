@@ -5,9 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const open = vi.fn();
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open }));
 
-import { canPickDirectory, pickDirectory } from "../src/ui/lib/pickDirectory";
+import { canPickDirectory, pickDirectory } from "../src/lib/nativeShell";
 
-const uiRoot = join(__dirname, "../src/ui");
+const srcRoot = join(__dirname, "../src");
 
 function sources(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -24,13 +24,13 @@ describe("pickDirectory", () => {
   });
 
   it("imports the dialog plugin with a literal specifier so the bundle carries it", () => {
-    const source = readFileSync(join(uiRoot, "lib/pickDirectory.ts"), "utf8");
+    const source = readFileSync(join(srcRoot, "lib/nativeShell.ts"), "utf8");
     expect(source).toContain('await import("@tauri-apps/plugin-dialog")');
     expect(source).not.toContain("@vite-ignore");
   });
 
-  it("never hides a module from the bundler anywhere in the UI", () => {
-    for (const file of sources(uiRoot)) {
+  it("never hides a module from the bundler anywhere in the app", () => {
+    for (const file of sources(srcRoot)) {
       expect(readFileSync(file, "utf8"), file).not.toContain("@vite-ignore");
     }
   });

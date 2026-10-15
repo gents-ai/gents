@@ -1,5 +1,5 @@
 use super::*;
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 
 struct PendingTool;
@@ -65,31 +65,21 @@ async fn generated_background_budget_uses_accepted_dispatch() {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_behavior(&node, identity.did(), "general").await;
+    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
     let executions = BackgroundExecutionRegistry::default();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        identity.did(),
-        FailurePolicy::default(),
-    )
-    .with_background_tool_registry(BackgroundToolRegistry::from_tools(
-        vec![Box::new(PendingTool)],
-        &["slow_tool".into()],
-    ))
-    .with_background_execution_registry(executions.clone());
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
+            .with_background_tool_registry(BackgroundToolRegistry::from_tools(
+                vec![Box::new(PendingTool)],
+                &["slow_tool".into()],
+            ))
+            .with_background_execution_registry(executions.clone());
     hook.on_completion_call(&user_text_message("fill background capacity"), &[])
         .await;
     let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_behavior_id(
-        &node,
-        &session,
-        "general",
-        identity.did(),
-        "general",
-    )
-    .await
-    .unwrap();
+    crate::session::create_session_with_agent_id(&node, &session, identity.did(), "general")
+        .await
+        .unwrap();
     let request_id = format!("budget-{}", uuid::Uuid::new_v4());
     bind_interruptible_request(
         &node,
@@ -175,9 +165,9 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_behavior(&node, identity.did(), "general").await;
+    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
     let tools: crate::document_config::Tools = serde_json::from_value(json!({
-        "tools_id": "timed", "agent_did": identity.did(),
+        "tools_id": "timed", "node_did": identity.did(),
         "host": {"bash": {"mode": "ReadOnly", "background_enabled": true,
             "background_timeout_secs": 60}},
         "remote": {"services": [{"mcp_service_id": "search", "style": "flat",
@@ -191,33 +181,23 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
         timeouts: crate::tool_surface::ToolTimeouts::from_document(&tools).background,
     };
     let executions = BackgroundExecutionRegistry::default();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        identity.did(),
-        FailurePolicy::default(),
-    )
-    .with_background_tool_registry(BackgroundToolRegistry::from_config(
-        vec![
-            Box::new(NamedPendingTool("bash".into())),
-            Box::new(NamedPendingTool(remote_name.clone())),
-        ],
-        &config,
-    ))
-    .with_remote_tools(tools.remote.clone())
-    .with_background_execution_registry(executions.clone());
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
+            .with_background_tool_registry(BackgroundToolRegistry::from_config(
+                vec![
+                    Box::new(NamedPendingTool("bash".into())),
+                    Box::new(NamedPendingTool(remote_name.clone())),
+                ],
+                &config,
+            ))
+            .with_remote_tools(tools.remote.clone())
+            .with_background_execution_registry(executions.clone());
     hook.on_completion_call(&user_text_message("configured background"), &[])
         .await;
     let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_behavior_id(
-        &node,
-        &session,
-        "general",
-        identity.did(),
-        "general",
-    )
-    .await
-    .unwrap();
+    crate::session::create_session_with_agent_id(&node, &session, identity.did(), "general")
+        .await
+        .unwrap();
     let request_id = format!("timed-{}", uuid::Uuid::new_v4());
     bind_interruptible_request(
         &node,
@@ -325,13 +305,13 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_behavior(&node, identity.did(), "general").await;
+    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
     {
         use crate::config_client::{
             apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
         };
-        let tools = json!({"agent_did": identity.did(), "tools_id": "general:tools",
+        let tools = json!({"node_did": identity.did(), "tools_id": "general:tools",
             "host": {"bash": {"mode": "ReadOnly", "background_enabled": true,
                 "max_output_chars": 10}}});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -348,29 +328,19 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
         .unwrap();
     }
     let executions = BackgroundExecutionRegistry::default();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        identity.did(),
-        FailurePolicy::default(),
-    )
-    .with_background_tool_registry(BackgroundToolRegistry::from_tools(
-        vec![Box::new(NoisyTool("bash".into()))],
-        &["bash".into()],
-    ))
-    .with_background_execution_registry(executions.clone());
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
+            .with_background_tool_registry(BackgroundToolRegistry::from_tools(
+                vec![Box::new(NoisyTool("bash".into()))],
+                &["bash".into()],
+            ))
+            .with_background_execution_registry(executions.clone());
     hook.on_completion_call(&user_text_message("budgeted background"), &[])
         .await;
     let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_behavior_id(
-        &node,
-        &session,
-        "general",
-        identity.did(),
-        "general",
-    )
-    .await
-    .unwrap();
+    crate::session::create_session_with_agent_id(&node, &session, identity.did(), "general")
+        .await
+        .unwrap();
     let request_id = format!("budgeted-{}", uuid::Uuid::new_v4());
     bind_interruptible_request(
         &node,
@@ -421,7 +391,7 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
             apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
         };
-        let tools = json!({"agent_did": identity.did(), "tools_id": "general:tools",
+        let tools = json!({"node_did": identity.did(), "tools_id": "general:tools",
             "host": {"bash": {"mode": "ReadOnly", "background_enabled": true,
                 "max_output_chars": 25}}});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {

@@ -223,9 +223,9 @@ pub(crate) mod tests {
     pub(crate) fn one_case_definition() -> EvalDefinition {
         serde_json::from_value(json!({
             "definition_id": "monitor-findings",
-            "agent_did": "did:key:o",
+            "node_did": "did:key:o",
             "comparability_version": 1,
-            "subject": {"kind": "behavior", "inference_slots": ["primary"]},
+            "subject": {"kind": "agent", "inference_slots": ["primary"]},
             "cases": [{
                 "case_id": "disk-warning",
                 "split": "validation",
@@ -283,7 +283,7 @@ pub(crate) mod tests {
                     case_id: "disk-warning".into(),
                     trial_index: slot.trial_index,
                     attempt: slot.attempt,
-                    trial_agent_did: "did:key:trial".into(),
+                    trial_node_did: "did:key:trial".into(),
                     session_id: "session".into(),
                     seed: 1_000 + slot.trial_index as i64,
                     home_hint: None,

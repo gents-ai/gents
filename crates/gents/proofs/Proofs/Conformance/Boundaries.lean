@@ -237,7 +237,7 @@ def boundaries : List Boundary :=
     , domain := "CoreTypes"
     , subject := "Nat-typed IDs and Time"
     , statement :=
-        "Core identifiers and Time are Nat abbreviations (Proofs/Basic and friends). Lifecycle and ordering proofs only need decidable equality and ordering. The abstraction deliberately omits wall-clock skew, UUID/string parse/serialize failures, ID-namespace collisions, and cross-node identity mismatches (AgentDid/PeerId/RequestId across deployments)."
+        "Core identifiers and Time are Nat abbreviations (Proofs/Basic and friends). Lifecycle and ordering proofs only need decidable equality and ordering. The abstraction deliberately omits wall-clock skew, UUID/string parse/serialize failures, ID-namespace collisions, and cross-node identity mismatches (NodeDid/PeerId/RequestId across deployments)."
     , acceptedFailureMode :=
         some "Collapsing distinct real identities to the same Nat equality could mask a cross-node identity bug class the distributed system can hit."
     , acceptedFollowUp :=
@@ -275,7 +275,7 @@ def boundaries : List Boundary :=
     , domain := "RenderedCapture"
     , subject := "capture key tuple vs the durable string column"
     , statement :=
-        "The modeled CaptureKey is a five-component tuple (agentDid, sessionId, requestId, turnIndex, attempt) with componentwise decidable equality, so \"the same key\" means \"the same five facts\" and there is no delimiter to collide on. The durable column is a single string. The model does not prove that the Rust encoding is injective on the tuple; that obligation sits entirely on the encoder."
+        "The modeled CaptureKey is a five-component tuple (nodeDid, sessionId, requestId, turnIndex, attempt) with componentwise decidable equality, so \"the same key\" means \"the same five facts\" and there is no delimiter to collide on. The durable column is a single string. The model does not prove that the Rust encoding is injective on the tuple; that obligation sits entirely on the encoder."
     , acceptedFailureMode :=
         some "A non-injective encoder merges two distinct attempts into one capture key. The existing composite key in the tree shows this is a live class rather than a hypothetical one: AgentToolCall.tool_call_key is an unescaped \"{session_id}:{tool_call_id}\" concatenation, and session_id reaches it unvalidated from `gents chat --session-id`, so a crafted session id can shadow or pre-claim another session's key."
     , acceptedFollowUp :=

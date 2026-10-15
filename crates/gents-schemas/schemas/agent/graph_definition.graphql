@@ -1,6 +1,6 @@
-type GraphDefinition @branchable @index(fields: ["agent_did", "graph_id"], unique: true) {
+type GraphDefinition @branchable @index(fields: ["node_did", "graph_id"], unique: true) {
     graph_id: String @immutable
-    agent_did: String @index @immutable
+    node_did: String @index @immutable
     enabled: Boolean
     tags: [String!]
     active_revision_digest: String @index

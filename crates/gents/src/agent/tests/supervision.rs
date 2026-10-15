@@ -15,13 +15,13 @@ async fn supervision_restarts_panicking_behavior_while_sibling_continues() {
     let (panic_attempt_tx, mut panic_attempt_rx) = watch::channel(0usize);
     let (sibling_tick_tx, mut sibling_tick_rx) = watch::channel(0usize);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let behaviors = vec![
+    let agents = vec![
         Arc::new(
-            PendingAgentBehavior::new("panic-profile")
+            PendingAgent::new("panic-profile")
                 .build_with_identity_for_test(test_identity("panic-profile")),
         ),
         Arc::new(
-            PendingAgentBehavior::new("steady-profile")
+            PendingAgent::new("steady-profile")
                 .build_with_identity_for_test(test_identity("steady-profile")),
         ),
     ];
@@ -31,14 +31,13 @@ async fn supervision_restarts_panicking_behavior_while_sibling_continues() {
         let sibling_ticks = sibling_ticks.clone();
         let panic_attempt_tx = panic_attempt_tx.clone();
         let sibling_tick_tx = sibling_tick_tx.clone();
-        move |behavior: Arc<crate::config::ResolvedBehavior>,
-              mut shutdown: watch::Receiver<bool>| {
+        move |behavior: Arc<crate::config::ResolvedAgent>, mut shutdown: watch::Receiver<bool>| {
             let panic_attempts = panic_attempts.clone();
             let sibling_ticks = sibling_ticks.clone();
             let panic_attempt_tx = panic_attempt_tx.clone();
             let sibling_tick_tx = sibling_tick_tx.clone();
             async move {
-                if behavior.behavior_id == "panic-profile" {
+                if behavior.agent_id == "panic-profile" {
                     let attempt = panic_attempts.fetch_add(1, Ordering::SeqCst);
                     panic_attempt_tx.send_replace(attempt + 1);
                     if attempt < 2 {
@@ -59,7 +58,7 @@ async fn supervision_restarts_panicking_behavior_while_sibling_continues() {
     };
 
     let task = tokio::spawn(supervise_behaviors_with_runner(
-        behaviors,
+        agents,
         shutdown_rx,
         crate::retry::RetryPolicy {
             max_retries: 3,
@@ -80,7 +79,7 @@ async fn supervision_restarts_panicking_behavior_while_sibling_continues() {
             .expect("sibling-tick observer should remain open");
     })
     .await
-    .expect("behaviors should restart and continue");
+    .expect("agents should restart and continue");
     assert!(panic_attempts.load(Ordering::SeqCst) >= 3);
     assert!(sibling_ticks.load(Ordering::SeqCst) > 3);
 

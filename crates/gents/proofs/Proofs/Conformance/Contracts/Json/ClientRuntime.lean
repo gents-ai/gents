@@ -69,6 +69,7 @@ private def sourceJson : CanonicalOutput.Source → String
         | .title => "title") ++
        ",\"scope\":" ++ toString scope ++ ",\"turn\":" ++ toString turn ++
        ",\"attempt\":" ++ toString attempt)
+  | .toolEffectArguments call => tagged "tool_effect_arguments" (",\"call\":" ++ toString call)
   | .tool call => tagged "tool" (",\"call\":" ++ toString call)
   | .authored key => tagged "authored" (",\"key\":" ++ toString key)
 
@@ -246,7 +247,7 @@ def queuedSteeringTraceJson (witness : QueuedSteering.TraceObservation) : String
     ",\"queuedAfter\":" ++ optionalNatJson script.entry.queuedAfter ++ "}" ++
     ",\"interruptAt\":" ++ optionalNatJson script.interruptAt ++
     ",\"preparedCandidate\":" ++ candidate.getD "null" ++
-    ",\"capture\":{\"agentDid\":" ++ toString key.agentDid ++
+    ",\"capture\":{\"nodeDid\":" ++ toString key.nodeDid ++
     ",\"sessionId\":" ++ toString key.sessionId ++
     ",\"requestDocId\":" ++ toString key.requestId ++
     ",\"turnIndex\":" ++ toString key.turnIndex ++

@@ -55,6 +55,13 @@ impl RequestLifecycleState {
         )
     }
 
+    /// A live terminal owner can certify no provider work only before the
+    /// Processing fence, which precedes title dispatch and compaction as well
+    /// as inference. Mirrors Lean `Request.Projection.stoppedBeforeRunning`.
+    pub const fn certifies_stopped_before_running(self, target: Self, owned: bool) -> bool {
+        owned && matches!(self, Self::Claimed) && matches!(target, Self::Interrupted)
+    }
+
     pub const fn is_claimable(self) -> bool {
         matches!(self, Self::Pending)
     }

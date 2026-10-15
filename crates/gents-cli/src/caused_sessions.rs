@@ -19,7 +19,7 @@ use serde_json::Value;
 #[derive(Clone, Debug)]
 pub(crate) struct CausedSession {
     pub(crate) scope: SessionScope,
-    pub(crate) behavior_id: String,
+    pub(crate) agent_id: String,
     pub(crate) root_session_id: String,
     pub(crate) caused_by_scope: SessionScope,
     /// Distance from the root of the resolved chain, starting at one.
@@ -29,8 +29,8 @@ pub(crate) struct CausedSession {
     pub(crate) latest: AgentRequestRow,
 }
 
-const REQUEST_FIELDS: &str = "_docID request_id agent_did session_id requester_did behavior_id \
-     content lifecycle_state superseded_by_request failure_reason created_at subagent_depth \
+const REQUEST_FIELDS: &str = "_docID request_id node_did session_id requester_did agent_id \
+     content lifecycle_state superseded_by_request failure_reason created_at request_hop \
      caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id \
      caused_by_parent_tool_call_doc_id";
 
@@ -49,12 +49,12 @@ pub(crate) async fn load_direct_caused_sessions(
         let latest = load_session_head(node, &link.scope)
             .await?
             .unwrap_or_else(|| first.clone());
-        let Some(behavior_id) = first.behavior_id.clone() else {
+        let Some(agent_id) = first.agent_id.clone() else {
             continue;
         };
         caused.push(CausedSession {
             scope: link.scope,
-            behavior_id,
+            agent_id,
             root_session_id: parent.session_id.clone(),
             caused_by_scope: parent.clone(),
             depth: 1,
@@ -173,7 +173,7 @@ pub(crate) async fn starting_request(
     let filter = public_request_filter(&format!(
         "{}, request_id: {{ _in: [{}] }}",
         session_scope_filter(
-            &link.scope.agent_did,
+            &link.scope.node_did,
             &link.scope.session_id,
             link.scope.requester_did.as_deref(),
         ),
@@ -221,7 +221,7 @@ pub(crate) async fn started_by_request(
     Ok(started)
 }
 
-/// Present one started session: its stored behavior, the request that
+/// Present one started session: its stored agent, the request that
 /// started it and its current head.
 async fn view(
     node: &Arc<EmbeddedNode>,
@@ -248,7 +248,7 @@ async fn view(
         .unwrap_or_else(|| first.clone());
     Ok(Some(CausedSession {
         scope: link.scope,
-        behavior_id: session.behavior_id,
+        agent_id: session.agent_id,
         root_session_id,
         caused_by_scope,
         depth,
@@ -266,7 +266,7 @@ pub(crate) async fn load_session_head(
         Box::pin(async move {
             load_latest_request_in_txn(
                 txn,
-                &scope.agent_did,
+                &scope.node_did,
                 &scope.session_id,
                 Some(scope.requester_did.as_deref()),
             )
@@ -302,10 +302,10 @@ async fn request_rows(access: &ConfigAccess, query: &str) -> Result<Vec<AgentReq
 
 fn row_scope(row: &AgentRequestRow) -> Result<SessionScope> {
     Ok(SessionScope {
-        agent_did: row
-            .agent_did
+        node_did: row
+            .node_did
             .clone()
-            .context("AgentRequest row omitted agent_did")?,
+            .context("AgentRequest row omitted node_did")?,
         session_id: row
             .session_id
             .clone()

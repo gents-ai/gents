@@ -13,8 +13,8 @@ use crate::support::snapshots::{
     fetch_compaction_entry_snapshots_for_session, fetch_session_snapshot,
 };
 use crate::support::{
-    create_agent_behavior, create_agent_session, create_agent_tool_call, create_compaction_entry,
-    create_request, test_db, AGENT_DID, AGENT_NAME,
+    create_agent, create_agent_session, create_agent_tool_call, create_compaction_entry,
+    create_request, test_db, AGENT_NAME, NODE_DID,
 };
 
 #[derive(Debug)]
@@ -47,7 +47,7 @@ async fn import_scoped_message(
     let request = format!("fixture-request:{session}:{sequence}");
     let close = if valid_ref {
         let segment = OutputSegment {
-            agent_did: AGENT_DID.into(),
+            node_did: NODE_DID.into(),
             requester_did: requester_did.map(str::to_owned),
             session_id: session.into(),
             request_doc_id: request.clone(),
@@ -101,7 +101,7 @@ async fn import_scoped_message(
     let message = TranscriptMessage {
         message_key: format!("fixture:{session}:{sequence}"),
         session_id: session.into(),
-        agent_did: AGENT_DID.into(),
+        node_did: NODE_DID.into(),
         requester_did: requester_did.map(str::to_owned),
         request_doc_id: Some(request),
         publication: MessagePublication::RequestExecution {
@@ -162,16 +162,16 @@ async fn headers(
 
 async fn setup(node: &defra_node::EmbeddedNode, session: &str) {
     create_agent_session(node, session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_behavior(node, AGENT_NAME, AGENT_DID).await;
+    create_agent(node, AGENT_NAME, NODE_DID).await;
 }
 
 fn params(session: &str, turn: u32) -> ForkParams<'_> {
     ForkParams {
         source_session_id: session,
         fork_at_user_turn: turn,
-        caller_agent_did: AGENT_DID,
+        caller_node_did: NODE_DID,
         caller_requester_did: None,
-        target_behavior_id: None,
+        target_agent_id: None,
     }
 }
 
@@ -222,7 +222,7 @@ async fn fork_copies_exact_header_prefix_by_reference() {
     let (_, native) = gents::session::load_canonical_message_from_node(
         &db.node,
         &copied[0].doc_id,
-        AGENT_DID,
+        NODE_DID,
         None,
     )
     .await
@@ -234,7 +234,7 @@ async fn fork_copies_exact_header_prefix_by_reference() {
     let (_, assistant) = gents::session::load_canonical_message_from_node(
         &db.node,
         &copied[1].doc_id,
-        AGENT_DID,
+        NODE_DID,
         None,
     )
     .await
@@ -306,7 +306,7 @@ async fn fork_preserves_exact_requester_scope_and_denies_cross_requester_access(
         crate::support::session_document("requester-parent", AGENT_NAME, "2026-04-21T10:00:00Z");
     session.requester_did = Some(requester.into());
     crate::support::create_session_document(&db.node, &session).await;
-    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    create_agent(&db.node, AGENT_NAME, NODE_DID).await;
     let source = import_scoped_message(
         &db.node,
         "requester-parent",
@@ -338,7 +338,7 @@ async fn fork_preserves_exact_requester_scope_and_denies_cross_requester_access(
     let (_, native) = gents::session::load_canonical_message_from_node(
         &db.node,
         &copied[0].doc_id,
-        AGENT_DID,
+        NODE_DID,
         Some(requester),
     )
     .await
@@ -538,13 +538,13 @@ async fn fork_rejects_invalid_cut_and_rolls_back_invalid_reference() {
 async fn fork_accepts_same_principal_behavior_swap() {
     let db = test_db("fork-behavior").await;
     setup(&db.node, "parent-behavior").await;
-    create_agent_behavior(&db.node, "alternate", AGENT_DID).await;
-    create_agent_behavior(&db.node, "foreign", "did:key:foreign").await;
+    create_agent(&db.node, "alternate", NODE_DID).await;
+    create_agent(&db.node, "foreign", "did:key:foreign").await;
     import_message(&db.node, "parent-behavior", 1, MessageRole::User, "u", true).await;
     let outcome = fork(
         &db.node,
         ForkParams {
-            target_behavior_id: Some("alternate"),
+            target_agent_id: Some("alternate"),
             ..params("parent-behavior", 1)
         },
     )
@@ -554,32 +554,32 @@ async fn fork_accepts_same_principal_behavior_swap() {
         fetch_session_snapshot(&db.node, &outcome.session_id)
             .await
             .unwrap()
-            .behavior_id,
+            .agent_id,
         "alternate"
     );
     assert!(matches!(
         fork(
             &db.node,
             ForkParams {
-                target_behavior_id: Some("missing"),
+                target_agent_id: Some("missing"),
                 ..params("parent-behavior", 1)
             }
         )
         .await
         .unwrap_err(),
-        ForkError::ForkBehaviorNotFound(_)
+        ForkError::ForkAgentNotFound(_)
     ));
     assert!(matches!(
         fork(
             &db.node,
             ForkParams {
-                target_behavior_id: Some("foreign"),
+                target_agent_id: Some("foreign"),
                 ..params("parent-behavior", 1)
             }
         )
         .await
         .unwrap_err(),
-        ForkError::ForkBehaviorNotFound(_)
+        ForkError::ForkAgentNotFound(_)
     ));
 }
 
@@ -631,7 +631,7 @@ async fn fork_of_fork_names_immediate_origin_and_hydrates() {
     let (_, native) = gents::session::load_canonical_message_from_node(
         &db.node,
         &grandchild_header.doc_id,
-        AGENT_DID,
+        NODE_DID,
         None,
     )
     .await
@@ -672,7 +672,7 @@ async fn fork_rejects_busy_wrong_principal_and_missing_source() {
     let wrong = fork(
         &db.node,
         ForkParams {
-            caller_agent_did: "did:key:foreign",
+            caller_node_did: "did:key:foreign",
             ..params("parent-rejections", 0)
         },
     )

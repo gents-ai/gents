@@ -243,8 +243,12 @@ impl LspClient {
                 .request_with_timeout("rust-analyzer/analyzerStatus", json!({}), status_timeout)
                 .await
             {
-                Ok(Value::String(status)) if !status.starts_with("No workspaces") => {
+                Ok(Value::String(status))
+                    if !status.trim().is_empty()
+                        && !status.trim_start().starts_with("No workspaces") =>
+                {
                     if seen_workspace
+                        && self.is_quiescent().await
                         && started.elapsed() >= MINIMUM_SETTLE
                         && self.progress.lock().await.is_empty()
                     {
@@ -266,6 +270,33 @@ impl LspClient {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+
+    /// Waits until the server stops reporting work, exits, or `deadline`
+    /// passes. Returns whether the server was busy. rust-analyzer answers
+    /// file requests with null while it reloads the crate graph and rescans
+    /// roots, so a null answer is not final until it settles.
+    pub async fn wait_while_busy(&self, deadline: Instant) -> bool {
+        let mut busy = false;
+        while Instant::now() < deadline && self.is_busy().await {
+            busy = true;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        busy
+    }
+
+    /// `experimental/serverStatus` is authoritative once sent: progress such
+    /// as rust-analyzer's post-quiescence cache priming does not block
+    /// answers. Open `$/progress` tokens mean busy only for servers that
+    /// never send it.
+    async fn is_busy(&self) -> bool {
+        if !self.is_alive() {
+            return false;
+        }
+        if let Some(status) = self.server_status.lock().await.as_ref() {
+            return !status.quiescent;
+        }
+        !self.progress.lock().await.is_empty()
     }
 
     async fn is_quiescent(&self) -> bool {
@@ -554,13 +585,22 @@ fn configuration_result(params: Option<&Value>, settings: &Option<Value>) -> Val
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    if items.is_empty() {
-        return json!([settings.clone().unwrap_or(Value::Null)]);
-    }
     Value::Array(
         items
             .iter()
-            .map(|_| settings.clone().unwrap_or(Value::Null))
+            .map(|item| {
+                let Some(settings) = settings.as_ref() else {
+                    return Value::Null;
+                };
+                match item.get("section").and_then(Value::as_str) {
+                    None | Some("") => settings.clone(),
+                    Some(section) => section
+                        .split('.')
+                        .try_fold(settings, |value, key| value.get(key))
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                }
+            })
             .collect(),
     )
 }
@@ -682,11 +722,9 @@ async fn handle_server_message(
             return Ok(());
         }
         "experimental/serverStatus" => {
-            let quiescent = value
-                .pointer("/params/quiescent")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            *shared.server_status.lock().await = Some(ServerStatus { quiescent });
+            if let Some(quiescent) = value.pointer("/params/quiescent").and_then(Value::as_bool) {
+                *shared.server_status.lock().await = Some(ServerStatus { quiescent });
+            }
             return Ok(());
         }
         "$/progress" => {
@@ -750,5 +788,53 @@ fn progress_token(value: Option<&Value>) -> String {
         Some(Value::String(token)) => token.clone(),
         Some(Value::Number(n)) => n.to_string(),
         _ => "progress".into(),
+    }
+}
+
+#[cfg(test)]
+mod configuration_tests {
+    use super::*;
+
+    #[test]
+    fn configuration_returns_requested_sections_in_item_order() {
+        let settings = Some(json!({
+            "rust-analyzer": {
+                "checkOnSave": false,
+                "cargo": { "buildScripts": { "enable": false } }
+            },
+            "editor": { "tabSize": 4 }
+        }));
+        let params = json!({ "items": [
+            { "section": "editor.tabSize" },
+            { "section": "rust-analyzer", "scopeUri": "file:///workspace/src/lib.rs" },
+            { "section": "rust-analyzer.cargo.buildScripts.enable" },
+            { "section": "missing" },
+            { "section": "editor.tabSize.missing" },
+            {}
+        ] });
+        assert_eq!(
+            configuration_result(Some(&params), &settings),
+            json!([
+                4,
+                { "checkOnSave": false, "cargo": { "buildScripts": { "enable": false } } },
+                false,
+                null,
+                null,
+                settings.as_ref().unwrap()
+            ])
+        );
+    }
+
+    #[test]
+    fn configuration_preserves_empty_and_unconfigured_cardinality() {
+        assert_eq!(
+            configuration_result(Some(&json!({ "items": [] })), &Some(json!({"x": 1}))),
+            json!([])
+        );
+        assert_eq!(configuration_result(None, &None), json!([]));
+        assert_eq!(
+            configuration_result(Some(&json!({ "items": [{"section": "x"}, {}] })), &None),
+            json!([null, null])
+        );
     }
 }

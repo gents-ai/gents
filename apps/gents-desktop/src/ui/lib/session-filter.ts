@@ -7,17 +7,17 @@ export type SessionSource = "person" | "task" | "session";
 export type SessionFilter = {
   states: SessionState[];
   sources: SessionSource[];
-  behaviors: string[];
+  agents: string[];
 };
 
 export const emptyFilter: SessionFilter = {
   states: [],
   sources: [],
-  behaviors: [],
+  agents: [],
 };
 
 export const hasFilter = (f: SessionFilter) =>
-  f.states.length > 0 || f.sources.length > 0 || f.behaviors.length > 0;
+  f.states.length > 0 || f.sources.length > 0 || f.agents.length > 0;
 
 const STATES: readonly string[] = ["live", "failed"];
 const SOURCES: readonly string[] = ["person", "task", "session"];
@@ -30,6 +30,6 @@ export function restoreSessionFilter(stored: unknown): SessionFilter {
   return {
     states: field("states").filter((s): s is SessionState => STATES.includes(s)),
     sources: field("sources").filter((s): s is SessionSource => SOURCES.includes(s)),
-    behaviors: field("behaviors"),
+    agents: field("agents"),
   };
 }

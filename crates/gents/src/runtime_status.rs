@@ -7,15 +7,13 @@ use tokio::sync::{watch, Mutex};
 use tokio::time::MissedTickBehavior;
 
 use crate::agent::ProcessLifecycleState;
-use crate::behavior_readiness_publisher::{
-    BehaviorReadinessPublisherHandle, BehaviorReadinessPublisherOwner,
-};
 use crate::graphql::escape_graphql_string;
+use crate::node_readiness_publisher::{NodeReadinessPublisherHandle, NodeReadinessPublisherOwner};
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
 /// Target of the reconcile-phase transition event.
 ///
-/// `AgentRuntime.reconcile_phase` holds only the phase the runtime is in now,
+/// `NodeRuntime.reconcile_phase` holds only the phase the runtime is in now,
 /// and a reconcile leaves the intermediate phases for as long as its debounce
 /// and resolve take. The order and duration of those phases is therefore only
 /// observable through this event stream, not by reading the document.
@@ -63,11 +61,11 @@ impl ReconcileResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeStatusRow {
-    agent_did: String,
+    node_did: String,
     reconcile_phase: String,
-    behavior_executor_capacity: i64,
-    behavior_executor_queue_depth: i64,
-    behavior_executor_status_json: String,
+    agent_executor_capacity: i64,
+    agent_executor_queue_depth: i64,
+    agent_executor_status_json: String,
     last_reconcile_result: String,
     last_reconcile_error: String,
     last_reconcile_completed_at: String,
@@ -75,14 +73,14 @@ struct RuntimeStatusRow {
 }
 
 impl RuntimeStatusRow {
-    fn new(agent_did: String) -> Self {
+    fn new(node_did: String) -> Self {
         let now = Utc::now().to_rfc3339();
         Self {
-            agent_did,
+            node_did,
             reconcile_phase: ReconcilePhase::Idle.as_str().to_string(),
-            behavior_executor_capacity: 0,
-            behavior_executor_queue_depth: 0,
-            behavior_executor_status_json: "{}".to_string(),
+            agent_executor_capacity: 0,
+            agent_executor_queue_depth: 0,
+            agent_executor_status_json: "{}".to_string(),
             last_reconcile_result: String::new(),
             last_reconcile_error: String::new(),
             last_reconcile_completed_at: String::new(),
@@ -92,7 +90,7 @@ impl RuntimeStatusRow {
 }
 
 pub(crate) struct RuntimeStatusOwner {
-    readiness: BehaviorReadinessPublisherOwner,
+    readiness: NodeReadinessPublisherOwner,
 }
 
 impl RuntimeStatusOwner {
@@ -105,24 +103,24 @@ impl RuntimeStatusOwner {
 pub(crate) struct RuntimeStatusHandle {
     node: Arc<defra_node::EmbeddedNode>,
     state: Arc<Mutex<RuntimeStatusRow>>,
-    readiness: BehaviorReadinessPublisherHandle,
+    readiness: NodeReadinessPublisherHandle,
 }
 
 impl RuntimeStatusHandle {
     pub(crate) fn start(
         node: Arc<defra_node::EmbeddedNode>,
-        agent_did: impl Into<String>,
+        node_did: impl Into<String>,
     ) -> (RuntimeStatusOwner, Self) {
-        let agent_did = agent_did.into();
+        let node_did = node_did.into();
         let (readiness_owner, readiness) =
-            BehaviorReadinessPublisherHandle::start(node.clone(), agent_did.clone());
+            NodeReadinessPublisherHandle::start(node.clone(), node_did.clone());
         (
             RuntimeStatusOwner {
                 readiness: readiness_owner,
             },
             Self {
                 node,
-                state: Arc::new(Mutex::new(RuntimeStatusRow::new(agent_did))),
+                state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
                 readiness,
             },
         )
@@ -131,38 +129,35 @@ impl RuntimeStatusHandle {
     #[cfg(test)]
     pub(crate) fn start_with_readiness_writer(
         node: Arc<defra_node::EmbeddedNode>,
-        agent_did: impl Into<String>,
-        writer: Arc<dyn crate::behavior_readiness_publisher::BehaviorReadinessWriter>,
+        node_did: impl Into<String>,
+        writer: Arc<dyn crate::node_readiness_publisher::NodeReadinessWriter>,
         retry_delay: Duration,
     ) -> (RuntimeStatusOwner, Self) {
-        let agent_did = agent_did.into();
-        let (readiness_owner, readiness) = BehaviorReadinessPublisherHandle::start_with_writer(
-            writer,
-            agent_did.clone(),
-            retry_delay,
-        );
+        let node_did = node_did.into();
+        let (readiness_owner, readiness) =
+            NodeReadinessPublisherHandle::start_with_writer(writer, node_did.clone(), retry_delay);
         (
             RuntimeStatusOwner {
                 readiness: readiness_owner,
             },
             Self {
                 node,
-                state: Arc::new(Mutex::new(RuntimeStatusRow::new(agent_did))),
+                state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
                 readiness,
             },
         )
     }
 
     #[cfg(test)]
-    pub(crate) fn new(node: Arc<defra_node::EmbeddedNode>, agent_did: impl Into<String>) -> Self {
-        let agent_did = agent_did.into();
-        let (_owner, readiness) = BehaviorReadinessPublisherHandle::start_with_unbounded_test_clock(
+    pub(crate) fn new(node: Arc<defra_node::EmbeddedNode>, node_did: impl Into<String>) -> Self {
+        let node_did = node_did.into();
+        let (_owner, readiness) = NodeReadinessPublisherHandle::start_with_unbounded_test_clock(
             node.clone(),
-            agent_did.clone(),
+            node_did.clone(),
         );
         let handle = Self {
             node,
-            state: Arc::new(Mutex::new(RuntimeStatusRow::new(agent_did))),
+            state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
             readiness,
         };
         handle
@@ -171,13 +166,13 @@ impl RuntimeStatusHandle {
     #[cfg(test)]
     pub(crate) fn start_with_unbounded_test_clock(
         node: Arc<defra_node::EmbeddedNode>,
-        agent_did: impl Into<String>,
+        node_did: impl Into<String>,
     ) -> (RuntimeStatusOwner, Self) {
-        let agent_did = agent_did.into();
+        let node_did = node_did.into();
         let (readiness_owner, readiness) =
-            BehaviorReadinessPublisherHandle::start_with_unbounded_test_clock(
+            NodeReadinessPublisherHandle::start_with_unbounded_test_clock(
                 node.clone(),
-                agent_did.clone(),
+                node_did.clone(),
             );
         (
             RuntimeStatusOwner {
@@ -185,18 +180,18 @@ impl RuntimeStatusHandle {
             },
             Self {
                 node,
-                state: Arc::new(Mutex::new(RuntimeStatusRow::new(agent_did))),
+                state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
                 readiness,
             },
         )
     }
 
-    pub(crate) fn readiness(&self) -> &BehaviorReadinessPublisherHandle {
+    pub(crate) fn readiness(&self) -> &NodeReadinessPublisherHandle {
         &self.readiness
     }
 
-    pub(crate) async fn initialize_startup(&self, default_behavior_id: &str) -> anyhow::Result<()> {
-        self.readiness.initialize(default_behavior_id).await?;
+    pub(crate) async fn initialize_startup(&self, default_agent_id: &str) -> anyhow::Result<()> {
+        self.readiness.initialize(default_agent_id).await?;
         Ok(())
     }
 
@@ -210,7 +205,7 @@ impl RuntimeStatusHandle {
     #[cfg(test)]
     pub(crate) async fn set_process_state(&self, state: ProcessLifecycleState) {
         if let Err(error) = self.set_process_state_durable(state).await {
-            tracing::error!(?state, error = %error, "behavior readiness publisher stopped");
+            tracing::error!(?state, error = %error, "agent readiness publisher stopped");
         }
     }
 
@@ -236,7 +231,7 @@ impl RuntimeStatusHandle {
 
     pub(crate) async fn publish_noop(&self, snapshot: &ActiveRuntimeSnapshot) {
         if let Err(error) = self.publish_snapshot(snapshot, ReconcileResult::Noop).await {
-            tracing::error!(error = %error, "failed to publish runtime behavior readiness source");
+            tracing::error!(error = %error, "failed to publish runtime agent readiness source");
         }
     }
 
@@ -245,7 +240,7 @@ impl RuntimeStatusHandle {
             .publish_snapshot(snapshot, ReconcileResult::Applied)
             .await
         {
-            tracing::error!(error = %error, "failed to publish runtime behavior readiness source");
+            tracing::error!(error = %error, "failed to publish runtime agent readiness source");
         }
     }
 
@@ -279,7 +274,7 @@ impl RuntimeStatusHandle {
         self.readiness
             .set_router_generation(generation)
             .await
-            .with_context(|| format!("publish behavior readiness router generation {generation}"))
+            .with_context(|| format!("publish agent readiness router generation {generation}"))
     }
 
     pub(crate) async fn publish_executor_snapshot(&self, snapshot: &ActiveRuntimeSnapshot) {
@@ -336,7 +331,7 @@ impl RuntimeStatusHandle {
         if next.reconcile_phase != guard.reconcile_phase {
             tracing::info!(
                 target: RECONCILE_PHASE_EVENT_TARGET,
-                agent_did = %next.agent_did,
+                node_did = %next.node_did,
                 previous_phase = guard.reconcile_phase.as_str(),
                 reconcile_phase = next.reconcile_phase.as_str(),
                 "runtime reconcile phase changed"
@@ -345,9 +340,9 @@ impl RuntimeStatusHandle {
         *guard = next.clone();
         if let Err(error) = upsert_runtime_status(self.node.as_ref(), &next).await {
             tracing::warn!(
-                agent_did = %next.agent_did,
+                node_did = %next.node_did,
                 error = %error,
-                "failed to persist AgentRuntime status"
+                "failed to persist NodeRuntime status"
             );
         }
     }
@@ -359,14 +354,14 @@ async fn upsert_runtime_status(
 ) -> anyhow::Result<()> {
     let mutation = format!(
         r#"mutation {{
-            upsert_AgentRuntime(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+            upsert_NodeRuntime(
+                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
                 add: {{
-                    agent_did: "{agent_did}",
+                    node_did: "{node_did}",
                     reconcile_phase: "{reconcile_phase}",
-                    behavior_executor_capacity: {behavior_executor_capacity},
-                    behavior_executor_queue_depth: {behavior_executor_queue_depth},
-                    behavior_executor_status_json: "{behavior_executor_status_json}",
+                    agent_executor_capacity: {agent_executor_capacity},
+                    agent_executor_queue_depth: {agent_executor_queue_depth},
+                    agent_executor_status_json: "{agent_executor_status_json}",
                     last_reconcile_result: "{last_reconcile_result}",
                     last_reconcile_error: "{last_reconcile_error}",
                     last_reconcile_completed_at: "{last_reconcile_completed_at}",
@@ -374,9 +369,9 @@ async fn upsert_runtime_status(
                 }},
                 update: {{
                     reconcile_phase: "{reconcile_phase}",
-                    behavior_executor_capacity: {behavior_executor_capacity},
-                    behavior_executor_queue_depth: {behavior_executor_queue_depth},
-                    behavior_executor_status_json: "{behavior_executor_status_json}",
+                    agent_executor_capacity: {agent_executor_capacity},
+                    agent_executor_queue_depth: {agent_executor_queue_depth},
+                    agent_executor_status_json: "{agent_executor_status_json}",
                     last_reconcile_result: "{last_reconcile_result}",
                     last_reconcile_error: "{last_reconcile_error}",
                     last_reconcile_completed_at: "{last_reconcile_completed_at}",
@@ -384,11 +379,11 @@ async fn upsert_runtime_status(
                 }}
             ) {{ _docID }}
         }}"#,
-        agent_did = escape_graphql_string(&row.agent_did),
+        node_did = escape_graphql_string(&row.node_did),
         reconcile_phase = escape_graphql_string(&row.reconcile_phase),
-        behavior_executor_capacity = row.behavior_executor_capacity,
-        behavior_executor_queue_depth = row.behavior_executor_queue_depth,
-        behavior_executor_status_json = escape_graphql_string(&row.behavior_executor_status_json),
+        agent_executor_capacity = row.agent_executor_capacity,
+        agent_executor_queue_depth = row.agent_executor_queue_depth,
+        agent_executor_status_json = escape_graphql_string(&row.agent_executor_status_json),
         last_reconcile_result = escape_graphql_string(&row.last_reconcile_result),
         last_reconcile_error = escape_graphql_string(&row.last_reconcile_error),
         last_reconcile_completed_at = escape_graphql_string(&row.last_reconcile_completed_at),
@@ -401,7 +396,7 @@ async fn upsert_runtime_status(
     )
     .await?;
     if response.has_errors() {
-        anyhow::bail!("upsert AgentRuntime failed: {:?}", response.errors);
+        anyhow::bail!("upsert NodeRuntime failed: {:?}", response.errors);
     }
     Ok(())
 }
@@ -413,7 +408,7 @@ struct ExecutorStatusFields {
 }
 
 fn executor_status_fields(snapshot: &ActiveRuntimeSnapshot) -> ExecutorStatusFields {
-    let statuses = snapshot.behavior_executor_statuses();
+    let statuses = snapshot.agent_executor_statuses();
     let capacity = statuses
         .values()
         .map(|status| status.worker_capacity)
@@ -433,16 +428,16 @@ fn executor_status_fields(snapshot: &ActiveRuntimeSnapshot) -> ExecutorStatusFie
 
 fn apply_executor_status(row: &mut RuntimeStatusRow, status: &ExecutorStatusFields) -> bool {
     let mut changed = false;
-    if row.behavior_executor_capacity != status.capacity {
-        row.behavior_executor_capacity = status.capacity;
+    if row.agent_executor_capacity != status.capacity {
+        row.agent_executor_capacity = status.capacity;
         changed = true;
     }
-    if row.behavior_executor_queue_depth != status.queue_depth {
-        row.behavior_executor_queue_depth = status.queue_depth;
+    if row.agent_executor_queue_depth != status.queue_depth {
+        row.agent_executor_queue_depth = status.queue_depth;
         changed = true;
     }
-    if row.behavior_executor_status_json != status.status_json {
-        row.behavior_executor_status_json = status.status_json.clone();
+    if row.agent_executor_status_json != status.status_json {
+        row.agent_executor_status_json = status.status_json.clone();
         changed = true;
     }
     changed

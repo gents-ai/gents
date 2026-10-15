@@ -17,7 +17,7 @@ registerSurface({
 
 registerSurface({
   id: "workers",
-  title: "Workers",
+  title: "Started sessions",
   icon: Users,
   placements: ["dock", "sheet"],
   routes: ["session"],

@@ -118,6 +118,8 @@ export function ChatTranscriptPanel({
         content: optimisticPendingTurn.content,
         selectedSkillIds: optimisticPendingTurn.selectedSkillIds,
         lifecycleState: optimisticPendingTurn.lifecycleState,
+        foldedIntoRequestId: null,
+        origin: null,
         createdAt: optimisticPendingTurn.createdAt,
       },
     ];
@@ -432,7 +434,7 @@ export function ChatTranscriptPanel({
                   <div className="assistant-activity-copy">
                     <strong>
                       {session?.turnState === "waitingForClaim"
-                        ? "Waiting for the agent"
+                        ? "Waiting for the node"
                         : "Assistant is working"}
                     </strong>
                     <span>

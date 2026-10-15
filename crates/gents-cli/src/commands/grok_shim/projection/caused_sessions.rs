@@ -277,7 +277,7 @@ pub(super) async fn project_caused_sessions(
             parent_session_id: session.caused_by_scope.session_id.clone(),
             parent_prompt_id: parent_prompt_id.map(ToOwned::to_owned),
             child_session_id: id.clone(),
-            subagent_type: session.behavior_id.clone(),
+            subagent_type: session.agent_id.clone(),
             description: description(session),
             context_normalized: true,
         }));
@@ -331,7 +331,7 @@ pub(crate) async fn handle(
     let roots = sessions
         .iter()
         .map(|session| SessionScope {
-            agent_did: principal.to_owned(),
+            node_did: principal.to_owned(),
             session_id: session.clone(),
             requester_did: Some(principal.to_owned()),
         })
@@ -440,7 +440,7 @@ async fn snapshot(
         "subagentId": session.scope.session_id,
         "parentSessionId": session.caused_by_scope.session_id,
         "childSessionId": session.scope.session_id,
-        "subagentType": session.behavior_id,
+        "subagentType": session.agent_id,
         "description": description(session),
         "startedAtEpochMs": started,
         "durationMs": duration,
@@ -535,8 +535,8 @@ async fn load_activity(
         .iter()
         .map(|(scope, doc_id)| {
             format!(
-                r#"{{agent_did: {{_eq: "{}"}}, request_doc_id: {{_eq: "{}"}}}}"#,
-                escape_graphql_string(&scope.agent_did),
+                r#"{{node_did: {{_eq: "{}"}}, request_doc_id: {{_eq: "{}"}}}}"#,
+                escape_graphql_string(&scope.node_did),
                 escape_graphql_string(doc_id)
             )
         })
@@ -548,7 +548,7 @@ async fn load_activity(
             format!(
                 r#"{{{}, request_doc_id: {{_eq: "{}"}}}}"#,
                 gents::session::session_scope_filter(
-                    &scope.agent_did,
+                    &scope.node_did,
                     &scope.session_id,
                     scope.requester_did.as_deref()
                 ),
@@ -746,7 +746,7 @@ mod tests {
     fn session(lifecycle_state: &str) -> CausedSession {
         let first = request(json!({
             "_docID": "doc-child", "request_id": "child", "session_id": "child-session",
-            "agent_did": "did:child", "requester_did": "did:parent", "behavior_id": "worker",
+            "node_did": "did:child", "requester_did": "did:parent", "agent_id": "worker",
             "content": "  inspect the logs  ", "lifecycle_state": lifecycle_state,
             "created_at": "2026-09-26T00:00:00Z",
             "caused_by_parent_request_doc_id": "doc-parent",
@@ -754,14 +754,14 @@ mod tests {
         }));
         CausedSession {
             scope: SessionScope {
-                agent_did: "did:child".into(),
+                node_did: "did:child".into(),
                 session_id: "child-session".into(),
                 requester_did: Some("did:parent".into()),
             },
-            behavior_id: "worker".into(),
+            agent_id: "worker".into(),
             root_session_id: "parent-session".into(),
             caused_by_scope: SessionScope {
-                agent_did: "did:parent".into(),
+                node_did: "did:parent".into(),
                 session_id: "parent-session".into(),
                 requester_did: Some("did:parent".into()),
             },

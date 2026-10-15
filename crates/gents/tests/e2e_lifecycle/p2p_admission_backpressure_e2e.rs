@@ -23,7 +23,7 @@ use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
 use crate::support::{test_p2p_db_with_admission, TestP2pAdmission};
 
 const OWNER_DID: &str = "did:test:admission-p2p-owner";
-const BEHAVIOR_ID: &str = "admission-p2p-behavior";
+const AGENT_ID: &str = "admission-p2p-behavior";
 
 async fn install_one_way_replicator(
     sender: &EmbeddedNode,
@@ -80,19 +80,19 @@ async fn create_request(
     node: &EmbeddedNode,
     request_id: &str,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     lifecycle_state: &str,
 ) {
     let request_id = escape_graphql_string(request_id);
     let session_id = escape_graphql_string(session_id);
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
                 purpose: "normal",
-                agent_did: "{agent_did}",
-                behavior_id: "{BEHAVIOR_ID}",
+                node_did: "{node_did}",
+                agent_id: "{AGENT_ID}",
                 session_id: "{session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{request_id}",
@@ -121,7 +121,7 @@ async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<AgentReq
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
                 request_id
-                agent_did
+                node_did
                 lifecycle_state
             }}
         }}"#
@@ -191,6 +191,6 @@ async fn single_push_worker_delivers_multi_wave_updates() {
             &format!("peer wave {idx}"),
         )
         .await;
-        assert_eq!(on_peer.agent_did.as_deref(), Some(OWNER_DID));
+        assert_eq!(on_peer.node_did.as_deref(), Some(OWNER_DID));
     }
 }

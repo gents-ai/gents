@@ -279,15 +279,15 @@ pub(super) fn build_atif_trajectory(
             .or_else(|| Some(timeline.request_id.clone())),
         trajectory_id: Some(timeline.request_id.clone()),
         agent: AtifAgent {
-            name: timeline.behavior_id.clone().unwrap_or_else(|| "gents".to_string()),
+            name: timeline.agent_id.clone().unwrap_or_else(|| "gents".to_string()),
             version: env!("CARGO_PKG_VERSION").to_string(),
             model_name: root_observed_model(timeline),
             extra: optional_extra([
                 ("runtime", string_value("gents")),
-                ("agent_did", optional_string_value(timeline.agent_did.as_deref())),
+                ("node_did", optional_string_value(timeline.node_did.as_deref())),
                 (
-                    "behavior_id",
-                    optional_string_value(timeline.behavior_id.as_deref()),
+                    "agent_id",
+                    optional_string_value(timeline.agent_id.as_deref()),
                 ),
                 (
                     "backend_id",
@@ -909,7 +909,7 @@ mod tests {
         let header = gents_protocol::output::TranscriptMessage {
             message_key: format!("{session_id}:{sequence}"),
             session_id: session_id.to_string(),
-            agent_did: "did:test:gents".to_string(),
+            node_did: "did:test:gents".to_string(),
             requester_did: None,
             request_doc_id: request_doc_id.map(ToOwned::to_owned),
             publication: gents_protocol::output::MessagePublication::RequestExecution {
@@ -928,7 +928,7 @@ mod tests {
             request_doc_id: header.request_doc_id.clone(),
             sequence,
             timestamp: Some(timestamp.to_string()),
-            agent_did: Some(header.agent_did.clone()),
+            node_did: Some(header.node_did.clone()),
             header,
             message,
         }
@@ -939,8 +939,8 @@ mod tests {
             request: TimelineRequestRow {
                 request_id: "req-atif".to_string(),
                 doc_id: Some("req-atif-doc".to_string()),
-                agent_did: Some("did:test:gents".to_string()),
-                behavior_id: Some("terminal-bench".to_string()),
+                node_did: Some("did:test:gents".to_string()),
+                agent_id: Some("terminal-bench".to_string()),
                 session_id: Some("session-atif".to_string()),
                 content: Some("Fix the project.".to_string()),
                 max_total_tokens: Some(10_000),

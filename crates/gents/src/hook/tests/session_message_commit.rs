@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::config_client::ConfigApplyTxn;
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 
 async fn write_config<T: serde::Serialize>(
     node: &EmbeddedNode,
@@ -30,15 +30,15 @@ async fn write_config<T: serde::Serialize>(
 /// `general` may start `general` on its own principal, and the `goal` Task
 /// declares a Goal.
 async fn enable_agents_tools(node: &EmbeddedNode, did: &str) {
-    crate::test_support::install_test_behavior(node, did, "general").await;
+    crate::test_support::install_test_agent(node, did, "general").await;
     write_config(
         node,
-        crate::Collection::SubagentTarget,
-        &crate::document_config::SubagentTargetDocument {
+        crate::Collection::AgentTarget,
+        &crate::document_config::AgentTargetDocument {
             target_id: "general:general".to_owned(),
-            agent_did: did.to_owned(),
-            target_agent_did: did.to_owned(),
-            behavior_id: "general".to_owned(),
+            node_did: did.to_owned(),
+            target_node_did: did.to_owned(),
+            agent_id: "general".to_owned(),
             name: "general".to_owned(),
             description: None,
             tags: Vec::new(),
@@ -49,9 +49,9 @@ async fn enable_agents_tools(node: &EmbeddedNode, did: &str) {
         node,
         crate::Collection::Tools,
         &serde_json::json!({
-            "agent_did": did,
+            "node_did": did,
             "tools_id": "general:tools",
-            "subagents": { "enabled": true, "target_ids": ["general:general"] }
+            "agents": { "enabled": true, "target_ids": ["general:general"] }
         }),
     )
     .await;
@@ -59,9 +59,9 @@ async fn enable_agents_tools(node: &EmbeddedNode, did: &str) {
         node,
         crate::Collection::Task,
         &serde_json::json!({
-            "agent_did": did,
+            "node_did": did,
             "task_id": "goal",
-            "behavior_id": "general",
+            "agent_id": "general",
             "prompt_template": "pursue the goal",
             "goal_objective_template": "finish the work"
         }),
@@ -165,12 +165,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
         crate::KeyIdentity::load_or_create(dir.path().join("test-agent.key"), None).unwrap();
     let did = identity.did().to_owned();
     enable_agents_tools(node.as_ref(), &did).await;
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "commit-receipt-loss",
-        &did,
-        FailurePolicy::default(),
-    );
+    let hook = DefraSessionHook::with_identity(node.clone(), &did, FailurePolicy::default());
     hook.on_completion_call(&user_text_message("start agents"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();

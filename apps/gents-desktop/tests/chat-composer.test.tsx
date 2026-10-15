@@ -17,7 +17,7 @@ function renderComposer(
       activeRequestId={overrides.activeRequestId ?? null}
       activityStatus={overrides.activityStatus ?? null}
       approxSerializedBytes={21000}
-      behaviorLabel="default"
+      agentLabel="default"
       canSend
       draft=""
       interruptVisible={overrides.interruptVisible ?? false}
@@ -45,14 +45,15 @@ describe("ChatComposer chrome", () => {
       turnState: "waitingForClaim",
       activityStatus: {
         kind: "waiting",
-        label: "Waiting for the agent…",
-        detail: "Your message is queued until the enrolled agent claims it.",
+        label: "Waiting for the node…",
+        detail:
+          "The node has not started this request yet. Messages you send now wait behind it.",
         animated: true,
       },
     });
     const status = screen.getByTestId("composer-status");
-    expect(status).toHaveTextContent("Waiting for the agent…");
-    expect(status).toHaveTextContent("Your message is queued");
+    expect(status).toHaveTextContent("Waiting for the node…");
+    expect(status).toHaveTextContent("The node has not started this request yet");
     expect(status).toHaveAttribute("data-activity-kind", "waiting");
     expect(status).not.toHaveTextContent("waitingForClaim");
   });
@@ -102,7 +103,7 @@ describe("ChatComposer chrome", () => {
       activityStatus: {
         kind: "blocked",
         label: "Agent is unavailable",
-        detail: "Behavior backend is unavailable",
+        detail: "Agent backend is unavailable",
         animated: false,
       },
       onConfigureInference,
@@ -116,22 +117,22 @@ describe("ChatComposer chrome", () => {
     renderComposer({
       activityStatus: {
         kind: "waiting",
-        label: "Waiting for the agent runtime…",
+        label: "Waiting for the node runtime…",
         detail: "The secure connection is recovering automatically.",
         animated: true,
       },
     });
     expect(screen.getByTestId("composer-status")).toHaveTextContent(
-      "Waiting for the agent runtime…",
+      "Waiting for the node runtime…",
     );
     expect(
       screen.queryByRole("button", { name: /reconnect/i }),
     ).not.toBeInTheDocument();
   });
 
-  it("no longer renders store internals or permanent behavior chrome", () => {
+  it("no longer renders store internals or permanent agent chrome", () => {
     renderComposer();
-    expect(screen.queryByText(/Selected behavior/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Selected agent/)).not.toBeInTheDocument();
     expect(screen.queryByText(/rows \//)).not.toBeInTheDocument();
   });
 });

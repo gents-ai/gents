@@ -2,8 +2,9 @@
    subscription runs on, and its models and usage. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { dependentsWarning } from "./dependents";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { newestWins } from "../../../lib/reads";
 import type {
   BackendProviderKind,
   BackendSaveRequest,
@@ -15,7 +16,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
-import { setupErrorMessage } from "@/lib/providerLogin";
+import { setupErrorMessage } from "../../../lib/setupErrors";
 import { optionalInteger, requiredHttpUrl, str, useDraft, problemOf } from "./draft";
 import {
   ChoiceRow,
@@ -33,15 +34,10 @@ import { useApp } from "@/app/AppContext";
 import { toastFailure } from "@/lib/failure";
 import { healthy, isSubscriptionKind, KINDS, SUBSCRIPTION } from "./inferenceKinds";
 import { UsageRows } from "./ProviderUsage";
-import {
-  accountWarnings,
-  AccountRows,
-  backendAccount,
-  removeAccount,
-} from "./ProviderAccounts";
+import { accountWarnings, AccountRows, backendAccount } from "./ProviderAccounts";
 
 export function backendSave(
-  agentDid: string,
+  nodeDid: string,
   fields: {
     backendId: string;
     name: string;
@@ -59,14 +55,14 @@ export function backendSave(
 ): BackendSaveRequest {
   return {
     document: {
-      agent_did: agentDid,
+      node_did: nodeDid,
       backend_id: fields.backendId,
       name: fields.name,
       provider_kind: fields.providerKind as BackendProviderKind,
       openai_wire_api: (fields.openaiWireApi as OpenAiWireApi | null) ?? null,
       endpoint: fields.endpoint,
       auth: isSubscriptionKind(fields.providerKind)
-        ? { kind: "principal_oauth" }
+        ? { kind: "node_oauth" }
         : fields.apiKey
           ? { kind: "api_key", key: fields.apiKey }
           : fields.apiKeyEnvVar
@@ -85,14 +81,12 @@ export function BackendEditor({
   deployment,
   backend,
   accounts,
-  reload,
   usage,
   embedded = false,
 }: {
   deployment: NodeView;
   backend: InferenceBackendView;
   accounts: readonly ProviderAccountView[];
-  reload: () => Promise<void>;
   /* this backend's usage and the read again; absent, no Usage group */
   usage?: {
     view?: BackendUsageView;
@@ -102,12 +96,16 @@ export function BackendEditor({
   embedded?: boolean;
 }) {
   const {
-    api,
-    actions: { changeConfig },
+    actions: {
+      changeConfig,
+      discoverInferenceModels,
+      probeInferenceEndpoint,
+      removeProviderAccount,
+    },
   } = useApp();
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "inference",
   };
   const saved = {
@@ -164,7 +162,7 @@ export function BackendEditor({
       let auth: InferenceBackend["auth"] | undefined;
       if (isSubscriptionKind(next.providerKind))
         auth = {
-          kind: "principal_oauth",
+          kind: "node_oauth",
           ...(backend.accountRef ? { account_ref: backend.accountRef } : {}),
         };
       else if (next.apiKey.trim()) auth = { kind: "api_key", key: next.apiKey };
@@ -173,7 +171,7 @@ export function BackendEditor({
       else if (!backend.apiKeyConfigured || isSubscriptionKind(saved.providerKind))
         auth = { kind: "unauthenticated" };
 
-      const changes: Partial<Omit<InferenceBackend, "agent_did" | "backend_id">> = {
+      const changes: Partial<Omit<InferenceBackend, "node_did" | "backend_id">> = {
         name,
         provider_kind: next.providerKind as BackendProviderKind,
         openai_wire_api: (next.openaiWireApi as OpenAiWireApi) || null,
@@ -187,7 +185,7 @@ export function BackendEditor({
       };
       if (auth) changes.auth = auth;
       await changeConfig("patchConfigComponents", {
-        agentDid: deployment.agentDid,
+        nodeDid: deployment.nodeDid,
         patches: [{ collection: "InferenceBackend", id: backend.backendId, changes }],
       });
     },
@@ -205,11 +203,11 @@ export function BackendEditor({
   );
   const [probe, setProbe] = useState<string | null>(null);
   const [discoveredModels, setDiscoveredModels] = useState<string[] | null>(null);
-  const discoveryRevision = useRef(0);
+  const [discoveries] = useState(newestWins);
   const id = (f: string) => `${backend.backendId}-${f}`;
   const subscription = d.draft.providerKind in SUBSCRIPTION;
   useEffect(() => {
-    discoveryRevision.current += 1;
+    discoveries.supersede();
     setDiscoveredModels(null);
     setProbe(null);
   }, [d.draft.providerKind, d.draft.endpoint]);
@@ -251,14 +249,14 @@ export function BackendEditor({
               size="sm"
               variant="outline"
               onClick={async () => {
-                const revision = ++discoveryRevision.current;
+                const current = discoveries.begin();
                 try {
                   if (subscription) {
                     setProbe("Discovering models…");
                     const connection = SUBSCRIPTION[d.draft.providerKind]!;
-                    const result = await api.discoverInferenceModels({
+                    const result = await discoverInferenceModels({
                       requestKey: `backend-${backend.backendId}-${Date.now()}`,
-                      agentDid: deployment.agentDid,
+                      nodeDid: deployment.nodeDid,
                       provider: connection.providerId,
                       authMethod: connection.authMethod,
                       endpoint: d.draft.endpoint,
@@ -267,7 +265,7 @@ export function BackendEditor({
                     });
                     if (!result.reachable)
                       throw new Error(result.failure?.message ?? "Discovery failed");
-                    if (discoveryRevision.current !== revision) return;
+                    if (!current()) return;
                     setDiscoveredModels(
                       result.models.map((option) => option.advertised.model_name),
                     );
@@ -276,8 +274,8 @@ export function BackendEditor({
                   }
                   const endpoint = requiredHttpUrl("Endpoint", d.draft.endpoint);
                   setProbe("probing…");
-                  const r = await api.probeInferenceEndpoint(endpoint);
-                  if (discoveryRevision.current !== revision) return;
+                  const r = await probeInferenceEndpoint(endpoint);
+                  if (!current()) return;
                   setProbe(
                     r.reachable
                       ? `reachable · ${r.models.length} models`
@@ -285,7 +283,7 @@ export function BackendEditor({
                   );
                   toast(r.reachable ? "Endpoint reachable" : "Endpoint unreachable");
                 } catch (error) {
-                  if (discoveryRevision.current !== revision) return;
+                  if (!current()) return;
                   setProbe("probe failed");
                   toast(
                     `Probe failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -332,9 +330,9 @@ export function BackendEditor({
         )}
         <FactRow
           label="Used by"
-          description="Delete is blocked while a behavior points here."
+          description="Delete is blocked while an agent points here."
         >
-          {users.length ? users.join(", ") : "no behavior"}
+          {users.length ? users.join(", ") : "no agent"}
         </FactRow>
       </Group>
       <Group title={subscription ? "Subscription" : "Credential"}>
@@ -344,7 +342,6 @@ export function BackendEditor({
             kind={d.draft.providerKind}
             accountRef={backend.accountRef ?? null}
             accounts={accounts}
-            reload={reload}
           />
         ) : (
           <>
@@ -380,7 +377,7 @@ export function BackendEditor({
                     changeConfig(
                       "patchConfigComponents",
                       {
-                        agentDid: deployment.agentDid,
+                        nodeDid: deployment.nodeDid,
                         patches: [
                           {
                             collection: "InferenceBackend",
@@ -511,7 +508,9 @@ export function BackendEditor({
           noun="account"
           warning={accountWarnings(deployment, accounts, removable).remove}
           base={base}
-          onDelete={() => removeAccount(api, deployment, removable, reload)}
+          onDelete={() =>
+            removeProviderAccount(deployment.nodeDid, removable.credentialId)
+          }
         />
       )}
       {!embedded && !removable && (
@@ -522,7 +521,7 @@ export function BackendEditor({
           onDelete={() =>
             changeConfig("deleteBackendConfig", {
               backendId: backend.backendId,
-              agentDid: deployment.agentDid,
+              nodeDid: deployment.nodeDid,
             })
           }
         />

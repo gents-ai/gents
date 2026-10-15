@@ -11,6 +11,7 @@ export {
   bridgeCommand,
   type DesktopTransport,
   type ClientUpdateEvent,
+  type OauthProvider,
   type Unlisten,
 } from "./transport.js";
 export {

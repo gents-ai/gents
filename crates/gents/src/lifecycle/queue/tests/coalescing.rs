@@ -1,12 +1,14 @@
 use super::*;
 
 #[tokio::test]
-async fn atomic_background_completion_coalesces_keyed_subagent_wakeups() {
+async fn atomic_background_completion_coalesces_keyed_agent_wakeups() {
     let db = test_db("coalesce").await;
     let session_id = "session-coalesced-wakeup";
     let mut fixture = canonical_background_fixture(&db, session_id).await;
     let parent = fixture.parent.clone();
     let hints = RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: Some(format!("background_completion:{session_id}")),
@@ -19,7 +21,7 @@ async fn atomic_background_completion_coalesces_keyed_subagent_wakeups() {
         .persist_notification(
             "terminal notification 1",
             "background-completion-notification:coalesce-1:tool",
-            "Process pending subagent completion notifications in this session.",
+            "Process pending agent completion notifications in this session.",
             hints.clone(),
             None,
         )
@@ -58,13 +60,13 @@ async fn atomic_background_completion_coalesces_keyed_subagent_wakeups() {
     let row = &rows[0];
     assert_eq!(row.doc_id, first.doc_id);
     assert_eq!(row.session_id, session_id);
-    assert_eq!(row.behavior_id, TEST_BEHAVIOR_ID);
+    assert_eq!(row.agent_id, TEST_AGENT_ID);
     assert_eq!(
         row.content,
-        "Process pending subagent completion notifications in this session."
+        "Process pending agent completion notifications in this session."
     );
     assert_eq!(row.execution_origin, "scheduled");
-    assert_eq!(row.subagent_depth, Some(parent.subagent_depth));
+    assert_eq!(row.request_hop, Some(parent.request_hop));
     assert_eq!(
         row.caused_by_parent_request_id.as_deref(),
         Some(parent.request_id.as_str())
@@ -107,6 +109,8 @@ async fn atomic_background_completion_ignores_append_row_with_same_source_and_ke
     let mut fixture = canonical_background_fixture(&db, session_id).await;
     let parent = fixture.parent.clone();
     let append_hints = RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Append,
         key: Some(format!("background_completion:{session_id}")),
@@ -116,7 +120,7 @@ async fn atomic_background_completion_ignores_append_row_with_same_source_and_ke
     };
     insert_raw_queue_request(
         &db.node,
-        db.agent_did(),
+        db.node_did(),
         "req-existing-append-same-key",
         session_id,
         &wake_queue_input(append_hints.clone()),
@@ -172,6 +176,8 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
     let mut fixture = canonical_background_fixture(&db, session_id).await;
     let parent = fixture.parent.clone();
     let hints = RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: Some(format!("background_completion:{session_id}")),
@@ -194,7 +200,7 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
         .expect("non-Goal wake");
     let duplicate_doc_id = insert_raw_queue_request(
         &db.node,
-        db.agent_did(),
+        db.node_did(),
         "req-coalesce-race-duplicate",
         session_id,
         &wake_queue_input(hints.clone()),
@@ -204,7 +210,7 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
     let reconciled = reconcile_coalesced_pending_request(
         &db.node,
         session_id,
-        db.agent_did(),
+        db.node_did(),
         QueueSource::BackgroundCompletion,
         &key,
     )
@@ -264,6 +270,8 @@ async fn atomic_background_completion_without_key_rejects_without_persisting_inp
     let mut fixture = canonical_background_fixture(&db, session_id).await;
     let parent = fixture.parent.clone();
     let hints = RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: None,

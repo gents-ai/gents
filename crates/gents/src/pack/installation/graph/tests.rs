@@ -18,14 +18,14 @@ const OWNER: &str = "did:key:zGraphRemoveOwner";
 async fn fixture() -> (Arc<EmbeddedNode>, ConfigAccess, GraphPackageInstallBindings) {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::document_config::ensure_agent_principal(&node, OWNER)
+    crate::document_config::ensure_node(&node, OWNER)
         .await
         .unwrap();
     for profile in ["claude", "glm", "grok"] {
-        crate::test_support::install_test_behavior(&node, OWNER, profile).await;
+        crate::test_support::install_test_agent(&node, OWNER, profile).await;
     }
     let options = GraphPackageInstallBindings {
-        agent_did: OWNER.into(),
+        node_did: OWNER.into(),
         inference_slots: BTreeMap::from([
             ("coordinator".into(), "claude:inference".into()),
             ("worker".into(), "glm:inference".into()),
@@ -65,7 +65,7 @@ async fn a_graph_install_is_recorded_and_remove_leaves_no_graph_documents() {
 
     let response = access
         .execute(&format!(
-            r#"{{ PackInstallation(filter: {{ agent_did: {{ _eq: "{OWNER}" }} }}) {{ coordinate documents }} }}"#
+            r#"{{ PackInstallation(filter: {{ node_did: {{ _eq: "{OWNER}" }} }}) {{ coordinate documents }} }}"#
         ))
         .await
         .unwrap();
@@ -84,13 +84,13 @@ async fn a_graph_install_is_recorded_and_remove_leaves_no_graph_documents() {
         .any(|document| document["id"] == "review-recon-task"));
 
     assert_eq!(
-        count(&access, "GraphDefinition", "agent_did", OWNER).await,
+        count(&access, "GraphDefinition", "node_did", OWNER).await,
         1
     );
     assert_eq!(count(&access, "GraphRevision", "owner_did", OWNER).await, 1);
-    assert!(count(&access, "Trigger", "agent_did", OWNER).await > 0);
-    assert!(count(&access, "EventSource", "agent_did", OWNER).await > 0);
-    assert!(count(&access, "Task", "agent_did", OWNER).await > 0);
+    assert!(count(&access, "Trigger", "node_did", OWNER).await > 0);
+    assert!(count(&access, "EventSource", "node_did", OWNER).await > 0);
+    assert!(count(&access, "Task", "node_did", OWNER).await > 0);
 
     let report = remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
         .await
@@ -101,14 +101,14 @@ async fn a_graph_install_is_recorded_and_remove_leaves_no_graph_documents() {
     );
 
     assert_eq!(
-        count(&access, "GraphDefinition", "agent_did", OWNER).await,
+        count(&access, "GraphDefinition", "node_did", OWNER).await,
         0
     );
     assert_eq!(count(&access, "GraphRevision", "owner_did", OWNER).await, 0);
-    assert_eq!(count(&access, "Trigger", "agent_did", OWNER).await, 0);
-    assert_eq!(count(&access, "EventSource", "agent_did", OWNER).await, 0);
+    assert_eq!(count(&access, "Trigger", "node_did", OWNER).await, 0);
+    assert_eq!(count(&access, "EventSource", "node_did", OWNER).await, 0);
     assert_eq!(
-        count(&access, "Task", "agent_did", OWNER).await,
+        count(&access, "Task", "node_did", OWNER).await,
         0,
         "the package's own Task documents are removed with it"
     );
@@ -290,7 +290,7 @@ async fn an_untracked_graph_is_adopted_on_reinstall_and_survives_removal() {
     // live, exactly as an untracked or import-carried graph would be found.
     let doc_id = access
         .execute(&format!(
-            r#"{{ PackInstallation(filter: {{ agent_did: {{ _eq: "{OWNER}" }} }}) {{ _docID }} }}"#
+            r#"{{ PackInstallation(filter: {{ node_did: {{ _eq: "{OWNER}" }} }}) {{ _docID }} }}"#
         ))
         .await
         .unwrap()["data"]["PackInstallation"][0]["_docID"]
@@ -307,7 +307,7 @@ async fn an_untracked_graph_is_adopted_on_reinstall_and_survives_removal() {
         .await
         .unwrap();
     assert_eq!(
-        count(&access, "GraphDefinition", "agent_did", OWNER).await,
+        count(&access, "GraphDefinition", "node_did", OWNER).await,
         1
     );
     assert_eq!(count(&access, "GraphRevision", "owner_did", OWNER).await, 1);
@@ -328,7 +328,7 @@ async fn an_untracked_graph_is_adopted_on_reinstall_and_survives_removal() {
 
     let response = access
         .execute(&format!(
-            r#"{{ PackInstallation(filter: {{ agent_did: {{ _eq: "{OWNER}" }} }}) {{ documents }} }}"#
+            r#"{{ PackInstallation(filter: {{ node_did: {{ _eq: "{OWNER}" }} }}) {{ documents }} }}"#
         ))
         .await
         .unwrap();
@@ -356,7 +356,7 @@ async fn an_untracked_graph_is_adopted_on_reinstall_and_survives_removal() {
         .await
         .unwrap();
     assert_eq!(
-        count(&access, "GraphDefinition", "agent_did", OWNER).await,
+        count(&access, "GraphDefinition", "node_did", OWNER).await,
         1,
         "the operator's pre-existing graph must survive removal of the install that only adopted it"
     );

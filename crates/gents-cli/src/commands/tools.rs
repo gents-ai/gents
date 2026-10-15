@@ -1,16 +1,21 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::path::PathBuf;
+use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
+use clap::ValueEnum;
+use gents::config_client::GraphqlEndpoint;
 use gents::tool_surface::{measured_mcp_services_for_access, RuntimeToolAvailability};
-use gents::{BehaviorToolConfig, ToolCeiling};
+use gents::{AgentToolSurfaceConfig, ToolCeiling};
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::cli::args::{ToolCeilingArg, ToolExplainArgs, ToolsCommand};
-use crate::shared::StoredInitConfig;
+use crate::commands::status::fetch_runtime_status;
+use crate::config_writes::ConfigAccess;
 use crate::{
-    build_config_export_bundle, format_tool_ceiling, print_json, read_init_config,
-    resolve_agent_did, resolve_config_access,
+    build_config_export_bundle, format_tool_ceiling, host_tool_ceiling, parse_cli_tool_arg,
+    print_json, read_init_config, resolve_config_access, resolve_node_did,
 };
 
 pub(crate) async fn dispatch(command: ToolsCommand) -> Result<()> {
@@ -22,45 +27,67 @@ pub(crate) async fn dispatch(command: ToolsCommand) -> Result<()> {
 async fn explain(args: ToolExplainArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
-    let init_config = read_init_config(&home_dir)?;
-    let (ceiling_arg, ceiling_source, tool_root, tool_ceiling) =
-        resolve_tool_ceiling(init_config.as_ref())?;
-    let bundle = build_config_export_bundle(&access, &agent_did).await?;
+    let host = match &*access {
+        ConfigAccess::Graphql(endpoint) => HostCeiling::live(endpoint).await?,
+        ConfigAccess::Local(_) => HostCeiling::configured(&home_dir)?,
+    };
+    if let (None, None, Some(live)) = (
+        args.graphql.as_deref(),
+        args.node_did.as_deref(),
+        host.live_node_did.as_deref(),
+    ) {
+        if let Some(expected) = read_init_config(&home_dir)?.map(|config| config.node_did) {
+            anyhow::ensure!(
+                expected == live,
+                "home {} belongs to node {expected}, but the runtime its runtime.json names \
+                 serves node {live}; restart `gents server --home {}` to serve this home, or \
+                 pass --graphql to explain that node",
+                home_dir.display(),
+                shell_quoted_path(&home_dir)?
+            );
+        }
+    }
+    let node_did = match (args.node_did.as_deref(), host.live_node_did.as_deref()) {
+        (Some(explicit), Some(live)) if explicit != live => anyhow::bail!(
+            "the runtime at this endpoint serves node {live}, so its tool ceiling does not \
+             apply to --node-did {explicit}; omit --node-did or point --graphql at that node"
+        ),
+        (None, Some(live)) => live.to_owned(),
+        (explicit, _) => resolve_node_did(args.home.as_deref(), explicit)?,
+    };
+    let tool_ceiling = &host.ceiling;
+    let bundle = build_config_export_bundle(&access, &node_did).await?;
     let available_services = measured_mcp_services_for_access(
         &access,
-        &agent_did,
+        &node_did,
         &bundle.config.tool_service_registries,
     )
     .await?;
     let availability =
         RuntimeToolAvailability::from_online_mcp_services(available_services.clone());
-    let enabled_behavior_ids = bundle
+    let enabled_agent_ids = bundle
         .config
-        .agent_behaviors
+        .agents
         .iter()
-        .filter(|behavior| behavior.enabled)
-        .map(|behavior| behavior.behavior_id.clone())
+        .filter(|agent| agent.enabled)
+        .map(|agent| agent.agent_id.clone())
         .collect::<BTreeSet<_>>();
-    let enabled_behavior_id_set = enabled_behavior_ids.iter().cloned().collect::<HashSet<_>>();
+    let enabled_agent_id_set = enabled_agent_ids.iter().cloned().collect::<HashSet<_>>();
     let mut configuration_issues = BTreeMap::new();
-    let mut behaviors = Vec::new();
-    for behavior in &bundle.config.agent_behaviors {
+    let mut agents = Vec::new();
+    for agent in &bundle.config.agents {
         if args
-            .behavior_id
+            .agent_id
             .as_deref()
-            .is_some_and(|id| behavior.behavior_id != id)
+            .is_some_and(|id| agent.agent_id != id)
         {
             continue;
         }
-        if !behavior.enabled {
-            configuration_issues.insert(
-                behavior.behavior_id.clone(),
-                "behavior is disabled".to_owned(),
-            );
+        if !agent.enabled {
+            configuration_issues.insert(agent.agent_id.clone(), "agent is disabled".to_owned());
         }
         let resolved = (|| -> Result<_> {
-            let context = behavior
+            let context = agent
                 .context_id
                 .as_deref()
                 .map(|id| {
@@ -68,7 +95,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                         .config
                         .contexts
                         .iter()
-                        .find(|context| context.agent_did == agent_did && context.context_id == id)
+                        .find(|context| context.node_did == node_did && context.context_id == id)
                         .with_context(|| format!("referenced AgentContext {id} is missing"))
                 })
                 .transpose()?;
@@ -78,25 +105,25 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                     .config
                     .tools
                     .iter()
-                    .find(|tools| tools.agent_did == agent_did && tools.tools_id == id)
+                    .find(|tools| tools.node_did == node_did && tools.tools_id == id)
                     .with_context(|| format!("referenced Tools {id} is missing"))?;
-                BehaviorToolConfig::from_tools_documents(
-                    &behavior.behavior_id,
+                AgentToolSurfaceConfig::from_tools_documents(
+                    &agent.agent_id,
                     tools,
                     &bundle.config.datastore_tool_surfaces,
                     &bundle.config.eth_tools,
-                    &bundle.config.subagent_targets,
-                    &tool_ceiling,
+                    &bundle.config.agent_targets,
+                    tool_ceiling,
                     Vec::new(),
                 )?
             } else {
-                BehaviorToolConfig::from_tools_documents(
-                    &behavior.behavior_id,
+                AgentToolSurfaceConfig::from_tools_documents(
+                    &agent.agent_id,
                     &gents::document_config::Tools::default(),
                     &[],
                     &[],
                     &[],
-                    &tool_ceiling,
+                    tool_ceiling,
                     Vec::new(),
                 )?
             };
@@ -105,91 +132,203 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         let (tools_id, config) = match resolved {
             Ok(value) => value,
             Err(error) => {
-                configuration_issues.insert(behavior.behavior_id.clone(), format!("{error:#}"));
+                configuration_issues.insert(agent.agent_id.clone(), format!("{error:#}"));
                 continue;
             }
         };
         let explanation = config.explain_with_runtime_availability(
             availability.clone(),
-            &agent_did,
-            &enabled_behavior_id_set,
+            &node_did,
+            &enabled_agent_id_set,
         );
-        behaviors.push(json!({
-            "behavior_id": behavior.behavior_id,
-            "display_name": behavior.display_name,
-            "enabled": behavior.enabled,
-            "context_id": behavior.context_id,
+        agents.push(json!({
+            "agent_id": agent.agent_id,
+            "display_name": agent.display_name,
+            "enabled": agent.enabled,
+            "context_id": agent.context_id,
             "tools_id": tools_id,
             "tools_source": if tools_id.is_some() { "document" } else { "default_no_tools_binding" },
             "surface": explanation,
         }));
     }
 
-    if let Some(only_behavior_id) = args.behavior_id.as_deref() {
-        let found = behaviors.iter().any(|row| {
-            row.get("behavior_id")
+    if let Some(only_agent_id) = args.agent_id.as_deref() {
+        let found = agents.iter().any(|row| {
+            row.get("agent_id")
                 .and_then(Value::as_str)
-                .is_some_and(|value| value == only_behavior_id)
-        }) || configuration_issues.contains_key(only_behavior_id);
+                .is_some_and(|value| value == only_agent_id)
+        }) || configuration_issues.contains_key(only_agent_id);
         if !found {
-            anyhow::bail!("behavior {only_behavior_id} was not found for agent {agent_did}");
+            anyhow::bail!("agent {only_agent_id} was not found for node {node_did}");
         }
     }
 
-    let output = json!({
-        "agent_did": agent_did,
-        "access_mode": access.mode(),
-        "home": home_dir,
-        "host_tool_ceiling": {
-            "tool_ceiling": format_tool_ceiling(ceiling_arg),
-            "source": ceiling_source,
-            "tool_root": tool_root,
-            "scope": "host_native_file_bash_cli_only",
-            "note": "This ceiling currently clamps host-native file/bash/CLI tools, not every model-callable built-in read, MCP, subagent, or operator HTTP surface."
+    let home_hint = args.home.as_deref().map(shell_quoted_path).transpose()?;
+    let output = ExplainReport {
+        node_did: &node_did,
+        host_tool_ceiling: HostCeilingReport {
+            tool_ceiling: format_tool_ceiling(host.mode),
+            tool_root: host.root.as_deref(),
+            cli_tools: host
+                .ceiling
+                .cli_tools()
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect(),
+            live: host.live_node_did.is_some(),
         },
-        "runtime_availability": {
+        agents,
+        configuration_issues,
+        runtime_availability: json!({
             "measured_available_mcp_service_ids": available_services,
             "local_target_eligibility": {
-                "source": "enabled_behavior_configuration",
-                "enabled_behavior_ids": enabled_behavior_ids.iter().cloned().collect::<Vec<_>>(),
+                "source": "enabled_agent_configuration",
+                "enabled_agent_ids": enabled_agent_ids.iter().cloned().collect::<Vec<_>>(),
                 "runtime_readiness_verified": false
             },
-        },
-        "behaviors": behaviors,
-        "configuration_issues": configuration_issues,
-        "operator_surfaces": {
+        }),
+        operator_surfaces: json!({
             "included_in_model_tool_surface": false,
-            "note": "Server HTTP routes and optional external /mcp are binary/operator surfaces; they are not included in per-behavior model-callable tool_names."
-        },
-    });
+            "note": "Server HTTP routes and optional external /mcp are binary/operator surfaces; they are not included in per-agent model-callable tool_names."
+        }),
+        next: host.live_node_did.is_none().then(|| {
+            let server = match &home_hint {
+                Some(home) => format!("gents server --home {home}"),
+                None => "gents server".to_owned(),
+            };
+            format!(
+                "No runtime serves this home, so this is the configured init.json ceiling; a \
+                 server started with --tool-ceiling, --tool-root or --cli-tool enforces its \
+                 own. Start `{server}` and rerun for the live ceiling."
+            )
+        }),
+        ceiling_source: host.source,
+        agent_roots: host.live_node_did.is_some().then_some(
+            "Agent Tools roots are admitted under tool_root on this CLI host's filesystem; \
+             explained from another host, a root the server admits can appear under \
+             configuration_issues.",
+        ),
+        ceiling_scope: "host_native_file_bash_cli_only",
+        ceiling_note: "This ceiling currently clamps host-native file/bash/CLI tools, not every \
+                       model-callable built-in read, MCP, agent, or operator HTTP surface.",
+        access_mode: access.mode(),
+        home: host
+            .home
+            .clone()
+            .unwrap_or_else(|| home_dir.display().to_string()),
+    };
     print_json(&output)?;
     Ok(())
 }
 
-fn resolve_tool_ceiling(
-    init_config: Option<&StoredInitConfig>,
-) -> Result<(ToolCeilingArg, &'static str, Option<String>, ToolCeiling)> {
-    let Some(config) = init_config else {
-        return Ok((
-            ToolCeilingArg::MetaOnly,
-            "default_no_init_json",
-            None,
-            ToolCeiling::meta_only(),
-        ));
-    };
-    let tool_root = config.tool_root.clone();
-    let ceiling = match config.tool_ceiling {
-        ToolCeilingArg::MetaOnly => ToolCeiling::meta_only(),
-        ToolCeilingArg::Readonly => match tool_root.as_deref() {
-            Some(root) => ToolCeiling::readonly_at(PathBuf::from(root)),
-            None => ToolCeiling::readonly(),
-        },
-        ToolCeilingArg::Readwrite => {
-            let root = tool_root.as_deref().ok_or_else(|| {
-                anyhow::anyhow!("init.json has readwrite tool_ceiling but no tool_root")
-            })?;
-            ToolCeiling::readwrite(PathBuf::from(root))
+/// Fields in reading order: the ceiling and the surfaces it clamps, how to
+/// proceed, then provenance.
+#[derive(Serialize)]
+struct ExplainReport<'a> {
+    node_did: &'a str,
+    host_tool_ceiling: HostCeilingReport<'a>,
+    agents: Vec<Value>,
+    configuration_issues: BTreeMap<String, String>,
+    runtime_availability: Value,
+    operator_surfaces: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next: Option<String>,
+    ceiling_source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_roots: Option<&'static str>,
+    ceiling_scope: &'static str,
+    ceiling_note: &'static str,
+    access_mode: &'static str,
+    home: String,
+}
+
+#[derive(Serialize)]
+struct HostCeilingReport<'a> {
+    tool_ceiling: &'static str,
+    tool_root: Option<&'a str>,
+    cli_tools: Vec<&'a str>,
+    live: bool,
+}
+
+fn shell_quoted_path(path: &Path) -> Result<String> {
+    let text = path
+        .to_str()
+        .with_context(|| format!("home {} is not UTF-8", path.display()))?;
+    Ok(shlex::try_quote(text)
+        .with_context(|| format!("home {text} cannot be shell-quoted"))?
+        .into_owned())
+}
+
+/// The host ceiling explained agents are clamped by: the serving runtime's
+/// own when one answers, since `gents server` flags override init.json.
+struct HostCeiling {
+    mode: ToolCeilingArg,
+    root: Option<String>,
+    ceiling: ToolCeiling,
+    source: &'static str,
+    live_node_did: Option<String>,
+    home: Option<String>,
+}
+
+impl HostCeiling {
+    async fn live(endpoint: &GraphqlEndpoint) -> Result<Self> {
+        let status = fetch_runtime_status(endpoint, Duration::from_secs(10))
+            .await
+            .context("the GraphQL endpoint has no gents runtime status to read its tool ceiling")?;
+        let field = |name: &str| status.get(name).and_then(Value::as_str).map(str::to_owned);
+        let mode_text = field("tool_ceiling").context("runtime status has no tool_ceiling")?;
+        let mode = ToolCeilingArg::from_str(&mode_text, false)
+            .map_err(|error| anyhow::anyhow!("runtime tool_ceiling {mode_text}: {error}"))?;
+        let root = field("tool_root");
+        if let (Some(error), false) = (field("tool_root_error"), mode == ToolCeilingArg::MetaOnly) {
+            anyhow::bail!(
+                "the runtime's {mode_text} ceiling has no usable root ({error}), so it builds no \
+                 host tools to explain; fix --tool-root (or tool_root in init.json) and restart \
+                 the server"
+            );
         }
-    };
-    Ok((config.tool_ceiling, "init_json", tool_root, ceiling))
+        let mut ceiling = host_tool_ceiling(mode, root.as_deref().map(Path::new))?;
+        for registration in status
+            .get("cli_tools")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            ceiling = ceiling.with_cli_tool(parse_cli_tool_arg(registration)?);
+        }
+        Ok(Self {
+            ceiling,
+            mode,
+            root,
+            source: "runtime_status",
+            live_node_did: Some(field("node_did").context("runtime status has no node_did")?),
+            home: field("home"),
+        })
+    }
+
+    fn configured(home_dir: &Path) -> Result<Self> {
+        let Some(config) = read_init_config(home_dir)? else {
+            return Ok(Self {
+                mode: ToolCeilingArg::MetaOnly,
+                root: None,
+                ceiling: ToolCeiling::meta_only(),
+                source: "default_no_init_json",
+                live_node_did: None,
+                home: None,
+            });
+        };
+        Ok(Self {
+            ceiling: host_tool_ceiling(
+                config.tool_ceiling,
+                config.tool_root.as_deref().map(Path::new),
+            )
+            .context("init.json tool ceiling")?,
+            mode: config.tool_ceiling,
+            root: config.tool_root,
+            source: "init_json",
+            live_node_did: None,
+            home: None,
+        })
+    }
 }

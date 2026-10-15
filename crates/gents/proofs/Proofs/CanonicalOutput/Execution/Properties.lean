@@ -351,6 +351,7 @@ theorem accounting_ignores_foreign_request_even_same_generation
 
 theorem explicit_background_control_updates_physical_and_parent_hook
     (world : World) (generation : Generation) (tool : OwnedTool)
+    (direct : tool.provenance = .acceptedIntent)
     (lease : RequestExecutionLease.World Generation)
     (hlookup : ownedToolByDocument? world tool.document = some tool)
     (howned : acceptedHeaderBindsToolGeneration world tool generation = true)
@@ -365,7 +366,7 @@ theorem explicit_background_control_updates_physical_and_parent_hook
         toolContexts := replaceOwnedTool world.toolContexts tool.document
           { tool with context := { tool.context with awaitMode := .background } }
         transcript := world.transcript.releaseParentInFlight tool.document } := by
-  simp [changeToolControlCore, toolControlAction, hlookup, howned, hstuck,
+  simp [changeToolControlCore, toolControlAction, hlookup, howned, hstuck, direct,
     ToolExecution.ToolCallContext.step?, hrunning, hforeground, hlease]
 
 theorem tool_control_success_preserves_projection_coherence
@@ -384,6 +385,21 @@ theorem spawned_background_admission_is_owned_without_fabricated_intent
   unfold admitSpawnedBackground at h
   have hp := checked_success _ _ _ h
   simpa only [Bool.and_eq_true] using hp
+
+theorem plugin_effect_admission_has_input_and_owned_lifecycle
+    (world post : World) (generation : Generation) (admission : PluginEffectAdmission)
+    (h : admitPluginEffect world generation admission = .ok post) :
+    toolProjectionCoherent post = true ∧ pluginEffectPresent post admission = true := by
+  unfold admitPluginEffect at h
+  have hp := checked_success _ _ _ h
+  simpa only [Bool.and_eq_true] using hp
+
+theorem plugin_effect_replay_is_identity
+    (world : World) (generation : Generation) (admission : PluginEffectAdmission)
+    (replay : pluginEffectPresent world admission = true)
+    (live : pluginEffectInvocationValid world generation admission = true) :
+    admitPluginEffectCore world generation admission = .ok world := by
+  simp [admitPluginEffectCore, replay, live]
 
 theorem spawned_admission_lost_ack_replay_is_identity
     (world : World) (generation : Generation) (admission : SpawnedToolAdmission)

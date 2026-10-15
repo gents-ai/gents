@@ -1,22 +1,22 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::config::{MaxTurnsProvenance, ResolvedBehavior, DEFAULT_MAX_TURNS};
+use gents::config::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::support::accepted_turn::{
     boot_prepared_accepted_turn, prepare_accepted_turn, AcceptedTurnRuntime, AcceptedTurnSpec,
 };
-use crate::support::fixtures::{configure_subagent_behavior, subagent_target};
+use crate::support::fixtures::{agent_target, configure_child_agent};
 use crate::support::streaming_backend::{StreamChunk, StreamPlan, StreamResponse};
 use crate::support::{test_db, TestDb};
 
-const PARENT_BEHAVIOR_ID: &str = "e2e-session-limit-parent";
-const CHILD_BEHAVIOR_ID: &str = "e2e-session-limit-child";
+const PARENT_AGENT_ID: &str = "e2e-session-limit-parent";
+const CHILD_AGENT_ID: &str = "e2e-session-limit-child";
 const BACKEND_ID: &str = "e2e-session-limit-backend";
 const MODEL: &str = "e2e-session-limit-model";
 const PARENT_TOOL_CALL_ID: &str = "e2e-session-limit-tool-call";
@@ -34,39 +34,39 @@ const PINNED_PREFIX: &str = "agent stream failed: PromptError: MaxTurnError: ";
 #[derive(Debug, Deserialize)]
 struct ChildRequestRow {
     request_id: String,
-    behavior_id: Option<String>,
+    agent_id: Option<String>,
     lifecycle_state: Option<String>,
     failure_reason: Option<String>,
 }
 
 async fn configure_session_chain(db: &TestDb) {
-    let agent_did = db.node_identity.did().to_string();
-    configure_subagent_behavior(
+    let node_did = db.node_identity.did().to_string();
+    configure_child_agent(
         db.node.as_ref(),
-        &agent_did,
-        CHILD_BEHAVIOR_ID,
+        &node_did,
+        CHILD_AGENT_ID,
         "e2e-session-limit-child-tools",
         Vec::new(),
         false,
     )
     .await;
-    configure_subagent_behavior(
+    configure_child_agent(
         db.node.as_ref(),
-        &agent_did,
-        PARENT_BEHAVIOR_ID,
+        &node_did,
+        PARENT_AGENT_ID,
         "e2e-session-limit-parent-tools",
-        vec![subagent_target(
-            &agent_did,
-            CHILD_BEHAVIOR_ID,
-            &agent_did,
-            CHILD_BEHAVIOR_ID,
+        vec![agent_target(
+            &node_did,
+            CHILD_AGENT_ID,
+            &node_did,
+            CHILD_AGENT_ID,
         )],
         true,
     )
     .await;
 }
 
-async fn bind_child_execution_max_turns(node: &EmbeddedNode, agent_did: &str, max_turns: i64) {
+async fn bind_child_execution_max_turns(node: &EmbeddedNode, node_did: &str, max_turns: i64) {
     use gents::config_client::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
@@ -78,15 +78,15 @@ async fn bind_child_execution_max_turns(node: &EmbeddedNode, agent_did: &str, ma
         "test.bind_child_execution_max_turns",
         |txn| {
             Box::pin(async move {
-                let profile_id = format!("{CHILD_BEHAVIOR_ID}-inference");
-                let execution_id = format!("{CHILD_BEHAVIOR_ID}-execution");
+                let profile_id = format!("{CHILD_AGENT_ID}-inference");
+                let execution_id = format!("{CHILD_AGENT_ID}-execution");
                 let (_, mut profile) =
-                    read(txn, Collection::InferenceProfile, agent_did, &profile_id)
+                    read(txn, Collection::InferenceProfile, node_did, &profile_id)
                         .await?
                         .expect("child inference profile");
                 profile["execution_id"] = execution_id.clone().into();
                 let execution = json!({
-                    "agent_did": agent_did,
+                    "node_did": node_did,
                     "execution_id": execution_id,
                     "max_turns": max_turns,
                 });
@@ -121,7 +121,7 @@ async fn child_of(node: &EmbeddedNode, parent_request_id: &str) -> Option<ChildR
                 filter: {{ caused_by_parent_request_id: {{ _eq: "{escaped}" }} }}
             ) {{
                 request_id
-                behavior_id
+                agent_id
                 lifecycle_state
                 failure_reason
             }}
@@ -140,7 +140,7 @@ async fn child_of(node: &EmbeddedNode, parent_request_id: &str) -> Option<ChildR
         .flatten()
         .cloned()
         .map(|row| serde_json::from_value::<ChildRequestRow>(row).expect("decode AgentRequest row"))
-        .find(|row| row.behavior_id.as_deref() == Some(CHILD_BEHAVIOR_ID))
+        .find(|row| row.agent_id.as_deref() == Some(CHILD_AGENT_ID))
 }
 
 async fn wait_for_terminal_child(
@@ -183,14 +183,14 @@ async fn start_child_session(
     request_id: &str,
     session_id: &str,
     child_responses: Vec<StreamResponse>,
-) -> (Arc<ResolvedBehavior>, AcceptedTurnRuntime) {
+) -> (Arc<ResolvedAgent>, AcceptedTurnRuntime) {
     let prepared = prepare_accepted_turn(
         db,
         AcceptedTurnSpec {
             backend_id: BACKEND_ID,
             model: MODEL,
-            parent_behavior_id: PARENT_BEHAVIOR_ID,
-            configured_behavior_ids: &[PARENT_BEHAVIOR_ID, CHILD_BEHAVIOR_ID],
+            parent_agent_id: PARENT_AGENT_ID,
+            configured_agent_ids: &[PARENT_AGENT_ID, CHILD_AGENT_ID],
             request_id,
             session_id,
             prompt: PARENT_PROMPT,
@@ -198,21 +198,21 @@ async fn start_child_session(
                 PARENT_TOOL_CALL_ID,
                 gents::toolset::AGENT_NEW_TOOL_NAME,
                 json!({
-                    "agent": CHILD_BEHAVIOR_ID,
+                    "agent": CHILD_AGENT_ID,
                     "prompt": CHILD_PROMPT,
                 })
                 .to_string(),
             )],
             child_plans: vec![StreamPlan::new(CHILD_PROMPT, child_responses)],
             valid_until: None,
-            subagent_depth: Some(0),
+            request_hop: Some(0),
             request_setup: None,
         },
     )
     .await;
 
-    let identity: Arc<dyn AgentIdentity> = db.node_identity.clone();
-    let agent = Gents::from_default_behavior_documents(
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
+    let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -223,9 +223,9 @@ async fn start_child_session(
     .await
     .expect("build child-limit runtime");
     let child_behavior = agent
-        .behaviors()
+        .agents()
         .iter()
-        .find(|behavior| behavior.behavior_id == CHILD_BEHAVIOR_ID)
+        .find(|behavior| behavior.agent_id == CHILD_AGENT_ID)
         .expect("child behavior resolved from documents")
         .clone();
 
@@ -262,7 +262,7 @@ async fn started_session_without_an_execution_document_runs_past_a_low_turn_limi
         &runtime,
     )
     .await;
-    assert_eq!(child.behavior_id.as_deref(), Some(CHILD_BEHAVIOR_ID));
+    assert_eq!(child.agent_id.as_deref(), Some(CHILD_AGENT_ID));
     assert_eq!(
         child.lifecycle_state.as_deref(),
         Some("completed"),
@@ -309,7 +309,7 @@ async fn started_session_loop_enforces_its_execution_documents_turn_limit() {
         &runtime,
     )
     .await;
-    assert_eq!(child.behavior_id.as_deref(), Some(CHILD_BEHAVIOR_ID));
+    assert_eq!(child.agent_id.as_deref(), Some(CHILD_AGENT_ID));
     assert_eq!(child.lifecycle_state.as_deref(), Some("failed"));
     let reason = child.failure_reason.unwrap_or_default();
     assert!(

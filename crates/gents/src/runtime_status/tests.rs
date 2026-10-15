@@ -4,7 +4,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
-use gents_protocol::row::BehaviorReadinessUnavailableReason;
+use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
 use super::*;
 use crate::ensure_runtime_schemas;
@@ -15,17 +15,17 @@ use crate::lean_vocab_test::{
 };
 
 #[derive(Debug, Deserialize)]
-struct AgentRuntimeRow {
+struct NodeRuntimeRow {
     reconcile_phase: String,
-    behavior_executor_capacity: i64,
-    behavior_executor_queue_depth: i64,
-    behavior_executor_status_json: String,
+    agent_executor_capacity: i64,
+    agent_executor_queue_depth: i64,
+    agent_executor_status_json: String,
     last_reconcile_result: String,
     last_reconcile_completed_at: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct AgentBehaviorReadinessRow {
+struct NodeReadinessRow {
     snapshot_json: String,
     updated_at: String,
 }
@@ -35,24 +35,24 @@ async fn test_node() -> Arc<defra_node::EmbeddedNode> {
 }
 
 #[test]
-fn agent_runtime_writer_source_cannot_serialize_readiness_authority() {
+fn node_runtime_writer_source_cannot_serialize_readiness_authority() {
     // The schema-side collection fence is owned by
-    // gents_protocol::schemas::agent_runtime_schema_is_diagnostics_only. This
+    // gents_protocol::schemas::node_runtime_schema_is_diagnostics_only. This
     // twin catches writer-shaped fields that would compile but fail at runtime.
     let source = include_str!("../runtime_status.rs");
     for forbidden in [
         "row.process_state",
         "row.active_generation",
         "row.router_generation",
-        "row.default_behavior_id",
+        "row.default_agent_id",
         "process_state: \"{process_state}\"",
         "active_generation: {active_generation}",
         "router_generation: {router_generation}",
-        "default_behavior_id: \"{default_behavior_id}\"",
+        "default_agent_id: \"{default_agent_id}\"",
     ] {
         assert!(
             !source.contains(forbidden),
-            "AgentRuntime writer regained readiness-owned source fragment {forbidden}"
+            "NodeRuntime writer regained readiness-owned source fragment {forbidden}"
         );
     }
 }
@@ -63,9 +63,9 @@ fn status_test_request(request_id: &str) -> crate::watcher::AgentRequest {
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: format!("{request_id}-doc"),
         request_id: request_id.to_string(),
-        agent_did: "did:test:status-test".to_string(),
+        node_did: "did:test:status-test".to_string(),
         requester_did: None,
-        behavior_id: "general".to_string(),
+        agent_id: "general".to_string(),
         session_id: format!("{request_id}-session"),
         content: "status test".to_string(),
         max_total_tokens: None,
@@ -76,7 +76,7 @@ fn status_test_request(request_id: &str) -> crate::watcher::AgentRequest {
         execution_generation: None,
         execution_lease_expires_at: None,
         execution_lease_secs: None,
-        subagent_depth: 0,
+        request_hop: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
@@ -88,30 +88,30 @@ fn status_test_request(request_id: &str) -> crate::watcher::AgentRequest {
         caused_by_trigger_context: None,
         workspace_id: None,
         workspace_authority: None,
-        workspace_owner_agent_did: None,
+        workspace_owner_node_did: None,
         workspace_seal_hash: None,
     }
 }
 
-fn unavailable_general() -> HashMap<String, crate::runtime_snapshot::UnavailableBehavior> {
+fn unavailable_general() -> HashMap<String, crate::runtime_snapshot::UnavailableAgent> {
     HashMap::from([(
         "general".to_string(),
-        crate::runtime_snapshot::UnavailableBehavior::new(
-            BehaviorReadinessUnavailableReason::RuntimeConfigurationInvalid,
+        crate::runtime_snapshot::UnavailableAgent::new(
+            AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
             "test runtime is not configured",
         ),
     )])
 }
 
-async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, agent_did: &str) -> AgentRuntimeRow {
-    let escaped_agent_did = escape_graphql_string(agent_did);
+async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, node_did: &str) -> NodeRuntimeRow {
+    let escaped_node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
-            AgentRuntime(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}, limit: 1) {{
+            NodeRuntime(filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }}, limit: 1) {{
                 reconcile_phase
-                behavior_executor_capacity
-                behavior_executor_queue_depth
-                behavior_executor_status_json
+                agent_executor_capacity
+                agent_executor_queue_depth
+                agent_executor_status_json
                 last_reconcile_result
                 last_reconcile_completed_at
             }}
@@ -120,30 +120,30 @@ async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, agent_did: &str) -> 
     let response = node.execute(&query).await;
     assert!(
         !response.has_errors(),
-        "AgentRuntime query failed: {:?}",
+        "NodeRuntime query failed: {:?}",
         response.errors
     );
     let value = response
         .data
         .as_ref()
-        .and_then(|data| data.get("AgentRuntime"))
+        .and_then(|data| data.get("NodeRuntime"))
         .and_then(|rows| rows.as_array())
         .and_then(|rows| rows.first())
         .cloned()
-        .expect("AgentRuntime row");
-    serde_json::from_value(value).expect("decode AgentRuntime row")
+        .expect("NodeRuntime row");
+    serde_json::from_value(value).expect("decode NodeRuntime row")
 }
 
-async fn fetch_behavior_readiness_row(
+async fn fetch_node_readiness_row(
     node: &defra_node::EmbeddedNode,
-    agent_did: &str,
-) -> AgentBehaviorReadinessRow {
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    node_did: &str,
+) -> NodeReadinessRow {
+    let escaped_node_did = escape_graphql_string(node_did);
     let response = node
         .execute(&format!(
             r#"{{
-                AgentBehaviorReadiness(
-                    filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
+                NodeReadiness(
+                    filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
                     limit: 1
                 ) {{
                     snapshot_json
@@ -154,55 +154,55 @@ async fn fetch_behavior_readiness_row(
         .await;
     assert!(
         !response.has_errors(),
-        "AgentBehaviorReadiness query failed: {:?}",
+        "NodeReadiness query failed: {:?}",
         response.errors
     );
     let value = response
         .data
         .as_ref()
-        .and_then(|data| data.get("AgentBehaviorReadiness"))
+        .and_then(|data| data.get("NodeReadiness"))
         .and_then(|rows| rows.as_array())
         .and_then(|rows| rows.first())
         .cloned()
-        .expect("AgentBehaviorReadiness row");
-    serde_json::from_value(value).expect("decode AgentBehaviorReadiness row")
+        .expect("NodeReadiness row");
+    serde_json::from_value(value).expect("decode NodeReadiness row")
 }
 
 #[tokio::test]
 async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_did = "did:test:readiness-restart";
+    let node_did = "did:test:readiness-restart";
 
-    let (first_owner, first) = RuntimeStatusHandle::start(node.clone(), agent_did);
+    let (first_owner, first) = RuntimeStatusHandle::start(node.clone(), node_did);
     first.initialize_startup("general").await.unwrap();
     first
         .set_process_state_durable(ProcessLifecycleState::Ready)
         .await
         .unwrap();
     assert_eq!(
-        serde_json::from_str::<gents_protocol::row::BehaviorReadinessSnapshot>(
-            &fetch_behavior_readiness_row(node.as_ref(), agent_did)
+        serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
+            &fetch_node_readiness_row(node.as_ref(), node_did)
                 .await
                 .snapshot_json
         )
         .unwrap()
         .process_state,
-        gents_protocol::row::BehaviorReadinessProcessState::Ready
+        gents_protocol::node_readiness::NodeReadinessProcessState::Ready
     );
     first_owner.close().await.unwrap();
 
-    let (second_owner, second) = RuntimeStatusHandle::start(node.clone(), agent_did);
+    let (second_owner, second) = RuntimeStatusHandle::start(node.clone(), node_did);
     second.initialize_startup("general").await.unwrap();
-    let restarted = serde_json::from_str::<gents_protocol::row::BehaviorReadinessSnapshot>(
-        &fetch_behavior_readiness_row(node.as_ref(), agent_did)
+    let restarted = serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
+        &fetch_node_readiness_row(node.as_ref(), node_did)
             .await
             .snapshot_json,
     )
     .unwrap();
     assert_eq!(
         restarted.process_state,
-        gents_protocol::row::BehaviorReadinessProcessState::Recovering,
+        gents_protocol::node_readiness::NodeReadinessProcessState::Recovering,
         "a prior durable Ready must be overwritten before restart work can fail"
     );
     second_owner.close().await.unwrap();
@@ -251,8 +251,8 @@ fn process_state_from_contract(state: &str) -> ProcessLifecycleState {
 async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_did = format!("did:test:process-contract:{}", case.name);
-    let (owner, status) = RuntimeStatusHandle::start(node.clone(), agent_did.clone());
+    let node_did = format!("did:test:process-contract:{}", case.name);
+    let (owner, status) = RuntimeStatusHandle::start(node.clone(), node_did.clone());
     status.readiness().initialize("general").await.unwrap();
     let action = case
         .action
@@ -291,8 +291,8 @@ async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) 
         ),
     }
 
-    let readiness = serde_json::from_str::<gents_protocol::row::BehaviorReadinessSnapshot>(
-        &fetch_behavior_readiness_row(node.as_ref(), &agent_did)
+    let readiness = serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
+        &fetch_node_readiness_row(node.as_ref(), &node_did)
             .await
             .snapshot_json,
     )
@@ -387,7 +387,7 @@ fn runtime_reconcile_state_machine_contract_is_complete() {
 }
 
 #[tokio::test]
-async fn runtime_status_persists_behavior_executor_capacity_and_queue_depth() {
+async fn runtime_status_persists_agent_executor_capacity_and_queue_depth() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
@@ -399,31 +399,31 @@ async fn runtime_status_persists_behavior_executor_capacity_and_queue_depth() {
     status
         .publish_startup_snapshot(&ActiveRuntimeSnapshot {
             generation: 1,
-            principal: None,
+            node: None,
             local_did: String::new(),
-            default_behavior_id: "general".to_string(),
-            behaviors: HashMap::new(),
+            default_agent_id: "general".to_string(),
+            agents: HashMap::new(),
             tool_surfaces: HashMap::new(),
             backend_admission_configs: HashMap::new(),
-            unavailable_behaviors: HashMap::new(),
+            unavailable_agents: HashMap::new(),
             active_schedules: HashMap::new(),
             unavailable_schedules: HashSet::new(),
             active_event_triggers: HashMap::new(),
             unavailable_event_triggers: HashSet::new(),
             active_tasks: HashMap::new(),
             dispatchers: HashMap::from([("general".to_string(), tx)]),
-            behavior_executor_capacities: HashMap::from([("general".to_string(), 3)]),
-            behavior_executor_queue_capacities: HashMap::from([("general".to_string(), 4)]),
+            agent_executor_capacities: HashMap::from([("general".to_string(), 3)]),
+            agent_executor_queue_capacities: HashMap::from([("general".to_string(), 4)]),
         })
         .await
         .unwrap();
 
     let row = fetch_runtime_row(node.as_ref(), "did:test:executor-status").await;
-    assert_eq!(row.behavior_executor_capacity, 3);
-    assert_eq!(row.behavior_executor_queue_depth, 2);
+    assert_eq!(row.agent_executor_capacity, 3);
+    assert_eq!(row.agent_executor_queue_depth, 2);
 
     let executor_status: serde_json::Value =
-        serde_json::from_str(&row.behavior_executor_status_json).unwrap();
+        serde_json::from_str(&row.agent_executor_status_json).unwrap();
     assert_eq!(
         executor_status,
         serde_json::json!({
@@ -437,38 +437,38 @@ async fn runtime_status_persists_behavior_executor_capacity_and_queue_depth() {
 }
 
 #[tokio::test]
-async fn executor_metrics_do_not_republish_unchanged_behavior_readiness() {
+async fn executor_metrics_do_not_republish_unchanged_node_readiness() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let (tx, _rx) = mpsc::channel(2);
     let snapshot = ActiveRuntimeSnapshot {
         generation: 1,
-        principal: None,
+        node: None,
         local_did: String::new(),
-        default_behavior_id: "general".to_string(),
-        behaviors: HashMap::new(),
+        default_agent_id: "general".to_string(),
+        agents: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::new(),
+        unavailable_agents: HashMap::new(),
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
         unavailable_event_triggers: HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::from([("general".to_string(), tx.clone())]),
-        behavior_executor_capacities: HashMap::from([("general".to_string(), 1)]),
-        behavior_executor_queue_capacities: HashMap::from([("general".to_string(), 2)]),
+        agent_executor_capacities: HashMap::from([("general".to_string(), 1)]),
+        agent_executor_queue_capacities: HashMap::from([("general".to_string(), 2)]),
     };
-    let agent_did = "did:test:readiness-metric-owner";
-    let status = RuntimeStatusHandle::new(node.clone(), agent_did);
+    let node_did = "did:test:readiness-metric-owner";
+    let status = RuntimeStatusHandle::new(node.clone(), node_did);
     status.publish_startup_snapshot(&snapshot).await.unwrap();
-    let before = fetch_behavior_readiness_row(node.as_ref(), agent_did).await;
+    let before = fetch_node_readiness_row(node.as_ref(), node_did).await;
 
     tx.try_send(status_test_request("metric-only-change"))
         .unwrap();
     status.publish_executor_snapshot(&snapshot).await;
-    let after = fetch_behavior_readiness_row(node.as_ref(), agent_did).await;
+    let after = fetch_node_readiness_row(node.as_ref(), node_did).await;
 
     assert_eq!(after.snapshot_json, before.snapshot_json);
     assert_eq!(
@@ -485,39 +485,39 @@ async fn runtime_status_serializes_persisted_generation_updates() {
     let status = RuntimeStatusHandle::new(node.clone(), "did:test:status-serialize");
     let startup = ActiveRuntimeSnapshot {
         generation: 1,
-        principal: None,
+        node: None,
         local_did: String::new(),
-        default_behavior_id: "general".to_string(),
-        behaviors: HashMap::new(),
+        default_agent_id: "general".to_string(),
+        agents: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: unavailable_general(),
+        unavailable_agents: unavailable_general(),
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
         unavailable_event_triggers: HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
-        behavior_executor_capacities: HashMap::new(),
-        behavior_executor_queue_capacities: HashMap::new(),
+        agent_executor_capacities: HashMap::new(),
+        agent_executor_queue_capacities: HashMap::new(),
     };
     let applied = ActiveRuntimeSnapshot {
         generation: 2,
-        principal: None,
+        node: None,
         local_did: String::new(),
-        default_behavior_id: "general".to_string(),
-        behaviors: HashMap::new(),
+        default_agent_id: "general".to_string(),
+        agents: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: unavailable_general(),
+        unavailable_agents: unavailable_general(),
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
         unavailable_event_triggers: HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
-        behavior_executor_capacities: HashMap::new(),
-        behavior_executor_queue_capacities: HashMap::new(),
+        agent_executor_capacities: HashMap::new(),
+        agent_executor_queue_capacities: HashMap::new(),
     };
 
     status.publish_startup_snapshot(&startup).await.unwrap();
@@ -541,8 +541,8 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         !row.last_reconcile_completed_at.is_empty(),
         "applied publish must stamp last_reconcile_completed_at"
     );
-    let readiness = fetch_behavior_readiness_row(node.as_ref(), "did:test:status-serialize").await;
-    let readiness: gents_protocol::row::BehaviorReadinessSnapshot =
+    let readiness = fetch_node_readiness_row(node.as_ref(), "did:test:status-serialize").await;
+    let readiness: gents_protocol::node_readiness::NodeReadinessSnapshot =
         serde_json::from_str(&readiness.snapshot_json).expect("decode serialized readiness");
     assert_eq!(readiness.active_generation, 2);
     assert_eq!(readiness.router_generation, 2);
@@ -561,39 +561,39 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
     let status = RuntimeStatusHandle::new(node.clone(), "did:test:runtime-contract");
     let startup = ActiveRuntimeSnapshot {
         generation: publish.pre_active_generation as u64,
-        principal: None,
+        node: None,
         local_did: String::new(),
-        default_behavior_id: "general".to_string(),
-        behaviors: HashMap::new(),
+        default_agent_id: "general".to_string(),
+        agents: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: unavailable_general(),
+        unavailable_agents: unavailable_general(),
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
         unavailable_event_triggers: HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
-        behavior_executor_capacities: HashMap::new(),
-        behavior_executor_queue_capacities: HashMap::new(),
+        agent_executor_capacities: HashMap::new(),
+        agent_executor_queue_capacities: HashMap::new(),
     };
     let applied = ActiveRuntimeSnapshot {
         generation: publish.post_active_generation as u64,
-        principal: None,
+        node: None,
         local_did: String::new(),
-        default_behavior_id: "general".to_string(),
-        behaviors: HashMap::new(),
+        default_agent_id: "general".to_string(),
+        agents: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: unavailable_general(),
+        unavailable_agents: unavailable_general(),
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
         unavailable_event_triggers: HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
-        behavior_executor_capacities: HashMap::new(),
-        behavior_executor_queue_capacities: HashMap::new(),
+        agent_executor_capacities: HashMap::new(),
+        agent_executor_queue_capacities: HashMap::new(),
     };
 
     status.publish_startup_snapshot(&startup).await.unwrap();
@@ -606,8 +606,8 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
     let row = fetch_runtime_row(node.as_ref(), "did:test:runtime-contract").await;
     assert_eq!(row.reconcile_phase, publish.post_phase.as_str());
     assert_eq!(row.last_reconcile_result, "applied");
-    let readiness = serde_json::from_str::<gents_protocol::row::BehaviorReadinessSnapshot>(
-        &fetch_behavior_readiness_row(node.as_ref(), "did:test:runtime-contract")
+    let readiness = serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
+        &fetch_node_readiness_row(node.as_ref(), "did:test:runtime-contract")
             .await
             .snapshot_json,
     )
@@ -627,8 +627,8 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
         .unwrap();
     let row = fetch_runtime_row(node.as_ref(), "did:test:runtime-contract").await;
     assert_eq!(row.reconcile_phase, router.post_phase.as_str());
-    let readiness = serde_json::from_str::<gents_protocol::row::BehaviorReadinessSnapshot>(
-        &fetch_behavior_readiness_row(node.as_ref(), "did:test:runtime-contract")
+    let readiness = serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
+        &fetch_node_readiness_row(node.as_ref(), "did:test:runtime-contract")
             .await
             .snapshot_json,
     )

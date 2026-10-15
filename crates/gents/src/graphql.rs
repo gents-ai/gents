@@ -85,6 +85,20 @@ pub fn graphql_string_list_literal<'a>(values: impl IntoIterator<Item = &'a str>
     }
 }
 
+/// Read `collection`'s arrival head so the transaction conflicts with any
+/// concurrent insert into it; predicate reads alone do not fence inserts.
+pub(crate) async fn fence_arrivals(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    collection: &str,
+) -> Result<()> {
+    txn.execute(&format!(
+        r#"{{ _documentArrivals(collection: "{}", limit: 1) {{ head }} }}"#,
+        escape_graphql_string(collection)
+    ))
+    .await?;
+    Ok(())
+}
+
 pub async fn graphql_response_with_transaction_retry(
     node: &EmbeddedNode,
     graphql: &str,
@@ -124,6 +138,15 @@ pub(crate) fn mutation_affected_documents(response: &QueryResponse) -> usize {
         .unwrap_or_default()
 }
 
+/// Native payloads can contain entire transcripts. Preserve their allocations
+/// when adapting the response envelope instead of serializing a second copy.
+pub(crate) fn into_data_envelope(data: Option<Value>) -> Value {
+    Value::Object(serde_json::Map::from_iter([(
+        "data".to_owned(),
+        data.unwrap_or(Value::Null),
+    )]))
+}
+
 pub fn ensure_no_errors(response: &QueryResponse, operation: &str) -> Result<()> {
     if response.has_errors() {
         anyhow::bail!("{operation} failed: {:?}", response.errors);
@@ -159,7 +182,7 @@ where
     let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
         return Ok(Vec::new());
     };
-    serde_json::from_value(value.clone()).with_context(|| format!("decode {field} rows"))
+    Vec::<T>::deserialize(value).with_context(|| format!("decode {field} rows"))
 }
 
 pub fn first_row<T>(response: &QueryResponse, field: &str) -> Result<Option<T>>
@@ -219,7 +242,7 @@ pub fn single_mutation_document<'a>(
 /// Extract the exact identity of a single create from a transaction envelope.
 /// Use the same mutation normalization as other storage adapters: the pinned
 /// DefraDB accepts `create_` but returns `add_` unless explicitly aliased.
-pub(crate) fn created_doc_id(response: &Value, collection: &str) -> Result<String> {
+pub fn created_doc_id(response: &Value, collection: &str) -> Result<String> {
     anyhow::ensure!(
         response
             .get("errors")

@@ -265,7 +265,9 @@ where
                 ensure_auxiliary_identity(active_auxiliary, identity)?;
                 emit_auxiliary(identity, AuxiliaryOutputEvent::Audit(observation.event)).await?;
             }
-            LoopStreamItem::AuthoredInputReady { .. } => {
+            LoopStreamItem::SteeringBoundary { .. }
+            | LoopStreamItem::AuthoredInputReady { .. }
+            | LoopStreamItem::FinishOrIntake { .. } => {
                 // This event carries persistence authority and may only be
                 // consumed by the owned StreamProcessor. The auxiliary has no
                 // hook, so observing it here means authority leaked past the
@@ -501,9 +503,9 @@ mod tests {
                 request_doc_id: "doc-aux".into(),
                 request_commit_cid: "bafy-aux".into(),
                 request_id: "req-aux".into(),
-                agent_did: "did:key:agent".into(),
+                node_did: "did:key:agent".into(),
                 requester_did: String::new(),
-                behavior_id: "behavior".into(),
+                agent_id: "behavior".into(),
                 session_id: "session".into(),
                 model_name: "claude".into(),
                 provider_family: None,
@@ -591,9 +593,9 @@ mod tests {
                 request_doc_id: "doc-identity".into(),
                 request_commit_cid: "bafy-identity".into(),
                 request_id: "req-identity".into(),
-                agent_did: "did:key:agent".into(),
+                node_did: "did:key:agent".into(),
                 requester_did: String::new(),
-                behavior_id: "behavior".into(),
+                agent_id: "behavior".into(),
                 session_id: "session".into(),
                 model_name: "claude".into(),
                 provider_family: None,
@@ -737,9 +739,9 @@ mod tests {
                 request_doc_id: "doc-cleanup".into(),
                 request_commit_cid: "bafy-cleanup".into(),
                 request_id: "req-cleanup".into(),
-                agent_did: "did:key:agent".into(),
+                node_did: "did:key:agent".into(),
                 requester_did: String::new(),
-                behavior_id: "behavior".into(),
+                agent_id: "behavior".into(),
                 session_id: "session".into(),
                 model_name: "claude".into(),
                 provider_family: None,

@@ -7,14 +7,11 @@ import type {
 
 import type { DesktopStartupPhase } from "../lib/loadingStatus";
 import { createSelectors, type WithSelectors } from "./createSelectors";
-import type {
-  ManagedServerStartupError,
-  ManagedServerWait,
-} from "../lib/managedServerStartup";
+import type { ManagedServerStartupError } from "../lib/managedServerStartup";
 
 /** The client and its startup: the last read (nodes, sessions and mailbox
     items are read by key through the fleet store), where startup has got
-    to, and what the managed server is doing. */
+    to, and why the managed server failed it. */
 export type ClientState = {
   snapshot: DesktopClientSnapshot | null;
   /** the client's own failure, shown in the banner */
@@ -22,7 +19,6 @@ export type ClientState = {
   startupPhase: DesktopStartupPhase;
   starting: boolean;
   stopping: boolean;
-  managedServerWait: ManagedServerWait | null;
   managedServerFailure: ManagedServerStartupError | null;
   /** where the logs are, read before the first snapshot when startup failed */
   startupDiagnosticsHint: string | null;
@@ -32,6 +28,7 @@ export type ClientState = {
     report: ManagedServerResetResult | null;
     busy: boolean;
     generation: number;
+    fullReset: boolean;
   };
 };
 
@@ -56,10 +53,9 @@ export function createClientStore(
       startupPhase,
       starting: false,
       stopping: false,
-      managedServerWait: null,
       managedServerFailure: null,
       startupDiagnosticsHint: null,
-      home: { report: null, busy: false, generation: 0 },
+      home: { report: null, busy: false, generation: 0, fullReset: false },
     })),
   );
 }

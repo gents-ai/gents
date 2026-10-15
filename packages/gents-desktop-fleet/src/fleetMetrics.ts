@@ -4,10 +4,10 @@ import type {
   Tools,
 } from "@source-inc/gents-desktop-client";
 import {
-  behaviorReadinessIsInferenceFailure,
   isLocalRuntimeSource,
+  nodeReadinessIsInferenceFailure,
   projectDeploymentOperationalState,
-  selectedBehaviorReadinessDecision,
+  selectedNodeReadinessDecision,
 } from "@source-inc/gents-desktop-client";
 
 export { isLocalRuntimeSource } from "@source-inc/gents-desktop-client";
@@ -43,7 +43,7 @@ export function deploymentStatus(
     operational.transport.detail,
     operational.route.detail,
     operational.sync.detail,
-    operational.behavior.detail,
+    operational.agent.detail,
     operational.reconcile.detail,
   ]
     .filter(Boolean)
@@ -64,10 +64,10 @@ export function deploymentStatus(
 
 export function inferenceBackendTitle(deployment: DeploymentView) {
   if (deployment.source === "enrollment") {
-    return projectDeploymentOperationalState(deployment).behaviorReadiness
-      .kind !== "unknown"
-      ? "Backend details stay on the agent host; this runtime reports authoritative behavior readiness"
-      : "Backend details stay on the agent host; runtime readiness is currently unavailable";
+    return projectDeploymentOperationalState(deployment).nodeReadiness.kind !==
+      "unknown"
+      ? "Backend details stay on the node host; this runtime reports authoritative node readiness"
+      : "Backend details stay on the node host; runtime readiness is currently unavailable";
   }
   const labels = (deployment.inferenceBackends ?? [])
     .filter((backend) => backend.enabled !== false)
@@ -81,8 +81,8 @@ export function needsInferenceSetup(deployment: DeploymentView): boolean {
   // Enrollment-owned deployments are configured by their remote runtime;
   // this client cannot satisfy a credentials/readiness failure locally.
   if (deployment.source === "enrollment") return false;
-  return behaviorReadinessIsInferenceFailure(
-    selectedBehaviorReadinessDecision(deployment, null),
+  return nodeReadinessIsInferenceFailure(
+    selectedNodeReadinessDecision(deployment, null),
   );
 }
 
@@ -111,9 +111,7 @@ export function toolCeilingIcons(
       .map((service) => service.mcp_service_id),
   );
   const cliTools = uniqueValues(
-    source.flatMap((tools) =>
-      (tools.host?.cli ?? []).map((tool) => tool.name),
-    ),
+    source.flatMap((tools) => (tools.host?.cli ?? []).map((tool) => tool.name)),
   );
 
   if (bestFileMode) {

@@ -43,18 +43,23 @@ pub(crate) use history::{
 };
 pub use observations::apply_title_in_txn;
 pub(crate) use observations::{
-    advance_session_request_observation_in_txn, derive_session_preview,
-    load_recent_titles_for_agent, load_scoped_request_facts_in_txn,
+    advance_refused_request_observation_in_txn, advance_session_request_observation_in_txn,
+    derive_session_preview, load_recent_titles_for_agent, load_scoped_request_facts_in_txn,
     refresh_session_request_observation_in_txn, session_needs_generated_title,
-    update_session_title_with_source,
+    update_session_title_with_source, REFUSAL_PROJECTION_EVENT_TARGET,
 };
 pub use observations::{load_latest_request_in_txn, SessionRequestFact};
 pub(crate) use observations::{load_session_current_hop, load_session_current_hop_in_txn};
+#[cfg(test)]
+pub(crate) use output::count_capture_row_queries;
 #[cfg(test)]
 pub(crate) use output::count_request_output_scans;
 #[cfg(test)]
 pub(crate) use output::load_canonical_payload_from_node;
 pub(crate) use output::load_canonical_payload_in_txn;
+pub(crate) use output::load_canonical_payload_with_access;
+#[cfg(test)]
+pub(crate) use output::record_request_output_scan;
 pub use output::{
     load_canonical_message, load_canonical_message_from_node, CanonicalOutputReadError,
 };
@@ -65,7 +70,7 @@ pub(crate) use output::{
 pub use query::{
     decode_session_row, public_request_filter, session_scope_filter, AGENT_SESSION_FIELDS,
 };
-pub(crate) use query::{load_session_behavior_id, load_session_requester_scope, require_session};
+pub(crate) use query::{load_session_agent_id, load_session_requester_scope, require_session};
 pub use request_output::{
     observe_request_output, CanonicalPresentation, CanonicalRequestOutput, CanonicalSelectedSource,
 };
@@ -74,8 +79,8 @@ pub use sessions::close_session;
 pub use sessions::load_agent_session_row_in_txn;
 #[cfg(test)]
 pub(crate) use sessions::{
-    create_session_with_behavior_id, create_session_with_id,
-    ensure_session_with_behavior_id_and_requester_did,
+    create_session_with_agent_id, create_session_with_id,
+    ensure_session_with_agent_id_and_requester_did,
 };
 pub(crate) use sessions::{ensure_session_in_txn, max_sequence, reopen_session_in_txn};
 

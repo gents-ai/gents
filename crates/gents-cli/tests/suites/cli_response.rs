@@ -22,7 +22,7 @@ struct ResponseTestRuntime {
     _mock_endpoint: MockModelEndpoint,
     _serve: ServeProcess,
     graphql: String,
-    agent_did: String,
+    node_did: String,
 }
 
 async fn start_response_runtime(label: &str) -> Result<ResponseTestRuntime> {
@@ -36,7 +36,7 @@ async fn start_response_runtime(label: &str) -> Result<ResponseTestRuntime> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -44,12 +44,12 @@ async fn start_response_runtime(label: &str) -> Result<ResponseTestRuntime> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     Ok(ResponseTestRuntime {
         _tempdir: tempdir,
@@ -57,7 +57,7 @@ async fn start_response_runtime(label: &str) -> Result<ResponseTestRuntime> {
         _mock_endpoint: mock_endpoint,
         _serve: serve,
         graphql,
-        agent_did,
+        node_did,
     })
 }
 
@@ -89,9 +89,9 @@ async fn create_fixture_request(
     let request = graphql_query(
         &runtime.graphql,
         &format!(
-            r#"mutation{{create_AgentRequest(input:{{purpose: "normal", request_id:"{}",agent_did:"{}",requester_did:null,session_id:"{}",behavior_id:"response-test",content:"test request",created_at:"{}",lifecycle_state:"{}"}}){{_docID}}}}"#,
+            r#"mutation{{create_AgentRequest(input:{{purpose: "normal", request_id:"{}",node_did:"{}",requester_did:null,session_id:"{}",agent_id:"response-test",content:"test request",created_at:"{}",lifecycle_state:"{}"}}){{_docID}}}}"#,
             escape_graphql_string(request_id),
-            escape_graphql_string(&runtime.agent_did),
+            escape_graphql_string(&runtime.node_did),
             escape_graphql_string(session_id),
             escape_graphql_string(&now),
             escape_graphql_string(lifecycle_state.as_str()),
@@ -207,7 +207,7 @@ async fn insert_materialized_response(
     let has_data = !runs.is_empty();
     let stream_bytes = runs.iter().map(|run| u64::from(run.bytes)).collect();
     let segment = OutputSegment {
-        agent_did: runtime.agent_did.clone(),
+        node_did: runtime.node_did.clone(),
         requester_did: None,
         session_id: session_id.to_owned(),
         request_doc_id: request_doc_id.clone(),
@@ -261,9 +261,9 @@ async fn insert_materialized_response(
         });
     }
     let header = TranscriptMessage {
-        message_key: gents::session::sequence_message_key(&runtime.agent_did, session_id, None, 1),
+        message_key: gents::session::sequence_message_key(&runtime.node_did, session_id, None, 1),
         session_id: session_id.to_owned(),
-        agent_did: runtime.agent_did.clone(),
+        node_did: runtime.node_did.clone(),
         requester_did: None,
         request_doc_id: Some(request_doc_id.clone()),
         publication: MessagePublication::RequestExecution {

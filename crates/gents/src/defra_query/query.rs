@@ -68,12 +68,12 @@ impl DefraQueryParams {
 pub const AGENT_CONFIG_SCOPE_ALIAS: &str = "agent-config";
 
 pub const AGENT_CONFIG_QUERY_COLLECTIONS: &[&str] = &[
-    "AgentPrincipal",
-    "AgentBehavior",
+    "Node",
+    "Agent",
     "AgentContext",
     "CompactionConfig",
     "Tools",
-    "SubagentTarget",
+    "AgentTarget",
     "Skill",
     "DatastoreToolSurface",
     "EthTool",
@@ -88,8 +88,8 @@ pub const AGENT_CONFIG_QUERY_COLLECTIONS: &[&str] = &[
     "Schedule",
     "EventSource",
     "Trigger",
-    "AgentRuntime",
-    "AgentNetwork",
+    "NodeRuntime",
+    "Network",
     "PeerEndpoint",
     "PeerRegistry",
     "PeerPairingDesired",
@@ -259,10 +259,7 @@ mod tests {
             expand_collection_scope_aliases(["AgentRequest", " agent-config ", "", "Custom"]);
         assert!(expanded.contains(&"AgentRequest".to_string()));
         assert!(expanded.contains(&"Custom".to_string()));
-        assert!(
-            expanded.contains(&"AgentBehavior".to_string()),
-            "alias expanded"
-        );
+        assert!(expanded.contains(&"Agent".to_string()), "alias expanded");
         assert!(!expanded.contains(&String::new()), "empties dropped");
         assert!(
             !expanded.contains(&"agent-config".to_string()),

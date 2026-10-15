@@ -20,7 +20,7 @@ import { shellStores } from "./shell-fixture";
 describe("the shell projection from the stores", () => {
   it("tracks the request a send is awaiting, as the stores hold it now", () => {
     const stores: ShellStores = {
-      selection: createSelectionStore({ agentDid: "node", sessionId: "s1" }),
+      selection: createSelectionStore({ nodeDid: "node", sessionId: "s1" }),
       session: createSessionStore(),
       fleet: createFleetStore(),
       client: createClientStore(),
@@ -31,7 +31,7 @@ describe("the shell projection from the stores", () => {
     stores.chat.setState({
       localWorkflow: {
         kind: "awaitingObservation",
-        agentDid: "node",
+        nodeDid: "node",
         sessionId: "s1",
         requestId: "r1",
       },
@@ -47,17 +47,19 @@ describe("the shell view", () => {
   const live = (content: string) =>
     ({
       sessionId: "s1",
-      agentDid: "node",
-      behaviorId: null,
+      nodeDid: "node",
+      agentId: null,
       turnState: "running",
       latestRequestId: "r1",
       pendingTurn: null,
+      queuedTurns: [],
+      foldedInputs: [],
       hydration: null,
       timelineItems: [{ kind: "liveAssistant", itemKey: "live", content }],
     }) as unknown as DesktopSessionSnapshot;
 
   it("notifies no one for a streamed chunk", () => {
-    const stores = shellStores({ selection: { agentDid: "node", sessionId: "s1" } });
+    const stores = shellStores({ selection: { nodeDid: "node", sessionId: "s1" } });
     const view = createShellView(stores);
     writeSession(stores.session, live("Hel"));
     const before = view.getState();
@@ -69,7 +71,7 @@ describe("the shell view", () => {
   });
 
   it("is in step with a write before the writer reads it", () => {
-    const stores = shellStores({ selection: { agentDid: "node", sessionId: "s1" } });
+    const stores = shellStores({ selection: { nodeDid: "node", sessionId: "s1" } });
     const view = createShellView(stores);
     const keyBefore = view.getState().draftKey;
     stores.selection.setState({ sessionId: "s2" });
@@ -77,7 +79,7 @@ describe("the shell view", () => {
     stores.chat.setState({
       localWorkflow: {
         kind: "awaitingObservation",
-        agentDid: "node",
+        nodeDid: "node",
         sessionId: "s2",
         requestId: "r2",
       },

@@ -83,7 +83,7 @@ pub struct GraphRunRequestView {
     pub request_id: String,
     pub session_id: Option<String>,
     pub node_id: Option<String>,
-    pub behavior_id: String,
+    pub agent_id: String,
     pub lifecycle_state: Option<String>,
     pub failure_reason: Option<String>,
     pub terminal: bool,
@@ -372,9 +372,9 @@ async fn load_groups(
         .unwrap_or(usize::MAX)
         .saturating_add(1);
     let response = executor.execute_graph_query(&format!(r#"{{
-        EventGroupState(filter: {{ agent_did: {{_eq: "{}"}}, correlation: {{_eq: "{}"}},
+        EventGroupState(filter: {{ node_did: {{_eq: "{}"}}, correlation: {{_eq: "{}"}},
             consumer: {{_in: [{consumers}]}} }}, order: {{first_seen_at: ASC}}, limit: {limit}) {{
-            group_key agent_did consumer correlation consumer_config_key first_seen_at quiesced_at quiesced_reason
+            group_key node_did consumer correlation consumer_config_key first_seen_at quiesced_at quiesced_reason
         }}
     }}"#, escape_graphql_string(owner_did), escape_graphql_string(correlation))).await?;
     rows(&response, "EventGroupState")
@@ -382,7 +382,7 @@ async fn load_groups(
         .map(|row| {
             let state: EventGroupState = serde_json::from_value(row.clone())?;
             anyhow::ensure!(
-                state.agent_did == owner_did && state.correlation == correlation,
+                state.node_did == owner_did && state.correlation == correlation,
                 "group observation is outside the graph run scope"
             );
             let EventConsumer::Trigger { trigger_id } = state.consumer else {
@@ -626,7 +626,7 @@ async fn load_graph_run_view_with(
         Some(json!({
             "version": 1, "code": "contract_drift",
             "message": "pinned graph request lacks authenticated route binding",
-            "request_id": request.request_id, "behavior_id": request.behavior_id,
+            "request_id": request.request_id, "agent_id": request.agent_id,
         }))
     } else if let Some(invocation) = invalid_invocation {
         Some(json!({
@@ -1005,7 +1005,7 @@ pub async fn load_graph_run_result_view_with_access(
     Ok(view)
 }
 
-/// Reconcile every running graph owned by one principal. The durable run and
+/// Reconcile every running graph owned by one node. The durable run and
 /// its pinned revision remain the only source of truth; this sweep merely
 /// applies the already-modeled terminal transition when evidence is ready.
 pub async fn reconcile_owned_graph_runs(node: &EmbeddedNode, owner_did: &str) -> Result<usize> {
@@ -1474,7 +1474,7 @@ mod tests {
                 request_id: "request".to_owned(),
                 session_id: Some("session".to_owned()),
                 node_id: Some("terminal".to_owned()),
-                behavior_id: "behavior".to_owned(),
+                agent_id: "agent".to_owned(),
                 lifecycle_state: Some("completed".to_owned()),
                 failure_reason: None,
                 terminal: true,

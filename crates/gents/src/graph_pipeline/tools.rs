@@ -81,7 +81,7 @@ impl Tool for CompileGraphTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_owned(),
-            description: "Compile a bounded document DAG from configured existing Task capabilities and publish its EventTriggers atomically. The model cannot author prompts, behaviors, tools, models, executable plans, or arbitrary collections. Invalid graphs return stable repair diagnostics without writes. Execution starts separately through existing bounded document-write tools after normal runtime reconciliation.".to_owned(),
+            description: "Compile a bounded document DAG from configured existing Task capabilities and publish its EventTriggers atomically. The model cannot author prompts, agents, tools, models, executable plans, or arbitrary collections. Invalid graphs return stable repair diagnostics without writes. Execution starts separately through existing bounded document-write tools after normal runtime reconciliation.".to_owned(),
             parameters: schemars::schema_for!(CompileGraphArgs).to_value(),
         }
     }
@@ -134,7 +134,7 @@ mod tests {
 
     fn capability() -> StageCapability {
         StageCapability {
-            agent_did: "did:key:owner".to_owned(),
+            node_did: "did:key:owner".to_owned(),
             tags: vec![],
             workspace_authority: None,
             capability_id: "worker".to_owned(),
@@ -174,7 +174,7 @@ mod tests {
 
     fn review_capability() -> StageCapability {
         StageCapability {
-            agent_did: "did:key:owner".to_owned(),
+            node_did: "did:key:owner".to_owned(),
             tags: vec![],
             workspace_authority: None,
             capability_id: "reviewer".to_owned(),
@@ -208,7 +208,7 @@ mod tests {
 
     fn intent(capability_id: &str) -> GraphIntent {
         GraphIntent {
-            agent_did: "did:key:owner".to_owned(),
+            node_did: "did:key:owner".to_owned(),
             tags: vec![],
             graph_id: "model-pipeline".to_owned(),
             nodes: vec![GraphNode {

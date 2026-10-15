@@ -12,17 +12,12 @@ async fn fixture(
 ) {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_behavior_id(
+    crate::session::create_session_with_agent_id(
         node.as_ref(),
         &session,
-        "general",
         "did:test:general",
         "general",
     )

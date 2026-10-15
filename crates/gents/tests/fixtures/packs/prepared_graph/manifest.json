@@ -15,7 +15,7 @@
   "config": "pack_config.json",
   "assets": [
     "README.md",
-    "agent_behaviors/fixture_worker/system_prompt.md",
+    "agents/fixture_worker/system_prompt.md",
     "pack_config.json",
     "plugins/prepare_fixture.afb",
     "schemas/fixture_evidence.graphql",
@@ -68,7 +68,7 @@
     {
       "name": "worker",
       "description": "The one slot this fixture declares.",
-      "behaviors": [
+      "agents": [
         "fixture-worker"
       ]
     }

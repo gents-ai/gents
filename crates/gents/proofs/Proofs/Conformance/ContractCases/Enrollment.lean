@@ -123,7 +123,7 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
   , requestAdmissionCase "peer-authority-denied"
       { requestAdmissionBase .peer with
           requesterMatchesTarget := false, peerAuthorityAllows := false }
-  , requestAdmissionCase "peer-same-principal-is-not-peer"
+  , requestAdmissionCase "peer-same-node-is-not-peer"
       { requestAdmissionBase .peer with
           requesterMatchesTarget := true, peerAuthorityAllows := true }
   , requestAdmissionCase "peer-forged-signer"
@@ -198,7 +198,7 @@ structure TitleRequestAdmissionCase where
   request : AgentRequestSemantics
   admission : AgentRequestAdmission
   runtimeEvidence : Option RuntimeInternalEvidence
-  sessionBehavior : String
+  sessionAgent : String
   expectedAdmitted : Bool
   expectedClaimable : Bool
   expectedDisposition : AgentRequestAdmissionDisposition
@@ -209,14 +209,14 @@ def titleParentLink : TitleParentLink :=
   { requestId := "p", documentId := "P" }
 
 def titleParentEvidence : TitleParentEvidence :=
-  { link := titleParentLink, agentDid := "a"
-  , sessionId := "s", behaviorId := "b"
+  { link := titleParentLink, nodeDid := "a"
+  , sessionId := "s", agentId := "b"
   , logicalBindingCurrent := true, physicalBindingCurrent := true }
 
 def titleRequest : AgentRequestSemantics :=
   { requestId := "t", purpose := .titleAudit
-  , targetAgent := "a", requesterDid := "a"
-  , behaviorId := "b", sessionId := "s"
+  , targetNode := "a", requesterDid := "a"
+  , agentId := "b", sessionId := "s"
   , content := "Generate a title", input := {}, createdAt := "2026-09-24T00:00:00Z"
   , triggerConfigDocumentId := "", retryFields := [], triggerFields := []
   , parentFields := titleParentFields titleParentLink, workspace := {} }
@@ -233,7 +233,7 @@ def titleAdmissionUnsigned : AgentRequestAdmission :=
 def titleEvidence : RuntimeInternalEvidence :=
   { sourceKind := .localControl, issuerDid := "a"
   , sourceRequestId := titleParentLink.requestId
-  , targetAgent := "a", targetRuntimeAttestationValid := true
+  , targetNode := "a", targetRuntimeAttestationValid := true
   , sourceBindingCurrent := true, triggerConfigDocumentBindingCurrent := false
   , sourceDocumentBindingCurrent := true
   , targetPolicyAllows := false
@@ -251,25 +251,25 @@ private def titlePendingContext : RequestContext :=
 private def titleRequestAdmissionCase (name : String) (request : AgentRequestSemantics)
     (admission : AgentRequestAdmission) (evidence : Option RuntimeInternalEvidence)
     (parentState : RequestState := .completed)
-    (sessionBehavior : String := "b")
+    (sessionAgent : String := "b")
     (observationAvailable : Bool := true)
     (branchFieldsExact : Bool := true)
     (pendingDeadlineAbsent : Bool := true) : TitleRequestAdmissionCase :=
   { name, parentObservedState := parentState, observationAvailable
   , branchFieldsExact, pendingDeadlineAbsent, request, admission
-  , runtimeEvidence := evidence, sessionBehavior
+  , runtimeEvidence := evidence, sessionAgent
   , expectedAdmitted := decide (agentRequestAdmissible ({} : Enrollment.State)
       request admission none none false evidence branchFieldsExact pendingDeadlineAbsent
       ⟨false, CausalHop.defaultMaxRequestHop⟩)
   , expectedClaimable := decide (agentRequestClaimable ({} : Enrollment.State)
       request admission none none false evidence branchFieldsExact pendingDeadlineAbsent
-      ⟨false, CausalHop.defaultMaxRequestHop⟩ sessionBehavior []
+      ⟨false, CausalHop.defaultMaxRequestHop⟩ sessionAgent []
       (fun _ => false) (fun _ => false))
   , expectedDisposition := titlePendingDisposition observationAvailable ({} : Enrollment.State)
-      request admission evidence sessionBehavior branchFieldsExact pendingDeadlineAbsent
+      request admission evidence sessionAgent branchFieldsExact pendingDeadlineAbsent
       CausalHop.defaultMaxRequestHop
   , expectedPendingState := (titlePendingStep? observationAvailable ({} : Enrollment.State)
-      request admission evidence sessionBehavior branchFieldsExact pendingDeadlineAbsent
+      request admission evidence sessionAgent branchFieldsExact pendingDeadlineAbsent
       CausalHop.defaultMaxRequestHop titlePendingContext).map (·.state) }
 
 def titleRequestAdmissionCases : List TitleRequestAdmissionCase :=
@@ -366,7 +366,7 @@ def enrollmentOffer : Offer :=
   { offerId := "offer-1", challenge := "challenge-1"
   , networkId := "network-1", adminDid := "did:key:admin"
   , serverPeer := "server-peer", serverTicketPeer := "server-peer"
-  , resolvedServerDid := "did:key:admin", ownerAgent := "did:key:agent"
+  , resolvedServerDid := "did:key:admin", ownerNode := "did:key:node"
   , profile := "client", schemaCompatible := true, adminSigned := true, fresh := true }
 
 def unsignedEnrollmentRequest : Request :=
@@ -376,7 +376,7 @@ def unsignedEnrollmentRequest : Request :=
   , serverPeer := "server-peer", candidateDid := "did:key:candidate"
   , candidatePeer := "candidate-peer", observedCandidatePeer := "candidate-peer"
   , resolvedCandidateDid := "did:key:candidate", candidateTicketPeer := "candidate-peer"
-  , ownerAgent := "did:key:agent", profile := "client"
+  , ownerNode := "did:key:node", profile := "client"
   , clientNonce := "nonce-1", issuedAt := "1", expiresAt := "2"
   , candidateSigned := true, fresh := true }
 
@@ -389,7 +389,7 @@ def decisionFor (r : Request) (kind : DecisionKind := .approved) (sequence : Nat
   { requestId := r.requestId, requestDigest := r.digest
   , networkId := r.networkId, adminDid := r.adminDid
   , candidateDid := r.candidateDid, candidatePeer := r.candidatePeer
-  , ownerAgent := r.ownerAgent, kind, authorizationSequence := sequence
+  , ownerNode := r.ownerNode, kind, authorizationSequence := sequence
   , authorizationExpiresAt := "lease-2"
   , signerDid := r.adminDid, adminSigned := true, fresh := true }
 
@@ -397,7 +397,7 @@ def revocationFor (r : Request) (sequence : Nat := 2) : AuthorizationRevision :=
   { requestId := r.requestId, requestDigest := r.digest
   , networkId := r.networkId, adminDid := r.adminDid
   , memberDid := r.candidateDid, memberPeer := r.candidatePeer
-  , ownerAgent := r.ownerAgent, sequence, kind := .revoked
+  , ownerNode := r.ownerNode, sequence, kind := .revoked
   , authorizationExpiresAt := "lease-2"
   , signerDid := r.adminDid, adminSigned := true }
 
@@ -493,7 +493,7 @@ def enrollmentTraceStep (action : EnrollmentAction) (state : Enrollment.State) :
   let offerNetworkId := match offer? with | some offer => offer.networkId | none => ""
   let offerAdminDid := match offer? with | some offer => offer.adminDid | none => ""
   let offerServerPeer := match offer? with | some offer => offer.serverPeer | none => ""
-  let offerOwnerAgent := match offer? with | some offer => offer.ownerAgent | none => ""
+  let offerOwnerNode := match offer? with | some offer => offer.ownerNode | none => ""
   let offerProfile := match offer? with | some offer => offer.profile | none => ""
   let challenge := match request?, offer? with
     | some request, _ => request.challenge
@@ -536,9 +536,9 @@ def enrollmentTraceStep (action : EnrollmentAction) (state : Enrollment.State) :
     | some request => request.resolvedCandidateDid | none => ""
   let candidateTicketPeer := match request? with
     | some request => request.candidateTicketPeer | none => ""
-  let ownerAgent := match request?, offer? with
-    | some request, _ => request.ownerAgent
-    | none, some offer => offer.ownerAgent
+  let ownerNode := match request?, offer? with
+    | some request, _ => request.ownerNode
+    | none, some offer => offer.ownerNode
     | none, none => ""
   let clientNonce := match request? with | some request => request.clientNonce | none => ""
   let issuedAt := match request? with | some request => request.issuedAt | none => ""
@@ -566,8 +566,8 @@ def enrollmentTraceStep (action : EnrollmentAction) (state : Enrollment.State) :
     | some decision => decision.candidateDid | none => ""
   let decisionCandidatePeer := match decision? with
     | some decision => decision.candidatePeer | none => ""
-  let decisionOwnerAgent := match decision? with
-    | some decision => decision.ownerAgent | none => ""
+  let decisionOwnerNode := match decision? with
+    | some decision => decision.ownerNode | none => ""
   let decisionAdminSigned := match decision? with
     | some decision => decision.adminSigned | none => false
   let decisionFresh := match decision? with
@@ -592,8 +592,8 @@ def enrollmentTraceStep (action : EnrollmentAction) (state : Enrollment.State) :
     | some revision => revision.memberDid | none => ""
   let revisionMemberPeer := match revision? with
     | some revision => revision.memberPeer | none => ""
-  let revisionOwnerAgent := match revision? with
-    | some revision => revision.ownerAgent | none => ""
+  let revisionOwnerNode := match revision? with
+    | some revision => revision.ownerNode | none => ""
   let revisionAdminSigned := match revision? with
     | some revision => revision.adminSigned | none => false
   let receiptRequestId := match receipt? with | some receipt => receipt.requestId | none => ""
@@ -604,7 +604,7 @@ def enrollmentTraceStep (action : EnrollmentAction) (state : Enrollment.State) :
   let receiptMemberDid := match receipt? with | some receipt => receipt.memberDid | none => ""
   let receiptMemberPeer := match receipt? with | some receipt => receipt.memberPeer | none => ""
   let receiptServerPeer := match receipt? with | some receipt => receipt.serverPeer | none => ""
-  let receiptOwnerAgent := match receipt? with | some receipt => receipt.ownerAgent | none => ""
+  let receiptOwnerNode := match receipt? with | some receipt => receipt.ownerNode | none => ""
   let receiptAuthorizationSequence := match receipt? with
     | some receipt => receipt.authorizationSequence | none => 0
   let receiptAuthorizationExpiresAt := match receipt? with
@@ -668,23 +668,23 @@ def enrollmentTraceStep (action : EnrollmentAction) (state : Enrollment.State) :
           (projectedServerToClientHydrationCatalog state request.networkId sessions) hydration)
     | none => false
   { action := actionName action, peerAdmissionDid, offerId, offerChallenge, offerNetworkId, offerAdminDid
-  , offerServerPeer, offerOwnerAgent, offerProfile, challenge, requestId, requestDigest
+  , offerServerPeer, offerOwnerNode, offerProfile, challenge, requestId, requestDigest
   , requestOfferId
   , networkId, adminDid, serverPeer, serverTicketPeer, resolvedServerDid, profile
   , schemaCompatible, offerAdminSigned, offerFresh
   , candidateDid, candidatePeer, observedCandidatePeer, resolvedCandidateDid
-  , candidateTicketPeer, ownerAgent, clientNonce, issuedAt, expiresAt
+  , candidateTicketPeer, ownerNode, clientNonce, issuedAt, expiresAt
   , candidateSigned, requestFresh, decisionAuthorizationSequence
   , decisionAuthorizationExpiresAt, decisionSignerDid
   , decisionKind, decisionRequestId, decisionRequestDigest, decisionNetworkId, decisionAdminDid
-  , decisionCandidateDid, decisionCandidatePeer, decisionOwnerAgent
+  , decisionCandidateDid, decisionCandidatePeer, decisionOwnerNode
   , decisionAdminSigned, decisionFresh, revisionKind, revisionSequence
   , revisionAuthorizationExpiresAt, revisionSignerDid
   , revisionRequestId, revisionRequestDigest
   , revisionNetworkId, revisionAdminDid, revisionMemberDid, revisionMemberPeer
-  , revisionOwnerAgent, revisionAdminSigned
+  , revisionOwnerNode, revisionAdminSigned
   , receiptRequestId, receiptRequestDigest, receiptNetworkId, receiptAdminDid
-  , receiptMemberDid, receiptMemberPeer, receiptServerPeer, receiptOwnerAgent
+  , receiptMemberDid, receiptMemberPeer, receiptServerPeer, receiptOwnerNode
   , receiptAuthorizationSequence, receiptAuthorizationExpiresAt
   , receiptDirection, receiptSignerDid
   , receiptAdminSigned, receiptApplied
@@ -761,12 +761,12 @@ def enrollmentCases : List EnrollmentCase :=
   let unsignedRevocation := { enrollmentRevocation with adminSigned := false }
   let wrongBindingRevocation := { enrollmentRevocation with memberPeer := "foreign-peer" }
   let replacementOffer := { enrollmentOffer with
-    offerId := "offer-2", challenge := "challenge-2", ownerAgent := "did:key:agent-2" }
+    offerId := "offer-2", challenge := "challenge-2", ownerNode := "did:key:node-2" }
   let replacementUnsigned := { unsignedEnrollmentRequest with
     requestId := "request-2", offerId := replacementOffer.offerId,
     challenge := replacementOffer.challenge, candidatePeer := "candidate-peer-2",
     observedCandidatePeer := "candidate-peer-2", candidateTicketPeer := "candidate-peer-2",
-    ownerAgent := replacementOffer.ownerAgent, clientNonce := "nonce-2" }
+    ownerNode := replacementOffer.ownerNode, clientNonce := "nonce-2" }
   let replacementRequest := canonicalizeEnrollmentRequest replacementUnsigned
   let replacementDecision := decisionFor replacementRequest .approved 2
   let conflictingAdminOffer := { enrollmentOffer with
@@ -888,7 +888,7 @@ def enrollmentCases : List EnrollmentCase :=
       (validEnrollmentActions ++ [.revoke enrollmentRequest unsignedRevocation])
   , enrollmentCase "wrong_revocation_binding_rejected"
       (validEnrollmentActions ++ [.revoke enrollmentRequest wrongBindingRevocation])
-  , enrollmentCase "higher_approval_replaces_peer_and_agent"
+  , enrollmentCase "higher_approval_replaces_peer_and_node"
       (validEnrollmentActions ++
         [.observe replacementOffer, .confirmPin replacementOffer,
          .accept replacementOffer replacementRequest,
@@ -1011,7 +1011,8 @@ private def edgeExpectedDigest : String :=
   "utf8hex-v1:" ++ edgeExpectedPayload
 
 def enrollmentDigestCases : List EnrollmentDigestCase :=
-  let baseFields := canonicalRequestTextFields enrollmentRequest
+  let baseFields := canonicalRequestTextFields
+    { enrollmentRequest with ownerNode := "did:key:agent" }
   let baseByteFields := textFieldsToBytes baseFields
   let basePayload := utf8HexString (canonicalSerializedFields baseByteFields)
   let baseDigest := renderDigestString (canonicalDigestFromFields baseByteFields)

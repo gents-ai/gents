@@ -249,7 +249,25 @@ fn json_usize(value: &serde_json::Value, key: &str) -> Option<usize> {
 }
 
 pub(super) fn json_string(value: serde_json::Value) -> String {
-    serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
+    crate::tool_output::render(
+        &value,
+        &[
+            "output",
+            "result",
+            "processes",
+            "entries",
+            "sessions",
+            "agents",
+            "message",
+            "status",
+            "process",
+            "error",
+            "next_call",
+            "next_offset",
+            "ok",
+        ],
+    )
+    .expect("JSON values serialize")
 }
 
 /// Build a model-facing JSON envelope that embeds a potentially oversized
@@ -279,7 +297,7 @@ pub(super) fn json_envelope_with_bounded_result(
         &inner_limits,
     );
     envelope[result_key] = serde_json::Value::String(bounded);
-    let rendered = serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| envelope.to_string());
+    let rendered = json_string(envelope.clone());
     if rendered.len() <= limits.max_bytes {
         return rendered;
     }
@@ -427,6 +445,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hook_results_lead_with_the_answer_and_keep_nulls() {
+        let value = json!({"ok":true,"status":"idle","result":null,"session_id":"session"});
+        let rendered = json_string(value.clone());
+        assert!(rendered.starts_with("{\n  \"result\": null,"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&rendered).unwrap(),
+            value
+        );
+    }
+
+    #[test]
+    fn successful_process_stop_leads_with_the_observed_outcome() {
+        let value = json!({"ok":true,"status":"cancelled","process":"stopped","error":null,"tool_call_id":"call"});
+        let rendered = json_string(value.clone());
+        assert!(
+            rendered.starts_with("{\n  \"status\": \"cancelled\",\n  \"process\": \"stopped\",")
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&rendered).unwrap(),
+            value
+        );
+    }
+
+    #[test]
     fn json_envelope_bounds_oversized_result_and_stays_valid_json() {
         let limits = crate::truncation::TruncationLimits::default();
         let big = "x".repeat(2 * limits.max_bytes);
@@ -443,6 +485,7 @@ mod tests {
             rendered.len(),
             limits.max_bytes
         );
+        assert!(rendered.starts_with("{\n  \"result\":"));
         let parsed: serde_json::Value =
             serde_json::from_str(&rendered).expect("envelope must remain valid JSON");
         let result = parsed["result"].as_str().expect("result string");

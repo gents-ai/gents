@@ -229,11 +229,11 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
         assert_eq!(case.projected_status, expected, "{}", case.witness);
     }
 
-    let behavior_cases = lean_codex_shim_behavior_selection_cases();
-    assert_eq!(behavior_cases.len(), 5);
-    for case in behavior_cases {
+    let agent_cases = lean_codex_shim_agent_selection_cases();
+    assert_eq!(agent_cases.len(), 5);
+    for case in agent_cases {
         let exact_scope = case.selected_owner == case.actual_owner
-            && case.projected_behavior_id == case.actual_behavior;
+            && case.projected_agent_id == case.actual_agent;
         if !exact_scope || case.resolved_model.is_none() {
             assert!(
                 case.projected_model.is_none(),
@@ -248,15 +248,13 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
             );
         }
     }
-    assert!(behavior_cases
+    assert!(agent_cases
         .iter()
         .any(|case| case.selected_owner != case.actual_owner));
-    assert!(behavior_cases
+    assert!(agent_cases
         .iter()
-        .any(|case| case.projected_behavior_id != case.actual_behavior));
-    assert!(behavior_cases
-        .iter()
-        .any(|case| case.resolved_model.is_none()));
+        .any(|case| case.projected_agent_id != case.actual_agent));
+    assert!(agent_cases.iter().any(|case| case.resolved_model.is_none()));
 
     let tool_metadata_cases = lean_codex_shim_tool_metadata_cases();
     assert_eq!(tool_metadata_cases.len(), 11);
@@ -276,7 +274,7 @@ pub(super) fn generated_codex_shim_binding_cases_pin_runnable_gated_binding() {
         "the Lean binding contract must stay fully consumed"
     );
 
-    const BOUND_BEHAVIOR: &str = "default";
+    const BOUND_AGENT: &str = "default";
 
     let reason_of = |state: ShimBindingState| match state {
         ShimBindingState::Bound => None,
@@ -294,18 +292,18 @@ pub(super) fn generated_codex_shim_binding_cases_pin_runnable_gated_binding() {
         );
 
         let mut shim = match (case.pre_state.as_str(), case.unbound_reason.as_deref()) {
-            ("bound", None) => ShimBinding::bound(BOUND_BEHAVIOR),
+            ("bound", None) => ShimBinding::bound(BOUND_AGENT),
             ("unbound", Some("dependencyMissing")) => {
-                ShimBinding::unbound(BOUND_BEHAVIOR, ShimUnboundReason::DependencyMissing)
+                ShimBinding::unbound(BOUND_AGENT, ShimUnboundReason::DependencyMissing)
             }
             ("unbound", Some("hostResource")) => {
-                ShimBinding::unbound(BOUND_BEHAVIOR, ShimUnboundReason::HostResource)
+                ShimBinding::unbound(BOUND_AGENT, ShimUnboundReason::HostResource)
             }
             other => panic!("{}: unmodeled pre-state {other:?}", case.witness),
         };
 
-        let runnable: Vec<&str> = if case.bound_behavior_runnable {
-            vec!["other", BOUND_BEHAVIOR]
+        let runnable: Vec<&str> = if case.bound_agent_runnable {
+            vec!["other", BOUND_AGENT]
         } else {
             vec!["other"]
         };
@@ -332,7 +330,7 @@ pub(super) fn generated_codex_shim_binding_cases_pin_runnable_gated_binding() {
         );
 
         let expected_attempts = usize::from(
-            case.bound_behavior_runnable
+            case.bound_agent_runnable
                 && case.pre_state == "unbound"
                 && case.unbound_reason.as_deref() == Some("dependencyMissing"),
         );

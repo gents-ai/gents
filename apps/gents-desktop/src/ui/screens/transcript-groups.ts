@@ -109,7 +109,7 @@ export function groupLabel(members: GroupMember[]): string {
           ? "edit"
           : p.kind === "command"
             ? "command"
-            : p.kind === "subagent"
+            : p.kind === "agent"
               ? "worker"
               : "other";
     counts.set(kind, (counts.get(kind) ?? 0) + 1);
@@ -121,7 +121,7 @@ export function groupLabel(members: GroupMember[]): string {
     n("read") && `read ${plural(n("read"), "file", "files")}`,
     n("edit") && `edited ${plural(n("edit"), "file", "files")}`,
     n("command") && `ran ${plural(n("command"), "command", "commands")}`,
-    n("worker") && `worked with ${plural(n("worker"), "agent", "agents")}`,
+    n("worker") && `made ${plural(n("worker"), "session call", "session calls")}`,
     n("other") && `used ${plural(n("other"), "tool", "tools")}`,
   ].filter(Boolean) as string[];
   const text = parts.join(", ") || "thought";
@@ -151,7 +151,7 @@ export function liveGroupLabel(members: GroupMember[]): string | null {
         ? `${p.created ? "Writing" : "Editing"} ${file(p.path)}`
         : p.kind === "command"
           ? `Running ${line(p.command)}`
-          : p.kind === "subagent"
+          : p.kind === "agent"
             ? `Working with ${p.name ?? "an agent"}`
             : `Using ${toolName ?? "a tool"}`;
   return `${doing}…`;

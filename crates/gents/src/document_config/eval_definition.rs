@@ -40,7 +40,7 @@ pub enum EvalReducer {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum EvalSubjectKind {
-    Behavior,
+    Agent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -56,7 +56,7 @@ pub struct EvalSubject {
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub inference_slots: Vec<String>,
     /// The trial's process ceiling also grants host bash, confined to its
-    /// workspace root, as a desktop node's ceiling does. Behaviors the subject
+    /// workspace root, as a desktop node's ceiling does. Agents the subject
     /// configures at run time (a crew's builds and git reads) need it; the
     /// subject pack's own Tools still may not grant host bash to an embedded
     /// trial.
@@ -290,7 +290,7 @@ pub struct EvalCase {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EvalDefinition {
     pub definition_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     /// Bumped by the author when cases, checks, reducers or judge settings
     /// change. Runs never compare across different values.
     pub comparability_version: i64,
@@ -499,9 +499,9 @@ mod tests {
     fn definition() -> serde_json::Value {
         json!({
             "definition_id": "monitor-findings",
-            "agent_did": "did:key:owner",
+            "node_did": "did:key:owner",
             "comparability_version": 1,
-            "subject": {"kind": "behavior", "inference_slots": ["primary"]},
+            "subject": {"kind": "agent", "inference_slots": ["primary"]},
             "cases": [{
                 "case_id": "disk-warning",
                 "split": "validation",
@@ -877,7 +877,7 @@ mod tests {
     #[test]
     fn a_pack_config_carries_eval_definitions() {
         let pack: crate::document_config::PackConfig = serde_json::from_value(json!({
-            "agent_principal": {"agent_did": "did:key:owner"},
+            "node": {"node_did": "did:key:owner"},
             "eval_definitions": [definition()]
         }))
         .unwrap();

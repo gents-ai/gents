@@ -5,7 +5,7 @@ import {
   withFolder,
 } from "../src/hooks/chatFolders";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
-import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
+import { createChatActions } from "../src/hooks/chatActions";
 import { admittingProjection, shellStores } from "./shell-fixture";
 import { folderLabel } from "../src/ui/screens/ChatFolderPicker";
 
@@ -55,14 +55,14 @@ describe("sending with a chat folder", () => {
     const sendChatMessage = vi.fn(async () => ({
       sessionId: "s9",
       requestId: "r1",
-      agentDid: "agent",
-      behaviorId: "coding",
+      nodeDid: "agent",
+      agentId: "coding",
     }));
     const stores = shellStores({
-      deployments: [{ agentDid: "agent", sessions: [], mailboxItems: [] }],
-      selection: { agentDid: "agent" },
+      deployments: [{ nodeDid: "agent", sessions: [], mailboxItems: [] }],
+      selection: { nodeDid: "agent" },
     });
-    const actions = createDesktopShellChatActions({
+    const actions = createChatActions({
       api: { sendChatMessage } as unknown as DesktopApiAdapter,
       stores,
       project: () => admittingProjection(),

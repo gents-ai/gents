@@ -14,7 +14,7 @@ describe("pack origin configuration filters", () => {
     const user = userEvent.setup();
     render(
       <ListDetail
-        base={{ name: "agent", agentDid: "did:key:test", section: "skills" }}
+        base={{ name: "agent", nodeDid: "did:key:test", section: "skills" }}
         createLabel="New skill"
         detail={() => null}
         empty="No skills."
@@ -49,7 +49,7 @@ describe("pack origin configuration filters", () => {
     const user = userEvent.setup();
     render(
       <ListDetail
-        base={{ name: "agent", agentDid: "did:key:test", section: "skills" }}
+        base={{ name: "agent", nodeDid: "did:key:test", section: "skills" }}
         createLabel="New skill"
         detail={() => null}
         empty="No skills."

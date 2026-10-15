@@ -115,28 +115,6 @@ def retractBeforeRetryCore (world : World) (generation : Generation)
   | none => .error .leaseRejected
   | some lease => .ok { world with lease := lease, segments := world.segments ++ [record] }
 
-def closedComplete (record : Segment) : Bool :=
-  match record.close with
-  | some (.closed .complete _ _) => true
-  | _ => false
-
-def closedPartial (record : Segment) : Bool :=
-  match record.close with
-  | some (.closed .«partial» _ _) => true
-  | _ => false
-
-def validateClosingRecord (segments : List Segment) (closing : Segment) : Bool :=
-  match uniqueRecord LookupError.unavailable .conflictingClosures
-      (closures segments closing.coordinate) with
-  | .ok only => only == closing &&
-      (match validateOpenPrefix segments closing.coordinate closing.writer with
-      | .ok _ => true
-      | .error _ => false) &&
-      match reconstructExtent segments closing with
-      | .ok _ => true
-      | .error _ => false
-  | .error _ => false
-
 /-- Fresh publication closes the entire authoritative data extent visible at
 its gate. Reconstruction remains deliberately tolerant of later facts beyond a
 previously committed extent. -/
@@ -477,14 +455,14 @@ def toolDispatchPublicationValid (world : World) (generation : Generation)
   match ownedToolByDocument? world document with
   | some tool => match tool.provenance with
     | .acceptedIntent => dispatchPublicationValid world generation document
-    | .spawnedBackground _ => acceptedHeaderBindsToolGeneration world tool generation
+    | .spawnedBackground _ | .pluginEffect _ _ => acceptedHeaderBindsToolGeneration world tool generation
   | none => false
 
 def toolReadyToDispatch (world : World) (document : DocId) : Bool :=
   match ownedToolByDocument? world document with
   | some tool => match tool.provenance with
     | .acceptedIntent => decide (world.transcript.ReadyToDispatch document)
-    | .spawnedBackground _ => tool.context.state == .pending
+    | .spawnedBackground _ | .pluginEffect _ _ => tool.context.state == .pending
   | none => false
 
 def dispatchCore (world : World) (generation : Generation)
@@ -512,8 +490,9 @@ def dispatchCore (world : World) (generation : Generation)
               .ok { world with
                 lease := lease
                 toolContexts := replaceOwnedTool world.toolContexts callId updated
-                transcript := world.transcript.dispatchToolCallWithMode
-                  callId context.awaitMode }
+                transcript := match tool.provenance with
+                  | .acceptedIntent => world.transcript.dispatchToolCallWithMode callId context.awaitMode
+                  | .spawnedBackground _ | .pluginEffect _ _ => world.transcript }
 
 def toolControlAction : ToolExecution.ToolCallContext.Action → Bool
   | .background | .foreground => true
@@ -530,6 +509,9 @@ def changeToolControlCore (world : World) (generation : Generation) (document : 
   | some tool =>
       if acceptedHeaderBindsToolGeneration world tool generation = false ||
           tool.stuckSince.isSome then
+        .error .transcriptRejected
+      else if action == .background && (match tool.provenance with
+          | .pluginEffect _ _ => true | _ => false) then
         .error .transcriptRejected
       else if action == .foreground && world.terminalSelection.isSome then
         .error .terminalRejected
@@ -709,6 +691,9 @@ def normalCompletionToolsReady (world : World) (generation : Generation) : Bool 
       match tool.provenance, tool.context.state with
       | _, .pending => true
       | .spawnedBackground _, .running => tool.context.awaitMode == .background
+      | .pluginEffect _ _, .running => false
+      | .pluginEffect _ _, terminal => decide (isTerminal terminal) &&
+          (tool.context.startedAt.isNone || pluginTerminalPayloadValid world tool)
       | .acceptedIntent, .running =>
           tool.context.awaitMode == .background && canonicalToolDelivered world tool
       | .spawnedBackground _, terminal =>
@@ -961,6 +946,34 @@ def admitSpawnedBackground (world : World) (generation : Generation)
   checked (fun post => toolProjectionCoherent post && spawnedToolPresent post admission)
     (admitSpawnedBackgroundCore world generation admission)
 
+def admitPluginEffectCore (world : World) (generation : Generation)
+    (admission : PluginEffectAdmission) : Except Error World :=
+  if pluginEffectPresent world admission && pluginEffectInvocationValid world generation admission then .ok world
+  else if !pluginEffectAdmissionValid world generation admission then .error .transcriptRejected
+  else match ownedToolByDocument? world admission.parentToolDoc with
+  | none => .error .transcriptRejected
+  | some parent =>
+      match RequestExecutionLease.step? world.lease
+          (.authorizeProducerDecision .mutationWriteGate generation .dispatch) with
+      | none => .error .leaseRejected
+      | some lease =>
+          .ok { world with
+            lease := lease
+            segments := world.segments ++ [admission.arguments]
+            toolContexts := world.toolContexts ++ [{
+              document := admission.document
+              requestDoc := parent.requestDoc
+              session := parent.session
+              acceptedSequence := parent.acceptedSequence
+              provenance := .pluginEffect admission.parentToolDoc admission.ordinal
+              effectArguments := some admission.arguments.id
+              context := admission.context }] }
+
+def admitPluginEffect (world : World) (generation : Generation)
+    (admission : PluginEffectAdmission) : Except Error World :=
+  checked (fun post => toolProjectionCoherent post && pluginEffectPresent post admission)
+    (admitPluginEffectCore world generation admission)
+
 def changeToolControl (world : World) (generation : Generation) (document : DocId)
     (action : ToolExecution.ToolCallContext.Action) : Except Error World :=
   checked toolProjectionCoherent
@@ -973,6 +986,137 @@ def publishAuthored (world : World) (generation : Generation)
       validateClosingRecord post.segments closing &&
       authoredMessageValid post generation post.segments closing message)
     (publishAuthoredCore world generation closing message)
+
+/-- A reclaimed generation of the same physical request reuses an identical
+authored entry that an earlier generation of it accepted, so redriving the
+turn's input never duplicates it. Reuse writes nothing: the caller must hold
+the live lease, and any input that is not an exact accepted entry stays on
+the fenced publication path. -/
+def reuseAuthored (world : World) (current : Generation) (closing : Segment)
+    (message : MessageEnvelope) : Except Error World :=
+  match closing.writer with
+  | .request prior =>
+      if authoredPublicationPresent world closing message then
+        match RequestExecutionLease.step? world.lease
+            (.authorizeProducerDecision .mutationWriteGate current .acceptAndPublish) with
+        | none => .error .leaseRejected
+        | some _ => publishAuthored world prior closing message
+      else .error .publicationIncomplete
+  | .tool _ => .error .invalidSegment
+
+theorem publishAuthored_present_unchanged (world after : World) (generation : Generation)
+    (closing : Segment) (message : MessageEnvelope)
+    (h_present : authoredPublicationPresent world closing message = true)
+    (h : publishAuthored world generation closing message = .ok after) : after = world := by
+  have h_core := checked_core_success _ _ _ h
+  unfold publishAuthoredCore at h_core
+  simp only [h_present, ↓reduceIte] at h_core
+  repeat' (first | contradiction | split at h_core)
+  all_goals (cases h_core; rfl)
+
+theorem reuseAuthored_writes_nothing (world after : World) (current : Generation)
+    (closing : Segment) (message : MessageEnvelope)
+    (h : reuseAuthored world current closing message = .ok after) : after = world := by
+  unfold reuseAuthored at h
+  split at h
+  · split at h
+    · rename_i h_present
+      split at h
+      · contradiction
+      · exact publishAuthored_present_unchanged world after _ closing message h_present h
+    · contradiction
+  · contradiction
+
+/-- Reuse is fenced: a generation without the live lease reuses nothing. -/
+theorem reuseAuthored_requires_live_lease (world : World) (current : Generation)
+    (closing : Segment) (message : MessageEnvelope)
+    (h_fenced : RequestExecutionLease.step? world.lease
+      (.authorizeProducerDecision .mutationWriteGate current .acceptAndPublish) = none) :
+    ∀ after, reuseAuthored world current closing message ≠ .ok after := by
+  intro after h
+  unfold reuseAuthored at h
+  split at h
+  · split at h
+    · rw [h_fenced] at h
+      contradiction
+    · contradiction
+  · contradiction
+
+/-- Authored key of the selected queued message a publication answers. -/
+def foldedAuthoredKey (requestId : RequestId) : String := "folded:" ++ toString requestId
+
+/-- New input must arrive strictly before the request deadline. This is the
+existing execution deadline boundary, not retry scheduling: a retry wake may
+fit exactly at its deadline, but no new input is accepted then. Already
+published input can still be replayed and partial audit output can be flushed. -/
+def inputPublicationBeforeDeadline (now : Time) (deadline : Option Time) : Bool :=
+  match deadline with
+  | none => true
+  | some deadline => decide (now < deadline)
+
+theorem inputPublication_at_deadline_rejected (deadline : Time) :
+    inputPublicationBeforeDeadline deadline (some deadline) = false := by
+  simp [inputPublicationBeforeDeadline]
+
+private def freshFoldedSelectionValid (world : World) (message : MessageEnvelope) : Bool :=
+  !message.key.startsWith "folded:" ||
+    (inputPublicationBeforeDeadline world.lease.now world.retry.deadline &&
+      world.queue.folding.head?.any (fun entry => foldedAuthoredKey entry.requestId == message.key))
+
+/-- The authored-publication owner. A fresh entry takes the fenced
+publication path; an accepted entry, from this or an earlier generation of
+the request, is reused under the caller's live lease. Publishing the next
+selected queued message supersedes it in the same commit
+(`SessionQueue.consumeFolded`). -/
+def publishAuthoredComposed (world : World) (generation : Generation) (closing : Segment)
+    (message : MessageEnvelope) : Except Error World :=
+  if authoredPublicationPresent world closing message then
+    reuseAuthored world generation closing message
+  else if !freshFoldedSelectionValid world message then
+    .error .publicationIncomplete
+  else match publishAuthored world generation closing message with
+    | .error error => .error error
+    | .ok published =>
+        match published.queue.folding with
+        | entry :: rest =>
+            if foldedAuthoredKey entry.requestId == message.key then
+              .ok { published with queue := published.queue.consumeFolded entry rest }
+            else .ok published
+        | [] => .ok published
+
+theorem publishAuthoredComposed_success (world after : World) (generation : Generation)
+    (closing : Segment) (message : MessageEnvelope)
+    (h : publishAuthoredComposed world generation closing message = .ok after) :
+    after = world ∨ ∃ published, publishAuthored world generation closing message = .ok published ∧
+      (after = published ∨ ∃ queue, after = { published with queue := queue }) := by
+  unfold publishAuthoredComposed at h
+  split at h
+  · exact Or.inl (reuseAuthored_writes_nothing world after generation closing message h)
+  · cases hf : freshFoldedSelectionValid world message with
+    | false =>
+        simp only [hf, Bool.not_false, ↓reduceIte] at h
+        cases h
+    | true =>
+        simp only [hf, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+        cases hp : publishAuthored world generation closing message with
+        | error err =>
+            simp only [hp] at h
+            cases h
+        | ok published =>
+            simp only [hp] at h
+            refine Or.inr ⟨published, rfl, ?_⟩
+            cases hs : published.queue.folding with
+            | nil =>
+                simp only [hs] at h
+                cases h
+                exact Or.inl rfl
+            | cons entry rest =>
+                simp only [hs] at h
+                split at h
+                · cases h
+                  exact Or.inr ⟨_, rfl⟩
+                · cases h
+                  exact Or.inl rfl
 
 def publishHeaderOnly (world : World) (generation : Generation)
     (message : MessageEnvelope) (admissions : List ToolAdmission) : Except Error World :=

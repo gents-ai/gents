@@ -1,6 +1,9 @@
 import type { BackendHealth } from "@source-inc/gents-desktop-client";
 import { deriveDisplayState } from "@source-inc/gents-desktop-operations";
-import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import type {
+  AllowedFolder,
+  DesktopApiAdapter,
+} from "@source-inc/gents-desktop-client";
 import type {
   DesktopClientUpdatedHandler,
   DesktopClientUpdatedListenerFactory,
@@ -26,9 +29,9 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 import type {
-  AgentPrincipal,
-  AgentBehavior,
-  BehaviorView,
+  Node,
+  Agent,
+  AgentView,
   SessionSummary,
   SessionProvenance,
   TriggerView,
@@ -40,8 +43,8 @@ import type { Task } from "@source-inc/gents-desktop-client/generated/Task";
 import type { Trigger } from "@source-inc/gents-desktop-client/generated/Trigger";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client/generated/RenderedTimelineItem";
 
-const AGENT_DID = "did:key:z6MkBombadilAgent";
-const DEFAULT_BEHAVIOR_ID = "default";
+const NODE_DID = "did:key:z6MkBombadilAgent";
+const DEFAULT_AGENT_ID = "default";
 const STARTED_AT = "2026-06-17T00:00:00.000Z";
 const THIRTY_DAYS_AGO = new Date(Date.now() - 30 * 86_400_000).toISOString();
 const TWO_HOURS_AGO = new Date(Date.now() - 2 * 3_600_000).toISOString();
@@ -112,6 +115,7 @@ export type DesktopUiHarnessScenario =
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
+  sessionIndexCount?: number;
 };
 
 export type MobilePerformanceBridgeCall = {
@@ -137,7 +141,10 @@ export type MobilePerformanceHarnessSnapshot = {
 };
 
 export type MobilePerformanceHarnessController = {
-  fixture: typeof MOBILE_PERFORMANCE_FIXTURE;
+  fixture: Omit<typeof MOBILE_PERFORMANCE_FIXTURE, "id" | "sessionIndexCount"> & {
+    id: string;
+    sessionIndexCount: number;
+  };
   reset(): void;
   snapshot(): MobilePerformanceHarnessSnapshot;
   recordCommit(commit: MobilePerformanceCommit): void;
@@ -222,6 +229,22 @@ export function createDesktopUiHarness(
   options: DesktopUiHarnessOptions = {},
 ): DesktopUiHarness {
   const scenario = normalizeScenario(options.scenario);
+  const sessionIndexCount =
+    options.sessionIndexCount ?? MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount;
+  if (
+    !Number.isSafeInteger(sessionIndexCount) ||
+    sessionIndexCount < 2 ||
+    sessionIndexCount > 100_000
+  )
+    throw new Error("sessionIndexCount must be an integer from 2 to 100000");
+  const performanceFixture = {
+    ...MOBILE_PERFORMANCE_FIXTURE,
+    sessionIndexCount,
+    id:
+      sessionIndexCount === MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount
+        ? MOBILE_PERFORMANCE_FIXTURE.id
+        : `${MOBILE_PERFORMANCE_FIXTURE.id}-sessions-${sessionIndexCount}`,
+  };
   const listeners = new Set<DesktopClientUpdatedHandler>();
   const sessions = new Map<string, DesktopSessionSnapshot>();
   let sendsHeld = false;
@@ -252,11 +275,11 @@ export function createDesktopUiHarness(
     deployment = {
       ...deployment,
       source: "local-standard",
-      behaviorReadiness: {
-        ...deployment.behaviorReadiness,
-        behaviors: deployment.behaviorReadiness.behaviors.map((behavior) => ({
+      nodeReadiness: {
+        ...deployment.nodeReadiness,
+        agents: deployment.nodeReadiness.agents.map((agent) => ({
           state: "unavailable" as const,
-          behaviorId: behavior.behaviorId,
+          agentId: agent.agentId,
           reason: "backend_disabled" as const,
         })),
       },
@@ -274,7 +297,7 @@ export function createDesktopUiHarness(
           itemId: "mailbox-mobile",
           itemKey: "mailbox-mobile-key",
           requesterDid: "did:key:z6MkRequesterWithAnUnbrokenIdentifierForMobile",
-          agentDid: AGENT_DID,
+          nodeDid: NODE_DID,
           status: "open",
           kind: "notification",
           action: "ack",
@@ -290,8 +313,8 @@ export function createDesktopUiHarness(
           requestId: "request-intro",
           graphRunId: null,
           causeDocId: null,
-          targetAgentDid: AGENT_DID,
-          targetBehaviorId: DEFAULT_BEHAVIOR_ID,
+          targetNodeDid: NODE_DID,
+          targetAgentId: DEFAULT_AGENT_ID,
           expectedCollection: "AgentResponse",
           parentItemId: null,
           deadlineAt: null,
@@ -306,8 +329,8 @@ export function createDesktopUiHarness(
   let managedServer: ManagedServerStatus = {
     state: "disabled",
     autoStart: false,
-    agentName: null,
-    agentDid: null,
+    nodeName: null,
+    nodeDid: null,
     graphql: null,
     effectiveToolCeiling: null,
     effectiveToolRoot: null,
@@ -337,8 +360,8 @@ export function createDesktopUiHarness(
   const activeTurn = scenario === "active-turn";
   sessions.set("session-intro", {
     sessionId: "session-intro",
-    agentDid: AGENT_DID,
-    behaviorId: DEFAULT_BEHAVIOR_ID,
+    nodeDid: NODE_DID,
+    agentId: DEFAULT_AGENT_ID,
     title: "introduction-and-greetings",
     previewText: greeting,
     status: "active",
@@ -348,6 +371,8 @@ export function createDesktopUiHarness(
     retryEligibility: { eligible: false, denialReason: null },
     latestRequestOutcome: harnessRequestOutcome(),
     pendingTurn: null,
+    queuedTurns: [],
+    foldedInputs: [],
     context:
       scenario === "long-content"
         ? harnessSessionContext({
@@ -463,13 +488,13 @@ export function createDesktopUiHarness(
                   },
                 },
                 {
-                  itemKey: "intro-subagent",
+                  itemKey: "intro-agent",
                   toolName: "agent_new",
-                  toolCallId: "call-intro-subagent",
+                  toolCallId: "call-intro-agent",
                   statusKind: "success",
                   reconstruction: HARNESS_READY_RECONSTRUCTION,
                   presentation: {
-                    kind: "subagent" as const,
+                    kind: "agent" as const,
                     action: "start",
                     name: "reviewer",
                     sessionId: "session-reviewer",
@@ -523,8 +548,8 @@ export function createDesktopUiHarness(
   if (scenario === "session-hydration") {
     sessions.set("session-remote", {
       sessionId: "session-remote",
-      agentDid: AGENT_DID,
-      behaviorId: DEFAULT_BEHAVIOR_ID,
+      nodeDid: NODE_DID,
+      agentId: DEFAULT_AGENT_ID,
       title: "Desktop-started session",
       previewText: "hello from desktop",
       status: "active",
@@ -534,6 +559,8 @@ export function createDesktopUiHarness(
       retryEligibility: { eligible: false, denialReason: null },
       latestRequestOutcome: null,
       pendingTurn: null,
+      queuedTurns: [],
+      foldedInputs: [],
       context: harnessSessionContext(),
       timelineItems: [
         {
@@ -548,7 +575,7 @@ export function createDesktopUiHarness(
       ],
       hydration: {
         sessionId: "session-remote",
-        agentDid: AGENT_DID,
+        nodeDid: NODE_DID,
         phase: "requested",
         mergedCount: 1,
         coveredCount: 1,
@@ -558,16 +585,12 @@ export function createDesktopUiHarness(
   }
   if (scenario === "mobile-performance") {
     sessions.set("session-large", createLargePerformanceSession());
-    for (
-      let index = 2;
-      index < MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount;
-      index += 1
-    ) {
+    for (let index = 2; index < performanceFixture.sessionIndexCount; index += 1) {
       const sessionId = `session-index-${String(index).padStart(3, "0")}`;
       sessions.set(sessionId, {
         sessionId,
-        agentDid: AGENT_DID,
-        behaviorId: DEFAULT_BEHAVIOR_ID,
+        nodeDid: NODE_DID,
+        agentId: DEFAULT_AGENT_ID,
         title: `Comparable session ${String(index).padStart(3, "0")}`,
         previewText: `Durable session-index fixture row ${index}`,
         status: "active",
@@ -577,12 +600,14 @@ export function createDesktopUiHarness(
         retryEligibility: { eligible: false, denialReason: null },
         latestRequestOutcome: null,
         pendingTurn: null,
+        queuedTurns: [],
+        foldedInputs: [],
         context: harnessSessionContext(),
         timelineItems: [],
       });
     }
     rowCount =
-      MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount * 2 +
+      performanceFixture.sessionIndexCount * 2 +
       MOBILE_PERFORMANCE_FIXTURE.largeSessionTimelineItems +
       MOBILE_PERFORMANCE_FIXTURE.shortSessionTimelineItems;
   }
@@ -669,16 +694,16 @@ export function createDesktopUiHarness(
     const freshHome = scenario === "empty-fleet" && !provisioned;
     const next: DesktopClientSnapshot = {
       bootstrap: {
-        defaultAgentHome: "/tmp/gents-bombadil/agent",
-        initAgentName: freshHome ? null : deployment.label,
-        initAgentDid: freshHome ? null : AGENT_DID,
+        defaultNodeHome: "/tmp/gents-bombadil/agent",
+        initNodeName: freshHome ? null : deployment.label,
+        initNodeDid: freshHome ? null : NODE_DID,
         initToolCeiling: freshHome ? null : "ReadWrite",
         initToolRoot: freshHome ? null : "/tmp/gents-bombadil/workspace",
         desktopHome: "/tmp/gents-bombadil/desktop",
         peerDirectoryPath: "/tmp/gents-bombadil/peers.json",
         nodeDataDir: "/tmp/gents-bombadil/node",
         diagnosticsHint: "native logging",
-        agentHomeExists: !freshHome,
+        nodeHomeExists: !freshHome,
         desktopHomeExists: true,
         peerDirectoryExists: true,
         clientStateExists: true,
@@ -688,7 +713,7 @@ export function createDesktopUiHarness(
               {
                 peerId: deployment.peerId,
                 label: deployment.label,
-                agentDid: deployment.agentDid,
+                nodeDid: deployment.nodeDid,
                 addr: deployment.addr,
                 graphql: deployment.graphql,
                 source: deployment.source,
@@ -731,7 +756,7 @@ export function createDesktopUiHarness(
         const summary: SessionSummary = {
           startedBy: null,
           sessionId: session.sessionId,
-          agentDid: session.agentDid ?? AGENT_DID,
+          nodeDid: session.nodeDid ?? NODE_DID,
           requesterDid: null,
           latestRequestDocId: null,
           closedAt: null,
@@ -740,7 +765,7 @@ export function createDesktopUiHarness(
           title: session.title,
           previewText: session.previewText,
           status: session.status,
-          behaviorId: session.behaviorId,
+          agentId: session.agentId,
           latestRequestId: session.latestRequestId,
           taskId: lineage?.taskId ?? null,
           taskName: lineage?.taskName ?? null,
@@ -763,7 +788,7 @@ export function createDesktopUiHarness(
 
   function createSessionFromPrompt(
     prompt: string,
-    behaviorId?: string | null,
+    agentId?: string | null,
     lineage?: {
       taskId?: string | null;
       taskName?: string | null;
@@ -778,8 +803,8 @@ export function createDesktopUiHarness(
     const now = new Date().toISOString();
     const session: DesktopSessionSnapshot = {
       sessionId,
-      agentDid: deployment.agentDid,
-      behaviorId: behaviorId || deployment.agentPrincipal.defaultBehaviorId,
+      nodeDid: deployment.nodeDid,
+      agentId: agentId || deployment.node.defaultAgentId,
       title,
       previewText: response,
       status: "active",
@@ -789,6 +814,8 @@ export function createDesktopUiHarness(
       retryEligibility: { eligible: false, denialReason: null },
       latestRequestOutcome: harnessRequestOutcome(),
       pendingTurn: null,
+      queuedTurns: [],
+      foldedInputs: [],
       context: harnessSessionContext(),
       timelineItems: [
         {
@@ -820,7 +847,11 @@ export function createDesktopUiHarness(
     return { session, requestId };
   }
 
+  let allowedFolders: AllowedFolder[] = [];
   const adapter: DesktopApiAdapter = {
+    async editPendingQueue() {
+      throw new Error("Pending queue edits are unavailable in this fixture.");
+    },
     async fetchDesktopSnapshot() {
       if (scenario === "bridge-unavailable") {
         throw new Error(
@@ -840,17 +871,17 @@ export function createDesktopUiHarness(
         // Background pairing installs an enrollment route for the managed DID.
         source: "enrollment",
         label,
-        agentPrincipal: { ...deployment.agentPrincipal, displayName: label },
+        node: { ...deployment.node, displayName: label },
       };
       const summary: InitSummary = {
         status: "ready",
         source: "bombadil-harness",
-        agentHome: "/tmp/gents-bombadil/agent",
+        nodeHome: "/tmp/gents-bombadil/agent",
         desktopHome: "/tmp/gents-bombadil/desktop",
         peerDirectory: "/tmp/gents-bombadil/peers.json",
         label,
-        agentName: label,
-        agentDid: AGENT_DID,
+        nodeName: label,
+        nodeDid: NODE_DID,
         graphql: "http://127.0.0.1:9181/api/v0/graphql",
         p2pTransport: "memory",
         p2pPeerId: "peer-bombadil-local",
@@ -868,6 +899,44 @@ export function createDesktopUiHarness(
       notify("runtime");
       return snapshot();
     },
+    /* no packs installed and no registry account; the allowed folders
+       are the ones added since the page loaded; no plugin call is asking */
+    async listInstalledPacks() {
+      return { packs: [] };
+    },
+    async listPackPluginSlots() {
+      return { plugins: [], profiles: [] };
+    },
+    async readPackAccount() {
+      throw new Error("Not signed in to the pack registry.");
+    },
+    async searchPacks() {
+      return { packs: [], has_more: false };
+    },
+    async installPack() {},
+    async updatePack() {},
+    async removePack() {},
+    async bindPackPlugin() {},
+    async signInToPackRegistry() {},
+    async signOutOfPackRegistry() {},
+    async listAllowedFolders() {
+      return { dirs: clone(allowedFolders) };
+    },
+    async addAllowedFolder(path, access) {
+      allowedFolders = [
+        ...allowedFolders.filter((dir) => dir.path !== path),
+        { path, access },
+      ];
+      return { dirs: clone(allowedFolders) };
+    },
+    async removeAllowedFolder(path) {
+      allowedFolders = allowedFolders.filter((dir) => dir.path !== path);
+      return { dirs: clone(allowedFolders) };
+    },
+    async listPendingPluginApprovals() {
+      return { requests: [] };
+    },
+    async decidePluginApproval() {},
     ...(scenario === "empty-fleet"
       ? ({
           async managedServerStatus() {
@@ -879,13 +948,13 @@ export function createDesktopUiHarness(
             }
             return clone(managedServer);
           },
-          async startManagedServer(agentName, authority) {
+          async startManagedServer(nodeName, authority) {
             pairingStatusReads = 0;
             managedServer = {
               ...managedServer,
               state: "running",
-              agentName,
-              agentDid: AGENT_DID,
+              nodeName,
+              nodeDid: NODE_DID,
               graphql: "http://127.0.0.1:9181/api/v0/graphql",
               effectiveToolCeiling:
                 authority?.toolCeiling ??
@@ -901,21 +970,21 @@ export function createDesktopUiHarness(
             };
             return clone(managedServer);
           },
-          async commitManagedServerAutoStart(agentName) {
-            managedServer = { ...managedServer, autoStart: true, agentName };
+          async commitManagedServerAutoStart(nodeName) {
+            managedServer = { ...managedServer, autoStart: true, nodeName };
             return clone(managedServer);
           },
           async setManagedServerAutoStart(enabled) {
             managedServer = { ...managedServer, autoStart: enabled };
             return clone(managedServer);
           },
-          async restartManagedServer(agentName, authority) {
+          async restartManagedServer(nodeName, authority) {
             pairingStatusReads = 0;
             managedServer = {
               ...managedServer,
               state: "running",
-              agentName,
-              agentDid: AGENT_DID,
+              nodeName,
+              nodeDid: NODE_DID,
               effectiveToolCeiling: authority.toolCeiling,
               effectiveToolRoot: authority.toolRoot,
               pairingReady: false,
@@ -934,7 +1003,7 @@ export function createDesktopUiHarness(
               ...managedServer,
               state: disableAutoStart ? "disabled" : "stopped",
               autoStart: disableAutoStart ? false : managedServer.autoStart,
-              agentDid: null,
+              nodeDid: null,
               graphql: null,
               effectiveToolCeiling: null,
               effectiveToolRoot: null,
@@ -944,7 +1013,7 @@ export function createDesktopUiHarness(
           },
         } satisfies Partial<DesktopApiAdapter>)
       : {}),
-    async setSelectedAgent() {
+    async setSelectedNode() {
       return undefined;
     },
     async removePeer(peerId) {
@@ -1000,19 +1069,19 @@ export function createDesktopUiHarness(
       return {
         requestId: `${requestId}-retry`,
         sessionId: "session-intro",
-        agentDid: AGENT_DID,
-        behaviorId: DEFAULT_BEHAVIOR_ID,
+        nodeDid: NODE_DID,
+        agentId: DEFAULT_AGENT_ID,
       };
     },
-    async fetchRequestTimeline(agentDid, requestId) {
-      if (agentDid !== AGENT_DID) {
-        throw new Error(`no deployment for ${agentDid}`);
+    async fetchRequestTimeline(nodeDid, requestId) {
+      if (nodeDid !== NODE_DID) {
+        throw new Error(`no deployment for ${nodeDid}`);
       }
       return {
         request_id: requestId,
         session_id: "session-intro",
-        agent_did: agentDid,
-        behavior_id: DEFAULT_BEHAVIOR_ID,
+        node_did: nodeDid,
+        agent_id: DEFAULT_AGENT_ID,
         child_request_ids: [],
         events: [
           {
@@ -1049,21 +1118,21 @@ export function createDesktopUiHarness(
         ],
       };
     },
-    async explainToolSurface(agentDid, behaviorId) {
-      if (agentDid !== AGENT_DID) {
+    async explainToolSurface(nodeDid, agentId) {
+      if (nodeDid !== NODE_DID) {
         throw new Error(
           "tool-surface explanation for remote agents is not yet supported",
         );
       }
-      const behavior = deployment.behaviors.find(
-        (candidate) => candidate.behaviorId === behaviorId,
+      const agent = deployment.agents.find(
+        (candidate) => candidate.agentId === agentId,
       );
       const context = deployment.contexts.find(
-        (candidate) => candidate.context_id === behavior?.contextId,
+        (candidate) => candidate.context_id === agent?.contextId,
       );
       return {
-        behaviorId,
-        enabled: behavior?.enabled ?? true,
+        agentId,
+        enabled: agent?.enabled ?? true,
         contextId: context?.context_id ?? null,
         toolsId: context?.tools_id ?? null,
         toolsSource: "context",
@@ -1101,7 +1170,7 @@ export function createDesktopUiHarness(
             peerId: deployment.peerId,
             label: deployment.label,
             addr: deployment.addr,
-            agentDid: deployment.agentDid,
+            nodeDid: deployment.nodeDid,
             source: deployment.source,
           },
         ],
@@ -1110,7 +1179,7 @@ export function createDesktopUiHarness(
     async fetchPeerStatus() {
       return {
         label: "Bombadil UI Agent",
-        agentDid: AGENT_DID,
+        nodeDid: NODE_DID,
         addr: "/ip4/127.0.0.1/tcp/9292",
         graphql: "http://127.0.0.1:9181/api/v0/graphql",
       };
@@ -1119,28 +1188,31 @@ export function createDesktopUiHarness(
       const request: EnrollmentRequestView = {
         requestId: "enrollment-request-harness",
         networkId: "network-harness",
-        adminDid: AGENT_DID,
+        adminDid: NODE_DID,
         serverPeer: "peer-enrollment-pending",
         serverLabel: "Bombadil UI Agent",
-        ownerAgent: AGENT_DID,
+        ownerNode: NODE_DID,
         state: "pending_approval",
         expiresAt: "2026-09-03T15:00:00.000Z",
       };
       enrollmentRequests = [request];
       return request;
     },
-    async fetchSessionSnapshot(_sessionId, _agentDid, _requestId, timelinePage) {
+    async fetchSessionSnapshot(_sessionId, _nodeDid, _requestId, timelinePage) {
       const sessionId = _sessionId;
       const session = sessions.get(sessionId);
       if (!session) return null;
       if (timelinePage?.beforeItemKey && olderPageDelayMs > 0)
         await wait(olderPageDelayMs);
       const snapshot = clone(session);
-      snapshot.projectionRevision = { storeVersion };
+      snapshot.projectionRevision = {
+        storeVersion,
+        provenanceVersion: liveSourceEpoch,
+      };
       snapshot.liveCursor = session.timelineItems.some(
         (item) => item.kind === "liveAssistant",
       )
-        ? `${session.agentDid}:${sessionId}:${session.latestRequestId}:${liveSourceEpoch}`
+        ? `${session.nodeDid}:${sessionId}:${session.latestRequestId}:${liveSourceEpoch}`
         : null;
       if (!timelinePage) return snapshot;
 
@@ -1169,13 +1241,13 @@ export function createDesktopUiHarness(
       };
       return snapshot;
     },
-    async retrySessionHydration(sessionId, agentDid) {
+    async retrySessionHydration(sessionId, nodeDid) {
       hydrationRetryCalls += 1;
       const session = sessions.get(sessionId);
-      const resolvedAgentDid = agentDid ?? session?.agentDid;
+      const resolvedNodeDid = nodeDid ?? session?.nodeDid;
       if (
         !session ||
-        session.agentDid !== resolvedAgentDid ||
+        session.nodeDid !== resolvedNodeDid ||
         session.hydration?.phase !== "failed"
       ) {
         throw new Error(
@@ -1195,8 +1267,8 @@ export function createDesktopUiHarness(
     async fetchSessionLiveDelta(request) {
       const session = sessions.get(request.sessionId);
       if (!session || session.latestRequestId !== request.requestId) return null;
-      const revision = { storeVersion };
-      const liveCursor = `${session.agentDid}:${request.sessionId}:${session.latestRequestId}:${liveSourceEpoch}`;
+      const revision = { storeVersion, provenanceVersion: liveSourceEpoch };
+      const liveCursor = `${session.nodeDid}:${request.sessionId}:${session.latestRequestId}:${liveSourceEpoch}`;
       if (request.baseLiveCursor !== liveCursor) {
         return {
           outcome: "snapshotRequired",
@@ -1246,14 +1318,45 @@ export function createDesktopUiHarness(
         return {
           sessionId: request.sessionId,
           requestId: LARGE_SENT_REQUEST_ID,
-          agentDid: request.agentDid,
-          behaviorId: request.behaviorId ?? null,
+          nodeDid: request.nodeDid,
+          agentId: request.agentId ?? null,
         };
       }
       if (request.sessionId && sessions.has(request.sessionId)) {
         const existing = sessions.get(request.sessionId)!;
         const nextSequence = existing.timelineItems.length + 1;
         const requestId = `request-${++requestSeq}`;
+        /* like the bridge, a message sent while the turn runs is queued
+           behind it rather than answered */
+        if (
+          existing.turnState === "running" ||
+          existing.turnState === "waitingForClaim"
+        ) {
+          sessions.set(request.sessionId, {
+            ...existing,
+            queuedTurns: [
+              ...existing.queuedTurns,
+              {
+                requestId,
+                content,
+                selectedSkillIds: [],
+                lifecycleState: "pending",
+                foldedIntoRequestId: null,
+                origin: null,
+                createdAt: new Date().toISOString(),
+              },
+            ],
+          });
+          rowCount += 1;
+          syncSessions();
+          notify("store");
+          return {
+            sessionId: request.sessionId,
+            requestId,
+            nodeDid: request.nodeDid,
+            agentId: request.agentId ?? null,
+          };
+        }
         const response = `Bombadil harness response ${requestSeq}: received "${content.slice(
           0,
           48,
@@ -1292,21 +1395,18 @@ export function createDesktopUiHarness(
         return {
           sessionId: request.sessionId,
           requestId,
-          agentDid: request.agentDid,
-          behaviorId: request.behaviorId ?? null,
+          nodeDid: request.nodeDid,
+          agentId: request.agentId ?? null,
         };
       }
 
-      const { session, requestId } = createSessionFromPrompt(
-        content,
-        request.behaviorId,
-      );
+      const { session, requestId } = createSessionFromPrompt(content, request.agentId);
       const result: TaskRunResult = {
         requestDocId: `${requestId}-doc`,
         requestId,
         sessionId: session.sessionId,
-        agentDid: request.agentDid,
-        behaviorId: request.behaviorId || DEFAULT_BEHAVIOR_ID,
+        nodeDid: request.nodeDid,
+        agentId: request.agentId || DEFAULT_AGENT_ID,
         lifecycleState: "completed",
       };
       return result;
@@ -1341,14 +1441,14 @@ export function createDesktopUiHarness(
       }
       deployment = {
         ...deployment,
-        behaviorConfigs: [
-          ...deployment.behaviorConfigs.filter(
-            (behavior) =>
-              !request.document.agent_behaviors?.some(
-                (candidate) => candidate.behavior_id === behavior.behavior_id,
+        agentConfigs: [
+          ...deployment.agentConfigs.filter(
+            (agent) =>
+              !request.document.agents?.some(
+                (candidate) => candidate.agent_id === agent.agent_id,
               ),
           ),
-          ...(request.document.agent_behaviors ?? []),
+          ...(request.document.agents ?? []),
         ],
         contexts: [
           ...deployment.contexts.filter(
@@ -1377,14 +1477,14 @@ export function createDesktopUiHarness(
           ),
           ...(request.document.tools ?? []),
         ],
-        subagentTargets: [
-          ...deployment.subagentTargets.filter(
+        agentTargets: [
+          ...deployment.agentTargets.filter(
             (target) =>
-              !request.document.subagent_targets?.some(
+              !request.document.agent_targets?.some(
                 (candidate) => candidate.target_id === target.target_id,
               ),
           ),
-          ...(request.document.subagent_targets ?? []),
+          ...(request.document.agent_targets ?? []),
         ],
         skills: [
           ...deployment.skills.filter(
@@ -1395,7 +1495,7 @@ export function createDesktopUiHarness(
           ),
           ...(request.document.skills ?? []).map((document) => ({
             skillId: document.skill_id,
-            agentDid: document.agent_did,
+            nodeDid: document.node_did,
             name: document.name ?? null,
             description: document.description ?? null,
             instructions: document.instructions ?? null,
@@ -1484,7 +1584,7 @@ export function createDesktopUiHarness(
             taskId: document.task_id,
             name: document.display_name ?? null,
             description: document.description ?? null,
-            behaviorId: document.behavior_id,
+            agentId: document.agent_id,
             promptTemplate: document.prompt_template,
             emitOutcome: document.emit_outcome,
             goalObjectiveTemplate: document.goal_objective_template ?? null,
@@ -1559,85 +1659,74 @@ export function createDesktopUiHarness(
       notify("config");
       return snapshot();
     },
-    async saveAgentConfig(request) {
-      const document: AgentPrincipal = request.document;
+    async saveNodeConfig(request) {
+      const document: Node = request.document;
       deployment = {
         ...deployment,
         label: document.display_name?.trim() || deployment.label,
-        agentPrincipal: {
-          ...deployment.agentPrincipal,
+        node: {
+          ...deployment.node,
           displayName: document.display_name?.trim() || deployment.label,
-          defaultBehaviorId: document.default_behavior_id ?? null,
-          enabled: document.enabled ?? deployment.agentPrincipal.enabled,
+          defaultAgentId: document.default_agent_id ?? null,
+          enabled: document.enabled ?? deployment.node.enabled,
         },
-        principalConfig: {
+        nodeConfig: {
           ...document,
           display_name: document.display_name ?? deployment.label,
-          default_behavior_id:
-            document.default_behavior_id ?? deployment.agentPrincipal.defaultBehaviorId,
-          enabled: document.enabled ?? deployment.agentPrincipal.enabled,
+          default_agent_id: document.default_agent_id ?? deployment.node.defaultAgentId,
+          enabled: document.enabled ?? deployment.node.enabled,
         },
       };
       return snapshot();
     },
-    async setDefaultBehavior(request) {
-      if (!deployment.behaviors.some((b) => b.behaviorId === request.behaviorId)) {
-        throw new Error(`AgentBehavior "${request.behaviorId}" does not exist`);
+    async setDefaultAgent(request) {
+      if (!deployment.agents.some((b) => b.agentId === request.agentId)) {
+        throw new Error(`Agent "${request.agentId}" does not exist`);
       }
       deployment = {
         ...deployment,
-        behaviors: deployment.behaviors.map((b) => ({
+        agents: deployment.agents.map((b) => ({
           ...b,
-          enabled: b.behaviorId === request.behaviorId ? true : b.enabled,
-          isDefault: b.behaviorId === request.behaviorId,
+          enabled: b.agentId === request.agentId ? true : b.enabled,
+          isDefault: b.agentId === request.agentId,
         })),
-        agentPrincipal: {
-          ...deployment.agentPrincipal,
-          defaultBehaviorId: request.behaviorId,
+        node: {
+          ...deployment.node,
+          defaultAgentId: request.agentId,
         },
-        principalConfig: deployment.principalConfig
-          ? { ...deployment.principalConfig, default_behavior_id: request.behaviorId }
-          : deployment.principalConfig,
+        nodeConfig: deployment.nodeConfig
+          ? { ...deployment.nodeConfig, default_agent_id: request.agentId }
+          : deployment.nodeConfig,
       };
       notify("config");
       return snapshot();
     },
-    async saveBehaviorConfig(request) {
+    async saveAgentConfig(request) {
       if (scenario === "save-error") {
-        throw new Error("Harness rejected behavior save for sad-path coverage.");
+        throw new Error("Harness rejected agent save for sad-path coverage.");
       }
-      const document: AgentBehavior = request.document;
-      const behaviorId = document.behavior_id.trim() || `behavior-${requestSeq}`;
-      const nextBehavior: BehaviorView = {
-        behaviorId,
-        agentDid: document.agent_did,
-        displayName: document.display_name?.trim() || behaviorId,
+      const document: Agent = request.document;
+      const agentId = document.agent_id.trim() || `agent-${requestSeq}`;
+      const nextAgent: AgentView = {
+        agentId,
+        nodeDid: document.node_did,
+        displayName: document.display_name?.trim() || agentId,
         description: document.description ?? null,
         contextId: document.context_id ?? null,
         inferenceProfileId: document.inference_profile_id,
         enabled: document.enabled ?? true,
-        isDefault: behaviorId === deployment.agentPrincipal.defaultBehaviorId,
+        isDefault: agentId === deployment.node.defaultAgentId,
         tags: document.tags ?? [],
         createdAt: null,
       };
       deployment = {
         ...deployment,
-        behaviors: upsertBy(
-          deployment.behaviors,
-          "behaviorId",
-          behaviorId,
-          nextBehavior,
-        ),
-        behaviorConfigs: upsertBy(
-          deployment.behaviorConfigs,
-          "behavior_id",
-          behaviorId,
-          {
-            ...document,
-            behavior_id: behaviorId,
-            display_name: document.display_name?.trim() || behaviorId,
-          },
-        ),
+        agents: upsertBy(deployment.agents, "agentId", agentId, nextAgent),
+        agentConfigs: upsertBy(deployment.agentConfigs, "agent_id", agentId, {
+          ...document,
+          agent_id: agentId,
+          display_name: document.display_name?.trim() || agentId,
+        }),
       };
       return snapshot();
     },
@@ -1649,7 +1738,7 @@ export function createDesktopUiHarness(
         ...deployment,
         skills: upsertBy(deployment.skills ?? [], "skillId", skillId, {
           skillId,
-          agentDid: document.agent_did || deployment.agentDid,
+          nodeDid: document.node_did || deployment.nodeDid,
           name,
           description: document.description ?? null,
           instructions: document.instructions ?? null,
@@ -1727,16 +1816,16 @@ export function createDesktopUiHarness(
       return snapshot();
     },
     async deleteBackendConfig(request) {
-      const referencingBehaviors = deployment.behaviors.filter((behavior) => {
+      const referencingAgents = deployment.agents.filter((agent) => {
         const profile = deployment.inferenceProfiles.find(
-          (candidate) => candidate.profile_id === behavior.inferenceProfileId,
+          (candidate) => candidate.profile_id === agent.inferenceProfileId,
         );
         return profile?.backend_id === request.backendId;
       });
-      const referencing = referencingBehaviors.map((behavior) => behavior.behaviorId);
+      const referencing = referencingAgents.map((agent) => agent.agentId);
       if (referencing.length) {
         throw new Error(
-          `backend "${request.backendId}" is referenced by inference profile(s) used by behavior(s) ${referencing.join(", ")}; point them elsewhere first`,
+          `backend "${request.backendId}" is referenced by inference profile(s) used by agent(s) ${referencing.join(", ")}; point them elsewhere first`,
         );
       }
       deployment = {
@@ -1749,12 +1838,12 @@ export function createDesktopUiHarness(
       return snapshot();
     },
     async deleteInferenceProfileConfig(request) {
-      const referencing = deployment.behaviors
-        .filter((behavior) => behavior.inferenceProfileId === request.profileId)
-        .map((behavior) => behavior.behaviorId);
+      const referencing = deployment.agents
+        .filter((agent) => agent.inferenceProfileId === request.profileId)
+        .map((agent) => agent.agentId);
       if (referencing.length) {
         throw new Error(
-          `profile "${request.profileId}" is referenced by behavior(s) ${referencing.join(", ")}; point them elsewhere first`,
+          `profile "${request.profileId}" is referenced by agent(s) ${referencing.join(", ")}; point them elsewhere first`,
         );
       }
       deployment = {
@@ -1767,17 +1856,17 @@ export function createDesktopUiHarness(
       return snapshot();
     },
     async deleteToolsConfig(request) {
-      const referencing = deployment.behaviors
-        .filter((behavior) => {
+      const referencing = deployment.agents
+        .filter((agent) => {
           const context = deployment.contexts.find(
-            (candidate) => candidate.context_id === behavior.contextId,
+            (candidate) => candidate.context_id === agent.contextId,
           );
           return context?.tools_id === request.toolsId;
         })
-        .map((behavior) => behavior.behaviorId);
+        .map((agent) => agent.agentId);
       if (referencing.length) {
         throw new Error(
-          `tools document "${request.toolsId}" is referenced by behavior(s) ${referencing.join(", ")}; point them elsewhere first`,
+          `tools document "${request.toolsId}" is referenced by agent(s) ${referencing.join(", ")}; point them elsewhere first`,
         );
       }
       deployment = {
@@ -1809,24 +1898,20 @@ export function createDesktopUiHarness(
       notify("config");
       return snapshot();
     },
-    async deleteBehaviorConfig(request) {
+    async deleteAgentConfig(request) {
       const isDefault =
-        deployment.behaviors.find(
-          (behavior) => behavior.behaviorId === request.behaviorId,
-        )?.isDefault ??
-        deployment.agentPrincipal.defaultBehaviorId === request.behaviorId;
+        deployment.agents.find((agent) => agent.agentId === request.agentId)
+          ?.isDefault ?? deployment.node.defaultAgentId === request.agentId;
       if (isDefault) {
         throw new Error(
-          `behavior "${request.behaviorId}" is the agent's default behavior; make another behavior the default first`,
+          `agent "${request.agentId}" is the node's default agent; make another agent the default first`,
         );
       }
       deployment = {
         ...deployment,
-        behaviors: deployment.behaviors.filter(
-          (behavior) => behavior.behaviorId !== request.behaviorId,
-        ),
-        behaviorConfigs: deployment.behaviorConfigs.filter(
-          (behavior) => behavior.behavior_id !== request.behaviorId,
+        agents: deployment.agents.filter((agent) => agent.agentId !== request.agentId),
+        agentConfigs: deployment.agentConfigs.filter(
+          (agent) => agent.agent_id !== request.agentId,
         ),
       };
       notify("config");
@@ -1954,7 +2039,7 @@ export function createDesktopUiHarness(
           taskId,
           name: document.display_name?.trim() || taskId,
           description: document.description ?? null,
-          behaviorId: document.behavior_id,
+          agentId: document.agent_id,
           promptTemplate: document.prompt_template,
           emitOutcome: document.emit_outcome,
           goalObjectiveTemplate: document.goal_objective_template ?? null,
@@ -2280,11 +2365,11 @@ export function createDesktopUiHarness(
         error: null,
       };
     },
-    async codexLogin(agentDid) {
+    async codexLogin(nodeDid) {
       const result: CodexLoginResult = {
-        docId: `credential-${agentDid}-codex`,
+        docId: `credential-${nodeDid}-codex`,
         credentialId: "credential-codex",
-        agentDid,
+        nodeDid,
         provider: "codex",
         accountId: null,
         chatgptPlanType: null,
@@ -2296,11 +2381,11 @@ export function createDesktopUiHarness(
       return result;
     },
     async cancelCodexLogin() {},
-    async grokLogin(agentDid) {
+    async grokLogin(nodeDid) {
       const result: GrokLoginResult = {
-        docId: `credential-${agentDid}-grok`,
+        docId: `credential-${nodeDid}-grok`,
         credentialId: "credential-grok",
-        agentDid,
+        nodeDid,
         provider: "grok",
         accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
         enabled: true,
@@ -2309,11 +2394,11 @@ export function createDesktopUiHarness(
       return result;
     },
     async cancelGrokLogin() {},
-    async claudeLogin(agentDid) {
+    async claudeLogin(nodeDid) {
       return {
-        docId: `credential-${agentDid}-claude`,
+        docId: `credential-${nodeDid}-claude`,
         credentialId: "credential-claude",
-        agentDid,
+        nodeDid,
         provider: "claude-subscription",
         accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
         enabled: true,
@@ -2361,7 +2446,7 @@ export function createDesktopUiHarness(
       const registries = deployment.toolServiceRegistries;
       const services: MCPServiceHealthView[] = registries.map((service) => ({
         serviceId: service.service_id,
-        agentDid: deployment.agentDid,
+        nodeDid: service.node_did,
         endpoint: `${service.hostname ?? "localhost"}:${service.mcp_port ?? 7331}${
           service.mcp_path ?? "/mcp"
         }`,
@@ -2379,7 +2464,14 @@ export function createDesktopUiHarness(
       }));
       return services;
     },
-    async probeMcpService(serviceId) {
+    async probeMcpService(nodeDid, serviceId) {
+      const service = deployment.toolServiceRegistries.find(
+        (candidate) =>
+          candidate.node_did === nodeDid && candidate.service_id === serviceId,
+      );
+      if (!service) {
+        throw new Error(`MCP service ${serviceId} not found on node ${nodeDid}`);
+      }
       const result: McpServiceProbeResult = {
         serviceId,
         status: "healthy",
@@ -2391,7 +2483,7 @@ export function createDesktopUiHarness(
     async fetchOperationsSnapshot(request) {
       const operations: DesktopOperationsSnapshot = {
         fetchedAt: new Date().toISOString(),
-        agentDid: request.agentDid ?? deployment.agentDid,
+        nodeDid: request.nodeDid ?? deployment.nodeDid,
         liveness: {
           expiredProcessingCount: 0,
           requests: [],
@@ -2425,13 +2517,13 @@ export function createDesktopUiHarness(
 
   function runHarnessTask(taskId: string): TaskRunResult {
     const task = deployment.tasks.find((row) => row.taskId === taskId);
-    const behaviorId = deployment.agentPrincipal.defaultBehaviorId;
-    if (!behaviorId) {
-      throw new Error("runtime readiness did not assign a default behavior");
+    const agentId = deployment.node.defaultAgentId;
+    if (!agentId) {
+      throw new Error("runtime readiness did not assign a default agent");
     }
     const { session, requestId } = createSessionFromPrompt(
       `Run task ${taskId}`,
-      behaviorId,
+      agentId,
       {
         taskId,
         taskName: task?.name ?? taskId,
@@ -2441,8 +2533,8 @@ export function createDesktopUiHarness(
       requestDocId: `${requestId}-doc`,
       requestId,
       sessionId: session.sessionId,
-      agentDid: deployment.agentDid,
-      behaviorId,
+      nodeDid: deployment.nodeDid,
+      agentId,
       lifecycleState: "completed",
     };
   }
@@ -2450,7 +2542,7 @@ export function createDesktopUiHarness(
   const performance: MobilePerformanceHarnessController | null =
     scenario === "mobile-performance"
       ? {
-          fixture: MOBILE_PERFORMANCE_FIXTURE,
+          fixture: performanceFixture,
           reset() {
             bridgeCalls = [];
             commits = [];
@@ -2570,6 +2662,8 @@ export function createDesktopUiHarness(
                     content: "again",
                     selectedSkillIds: [],
                     lifecycleState: "pending",
+                    foldedIntoRequestId: null,
+                    origin: null,
                     createdAt: STARTED_AT,
                   }
                 : {
@@ -2685,7 +2779,7 @@ export function createDesktopUiHarness(
   ) {
     return {
       sessionId: "session-remote",
-      agentDid: AGENT_DID,
+      nodeDid: NODE_DID,
       phase,
       mergedCount,
       coveredCount:
@@ -2801,8 +2895,8 @@ function createLargePerformanceSession(): DesktopSessionSnapshot {
   );
   return {
     sessionId: "session-large",
-    agentDid: AGENT_DID,
-    behaviorId: DEFAULT_BEHAVIOR_ID,
+    nodeDid: NODE_DID,
+    agentId: DEFAULT_AGENT_ID,
     title: "Large local transcript — 600 timeline items",
     previewText: "stream-start",
     status: "active",
@@ -2812,6 +2906,8 @@ function createLargePerformanceSession(): DesktopSessionSnapshot {
     retryEligibility: { eligible: false, denialReason: null },
     latestRequestOutcome: null,
     pendingTurn: null,
+    queuedTurns: [],
+    foldedInputs: [],
     context: harnessSessionContext(),
     timelineItems,
   };
@@ -2870,29 +2966,29 @@ function createDeployment(): DeploymentView {
   return {
     peerId: "peer-bombadil-local",
     label: "Bombadil UI Agent",
-    agentDid: AGENT_DID,
+    nodeDid: NODE_DID,
     addr: "/ip4/127.0.0.1/tcp/9292",
     source: "bombadil-harness",
     graphql: "http://127.0.0.1:9181/api/v0/graphql",
     dialSucceeded: true,
     chatSafe: true,
-    behaviorReadiness: {
+    nodeReadiness: {
       source: { state: "current" },
       activeGeneration: 1,
       routerGeneration: 1,
       updatedAt: STARTED_AT,
-      behaviors: [
-        { state: "ready", behaviorId: DEFAULT_BEHAVIOR_ID },
-        { state: "ready", behaviorId: "ops" },
+      agents: [
+        { state: "ready", agentId: DEFAULT_AGENT_ID },
+        { state: "ready", agentId: "ops" },
       ],
     },
     routes: [],
     pairing: [],
     lastError: null,
-    agentPrincipal: {
-      agentDid: AGENT_DID,
+    node: {
+      nodeDid: NODE_DID,
       displayName: "Bombadil UI Agent",
-      defaultBehaviorId: DEFAULT_BEHAVIOR_ID,
+      defaultAgentId: DEFAULT_AGENT_ID,
       enabled: true,
       createdAt: STARTED_AT,
       createdBy: "bombadil",
@@ -2902,21 +2998,21 @@ function createDeployment(): DeploymentView {
       lastReconcileResult: "ok",
       lastReconcileError: null,
       updatedAt: THIRTY_DAYS_AGO,
-      behaviorExecutorCapacity: 4,
-      behaviorExecutorQueueDepth: 0,
+      agentExecutorCapacity: 4,
+      agentExecutorQueueDepth: 0,
     },
-    principalConfig: {
-      agent_did: AGENT_DID,
+    nodeConfig: {
+      node_did: NODE_DID,
       display_name: "Bombadil UI Agent",
-      default_behavior_id: DEFAULT_BEHAVIOR_ID,
+      default_agent_id: DEFAULT_AGENT_ID,
       enabled: true,
       created_at: STARTED_AT,
       created_by: "bombadil",
     },
-    behaviorConfigs: [
+    agentConfigs: [
       {
-        behavior_id: DEFAULT_BEHAVIOR_ID,
-        agent_did: AGENT_DID,
+        agent_id: DEFAULT_AGENT_ID,
+        node_did: NODE_DID,
         display_name: "Default",
         context_id: "context-default",
         inference_profile_id: "profile-default",
@@ -2925,8 +3021,8 @@ function createDeployment(): DeploymentView {
         created_at: STARTED_AT,
       },
       {
-        behavior_id: "ops",
-        agent_did: AGENT_DID,
+        agent_id: "ops",
+        node_did: NODE_DID,
         display_name: "Ops",
         context_id: "context-ops",
         inference_profile_id: "profile-default",
@@ -2938,7 +3034,7 @@ function createDeployment(): DeploymentView {
     contexts: [
       {
         context_id: "context-default",
-        agent_did: AGENT_DID,
+        node_did: NODE_DID,
         display_name: "Default context",
         system_prompt: "You are a deterministic UI-test agent.",
         tools_id: "tools-default",
@@ -2947,7 +3043,7 @@ function createDeployment(): DeploymentView {
       },
       {
         context_id: "context-ops",
-        agent_did: AGENT_DID,
+        node_did: NODE_DID,
         display_name: "Ops context",
         system_prompt: "You inspect runtime and fleet health.",
         tools_id: "tools-default",
@@ -2956,10 +3052,10 @@ function createDeployment(): DeploymentView {
       },
     ],
     compactions: [],
-    behaviors: [
+    agents: [
       {
-        behaviorId: DEFAULT_BEHAVIOR_ID,
-        agentDid: AGENT_DID,
+        agentId: DEFAULT_AGENT_ID,
+        nodeDid: NODE_DID,
         displayName: "Default",
         description: null,
         contextId: "context-default",
@@ -2970,8 +3066,8 @@ function createDeployment(): DeploymentView {
         createdAt: STARTED_AT,
       },
       {
-        behaviorId: "ops",
-        agentDid: AGENT_DID,
+        agentId: "ops",
+        nodeDid: NODE_DID,
         displayName: "Ops",
         description: null,
         contextId: "context-ops",
@@ -2982,9 +3078,9 @@ function createDeployment(): DeploymentView {
         createdAt: STARTED_AT,
       },
     ],
-    behaviorEnvironments: [
+    agentEnvironments: [
       {
-        behaviorId: DEFAULT_BEHAVIOR_ID,
+        agentId: DEFAULT_AGENT_ID,
         displayName: "Default",
         enabled: true,
         isDefault: true,
@@ -2999,7 +3095,7 @@ function createDeployment(): DeploymentView {
         activeSessionCount: 0,
       },
       {
-        behaviorId: "ops",
+        agentId: "ops",
         displayName: "Ops",
         enabled: true,
         isDefault: false,
@@ -3038,7 +3134,7 @@ function createDeployment(): DeploymentView {
     ],
     inferenceProfiles: [
       {
-        agent_did: AGENT_DID,
+        node_did: NODE_DID,
         profile_id: "profile-default",
         display_name: "Default profile",
         backend_id: "backend-openai",
@@ -3052,7 +3148,7 @@ function createDeployment(): DeploymentView {
     tools: [
       {
         tools_id: "tools-default",
-        agent_did: AGENT_DID,
+        node_did: NODE_DID,
         display_name: "Default tools",
         host: {
           root: "/tmp/gents-bombadil/workspace",
@@ -3078,7 +3174,7 @@ function createDeployment(): DeploymentView {
     toolServiceRegistries: [
       {
         service_id: "mcp-observability",
-        agent_did: AGENT_DID,
+        node_did: NODE_DID,
         display_name: "Observability MCP",
         description: "Fleet health MCP service",
         hostname: "localhost",
@@ -3092,7 +3188,7 @@ function createDeployment(): DeploymentView {
     skills: [
       {
         skillId: "host-diagnostics",
-        agentDid: AGENT_DID,
+        nodeDid: NODE_DID,
         name: "Host diagnostics",
         description: "Inspect host health and write a concise operational report.",
         instructions: "Inspect host health, telemetry freshness, and recent errors.",
@@ -3106,7 +3202,7 @@ function createDeployment(): DeploymentView {
       },
       {
         skillId: "fleet-summary",
-        agentDid: AGENT_DID,
+        nodeDid: NODE_DID,
         name: "Fleet summary",
         description: "Summarize fleet state for operator handoff.",
         instructions:
@@ -3125,7 +3221,7 @@ function createDeployment(): DeploymentView {
         taskId: "host-check",
         name: "Host check",
         description: "Inspect host health and summarize findings.",
-        behaviorId: DEFAULT_BEHAVIOR_ID,
+        agentId: DEFAULT_AGENT_ID,
         promptTemplate: "Inspect this host and report health.",
         goalObjectiveTemplate: null,
         goalTokenBudget: null,
@@ -3147,7 +3243,7 @@ function createDeployment(): DeploymentView {
     ],
     schedules: [
       {
-        agent_did: AGENT_DID,
+        node_did: NODE_DID,
         schedule_id: "host-check-every-6h",
         display_name: "Host check every 6h",
         cadence: { kind: "interval", interval_secs: 21600 },
@@ -3158,7 +3254,7 @@ function createDeployment(): DeploymentView {
     triggers: [],
     inferenceSampling: [],
     inferenceExecution: [],
-    subagentTargets: [],
+    agentTargets: [],
     datastoreToolSurfaces: [],
     chainKeyBindings: [],
     mailboxItems: [],

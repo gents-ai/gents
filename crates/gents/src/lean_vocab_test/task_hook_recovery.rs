@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::document_config::TaskHook;
 use crate::hook::BackgroundExecutionRegistry;
-use crate::identity::{AgentIdentity, KeyIdentity};
+use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lean_vocab_test::{
     lean_recovery_sweep_cases, lean_task_hook_recovery_cases, LeanCommandResult, LeanTaskHook,
 };
@@ -14,11 +14,11 @@ use crate::task_hooks::{
     TaskHookRecordStore,
 };
 
-const BEHAVIOR_ID: &str = "general";
+const AGENT_ID: &str = "general";
 
 pub(super) struct Fixture {
     pub(super) node: Arc<defra_node::EmbeddedNode>,
-    identity: Arc<dyn AgentIdentity>,
+    identity: Arc<dyn NodeIdentity>,
     _data: tempfile::TempDir,
 }
 
@@ -33,11 +33,10 @@ impl Fixture {
                 .expect("embedded node"),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let identity: Arc<dyn AgentIdentity> = Arc::new(
+        let identity: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_or_create(data.path().join("agent.key"), None).expect("identity"),
         );
-        crate::test_support::install_test_behavior(node.as_ref(), identity.did(), BEHAVIOR_ID)
-            .await;
+        crate::test_support::install_test_agent(node.as_ref(), identity.did(), AGENT_ID).await;
         Self {
             node,
             identity,
@@ -52,7 +51,7 @@ impl Fixture {
     pub(super) async fn claimed(&self, lease: Duration) -> RequestLifecycle {
         let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
             self.node.clone(),
-            BEHAVIOR_ID,
+            AGENT_ID,
             self.identity.clone(),
             "run the task",
             60,
@@ -152,7 +151,7 @@ fn record(
     TaskHookRecord {
         request_doc_id: doc_id.to_owned(),
         request_id: name.to_owned(),
-        agent_did: did.to_owned(),
+        node_did: did.to_owned(),
         cwd: cwd.to_path_buf(),
         root_guard: None,
         hooks,
@@ -490,7 +489,7 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
             "root-outside-ceiling",
             dir.path().to_path_buf(),
             Some(crate::tool_surface::RootExecutionGuard {
-                behavior_id: BEHAVIOR_ID.into(),
+                agent_id: AGENT_ID.into(),
                 selected_root: Some(dir.path().to_path_buf()),
                 ceiling_root: Some(ceiling.path().to_path_buf()),
             }),

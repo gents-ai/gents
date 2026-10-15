@@ -96,7 +96,7 @@ def wakeEntry : SessionQueue.QueueEntry :=
     origin := .scheduled }
 
 def wakeBinding : WakeDocumentBinding :=
-  { entry := wakeEntry, agent := 1, session := 1
+  { entry := wakeEntry, node := 1, session := 1
     notificationMessageId := 701, notificationSequence := 2
     wakeDocument := 11, authenticated := true }
 

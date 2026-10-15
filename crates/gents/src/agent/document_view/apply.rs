@@ -9,21 +9,27 @@ use defra_node::EmbeddedNode;
 /// This also handles deletes and ownership moves without retaining a stale row.
 pub(crate) async fn apply_control_update(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     collection_name: &str,
     _doc_id: &str,
     view: &mut DocumentRuntimeView,
 ) -> Result<ControlUpdateOutcome> {
     anyhow::ensure!(
-        view.principal.value.agent_did == agent_did,
+        view.node.value.node_did == node_did,
         "runtime view owner mismatch"
     );
     if Collection::ALL
         .iter()
         .any(|c| c.graphql_type() == collection_name)
+        // PackInstallation is not itself configuration: a pack install or
+        // remove writes or deletes only this record, and the plugin-store
+        // change it carries reaches change detection through the resolved
+        // plugin identities on the tool surface, so it must still wake the
+        // reconciler.
         || matches!(
             collection_name,
             "OAuthCredential" | "ToolServiceHealthState" | "GraphRevision" | "GraphRun"
+                | "PackInstallation"
         )
     {
         Ok(ControlUpdateOutcome::FullReload)

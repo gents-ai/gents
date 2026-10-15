@@ -22,12 +22,12 @@ use crate::Collection;
 
 /// The configuration collections every snapshot counts.
 const CONFIGURATION: [Collection; 11] = [
-    Collection::AgentBehavior,
+    Collection::Agent,
     Collection::AgentContext,
     Collection::Tools,
     Collection::InferenceProfile,
     Collection::InferenceExecution,
-    Collection::SubagentTarget,
+    Collection::AgentTarget,
     Collection::DatastoreToolSurface,
     Collection::EventSource,
     Collection::Trigger,
@@ -127,11 +127,11 @@ async fn activity(node: &std::sync::Arc<EmbeddedNode>) -> Result<LiveSnapshot> {
     let requests = crate::session::public_request_filter("");
     let query = format!(
         r#"{{
-            AgentRequest(filter: {{ {requests} }}) {{ _docID agent_did session_id requester_did }}
-            InferenceCall {{ call_id request_doc_id agent_did call_kind queued_at call_seq call_state failure_reason prompt_tokens completion_tokens context_accounting_json }}
+            AgentRequest(filter: {{ {requests} }}) {{ _docID node_did session_id requester_did }}
+            InferenceCall {{ call_id request_doc_id node_did call_kind queued_at call_seq call_state failure_reason prompt_tokens completion_tokens context_accounting_json }}
             AgentToolCall {{ tool_name lifecycle_state }}
-            CompactionEntry {{ agent_did session_id requester_did }}
-            ProviderContextReduction {{ agent_did session_id requester_did }}
+            CompactionEntry {{ node_did session_id requester_did }}
+            ProviderContextReduction {{ node_did session_id requester_did }}
         }}"#
     );
     let response = graphql_with_transaction_retry(node, &query, "eval trial live snapshot").await?;
@@ -184,7 +184,7 @@ async fn activity(node: &std::sync::Arc<EmbeddedNode>) -> Result<LiveSnapshot> {
 /// The tool call that started last, with the start of its result on one
 /// line; `None` when there is none or it cannot be read.
 async fn last_tool_call(node: &std::sync::Arc<EmbeddedNode>) -> Option<LastToolCall> {
-    let query = r#"{ AgentToolCall(order: { started_at: DESC }, limit: 1) { _docID agent_did session_id requester_did tool_name lifecycle_state } }"#;
+    let query = r#"{ AgentToolCall(order: { started_at: DESC }, limit: 1) { _docID node_did session_id requester_did tool_name lifecycle_state } }"#;
     let response = graphql_with_transaction_retry(node, query, "eval trial last tool call")
         .await
         .map_err(|error| {
@@ -202,7 +202,7 @@ async fn last_tool_call(node: &std::sync::Arc<EmbeddedNode>) -> Option<LastToolC
     let result = crate::tool_call_lifecycle::query::load_tool_call_presentation(
         &ConfigAccess::Local(node.clone()),
         row.get("_docID")?.as_str()?,
-        row.get("agent_did")?.as_str()?,
+        row.get("node_did")?.as_str()?,
         row.get("session_id")?.as_str()?,
         row.get("requester_did").and_then(Value::as_str),
     )

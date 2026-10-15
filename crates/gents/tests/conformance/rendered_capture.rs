@@ -70,8 +70,8 @@ use crate::lean_vocab_test::{lean_rendered_capture_cases, lean_rendered_capture_
 /// The model's ids are `Nat` (`boundary.model.nat-typed-ids-time`); production
 /// carries strings. The mapping is injective, so tuple equality on either side
 /// means the same thing.
-fn agent_did(id: u64) -> String {
-    format!("did:key:z6Mk-agent-{id}")
+fn node_did(id: u64) -> String {
+    format!("did:key:z6Mk-node-{id}")
 }
 
 fn session_id(id: u64) -> String {
@@ -85,11 +85,11 @@ fn request_doc_id(id: u64) -> String {
 /// Build the production capture DTO for one modeled attempt.
 ///
 /// This is a struct literal on purpose: if a future change drops
-/// `turn_index`, `attempt`, `agent_did`, `session_id`, or `request_doc_id` from
+/// `turn_index`, `attempt`, `node_did`, `session_id`, or `request_doc_id` from
 /// `RenderedCompletionRequest`, this file stops compiling instead of quietly
 /// collapsing two capture keys.
 fn rendered(
-    agent: u64,
+    node: u64,
     session: u64,
     request: u64,
     turn_index: usize,
@@ -97,7 +97,7 @@ fn rendered(
     request_json: Value,
 ) -> RenderedCompletionRequest {
     rendered_in_scope(
-        agent,
+        node,
         session,
         request,
         CAPTURE_SCOPE,
@@ -113,7 +113,7 @@ fn rendered(
 const CAPTURE_SCOPE: &str = "inference.1";
 
 fn rendered_in_scope(
-    agent: u64,
+    node: u64,
     session: u64,
     request: u64,
     capture_scope: &str,
@@ -121,7 +121,7 @@ fn rendered_in_scope(
     attempt: u32,
     request_json: Value,
 ) -> RenderedCompletionRequest {
-    let agent_did = agent_did(agent);
+    let node_did = node_did(node);
     let session_id = session_id(session);
     let request_doc_id = request_doc_id(request);
     let assembly_trace =
@@ -129,7 +129,7 @@ fn rendered_in_scope(
 
     RenderedCompletionRequest {
         capture_key: derive_capture_key(
-            &agent_did,
+            &node_did,
             &session_id,
             &request_doc_id,
             capture_scope,
@@ -144,9 +144,9 @@ fn rendered_in_scope(
         capture_scope: capture_scope.to_string(),
         turn_index,
         attempt,
-        agent_did,
+        node_did,
         requester_did: "did:key:z6Mk-requester".to_string(),
-        behavior_id: "behavior-1".to_string(),
+        agent_id: "agent-1".to_string(),
         session_id,
         model_name: "test-model".to_string(),
         source: RenderedRequestSource::OpenAiChatCompletions,
@@ -174,7 +174,7 @@ fn capture_key(
     rendered: &RenderedCompletionRequest,
 ) -> (String, String, (String, String), usize, u32) {
     (
-        rendered.agent_did.clone(),
+        rendered.node_did.clone(),
         rendered.session_id.clone(),
         (
             rendered.request_doc_id.clone(),
@@ -195,7 +195,7 @@ fn generated_rendered_capture_key_cases_pin_the_capture_key_tuple() {
 
     for case in cases {
         let left = rendered(
-            case.left_agent_did,
+            case.left_node_did,
             case.left_session_id,
             case.left_request_id,
             case.left_turn_index,
@@ -203,7 +203,7 @@ fn generated_rendered_capture_key_cases_pin_the_capture_key_tuple() {
             json!({"model": "test-model"}),
         );
         let right = rendered(
-            case.right_agent_did,
+            case.right_node_did,
             case.right_session_id,
             case.right_request_id,
             case.right_turn_index,
@@ -237,7 +237,7 @@ fn generated_rendered_capture_key_cases_pin_the_capture_key_tuple() {
         // Each generated row isolates a single component, so a projection that
         // drops that component would report `same_fact` for a distinct pair.
         let varied = [
-            case.left_agent_did != case.right_agent_did,
+            case.left_node_did != case.right_node_did,
             case.left_session_id != case.right_session_id,
             case.left_request_id != case.right_request_id,
             case.left_turn_index != case.right_turn_index,
@@ -315,7 +315,7 @@ fn a_request_doc_id_cannot_forge_another_scopes_key() {
     assert_eq!(forged.capture_key, honest.capture_key);
 
     let sneaky = derive_capture_key(
-        &agent_did(1),
+        &node_did(1),
         &session_id(1),
         &format!("{}#compaction.1", request_doc_id(1)),
         "inference.1",
@@ -324,7 +324,7 @@ fn a_request_doc_id_cannot_forge_another_scopes_key() {
     )
     .expect("capture key");
     let target = derive_capture_key(
-        &agent_did(1),
+        &node_did(1),
         &session_id(1),
         &request_doc_id(1),
         "compaction.1",

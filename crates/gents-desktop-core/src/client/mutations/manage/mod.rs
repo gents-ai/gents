@@ -50,19 +50,19 @@ pub async fn delete_scoped_document(
     access: &ConfigAccess,
     operation: &'static str,
     collection: Collection,
-    agent_did: &str,
+    node_did: &str,
     id: &str,
 ) -> Result<usize> {
     let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
         collection,
-        agent_did.to_owned(),
+        node_did.to_owned(),
         id.to_owned(),
     )])?;
     access
         .transact(operation, |txn| {
             let plan = &plan;
             Box::pin(async move {
-                let existed = read_desired_state_record_in_txn(txn, collection, agent_did, id)
+                let existed = read_desired_state_record_in_txn(txn, collection, node_did, id)
                     .await?
                     .is_some();
                 apply_desired_state_plan(txn, plan).await?;
@@ -77,18 +77,18 @@ pub async fn delete_scoped_document_local(
     node: &EmbeddedNode,
     operation: &'static str,
     collection: Collection,
-    agent_did: &str,
+    node_did: &str,
     id: &str,
 ) -> Result<usize> {
     let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
         collection,
-        agent_did.to_owned(),
+        node_did.to_owned(),
         id.to_owned(),
     )])?;
     ConfigAccess::transact_local(node, None, operation, |txn| {
         let plan = &plan;
         Box::pin(async move {
-            let existed = read_desired_state_record_in_txn(txn, collection, agent_did, id)
+            let existed = read_desired_state_record_in_txn(txn, collection, node_did, id)
                 .await?
                 .is_some();
             apply_desired_state_plan(txn, plan).await?;
@@ -98,11 +98,10 @@ pub async fn delete_scoped_document_local(
     .await
 }
 
-pub use behavior::{delete_agent_behavior_on, delete_agent_context_on, upsert_agent_behavior_on};
+pub use behavior::{delete_agent_context_on, delete_agent_on, upsert_agent_on};
 pub use inference::{delete_inference_backend_on, upsert_inference_backend_on};
 pub use principal::{
-    apply_config_components_on, patch_config_components_on, set_default_behavior_on,
-    upsert_agent_principal_on,
+    apply_config_components_on, patch_config_components_on, set_default_agent_on, upsert_node_on,
 };
 pub use profile::{delete_inference_profile_on, upsert_inference_profile_on};
 pub use skill::{delete_skill_on, upsert_skill_on};

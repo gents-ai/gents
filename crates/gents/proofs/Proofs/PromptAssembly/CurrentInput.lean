@@ -59,6 +59,20 @@ def publishesAuthoredInput (resume : Bool) : Bool := !resume
 
 theorem retry_does_not_republish_input : publishesAuthoredInput true = false := rfl
 
+/-- Queued messages a turn answers (`SessionQueue.foldRun`). Folded messages
+are consumed only by publishing them as authored input, so a retry resuming
+its parent's durable progress answers none of the run its claim selected:
+those messages stay queued for the next turn. A parent's already published
+folded messages are durable history the resumed retry continues from. -/
+def answersSelection (resume : Bool) (selected : List α) : List α :=
+  if publishesAuthoredInput resume then selected else []
+
+theorem resumed_retry_answers_no_selection (selected : List α) :
+    answersSelection true selected = [] := rfl
+
+theorem fresh_turn_answers_its_selection (selected : List α) :
+    answersSelection false selected = selected := rfl
+
 /-- The ownership facts needed at the provider boundary. Transcript content is
     intentionally absent: deduplication is structural, never text-based. -/
 structure HistoryRow where

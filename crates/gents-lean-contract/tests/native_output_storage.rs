@@ -11,7 +11,7 @@ async fn canonical_segment_create_returns_physical_identity_and_exact_json() {
         .await
         .unwrap();
     let segment = OutputSegment {
-        agent_did: "did:test:storage".into(),
+        node_did: "did:test:storage".into(),
         requester_did: None,
         session_id: "session".into(),
         request_doc_id: "request-doc".into(),
@@ -53,7 +53,7 @@ async fn canonical_segment_create_returns_physical_identity_and_exact_json() {
         .unwrap_or_else(|| panic!("create response shape: {data}"));
     assert_eq!(rows.len(), 1);
     assert!(!rows[0]["_docID"].as_str().unwrap().is_empty());
-    let response = node.execute("{ AgentOutputSegment { agent_did requester_did session_id request_doc_id source writer ordinal runs payload close created_at } }").await;
+    let response = node.execute("{ AgentOutputSegment { node_did requester_did session_id request_doc_id source writer ordinal runs payload close created_at } }").await;
     assert!(
         !response.has_errors(),
         "fixture read errors: {:?}",

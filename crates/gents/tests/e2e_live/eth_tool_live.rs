@@ -20,9 +20,9 @@ use std::time::Duration;
 use gents::defra_node::EmbeddedNode;
 use gents::document_config::{IntegrationTools, Tools};
 use gents::graphql::escape_graphql_string;
-use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 
-use crate::support::fixtures::{configure_behavior_tools, test_identity};
+use crate::support::fixtures::{configure_agent_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::{
     bind_target, live_target, wait_for_assistant_answer, wait_for_request_terminal, InferenceTarget,
@@ -87,37 +87,37 @@ async fn assert_rpc_reachable(rpc_url: &str, chain_id: i64) {
 
 pub(crate) async fn bind_eth_target(
     node: &EmbeddedNode,
-    identity: &dyn AgentIdentity,
+    identity: &dyn NodeIdentity,
     target: &InferenceTarget,
     system_prompt: &str,
 ) -> (String, String) {
-    let (agent_did, behavior_id) = bind_target(node, identity, target).await;
-    configure_behavior_tools(
+    let (node_did, agent_id) = bind_target(node, identity, target).await;
+    configure_agent_tools(
         node,
-        &agent_did,
-        &behavior_id,
+        &node_did,
+        &agent_id,
         Some(system_prompt.to_string()),
         Tools {
-            tools_id: format!("{behavior_id}:bootstrap-tools"),
-            agent_did: agent_did.clone(),
+            tools_id: format!("{agent_id}:bootstrap-tools"),
+            node_did: node_did.clone(),
             ..Default::default()
         },
         Vec::new(),
     )
     .await;
-    (agent_did, behavior_id)
+    (node_did, agent_id)
 }
 
-async fn create_eth_tool(node: &EmbeddedNode, agent_did: &str) {
+async fn create_eth_tool(node: &EmbeddedNode, node_did: &str) {
     let tool_id = escape_graphql_string(TOOL_ID);
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let rpc_url = escape_graphql_string(&live_rpc());
     let chain_id = live_chain_id();
     let mutation = format!(
         r#"mutation {{
             create_EthTool(input: {{
                 tool_id: "{tool_id}",
-                agent_did: "{agent_did}",
+                node_did: "{node_did}",
                 display_name: "Base Sepolia",
                 enabled: true,
                 chain_id: {chain_id},
@@ -185,8 +185,8 @@ async fn eth_tool_live_model_queries_base_sepolia() {
     assert_rpc_reachable(&rpc, chain_id).await;
 
     let db = test_db("eth-tool-live").await;
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("eth-tool-live"));
-    let (agent_did, behavior_id) = bind_eth_target(
+    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("eth-tool-live"));
+    let (node_did, agent_id) = bind_eth_target(
         db.node.as_ref(),
         identity.as_ref(),
         &target,
@@ -194,16 +194,16 @@ async fn eth_tool_live_model_queries_base_sepolia() {
          When asked for chain data, call that tool. Do not guess block numbers.",
     )
     .await;
-    create_eth_tool(db.node.as_ref(), &agent_did).await;
+    create_eth_tool(db.node.as_ref(), &node_did).await;
 
-    configure_behavior_tools(
+    configure_agent_tools(
         db.node.as_ref(),
-        &agent_did,
-        &behavior_id,
+        &node_did,
+        &agent_id,
         None,
         Tools {
             tools_id: "eth-live-tools".to_string(),
-            agent_did: agent_did.clone(),
+            node_did: node_did.clone(),
             integrations: Some(IntegrationTools {
                 eth_tool_ids: Some(vec![TOOL_ID.to_string()]),
                 ..Default::default()
@@ -214,7 +214,7 @@ async fn eth_tool_live_model_queries_base_sepolia() {
     )
     .await;
 
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         Arc::clone(&identity),
         DocumentRuntimeOptions {
@@ -226,14 +226,14 @@ async fn eth_tool_live_model_queries_base_sepolia() {
     .expect("boot agent");
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
-    let _booted = BootedAgent::new(shutdown_tx, handle, agent_did.clone());
+    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
+    let _booted = BootedAgent::new(shutdown_tx, handle, node_did.clone());
 
     let request_id = "eth-live-block-1";
     create_runtime_request(
         db.node.as_ref(),
-        &agent_did,
-        &behavior_id,
+        &node_did,
+        &agent_id,
         request_id,
         "eth-live-session-1",
         "What is the current Base Sepolia block number? Use the base-sepolia_query tool with method eth_blockNumber and empty params. Then tell me the hex result.",

@@ -1,3 +1,4 @@
+import type { PendingQueueEditResult } from "../generated/PendingQueueEditResult.js";
 import type { DesktopTransport } from "../transport.js";
 import type { BackendHealth } from "../types/backendHealth.js";
 import type {
@@ -24,9 +25,12 @@ import type {
 } from "../types.js";
 import type { DesktopOperationsSnapshot } from "../types/operations.js";
 import { createDesktopInvoker } from "./invoke.js";
+import { createHostAccessCommands } from "./hostAccess.js";
+import { createManagedServerCommands } from "./managedServer.js";
+import { createPackCommands } from "./packs.js";
+import { createUxPluginCommands } from "./uxPlugins.js";
 import { createProviderAccountCommands } from "./providerAccounts.js";
-import type { DesktopApiAdapter, ManagedServerStatus } from "./types.js";
-import type { ManagedServerResetResult } from "../generated/ManagedServerResetResult.js";
+import type { DesktopApiAdapter } from "./types.js";
 import type { InferenceSetupCatalog } from "../generated/InferenceSetupCatalog.js";
 import type { InferenceDiscoveryResult } from "../generated/InferenceDiscoveryResult.js";
 import type { InferenceModelRecommendation } from "../generated/InferenceModelRecommendation.js";
@@ -51,47 +55,13 @@ export function createDesktopApiAdapter(
       invokeDesktop<DesktopClientSnapshot>("desktop_client_start"),
     shutdownDesktopClient: () =>
       invokeDesktop<DesktopClientSnapshot>("desktop_client_shutdown"),
-    managedServerStatus: () =>
-      invokeDesktop<ManagedServerStatus>("desktop_managed_server_status"),
-    startManagedServer: (agentName, authority) =>
-      invokeDesktop<ManagedServerStatus>("desktop_managed_server_start", {
-        request: {
-          agentName,
-          toolCeiling: authority?.toolCeiling ?? null,
-          toolRoot: authority?.toolRoot ?? null,
-        },
-      }),
-    restartManagedServer: (agentName, authority) =>
-      invokeDesktop<ManagedServerStatus>("desktop_managed_server_restart", {
-        request: { agentName, ...authority },
-      }),
-    resetManagedServer: (confirmation, disposition) =>
-      invokeDesktop<ManagedServerResetResult>("desktop_managed_server_reset", {
-        request: { confirmation: confirmation ?? null, disposition: disposition ?? null },
-      }),
+    ...createManagedServerCommands(invokeDesktop),
     quitDesktop: () => invokeDesktop<void>("desktop_app_quit"),
-    validateManagedServerRoot: (path) =>
-      invokeDesktop<{ canonicalPath: string }>(
-        "desktop_managed_server_validate_root",
-        { request: { path } },
-      ).then((result) => result.canonicalPath),
-    openManagedServerLoginItems: () =>
-      invokeDesktop<void>("desktop_managed_server_open_login_items"),
-    commitManagedServerAutoStart: (_agentName) =>
-      invokeDesktop<ManagedServerStatus>("desktop_managed_server_set_auto_start", {
-        enabled: true,
-      }),
-    stopManagedServer: (disableAutoStart) =>
-      invokeDesktop<ManagedServerStatus>("desktop_managed_server_stop", {
-        disableAutoStart,
-      }),
     openDbExplorer: () => invokeDesktop<string>("desktop_open_db_explorer"),
-    setManagedServerAutoStart: (enabled) =>
-      invokeDesktop<ManagedServerStatus>("desktop_managed_server_set_auto_start", {
-        enabled,
-      }),
-    setSelectedAgent: (agentDid) =>
-      invokeDesktop<void>("desktop_set_selected_agent", { agentDid }),
+    openExternalUrl: (url) =>
+      invokeDesktop<void>("desktop_open_external_url", { url }),
+    setSelectedNode: (nodeDid) =>
+      invokeDesktop<void>("desktop_set_selected_node", { nodeDid }),
     removePeer: (peerId) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_peer_remove", { peerId }),
     renamePeer: (peerId, label) =>
@@ -111,35 +81,35 @@ export function createDesktopApiAdapter(
       invokeDesktop<WorkspaceListingView>("desktop_workspace_list", {
         subpath: subpath ?? null,
       }),
-    fetchRequestTimeline: (agentDid, requestId) =>
+    fetchRequestTimeline: (nodeDid, requestId) =>
       invokeDesktop<RequestTimelineView>("desktop_request_timeline", {
-        agentDid,
+        nodeDid,
         requestId,
       }),
-    explainToolSurface: (agentDid, behaviorId) =>
+    explainToolSurface: (nodeDid, agentId) =>
       invokeDesktop<ToolSurfaceExplanationView>(
         "desktop_tool_surface_explain",
-        { agentDid, behaviorId },
+        { nodeDid, agentId },
       ),
     fetchNetworkStatus: () =>
       invokeDesktop<NetworkStatusView>("desktop_network_status"),
-    fetchSessionSnapshot: (sessionId, agentDid, requestId, timelinePage) =>
+    fetchSessionSnapshot: (sessionId, nodeDid, requestId, timelinePage) =>
       invokeDesktop<DesktopSessionSnapshot | null>("desktop_session_snapshot", {
         sessionId,
-        agentDid,
+        nodeDid,
         requestId,
         timelineLimit: timelinePage?.limit,
         timelineBeforeItemKey: timelinePage?.beforeItemKey ?? null,
       }),
-    retrySessionHydration: (sessionId, agentDid) =>
+    retrySessionHydration: (sessionId, nodeDid) =>
       invokeDesktop<void>("desktop_session_hydration_retry", {
         sessionId,
-        agentDid: agentDid ?? null,
+        nodeDid: nodeDid ?? null,
       }),
     fetchSessionLiveDelta: (request) =>
       invokeDesktop<SessionLiveDeltaView | null>("desktop_session_live_delta", {
         sessionId: request.sessionId,
-        agentDid: request.agentDid ?? null,
+        nodeDid: request.nodeDid ?? null,
         requestId: request.requestId,
         baseLiveCursor: request.baseLiveCursor,
         baseContentByteLen: request.baseContentByteLen,
@@ -149,6 +119,10 @@ export function createDesktopApiAdapter(
       }),
     sendChatMessage: (request) =>
       invokeDesktop<ChatSendResult>("desktop_chat_send", { request }),
+    editPendingQueue: (request) =>
+      invokeDesktop<PendingQueueEditResult>("desktop_pending_queue_edit", {
+        request,
+      }),
     listMailbox: () => invokeDesktop<MailboxItemView[]>("desktop_mailbox_list"),
     startMailboxRequest: (itemId) =>
       invokeDesktop<MailboxItemView>("desktop_mailbox_start_request", {
@@ -160,15 +134,15 @@ export function createDesktopApiAdapter(
       }),
     renameSession: (request) =>
       invokeDesktop<void>("desktop_session_rename", { request }),
-    resendRequest: (requestId, agentDid) =>
+    resendRequest: (requestId, nodeDid) =>
       invokeDesktop<RequestResendResult>("desktop_request_resend", {
         requestId,
-        agentDid,
+        nodeDid,
       }),
-    retryRequest: (requestId, agentDid) =>
+    retryRequest: (requestId, nodeDid) =>
       invokeDesktop<ChatSendResult>("desktop_request_retry", {
         requestId,
-        agentDid,
+        nodeDid,
       }),
     applyConfigComponents: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_config_components_apply", {
@@ -178,12 +152,16 @@ export function createDesktopApiAdapter(
       invokeDesktop<DesktopClientSnapshot>("desktop_config_components_patch", {
         request,
       }),
+    saveNodeConfig: (request) =>
+      invokeDesktop<DesktopClientSnapshot>("desktop_node_config_save", {
+        request,
+      }),
+    setDefaultAgent: (request) =>
+      invokeDesktop<DesktopClientSnapshot>("desktop_default_agent_set", {
+        request,
+      }),
     saveAgentConfig: (request) =>
-      invokeDesktop<DesktopClientSnapshot>("desktop_agent_config_save", { request }),
-    setDefaultBehavior: (request) =>
-      invokeDesktop<DesktopClientSnapshot>("desktop_default_behavior_set", { request }),
-    saveBehaviorConfig: (request) =>
-      invokeDesktop<DesktopClientSnapshot>("desktop_behavior_save", {
+      invokeDesktop<DesktopClientSnapshot>("desktop_agent_save", {
         request,
       }),
     saveSkillConfig: (request) =>
@@ -224,8 +202,8 @@ export function createDesktopApiAdapter(
       invokeDesktop<DesktopClientSnapshot>("desktop_tool_service_delete", {
         request,
       }),
-    deleteBehaviorConfig: (request) =>
-      invokeDesktop<DesktopClientSnapshot>("desktop_behavior_delete", {
+    deleteAgentConfig: (request) =>
+      invokeDesktop<DesktopClientSnapshot>("desktop_agent_delete", {
         request,
       }),
     deleteContextConfig: (request) =>
@@ -257,22 +235,28 @@ export function createDesktopApiAdapter(
         "desktop_inference_backend_recommendation",
         { request },
       ),
-    codexLogin: (agentDid, provider, label) =>
+    codexLogin: (nodeDid, provider, label) =>
       invokeDesktop<CodexLoginResult>("desktop_codex_login", {
-        request: { agentDid, provider: provider ?? null, label: label ?? null },
+        request: { nodeDid, provider: provider ?? null, label: label ?? null },
       }),
     cancelCodexLogin: () => invokeDesktop<void>("desktop_codex_login_cancel"),
-    grokLogin: (agentDid, provider, label) =>
+    grokLogin: (nodeDid, provider, label) =>
       invokeDesktop<GrokLoginResult>("desktop_grok_login", {
-        request: { agentDid, provider: provider ?? null, label: label ?? null },
+        request: { nodeDid, provider: provider ?? null, label: label ?? null },
       }),
     cancelGrokLogin: () => invokeDesktop<void>("desktop_grok_login_cancel"),
-    claudeLogin: (agentDid, provider, label) =>
+    claudeLogin: (nodeDid, provider, label) =>
       invokeDesktop<ClaudeLoginResult>("desktop_claude_login", {
-        request: { agentDid, provider: provider ?? null, label: label ?? null },
+        request: { nodeDid, provider: provider ?? null, label: label ?? null },
       }),
     cancelClaudeLogin: () => invokeDesktop<void>("desktop_claude_login_cancel"),
+    watchProviderLoginUrl: (provider, onUrl) =>
+      transport.listenProviderLoginUrl?.(provider, onUrl) ??
+      Promise.resolve(() => {}),
     ...createProviderAccountCommands(invokeDesktop),
+    ...createPackCommands(invokeDesktop),
+    ...createHostAccessCommands(invokeDesktop),
+    ...createUxPluginCommands(invokeDesktop),
     saveInferenceProfileConfig: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_save", {
         request,
@@ -313,9 +297,9 @@ export function createDesktopApiAdapter(
       invokeDesktop<MCPServiceHealthView[]>(
         "desktop_list_mcp_services_with_health",
       ),
-    probeMcpService: (serviceId) =>
+    probeMcpService: (nodeDid, serviceId) =>
       invokeDesktop<McpServiceProbeResult>("desktop_probe_mcp_service", {
-        request: { serviceId },
+        request: { nodeDid, serviceId },
       }),
     fetchOperationsSnapshot: (request) =>
       invokeDesktop<DesktopOperationsSnapshot>("desktop_operations_snapshot", {

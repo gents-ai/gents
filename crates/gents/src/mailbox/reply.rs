@@ -57,9 +57,9 @@ pub(crate) async fn claim_reply_in_txn(
         },
     )?;
     ensure!(
-        signed_request.agent_did == request.agent_did
+        signed_request.node_did == request.node_did
             && signed_request.requester_did == request.requester_did
-            && signed_request.behavior_id == request.behavior_id
+            && signed_request.agent_id == request.agent_id
             && signed_request.session_id == request.session_id,
         "mailbox reply changed during admission"
     );
@@ -117,12 +117,12 @@ pub(super) fn validate_reply_claim(
         "mailbox reply requester does not match"
     );
     ensure!(
-        !request.agent_did.is_empty() && request.agent_did == item.target_agent_did,
-        "mailbox reply target agent does not match"
+        !request.node_did.is_empty() && request.node_did == item.target_node_did,
+        "mailbox reply target node does not match"
     );
     ensure!(
-        !item.target_behavior_id.is_empty() && request.behavior_id == item.target_behavior_id,
-        "mailbox reply target behavior does not match"
+        !item.target_agent_id.is_empty() && request.agent_id == item.target_agent_id,
+        "mailbox reply target agent does not match"
     );
     ensure!(
         item.session_id

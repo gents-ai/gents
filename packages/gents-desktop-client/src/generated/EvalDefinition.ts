@@ -7,7 +7,7 @@ import type { EvalSubject } from "./EvalSubject.js";
  * A pack-carried eval definition. Identity is `(definition_id,
  * comparability_version, desired_state_document_digest)`.
  */
-export type EvalDefinition = { definition_id: string, agent_did: string,
+export type EvalDefinition = { definition_id: string, node_did: string,
 /**
  * Bumped by the author when cases, checks, reducers or judge settings
  * change. Runs never compare across different values.

@@ -8,7 +8,7 @@ import { node, publish, testApp, withApp } from "./app-fixture";
 
 const session = (overrides: Partial<SessionSummary>): SessionSummary => ({
   sessionId: "parent",
-  agentDid: "did:test:owner",
+  nodeDid: "did:test:owner",
   requesterDid: null,
   startedBy: null,
   latestRequestDocId: "physical-parent-1",
@@ -19,7 +19,7 @@ const session = (overrides: Partial<SessionSummary>): SessionSummary => ({
   title: "Lead",
   previewText: null,
   status: "processing",
-  behaviorId: null,
+  agentId: null,
   taskId: null,
   taskName: null,
   triggerId: null,
@@ -45,17 +45,17 @@ const child = session({
   },
   startedBy: {
     sessionId: "parent",
-    agentDid: "did:test:owner",
+    nodeDid: "did:test:owner",
     requesterDid: null,
     causeRequestDocId: "physical-parent-1",
   },
 });
 const deploymentWith = (sessions: SessionSummary[]) =>
   node({
-    agentDid: "did:key:node",
+    nodeDid: "did:key:node",
     sessions,
     behaviors: [],
-    behaviorConfigs: [],
+    agentConfigs: [],
     behaviorEnvironments: [],
   });
 
@@ -78,7 +78,7 @@ describe("sessions started by another session", () => {
       wrapper: withApp(app),
     });
     expect(screen.queryByTestId("session-child")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /1 more worker/ }));
+    fireEvent.click(screen.getByRole("button", { name: /1 more started session/ }));
     expect(screen.getByTestId("session-child")).toHaveClass("pl-9");
     const advanced = [
       child,
@@ -90,7 +90,7 @@ describe("sessions started by another session", () => {
     act(() => publish(app, [deploymentWith(advanced)]));
     rerender(<SessionsScreen />);
     expect(screen.getByTestId("session-child")).toHaveClass("pl-9");
-    expect(screen.getByRole("button", { name: /1 worker/ })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /1 started session/ })).toHaveAttribute(
       "aria-expanded",
       "true",
     );

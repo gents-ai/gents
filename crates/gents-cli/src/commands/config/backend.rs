@@ -1,6 +1,6 @@
 use crate::cli::*;
 use crate::shared::ResolvedBackendConfig;
-use crate::{resolve_agent_did, BackendResolutionMode};
+use crate::{resolve_node_did, BackendResolutionMode};
 use anyhow::{Context, Result};
 use gents::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
@@ -38,7 +38,7 @@ pub(super) async fn backend_set(args: BackendSetArgs) -> Result<()> {
                 Ok(read_desired_state_record_in_txn(
                     txn,
                     Collection::InferenceBackend,
-                    &backend.agent_did,
+                    &backend.node_did,
                     &backend.backend_id,
                 )
                 .await?
@@ -48,7 +48,7 @@ pub(super) async fn backend_set(args: BackendSetArgs) -> Result<()> {
         })
         .await?;
     crate::print_json(
-        &json!({"doc_id":doc_id,"agent_did":backend.agent_did,"backend_id":backend.backend_id,"provider_kind":backend.provider_kind.as_str(),"endpoint":backend.endpoint}),
+        &json!({"doc_id":doc_id,"node_did":backend.node_did,"backend_id":backend.backend_id,"provider_kind":backend.provider_kind.as_str(),"endpoint":backend.endpoint}),
     )
 }
 
@@ -72,7 +72,7 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         .timeout(timeout)
         .build()
         .context("building backend discovery client")?;
-    let (oauth_credential, oauth_agent_did) = if target.provider_kind.is_agent_scoped_oauth() {
+    let (oauth_credential, oauth_node_did) = if target.provider_kind.is_node_scoped_oauth() {
         // A preset becomes a backend with no reference, which runs on the original account.
         let account_ref = stored
             .as_ref()
@@ -98,7 +98,7 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
                 && discovery_error_is_auth(&error) =>
         {
             let guidance = gents::oauth_credential::classify_chatgpt_auth_error(
-                oauth_agent_did.as_deref().unwrap_or(""),
+                oauth_node_did.as_deref().unwrap_or(""),
                 gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
                 &gents::oauth_credential::OAuthAuthProblem::Expired,
             );
@@ -109,7 +109,7 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
                 && discovery_error_is_auth(&error) =>
         {
             let guidance = gents::xai_grok_oauth::classify_xai_auth_error(
-                oauth_agent_did.as_deref().unwrap_or(""),
+                oauth_node_did.as_deref().unwrap_or(""),
                 gents::xai_grok_oauth::XAI_OAUTH_PROVIDER,
                 &gents::oauth_credential::OAuthAuthProblem::Expired,
             );
@@ -129,7 +129,7 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
                 && discovery_error_is_auth(&error) =>
         {
             let guidance = gents::claude_oauth::classify_claude_auth_error(
-                oauth_agent_did.as_deref().unwrap_or(""),
+                oauth_node_did.as_deref().unwrap_or(""),
                 gents::claude_oauth::CLAUDE_OAUTH_PROVIDER,
                 &gents::oauth_credential::OAuthAuthProblem::Expired,
             );
@@ -176,17 +176,17 @@ async fn load_oauth_credential_for_discovery(
         ),
         _ => anyhow::bail!("load_oauth_credential_for_discovery called for non-OAuth provider"),
     };
-    let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
+    let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let (access, _) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let credential = gents::oauth_credential::resolve_oauth_credential(
         &access,
-        &agent_did,
+        &node_did,
         provider,
         gents::oauth_credential::AccountPick::Reference(account_ref),
     )
     .await?;
-    Ok((credential, agent_did))
+    Ok((credential, node_did))
 }
 
 /// Whether a model-discovery error is an authentication failure (HTTP 401/403), so ChatGptCodex
@@ -212,8 +212,8 @@ fn discovery_error_is_client_version_gate(error: &anyhow::Error) -> bool {
     })
 }
 
-/// Connection of a stored backend. Principal OAuth resolves the invoking
-/// principal's OAuthCredential separately; it has no shared key here.
+/// Connection of a stored backend. Node OAuth resolves the invoking
+/// node's OAuthCredential separately; it has no shared key here.
 fn stored_backend_target(backend: &InferenceBackend) -> Result<ResolvedBackendConfig> {
     backend.validate()?;
     Ok(ResolvedBackendConfig {
@@ -221,7 +221,7 @@ fn stored_backend_target(backend: &InferenceBackend) -> Result<ResolvedBackendCo
         openai_wire_api: backend.openai_wire_api,
         endpoint: backend.endpoint.clone(),
         api_key: match &backend.auth {
-            BackendAuth::PrincipalOAuth { .. } => None,
+            BackendAuth::NodeOAuth { .. } => None,
             auth => auth.resolve_api_key()?,
         },
         api_key_env_var: match &backend.auth {
@@ -243,7 +243,7 @@ async fn resolve_backend_discovery_target(
                 && args.api_key_env_var.is_none(),
             "--backend-id uses stored configuration; explicit provider, endpoint and auth flags cannot override it"
         );
-        let owner = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
+        let owner = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
         let (access, _) =
             crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
         let backend = access
@@ -290,11 +290,8 @@ mod tests {
     use super::*;
     #[test]
     fn canonical_oauth_backend_retains_defaults_without_fake_catalog() {
-        let (backend,plan)=backend_plan(br#"{"agent_did":"owner","backend_id":"claude","name":"Claude","provider_kind":"ClaudeCliSubscription","endpoint":"https://api.anthropic.com","auth":{"kind":"principal_oauth"}}"#).unwrap();
-        assert_eq!(
-            backend.auth,
-            BackendAuth::PrincipalOAuth { account_ref: None }
-        );
+        let (backend,plan)=backend_plan(br#"{"node_did":"owner","backend_id":"claude","name":"Claude","provider_kind":"ClaudeCliSubscription","endpoint":"https://api.anthropic.com","auth":{"kind":"node_oauth"}}"#).unwrap();
+        assert_eq!(backend.auth, BackendAuth::NodeOAuth { account_ref: None });
         assert_eq!(backend.max_concurrent, None);
         assert!(plan.documents()[0].add.get("catalogs").is_none());
         assert!(plan.documents()[0].add.get("models").is_none());
@@ -302,7 +299,7 @@ mod tests {
     #[test]
     fn retired_auth_and_observation_fields_are_not_config() {
         for field in ["api_key", "models", "probe_status"] {
-            let mut value = json!({"agent_did":"owner","backend_id":"local","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}});
+            let mut value = json!({"node_did":"owner","backend_id":"local","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}});
             value[field] = json!("invalid");
             assert!(backend_plan(&serde_json::to_vec(&value).unwrap()).is_err());
         }
@@ -311,10 +308,10 @@ mod tests {
     #[test]
     fn stored_subscription_backend_resolves_without_a_shared_key() {
         let backend: InferenceBackend = serde_json::from_value(json!({
-            "agent_did": "did:key:owner", "backend_id": "claude", "name": "Claude",
+            "node_did": "did:key:owner", "backend_id": "claude", "name": "Claude",
             "provider_kind": "ClaudeCliSubscription",
             "endpoint": "https://api.anthropic.com/v1",
-            "auth": {"kind": "principal_oauth"},
+            "auth": {"kind": "node_oauth"},
         }))
         .unwrap();
         let target = stored_backend_target(&backend).unwrap();

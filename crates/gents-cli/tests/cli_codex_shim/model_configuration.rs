@@ -10,21 +10,21 @@ async fn codex_shim_model_list_enumerates_backend_models() -> Result<()> {
     let mock_endpoint = MockChatEndpoint::start(&model_name, "irrelevant")?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
 
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
-    let default_backend_id = default_backend_id(&agent_did);
+    let node_did = node_did_from_init(&init)?;
+    let default_backend_id = default_backend_id(&node_did);
     let default_model_selection = gents_model_selection_id(&default_backend_id, &model_name);
     let extra_model_name = format!("mock-codex-shim-extra-model-{}", Uuid::new_v4().simple());
     let extra_endpoint = MockChatEndpoint::start(&extra_model_name, "irrelevant")?;
@@ -46,17 +46,17 @@ async fn codex_shim_model_list_enumerates_backend_models() -> Result<()> {
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
     let generation =
-        wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+        wait_for_runtime_quiescence(&graphql, &node_did, 1, Duration::from_secs(2)).await?;
 
     let create_extra_backend = format!(
         r#"mutation {{
             create_InferenceBackend(input: {{
-                agent_did: "{agent_did}",
+                node_did: "{node_did}",
                 backend_id: "{extra_backend_id}",
                 name: "Extra Backend",
                 provider_kind: "OpenAiCompatible",
@@ -68,7 +68,7 @@ async fn codex_shim_model_list_enumerates_backend_models() -> Result<()> {
                 enabled: true
             }}) {{ _docID }}
             create_duplicate: create_InferenceBackend(input: {{
-                agent_did: "{agent_did}",
+                node_did: "{node_did}",
                 backend_id: "{duplicate_backend_id}",
                 name: "Duplicate Backend",
                 provider_kind: "OpenAiCompatible",
@@ -86,12 +86,12 @@ async fn codex_shim_model_list_enumerates_backend_models() -> Result<()> {
     serve
         .capturing(graphql_query(&graphql, &create_extra_backend))
         .await?;
-    seed_backend_catalog(&graphql, &agent_did, &extra_backend_id, &extra_model_name).await?;
-    seed_backend_catalog(&graphql, &agent_did, &duplicate_backend_id, &model_name).await?;
+    seed_backend_catalog(&graphql, &node_did, &extra_backend_id, &extra_model_name).await?;
+    seed_backend_catalog(&graphql, &node_did, &duplicate_backend_id, &model_name).await?;
     serve
         .capturing(wait_for_runtime_quiescence(
             &graphql,
-            &agent_did,
+            &node_did,
             generation + 1,
             Duration::from_secs(2),
         ))
@@ -193,22 +193,22 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
     let mock_endpoint = MockChatEndpoint::start(&model_name, "irrelevant")?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
 
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
-    let default_behavior_id = format!("{agent_did}:default");
-    let default_backend_id = default_backend_id(&agent_did);
+    let node_did = node_did_from_init(&init)?;
+    let default_agent_id = format!("{node_did}:default");
+    let default_backend_id = default_backend_id(&node_did);
     let alt_model_name = format!("alt-model-{}", Uuid::new_v4().simple());
     let alt_model_selection = gents_model_selection_id(&default_backend_id, &alt_model_name);
 
@@ -225,16 +225,16 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, 1, Duration::from_secs(2)).await?;
 
     let switch_profile = format!(
         r#"mutation {{
             update_InferenceProfile(
-                filter: {{ profile_id: {{ _eq: "{default_behavior_id}-profile" }} }},
+                filter: {{ profile_id: {{ _eq: "{default_agent_id}-profile" }} }},
                 input: {{ model_name: "{alt_model_name}" }}
             ) {{ _docID }}
         }}"#
@@ -290,7 +290,7 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
+async fn codex_shim_config_value_write_model_mutates_agent() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -298,22 +298,22 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
     let mock_endpoint = MockChatEndpoint::start(&model_name, "irrelevant")?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
 
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
-    let default_behavior_id = format!("{agent_did}:default");
-    let original_profile_id = format!("{agent_did}:default-profile");
+    let node_did = node_did_from_init(&init)?;
+    let default_agent_id = format!("{node_did}:default");
+    let original_profile_id = format!("{node_did}:default-profile");
     let alt_model_name = format!("mock-codex-shim-alt-model-{}", Uuid::new_v4().simple());
     let alt_endpoint = MockChatEndpoint::start(&alt_model_name, "irrelevant")?;
     let alt_backend_id = format!("alt-backend-{}", Uuid::new_v4().simple());
@@ -332,17 +332,17 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
     let generation =
-        wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+        wait_for_runtime_quiescence(&graphql, &node_did, 1, Duration::from_secs(2)).await?;
 
     let create_alt_backend = format!(
         r#"mutation {{
             create_InferenceBackend(input: {{
-                agent_did: "{agent_did}",
+                node_did: "{node_did}",
                 backend_id: "{alt_backend_id}",
                 name: "Alt Backend",
                 provider_kind: "OpenAiCompatible",
@@ -359,11 +359,11 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
     serve
         .capturing(graphql_query(&graphql, &create_alt_backend))
         .await?;
-    seed_backend_catalog(&graphql, &agent_did, &alt_backend_id, &alt_model_name).await?;
+    seed_backend_catalog(&graphql, &node_did, &alt_backend_id, &alt_model_name).await?;
     serve
         .capturing(wait_for_runtime_quiescence(
             &graphql,
-            &agent_did,
+            &node_did,
             generation + 1,
             Duration::from_secs(2),
         ))
@@ -419,8 +419,8 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
             &graphql,
             &format!(
                 r#"{{
-                AgentBehavior(
-                    filter: {{ behavior_id: {{ _eq: "{default_behavior_id}" }} }},
+                Agent(
+                    filter: {{ agent_id: {{ _eq: "{default_agent_id}" }} }},
                     limit: 1
                 ) {{ inference_profile_id }}
             }}"#
@@ -428,7 +428,7 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
         ))
         .await?;
     let stored_profile = resp
-        .pointer("/data/AgentBehavior/0/inference_profile_id")
+        .pointer("/data/Agent/0/inference_profile_id")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned)
         .unwrap_or_default();
@@ -440,7 +440,7 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
         .capturing(graphql_query(
             &graphql,
             &format!(
-                r#"{{ InferenceProfile(filter: {{agent_did: {{_eq: "{agent_did}"}}, profile_id: {{_eq: "{}"}}}}, limit: 1) {{backend_id model_name}} }}"#,
+                r#"{{ InferenceProfile(filter: {{node_did: {{_eq: "{node_did}"}}, profile_id: {{_eq: "{}"}}}}, limit: 1) {{backend_id model_name}} }}"#,
                 escape_graphql_string(&stored_profile)
             ),
         ))
@@ -465,23 +465,23 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
     let mock_endpoint = MockChatEndpoint::start(&model_name, "irrelevant")?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
 
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
-    let default_behavior_id = format!("{agent_did}:default");
-    let original_backend_id = format!("{agent_did}:backend");
-    let original_profile_id = format!("{agent_did}:default-profile");
+    let node_did = node_did_from_init(&init)?;
+    let default_agent_id = format!("{node_did}:default");
+    let original_backend_id = format!("{node_did}:backend");
+    let original_profile_id = format!("{node_did}:default-profile");
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -496,7 +496,7 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -544,7 +544,7 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
     let error = read_error_response(&mut ws, request_id(2)).await?;
     assert_eq!(
         error.message,
-        "no backend advertises model \"definitely-not-real\" in this principal's credential scope"
+        "no backend advertises model \"definitely-not-real\" in this node's credential scope"
     );
 
     let resp = serve
@@ -552,8 +552,8 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
             &graphql,
             &format!(
                 r#"{{
-                AgentBehavior(
-                    filter: {{ behavior_id: {{ _eq: "{default_behavior_id}" }} }},
+                Agent(
+                    filter: {{ agent_id: {{ _eq: "{default_agent_id}" }} }},
                     limit: 1
                 ) {{ inference_profile_id }}
             }}"#
@@ -561,19 +561,19 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
         ))
         .await?;
     let stored_profile = resp
-        .pointer("/data/AgentBehavior/0/inference_profile_id")
+        .pointer("/data/Agent/0/inference_profile_id")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned)
         .unwrap_or_default();
     assert_eq!(
         stored_profile, original_profile_id,
-        "behavior inference_profile_id must remain unchanged after rejected write"
+        "agent inference_profile_id must remain unchanged after rejected write"
     );
     let profile = serve
         .capturing(graphql_query(
             &graphql,
             &format!(
-                r#"{{ InferenceProfile(filter: {{agent_did: {{_eq: "{agent_did}"}}, profile_id: {{_eq: "{original_profile_id}"}}}}, limit: 1) {{backend_id model_name}} }}"#,
+                r#"{{ InferenceProfile(filter: {{node_did: {{_eq: "{node_did}"}}, profile_id: {{_eq: "{original_profile_id}"}}}}, limit: 1) {{backend_id model_name}} }}"#,
             ),
         ))
         .await?;

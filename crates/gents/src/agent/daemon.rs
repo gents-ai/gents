@@ -25,7 +25,7 @@ use crate::agent::worker_capacity::{
     bind_current_claim, current_slot_capacity, scope_request_capacity, WorkerTicket,
 };
 use crate::compaction::{ProviderReductionEngine, ReductionEngine, ReductionOptions};
-use crate::config::ResolvedBehavior;
+use crate::config::ResolvedAgent;
 use crate::hook::FailurePolicy;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
 use crate::prompt::LayeredPromptBuilder;
@@ -35,6 +35,23 @@ use crate::runtime_trace::{
 };
 use crate::streaming::DefraStreamWriter;
 use crate::watcher::AgentRequest;
+
+/// Task hooks and workspace write/integration effects must finish before their
+/// request terminalizes. Those owners retain their existing completion order;
+/// only requests without such effects may finish inside the steering gate.
+fn permits_natural_finish(request: &AgentRequest, task_owned: bool) -> bool {
+    !task_owned
+        && crate::lifecycle::queue::heads_user_turn(request)
+        && (request
+            .workspace_id
+            .as_deref()
+            .is_none_or(|id| id.trim().is_empty())
+            || request
+                .workspace_authority
+                .as_deref()
+                .and_then(|authority| crate::toolset::WorkspaceAuthority::parse(authority).ok())
+                == Some(crate::toolset::WorkspaceAuthority::ReadOnly))
+}
 
 /// Only the winning terminal CAS authorizes follow-up effects. A matching
 /// durable terminal row is an observation, not a second completion event.
@@ -91,10 +108,10 @@ async fn finalize_request_failure(
 pub(crate) async fn verify_request_at_claim_boundary(
     verifier: &crate::request_admission::AgentRequestAdmissionVerifier,
     node: Arc<defra_node::EmbeddedNode>,
-    behavior_id: &str,
+    agent_id: &str,
     request: AgentRequest,
 ) -> Option<AgentRequest> {
-    match verifier.verify_fresh(&request, behavior_id).await {
+    match verifier.verify_fresh(&request, agent_id).await {
         Ok(verified) => Some(verified),
         Err(error) if error.is_denied() => {
             let reason = format!("request admission denied: {error:#}");
@@ -104,7 +121,7 @@ pub(crate) async fn verify_request_at_claim_boundary(
                 crate::request_admission::terminalize_pending_request_rejection(
                     node.as_ref(),
                     &request.doc_id,
-                    &request.agent_did,
+                    &request.node_did,
                     &reason,
                     "terminalize_request_admission_rejection",
                 )
@@ -131,9 +148,9 @@ pub(crate) async fn verify_request_at_claim_boundary(
     }
 }
 
-pub(super) struct BehaviorDaemon<M: ProviderModel> {
+pub(super) struct AgentDaemon<M: ProviderModel> {
     node: Arc<defra_node::EmbeddedNode>,
-    behavior: Arc<ResolvedBehavior>,
+    agent_config: Arc<ResolvedAgent>,
     provider_family: Option<String>,
     replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
     compaction_provider_family: Option<String>,
@@ -161,7 +178,26 @@ pub(super) struct BehaviorDaemon<M: ProviderModel> {
 enum HandleRequestOutcome {
     Completed,
     FailedAfterResponse(anyhow::Error),
-    Interrupted,
+    Interrupted(RequestInterruptionSource),
+}
+
+#[derive(Clone, Copy)]
+enum RequestInterruptionSource {
+    Claimed,
+    Preparation,
+    Inference,
+    TaskHook,
+}
+
+impl RequestInterruptionSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Claimed => "claimed",
+            Self::Preparation => "preparation",
+            Self::Inference => "mid_flight",
+            Self::TaskHook => "task_hook",
+        }
+    }
 }
 
 fn title_task_join_result(joined: std::result::Result<Result<()>, JoinError>) -> Result<()> {
@@ -178,10 +214,10 @@ fn title_task_join_result(joined: std::result::Result<Result<()>, JoinError>) ->
     }
 }
 
-impl<M: ProviderModel> BehaviorDaemon<M> {
+impl<M: ProviderModel> AgentDaemon<M> {
     pub(super) fn new(
         node: Arc<defra_node::EmbeddedNode>,
-        behavior: Arc<ResolvedBehavior>,
+        agent_config: Arc<ResolvedAgent>,
         provider_family: Option<String>,
         model: Arc<M>,
         preamble: String,
@@ -199,7 +235,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
         request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
     ) -> Result<Self> {
         let mut compaction_config = crate::completion_factory::loop_config(
-            behavior.as_ref(),
+            agent_config.as_ref(),
             preamble.clone(),
             0,
             crate::rendered_request::CaptureScopeKind::Compaction,
@@ -209,11 +245,11 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
             model.clone(),
             compaction_config,
         ));
-        let compaction_options = crate::compaction::reduction_options_for_behavior(&behavior)?;
+        let compaction_options = crate::compaction::reduction_options_for_agent(&agent_config)?;
 
         Ok(Self {
             node,
-            behavior,
+            agent_config,
             provider_family: provider_family.clone(),
             replay_issuer: None,
             compaction_provider_family: provider_family,
@@ -325,27 +361,27 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<()> {
         tracing::info!(
-            behavior_id = %self.behavior.behavior_id,
-            did = %self.behavior.agent_did(),
-            model = %self.behavior.model_name,
-            context_window = self.behavior.context_window,
-            "gents behavior started"
+            agent_id = %self.agent_config.agent_id,
+            did = %self.agent_config.node_did(),
+            model = %self.agent_config.model_name,
+            context_window = self.agent_config.context_window,
+            "gents agent started"
         );
 
         if self
             .runtime_status
             .readiness()
-            .mark_slot_ready(&self.behavior.behavior_id, self.slot_generation)
+            .mark_slot_ready(&self.agent_config.agent_id, self.slot_generation)
             .await?
         {
             self.startup_barrier
-                .mark_behavior_ready(&self.behavior.behavior_id, self.slot_generation)
+                .mark_agent_ready(&self.agent_config.agent_id, self.slot_generation)
                 .await;
         }
         tracing::info!(
-            behavior_id = %self.behavior.behavior_id,
-            did = %self.behavior.agent_did(),
-            "gents behavior executor online"
+            agent_id = %self.agent_config.agent_id,
+            did = %self.agent_config.node_did(),
+            "gents agent executor online"
         );
 
         let mut title_tasks = JoinSet::new();
@@ -357,7 +393,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 biased;
 
                 _ = shutdown.changed() => {
-                    tracing::info!(behavior_id = %self.behavior.behavior_id, "shutdown signal received");
+                    tracing::info!(agent_id = %self.agent_config.agent_id, "shutdown signal received");
                     break Ok(());
                 }
 
@@ -385,8 +421,8 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
             }
 
             let trace_attrs = RequestTraceAttrs::from_request(&request);
-            let behavior_id = self.behavior.behavior_id.clone();
-            let backend_id = self.behavior.backend_id.clone().unwrap_or_default();
+            let agent_id = self.agent_config.agent_id.clone();
+            let backend_id = self.agent_config.backend_id.clone().unwrap_or_default();
 
             // The slot's fixed workers may be idle or waiting on this shared
             // active semaphore. Dequeue happens first; no idle worker holds
@@ -402,7 +438,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 match guard {
                     Ok(guard) => Some(guard),
                     Err(error) => {
-                        tracing::warn!(behavior_id, error = %error, "request worker capacity admission stopped");
+                        tracing::warn!(agent_id, error = %error, "request worker capacity admission stopped");
                         break Ok(());
                     }
                 }
@@ -417,9 +453,9 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                         request_doc_id = %trace_attrs.request_doc_id,
                         request_id = %trace_attrs.request_id,
                         session_id = %trace_attrs.session_id,
-                        agent_did = %trace_attrs.agent_did,
-                        behavior_id = %behavior_id,
-                        requested_behavior_id = %trace_attrs.requested_behavior_id,
+                        node_did = %trace_attrs.node_did,
+                        agent_id = %agent_id,
+                        requested_agent_id = %trace_attrs.requested_agent_id,
                         backend_id = %backend_id,
                         execution_origin = %trace_attrs.execution_origin,
                         persisted_execution_origin = %trace_attrs.execution_origin,
@@ -464,6 +500,40 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
         }
     }
 
+    /// Verify, through the head's own admission owner, each pending message
+    /// that may fold into `request`'s claim. An unverified message is not
+    /// folded: it keeps its own claim, where its admission is decided.
+    async fn verified_fold_admissions(&self, request: &AgentRequest) -> Vec<String> {
+        let candidates = match crate::lifecycle::queue::fold_candidates(&self.node, request).await {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::warn!(
+                    request_id = %request.request_id,
+                    error = %format!("{error:#}"),
+                    "could not read queued messages to fold; claiming the request alone"
+                );
+                return Vec::new();
+            }
+        };
+        let mut admitted = Vec::new();
+        for candidate in candidates {
+            match self
+                .request_admission
+                .verify_fresh(&candidate, &self.agent_config.agent_id)
+                .await
+            {
+                Ok(verified) => admitted.push(verified.doc_id),
+                Err(error) => tracing::debug!(
+                    request_id = %request.request_id,
+                    candidate_request_id = %candidate.request_id,
+                    error = %error,
+                    "queued message admission not verified; it keeps its own turn"
+                ),
+            }
+        }
+        admitted
+    }
+
     pub(in crate::agent) async fn process_request(
         &mut self,
         request: AgentRequest,
@@ -474,13 +544,13 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
         // durable transcript and recovery state remain in DefraDB.
         let stream_writer = DefraStreamWriter::new(
             self.node.clone(),
-            self.behavior.agent_did(),
-            Duration::from_millis(self.behavior.stream_batch_ms),
+            self.agent_config.node_did(),
+            Duration::from_millis(self.agent_config.stream_batch_ms),
         );
         let Some(request) = verify_request_at_claim_boundary(
             &self.request_admission,
             self.node.clone(),
-            &self.behavior.behavior_id,
+            &self.agent_config.agent_id,
             request,
         )
         .await
@@ -492,15 +562,16 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 .expect("fresh request admission requires a canonical execution_origin");
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
-            &self.behavior.behavior_id,
-            self.behavior.agent_did(),
+            &self.agent_config.agent_id,
+            self.agent_config.node_did(),
             request.clone(),
-            self.behavior.deadline_duration.as_secs(),
+            self.agent_config.deadline_duration.as_secs(),
             execution_origin,
-            self.behavior.backend_id.clone().unwrap_or_default(),
+            self.agent_config.backend_id.clone().unwrap_or_default(),
         );
-        lifecycle.set_execution_lease_duration(self.behavior.stream_liveness_timeout);
-        lifecycle.set_configured_max_total_tokens(self.behavior.max_total_tokens);
+        lifecycle.set_execution_lease_duration(self.agent_config.stream_liveness_timeout);
+        lifecycle.set_configured_max_total_tokens(self.agent_config.max_total_tokens);
+        lifecycle.set_fold_admitted(self.verified_fold_admissions(&request).await);
 
         let claim_result = lifecycle
             .claim_with_identity()
@@ -508,8 +579,8 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 "request.claim",
                 request_id = %request.request_id,
                 session_id = %request.session_id,
-                agent_did = %request.agent_did,
-                behavior_id = %self.behavior.behavior_id,
+                node_did = %request.node_did,
+                agent_id = %self.agent_config.agent_id,
             ))
             .await;
 
@@ -550,7 +621,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 record_current_claim_outcome("queued");
                 record_current_request_outcome("queued");
                 tracing::info!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     "request queued behind an earlier same-session request"
@@ -561,7 +632,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 record_current_claim_outcome("interrupted");
                 record_current_request_outcome("interrupted_pre_claim");
                 tracing::info!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     cancellation_source = "pre_claim",
@@ -573,7 +644,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 record_current_claim_outcome("expired");
                 record_current_request_outcome("expired_pre_claim");
                 tracing::info!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     cancellation_source = "stale_ttl",
@@ -592,7 +663,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 record_current_failure_class(&error);
                 if deterministic_rejection {
                     tracing::warn!(
-                        behavior_id = %self.behavior.behavior_id,
+                        agent_id = %self.agent_config.agent_id,
                         request_id = %request.request_id,
                         error = %error,
                         "rejecting request with an invalid canonical admission binding"
@@ -601,7 +672,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                         lifecycle.reject_admission(&error.to_string()).await
                     {
                         tracing::error!(
-                            behavior_id = %self.behavior.behavior_id,
+                            agent_id = %self.agent_config.agent_id,
                             request_id = %request.request_id,
                             error = %rejection_error,
                             "failed to persist request admission rejection"
@@ -610,7 +681,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                     return Ok(());
                 }
                 tracing::warn!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     error = %error,
                     "failed to claim request; leaving it pending for retry"
@@ -619,21 +690,32 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
             }
         }
 
-        let requested_behavior_id = request.behavior_id.as_str();
-        if requested_behavior_id != self.behavior.behavior_id {
+        let (interrupt_tx, mut interrupt_rx) =
+            tokio::sync::watch::channel::<Option<crate::interrupt::InterruptIntent>>(None);
+        let observer = tokio_util::task::AbortOnDropHandle::new(
+            crate::interrupt::spawn_request_interrupt_observer(
+                self.node.clone(),
+                request.doc_id.clone(),
+                interrupt_tx,
+                shutdown.clone(),
+            ),
+        );
+
+        let requested_agent_id = request.agent_id.as_str();
+        if requested_agent_id != self.agent_config.agent_id {
             let error = anyhow::anyhow!(
-                "request targets behavior {} but runtime is serving behavior {}",
-                requested_behavior_id,
-                self.behavior.behavior_id
+                "request targets agent {} but runtime is serving agent {}",
+                requested_agent_id,
+                self.agent_config.agent_id
             );
-            record_current_request_outcome("rejected_behavior_mismatch");
+            record_current_request_outcome("rejected_agent_mismatch");
             record_current_failure_class(&error);
             tracing::warn!(
-                behavior_id = %self.behavior.behavior_id,
+                agent_id = %self.agent_config.agent_id,
                 request_id = %request.request_id,
                 session_id = %request.session_id,
-                requested_behavior_id = %requested_behavior_id,
-                "rejecting request for unroutable behavior"
+                requested_agent_id = %requested_agent_id,
+                "rejecting request for unroutable agent"
             );
             self.finalize_failure_before_work(
                 &mut lifecycle,
@@ -645,7 +727,17 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
             return Ok(());
         }
 
-        match crate::workspace::writer_request_already_sealed(self.node.as_ref(), &request).await {
+        let sealed = request::prepare_unless_interrupted(
+            &mut interrupt_rx,
+            crate::workspace::writer_request_already_sealed(self.node.as_ref(), &request),
+        )
+        .await;
+        let Some(sealed) = sealed else {
+            self.finalize_interrupt_before_work(&mut lifecycle, &stream_writer, &request)
+                .await?;
+            return Ok(());
+        };
+        match sealed {
             // An earlier execution already ran and sealed this work. Its task
             // hooks are not rerun: host commands are never replayed, and that
             // execution's remaining cleanup belongs to task hook recovery.
@@ -721,12 +813,22 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
             }
         }
 
-        let (hooks, hook_cwd, hook_record) = match self.prepare_task_hooks(&request).await {
+        let prepared_hooks = request::prepare_unless_interrupted(
+            &mut interrupt_rx,
+            self.prepare_task_hooks(&request),
+        )
+        .await;
+        let Some(prepared_hooks) = prepared_hooks else {
+            self.finalize_interrupt_before_work(&mut lifecycle, &stream_writer, &request)
+                .await?;
+            return Ok(());
+        };
+        let (hooks, hook_cwd, hook_record, task_owned) = match prepared_hooks {
             Ok(prepared) => prepared,
             Err(error) => {
                 record_current_failure_class(&error);
                 tracing::error!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     error = %format!("{error:#}"),
                     "refusing to run a request whose task hooks cannot be prepared"
@@ -742,16 +844,8 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
             }
         };
 
-        // One observer spans the hooks and the owned work, so an interrupt
-        // latched during a hook cancels that hook and reaches the work too.
-        let (interrupt_tx, interrupt_rx) =
-            tokio::sync::watch::channel::<Option<crate::interrupt::InterruptIntent>>(None);
-        let observer = crate::interrupt::spawn_request_interrupt_observer(
-            self.node.clone(),
-            request.doc_id.clone(),
-            interrupt_tx,
-            shutdown.clone(),
-        );
+        lifecycle.allow_natural_finish(permits_natural_finish(&request, task_owned));
+
         let ownership_lost = lifecycle.ownership_lost();
         let hook_cancellation = crate::task_hooks::TaskHookCancellation::default();
         let hook_cancellation_follower = (!hooks.is_empty()).then(|| {
@@ -814,17 +908,22 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
             return Ok(());
         }
 
-        let (work_reason, release_writer_binding) = match owned_work {
+        let (work_reason, release_writer_binding, interruption_source) = match owned_work {
             // No work ran, so nothing else can hold the writer binding the
             // request was materialized with.
-            None => (None, true),
+            None => (None, true, RequestInterruptionSource::TaskHook),
+            Some(OwnedWorkOutcome::Interrupted(source)) => (None, false, source),
             Some(OwnedWorkOutcome::OwnershipLost) => return Ok(()),
             Some(OwnedWorkOutcome::DrainFailed(error)) => return Err(error),
             Some(OwnedWorkOutcome::Observed {
                 reason,
                 release_writer_binding,
                 ..
-            }) => (reason, release_writer_binding),
+            }) => (
+                reason,
+                release_writer_binding,
+                RequestInterruptionSource::TaskHook,
+            ),
         };
 
         let final_outcome = run.final_outcome();
@@ -838,7 +937,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
         if !cleanup_errors.is_empty() {
             let note = format!("task cleanup hooks failed: {}", cleanup_errors.join(", "));
             tracing::error!(
-                behavior_id = %self.behavior.behavior_id,
+                agent_id = %self.agent_config.agent_id,
                 request_id = %request.request_id,
                 cleanup_errors = %cleanup_errors.join(","),
                 "task cleanup hooks failed"
@@ -888,6 +987,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                         return Ok(());
                     }
                 }
+                self.record_request_interruption(&request, interruption_source);
                 if let Err(error) =
                     crate::workspace::release_writer_binding(self.node.as_ref(), &request).await
                 {
@@ -897,13 +997,6 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                         "failed to release writer workspace binding after interrupt"
                     );
                 }
-                tracing::info!(
-                    behavior_id = %self.behavior.behavior_id,
-                    request_id = %request.request_id,
-                    session_id = %request.session_id,
-                    cancellation_source = "mid_flight",
-                    "request interrupted mid-flight"
-                );
             }
         }
         Ok(())
@@ -937,6 +1030,41 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
         }
     }
 
+    async fn finalize_interrupt_before_work(
+        &self,
+        lifecycle: &mut RequestLifecycle,
+        stream_writer: &DefraStreamWriter,
+        request: &AgentRequest,
+    ) -> Result<()> {
+        if terminalize_request(
+            lifecycle,
+            stream_writer,
+            RequestTerminalOutcome::Interrupted,
+            Some("interrupted"),
+        )
+        .await?
+        {
+            record_current_request_outcome("interrupted");
+            self.record_request_interruption(request, RequestInterruptionSource::Claimed);
+            crate::workspace::release_writer_binding(self.node.as_ref(), request).await?;
+        }
+        Ok(())
+    }
+
+    fn record_request_interruption(
+        &self,
+        request: &AgentRequest,
+        source: RequestInterruptionSource,
+    ) {
+        tracing::info!(
+            agent_id = %self.agent_config.agent_id,
+            request_id = %request.request_id,
+            session_id = %request.session_id,
+            cancellation_source = source.as_str(),
+            "request interrupted"
+        );
+    }
+
     /// The request's Task hooks, the admitted cwd they run from and the claim
     /// on their host record; no cwd or record when the Task has no hooks.
     async fn prepare_task_hooks(
@@ -946,11 +1074,12 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
         Vec<crate::document_config::TaskHook>,
         PathBuf,
         Option<crate::task_hooks::TaskHookRecordHandle>,
+        bool,
     )> {
-        let hooks =
+        let (hooks, task_owned) =
             crate::task_hooks::resolve_request_task_hooks(self.node.as_ref(), request).await?;
         if hooks.is_empty() {
-            return Ok((hooks, PathBuf::new(), None));
+            return Ok((hooks, PathBuf::new(), None, task_owned));
         }
         let cwd = self.task_hook_cwd().await?;
         let record = self
@@ -959,17 +1088,17 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
             .begin(crate::task_hooks::TaskHookRecord {
                 request_doc_id: request.doc_id.clone(),
                 request_id: request.request_id.clone(),
-                agent_did: request.agent_did.clone(),
+                node_did: request.node_did.clone(),
                 cwd: cwd.clone(),
                 root_guard: self.root_execution_guard.clone(),
                 hooks: hooks.clone(),
                 attempts: Vec::new(),
             })?;
-        Ok((hooks, cwd, Some(record)))
+        Ok((hooks, cwd, Some(record), task_owned))
     }
 
-    /// Task hooks run from the behavior's host-tools root, revalidated through
-    /// its admission owner, or the runtime cwd when the behavior has none.
+    /// Task hooks run from the agent_config's host-tools root, revalidated through
+    /// its admission owner, or the runtime cwd when the agent_config has none.
     /// Workspace association for hooks remains an open design question, so a
     /// hook never runs inside the request's workspace overlay.
     async fn task_hook_cwd(&self) -> Result<PathBuf> {
@@ -1003,6 +1132,9 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
         match result {
             Ok(HandleRequestOutcome::Completed) => {
                 record_current_request_outcome("completed");
+                if lifecycle.natural_finish_completed() {
+                    return OwnedWorkOutcome::observed(TaskAgentResult::Success, None, false);
+                }
                 if let Err(error) = lifecycle.validate_owned_execution().await {
                     tracing::warn!(request_id = %request.request_id, %error, "stopping workspace completion after execution ownership loss");
                     return OwnedWorkOutcome::OwnershipLost;
@@ -1055,9 +1187,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
             }
             // The owned loop returns this only with an interrupt latch
             // present: a cancellation of active work, not an unknown outcome.
-            Ok(HandleRequestOutcome::Interrupted) => {
-                OwnedWorkOutcome::observed(TaskAgentResult::Cancelled, None, false)
-            }
+            Ok(HandleRequestOutcome::Interrupted(source)) => OwnedWorkOutcome::Interrupted(source),
             Ok(HandleRequestOutcome::FailedAfterResponse(error))
                 if lost_execution_ownership(lifecycle, &error).await =>
             {
@@ -1068,7 +1198,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 record_current_request_outcome("failed_after_response");
                 record_current_failure_class(&error);
                 tracing::error!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     error = %error,
                     "request failed after response started"
@@ -1079,7 +1209,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 record_current_request_outcome("shutdown_drain_failed");
                 record_current_failure_class(&error);
                 tracing::error!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     error = %error,
                     "graceful shutdown could not confirm provider output retention; leaving durable execution for recovery"
@@ -1094,7 +1224,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 record_current_request_outcome("failed");
                 record_current_failure_class(&error);
                 tracing::error!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     error = %error,
                     "request handling failed"
@@ -1122,6 +1252,7 @@ async fn lost_execution_ownership(lifecycle: &RequestLifecycle, error: &anyhow::
 /// runs, and the request's current owner keeps its terminal. A drain failure
 /// leaves the durable execution to recovery and its error to the runtime.
 enum OwnedWorkOutcome {
+    Interrupted(RequestInterruptionSource),
     Observed {
         observation: crate::task_hooks::TaskAgentResult,
         reason: Option<String>,
@@ -1146,6 +1277,7 @@ impl OwnedWorkOutcome {
 
     fn observation(&self) -> crate::task_hooks::TaskAgentResult {
         match self {
+            Self::Interrupted(_) => crate::task_hooks::TaskAgentResult::Cancelled,
             Self::Observed { observation, .. } => *observation,
             Self::OwnershipLost | Self::DrainFailed(_) => {
                 crate::task_hooks::TaskAgentResult::Interrupted

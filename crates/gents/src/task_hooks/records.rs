@@ -28,7 +28,7 @@ use crate::managed_exec::ownership::{
 pub(crate) struct TaskHookRecord {
     pub(crate) request_doc_id: String,
     pub(crate) request_id: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) cwd: PathBuf,
     #[serde(default)]
     pub(crate) root_guard: Option<crate::tool_surface::RootExecutionGuard>,
@@ -389,7 +389,7 @@ async fn recover_record(
 /// tasks, off the caller's reconcile tick.
 pub(crate) async fn recover_task_hook_records(
     node: &Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     store: &TaskHookRecordStore,
 ) -> Result<usize> {
     let mut started = 0;
@@ -397,7 +397,7 @@ pub(crate) async fn recover_task_hook_records(
         return Ok(started);
     }
     for record in store.list() {
-        if record.agent_did != agent_did {
+        if record.node_did != node_did {
             continue;
         }
         let Some(handle) = store.claim(record.clone()) else {

@@ -11,12 +11,12 @@ import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
 import { SessionsScreen } from "../src/ui/screens/SessionsScreen";
 import { node, renderIn, testApp } from "./app-fixture";
 
-const summary = (agentDid: string, sessionId: string) =>
+const summary = (nodeDid: string, sessionId: string) =>
   ({
     sessionId,
-    agentDid,
+    nodeDid,
     requesterDid: null,
-    behaviorId: null,
+    agentId: null,
     title: sessionId,
     turnState: null,
     updatedAt: null,
@@ -26,8 +26,8 @@ const summary = (agentDid: string, sessionId: string) =>
 const app = () =>
   testApp({
     deployments: [
-      node({ agentDid: "did:key:here", sessions: [summary("did:key:here", "a")] }),
-      node({ agentDid: "did:key:there", sessions: [summary("did:key:there", "b")] }),
+      node({ nodeDid: "did:key:here", sessions: [summary("did:key:here", "a")] }),
+      node({ nodeDid: "did:key:there", sessions: [summary("did:key:there", "b")] }),
     ],
   });
 

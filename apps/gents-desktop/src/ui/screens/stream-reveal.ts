@@ -247,13 +247,10 @@ export function drawKeys(
   return next;
 }
 
-/* The request a row stands in for, as the turn of the person's message.
-   A saved row stands in only when it owns the turn — the request's prompt,
-   as the bridge marks it (`ownsTurn`); a request authors other user rows
-   (workspace instructions, tool delivery) that are rows of their own. */
 const requestOf = (item: RenderedTimelineItem): string | null => {
   if (item.kind === "pendingUserTurn") return item.requestId;
-  if (item.kind === "userMessage" && item.ownsTurn) return item.requestId ?? null;
+  if (item.kind === "userMessage")
+    return item.inputRequestId ?? (item.ownsTurn ? (item.requestId ?? null) : null);
   return null;
 };
 
@@ -303,6 +300,8 @@ export function withSentTurns(
             content: local.content,
             selectedSkillIds: local.selectedSkillIds,
             lifecycleState: local.lifecycleState,
+            foldedIntoRequestId: null,
+            origin: null,
             createdAt: local.createdAt,
           };
           const tailAt = items.findIndex((i) => i.kind === "liveAssistant");

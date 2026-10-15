@@ -47,11 +47,11 @@ if (isDirectRun) {
   const provider = takeFlag(argv, "--provider");
   const apiKey = takeFlag(argv, "--api-key");
   const apiKeyEnvVar = takeFlag(argv, "--api-key-env-var");
-  const subagentInferenceUrl = takeFlag(argv, "--subagent-inference-url");
-  const subagentModelName = takeFlag(argv, "--subagent-model-name");
-  const subagentProvider = takeFlag(argv, "--subagent-provider");
-  const subagentApiKey = takeFlag(argv, "--subagent-api-key");
-  const subagentApiKeyEnvVar = takeFlag(argv, "--subagent-api-key-env-var");
+  const agentTargetInferenceUrl = takeFlag(argv, "--agent-target-inference-url");
+  const agentTargetModelName = takeFlag(argv, "--agent-target-model-name");
+  const agentTargetProvider = takeFlag(argv, "--agent-target-provider");
+  const agentTargetApiKey = takeFlag(argv, "--agent-target-api-key");
+  const agentTargetApiKeyEnvVar = takeFlag(argv, "--agent-target-api-key-env-var");
   const suite = takeFlag(argv, "--suite");
 
   // Fail fast before launching vitest; never guess a provider from the URL
@@ -89,22 +89,24 @@ if (isDirectRun) {
   if (apiKeyEnvVar) {
     env.GENTS_TAURI_LIVE_API_KEY_ENV_VAR = apiKeyEnvVar;
   }
-  if (subagentInferenceUrl)
-    env.GENTS_TAURI_LIVE_SUBAGENT_INFERENCE_URL = subagentInferenceUrl;
-  if (subagentModelName) env.GENTS_TAURI_LIVE_SUBAGENT_MODEL_NAME = subagentModelName;
-  if (subagentProvider) env.GENTS_TAURI_LIVE_SUBAGENT_PROVIDER = subagentProvider;
-  if (subagentApiKey) env.GENTS_TAURI_LIVE_SUBAGENT_API_KEY = subagentApiKey;
-  if (subagentApiKeyEnvVar)
-    env.GENTS_TAURI_LIVE_SUBAGENT_API_KEY_ENV_VAR = subagentApiKeyEnvVar;
+  if (agentTargetInferenceUrl)
+    env.GENTS_TAURI_LIVE_AGENT_TARGET_INFERENCE_URL = agentTargetInferenceUrl;
+  if (agentTargetModelName)
+    env.GENTS_TAURI_LIVE_AGENT_TARGET_MODEL_NAME = agentTargetModelName;
+  if (agentTargetProvider)
+    env.GENTS_TAURI_LIVE_AGENT_TARGET_PROVIDER = agentTargetProvider;
+  if (agentTargetApiKey) env.GENTS_TAURI_LIVE_AGENT_TARGET_API_KEY = agentTargetApiKey;
+  if (agentTargetApiKeyEnvVar)
+    env.GENTS_TAURI_LIVE_AGENT_TARGET_API_KEY_ENV_VAR = agentTargetApiKeyEnvVar;
 
   const liveTestSuites = {
     fleet: "tests/tauri-driver.live.fleet.test.tsx",
-    behavior: "tests/tauri-driver.live.behavior.test.tsx",
+    agent: "tests/tauri-driver.live.agent.test.tsx",
     config: "tests/tauri-driver.live.config.test.tsx",
     chat: "tests/tauri-driver.live.chat.test.tsx",
     interrupt: "tests/tauri-driver.live.interrupt.test.tsx",
     operations: "tests/tauri-driver.live.operations.test.tsx",
-    subagent: "tests/tauri-driver.live.subagent.test.tsx",
+    "agent-target": "tests/tauri-driver.live.agent-target.test.tsx",
     replication: "tests/tauri-driver.live.replication.test.tsx",
     "sad-path": "tests/tauri-driver.live.sad-path.test.tsx",
     "e2e-acceptance": "tests/tauri-driver.live.e2e-acceptance.test.tsx",
@@ -120,12 +122,12 @@ if (isDirectRun) {
     ? [liveTestSuites[suite]]
     : [
         liveTestSuites.fleet,
-        liveTestSuites.behavior,
+        liveTestSuites.agent,
         liveTestSuites.config,
         liveTestSuites.chat,
         liveTestSuites.interrupt,
         liveTestSuites.operations,
-        liveTestSuites.subagent,
+        liveTestSuites["agent-target"],
         liveTestSuites.replication,
         liveTestSuites["sad-path"],
       ];

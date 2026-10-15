@@ -197,43 +197,45 @@ pub(super) fn write_peer_directory_records(
 
 pub(super) async fn wait_for_live_documents(
     desktop_core: &ClientCore,
-    agent_did: &str,
+    node_did: &str,
     docs: &LiveAgentDocs,
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         desktop_core.refresh_store().await?;
         let snapshot = desktop_core.store().snapshot();
-        let has_principal = snapshot
-            .agent_principals
+        let has_node = snapshot.nodes.iter().any(|row| row.node_did == node_did);
+        let has_agent = snapshot
+            .agents
             .iter()
-            .any(|row| row.agent_did == agent_did);
-        let has_behavior = snapshot
-            .behaviors
+            .any(|row| row.agent_id == docs.agent_id);
+        let has_target_agent = snapshot
+            .agents
             .iter()
-            .any(|row| row.behavior_id == docs.behavior_id);
-        let has_subagent_behavior = snapshot
-            .behaviors
-            .iter()
-            .any(|row| row.behavior_id == docs.subagent_behavior_id);
+            .any(|row| row.agent_id == docs.target_agent_id);
         let has_tools = snapshot
             .tools
             .iter()
             .any(|row| row.tools_id == docs.tools_id);
-        let has_subagent_tools = snapshot
+        let has_target_tools = snapshot
             .tools
             .iter()
-            .any(|row| row.tools_id == docs.subagent_tools_id);
+            .any(|row| row.tools_id == docs.target_tools_id);
+        let has_target = snapshot
+            .agent_targets
+            .iter()
+            .any(|row| row.target_id == docs.target_id);
         let has_profile = snapshot
             .inference_profiles
             .iter()
             .any(|row| row.profile_id == docs.inference_profile_id);
 
-        if has_principal
-            && has_behavior
-            && has_subagent_behavior
+        if has_node
+            && has_agent
+            && has_target_agent
             && has_tools
-            && has_subagent_tools
+            && has_target_tools
+            && has_target
             && has_profile
         {
             return Ok(());

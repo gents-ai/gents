@@ -1,4 +1,4 @@
-//! The subject dossier: what the author knows about the behavior it drafts
+//! The subject dossier: what the author knows about the agent it drafts
 //! cases for. The author reads nothing itself; this is rendered once, from
 //! the pack's own declared assets through the real pack loader.
 
@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::document_config::{AgentBehavior, PackConfig};
+use gents::document_config::{Agent, PackConfig};
 use gents::pack::{
     declared_paths, digest_declared_assets, interpolate, load_pack_config, PackInstallOptions,
     PackManifest,
@@ -21,7 +21,7 @@ pub(crate) struct Dossier {
     pub(crate) pack_name: String,
     pub(crate) pack_version: String,
     pub(crate) pack_digest: String,
-    pub(crate) behavior_id: String,
+    pub(crate) agent_id: String,
     pub(crate) slot: String,
     /// Collections a documents capture may name, with their fields: from
     /// datastore surfaces (`fields` of each entry) and `schemas/*.graphql`
@@ -33,9 +33,9 @@ pub(crate) struct Dossier {
 /// A dossier larger than this is refused: it would crowd the author's turn.
 pub(crate) const DOSSIER_LIMIT_BYTES: usize = 64 * 1024;
 
-/// The dossier of `behavior` (or the pack's only behavior) of the directory
+/// The dossier of `agent` (or the pack's only agent) of the directory
 /// pack at `pack_dir`.
-pub(crate) fn render(pack_dir: &Path, behavior: Option<&str>) -> Result<Dossier> {
+pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
     let (manifest, assets) = read_pack(pack_dir)?;
     let asset = |path: &str| {
         assets
@@ -53,7 +53,7 @@ pub(crate) fn render(pack_dir: &Path, behavior: Option<&str>) -> Result<Dossier>
     let config = load_pack_config(
         &manifest,
         &PackInstallOptions {
-            agent_did: "did:key:dossier".into(),
+            node_did: "did:key:dossier".into(),
         },
         &|path| {
             read.borrow_mut().insert(path.to_owned());
@@ -69,17 +69,17 @@ pub(crate) fn render(pack_dir: &Path, behavior: Option<&str>) -> Result<Dossier>
     .with_context(|| format!("loading pack {}", manifest.name))?;
     let read = read.into_inner();
 
-    let chosen = choose_behavior(&config, behavior)?;
-    let behavior_id = chosen.behavior_id.clone();
+    let chosen = choose_agent(&config, agent)?;
+    let agent_id = chosen.agent_id.clone();
     let slot = manifest
         .metadata
         .inference_slots
         .iter()
-        .find(|slot| slot.behaviors.contains(&behavior_id))
+        .find(|slot| slot.agents.contains(&agent_id))
         .map(|slot| slot.name.clone())
         .with_context(|| {
             format!(
-                "behavior {behavior_id:?} binds no inference slot of pack {}",
+                "agent {agent_id:?} binds no inference slot of pack {}",
                 manifest.name
             )
         })?;
@@ -98,7 +98,7 @@ pub(crate) fn render(pack_dir: &Path, behavior: Option<&str>) -> Result<Dossier>
     let _ = writeln!(text, "- digest: {pack_digest}");
     let _ = writeln!(
         text,
-        "- behavior: {behavior_id} ({})",
+        "- agent: {agent_id} ({})",
         chosen.display_name.as_deref().unwrap_or("no display name")
     );
     let _ = writeln!(text, "- inference slot: {slot}");
@@ -171,7 +171,7 @@ pub(crate) fn render(pack_dir: &Path, behavior: Option<&str>) -> Result<Dossier>
     let tasks: Vec<_> = config
         .tasks
         .iter()
-        .filter(|task| task.behavior_id == behavior_id)
+        .filter(|task| task.agent_id == agent_id)
         .collect();
     if tasks.is_empty() {
         text.push_str("\n(none)\n");
@@ -261,7 +261,7 @@ pub(crate) fn render(pack_dir: &Path, behavior: Option<&str>) -> Result<Dossier>
         pack_name: manifest.name,
         pack_version: manifest.version,
         pack_digest,
-        behavior_id,
+        agent_id,
         slot,
         collections,
         text,
@@ -292,7 +292,7 @@ pub(super) fn read_pack(pack_dir: &Path) -> Result<(PackManifest, BTreeMap<Strin
 /// `${VAR:-default}` stays that marker. The owner marker is left for the
 /// loader to bind, as it does for any install.
 fn literal_placeholders(bytes: &[u8]) -> Result<Vec<u8>> {
-    const OWNER: &str = "${GENTS_PACK_AGENT_DID}";
+    const OWNER: &str = "${GENTS_PACK_NODE_DID}";
     fn escape(value: &mut Value) {
         match value {
             Value::String(text) => {
@@ -308,29 +308,26 @@ fn literal_placeholders(bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(&value)?)
 }
 
-fn choose_behavior<'a>(
-    config: &'a PackConfig,
-    behavior: Option<&str>,
-) -> Result<&'a AgentBehavior> {
+fn choose_agent<'a>(config: &'a PackConfig, agent: Option<&str>) -> Result<&'a Agent> {
     let ids = || {
         config
-            .agent_behaviors
+            .agents
             .iter()
-            .map(|behavior| behavior.behavior_id.as_str())
+            .map(|agent| agent.agent_id.as_str())
             .collect::<Vec<_>>()
             .join(", ")
     };
-    match behavior {
+    match agent {
         Some(id) => config
-            .agent_behaviors
+            .agents
             .iter()
-            .find(|behavior| behavior.behavior_id == id)
-            .with_context(|| format!("the pack has no behavior {id:?}; it declares: {}", ids())),
-        None => match config.agent_behaviors.as_slice() {
+            .find(|agent| agent.agent_id == id)
+            .with_context(|| format!("the pack has no agent {id:?}; it declares: {}", ids())),
+        None => match config.agents.as_slice() {
             [only] => Ok(only),
-            [] => anyhow::bail!("the pack declares no behavior to evaluate"),
+            [] => anyhow::bail!("the pack declares no agent to evaluate"),
             _ => anyhow::bail!(
-                "the pack declares several behaviors ({}); choose one with --behavior",
+                "the pack declares several agents ({}); choose one with --agent",
                 ids()
             ),
         },
@@ -461,7 +458,7 @@ mod tests {
     }
 
     /// A directory pack: `config` as `pack_config.json`, a README, and
-    /// `assets` (path, text). Each behavior gets its own inference slot.
+    /// `assets` (path, text). Each agent gets its own inference slot.
     fn write_pack(dir: &Path, config: &Value, assets: &[(&str, &str)]) {
         let mut paths = vec!["README.md".to_owned(), "pack_config.json".to_owned()];
         std::fs::write(dir.join("README.md"), "# a fixture pack\n").unwrap();
@@ -472,16 +469,16 @@ mod tests {
             paths.push((*path).to_owned());
         }
         paths.sort();
-        let slots: Vec<Value> = config["agent_behaviors"]
+        let slots: Vec<Value> = config["agents"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|behavior| {
-                let id = behavior["behavior_id"].as_str().unwrap();
+            .map(|agent| {
+                let id = agent["agent_id"].as_str().unwrap();
                 json!({
                     "name": format!("slot_{id}"),
                     "description": "Runs it.",
-                    "behaviors": [id],
+                    "agents": [id],
                 })
             })
             .collect();
@@ -508,10 +505,10 @@ mod tests {
         .unwrap();
     }
 
-    fn behavior(id: &str) -> Value {
+    fn agent(id: &str) -> Value {
         json!({
-            "behavior_id": id,
-            "display_name": format!("Behavior {id}"),
+            "agent_id": id,
+            "display_name": format!("Agent {id}"),
             "context_id": format!("{id}-context"),
             "inference_profile_id": format!("gents:inference-slot:slot_{id}"),
         })
@@ -531,7 +528,7 @@ mod tests {
         assert_eq!(dossier.pack_name, "eval_canary");
         assert_eq!(dossier.pack_version, "1.0.0");
         assert!(dossier.pack_digest.starts_with("sha256:"));
-        assert_eq!(dossier.behavior_id, "canary");
+        assert_eq!(dossier.agent_id, "canary");
         assert_eq!(dossier.slot, "primary");
         let text = &dossier.text;
         assert!(text.contains("# Subject"));
@@ -554,8 +551,8 @@ mod tests {
     fn a_pack_with_two_behaviors_needs_a_choice_and_refuses_an_unknown_one() {
         let dir = tempfile::tempdir().unwrap();
         let config = json!({
-            "agent_principal": {},
-            "agent_behaviors": [behavior("a"), behavior("b")],
+            "node": {},
+            "agents": [agent("a"), agent("b")],
             "contexts": [context("a", "Prompt A."), context("b", "Prompt B.")],
             "tools": [
                 {"tools_id": "a-tools", "host": {"files": {"mode": "ReadOnly"}}},
@@ -566,13 +563,13 @@ mod tests {
 
         let error = render(dir.path(), None).err().unwrap().to_string();
         assert!(error.contains("a") && error.contains("b"), "{error}");
-        assert!(error.contains("--behavior"), "{error}");
+        assert!(error.contains("--agent"), "{error}");
 
         let error = render(dir.path(), Some("nope")).err().unwrap().to_string();
         assert!(error.contains("nope"), "{error}");
 
         let dossier = render(dir.path(), Some("b")).unwrap();
-        assert_eq!(dossier.behavior_id, "b");
+        assert_eq!(dossier.agent_id, "b");
         assert_eq!(dossier.slot, "slot_b");
         assert!(dossier.text.contains("Prompt B."));
         assert!(!dossier.text.contains("Prompt A."));
@@ -583,8 +580,8 @@ mod tests {
     fn surfaces_tasks_and_schemas_are_rendered_and_give_collections() {
         let dir = tempfile::tempdir().unwrap();
         let config = json!({
-            "agent_principal": {},
-            "agent_behaviors": [behavior("a")],
+            "node": {},
+            "agents": [agent("a")],
             "contexts": [context("a", "Prompt A.")],
             "tools": [{
                 "tools_id": "a-tools",
@@ -601,7 +598,7 @@ mod tests {
             }],
             "tasks": [{
                 "task_id": "summarize",
-                "behavior_id": "a",
+                "agent_id": "a",
                 "prompt_template": "Summarize {{ topic }} for {{reader}}.",
             }],
         });
@@ -646,8 +643,8 @@ mod tests {
     fn placeholders_stay_markers_and_the_size_limit_is_enforced() {
         let dir = tempfile::tempdir().unwrap();
         let config = json!({
-            "agent_principal": {},
-            "agent_behaviors": [behavior("a")],
+            "node": {},
+            "agents": [agent("a")],
             "contexts": [context("a", "Prompt A.")],
             "tools": [{
                 "tools_id": "a-tools",
@@ -667,8 +664,8 @@ mod tests {
 
         let big = tempfile::tempdir().unwrap();
         let config = json!({
-            "agent_principal": {},
-            "agent_behaviors": [behavior("a")],
+            "node": {},
+            "agents": [agent("a")],
             "contexts": [context("a", "./prompts/a.md")],
             "tools": [{"tools_id": "a-tools"}],
         });

@@ -65,7 +65,7 @@ function verifierRequestFor(
 ): AgentRequestRow | undefined {
   return requests
     .filter((request) => {
-      if (request.behavior_id !== "defend-verifier") {
+      if (request.agent_id !== "defend-verifier") {
         return false;
       }
       if (
@@ -448,7 +448,7 @@ export function projectDefenseGraph(
   const isolatedVerifierTopology = Boolean(
     graphNativeVerification ||
       triageRequest?.content?.includes("candidate-verifier") ||
-      triageRequest?.content?.includes("spawn_subagent"),
+      triageRequest?.content?.includes("agent_new"),
   );
   const legacySerialTriage = Boolean(
     scansClosed &&

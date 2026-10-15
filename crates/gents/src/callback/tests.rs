@@ -23,24 +23,24 @@ use super::documents::{
     CallbackBindingDoc, CallbackInvocationDoc, CallbackModuleDoc, CallbackResultDoc,
     CallbackResultInvocationRow,
 };
+use super::planner::{
+    compute_module_id, fixture_create_workspace_artifact, invoke_plugin_planner, plan_from_module,
+    validate_callback_module, CallbackModuleLimits, MAX_ARTIFACT_BYTES,
+};
 use super::run::{
     apply_planner_deny, can_emit_callback_result, can_start_executing, decode_journal,
     emit_plan_from_source, plan_from_callback, resolve_action_plan,
     resolve_action_plan_with_module,
-};
-use super::wasm::{
-    compute_module_id, fixture_create_workspace_wasm, fixture_wasm_is_stub, invoke_wasm_planner,
-    plan_from_wasm_module, validate_callback_module, CallbackModuleLimits, MAX_WASM_BYTES,
 };
 use super::{
     LIFECYCLE_DENIED, LIFECYCLE_FAILED, LIFECYCLE_PENDING, LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED,
 };
 
 fn binding() -> CallbackBindingDoc {
-    serde_json::from_value(json!({"binding_id":"bind-1","agent_did":"did:key:zWriter","event_source_id":"events","callback_id":"cb-1","input_fields":["work_unit_id","repository_id","base_sha","branch","owned_files"]})).unwrap()
+    serde_json::from_value(json!({"binding_id":"bind-1","node_did":"did:key:zWriter","event_source_id":"events","callback_id":"cb-1","input_fields":["work_unit_id","repository_id","base_sha","branch","owned_files"]})).unwrap()
 }
 fn callback() -> crate::document_config::Callback {
-    serde_json::from_value(json!({"callback_id":"cb-1","agent_did":"did:key:zWriter","handler":{"kind":"built_in","emitter":"create_workspace"},"capabilities":["create_workspace","observe_dirty_base","clone_artifacts"]})).unwrap()
+    serde_json::from_value(json!({"callback_id":"cb-1","node_did":"did:key:zWriter","handler":{"kind":"built_in","emitter":"create_workspace"},"capabilities":["create_workspace","observe_dirty_base","clone_artifacts"]})).unwrap()
 }
 
 fn lean_journal(states: &[String]) -> Vec<ActionJournalEntry> {
@@ -73,7 +73,7 @@ fn generated_recovery_and_denial_match_runtime_owners() {
 
         let mut denied = CallbackInvocationDoc {
             invocation_id: "inv-1".into(),
-            owner_agent_did: "did:key:zWriter".into(),
+            owner_node_did: "did:key:zWriter".into(),
             callback_id: "cb-1".into(),
             input: json!({}),
             origin: crate::document_config::CallbackInvocationOrigin::Event {
@@ -151,7 +151,7 @@ fn callback_result_requires_succeeded_complete_journal_and_docs() {
         branch: "topic".into(),
         creation_policy: "git_worktree_diff".into(),
         adapter: "git_worktree".into(),
-        owner_agent_did: "deploy-1".into(),
+        owner_node_did: "deploy-1".into(),
         writer_principal: "did:key:zW".into(),
         integrator_principal: "did:key:zI".into(),
         instruction_manifest: "{}".into(),
@@ -162,7 +162,7 @@ fn callback_result_requires_succeeded_complete_journal_and_docs() {
     };
     let placement = crate::workspace::WorkspacePlacementDoc {
         workspace_id: "ws-1".into(),
-        owner_agent_did: "deploy-1".into(),
+        owner_node_did: "deploy-1".into(),
         host_path: "/tmp/ws".into(),
         repository_placement_id: "repo-1".into(),
         adapter: "git_worktree".into(),
@@ -208,7 +208,7 @@ fn callback_result_requires_succeeded_complete_journal_and_docs() {
 fn non_owner_does_not_claim_invocation_or_workspace_request() {
     let invocation = CallbackInvocationDoc {
         invocation_id: "inv-1".into(),
-        owner_agent_did: "deploy-owner".into(),
+        owner_node_did: "deploy-owner".into(),
         callback_id: "cb-1".into(),
         input: json!({}),
         origin: crate::document_config::CallbackInvocationOrigin::Event {
@@ -269,7 +269,7 @@ fn succeeded_without_result_repair_is_windowed_and_batched() {
 
     let row = |id: &str| CallbackInvocationDoc {
         invocation_id: id.into(),
-        owner_agent_did: "deploy-1".into(),
+        owner_node_did: "deploy-1".into(),
         callback_id: "cb-1".into(),
         input: json!({}),
         origin: crate::document_config::CallbackInvocationOrigin::Event {
@@ -336,7 +336,7 @@ fn recovery_reuses_stored_action_plan() {
     let plan = emit_plan_from_source(&callback(), &source).unwrap();
     let mut invocation = CallbackInvocationDoc {
         invocation_id: "inv-1".into(),
-        owner_agent_did: "deploy-1".into(),
+        owner_node_did: "deploy-1".into(),
         callback_id: "cb-1".into(),
         input: json!({}),
         origin: crate::document_config::CallbackInvocationOrigin::Event {
@@ -403,7 +403,7 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
     let journal = vec![ActionJournalEntry::new(0, ActionJournalState::Executing)];
     let invocation = CallbackInvocationDoc {
         invocation_id: "inv-wasm-recover".into(),
-        owner_agent_did: "deploy-1".into(),
+        owner_node_did: "deploy-1".into(),
         callback_id: "cb-1".into(),
         input: json!({}),
         origin: crate::document_config::CallbackInvocationOrigin::Event {
@@ -422,8 +422,8 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
         claimed_at: None,
         created_at: None,
     };
-    let mut wasm_binding = callback();
-    wasm_binding.handler = crate::document_config::CallbackHandler::Module {
+    let mut module_binding = callback();
+    module_binding.handler = crate::document_config::CallbackHandler::Module {
         module_id: "mod-gone".into(),
     };
     let mutated = json!({
@@ -435,7 +435,7 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
         "workspace_id": "ws-mutated"
     });
     let resolved =
-        resolve_action_plan_with_module(&invocation, &wasm_binding, &mutated, None).unwrap();
+        resolve_action_plan_with_module(&invocation, &module_binding, &mutated, None).unwrap();
     match &resolved.actions[0] {
         crate::workspace::HostAction::CreateWorkspace(action) => {
             assert_eq!(action.workspace_id, "ws-stored");
@@ -596,10 +596,10 @@ fn callback_result_only_after_workspace_docs_are_durable() {
     ));
 
     let mut ctx = HostExecutorContext {
-        owner_agent_did: "deploy-1".into(),
+        owner_node_did: "deploy-1".into(),
         repository: RepositoryPlacementRef {
             repository_id: "repo-1".into(),
-            owner_agent_did: "deploy-1".into(),
+            owner_node_did: "deploy-1".into(),
             host_path: fx.repo.clone(),
             enabled: true,
         },
@@ -639,7 +639,7 @@ async fn test_node() -> Arc<defra_node::EmbeddedNode> {
 #[tokio::test]
 async fn first_seen_source_create_materializes_owner_invocation() {
     let node = test_node().await;
-    let owner_agent_did = "did:key:zWriter".to_owned();
+    let owner_node_did = "did:key:zWriter".to_owned();
     node.add_schema(
         r#"
         type WorkUnit {
@@ -655,9 +655,9 @@ async fn first_seen_source_create_materializes_owner_invocation() {
     .expect("WorkUnit schema");
 
     let binding_mutation = r#"mutation {
-        create_Callback(input: {callback_id:"cb-scan",agent_did:"did:key:zWriter",handler:{kind:"built_in",emitter:"create_workspace"},capabilities:["create_workspace","observe_dirty_base"],enabled:true}) {_docID}
-        create_EventSource(input: {event_source_id:"events-scan",agent_did:"did:key:zWriter",source_collection:"WorkUnit",event_kind:"created"}) {_docID}
-        create_CallbackBinding(input: {binding_id:"bind-scan",agent_did:"did:key:zWriter",event_source_id:"events-scan",callback_id:"cb-scan",input_fields:["work_unit_id","repository_id","base_sha","branch","owned_files"],enabled:true}) {_docID}
+        create_Callback(input: {callback_id:"cb-scan",node_did:"did:key:zWriter",handler:{kind:"built_in",emitter:"create_workspace"},capabilities:["create_workspace","observe_dirty_base"],enabled:true}) {_docID}
+        create_EventSource(input: {event_source_id:"events-scan",node_did:"did:key:zWriter",source_collection:"WorkUnit",event_kind:"created"}) {_docID}
+        create_CallbackBinding(input: {binding_id:"bind-scan",node_did:"did:key:zWriter",event_source_id:"events-scan",callback_id:"cb-scan",input_fields:["work_unit_id","repository_id","base_sha","branch","owned_files"],enabled:true}) {_docID}
     }"#;
     let response = node.execute(&binding_mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -667,7 +667,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
         .unwrap();
     let source = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        super::documents::load_event_source(&node, "events-scan", &owner_agent_did),
+        super::documents::load_event_source(&node, "events-scan", &owner_node_did),
     )
     .await
     .expect("callback configuration lookup must not wait for the mutation gate")
@@ -677,8 +677,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
     held.discard().await.unwrap();
 
     let cancel = tokio_util::sync::CancellationToken::new();
-    let mut engine =
-        super::CallbackEngine::new(node.clone(), owner_agent_did.clone(), None, cancel);
+    let mut engine = super::CallbackEngine::new(node.clone(), owner_node_did.clone(), None, cancel);
     engine.reconcile_bindings().await;
 
     let create = r#"mutation {
@@ -752,18 +751,18 @@ async fn first_seen_source_create_materializes_owner_invocation() {
     let query = format!(
         r#"{{
             CallbackInvocation(
-                filter: {{ owner_agent_did: {{ _eq: "{owner}" }} }},
+                filter: {{ owner_node_did: {{ _eq: "{owner}" }} }},
                 limit: 10
             ) {{
                 invocation_id
-                owner_agent_did
+                owner_node_did
                 lifecycle_state
                 idempotency_key
                 input
                 origin
             }}
         }}"#,
-        owner = crate::graphql::escape_graphql_string(&owner_agent_did),
+        owner = crate::graphql::escape_graphql_string(&owner_node_did),
     );
     let response = node.execute(&query).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -775,7 +774,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
         .cloned()
         .unwrap_or_default();
     assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["owner_agent_did"], owner_agent_did);
+    assert_eq!(rows[0]["owner_node_did"], owner_node_did);
     assert_eq!(rows[0]["origin"]["source_doc_id"], doc_id);
     assert_eq!(rows[0]["input"]["work_unit_id"], "unit-scan");
     assert!(rows[0]["input"].get("_docID").is_none());
@@ -789,8 +788,8 @@ async fn first_seen_source_create_materializes_owner_invocation() {
     );
 }
 
-fn wasm_bytes_for_id() -> Vec<u8> {
-    b"\0asm\x01\x00\x00\x00hello-planner".to_vec()
+fn artifact_bytes_for_id() -> Vec<u8> {
+    crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(b"{}"))
 }
 
 fn module_doc(wasm: &[u8], args: &serde_json::Value, signer: &str) -> CallbackModuleDoc {
@@ -799,10 +798,10 @@ fn module_doc(wasm: &[u8], args: &serde_json::Value, signer: &str) -> CallbackMo
     let module_id = compute_module_id(wasm, args, 1).unwrap();
     CallbackModuleDoc {
         module_id,
-        agent_did: "did:key:zWriter".into(),
+        node_did: "did:key:zWriter".into(),
         tags: vec![],
         abi_version: Some(1),
-        wasm_bytes: Some(STANDARD.encode(wasm)),
+        artifact_bytes: Some(STANDARD.encode(wasm)),
         canonical_args: Some(serde_json::to_string(args).unwrap()),
         signer_did: Some(signer.into()),
         provenance: Some("fixture_create_workspace".into()),
@@ -818,22 +817,9 @@ fn trusted(signer: &str) -> BTreeSet<String> {
     [signer.to_string()].into_iter().collect()
 }
 
-fn compile_wat(wat: &str) -> Vec<u8> {
-    wat::parse_str(wat).unwrap_or_else(|error| panic!("wat parse: {error}"))
-}
-
 fn wat_returns_json(json: &str) -> Vec<u8> {
-    let escaped = json.replace('\\', "\\\\").replace('"', "\\\"");
-    compile_wat(&format!(
-        r#"(module
-  (memory (export "memory") 1)
-  (data (i32.const 0) "{escaped}")
-  (func (export "alloc") (param i32) (result i32) (i32.const 2048))
-  (func (export "output_ptr") (result i32) (i32.const 0))
-  (func (export "plan") (param i32 i32) (result i32)
-    (i32.const {len}))
-)"#,
-        len = json.len()
+    crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(
+        json.as_bytes(),
     ))
 }
 
@@ -848,7 +834,7 @@ fn tight_limits(fuel: u64, pages: u32, max_in: usize, max_out: usize) -> Callbac
 
 #[test]
 fn module_id_is_stable_across_host_paths_and_arg_key_order() {
-    let wasm = wasm_bytes_for_id();
+    let wasm = artifact_bytes_for_id();
     let root = TempDir::new().unwrap();
     let path_a = root.path().join("one").join("module.wasm");
     let path_b = root.path().join("other-host").join("copy.wasm");
@@ -870,7 +856,7 @@ fn module_id_is_stable_across_host_paths_and_arg_key_order() {
 
 #[test]
 fn signer_policy_fail_closes_when_missing_or_untrusted() {
-    let wasm = wasm_bytes_for_id();
+    let wasm = artifact_bytes_for_id();
     let mut module = module_doc(&wasm, &json!({}), "did:key:zTrusted");
     let empty = BTreeSet::new();
     let error = validate_callback_module(&module, &empty).unwrap_err();
@@ -895,47 +881,31 @@ fn signer_policy_fail_closes_when_missing_or_untrusted() {
 }
 
 #[test]
-fn fuel_exhaustion_denies_without_a_plan() {
-    let wat = r#"(module
-  (memory (export "memory") 1)
-  (func (export "alloc") (param i32) (result i32) (i32.const 0))
-  (func (export "output_ptr") (result i32) (i32.const 0))
-  (func (export "plan") (param i32 i32) (result i32)
-    (loop $spin (br $spin))
-    unreachable)
-)"#;
-    let wasm = compile_wat(wat);
-    // Empty input skips `alloc` so the first metered call is the spinning `plan`.
-    let error = invoke_wasm_planner(&wasm, &tight_limits(1, 1, 64, 64), b"").unwrap_err();
-    assert!(
-        error.to_lowercase().contains("fuel"),
-        "expected wasmtime fuel exhaustion, got {error}"
+fn planner_uses_shared_plugin_fuel_memory_and_output_limits() {
+    let infinite = crate::plugin::tests::build_plugin_afb(
+        r#"(module (memory (export "memory") 1)
+          (func (export "_start") (loop $spin (br $spin))))"#,
     );
-}
-
-#[test]
-fn memory_limit_denies_at_instantiate() {
-    let wat = r#"(module
-  (memory (export "memory") 8)
-  (func (export "alloc") (param i32) (result i32) (i32.const 0))
-  (func (export "output_ptr") (result i32) (i32.const 0))
-  (func (export "plan") (param i32 i32) (result i32) (i32.const 0))
-)"#;
-    let wasm = compile_wat(wat);
-    let error = invoke_wasm_planner(&wasm, &tight_limits(10_000, 1, 64, 64), b"{}").unwrap_err();
-    assert!(error.to_lowercase().contains("denied"), "{error}");
-}
-
-#[test]
-fn input_and_output_byte_limits_deny() {
-    let wasm = wat_returns_json(&"x".repeat(32));
-    let error = invoke_wasm_planner(&wasm, &tight_limits(10_000_000, 1, 4, 1024), b"0123456789")
+    let error = invoke_plugin_planner(&infinite, &tight_limits(100, 1, 1024, 1024), &json!({}))
         .unwrap_err();
+    assert!(error.contains("OutOfFuel"), "{error}");
+    let memory = crate::plugin::tests::build_plugin_afb(
+        r#"(module (memory (export "memory") 8) (func (export "_start")))"#,
+    );
+    assert!(
+        invoke_plugin_planner(&memory, &tight_limits(10_000, 1, 1024, 1024), &json!({})).is_err()
+    );
+    let output = wat_returns_json(r#"{"value":"long output"}"#);
+    let error = invoke_plugin_planner(
+        &output,
+        &tight_limits(100_000, 1, 4, 1024),
+        &json!({"input":"too long"}),
+    )
+    .unwrap_err();
     assert!(error.contains("max_input_bytes"), "{error}");
-
     let error =
-        invoke_wasm_planner(&wasm, &tight_limits(10_000_000, 1, 1024, 8), b"{}").unwrap_err();
-    assert!(error.contains("max_output_bytes"), "{error}");
+        invoke_plugin_planner(&output, &tight_limits(100_000, 1, 1024, 8), &json!({})).unwrap_err();
+    assert!(error.contains("BadOutput"), "{error}");
 }
 
 #[test]
@@ -946,26 +916,8 @@ fn unknown_action_type_denies_the_entire_plan() {
         .into_iter()
         .map(str::to_string)
         .collect();
-    let error = plan_from_wasm_module(&module, &json!({}), &caps).unwrap_err();
+    let error = plan_from_module(&module, &json!({}), &caps).unwrap_err();
     assert!(error.contains("unknown ActionPlan action type"), "{error}");
-}
-
-#[test]
-fn wasi_import_is_denied() {
-    let wasm = compile_wat(
-        r#"(module
-  (import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))
-  (memory (export "memory") 1)
-  (func (export "alloc") (param i32) (result i32) (i32.const 0))
-  (func (export "output_ptr") (result i32) (i32.const 0))
-  (func (export "plan") (param i32 i32) (result i32) (i32.const 0))
-)"#,
-    );
-    let error = invoke_wasm_planner(&wasm, &tight_limits(10_000, 1, 64, 64), b"{}").unwrap_err();
-    assert!(
-        error.contains("may not import") && error.contains("wasi_snapshot_preview1"),
-        "{error}"
-    );
 }
 
 #[test]
@@ -1022,33 +974,29 @@ fn extra_action_fields_deny_the_plan() {
 }
 
 #[test]
-fn wat_text_and_over_ceiling_limits_are_denied() {
-    let error = invoke_wasm_planner(b"(module)", &tight_limits(1, 1, 64, 64), b"{}").unwrap_err();
-    assert!(error.contains("binary module"), "{error}");
-
-    let wasm = wasm_bytes_for_id();
-    let mut module = module_doc(&wasm, &json!({}), "did:key:zTrusted");
+fn callback_requires_bounded_afterburner_artifact() {
+    let artifact = artifact_bytes_for_id();
+    let mut module = module_doc(&artifact, &json!({}), "did:key:zTrusted");
     module.fuel_limit = Some(i64::MAX);
     let error = validate_callback_module(&module, &trusted("did:key:zTrusted")).unwrap_err();
     assert!(error.contains("host maximum"), "{error}");
-
-    let mut wat_module = module_doc(b"(module)", &json!({}), "did:key:zTrusted");
-    let error = validate_callback_module(&wat_module, &trusted("did:key:zTrusted")).unwrap_err();
-    assert!(error.contains("binary module"), "{error}");
-
-    let mut oversized = vec![0u8; MAX_WASM_BYTES + 1];
-    oversized[..4].copy_from_slice(b"\0asm");
-    wat_module = module_doc(&oversized, &json!({}), "did:key:zTrusted");
-    let error = validate_callback_module(&wat_module, &trusted("did:key:zTrusted")).unwrap_err();
-    assert!(error.contains("max_wasm_bytes"), "{error}");
+    let malformed = module_doc(b"not an artifact", &json!({}), "did:key:zTrusted");
+    let error = validate_callback_module(&malformed, &trusted("did:key:zTrusted")).unwrap_err();
+    assert!(error.contains("Afterburner"), "{error}");
+    let oversized = module_doc(
+        &vec![0; MAX_ARTIFACT_BYTES + 1],
+        &json!({}),
+        "did:key:zTrusted",
+    );
+    let error = validate_callback_module(&oversized, &trusted("did:key:zTrusted")).unwrap_err();
+    assert!(error.contains("max_artifact_bytes"), "{error}");
 }
 
 #[test]
 fn capability_miss_denies_create_workspace_plan() {
-    let wasm = fixture_create_workspace_wasm();
-    if fixture_wasm_is_stub(wasm) {
+    let Some(wasm) = fixture_create_workspace_artifact() else {
         return;
-    }
+    };
     let source = json!({
         "owned_files": [],
         "work_unit_id": "unit-1",
@@ -1063,7 +1011,7 @@ fn capability_miss_denies_create_workspace_plan() {
         .into_iter()
         .map(str::to_string)
         .collect();
-    let plan = plan_from_wasm_module(&module, &source, &caps).expect("plan");
+    let plan = plan_from_module(&module, &source, &caps).expect("plan");
     let missing = BTreeSet::from([CAP_OBSERVE_DIRTY_BASE.to_string()]);
     let error = plan.validate_against(&missing).unwrap_err().to_string();
     assert!(
@@ -1073,11 +1021,10 @@ fn capability_miss_denies_create_workspace_plan() {
 }
 
 #[test]
-fn fixture_wasm_emits_valid_create_workspace_plan() {
-    let wasm = fixture_create_workspace_wasm();
-    if fixture_wasm_is_stub(wasm) {
+fn fixture_artifact_emits_valid_create_workspace_plan() {
+    let Some(wasm) = fixture_create_workspace_artifact() else {
         return;
-    }
+    };
     let source = json!({
         "owned_files": [],
         "work_unit_id": "unit-1",
@@ -1098,7 +1045,7 @@ fn fixture_wasm_emits_valid_create_workspace_plan() {
         .map(str::to_string)
         .collect();
     let stripped = strip_secret_fields(source);
-    let plan = plan_from_wasm_module(&module, &stripped, &caps).expect("fixture plan");
+    let plan = plan_from_module(&module, &stripped, &caps).expect("fixture plan");
     let canonical = action_plan_canonical_json(&plan).expect("canonical");
     assert!(!canonical.contains("host_path"), "{canonical}");
     assert!(!canonical.contains("/tmp"), "{canonical}");
@@ -1119,12 +1066,12 @@ fn fixture_wasm_emits_valid_create_workspace_plan() {
     }
     plan.validate_against(&caps).expect("capabilities");
 
-    let mut wasm_binding = callback();
-    wasm_binding.handler = crate::document_config::CallbackHandler::Module {
+    let mut module_binding = callback();
+    module_binding.handler = crate::document_config::CallbackHandler::Module {
         module_id: module.module_id.clone(),
     };
-    wasm_binding.capabilities = vec![CAP_CREATE_WORKSPACE.into(), CAP_OBSERVE_DIRTY_BASE.into()];
-    let via_binding = plan_from_callback(&wasm_binding, &stripped, Some(&module)).expect("wired");
+    module_binding.capabilities = vec![CAP_CREATE_WORKSPACE.into(), CAP_OBSERVE_DIRTY_BASE.into()];
+    let via_binding = plan_from_callback(&module_binding, &stripped, Some(&module)).expect("wired");
     assert_eq!(via_binding, plan);
 
     let clone_caps: BTreeSet<String> = [
@@ -1171,7 +1118,7 @@ fn create_callback_result_mutation_renders_absent_fields_as_null_not_empty_strin
         result_id: "res-1".to_owned(),
         invocation_id: "inv-1".to_owned(),
         binding_id: None,
-        owner_agent_did: "did:key:zWriter".to_owned(),
+        owner_node_did: "did:key:zWriter".to_owned(),
         workspace_id: None,
         work_unit_id: None,
         caused_by_correlation: None,
@@ -1219,7 +1166,7 @@ fn update_invocation_mutation_renders_absent_fields_as_null_not_empty_string() {
     };
     let invocation = CallbackInvocationDoc {
         invocation_id: "inv-1".into(),
-        owner_agent_did: "did:key:zWriter".into(),
+        owner_node_did: "did:key:zWriter".into(),
         callback_id: "cb-1".into(),
         input: json!({}),
         origin: origin.clone(),
@@ -1273,7 +1220,7 @@ async fn callback_results_are_selectable_by_their_binding() {
                 result_id: format!("res-{invocation_id}"),
                 invocation_id: invocation_id.to_owned(),
                 binding_id: Some(binding_id.to_owned()),
-                owner_agent_did: "did:key:zWriter".to_owned(),
+                owner_node_did: "did:key:zWriter".to_owned(),
                 workspace_id: None,
                 work_unit_id: None,
                 caused_by_correlation: None,
@@ -1368,7 +1315,7 @@ impl Backlog {
         ]
         .into_iter()
         .map(|(collection, mut value)| {
-            value["agent_did"] = json!(BACKLOG_OWNER);
+            value["node_did"] = json!(BACKLOG_OWNER);
             DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),
@@ -1553,4 +1500,25 @@ async fn admission_refuses_a_binding_disabled_after_its_snapshot() {
         .unwrap());
     assert!(backlog.invoked().await.is_empty());
     backlog.node.shutdown().await;
+}
+
+#[test]
+fn callback_artifact_identity_and_output_are_host_validated() {
+    let artifact = wat_returns_json(r#"{"abi":1,"actions":[]}"#);
+    let mut module = module_doc(&artifact, &json!({}), "did:key:zTrusted");
+    validate_callback_module(&module, &trusted("did:key:zTrusted")).unwrap();
+    module.canonical_args = Some(r#"{"forged":true}"#.into());
+    assert!(validate_callback_module(&module, &trusted("did:key:zTrusted")).is_err());
+    module = module_doc(&artifact, &json!({}), "did:key:zTrusted");
+    module.abi_version = Some(99);
+    assert!(validate_callback_module(&module, &trusted("did:key:zTrusted")).is_err());
+
+    let trap = crate::plugin::tests::build_plugin_afb(
+        r#"(module (memory (export "memory") 1) (func (export "_start") unreachable))"#,
+    );
+    let module = module_doc(&trap, &json!({}), "did:key:zTrusted");
+    assert!(plan_from_module(&module, &json!({}), &BTreeSet::new()).is_err());
+    let malformed = wat_returns_json("not JSON");
+    let module = module_doc(&malformed, &json!({}), "did:key:zTrusted");
+    assert!(plan_from_module(&module, &json!({}), &BTreeSet::new()).is_err());
 }

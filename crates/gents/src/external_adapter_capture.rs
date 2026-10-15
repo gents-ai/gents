@@ -42,9 +42,9 @@ pub struct ExternalAdapterMapping {
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(default)]
-    pub behavior_id: Option<String>,
+    pub agent_id: Option<String>,
     #[serde(default)]
     pub actor_did: Option<String>,
     #[serde(default)]
@@ -63,9 +63,9 @@ pub struct ExternalParticipantMapping {
     pub native_name: Option<String>,
     pub role: String,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(default)]
-    pub behavior_id: Option<String>,
+    pub agent_id: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
 }
@@ -79,9 +79,9 @@ pub struct ExternalDelegationMapping {
     #[serde(default)]
     pub tool_name: Option<String>,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(default)]
-    pub behavior_id: Option<String>,
+    pub agent_id: Option<String>,
     #[serde(default)]
     pub status: Option<String>,
 }
@@ -123,6 +123,9 @@ pub struct ExternalAdapterMessage {
     /// Stable only within this imported capture. It is a derived label, not a
     /// DefraDB document identifier or an asserted framework physical ID.
     pub capture_message_label: String,
+    /// External participant role retained for adapter export; it grants no
+    /// native message role or request authority.
+    pub source_role: String,
     pub session_id: String,
     pub request_id: Option<String>,
     pub sequence: i64,
@@ -352,8 +355,8 @@ fn import_langgraph_capture(
 
     let mut requests = vec![TimelineRequestRow {
         request_id: mapping.request_id.clone(),
-        agent_did: mapping.agent_did.clone(),
-        behavior_id: mapping.behavior_id.clone(),
+        node_did: mapping.node_did.clone(),
+        agent_id: mapping.agent_id.clone(),
         session_id: Some(session_id.clone()),
         content: latest_values
             .and_then(|values| values.get("topic"))
@@ -438,8 +441,8 @@ fn import_langgraph_capture(
             request: root,
             session: imported_session(
                 &session_id,
-                mapping.agent_did.as_deref(),
-                mapping.behavior_id.as_deref(),
+                mapping.node_did.as_deref(),
+                mapping.agent_id.as_deref(),
                 started_at,
                 "Imported LangGraph state history".to_string(),
                 latest_values
@@ -809,13 +812,13 @@ fn import_multi_agent_capture(
             .as_deref()
             .is_none_or(|request_id| request_id == mapping.request_id)
     });
-    let root_agent_did = first_owned([
-        mapping.agent_did.as_deref(),
-        root_participant.and_then(|participant| participant.agent_did.as_deref()),
+    let root_node_did = first_owned([
+        mapping.node_did.as_deref(),
+        root_participant.and_then(|participant| participant.node_did.as_deref()),
     ]);
-    let root_behavior_id = first_owned([
-        mapping.behavior_id.as_deref(),
-        root_participant.and_then(|participant| participant.behavior_id.as_deref()),
+    let root_agent_id = first_owned([
+        mapping.agent_id.as_deref(),
+        root_participant.and_then(|participant| participant.agent_id.as_deref()),
     ]);
     let participant_by_request = mapping
         .participants
@@ -834,8 +837,8 @@ fn import_multi_agent_capture(
     let mut requests = Vec::new();
     requests.push(TimelineRequestRow {
         request_id: mapping.request_id.clone(),
-        agent_did: root_agent_did.clone(),
-        behavior_id: root_behavior_id.clone(),
+        node_did: root_node_did.clone(),
+        agent_id: root_agent_id.clone(),
         session_id: Some(session_id.clone()),
         content: external_task_text(&capture.native),
         lifecycle_state: Some(lifecycle_state),
@@ -852,13 +855,13 @@ fn import_multi_agent_capture(
         let delegation = delegation_by_child.get(child_request_id.as_str()).copied();
         requests.push(TimelineRequestRow {
             request_id: child_request_id.clone(),
-            agent_did: first_owned([
-                participant.and_then(|participant| participant.agent_did.as_deref()),
-                delegation.and_then(|delegation| delegation.agent_did.as_deref()),
+            node_did: first_owned([
+                participant.and_then(|participant| participant.node_did.as_deref()),
+                delegation.and_then(|delegation| delegation.node_did.as_deref()),
             ]),
-            behavior_id: first_owned([
-                participant.and_then(|participant| participant.behavior_id.as_deref()),
-                delegation.and_then(|delegation| delegation.behavior_id.as_deref()),
+            agent_id: first_owned([
+                participant.and_then(|participant| participant.agent_id.as_deref()),
+                delegation.and_then(|delegation| delegation.agent_id.as_deref()),
             ]),
             session_id: Some(session_id.clone()),
             content: participant
@@ -973,8 +976,8 @@ fn import_multi_agent_capture(
             request: root,
             session: imported_session(
                 &session_id,
-                root_agent_did.as_deref(),
-                root_behavior_id.as_deref(),
+                root_node_did.as_deref(),
+                root_agent_id.as_deref(),
                 started_at,
                 format!("Imported {}", capture.source.system),
                 external_task_text(&capture.native).as_deref(),
@@ -1283,6 +1286,7 @@ fn imported_external_message(
     let created_at = timestamp_for_index(sequence.max(0) as usize);
     ExternalAdapterMessage {
         capture_message_label: format!("capture:{session_id}:{sequence}"),
+        source_role: role.to_owned(),
         session_id: session_id.to_string(),
         request_id: Some(request_id.to_string()),
         sequence,
@@ -1322,8 +1326,8 @@ fn first_owned<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<
 /// This is a read-only projection of supplied capture identity, never a persisted doc.
 fn imported_session(
     session_id: &str,
-    agent_did: Option<&str>,
-    behavior_id: Option<&str>,
+    node_did: Option<&str>,
+    agent_id: Option<&str>,
     created_at: &str,
     title: String,
     preview: Option<&str>,
@@ -1331,15 +1335,15 @@ fn imported_session(
     use gents_protocol::session::{
         AgentSession, SessionObservation, SessionTitle, SessionTitleSource,
     };
-    let agent_did = agent_did.filter(|value| !value.trim().is_empty())?;
-    let behavior_id = behavior_id.filter(|value| !value.trim().is_empty())?;
+    let node_did = node_did.filter(|value| !value.trim().is_empty())?;
+    let agent_id = agent_id.filter(|value| !value.trim().is_empty())?;
     Some(TimelineSessionRow {
         doc_id: None,
         session: AgentSession {
             session_id: session_id.to_owned(),
-            agent_did: agent_did.to_owned(),
+            node_did: node_did.to_owned(),
             requester_did: None,
-            behavior_id: behavior_id.to_owned(),
+            agent_id: agent_id.to_owned(),
             created_at: created_at.to_owned(),
             closed_at: None,
             title: Some(SessionTitle {

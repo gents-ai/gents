@@ -35,19 +35,19 @@ pub(super) async fn inference_profile_set(args: InferenceProfileSetArgs) -> Resu
 }
 
 pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) -> Result<()> {
-    let (access, agent_did) = target(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let (access, node_did) = target(args.home.as_deref(), args.graphql.as_deref()).await?;
     let slots = bound_slots(
         args.home.as_deref(),
         args.graphql.as_deref(),
-        &agent_did,
+        &node_did,
         &args.profile,
     )?;
     let output = match args.account.as_deref() {
-        None => list_candidates(&access, &agent_did, &args.profile, &slots).await?,
+        None => list_candidates(&access, &node_did, &args.profile, &slots).await?,
         Some(account) => {
             set_account(
                 &access,
-                &agent_did,
+                &node_did,
                 &args.profile,
                 account,
                 args.provider.as_deref(),
@@ -66,7 +66,7 @@ pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) ->
 pub(crate) fn bound_slots(
     home: Option<&std::path::Path>,
     graphql: Option<&str>,
-    agent_did: &str,
+    node_did: &str,
     profile_id: &str,
 ) -> Result<Vec<String>> {
     if graphql.is_some() {
@@ -74,7 +74,7 @@ pub(crate) fn bound_slots(
     }
     gents::plugin::store::bound_to_profile(
         &crate::home_state::resolve_home_dir(home),
-        agent_did,
+        node_did,
         profile_id,
     )
 }
@@ -82,13 +82,13 @@ pub(crate) fn bound_slots(
 /// Where `profile_id` can move, who uses it and what a move costs.
 async fn list_candidates(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     profile_id: &str,
     plugin_slots: &[String],
 ) -> Result<Value> {
     let plan = gents::config_client::switch_candidates(
         access,
-        agent_did,
+        node_did,
         profile_id,
         plugin_slots,
         chrono::Utc::now(),
@@ -108,16 +108,16 @@ async fn set_profile(
 ) -> Result<Value> {
     if account.is_none() && provider.is_none() {
         let profile = decode_profile(contents)?;
-        let snapshot = snapshot(access, &profile.agent_did).await?;
+        let snapshot = snapshot(access, &profile.node_did).await?;
         return write_checked(access, &snapshot, &profile, false).await;
     }
     let mut value: Value =
         serde_json::from_slice(contents).context("decoding canonical InferenceProfile document")?;
-    let agent_did = value["agent_did"]
+    let node_did = value["node_did"]
         .as_str()
-        .context("the profile document names no agent_did")?
+        .context("the profile document names no node_did")?
         .to_owned();
-    let snapshot = snapshot(access, &agent_did).await?;
+    let snapshot = snapshot(access, &node_did).await?;
     let summary = match (account, provider) {
         (Some(account), provider) => snapshot.pick(account, provider)?,
         (None, Some(provider)) => snapshot
@@ -147,17 +147,17 @@ async fn set_profile(
 /// backend by id or name, which is its own account.
 async fn set_account(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     profile_id: &str,
     account: &str,
     provider: Option<&str>,
     with_compaction: bool,
     plugin_slots: &[String],
 ) -> Result<Value> {
-    let backend_id = backend_for_account(access, agent_did, account, provider).await?;
+    let backend_id = backend_for_account(access, node_did, account, provider).await?;
     let receipt = gents::config_client::switch_profile_account(
         access,
-        agent_did,
+        node_did,
         profile_id,
         &backend_id,
         with_compaction,
@@ -171,11 +171,11 @@ async fn set_account(
 /// API-key backend by id or name.
 pub(crate) async fn backend_for_account(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     account: &str,
     provider: Option<&str>,
 ) -> Result<String> {
-    let snapshot = snapshot(access, agent_did).await?;
+    let snapshot = snapshot(access, node_did).await?;
     match snapshot.pick(account, provider) {
         Ok(summary) => account_backend(&snapshot, summary),
         Err(error) => snapshot
@@ -252,7 +252,7 @@ async fn write_checked(
         );
     }
     let doc_id = gents::config_client::write_inference_profile_document(access, profile).await?;
-    let mut output = json!({"doc_id":doc_id,"agent_did":profile.agent_did,"profile_id":profile.profile_id,"backend_id":profile.backend_id,"model_name":profile.model_name});
+    let mut output = json!({"doc_id":doc_id,"node_did":profile.node_did,"profile_id":profile.profile_id,"backend_id":profile.backend_id,"model_name":profile.model_name});
     if let Some(account) = account {
         output["account"] = serde_json::to_value(account)?;
     }
@@ -267,14 +267,14 @@ async fn target(
     graphql: Option<&str>,
 ) -> Result<(crate::CommandAccess, String)> {
     let (access, _) = crate::resolve_config_access(home, graphql).await?;
-    let agent_did =
-        super::binding::resolve_target_agent_did(None, None, home, graphql, Some(&access)).await?;
-    Ok((access, agent_did))
+    let node_did =
+        super::binding::resolve_target_node_did(None, None, home, graphql, Some(&access)).await?;
+    Ok((access, node_did))
 }
 
 pub(super) async fn profile_list(args: ConfigListArgs) -> Result<()> {
-    let (access, agent_did) = target(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let rows = profile_rows(&access, &agent_did, None).await?;
+    let (access, node_did) = target(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let rows = profile_rows(&access, &node_did, None).await?;
     match args.output.ensure_supported(
         "config profile list",
         &[OutputFormat::Table, OutputFormat::Json],
@@ -300,29 +300,29 @@ pub(super) async fn profile_show(args: ConfigShowArgs) -> Result<()> {
     )?;
     args.output
         .ensure_supported("config profile show", &[OutputFormat::Json])?;
-    let (access, agent_did) = target(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let row = profile_rows(&access, &agent_did, Some(&id))
+    let (access, node_did) = target(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let row = profile_rows(&access, &node_did, Some(&id))
         .await?
         .into_iter()
         .next()
-        .with_context(|| format!("not found: InferenceProfile {agent_did:?}/{id:?}"))?;
-    if let Some(warning) = profile_effort_warning(&access, &agent_did, &row).await {
+        .with_context(|| format!("not found: InferenceProfile {node_did:?}/{id:?}"))?;
+    if let Some(warning) = profile_effort_warning(&access, &node_did, &row).await {
         eprintln!("warning: {warning}");
     }
     crate::print_json(&row)
 }
 
-/// `agent_did`'s profiles (one when `id` is given) as stored, ordered by id,
+/// `node_did`'s profiles (one when `id` is given) as stored, ordered by id,
 /// each with the account its backend runs on.
 async fn profile_rows(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     id: Option<&str>,
 ) -> Result<Vec<Value>> {
     let mut rows =
-        super::crud::query_collection(access, super::crud::PROFILE_SPEC, agent_did, id).await?;
+        super::crud::query_collection(access, super::crud::PROFILE_SPEC, node_did, id).await?;
     rows.sort_by(|a, b| a["profile_id"].as_str().cmp(&b["profile_id"].as_str()));
-    let snapshot = snapshot(access, agent_did).await?;
+    let snapshot = snapshot(access, node_did).await?;
     for row in &mut rows {
         if let Some(backend) = snapshot
             .backends
@@ -389,7 +389,7 @@ fn render_profile_table(rows: &[Value]) -> String {
 /// Every lookup failure yields `None`: a warning never fails `show`.
 pub(super) async fn profile_effort_warning(
     access: &crate::config_writes::ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     row: &serde_json::Value,
 ) -> Option<String> {
     let mut row = row.clone();
@@ -400,14 +400,14 @@ pub(super) async fn profile_effort_warning(
     let backend = super::crud::load_one(
         access,
         super::crud::BACKEND_SPEC,
-        agent_did,
+        node_did,
         &profile.backend_id,
     )
     .await
     .ok()?;
     let backend = gents::document_config::InferenceBackend::from_value(&backend).ok()?;
     let observation =
-        crate::shared::load_backend_observation(access, agent_did, &profile.backend_id)
+        crate::shared::load_backend_observation(access, node_did, &profile.backend_id)
             .await
             .ok();
     gents::config::unsent_reasoning_effort(&backend, &profile, observation.as_ref())
@@ -432,7 +432,7 @@ mod tests {
     }
     #[test]
     fn canonical_model_effort_and_policy_links_are_preserved() {
-        let profile=decode_profile(br#"{"agent_did":"owner","profile_id":"chosen","backend_id":"provider","model_name":"exact-model","reasoning_effort":"high","sampling_id":"sampling","execution_id":"execution"}"#).unwrap();
+        let profile=decode_profile(br#"{"node_did":"owner","profile_id":"chosen","backend_id":"provider","model_name":"exact-model","reasoning_effort":"high","sampling_id":"sampling","execution_id":"execution"}"#).unwrap();
         assert_eq!(profile.model_name, "exact-model");
         assert_eq!(profile.reasoning_effort, Some(gents::ReasoningEffort::High));
         assert_eq!(profile.sampling_id.as_deref(), Some("sampling"));
@@ -442,7 +442,7 @@ mod tests {
     fn retired_flat_sampling_and_missing_owner_are_rejected() {
         for input in [
             r#"{"profile_id":"p","backend_id":"b","model_name":"m"}"#,
-            r#"{"agent_did":"owner","profile_id":"p","backend_id":"b","model_name":"m","temperature":1}"#,
+            r#"{"node_did":"owner","profile_id":"p","backend_id":"b","model_name":"m","temperature":1}"#,
         ] {
             assert!(decode_profile(input.as_bytes()).is_err());
         }
@@ -474,13 +474,13 @@ mod tests {
         } else {
             "http://127.0.0.1:1/v1"
         };
-        json!({"agent_did": DID, "backend_id": backend_id, "name": name,
+        json!({"node_did": DID, "backend_id": backend_id, "name": name,
             "provider_kind": provider_kind, "endpoint": endpoint, "auth": auth})
     }
 
     async fn write_profile(access: &ConfigAccess, profile_id: &str, backend_id: &str) {
         let profile = serde_json::from_value(json!({
-            "agent_did": DID, "profile_id": profile_id, "backend_id": backend_id,
+            "node_did": DID, "profile_id": profile_id, "backend_id": backend_id,
             "model_name": "model-x",
         }))
         .unwrap();
@@ -503,13 +503,13 @@ mod tests {
                 "claude",
                 "Claude",
                 "ClaudeCliSubscription",
-                json!({"kind": "principal_oauth"}),
+                json!({"kind": "node_oauth"}),
             ),
             backend(
                 "gone",
                 "Gone",
                 "ClaudeCliSubscription",
-                json!({"kind": "principal_oauth", "account_ref": "acct-other"}),
+                json!({"kind": "node_oauth", "account_ref": "acct-other"}),
             ),
             backend(
                 "openai",
@@ -637,8 +637,7 @@ mod tests {
     }
 
     fn file(profile_id: &str, backend_id: Option<&str>) -> Vec<u8> {
-        let mut value =
-            json!({"agent_did": DID, "profile_id": profile_id, "model_name": "model-x"});
+        let mut value = json!({"node_did": DID, "profile_id": profile_id, "model_name": "model-x"});
         if let Some(backend_id) = backend_id {
             value["backend_id"] = json!(backend_id);
         }
@@ -789,7 +788,7 @@ mod tests {
                 "claude-2",
                 "Claude 2",
                 "ClaudeCliSubscription",
-                json!({"kind": "principal_oauth"}),
+                json!({"kind": "node_oauth"}),
             ))
             .unwrap(),
         )
@@ -861,26 +860,26 @@ mod tests {
         assert!(error.contains("no account"), "{error}");
         assert_eq!(stored(&access, "p-original").await.unwrap(), after);
     }
-    /// Behaviors `x` and `y` on `p-original`, `x` compacting with `summ` on
+    /// Agents `x` and `y` on `p-original`, `x` compacting with `summ` on
     /// the same account.
-    async fn with_behaviors(access: &ConfigAccess) {
+    async fn with_agents(access: &ConfigAccess) {
         write_profile(access, "summ", "claude").await;
         let documents = [
             (
                 gents::Collection::Compaction,
-                json!({"agent_did": DID, "compaction_id": "compaction-x", "inference_profile_id": "summ"}),
+                json!({"node_did": DID, "compaction_id": "compaction-x", "inference_profile_id": "summ"}),
             ),
             (
                 gents::Collection::AgentContext,
-                json!({"agent_did": DID, "context_id": "context-x", "compaction_id": "compaction-x"}),
+                json!({"node_did": DID, "context_id": "context-x", "compaction_id": "compaction-x"}),
             ),
             (
-                gents::Collection::AgentBehavior,
-                json!({"agent_did": DID, "behavior_id": "x", "context_id": "context-x", "inference_profile_id": "p-original"}),
+                gents::Collection::Agent,
+                json!({"node_did": DID, "agent_id": "x", "context_id": "context-x", "inference_profile_id": "p-original"}),
             ),
             (
-                gents::Collection::AgentBehavior,
-                json!({"agent_did": DID, "behavior_id": "y", "inference_profile_id": "p-original"}),
+                gents::Collection::Agent,
+                json!({"node_did": DID, "agent_id": "y", "inference_profile_id": "p-original"}),
             ),
         ]
         .into_iter()
@@ -892,7 +891,7 @@ mod tests {
         .collect();
         let plan = gents::config_client::DesiredStateApplyPlan::new(documents).unwrap();
         access
-            .transact("test.profile.behaviors", |txn| {
+            .transact("test.profile.agents", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
                     gents::config_client::apply_desired_state_plan(txn, plan)
@@ -907,7 +906,7 @@ mod tests {
     #[tokio::test]
     async fn set_account_without_an_account_lists_the_candidates() {
         let (access, b_backend, _) = seeded().await;
-        with_behaviors(&access).await;
+        with_agents(&access).await;
         let output = list_candidates(&access, DID, "p-original", &[])
             .await
             .unwrap();
@@ -916,7 +915,7 @@ mod tests {
             output["account"],
             json!({"label": "Claude", "state": "enabled"})
         );
-        assert_eq!(output["behaviors"], json!(["x", "y"]));
+        assert_eq!(output["agents"], json!(["x", "y"]));
         assert_eq!(output["companions"], json!(["summ"]));
         assert_eq!(output["cost"], json!(gents::config_client::SWITCH_COST));
         let candidates: Vec<_> = output["candidates"]
@@ -948,22 +947,22 @@ mod tests {
     #[tokio::test]
     async fn set_account_moves_the_profile_through_the_switch() {
         let (access, _, _) = seeded().await;
-        with_behaviors(&access).await;
+        with_agents(&access).await;
         let output = set_account(&access, DID, "p-original", "label-b", None, false, &[])
             .await
             .unwrap();
         assert_eq!(
             output["headline"],
-            json!("Move profile p-original to label-b (used by 2 behaviors)")
+            json!("Move profile p-original to label-b (used by 2 agents)")
         );
-        assert_eq!(output["behaviors"], json!(["x", "y"]));
+        assert_eq!(output["agents"], json!(["x", "y"]));
         assert_eq!(output["cost"], json!(gents::config_client::SWITCH_COST));
         assert_eq!(output["companions_offered"], json!(["summ"]));
         assert_eq!(output["companions_moved"], json!([]));
         assert_eq!(stored(&access, "summ").await.unwrap().backend_id, "claude");
 
         let (access, b_backend, _) = seeded().await;
-        with_behaviors(&access).await;
+        with_agents(&access).await;
         let output = set_account(&access, DID, "p-original", "label-b", None, true, &[])
             .await
             .unwrap();
@@ -990,7 +989,7 @@ mod tests {
                 "xai-oauth-acct-g",
                 "label-g",
                 "XaiGrokOAuth",
-                json!({"kind": "principal_oauth", "account_ref": "acct-g"}),
+                json!({"kind": "node_oauth", "account_ref": "acct-g"}),
             ))
             .unwrap(),
         )
@@ -1029,7 +1028,7 @@ mod tests {
                 "language": "rust", "input_schema": {"type": "object"},
                 "model_slot": "remote_ocr",
             },
-            "model_binding": {"agent_did": DID, "profile_id": "p-api"},
+            "model_binding": {"node_did": DID, "profile_id": "p-api"},
         }))
         .unwrap();
         gents::plugin::store::write_record(home.path(), &record).unwrap();

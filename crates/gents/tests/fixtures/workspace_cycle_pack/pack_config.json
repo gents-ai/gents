@@ -1,42 +1,42 @@
 {
-  "agent_behaviors": [
+  "agents": [
     {
-      "behavior_id": "change-unit-writer",
+      "agent_id": "change-unit-writer",
       "context_id": "change-unit-writer-context",
       "description": "Implements one exact-path change in a host-sealed isolated workspace.",
       "display_name": "Change Writer",
       "inference_profile_id": "gents:inference-slot:writer"
     },
     {
-      "behavior_id": "change-unit-reviewer",
+      "agent_id": "change-unit-reviewer",
       "context_id": "change-unit-reviewer-context",
       "description": "Independently reviews the sealed workspace and binds acceptance to its writer receipt.",
       "display_name": "Change Reviewer",
       "inference_profile_id": "gents:inference-slot:reviewer"
     },
     {
-      "behavior_id": "change-unit-integrator",
+      "agent_id": "change-unit-integrator",
       "context_id": "change-unit-integrator-context",
       "description": "Acknowledges host-owned integration of an accepted sealed workspace.",
       "display_name": "Change Integrator",
       "inference_profile_id": "gents:inference-slot:integrator"
     },
     {
-      "behavior_id": "change-unit-record",
+      "agent_id": "change-unit-record",
       "context_id": "change-unit-record-context",
       "description": "Records host-confirmed integration from the integrator receipt.",
       "display_name": "Integration Recorder",
       "inference_profile_id": "gents:inference-slot:integrator"
     },
     {
-      "behavior_id": "change-unit-rejected",
+      "agent_id": "change-unit-rejected",
       "context_id": "change-unit-rejected-context",
       "description": "Records a rejected review as a terminal result.",
       "display_name": "Rejection Recorder",
       "inference_profile_id": "gents:inference-slot:integrator"
     }
   ],
-  "agent_principal": {},
+  "node": {},
   "callback_bindings": [
     {
       "binding_id": "change-unit-workspace",
@@ -82,31 +82,31 @@
     {
       "context_id": "change-unit-writer-context",
       "display_name": "Change unit writer",
-      "system_prompt": "./agent_behaviors/change_unit_writer/system_prompt.md",
+      "system_prompt": "./agents/change_unit_writer/system_prompt.md",
       "tools_id": "change-unit-writer-tools"
     },
     {
       "context_id": "change-unit-reviewer-context",
       "display_name": "Change unit reviewer",
-      "system_prompt": "./agent_behaviors/change_unit_reviewer/system_prompt.md",
+      "system_prompt": "./agents/change_unit_reviewer/system_prompt.md",
       "tools_id": "change-unit-review-tools"
     },
     {
       "context_id": "change-unit-integrator-context",
       "display_name": "Change unit integrator",
-      "system_prompt": "./agent_behaviors/change_unit_integrator/system_prompt.md",
+      "system_prompt": "./agents/change_unit_integrator/system_prompt.md",
       "tools_id": "change-unit-integrator-tools"
     },
     {
       "context_id": "change-unit-record-context",
       "display_name": "Change unit record",
-      "system_prompt": "./agent_behaviors/change_unit_record/system_prompt.md",
+      "system_prompt": "./agents/change_unit_record/system_prompt.md",
       "tools_id": "change-unit-record-tools"
     },
     {
       "context_id": "change-unit-rejected-context",
       "display_name": "Change unit rejected",
-      "system_prompt": "./agent_behaviors/change_unit_rejected/system_prompt.md",
+      "system_prompt": "./agents/change_unit_rejected/system_prompt.md",
       "tools_id": "change-unit-rejected-tools"
     }
   ],
@@ -784,37 +784,37 @@
       "repository_id": "change-unit-repository"
     }
   ],
-  "subagent_targets": [],
+  "agent_targets": [],
   "tasks": [
     {
-      "behavior_id": "change-unit-writer",
+      "agent_id": "change-unit-writer",
       "display_name": "Implement Change",
       "prompt_template": "./tasks/change_unit_writer_task/prompt.md",
       "task_id": "change-unit-writer-task",
       "emit_outcome": true
     },
     {
-      "behavior_id": "change-unit-reviewer",
+      "agent_id": "change-unit-reviewer",
       "display_name": "Review Sealed Change",
       "prompt_template": "./tasks/change_unit_review_task/prompt.md",
       "task_id": "change-unit-review-task",
       "emit_outcome": true
     },
     {
-      "behavior_id": "change-unit-integrator",
+      "agent_id": "change-unit-integrator",
       "display_name": "Integrate Accepted Change",
       "prompt_template": "./tasks/change_unit_integrate_task/prompt.md",
       "task_id": "change-unit-integrate-task",
       "emit_outcome": true
     },
     {
-      "behavior_id": "change-unit-record",
+      "agent_id": "change-unit-record",
       "display_name": "Record Integration",
       "prompt_template": "./tasks/change_unit_record_task/prompt.md",
       "task_id": "change-unit-record-task"
     },
     {
-      "behavior_id": "change-unit-rejected",
+      "agent_id": "change-unit-rejected",
       "display_name": "Record Rejection or Failure",
       "prompt_template": "./tasks/change_unit_rejected_task/prompt.md",
       "task_id": "change-unit-rejected-task"

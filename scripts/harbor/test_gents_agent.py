@@ -122,7 +122,7 @@ class PopulateContextPostRunTest(unittest.TestCase):
                     "max_turns": 250,
                     "request_id": "req-1",
                 },
-                "response.json": {"status": "error", "error_message": _MAX_TURN_ERROR},
+                "response.json": {"request": {"lifecycle_state": "failed", "failure_reason": _MAX_TURN_ERROR}, "output": {"kind": "terminal_no_message"}},
             }
         )
         self.assertEqual(gents.get("outcome"), "max_turns_exhausted")
@@ -144,8 +144,8 @@ class PopulateContextPostRunTest(unittest.TestCase):
                 "request.json": {"request_id": "req-token"},
                 "gents-outcome.json": {"outcome": "token_budget_exhausted"},
                 "response.json": {
-                    "status": "error",
-                    "error_message": "aggregate_token_budget_exhausted: limit=100000",
+                    "request": {"lifecycle_state": "failed", "failure_reason": "aggregate_token_budget_exhausted: limit=100000"},
+                "output": {"kind": "terminal_no_message"},
                 },
             }
         )
@@ -161,7 +161,7 @@ class PopulateContextPostRunTest(unittest.TestCase):
                     "outcome": "completed",
                     "response_status": "complete",
                 },
-                "response.json": {"status": "complete", "error_message": None},
+                "response.json": {"request": {"lifecycle_state": "completed", "failure_reason": None}, "output": {"kind": "terminal_no_message"}},
             }
         )
         self.assertEqual(gents.get("outcome"), "completed")
@@ -185,7 +185,7 @@ class PopulateContextPostRunTest(unittest.TestCase):
                 "trajectory.json": _TRAJECTORY,
                 "request.json": {"request_id": "req-4"},
                 "gents-outcome.json": '{"outcome": "max_turns_exhausted", oops',
-                "response.json": {"status": "error", "error_message": _MAX_TURN_ERROR},
+                "response.json": {"request": {"lifecycle_state": "failed", "failure_reason": _MAX_TURN_ERROR}, "output": {"kind": "terminal_no_message"}},
             }
         )
         self.assertIsNone(gents.get("outcome"))
@@ -219,8 +219,8 @@ class PopulateContextPostRunTest(unittest.TestCase):
                 "request.json": {"request_id": "req-compaction"},
                 "gents-outcome.json": {"outcome": "compaction_provider_error"},
                 "response.json": {
-                    "status": "error",
-                    "error_message": "compaction_provider_failure: guided and fallback output failed",
+                    "request": {"lifecycle_state": "failed", "failure_reason": "compaction_provider_failure: guided and fallback output failed"},
+                "output": {"kind": "terminal_no_message"},
                 },
             }
         )
@@ -265,8 +265,8 @@ class PersistedRequestContractTest(unittest.TestCase):
             },
             "request-persisted.json": persisted_snapshot,
             "response.json": {
-                "status": "error",
-                "error_message": "aggregate_token_budget_exhausted",
+                "request": {"lifecycle_state": "failed", "failure_reason": "aggregate_token_budget_exhausted"},
+            "output": {"kind": "terminal_no_message"},
             },
             "gents-outcome.json": {"outcome": "token_budget_exhausted"},
             "gents-profile.json": {
@@ -373,7 +373,7 @@ class RunnerSupervisionTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("restarting (1/2)", result.stderr)
             response = json.loads((logs / "response.json").read_text())
-            self.assertEqual(response["status"], "complete")
+            self.assertEqual(response["request"]["lifecycle_state"], "completed")
             self.assertEqual(
                 (home / "invocations.jsonl").read_text().count('["response", "wait"'),
                 2,
@@ -468,7 +468,7 @@ class RunnerSupervisionTest(unittest.TestCase):
             )
             tools_file = Path(tools[tools.index("--file") + 1])
             tools_document = json.loads(tools_file.read_text())
-            self.assertEqual(tools_document["agent_did"], "did:key:fake")
+            self.assertEqual(tools_document["node_did"], "did:key:fake")
             self.assertEqual(tools_document["tools_id"], "did:key:fake:tools")
             self.assertEqual(tools_document["host"]["root"], str(root))
             self.assertEqual(tools_document["host"]["files"]["mode"], "ReadWrite")
@@ -515,8 +515,8 @@ with (home / "invocations.jsonl").open("a") as invocations:
 
 if args[:1] == ["init"]:
     print(json.dumps({
-        "agent_did": "did:key:fake",
-        "default_behavior_id": "did:key:fake:default",
+        "node_did": "did:key:fake",
+        "default_agent_id": "did:key:fake:default",
         "inference_profile_id": "profile-1",
         "tools_id": "did:key:fake:tools",
     }, indent=2))
@@ -552,12 +552,12 @@ elif args[:2] == ["tools", "explain"]:
     if not (home / "second-server-ready").exists():
         print("database is locked by the restarting server", file=sys.stderr)
         sys.exit(73)
-    print(json.dumps({"behaviors": []}))
+    print(json.dumps({"agents": []}))
 elif args[:1] == ["status"]:
     if (home / "server-lost").exists():
         print("GraphQL connection refused", file=sys.stderr)
         sys.exit(1)
-    print(json.dumps({"process_state": "ready", "behavior_readiness": "ready"}, indent=2))
+    print(json.dumps({"process_state": "ready", "readiness_status": "ready"}, indent=2))
 elif args[:2] == ["request", "submit"]:
     request = {
         "request_id": "request-1",
@@ -591,10 +591,8 @@ elif args[:2] == ["response", "wait"]:
             print("Error: posting GraphQL to http://127.0.0.1:9191/api/v0/graphql", file=sys.stderr)
             sys.exit(1)
         print(json.dumps({
-            "request_id": "request-1",
-            "status": "complete",
-            "content": "done",
-            "error_message": None,
+            "request": {"request_id": "request-1", "lifecycle_state": "completed", "failure_reason": None},
+            "output": {"kind": "terminal_message", "presentation": {"body_markdown": "done"}},
         }, indent=2))
         (home / "waiter-finished").touch()
         sys.exit(0)

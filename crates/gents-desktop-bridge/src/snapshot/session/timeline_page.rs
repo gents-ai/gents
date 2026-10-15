@@ -8,6 +8,7 @@ fn rendered_timeline_item_key(item: &crate::types::RenderedTimelineItem) -> &str
 
     match item {
         RenderedTimelineItem::UserMessage { item_key, .. }
+        | RenderedTimelineItem::AutomatedInput { item_key, .. }
         | RenderedTimelineItem::AssistantMessage { item_key, .. }
         | RenderedTimelineItem::ToolGroup { item_key, .. }
         | RenderedTimelineItem::PendingUserTurn { item_key, .. }
@@ -22,6 +23,7 @@ fn rendered_timeline_durable_sequence(
 
     match item {
         RenderedTimelineItem::UserMessage { sequence, .. }
+        | RenderedTimelineItem::AutomatedInput { sequence, .. }
         | RenderedTimelineItem::AssistantMessage { sequence, .. } => Some(*sequence),
         RenderedTimelineItem::ToolGroup {
             message_sequence, ..

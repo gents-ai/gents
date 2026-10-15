@@ -142,12 +142,12 @@ mod tests {
                 "prompt": "Build the crew.",
                 "deadline_secs": 60,
                 "capture": [
-                    {"kind": "documents", "name": "behaviors", "collection": "AgentBehavior", "filter": {}},
+                    {"kind": "documents", "name": "agents", "collection": "Agent", "filter": {}},
                     {"kind": "documents", "name": "tasks", "collection": "Task", "filter": {}},
                     {"kind": "file", "name": "notes", "glob": "*.md"}
                 ],
                 "checks": [
-                    {"check": "captured_rows_count", "params": {"name": "behaviors", "min": 9}, "tier": "acceptance"},
+                    {"check": "captured_rows_count", "params": {"name": "agents", "min": 9}, "tier": "acceptance"},
                     {"check": "tool_calls_expected", "params": {"required": ["config"]}, "tier": "acceptance"}
                 ]
             }, {
@@ -175,8 +175,8 @@ mod tests {
             goal,
             vec![
                 GoalEntry {
-                    collection: "AgentBehavior".into(),
-                    capture: Some("behaviors".into()),
+                    collection: "Agent".into(),
+                    capture: Some("agents".into()),
                     min: 9,
                     max: None
                 },
@@ -193,7 +193,7 @@ mod tests {
 
         let overridden = case_goal(
             &case(BTreeMap::from([
-                ("AgentBehavior".to_owned(), 7),
+                ("Agent".to_owned(), 7),
                 (SCHEMAS_GOAL.to_owned(), 9),
             ])),
             &fallback,
@@ -209,7 +209,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 ("Task", true, 20),
-                ("AgentBehavior", false, 7),
+                ("Agent", false, 7),
                 ("schemas", false, 9)
             ]
         );
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn an_entry_reads_its_capture_its_collection_or_the_registered_schemas() {
         let snapshot = LiveSnapshot {
-            documents: BTreeMap::from([("AgentBehavior".to_owned(), 7)]),
+            documents: BTreeMap::from([("Agent".to_owned(), 7)]),
             captures: BTreeMap::from([("tasks".to_owned(), 21)]),
             schemas: vec!["RunStart".into(), "GateResult".into()],
             ..LiveSnapshot::default()
@@ -229,17 +229,17 @@ mod tests {
             min,
             max,
         };
-        let behaviors = entry("AgentBehavior", None, 9, None);
+        let agents = entry("Agent", None, 9, None);
         let tasks = entry("Task", Some("tasks"), 20, Some(22));
         let schemas = entry(SCHEMAS_GOAL, None, 9, None);
         let absent = entry("RunStart", None, 1, None);
-        assert_eq!(behaviors.observed(&snapshot), Some(7));
+        assert_eq!(agents.observed(&snapshot), Some(7));
         assert_eq!(tasks.observed(&snapshot), Some(21));
         assert_eq!(schemas.observed(&snapshot), Some(2));
         assert_eq!(absent.observed(&snapshot), None);
-        assert!(!behaviors.met(7) && behaviors.met(9));
+        assert!(!agents.met(7) && agents.met(9));
         assert!(tasks.met(21) && !tasks.met(23));
-        assert_eq!(behaviors.label(Some(7)), "7/9");
+        assert_eq!(agents.label(Some(7)), "7/9");
         assert_eq!(tasks.label(Some(21)), "21/20..22");
         assert_eq!(absent.label(None), "?/1");
         assert_eq!(entry("Task", None, 0, Some(4)).label(Some(1)), "1/≤4");

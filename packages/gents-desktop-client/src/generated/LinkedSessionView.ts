@@ -3,7 +3,7 @@
 /**
  * Another session and the request that links it to this one.
  */
-export type LinkedSessionView = { agentDid: string, sessionId: string, requesterDid: string | null,
+export type LinkedSessionView = { nodeDid: string, sessionId: string, requesterDid: string | null,
 /**
  * The causing request: in the other session for `started_by` and
  * `received`, in this session for `started` and `sent`.

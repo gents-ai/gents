@@ -3,10 +3,10 @@ use std::sync::Arc;
 use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use gents::{ensure_runtime_schemas, AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{ensure_runtime_schemas, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use serde_json::Value;
 
-use crate::support::fixtures::{bind_default_behavior_backend, test_behavior, test_identity};
+use crate::support::fixtures::{bind_default_agent_backend, test_agent, test_identity};
 use crate::support::mock_endpoint::MockModelEndpoint;
 
 #[tokio::test]
@@ -58,7 +58,7 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
     ensure_runtime_schemas(node.as_ref()).await?;
     let mock_endpoint =
         MockModelEndpoint::start_with_required_bearer("default", Some("backend-key"))?;
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         node.as_ref(),
         identity.did(),
         "backend-startup-auth",
@@ -83,7 +83,7 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
 
     let mut env = TestEnvGuard::new(&["GENTS_TEST_RUNTIME_BACKEND_KEY"]);
     env.set("GENTS_TEST_RUNTIME_BACKEND_KEY", "backend-key");
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
@@ -93,12 +93,12 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
     )
     .await?;
 
-    let default_behavior = agent
-        .behaviors()
+    let default_agent = agent
+        .agents()
         .iter()
-        .find(|behavior| behavior.behavior_id == agent.default_behavior_id())
+        .find(|behavior| behavior.agent_id == agent.default_agent_id())
         .expect("document runtime should load the default behavior");
-    assert_eq!(default_behavior.completion_client_api_key()?, "backend-key");
+    assert_eq!(default_agent.completion_client_api_key()?, "backend-key");
 
     Ok(())
 }
@@ -113,17 +113,17 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
         "openai/gpt-4o-mini",
         Some("openrouter-key"),
     )?;
-    let mut behavior = test_behavior("openrouter-oneshot", "backend-openrouter", None);
+    let mut behavior = test_agent("openrouter-oneshot", "backend-openrouter", None);
     behavior.backend_provider_kind = BackendProviderKind::OpenRouter;
     behavior.backend_endpoint = mock_endpoint.endpoint().to_string();
     behavior.backend_auth = gents::document_config::BackendAuth::ApiKey {
         key: "openrouter-key".to_string(),
     };
     behavior.model_name = "openai/gpt-4o-mini".to_string();
-    crate::support::fixtures::bind_behavior_backend(
+    crate::support::fixtures::bind_agent_backend(
         node.as_ref(),
-        behavior.agent_did(),
-        &behavior.behavior_id,
+        behavior.node_did(),
+        &behavior.agent_id,
         "backend-openrouter",
         mock_endpoint.endpoint(),
         "openai/gpt-4o-mini",
@@ -137,7 +137,7 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
     let projection = node
         .execute(
             r#"{
-                AgentRequest { _docID agent_did requester_did lifecycle_state terminal_output }
+                AgentRequest { _docID node_did requester_did lifecycle_state terminal_output }
                 AgentSession { observation }
             }"#,
         )
@@ -159,7 +159,7 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
     let gents_protocol::output::TerminalOutput::Message { message_doc_id } = terminal else {
         panic!("one-shot completion must select a published message");
     };
-    let owner = request_row["agent_did"]
+    let owner = request_row["node_did"]
         .as_str()
         .expect("canonical request owner");
     let requester = request_row["requester_did"].as_str();

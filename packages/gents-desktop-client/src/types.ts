@@ -6,14 +6,14 @@ export type {
   SavedPeer,
 } from "./types/bootstrap.js";
 export type {
-  AgentPrincipalView,
-  BehaviorEnvironmentView,
-  BehaviorReadinessSourceView,
-  BehaviorReadinessStatusView,
-  BehaviorReadinessUnknownReasonView,
-  BehaviorReadinessView,
-  BehaviorUnavailableReasonView,
-  BehaviorView,
+  NodeView,
+  AgentEnvironmentView,
+  NodeReadinessSourceView,
+  AgentReadinessStatusView,
+  AgentReadinessUnknownReasonView,
+  NodeReadinessView,
+  AgentUnavailableReasonView,
+  AgentView,
   SessionSummary,
   SessionProvenance,
   SessionFork,
@@ -42,22 +42,22 @@ export type {
   TaskView,
 } from "./types/deployment.js";
 export {
-  displayAgentIdentity,
-  displayBehaviorLabel,
+  displayNodeIdentity,
+  displayAgentLabel,
   displayConversationTitle,
   displayGraphqlEndpoint,
   formatBytes,
 } from "./types/display.js";
 export type {
-  AgentConfigSaveRequest,
-  DefaultBehaviorSetRequest,
+  NodeConfigSaveRequest,
+  DefaultAgentSetRequest,
   BackendSaveRequest,
   ConfigComponentsApplyRequest,
   ConfigComponentsPatchRequest,
   ConfigComponentPatch,
   EventSourceSaveRequest,
   EventSourceDeleteRequest,
-  BehaviorSaveRequest,
+  AgentSaveRequest,
   ChatSendRequest,
   MailboxItemRequest,
   CodexLoginResult,
@@ -87,7 +87,7 @@ export type {
   InferenceProfileDeleteRequest,
   ToolsDeleteRequest,
   ToolServiceDeleteRequest,
-  BehaviorDeleteRequest,
+  AgentDeleteRequest,
   ContextDeleteRequest,
   SkillSaveRequest,
   TaskRunRequest,
@@ -107,11 +107,16 @@ export type {
   SessionLiveDeltaView,
   SessionLiveTextPatchView,
   SessionProjectionRevisionView,
+  FoldedInputView,
   GoalView,
   MessageView,
   PendingTurnView,
+  PendingQueueEditRequest,
+  PendingQueueEditResult,
+  PendingQueueEntryView,
   RenderedTimelineItem,
   RenderedToolCallView,
+  RequestOriginView,
   ToolCallView,
   ToolDiffLineKind,
   ToolDiffLineView,
@@ -144,6 +149,27 @@ export type {
   WorkspaceEntryView,
   WorkspaceListingView,
 } from "./types/operations.js";
+export type {
+  FoundPack,
+  InstalledPack,
+  PackEditedChoice,
+  PackInstallRequest,
+  PackPluginSlot,
+  PackSlotProfile,
+} from "./types/packs.js";
+export type {
+  AllowedFolder,
+  AllowedFolderAccess,
+  AllowedFolders,
+  PluginApprovalDecision,
+  PluginApprovalRequest,
+} from "./types/hostAccess.js";
+export type {
+  PackPluginCallRequest,
+  UxDeclaredContributions,
+  UxPluginListing,
+  UxPluginSource,
+} from "./types/uxPlugins.js";
 export type {
   BackendDisplayState,
   BackendHealth,
@@ -183,10 +209,10 @@ export type { InferenceSampling } from "./generated/InferenceSampling.js";
 export type { InferenceExecution } from "./generated/InferenceExecution.js";
 export type { InferenceRetryPolicy } from "./generated/InferenceRetryPolicy.js";
 export type { PackConfig } from "./generated/PackConfig.js";
-export type { AgentBehavior } from "./generated/AgentBehavior.js";
+export type { Agent } from "./generated/Agent.js";
 export type { AgentContext } from "./generated/AgentContext.js";
 export type { CompactionConfig } from "./generated/CompactionConfig.js";
 export type { Tools } from "./generated/Tools.js";
 export type { ToolServiceRegistry } from "./generated/ToolServiceRegistry.js";
-export type { SubagentTargetDocument } from "./generated/SubagentTargetDocument.js";
-export type { AgentPrincipal } from "./generated/AgentPrincipal.js";
+export type { AgentTargetDocument } from "./generated/AgentTargetDocument.js";
+export type { Node } from "./generated/Node.js";

@@ -116,7 +116,7 @@ def policyClockAllowed (now : Time) (action : CompletionRetry.Action) : Bool :=
   | .wake wakeAt => wakeAt == now
   | _ => true
 
-/-- Policy-only progress never impersonates canonical acceptance or retraction.
+/-- Policy-only progress never stands in for canonical acceptance or retraction.
 It advances at a clock no older than either composed owner; the next closure
 decision must still enter `commit` and its held execution gate. -/
 def stepPolicy (state : CanonicalOutput.Execution.World) (now : Time)
@@ -156,7 +156,7 @@ theorem successful_commit_is_actual_gate_commit
   | none => simp [hg] at h
   | some gate =>
       have hretry := (CanonicalOutput.Execution.Gate.commit_preserves_composed_control
-        before gate actor now (gateOperation operation) hg).2.2
+        before gate actor now (gateOperation operation) hg).2.2.2.2
       simp [hg] at h
       cases h
       congr 1

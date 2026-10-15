@@ -1,7 +1,7 @@
 //! Physical request-scope checks that require the private accepted-call seam.
 
 use super::AwaitMode;
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 use crate::tool_call_lifecycle::admission_fixture::{
     claimed_signed_request, complete_child, materialize_session_message,
     publish_accepted_on_claimed_request,
@@ -20,8 +20,8 @@ async fn exec(node: &EmbeddedNode, statement: &str) {
 
 async fn scope_row(node: &EmbeddedNode, collection: &str, doc_id: &str) -> serde_json::Value {
     let fields = match collection {
-        "AgentRequest" => "_docID request_id agent_did lifecycle_state failure_reason deadline execution_generation execution_lease_expires_at",
-        "AgentToolCall" => "_docID request_doc_id agent_did tool_call_id lifecycle_state cancel_cause tool_failure_class",
+        "AgentRequest" => "_docID request_id node_did lifecycle_state failure_reason deadline execution_generation execution_lease_expires_at",
+        "AgentToolCall" => "_docID request_doc_id node_did tool_call_id lifecycle_state cancel_cause tool_failure_class",
         other => panic!("unsupported scope collection {other}"),
     };
     let doc_id = crate::graphql::escape_graphql_string(doc_id);
@@ -73,17 +73,17 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
     let path = std::env::temp_dir().join(format!("queue-scope-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&path).unwrap();
     let identity = crate::KeyIdentity::load_or_create(path.join("queue-agent.key"), None).unwrap();
-    let agent_did = identity.did();
+    let node_did = identity.did();
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(&path)
-            .with_node_identity_did(agent_did)
+            .with_node_identity_did(node_did)
             .build()
             .await
             .unwrap(),
     );
     crate::schema::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_behavior(node.as_ref(), agent_did, "general").await;
+    crate::test_support::install_test_agent(node.as_ref(), node_did, "general").await;
     let parent_id = format!("queue-deadline-coalesce-parent-{}", uuid::Uuid::new_v4());
     let session_id = case.session_id.to_string();
     let mut parent = claimed_signed_request(&node, &parent_id, &session_id, &identity, None).await;
@@ -104,7 +104,7 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
         let mut row = publish_accepted_on_claimed_request(
             node.clone(),
             &mut parent,
-            agent_did,
+            node_did,
             turn,
             crate::toolset::AGENT_NEW_TOOL_NAME,
             &tool_id,
@@ -118,7 +118,7 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
             &node,
             &parent,
             &mut row,
-            agent_did,
+            node_did,
             &format!("prompt for {tool_id}"),
         )
         .await
@@ -127,7 +127,7 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
         assert_eq!(row.request_doc_id.as_deref(), Some(parent_doc_id.as_str()));
         let persisted = scope_row(node.as_ref(), "AgentToolCall", &tool_doc_id).await;
         assert_eq!(persisted["request_doc_id"], parent_doc_id);
-        assert_eq!(persisted["agent_did"], agent_did);
+        assert_eq!(persisted["node_did"], node_did);
         assert_eq!(persisted["lifecycle_state"], "running");
         children.push(receipt.request_id);
     }
@@ -139,13 +139,13 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
         complete_child(
             &node,
             caused_request_id,
-            agent_did,
+            node_did,
             &format!("child {} complete", index + 1),
         )
         .await;
     }
     let settled =
-        crate::background_completion::settle_running_session_message_rows(&node, agent_did)
+        crate::background_completion::settle_running_session_message_rows(&node, node_did)
             .await
             .unwrap();
     assert_eq!(settled, 2);

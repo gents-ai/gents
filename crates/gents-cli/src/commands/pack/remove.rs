@@ -29,7 +29,7 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     if args.scope.graphql.is_none() {
         if let Some(record) = gents::pack::read_home_install(&home, &coordinate)? {
             anyhow::ensure!(
-                args.scope.agent_did.is_none(),
+                args.scope.node_did.is_none(),
                 "asset and plugins packs are removed locally with --home; identity flags do not apply"
             );
             let removed = remove_home_install(&home, &coordinate, record).await?;
@@ -209,6 +209,12 @@ async fn remove_home_install(
     let plugin_records =
         release_plugin_records(home, coordinate, &record.plugins, &mut plugin_digests)?;
     let plugin_bytes = plugin_release_result(home, &plugin_digests)?;
+    if !record.plugins.is_empty() {
+        super::warn_on_unrecorded_removal(
+            coordinate,
+            super::record_plugin_store_change(home, coordinate, None).await,
+        );
+    }
 
     // Forget the record before scanning for unreferenced archives: the scan
     // reads every file record currently on disk, and this one must not count

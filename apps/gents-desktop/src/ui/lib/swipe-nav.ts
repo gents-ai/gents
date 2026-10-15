@@ -7,8 +7,7 @@
    still scroll sideways: content scrolls first and the swipe arms at its
    edge, as in Safari and Chrome. */
 import { useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listenToWindow, reportSwipeScrollEdges } from "../../lib/nativeShell";
 import { isMacTauriShell } from "../../lib/shellPlatform";
 import type { History } from "./router";
 import { SWIPE_HANDLE_ATTR } from "../app/SwipeHandles";
@@ -70,7 +69,7 @@ function reportScrollRoom(): () => void {
     const key = `${left}${right}`;
     if (key === sent) return;
     sent = key;
-    invoke("swipe_scroll_edges", { left, right }).catch(() => {
+    reportSwipeScrollEdges({ left, right }).catch(() => {
       dead = true;
     });
   };
@@ -106,27 +105,26 @@ export function useSwipeNav(history: History) {
     /* AppKit keeps reporting the end phase while it animates the amount
        after lift, so a gesture settles on its first end only */
     let settled = false;
-    void getCurrentWindow()
-      .listen<SwipeProgress>("native-swipe", ({ payload }) => {
-        const h = latest.current;
-        const back = payload.amount > 0;
-        if (payload.phase === "moving") {
-          settled = false;
-          if (!(back ? h.canBack : h.canForward)) return;
-          const el = handle(back ? "back" : "forward");
-          if (el) show(el, Math.abs(payload.amount), back ? 1 : -1);
-          return;
-        }
-        if (settled) return;
-        settled = true;
-        for (const direction of ["back", "forward"] as const) {
-          const el = handle(direction);
-          if (el) hide(el);
-        }
-        if (payload.phase !== "ended" || Math.abs(payload.amount) < COMMIT) return;
-        if (back && h.canBack) h.back();
-        else if (!back && h.canForward) h.forward();
-      })
+    void listenToWindow<SwipeProgress>("native-swipe", (payload) => {
+      const h = latest.current;
+      const back = payload.amount > 0;
+      if (payload.phase === "moving") {
+        settled = false;
+        if (!(back ? h.canBack : h.canForward)) return;
+        const el = handle(back ? "back" : "forward");
+        if (el) show(el, Math.abs(payload.amount), back ? 1 : -1);
+        return;
+      }
+      if (settled) return;
+      settled = true;
+      for (const direction of ["back", "forward"] as const) {
+        const el = handle(direction);
+        if (el) hide(el);
+      }
+      if (payload.phase !== "ended" || Math.abs(payload.amount) < COMMIT) return;
+      if (back && h.canBack) h.back();
+      else if (!back && h.canForward) h.forward();
+    })
       .then((stop) => {
         if (disposed) stop();
         else unlisten = stop;

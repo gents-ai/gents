@@ -14,10 +14,10 @@ use crate::config_writes::ConfigAccess;
 use crate::request_helpers::resolve_dual_id;
 use crate::{
     default_data_dir, graphql_diagnostic_hint, graphql_rows, graphql_string_list_literal,
-    print_json, resolve_agent_did, resolve_config_access, resolve_home_dir,
+    print_json, resolve_config_access, resolve_home_dir, resolve_node_did,
 };
 
-const SESSION_FIELDS: &str = "session_id agent_did requester_did behavior_id created_at closed_at \
+const SESSION_FIELDS: &str = "session_id node_did requester_did agent_id created_at closed_at \
 title tags provenance observation";
 
 pub(crate) async fn dispatch(command: SessionCommand) -> Result<()> {
@@ -79,8 +79,8 @@ async fn session_show(args: ConfigShowArgs) -> Result<()> {
 }
 
 async fn session_fork(args: SessionForkArgs) -> Result<()> {
-    let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())
-        .context("resolving caller agent_did")?;
+    let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())
+        .context("resolving caller node_did")?;
 
     if let Some(graphql) = args.graphql.as_deref() {
         let endpoint = crate::resolve_graphql_endpoint(Some(graphql), args.home.as_deref())?;
@@ -89,9 +89,9 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
             ForkParams {
                 source_session_id: &args.from,
                 fork_at_user_turn: args.at_user_turn,
-                caller_agent_did: &agent_did,
+                caller_node_did: &node_did,
                 caller_requester_did: args.requester_did.as_deref(),
-                target_behavior_id: args.behavior.as_deref(),
+                target_agent_id: args.agent.as_deref(),
             },
         )
         .await
@@ -118,9 +118,9 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
         ForkParams {
             source_session_id: &args.from,
             fork_at_user_turn: args.at_user_turn,
-            caller_agent_did: &agent_did,
+            caller_node_did: &node_did,
             caller_requester_did: args.requester_did.as_deref(),
-            target_behavior_id: args.behavior.as_deref(),
+            target_agent_id: args.agent.as_deref(),
         },
     )
     .await
@@ -355,7 +355,7 @@ fn map_fork_error(error: ForkError) -> anyhow::Error {
     match error {
         ForkError::ForkSourceNotFound(_)
         | ForkError::ForkAtUserTurnOutOfRange(_, _)
-        | ForkError::ForkBehaviorNotFound(_)
+        | ForkError::ForkAgentNotFound(_)
         | ForkError::ForkNotSameAgent
         | ForkError::ForkSourceBusy => anyhow::anyhow!("{error}"),
         ForkError::ForkCopyFailed(inner) => inner.context("fork copy step failed"),
@@ -380,7 +380,7 @@ mod tests {
 
     use crate::shared::StoredInitConfig;
     use crate::{default_key_path, write_init_config, ToolCeilingArg};
-    use gents::AgentIdentity as _;
+    use gents::NodeIdentity as _;
 
     /// An initialized home: the signing key and `init.json` every
     /// embedded-node entry point requires before it will open the store.
@@ -393,8 +393,8 @@ mod tests {
             &home,
             &StoredInitConfig {
                 home: home.to_string_lossy().to_string(),
-                agent_name: "default".to_string(),
-                agent_did: identity.did().to_string(),
+                node_name: "default".to_string(),
+                node_did: identity.did().to_string(),
                 key_path: Some(key_path.to_string_lossy().to_string()),
                 identity_backend: None,
                 keychain_label: None,

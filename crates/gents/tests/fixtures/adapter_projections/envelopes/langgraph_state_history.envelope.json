@@ -63,8 +63,8 @@
       ],
       "thread_id": "thread-langgraph-1",
       "values": {
-        "agent_did": "did:test:graph-runner",
-        "behavior_id": "graph-runner",
+        "node_did": "did:test:graph-runner",
+        "agent_id": "graph-runner",
         "child_request_ids": [
           "req-langgraph-child-1"
         ],
@@ -84,8 +84,8 @@
     "source_projection_version": "v1"
   },
   "redaction_mode": "full",
-  "source_agent_did": "did:test:graph-runner",
-  "source_behavior_id": "graph-runner",
+  "source_node_did": "did:test:graph-runner",
+  "source_agent_id": "graph-runner",
   "source_request_id": "req-langgraph-1",
   "source_session_id": "thread-langgraph-1"
 }

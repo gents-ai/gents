@@ -5,8 +5,8 @@ import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({ toast }));
 
-import { createDesktopShellConfigActions } from "../src/hooks/desktopShellConfigActions";
-import { wasShown } from "../src/hooks/desktopShellRuntime";
+import { createConfigActions } from "../src/hooks/configActions";
+import { wasShown } from "../src/hooks/actionFailure";
 import { toastFailure } from "../src/ui/lib/failure";
 
 /* #2043: a failed action is reported once. The action that ran it says what
@@ -15,7 +15,7 @@ import { toastFailure } from "../src/ui/lib/failure";
 describe("a failed action", () => {
   const actions = (saveSkillConfig: () => Promise<never>) => {
     const reportFailure = vi.fn();
-    const created = createDesktopShellConfigActions({
+    const created = createConfigActions({
       api: { saveSkillConfig } as unknown as DesktopApiAdapter,
       mutateSnapshot: async <T>(mutation: () => Promise<T>) => mutation(),
       reportFailure,

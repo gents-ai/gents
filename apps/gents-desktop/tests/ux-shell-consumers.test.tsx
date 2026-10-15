@@ -26,7 +26,7 @@ const boardRow: NavItem = {
   id: "board:nav",
   label: "Board",
   icon: <span data-testid="board-icon">◫</span>,
-  to: { name: "agent", agentDid: "did:key:a", section: "board:page" },
+  to: { name: "agent", nodeDid: "did:key:a", section: "board:page" },
   active: (r) => r.name === "agent" && r.section === "board:page",
   placement: "footer",
 };
@@ -41,7 +41,7 @@ describe("contributed nav rows", () => {
         data: boardRow,
       }),
     );
-    const app = testApp({ deployments: [node({ agentDid: "did:key:a" })] });
+    const app = testApp({ deployments: [node({ nodeDid: "did:key:a" })] });
     renderIn(
       app,
       <TooltipProvider>
@@ -91,7 +91,7 @@ describe("contributed nav rows", () => {
         { id: "p:ok", area: NAV_AREA, data: { ...boardRow, label: "Fine" } },
       ]),
     );
-    const app = testApp({ deployments: [node({ agentDid: "did:key:a" })] });
+    const app = testApp({ deployments: [node({ nodeDid: "did:key:a" })] });
     renderIn(
       app,
       <TooltipProvider>
@@ -114,9 +114,9 @@ describe("contributed nav rows", () => {
         source: "plugin:board",
         data: {
           ...boardRow,
-          to: ({ selectedAgentDid }) =>
-            selectedAgentDid
-              ? { name: "agent", agentDid: selectedAgentDid, section: "board:page" }
+          to: ({ selectedNodeDid }) =>
+            selectedNodeDid
+              ? { name: "agent", nodeDid: selectedNodeDid, section: "board:page" }
               : null,
         },
       }),
@@ -132,8 +132,8 @@ describe("contributed nav rows", () => {
     expect(screen.queryByRole("link", { name: /Board/ })).toBeNull();
 
     act(() => {
-      publish(app, [node({ agentDid: "did:key:a" }), node({ agentDid: "did:key:b" })]);
-      app.stores.selection.setState({ agentDid: "did:key:b" });
+      publish(app, [node({ nodeDid: "did:key:a" }), node({ nodeDid: "did:key:b" })]);
+      app.stores.selection.setState({ nodeDid: "did:key:b" });
     });
     const links = screen.getAllByRole("link", { name: /Board/ });
     expect(links).toHaveLength(2);
@@ -151,12 +151,12 @@ describe("contributed nav rows", () => {
         data: boardRow,
       }),
     );
-    const app = testApp({ deployments: [node({ agentDid: "did:key:a" })] });
+    const app = testApp({ deployments: [node({ nodeDid: "did:key:a" })] });
     renderIn(
       app,
       <TooltipProvider>
         <Rail
-          route={{ name: "agent", agentDid: "did:key:a", section: "board:page" }}
+          route={{ name: "agent", nodeDid: "did:key:a", section: "board:page" }}
           settings={null}
         />
       </TooltipProvider>,
@@ -172,9 +172,9 @@ describe("contributed agent sections", () => {
   const section: AgentSectionData = {
     group: "Packs",
     label: "Board",
-    render: ({ agentDid, item }) => (
+    render: ({ nodeDid, item }) => (
       <p data-testid="board-page">
-        board for {agentDid}
+        board for {nodeDid}
         {item ? ` #${item}` : ""}
       </p>
     ),
@@ -189,11 +189,11 @@ describe("contributed agent sections", () => {
         data: section,
       }),
     );
-    const app = testApp({ deployments: [node({ agentDid: "did:key:a" })] });
+    const app = testApp({ deployments: [node({ nodeDid: "did:key:a" })] });
     renderIn(
       app,
       <TooltipProvider>
-        <AgentScreen agentDid="did:key:a" section="board:page" item="7" />
+        <AgentScreen nodeDid="did:key:a" section="board:page" item="7" />
       </TooltipProvider>,
     );
     expect(screen.getByTestId("board-page")).toHaveTextContent(
@@ -210,14 +210,14 @@ describe("contributed agent sections", () => {
 
   it("keep the page mounted, state and all, while the screen around it re-renders", () => {
     let mounts = 0;
-    function Page({ agentDid }: { agentDid: string }) {
+    function Page({ nodeDid }: { nodeDid: string }) {
       const [typed, setTyped] = useState("");
       useEffect(() => {
         mounts += 1;
       }, []);
       return (
         <label>
-          draft for {agentDid}
+          draft for {nodeDid}
           <input value={typed} onChange={(e) => setTyped(e.target.value)} />
         </label>
       );
@@ -227,14 +227,14 @@ describe("contributed agent sections", () => {
         id: "board:page",
         area: AGENT_SECTIONS_AREA,
         source: "plugin:board",
-        data: { ...section, render: (props) => <Page agentDid={props.agentDid} /> },
+        data: { ...section, render: (props) => <Page nodeDid={props.nodeDid} /> },
       }),
     );
-    const app = testApp({ deployments: [node({ agentDid: "did:key:a" })] });
+    const app = testApp({ deployments: [node({ nodeDid: "did:key:a" })] });
     const view = renderIn(
       app,
       <TooltipProvider>
-        <AgentScreen agentDid="did:key:a" section="board:page" />
+        <AgentScreen nodeDid="did:key:a" section="board:page" />
       </TooltipProvider>,
     );
     const input = screen.getByRole("textbox");
@@ -244,12 +244,12 @@ describe("contributed agent sections", () => {
     /* the node this screen reads changes identity, as it does whenever the
        agent's status or sessions move: the screen re-renders */
     act(() => {
-      publish(app, [node({ agentDid: "did:key:a", label: "renamed" })]);
+      publish(app, [node({ nodeDid: "did:key:a", label: "renamed" })]);
     });
     /* and the route gains an item, as a ::board card's click gives it */
     view.rerender(
       <TooltipProvider>
-        <AgentScreen agentDid="did:key:a" section="board:page" item="3" />
+        <AgentScreen nodeDid="did:key:a" section="board:page" item="3" />
       </TooltipProvider>,
     );
     expect(screen.getByRole("textbox")).toHaveValue("half a task");
@@ -272,11 +272,11 @@ describe("contributed agent sections", () => {
         },
       }),
     );
-    const app = testApp({ deployments: [node({ agentDid: "did:key:a" })] });
+    const app = testApp({ deployments: [node({ nodeDid: "did:key:a" })] });
     renderIn(
       app,
       <TooltipProvider>
-        <AgentScreen agentDid="did:key:a" section="boom:page" />
+        <AgentScreen nodeDid="did:key:a" section="boom:page" />
       </TooltipProvider>,
     );
     expect(screen.getByTestId("contrib-error-pane")).toHaveTextContent("page failed");
@@ -290,11 +290,11 @@ describe("contributed agent sections", () => {
       source: "plugin:board",
       data: section,
     });
-    const app = testApp({ deployments: [node({ agentDid: "did:key:a" })] });
+    const app = testApp({ deployments: [node({ nodeDid: "did:key:a" })] });
     renderIn(
       app,
       <TooltipProvider>
-        <AgentScreen agentDid="did:key:a" section="packs" />
+        <AgentScreen nodeDid="did:key:a" section="packs" />
       </TooltipProvider>,
     );
     expect(screen.getByRole("link", { name: /Board/ })).toBeInTheDocument();

@@ -14,150 +14,150 @@ def ruminationDid : String :=
 def ghostDid : String :=
   "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"
 
-structure PrincipalCase where
+structure NodeCase where
   did     : String
   enabled : Bool
   deriving Repr
 
-structure BehaviorCase where
+structure AgentCase where
   id        : String
-  principal : String
+  node      : String
   enabled   : Bool
   deriving Repr
 
 structure PermissionGrantCase where
-  principal  : String
+  node       : String
   permission : String
   deriving Repr
 
 structure IdentityStructuralCase where
   name        : String
-  principals  : List PrincipalCase
-  behaviors   : List BehaviorCase
+  nodes       : List NodeCase
+  agents      : List AgentCase
   deriving Repr
 
-def behaviorCaseToBehavior (c : BehaviorCase) : Behavior :=
-  { id := c.id, principal := c.principal, displayName := none, enabled := c.enabled }
+def agentCaseToAgent (c : AgentCase) : Agent :=
+  { id := c.id, node := c.node, displayName := none, enabled := c.enabled }
 
 def IdentityStructuralCase.world (c : IdentityStructuralCase) : World :=
-  { principals := (c.principals.map (fun p =>
-      ({ did := p.did, displayName := none, enabled := p.enabled } : Principal))).toFinset,
-    behaviors := (c.behaviors.map behaviorCaseToBehavior).toFinset }
+  { nodes := (c.nodes.map (fun p =>
+      ({ did := p.did, displayName := none, enabled := p.enabled } : Node))).toFinset,
+    agents := (c.agents.map agentCaseToAgent).toFinset }
 
 def IdentityStructuralCase.wellFormed (c : IdentityStructuralCase) : Bool :=
   decide c.world.WellFormed
 
 def structuralCases : List IdentityStructuralCase :=
-  [ { name        := "amy_general_and_amy_code_share_principal"
-    , principals  := [{ did := amyDid, enabled := true }]
-    , behaviors   :=
-        [ { id := "amy-general", principal := amyDid, enabled := true }
-        , { id := "amy-code",    principal := amyDid, enabled := true } ]
+  [ { name        := "amy_general_and_amy_code_share_node"
+    , nodes       := [{ did := amyDid, enabled := true }]
+    , agents      :=
+        [ { id := "amy-general", node := amyDid, enabled := true }
+        , { id := "amy-code",    node := amyDid, enabled := true } ]
     }
-  , { name        := "amy_rumination_separate_principal"
-    , principals  :=
+  , { name        := "amy_rumination_separate_node"
+    , nodes       :=
         [ { did := amyDid,        enabled := true }
         , { did := ruminationDid, enabled := true } ]
-    , behaviors   :=
-        [ { id := "amy-general",     principal := amyDid,        enabled := true }
-        , { id := "amy-rumination",  principal := ruminationDid, enabled := true } ]
+    , agents      :=
+        [ { id := "amy-general",     node := amyDid,        enabled := true }
+        , { id := "amy-rumination",  node := ruminationDid, enabled := true } ]
     }
-  , { name        := "dangling_behavior_fk_violates"
-    , principals  := [{ did := amyDid, enabled := true }]
-    , behaviors   :=
-        [ { id := "orphan", principal := ghostDid, enabled := true } ]
+  , { name        := "dangling_agent_fk_violates"
+    , nodes       := [{ did := amyDid, enabled := true }]
+    , agents      :=
+        [ { id := "orphan", node := ghostDid, enabled := true } ]
     }
-  , { name        := "duplicate_behavior_id_violates"
-    , principals  := [{ did := amyDid, enabled := true }]
-    , behaviors   :=
-        [ { id := "amy-general", principal := amyDid, enabled := true }
-        , { id := "amy-general", principal := amyDid, enabled := false } ]
+  , { name        := "duplicate_agent_id_violates"
+    , nodes       := [{ did := amyDid, enabled := true }]
+    , agents      :=
+        [ { id := "amy-general", node := amyDid, enabled := true }
+        , { id := "amy-general", node := amyDid, enabled := false } ]
     }
-  , { name := "same_behavior_label_across_principals_allowed"
-    , principals := [{ did := amyDid, enabled := true }, { did := ruminationDid, enabled := true }]
-    , behaviors := [{ id := "coding", principal := amyDid, enabled := true },
-                    { id := "coding", principal := ruminationDid, enabled := true }] }
+  , { name := "same_agent_label_across_nodes_allowed"
+    , nodes := [{ did := amyDid, enabled := true }, { did := ruminationDid, enabled := true }]
+    , agents := [{ id := "coding", node := amyDid, enabled := true },
+                    { id := "coding", node := ruminationDid, enabled := true }] }
 
 
   ]
 
 structure IdentityPermissionCase where
   name                     : String
-  principals               : List PrincipalCase
-  behaviors                : List BehaviorCase
+  nodes                    : List NodeCase
+  agents                   : List AgentCase
   grants                   : List PermissionGrantCase
   permission               : String
   rowOwner                 : String
-  actorPrincipal           : String
-  actorBehavior            : String
-  peerPrincipal            : String
-  peerBehavior             : String
-  expectedActorPrincipal   : Option String
-  expectedPeerPrincipal    : Option String
+  actorNode                : String
+  actorAgent               : String
+  peerNode                 : String
+  peerAgent                : String
+  expectedActorNode        : Option String
+  expectedPeerNode         : Option String
   expectedActorAllowed     : Bool
   expectedPeerAllowed      : Bool
-  samePrincipal            : Bool
+  sameNode                 : Bool
   expectedDecisionsEqual   : Bool
   deriving Repr
 
 
 def grantStoreFromCases (grants : List PermissionGrantCase) : GrantStore String :=
-  { granted := fun principal permission =>
+  { granted := fun node permission =>
       grants.any (fun grant =>
-        grant.principal == principal && grant.permission == permission) }
+        grant.node == node && grant.permission == permission) }
 
 def permissionDecideFromGrants (grants : List PermissionGrantCase) :
     Decide String :=
   canonicalDecide (grantStoreFromCases grants)
 
-theorem permissionDecideFromGrants_respectsPrincipal
+theorem permissionDecideFromGrants_respectsNode
     (grants : List PermissionGrantCase) :
-    RespectsPrincipal (permissionDecideFromGrants grants) :=
-  canonicalDecide_respectsPrincipal (grantStoreFromCases grants)
+    RespectsNode (permissionDecideFromGrants grants) :=
+  canonicalDecide_respectsNode (grantStoreFromCases grants)
 
 def mkIdentityPermissionCase
     (name : String)
-    (principals : List PrincipalCase)
-    (behaviors : List BehaviorCase)
+    (nodes : List NodeCase)
+    (agents : List AgentCase)
     (grants : List PermissionGrantCase)
-    (permission rowOwner actorPrincipal actorBehavior peerPrincipal peerBehavior : String) :
+    (permission rowOwner actorNode actorAgent peerNode peerAgent : String) :
     IdentityPermissionCase :=
-  let actor := Identity.findBehavior? (behaviors.map behaviorCaseToBehavior) actorPrincipal actorBehavior
-  let peer := Identity.findBehavior? (behaviors.map behaviorCaseToBehavior) peerPrincipal peerBehavior
-  let actorAllowed := actor.any (fun behavior => permissionDecideFromGrants grants behavior permission)
-  let peerAllowed := peer.any (fun behavior => permissionDecideFromGrants grants behavior permission)
+  let actor := Identity.findAgent? (agents.map agentCaseToAgent) actorNode actorAgent
+  let peer := Identity.findAgent? (agents.map agentCaseToAgent) peerNode peerAgent
+  let actorAllowed := actor.any (fun agent => permissionDecideFromGrants grants agent permission)
+  let peerAllowed := peer.any (fun agent => permissionDecideFromGrants grants agent permission)
   { name := name
-  , principals := principals
-  , behaviors := behaviors
+  , nodes := nodes
+  , agents := agents
   , grants := grants
   , permission := permission
   , rowOwner := rowOwner
-  , actorPrincipal := actorPrincipal
-  , actorBehavior := actorBehavior
-  , peerPrincipal := peerPrincipal
-  , peerBehavior := peerBehavior
-  , expectedActorPrincipal := actor.map (·.principal)
-  , expectedPeerPrincipal := peer.map (·.principal)
+  , actorNode := actorNode
+  , actorAgent := actorAgent
+  , peerNode := peerNode
+  , peerAgent := peerAgent
+  , expectedActorNode := actor.map (·.node)
+  , expectedPeerNode := peer.map (·.node)
   , expectedActorAllowed := actorAllowed
   , expectedPeerAllowed := peerAllowed
-  , samePrincipal := actor.any (fun a => peer.any (fun b => a.principal == b.principal))
+  , sameNode := actor.any (fun a => peer.any (fun b => a.node == b.node))
   , expectedDecisionsEqual := actorAllowed == peerAllowed
   }
 
-def amyPrincipal : PrincipalCase :=
+def amyNode : NodeCase :=
   { did := amyDid, enabled := true }
 
-def ruminationPrincipal : PrincipalCase :=
+def ruminationNode : NodeCase :=
   { did := ruminationDid, enabled := true }
 
-def amyGeneralBehavior : BehaviorCase :=
-  { id := "amy-general", principal := amyDid, enabled := true }
+def amyGeneralAgent : AgentCase :=
+  { id := "amy-general", node := amyDid, enabled := true }
 
-def amyCodeBehavior : BehaviorCase :=
-  { id := "amy-code", principal := amyDid, enabled := true }
+def amyCodeAgent : AgentCase :=
+  { id := "amy-code", node := amyDid, enabled := true }
 
-def amyRuminationBehavior : BehaviorCase :=
-  { id := "amy-rumination", principal := ruminationDid, enabled := true }
+def amyRuminationAgent : AgentCase :=
+  { id := "amy-rumination", node := ruminationDid, enabled := true }
 
 def amyRowReadPermission : String :=
   "row:" ++ amyDid ++ ":memory.read"
@@ -165,32 +165,32 @@ def amyRowReadPermission : String :=
 def ruminationRowReadPermission : String :=
   "row:" ++ ruminationDid ++ ":journal.read"
 
-def grant (principal permission : String) : PermissionGrantCase :=
-  { principal := principal, permission := permission }
+def grant (node permission : String) : PermissionGrantCase :=
+  { node := node, permission := permission }
 
 def identityPermissionCases : List IdentityPermissionCase :=
   [ mkIdentityPermissionCase
-      "same_principal_row_owner_grant_allows_shared_behaviors"
-      [amyPrincipal]
-      [amyGeneralBehavior, amyCodeBehavior]
+      "same_node_row_owner_grant_allows_shared_agents"
+      [amyNode]
+      [amyGeneralAgent, amyCodeAgent]
       [grant amyDid amyRowReadPermission]
       amyRowReadPermission
       amyDid
       amyDid "amy-general"
       amyDid "amy-code"
   , mkIdentityPermissionCase
-      "separate_principal_without_grant_blocks_peer"
-      [amyPrincipal, ruminationPrincipal]
-      [amyGeneralBehavior, amyRuminationBehavior]
+      "separate_node_without_grant_blocks_peer"
+      [amyNode, ruminationNode]
+      [amyGeneralAgent, amyRuminationAgent]
       [grant amyDid amyRowReadPermission]
       amyRowReadPermission
       amyDid
       amyDid "amy-general"
       ruminationDid "amy-rumination"
   , mkIdentityPermissionCase
-      "separate_principal_with_grant_allows_peer"
-      [amyPrincipal, ruminationPrincipal]
-      [amyGeneralBehavior, amyRuminationBehavior]
+      "separate_node_with_grant_allows_peer"
+      [amyNode, ruminationNode]
+      [amyGeneralAgent, amyRuminationAgent]
       [ grant amyDid amyRowReadPermission
       , grant ruminationDid amyRowReadPermission ]
       amyRowReadPermission
@@ -198,9 +198,9 @@ def identityPermissionCases : List IdentityPermissionCase :=
       amyDid "amy-general"
       ruminationDid "amy-rumination"
   , mkIdentityPermissionCase
-      "scoped_behavior_lookup_selects_declared_principal"
-      [amyPrincipal, ruminationPrincipal]
-      [amyGeneralBehavior, amyCodeBehavior, amyRuminationBehavior]
+      "scoped_agent_lookup_selects_declared_node"
+      [amyNode, ruminationNode]
+      [amyGeneralAgent, amyCodeAgent, amyRuminationAgent]
       [grant ruminationDid ruminationRowReadPermission]
       ruminationRowReadPermission
       ruminationDid
@@ -211,32 +211,32 @@ def identityPermissionCases : List IdentityPermissionCase :=
 theorem structural_scope_cases_pinned : structuralCases.map (·.wellFormed) =
     [true, true, false, false, true] := by native_decide
 
-/-- Same label never borrows the other principal's ACP grant, regardless of
+/-- Same label never borrows the other node's ACP grant, regardless of
 query ordering. Ambiguous same-owner documents fail resolution. -/
-def sharedLabelBehaviors : List BehaviorCase :=
-  [{ id := "coding", principal := amyDid, enabled := true },
-   { id := "coding", principal := ruminationDid, enabled := true }]
+def sharedLabelAgents : List AgentCase :=
+  [{ id := "coding", node := amyDid, enabled := true },
+   { id := "coding", node := ruminationDid, enabled := true }]
 
 def scopedSelectionCases : List IdentityPermissionCase :=
   [ mkIdentityPermissionCase "same-label-scoped-selection-forward"
-      [amyPrincipal, ruminationPrincipal] sharedLabelBehaviors
+      [amyNode, ruminationNode] sharedLabelAgents
       [grant amyDid amyRowReadPermission] amyRowReadPermission amyDid
       amyDid "coding" ruminationDid "coding"
   , mkIdentityPermissionCase "same-label-scoped-selection-reverse"
-      [amyPrincipal, ruminationPrincipal] sharedLabelBehaviors.reverse
+      [amyNode, ruminationNode] sharedLabelAgents.reverse
       [grant amyDid amyRowReadPermission] amyRowReadPermission amyDid
       amyDid "coding" ruminationDid "coding"
-  , mkIdentityPermissionCase "unknown-owner-does-not-select-other-principal"
-      [amyPrincipal, ruminationPrincipal] sharedLabelBehaviors
+  , mkIdentityPermissionCase "unknown-owner-does-not-select-other-node"
+      [amyNode, ruminationNode] sharedLabelAgents
       [grant amyDid amyRowReadPermission] amyRowReadPermission amyDid
       ghostDid "coding" amyDid "coding"
   , mkIdentityPermissionCase "same-owner-collision-does-not-select-first-row"
-      [amyPrincipal] [amyGeneralBehavior, { amyGeneralBehavior with enabled := false }]
+      [amyNode] [amyGeneralAgent, { amyGeneralAgent with enabled := false }]
       [grant amyDid amyRowReadPermission] amyRowReadPermission amyDid
       amyDid "amy-general" amyDid "amy-general" ]
 
 theorem scoped_selection_permission_cases_pinned : scopedSelectionCases.map
-    (fun c => (c.expectedActorPrincipal, c.expectedPeerPrincipal,
+    (fun c => (c.expectedActorNode, c.expectedPeerNode,
       c.expectedActorAllowed, c.expectedPeerAllowed)) =
     [(some amyDid, some ruminationDid, true, false),
      (some amyDid, some ruminationDid, true, false),
@@ -245,30 +245,30 @@ theorem scoped_selection_permission_cases_pinned : scopedSelectionCases.map
 open Conformance.Contracts
 open Conformance.ContractCases (boolString)
 
-def principalCaseJson (c : PrincipalCase) : String :=
+def nodeCaseJson (c : NodeCase) : String :=
   "{"
     ++ "\"did\":" ++ jsonString c.did ++ ","
     ++ "\"enabled\":" ++ boolString c.enabled
     ++ "}"
 
-def behaviorCaseJson (c : BehaviorCase) : String :=
+def agentCaseJson (c : AgentCase) : String :=
   "{"
     ++ "\"id\":" ++ jsonString c.id ++ ","
-    ++ "\"principal\":" ++ jsonString c.principal ++ ","
+    ++ "\"node\":" ++ jsonString c.node ++ ","
     ++ "\"enabled\":" ++ boolString c.enabled
     ++ "}"
 
 def permissionGrantCaseJson (c : PermissionGrantCase) : String :=
   "{"
-    ++ "\"principal\":" ++ jsonString c.principal ++ ","
+    ++ "\"node\":" ++ jsonString c.node ++ ","
     ++ "\"permission\":" ++ jsonString c.permission
     ++ "}"
 
 def identityStructuralCaseJson (c : IdentityStructuralCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString c.name ++ ","
-    ++ "\"principals\":" ++ jsonArray (c.principals.map principalCaseJson) ++ ","
-    ++ "\"behaviors\":" ++ jsonArray (c.behaviors.map behaviorCaseJson) ++ ","
+    ++ "\"nodes\":" ++ jsonArray (c.nodes.map nodeCaseJson) ++ ","
+    ++ "\"agents\":" ++ jsonArray (c.agents.map agentCaseJson) ++ ","
     ++ "\"well_formed\":" ++ boolString c.wellFormed
     ++ "}"
 
@@ -278,24 +278,24 @@ def structuralCasesJson : String :=
 def identityPermissionCaseJson (c : IdentityPermissionCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString c.name ++ ","
-    ++ "\"principals\":" ++ jsonArray (c.principals.map principalCaseJson) ++ ","
-    ++ "\"behaviors\":" ++ jsonArray (c.behaviors.map behaviorCaseJson) ++ ","
+    ++ "\"nodes\":" ++ jsonArray (c.nodes.map nodeCaseJson) ++ ","
+    ++ "\"agents\":" ++ jsonArray (c.agents.map agentCaseJson) ++ ","
     ++ "\"grants\":" ++ jsonArray (c.grants.map permissionGrantCaseJson) ++ ","
     ++ "\"permission\":" ++ jsonString c.permission ++ ","
     ++ "\"row_owner\":" ++ jsonString c.rowOwner ++ ","
-    ++ "\"actor_principal\":" ++ jsonString c.actorPrincipal ++ ","
-    ++ "\"actor_behavior\":" ++ jsonString c.actorBehavior ++ ","
-    ++ "\"peer_principal\":" ++ jsonString c.peerPrincipal ++ ","
-    ++ "\"peer_behavior\":" ++ jsonString c.peerBehavior ++ ","
-    ++ "\"expected_actor_principal\":"
-      ++ (c.expectedActorPrincipal.map jsonString |>.getD "null") ++ ","
-    ++ "\"expected_peer_principal\":"
-      ++ (c.expectedPeerPrincipal.map jsonString |>.getD "null") ++ ","
+    ++ "\"actor_node\":" ++ jsonString c.actorNode ++ ","
+    ++ "\"actor_agent\":" ++ jsonString c.actorAgent ++ ","
+    ++ "\"peer_node\":" ++ jsonString c.peerNode ++ ","
+    ++ "\"peer_agent\":" ++ jsonString c.peerAgent ++ ","
+    ++ "\"expected_actor_node\":"
+      ++ (c.expectedActorNode.map jsonString |>.getD "null") ++ ","
+    ++ "\"expected_peer_node\":"
+      ++ (c.expectedPeerNode.map jsonString |>.getD "null") ++ ","
     ++ "\"expected_actor_allowed\":"
       ++ boolString c.expectedActorAllowed ++ ","
     ++ "\"expected_peer_allowed\":"
       ++ boolString c.expectedPeerAllowed ++ ","
-    ++ "\"same_principal\":" ++ boolString c.samePrincipal ++ ","
+    ++ "\"same_node\":" ++ boolString c.sameNode ++ ","
     ++ "\"expected_decisions_equal\":"
       ++ boolString c.expectedDecisionsEqual
     ++ "}"
@@ -311,11 +311,11 @@ structure IdentityContract where
   deriving Repr
 
 def identityContracts : List IdentityContract :=
-  [ { name      := "identity.respects_principal_boundary"
+  [ { name      := "identity.respects_node_boundary"
     , statement :=
-        "Target contract: resolve behaviors by (agent_did, behavior_id). " ++
-        "For any two AgentBehavior rows b1, b2 with " ++
-        "b1.agent_did == b2.agent_did, the runtime supplies the same " ++
+        "Target contract: resolve agents by (node_did, agent_id). " ++
+        "For any two Agent rows b1, b2 with " ++
+        "b1.node_did == b2.node_did, the runtime supplies the same " ++
         "Identity::Authenticated(did) as the actor for any DefraDB ACP " ++
         "check, so any DID-keyed permission decision returns identical " ++
         "results."

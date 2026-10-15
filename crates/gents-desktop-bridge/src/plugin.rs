@@ -17,6 +17,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                 home = %policy.desktop_paths.root().display(),
                 "gents-desktop-bridge initialized"
             );
+            hold_desktop_process(app, &policy.desktop_paths)?;
             app.manage(DesktopAppState::new(policy));
             // Off the setup path: reading the packaged runtime and asking the
             // service manager for its state are both blocking.
@@ -41,6 +42,12 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                 }
             });
             Ok(())
+        })
+        .on_webview_ready(register_window)
+        .on_event(|app, event| {
+            if let tauri::RunEvent::WindowEvent { label, event, .. } = event {
+                app.state::<DesktopAppState>().window_event(label, event);
+            }
         })
         .invoke_handler(tauri::generate_handler![
             tauri_commands::external_url::desktop_open_external_url,
@@ -91,7 +98,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::workspace::desktop_workspace_list,
             tauri_commands::peers::desktop_network_status,
             tauri_commands::lifecycle::desktop_client_snapshot,
-            tauri_commands::lifecycle::desktop_set_selected_agent,
+            tauri_commands::lifecycle::desktop_set_selected_node,
             tauri_commands::lifecycle::desktop_observer_metrics,
             tauri_commands::chat::desktop_session_snapshot,
             tauri_commands::chat::desktop_session_hydration_retry,
@@ -99,17 +106,18 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::chat::desktop_request_timeline,
             tauri_commands::tools_explain::desktop_tool_surface_explain,
             tauri_commands::chat::desktop_chat_send,
+            tauri_commands::chat::desktop_pending_queue_edit,
             tauri_commands::chat::desktop_session_rename,
             tauri_commands::chat::desktop_request_resend,
             tauri_commands::chat::desktop_request_retry,
             tauri_commands::mailbox::desktop_mailbox_list,
             tauri_commands::mailbox::desktop_mailbox_start_request,
             tauri_commands::mailbox::desktop_mailbox_dismiss,
-            tauri_commands::config::desktop_agent_config_save,
-            tauri_commands::config::desktop_default_behavior_set,
+            tauri_commands::config::desktop_node_config_save,
+            tauri_commands::config::desktop_default_agent_set,
             tauri_commands::config::desktop_config_components_apply,
             tauri_commands::config::desktop_config_components_patch,
-            tauri_commands::config::desktop_behavior_save,
+            tauri_commands::config::desktop_agent_save,
             tauri_commands::config::desktop_skill_save,
             tauri_commands::config::desktop_skill_delete,
             tauri_commands::config::desktop_task_delete,
@@ -119,7 +127,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::config::desktop_inference_profile_delete,
             tauri_commands::config::desktop_tools_delete,
             tauri_commands::config::desktop_tool_service_delete,
-            tauri_commands::config::desktop_behavior_delete,
+            tauri_commands::config::desktop_agent_delete,
             tauri_commands::config::desktop_context_delete,
             tauri_commands::config::desktop_backend_save,
             tauri_commands::config::desktop_inference_profile_save,
@@ -158,4 +166,113 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::operations::desktop_probe_mcp_service,
         ])
         .build()
+}
+
+fn register_window<R: Runtime>(webview: tauri::Webview<R>) {
+    let window = webview.window();
+    window
+        .state::<DesktopAppState>()
+        .register_window(window.label());
+}
+
+/// Takes the desktop process lock through the reset reservation, so a
+/// waiting reset is never overtaken, and holds it for the app's lifetime.
+fn hold_desktop_process<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    paths: &gents_desktop_core::client::DesktopPaths,
+) -> anyhow::Result<()> {
+    let reservation = gents_desktop_core::home_reset::lock_reset(paths)?;
+    let process = gents_desktop_core::home_reset::lock_desktop_process(paths, false)?;
+    anyhow::ensure!(
+        app.manage(process),
+        "the desktop process lock is already held by this app"
+    );
+    drop(reservation);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gents_desktop_core::client::DesktopPaths;
+    use gents_desktop_core::home_reset::{
+        lock_browser_store, lock_desktop_process, BrowserStoreLock, DesktopProcessLock,
+    };
+
+    #[test]
+    fn browser_store_and_process_locks_are_both_held_after_setup() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(temp.path().join("desktop"));
+        let store = format!("plugin-test-{}", std::process::id());
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        assert!(app.manage(lock_browser_store(Some(&store)).unwrap()));
+        hold_desktop_process(app.handle(), &paths).unwrap();
+        assert!(app.try_state::<BrowserStoreLock>().is_some());
+        assert!(app.try_state::<DesktopProcessLock>().is_some());
+        assert!(lock_browser_store(Some(&store)).is_err());
+        assert!(lock_desktop_process(&paths, false).is_err());
+    }
+
+    #[test]
+    fn native_views_register_before_selection_and_closed_view_ipc_is_ignored() {
+        use tauri::ipc::InvokeBody;
+        use tauri::webview::InvokeRequest;
+
+        let temp = tempfile::tempdir().unwrap();
+        let config = BridgeConfig {
+            home: crate::config::HomePolicy::FixedRoot(temp.path().join("desktop")),
+            bootstrap: crate::config::BootstrapPolicy::PairedRemoteOnly,
+            ..Default::default()
+        };
+        let app = tauri::test::mock_builder()
+            .manage(DesktopAppState::new(resolve_policy(&config, None).unwrap()))
+            .plugin(
+                Builder::<tauri::test::MockRuntime>::new("window-selection-test")
+                    .on_webview_ready(register_window)
+                    .build(),
+            )
+            .invoke_handler(tauri::generate_handler![
+                tauri_commands::lifecycle::desktop_set_selected_node
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let second = tauri::WebviewWindowBuilder::new(&app, "second", Default::default())
+            .build()
+            .unwrap();
+        let state = app.state::<DesktopAppState>();
+        for label in ["main", "second"] {
+            assert!(state.bridge.lock().unwrap().has_window(label));
+        }
+        main.hide().unwrap();
+        state.window_event("main", &tauri::WindowEvent::Focused(false));
+        assert!(state.bridge.lock().unwrap().has_window("main"));
+
+        let invoke = |view: &tauri::WebviewWindow<tauri::test::MockRuntime>| {
+            tauri::test::get_ipc_response(
+                view,
+                InvokeRequest {
+                    cmd: "desktop_set_selected_node".into(),
+                    callback: tauri::ipc::CallbackFn(0),
+                    error: tauri::ipc::CallbackFn(1),
+                    url: "http://tauri.localhost".parse().unwrap(),
+                    body: InvokeBody::Json(serde_json::json!({"nodeDid": "did:stale"})),
+                    headers: Default::default(),
+                    invoke_key: tauri::test::INVOKE_KEY.to_string(),
+                },
+            )
+        };
+        assert!(invoke(&main)
+            .expect_err("a live view still requires a running client")
+            .to_string()
+            .contains("desktop client not initialized"));
+        state.window_event("second", &tauri::WindowEvent::Destroyed);
+        invoke(&second).expect("IPC already queued by a destroyed view is ignored");
+        assert!(!state.bridge.lock().unwrap().has_window("second"));
+        assert!(state.bridge.lock().unwrap().has_window("main"));
+    }
 }

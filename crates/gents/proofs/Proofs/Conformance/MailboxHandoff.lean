@@ -26,11 +26,11 @@ private def cases : List Case :=
   , { name := "tool-owner-mismatch", producer :=
         { Handoff.producer with tool := { Handoff.producer.tool with requestId := 2 } } }
   , { name := "producer-agent-mismatch", producer :=
-        { Handoff.producer with agentDid := "other-agent" } }
+        { Handoff.producer with nodeDid := "other-node" } }
   , { name := "producer-requester-mismatch", producer :=
         { Handoff.producer with requesterDid := "other-requester" } }
   , { name := "unstamped", question :=
-        { openQuestion with context := ⟨"foreign", "agent"⟩ } }
+        { openQuestion with context := ⟨"foreign", "node"⟩ } }
   , { name := "terminal-old-row", registry := staleRegistry,
       producer := { Handoff.producer with requestId := 2, sessionId := "old-session", tool :=
         { Handoff.producer.tool with requestId := 2 } },
@@ -38,8 +38,8 @@ private def cases : List Case :=
   , { name := "wrong-reply-source", reply :=
         { replyEvidence with sourceDocId := "other" } }
   , { name := "wrong-reply-target", envelope :=
-        { replyEnvelope with targetAgentDid := "other-agent" }, reply :=
-        { replyEvidence with agentDid := "other-agent" } }
+        { replyEnvelope with targetNodeDid := "other-node" }, reply :=
+        { replyEvidence with nodeDid := "other-node" } }
   , { name := "wrong-reply-session", envelope :=
         { replyEnvelope with sessionId := some "other" } }
   , { name := "same-physical-request", reply :=
@@ -92,9 +92,9 @@ private def caseJson (test : Case) : String :=
     ",\"request_id\":" ++ toString test.question.requestId ++
     ",\"producer_request_id\":" ++ toString test.producer.requestId ++
     ",\"tool_request_id\":" ++ toString test.producer.tool.requestId ++
-    ",\"producer_agent_did\":" ++ jsonString test.producer.agentDid ++
+    ",\"producer_node_did\":" ++ jsonString test.producer.nodeDid ++
     ",\"producer_requester_did\":" ++ jsonString test.producer.requesterDid ++
-    ",\"question_agent_did\":" ++ jsonString test.question.identity.agentDid ++
+    ",\"question_node_did\":" ++ jsonString test.question.identity.nodeDid ++
     ",\"question_requester_did\":" ++ jsonString test.question.identity.requesterDid ++
     ",\"session_id\":" ++ jsonString test.question.sessionId ++
     ",\"request_doc_id\":" ++ jsonString test.producer.requestDocId ++

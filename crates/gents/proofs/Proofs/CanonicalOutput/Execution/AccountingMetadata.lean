@@ -32,13 +32,13 @@ theorem acceptedHeaderBindsTool_map
       { world with toolContexts := world.toolContexts.map edit } (edit tool) =
       acceptedHeaderBindsTool world tool := by
   have hlookup (document : DocId) := ownedToolByDocument_map world edit document hdocument
-  unfold acceptedHeaderBindsTool spawnParentIntentValid
+  unfold acceptedHeaderBindsTool spawnParentIntentValid pluginParentIntentValid
   rw [hprovenance]
   cases hp : tool.provenance with
   | acceptedIntent =>
       simp only [directAcceptedHeaderMetadataBindsTool, hdocument, hrequest, hsession,
         hsequence]
-  | spawnedBackground parent =>
+  | spawnedBackground parent | pluginEffect parent _ =>
       simp only [hlookup, hdocument, hrequest, hsession, hsequence, hprovenance, hawait]
       cases hl : ownedToolByDocument? world parent <;> simp [hl, hrequest, hsession,
         hsequence, hprovenance, directAcceptedHeaderMetadataBindsTool, hdocument]

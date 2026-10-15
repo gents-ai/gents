@@ -65,7 +65,7 @@ pub(crate) async fn prepare_pack_plan_in_txn(
     let mut prepared = Vec::with_capacity(documents.len());
     for authored in documents {
         let mut document = authored.clone();
-        let owner = document.add["agent_did"]
+        let owner = document.add["node_did"]
             .as_str()
             .context("pack document is missing owner")?;
         let id = document.add[document.collection.unique_field()]
@@ -186,7 +186,7 @@ pub(super) fn stamp_pack_origin(
         .as_object_mut()
         .context("pack config must be an object")?;
     for collection in Collection::ALL {
-        if collection == Collection::AgentPrincipal
+        if collection == Collection::Node
             || matches!(
                 collection,
                 Collection::InferenceBackend
@@ -257,8 +257,8 @@ mod tests {
             "gents:pack:pipeline".into(),
         ])
         .is_err());
-        let left = serde_json::json!({"agent_did":"owner","task_id":"task","tags":["one"]});
-        let right = serde_json::json!({"agent_did":"owner","task_id":"task","tags":["two"]});
+        let left = serde_json::json!({"node_did":"owner","task_id":"task","tags":["one"]});
+        let right = serde_json::json!({"node_did":"owner","task_id":"task","tags":["two"]});
         assert_eq!(
             pack_artifact_document_digest(&left).unwrap(),
             pack_artifact_document_digest(&right).unwrap()

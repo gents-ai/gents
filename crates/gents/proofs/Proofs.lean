@@ -17,6 +17,8 @@ import Proofs.SessionHydration
 import Proofs.Session.Properties
 import Proofs.Session.Interrupt
 import Proofs.Session.InterruptCases
+import Proofs.Session.Fold
+import Proofs.Session.FoldCases
 import Proofs.Transcript
 import Proofs.CanonicalOutput
 import Proofs.StreamingResponse.ReasoningAudit
@@ -71,6 +73,7 @@ import Proofs.Conformance.CoverageLedger
 import Proofs.Conformance.Contracts
 import Proofs.ApplyReconcile
 import Proofs.SelfConfig
+import Proofs.SelfConfig.Selection
 import Proofs.ReversePairingHandlers
 import Proofs.Identity
 import Proofs.Skills
@@ -85,7 +88,6 @@ import Proofs.GraphPipeline.LogicalInvocation
 import Proofs.EthSubmission
 import Proofs.PeerRegistryDiscovery.DirectoryProjection
 import Proofs.PeerRegistryDiscovery.RootAdmission
-import Proofs.PeerRegistryDiscovery.PersonaRequest
 
 import Proofs.Conformance.InvalidToolProgress
 import Proofs.Conformance.RepeatedToolFailure

@@ -6,10 +6,24 @@ export type ClientUpdateEvent = Partial<GeneratedClientUpdateEvent>;
 
 export type Unlisten = () => void;
 
+/* The bridge opens the browser for a provider's sign-in itself; it also
+   sends the URL on these events for the person's "Open browser" fallback. */
+const PROVIDER_LOGIN_URL_EVENT = {
+  openai: "desktop://codex-login-url",
+  anthropic: "desktop://claude-login-url",
+  grok: "desktop://grok-login-url",
+} as const;
+
+export type OauthProvider = keyof typeof PROVIDER_LOGIN_URL_EVENT;
+
 export interface DesktopTransport {
   invoke<T>(command: string, args?: unknown): Promise<T>;
   listenClientUpdated(
     handler: (e: ClientUpdateEvent) => void,
+  ): Promise<Unlisten>;
+  listenProviderLoginUrl?(
+    provider: OauthProvider,
+    handler: (url: string) => void,
   ): Promise<Unlisten>;
 }
 
@@ -42,6 +56,19 @@ export function tauriTransport(): DesktopTransport {
       return () => {
         unlisten();
       };
+    },
+    async listenProviderLoginUrl(provider, handler) {
+      if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
+        return () => {};
+      }
+      const { listen } = await import("@tauri-apps/api/event");
+      return listen<{ url?: string }>(
+        PROVIDER_LOGIN_URL_EVENT[provider],
+        (event) => {
+          const url = event.payload?.url;
+          if (url) handler(url);
+        },
+      );
     },
   };
 }

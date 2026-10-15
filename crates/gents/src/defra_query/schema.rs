@@ -489,14 +489,14 @@ mod tests {
     }
 
     #[test]
-    fn suggests_agent_did_for_agent_name() {
+    fn suggests_node_did_for_node_name() {
         let candidates = vec![
-            "agent_did".to_string(),
-            "behavior_id".to_string(),
+            "node_did".to_string(),
+            "agent_id".to_string(),
             "request_id".to_string(),
             "status".to_string(),
         ];
-        assert_eq!(suggest_fields("agent_name", &candidates), vec!["agent_did"]);
+        assert_eq!(suggest_fields("node_name", &candidates), vec!["node_did"]);
     }
 
     #[test]

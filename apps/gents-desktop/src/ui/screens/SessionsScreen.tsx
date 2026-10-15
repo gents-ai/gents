@@ -1,6 +1,13 @@
 /* Sessions: a heading row with search and New, then plain rows on the
-   ground: title, the behavior's chip, and when it last moved. */
-import { memo, useLayoutEffect, useState } from "react";
+   ground: title, the agent's chip, and when it last moved. */
+import {
+  memo,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  type ComponentProps,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   ChevronDown,
@@ -18,6 +25,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { href, navigate } from "@/lib/router";
+import { useListWindow } from "@/lib/listWindow";
 import { Age } from "./time";
 import {
   defaultScope,
@@ -27,10 +35,10 @@ import {
   sessionsInScope,
   type Scope,
 } from "@/lib/scope";
-import { useHomeDid, useInScope, useSelectedAgentDid } from "@/hooks/useClient";
+import { useHomeDid, useInScope, useSelectedNodeDid } from "@/hooks/useClient";
 import { sessionKeyOf } from "../../hooks/fleetStore";
 import { nodeDidOf, nodeOfSession } from "@/lib/nodes";
-import { NodeBehaviorStack } from "./NodeBehaviorStack";
+import { NodeAgentStack } from "./NodeBehaviorStack";
 import { NodeAxis } from "./NodeAxis";
 import { SessionStatus } from "./SessionStatus";
 import { isLive } from "@/lib/live";
@@ -44,6 +52,26 @@ import {
   workersOf,
 } from "../hooks/useFleet";
 
+type Row =
+  | {
+      kind: "session";
+      session: SessionSummary;
+      child: boolean;
+      delay?: number | null;
+    }
+  | {
+      kind: "toggle";
+      of: string;
+      kin: number;
+      hidden: number;
+      open: boolean;
+      running: number;
+    };
+
+const rowKey = (row: Row) =>
+  row.kind === "session" ? sessionKeyOf(row.session) : `${row.of}-workers`;
+const rowHeight = (row: Row) => (row.kind === "toggle" ? 37 : row.child ? 41 : 61);
+
 export function SessionsScreen({
   nodeDid,
 }: {
@@ -52,9 +80,9 @@ export function SessionsScreen({
 }) {
   const nodes = useFleet(useShallow(fleetNodes));
   const homeDid = useHomeDid();
-  const selectedNodeDid = useSelectedAgentDid();
+  const selectedNodeDid = useSelectedNodeDid();
   const [query, setQuery] = useState<string | null>(null);
-  /* the three axes the summary carries: behavior, state, and what started it */
+  /* the three axes the summary carries: agent, state, and what started it */
   const filter = useListViews((v) => v.sessionFilter);
   /* which parents are showing their workers; a person who opened one meant it */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
@@ -101,7 +129,10 @@ export function SessionsScreen({
       Object.fromEntries(inScope.map((c) => [sessionKeyOf(c), workersOf(s, c)])),
     ),
   );
-  const conversations = filterSessions(inScope, filter, query);
+  const conversations = useMemo(
+    () => filterSessions(inScope, filter, query),
+    [inScope, filter, query],
+  );
   /* an empty list says "yet" only when no node has a session; otherwise
      something narrowed it, the node chips included */
   const narrowed =
@@ -117,26 +148,11 @@ export function SessionsScreen({
      say what its workers are doing. A child follows its parent only when
      the parent is here to follow: a filter or a search that keeps the child
      and drops the parent leaves the child where it fell. */
-  type Row =
-    | {
-        kind: "session";
-        session: SessionSummary;
-        child: boolean;
-        delay?: number | null;
-      }
-    | {
-        kind: "toggle";
-        of: string;
-        kin: number;
-        hidden: number;
-        open: boolean;
-        running: number;
-      };
 
   /* every worker on any node by the session that handed it out, whether
      or not the list is showing it: the parent's marks say the whole piece
      of work, and a worker on another node is still its work */
-  const nested = (() => {
+  const nested = useMemo(() => {
     const shown = new Set(conversations.map((c) => c.sessionId));
     const children = new Map<string, SessionSummary[]>();
     const roots: SessionSummary[] = [];
@@ -171,10 +187,17 @@ export function SessionsScreen({
         });
       return rows;
     });
-  })();
+  }, [conversations, parents, expanded, filter]);
+  const [scroller, setScroller] = useState<HTMLElement | null>(null);
+  const scrollRoot = useCallback((root: HTMLDivElement | null) => {
+    setScroller(
+      root?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]') ?? null,
+    );
+  }, []);
+  const window = useListWindow(nested, scroller, rowKey, rowHeight);
 
   return (
-    <ScrollArea className="h-full" data-testid="sessions-screen">
+    <ScrollArea ref={scrollRoot} className="h-full" data-testid="sessions-screen">
       <div className="mx-auto max-w-page px-6 py-6">
         <div className="flex h-10 items-center gap-2">
           <h1 className="font-heading text-lg font-medium text-heading">Sessions</h1>
@@ -248,10 +271,19 @@ export function SessionsScreen({
             </Button>
           </div>
         )}
-        <ul className="mt-4 divide-y divide-border/60">
-          {nested.map((row) =>
-            row.kind === "toggle" ? (
-              <li key={`${row.of}-workers`}>
+        <ul
+          {...window.listProps}
+          aria-label="Sessions"
+          data-session-count={nested.length}
+          className={cn("mt-4", !window.enabled && "divide-y divide-border/60")}
+        >
+          {window.items.map(({ index, start }) => {
+            const row = nested[index]!;
+            const attributes = window.attributes(index, start);
+            if (attributes && index > 0)
+              attributes.className = "border-t border-border/60";
+            return row.kind === "toggle" ? (
+              <li key={rowKey(row)} {...attributes}>
                 <button
                   type="button"
                   aria-expanded={row.open}
@@ -271,14 +303,15 @@ export function SessionsScreen({
                     )}
                   />
                   {row.open || row.hidden === 0
-                    ? `${row.kin} ${row.kin === 1 ? "worker" : "workers"}`
-                    : `${row.hidden} more ${row.hidden === 1 ? "worker" : "workers"}`}
+                    ? `${row.kin} started session${row.kin === 1 ? "" : "s"}`
+                    : `${row.hidden} more started session${row.hidden === 1 ? "" : "s"}`}
                   {row.running > 0 && <span>· {row.running} running</span>}
                 </button>
               </li>
             ) : (
               <SessionRow
-                key={row.session.sessionId}
+                key={rowKey(row)}
+                attributes={attributes}
                 session={row.session}
                 child={row.child}
                 delay={row.delay ?? null}
@@ -289,8 +322,8 @@ export function SessionsScreen({
                     : (workers[sessionKeyOf(row.session)] ?? NO_SESSIONS)
                 }
               />
-            ),
-          )}
+            );
+          })}
           {conversations.length === 0 && narrowed && (
             <li className="py-8 text-center text-sm text-muted-foreground">
               No sessions match.
@@ -329,7 +362,9 @@ const SessionRow = memo(function SessionRow({
   delay,
   parent,
   workers,
+  attributes = {},
 }: {
+  attributes?: ComponentProps<"li">;
   session: SessionSummary;
   child: boolean;
   delay: number | null;
@@ -338,12 +373,17 @@ const SessionRow = memo(function SessionRow({
 }) {
   return (
     <li
-      key={session.sessionId}
+      {...attributes}
       className={cn(
-        delay != null &&
+        attributes.className,
+        !attributes.style &&
+          delay != null &&
           "animate-in fade-in-0 slide-in-from-top-1 fill-mode-both duration-200 ease-out motion-reduce:animate-none",
       )}
-      style={delay != null ? { animationDelay: `${delay * 40}ms` } : undefined}
+      style={
+        attributes.style ??
+        (delay != null ? { animationDelay: `${delay * 40}ms` } : undefined)
+      }
     >
       <a
         href={href({
@@ -406,9 +446,9 @@ const SessionRow = memo(function SessionRow({
             {session.title ?? "Untitled"}
           </span>
         </p>
-        <NodeBehaviorStack
+        <NodeAgentStack
           nodeDid={nodeOfSession(session)}
-          behaviorId={session.behaviorId}
+          agentId={session.agentId}
           size={child ? "sm" : "md"}
           workers={workers}
         />

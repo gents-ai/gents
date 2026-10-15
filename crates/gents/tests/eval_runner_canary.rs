@@ -151,7 +151,7 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripte
         );
         assert!(live["output_tokens"].is_u64(), "{case_id}: {record:#}");
         assert!(
-            live["documents"]["AgentBehavior"].as_u64() >= Some(1),
+            live["documents"]["Agent"].as_u64() >= Some(1),
             "the pack's own behavior: {record:#}"
         );
         assert_eq!(live["captures"]["items"], 1, "{case_id}: {record:#}");
@@ -232,7 +232,7 @@ async fn a_subject_profile_bound_to_an_execution_and_retry_policy_starts_its_tri
             (
                 Collection::InferenceRetryPolicy,
                 json!({
-                    "agent_did": owner,
+                    "node_did": owner,
                     "retry_policy_id": "canary-retry",
                     "max_transport_retries": 1,
                 }),
@@ -240,7 +240,7 @@ async fn a_subject_profile_bound_to_an_execution_and_retry_policy_starts_its_tri
             (
                 Collection::InferenceExecution,
                 json!({
-                    "agent_did": owner,
+                    "node_did": owner,
                     "execution_id": "canary-execution",
                     "display_name": "Default",
                     "retry_policy_id": "canary-retry",
@@ -305,9 +305,9 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
             "collection": "AgentSession",
             "document": {
                 "session_id": "supplied-destination",
-                "agent_did": "$trial",
+                "node_did": "$trial",
                 "requester_did": "$trial",
-                "behavior_id": "seeded",
+                "agent_id": "seeded",
                 "created_at": "2026-01-01T00:00:00Z"
             }
         }]);
@@ -331,7 +331,7 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
     } else {
         source
     });
-    request.cells[0].behavior_id = "seeded".into();
+    request.cells[0].agent_id = "seeded".into();
     let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), canary.runs_dir());
 
     let outcome = run(
@@ -356,7 +356,7 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
         let home = EmbeddedHome::open_retained(&retained).await.unwrap();
         let state = gents::graphql::graphql_with_transaction_retry(
             &home.node,
-            "{ Trigger { trigger_id last_status last_error } AgentRequest { request_id lifecycle_state failure_reason session_id requester_did } AgentSession { session_id agent_did requester_did behavior_id } }",
+            "{ Trigger { trigger_id last_status last_error } AgentRequest { request_id lifecycle_state failure_reason session_id requester_did } AgentSession { session_id node_did requester_did agent_id } }",
             "failed routing canary",
         ).await.unwrap();
         panic!(
@@ -410,7 +410,7 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
     if existing_session {
         let routed = gents::graphql::graphql_with_transaction_retry(
             &home.node,
-            r#"{ AgentRequest(filter: { caused_by_trigger_id: { _eq: "seed-trigger" } }) { session_id } AgentSession { agent_did session_id created_at } }"#,
+            r#"{ AgentRequest(filter: { caused_by_trigger_id: { _eq: "seed-trigger" } }) { session_id } AgentSession { node_did session_id created_at } }"#,
             "canary supplied destination",
         ).await.unwrap();
         assert!(routed.errors.is_empty(), "{routed:#?}");
@@ -422,7 +422,7 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
         assert_eq!(
             data["AgentSession"],
             json!([{
-                "agent_did": home.did(),
+                "node_did": home.did(),
                 "session_id": "supplied-destination",
                 "created_at": "2026-01-01T00:00:00Z"
             }]),
@@ -452,7 +452,7 @@ async fn a_seed_stage_no_trigger_fires_for_ends_unsubmitted_at_its_deadline() {
     request.cells[0].source = CellSource::Directory(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/eval_runner/trigger_pack"),
     );
-    request.cells[0].behavior_id = "seeded".into();
+    request.cells[0].agent_id = "seeded".into();
     let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), canary.runs_dir());
 
     let outcome = run(
@@ -505,7 +505,7 @@ async fn a_seed_stage_whose_event_sources_do_not_reconcile_fails_at_once() {
     request.cells[0].source = CellSource::Directory(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/eval_runner/trigger_pack"),
     );
-    request.cells[0].behavior_id = "seeded".into();
+    request.cells[0].agent_id = "seeded".into();
     let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), canary.runs_dir());
 
     let started = Instant::now();
@@ -682,7 +682,7 @@ async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_a
         .unwrap_or_else(|| panic!("expected a FreezeRefused: {error:#}"))
         .0
         .clone();
-    assert!(refusal.contains("principal_oauth"), "{refusal}");
+    assert!(refusal.contains("node_oauth"), "{refusal}");
 
     for run_id in ["run-bash", "run-oauth"] {
         assert!(
@@ -735,7 +735,7 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
             (
                 Collection::InferenceSampling,
                 json!({
-                    "agent_did": canary.owner,
+                    "node_did": canary.owner,
                     "sampling_id": "canary-sampling",
                     "temperature": 0.7,
                 }),
@@ -865,7 +865,7 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
     let home = EmbeddedHome::create_temp("eval-canary").await.unwrap();
     let access = ConfigAccess::Local(home.node.clone());
     let owner = home.did().to_string();
-    gents::ensure_agent_principal(home.node.as_ref(), &owner)
+    gents::ensure_node(home.node.as_ref(), &owner)
         .await
         .unwrap();
     let canary = Canary {
@@ -891,7 +891,7 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
             (
                 Collection::InferenceSampling,
                 json!({
-                    "agent_did": owner,
+                    "node_did": owner,
                     "sampling_id": "canary-sampling",
                     "temperature": 0.0,
                 }),
@@ -917,7 +917,7 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
             cell_id: "baseline".into(),
             label: "baseline".into(),
             source: CellSource::Directory(canary.pack_dir.clone()),
-            behavior_id: "canary".into(),
+            agent_id: "canary".into(),
             inference_profile_id: "canary".into(),
         }],
         trials_per_case: 1,
@@ -954,10 +954,10 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
 fn definition_document(owner: &str) -> Value {
     json!({
         "definition_id": "canary",
-        "agent_did": owner,
+        "node_did": owner,
         "comparability_version": 1,
         "title": "Eval runner canary",
-        "subject": {"kind": "behavior", "inference_slots": ["primary"]},
+        "subject": {"kind": "agent", "inference_slots": ["primary"]},
         "fixtures": {
             "assets": ["notes.txt"],
             "schemas": [CANARY_ITEM_SDL],
@@ -990,10 +990,10 @@ fn definition_document(owner: &str) -> Value {
 fn quiet_seed_definition_document(owner: &str, definition_id: &str, schemas: &[&str]) -> Value {
     json!({
         "definition_id": definition_id,
-        "agent_did": owner,
+        "node_did": owner,
         "comparability_version": 1,
         "title": "Eval runner seed stage without a trigger",
-        "subject": {"kind": "behavior", "inference_slots": ["primary"]},
+        "subject": {"kind": "agent", "inference_slots": ["primary"]},
         "fixtures": {"schemas": schemas},
         "cases": [{
             "case_id": "quiet",
@@ -1024,10 +1024,10 @@ fn quiet_seed_definition_document(owner: &str, definition_id: &str, schemas: &[&
 fn seed_definition_document(owner: &str) -> Value {
     json!({
         "definition_id": "seed",
-        "agent_did": owner,
+        "node_did": owner,
         "comparability_version": 1,
         "title": "Eval runner seed stage",
-        "subject": {"kind": "behavior", "inference_slots": ["primary"]},
+        "subject": {"kind": "agent", "inference_slots": ["primary"]},
         "fixtures": {"schemas": [SEED_ITEM_SDL]},
         "cases": [{
             "case_id": "seeded",
@@ -1068,7 +1068,7 @@ fn stage_document(stage_id: &str, marker: &str) -> Value {
 
 fn backend_document(owner: &str, backend_id: &str, endpoint: &str, auth: Value) -> Value {
     json!({
-        "agent_did": owner,
+        "node_did": owner,
         "backend_id": backend_id,
         "name": "Eval canary backend",
         "provider_kind": "OpenAiCompatible",
@@ -1080,23 +1080,23 @@ fn backend_document(owner: &str, backend_id: &str, endpoint: &str, auth: Value) 
     })
 }
 
-/// A backend that would spend the launching principal's own subscription
-/// credential. `principal_oauth` is only compatible with an agent-scoped OAuth
+/// A backend that would spend the launching node's own subscription
+/// credential. `node_oauth` is only compatible with a node-scoped OAuth
 /// provider kind, so the refusal has to be asked of a realistic document.
 fn subscription_backend_document(owner: &str, backend_id: &str) -> Value {
     json!({
-        "agent_did": owner,
+        "node_did": owner,
         "backend_id": backend_id,
         "name": "Eval canary subscription backend",
         "provider_kind": "ClaudeCliSubscription",
         "endpoint": "https://api.anthropic.com",
-        "auth": {"kind": "principal_oauth"},
+        "auth": {"kind": "node_oauth"},
     })
 }
 
 fn profile_document(owner: &str, profile_id: &str, backend_id: &str, model: &str) -> Value {
     json!({
-        "agent_did": owner,
+        "node_did": owner,
         "profile_id": profile_id,
         "backend_id": backend_id,
         "model_name": model,
@@ -1133,7 +1133,7 @@ fn trial<'a>(trials: &'a [TrialRecord], case_id: &str) -> &'a TrialRecord {
 
 fn locator(trial: &TrialRecord) -> TrialLocator {
     TrialLocator {
-        trial_agent_did: trial.identity.trial_agent_did.clone(),
+        trial_node_did: trial.identity.trial_node_did.clone(),
         session_id: trial.identity.session_id.clone(),
         home_hint: trial.identity.home_hint.clone(),
     }

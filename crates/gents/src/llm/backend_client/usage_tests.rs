@@ -1,4 +1,4 @@
-use super::tests::test_behavior;
+use super::tests::test_agent;
 use super::*;
 
 async fn one_openai_completion(client: BackendClient) {
@@ -35,7 +35,7 @@ async fn usage_wiring_openai_compatible_records_under_the_backend_id() {
     ] {
         let url =
             crate::provider_http::tests::one_shot_server("200 OK", OPENAI_USAGE_HEADERS, "").await;
-        let mut behavior = test_behavior(BackendProviderKind::OpenAiCompatible, wire);
+        let mut behavior = test_agent(BackendProviderKind::OpenAiCompatible, wire);
         behavior.backend_id = Some(backend_id.to_string());
         behavior.backend_endpoint = format!("{url}/v1");
         let client =
@@ -46,7 +46,7 @@ async fn usage_wiring_openai_compatible_records_under_the_backend_id() {
         one_openai_completion(client).await;
 
         let account = crate::usage_observation::UsageAccount::Backend {
-            agent_did: behavior.agent_did().to_string(),
+            node_did: behavior.node_did().to_string(),
             provider: "OpenAiCompatible".to_string(),
             backend_id: backend_id.to_string(),
         };
@@ -63,7 +63,7 @@ async fn usage_wiring_backend_without_id_has_no_reporter() {
     let node = Arc::new(crate::oauth_credential::test_support::test_node().await);
     let url =
         crate::provider_http::tests::one_shot_server("200 OK", OPENAI_USAGE_HEADERS, "").await;
-    let mut behavior = test_behavior(
+    let mut behavior = test_agent(
         BackendProviderKind::OpenAiCompatible,
         crate::OpenAiWireApi::ChatCompletions,
     );

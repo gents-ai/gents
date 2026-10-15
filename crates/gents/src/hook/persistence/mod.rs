@@ -11,7 +11,7 @@ use crate::background_tools::{
     handle_list_background_tools, handle_read_tool_output, BackgroundToolArgs, CancelToolArgs,
     ProcessControlScope, ReadToolOutputOutcome, WaitToolArgs,
 };
-use crate::document_config::load_agent_behavior;
+use crate::document_config::load_agent;
 use crate::tool_call_lifecycle::query::load_tool_call_result;
 use crate::tool_call_lifecycle::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle};
 use crate::toolset::{
@@ -32,6 +32,7 @@ mod prompt_hook;
 mod session_message;
 
 use helpers::*;
+pub(crate) use prompt_hook::HookOwnedTool;
 #[cfg(test)]
 pub(super) fn test_model_observation_for_tool_result(tool_name: &str, raw_result: &str) -> String {
     model_observation_for_tool_result(tool_name, raw_result)

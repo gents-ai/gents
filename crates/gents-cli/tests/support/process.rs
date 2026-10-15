@@ -116,12 +116,12 @@ pub fn desktop_bin() -> Result<PathBuf> {
     Ok(desktop_path)
 }
 
-pub fn run_desktop_init_json(agent_home: &Path, desktop_home: &Path, label: &str) -> Result<Value> {
+pub fn run_desktop_init_json(node_home: &Path, desktop_home: &Path, label: &str) -> Result<Value> {
     let output = Command::new(desktop_bin()?)
         .env("RUST_LOG", "error")
         .arg("init")
-        .arg("--agent-home")
-        .arg(agent_home)
+        .arg("--node-home")
+        .arg(node_home)
         .arg("--desktop-home")
         .arg(desktop_home)
         .arg("--label")

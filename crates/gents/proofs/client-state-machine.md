@@ -289,7 +289,7 @@ A compliant client MUST open its `EventName::Update` subscription before
 reading the initial snapshot and MUST drain the subscription continuously
 thereafter. Drop-counter signals (`Subscription::check_and_reset_dropped() > 0`)
 MUST trigger a scope-bounded resync, scoped to the currently-selected
-`agent_did` when one is set. Per-event patches MUST upsert by stable per-collection
+`node_did` when one is set. Per-event patches MUST upsert by stable per-collection
 key (the `*_merge_key` functions in `gents-desktop-core::client::store`),
 so that row-level merges converge to the same state a full reload would produce.
 
@@ -327,7 +327,7 @@ enforces these parts:
 | C2 snapshot preserves selection | React selection state is separate from snapshot refresh. `projectChatShell` is pure and receives selection as input rather than writing it. | `Proofs.Conformance.ClientShell.Contracts` emits `snapshot_preserves_selection`; TypeScript consumes the frontend projection row and Rust conformance checks the generated pre/post selection fields. |
 | C3 transport input is non-mutating | P2P health lives in `DesktopRuntimeSnapshot.p2pHealth`; it is projected separately from selected session/chat state. Auto-restart refreshes the selected session by id instead of rewriting selection from transport health. | Generated `transport_noop` case checks that `step` returns the same shell state. |
 | C4/C4' session selection is local | `onSelectSession` latches the clicked session and clears the loaded session snapshot if it belongs to another session. Store presence affects projection only. | Generated `stale_workflow_after_session_switch` is consumed by TypeScript projection tests and Rust conformance. |
-| C6 start-submit is gated | `onSendMessage` checks `shellProjection.sendStatus === ready` before calling `sendChatMessage`; Rust submission APIs still validate required agent/session fields. | Generated `blocked_submit_*` cases cover offline client, missing agent, empty composer, mutation in flight, awaiting observation, missing session, and non-terminal turn gates. |
+| C6 start-submit is gated | `onSendMessage` refuses a `disabled` send status before calling `sendChatMessage`; Rust submission APIs still validate required agent/session fields. | Generated `blocked_submit_*` cases cover offline client, missing agent, empty composer, mutation in flight, awaiting observation, and missing session gates; a non-terminal turn queues the message instead (`queue_submit_behind_nonterminal_turn`, `queued_observation_retires_awaiting`, `folded_observation_retires_awaiting`). |
 | C9 awaiting retires only on matching request | Rust `build_session_snapshot_from_store(..., preferred_request_id)` reports a preferred request only if that request is actually in the observed store; TypeScript keeps `awaitingObservation` while latest/pending request ids do not match. | Generated stale/matching observation cases are consumed by both `projectChatShell` and desktop session snapshot tests. |
 | Terminal follow-up allowance | Follow-up uses the selected session/request observation, with no separate conversation summary. | Generated terminal cases exercise the single session observation path. |
 
@@ -338,7 +338,7 @@ enforces these parts:
 list keeps all generated rows for TypeScript projection coverage; the desktop
 list contains selected-session rows that the Rust session-snapshot bridge can
 own directly, including the selected-but-absent snapshot case. Future shell
-changes that add workflow states, blocker reasons, behavior-mismatch handling,
+changes that add workflow states, blocker reasons, agent-mismatch handling,
 or transport coupling should extend `Proofs.ClientShell` first and update this
 generated contract surface in the same change. The emitted frontend and desktop
 ClientShell domains are also listed in `Proofs.Conformance.CoverageLedger`, so

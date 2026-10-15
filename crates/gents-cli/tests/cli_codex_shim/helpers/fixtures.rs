@@ -9,7 +9,7 @@ async fn exact_request_binding(
         graphql,
         &format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{
-                _docID agent_did requester_did
+                _docID node_did requester_did
             }} }}"#,
             escape_graphql_string(request_id),
         ),
@@ -26,7 +26,7 @@ async fn exact_request_binding(
             .and_then(Value::as_str)
             .context("request binding missing physical ID")?
             .to_string(),
-        row.get("agent_did")
+        row.get("node_did")
             .and_then(Value::as_str)
             .context("request binding missing principal")?
             .to_string(),
@@ -42,7 +42,7 @@ async fn exact_request_binding(
 /// sequence, and canonical header lookup rejects sequence twins as conflicts.
 async fn next_session_message_sequence(
     graphql: &str,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     request_doc_id: &str,
 ) -> Result<u32> {
@@ -51,23 +51,23 @@ async fn next_session_message_sequence(
             prompt: AgentMessage(
                 filter: {{
                     session_id: {{ _eq: "{session_id}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     request_doc_id: {{ _eq: "{request_doc_id}" }},
                     role: {{ _eq: "user" }}
                 }},
                 limit: 1
             ) {{ sequence }}
             AgentMessage(
-                filter: {{ session_id: {{ _eq: "{session_id}" }}, agent_did: {{ _eq: "{agent_did}" }} }},
+                filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }} }},
                 order: {{ sequence: DESC }},
                 limit: 1
             ) {{ sequence }}
             AgentToolCall(
-                filter: {{ session_id: {{ _eq: "{session_id}" }}, agent_did: {{ _eq: "{agent_did}" }} }}
+                filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }} }}
             ) {{ message_sequence }}
         }}"#,
         session_id = escape_graphql_string(session_id),
-        agent_did = escape_graphql_string(agent_did),
+        node_did = escape_graphql_string(node_did),
         request_doc_id = escape_graphql_string(request_doc_id),
     );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
@@ -102,7 +102,7 @@ async fn next_session_message_sequence(
 async fn seed_canonical_tool_transcript(
     graphql: &str,
     request_doc_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
     tool_call_doc_id: &str,
@@ -128,7 +128,7 @@ async fn seed_canonical_tool_transcript(
     let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
     let generation = format!("codex-fixture:{request_doc_id}:{sequence}");
     let argument_segment = OutputSegment {
-        agent_did: agent_did.into(),
+        node_did: node_did.into(),
         requester_did: requester_did.map(str::to_owned),
         session_id: session_id.into(),
         request_doc_id: request_doc_id.into(),
@@ -175,13 +175,13 @@ async fn seed_canonical_tool_transcript(
         gents_protocol::graphql::extract_mutation_doc_id(&argument_response, "AgentOutputSegment")?;
     let admission = TranscriptMessage {
         message_key: gents::session::sequence_message_key(
-            agent_did,
+            node_did,
             session_id,
             requester_did,
             sequence,
         ),
         session_id: session_id.into(),
-        agent_did: agent_did.into(),
+        node_did: node_did.into(),
         requester_did: requester_did.map(str::to_owned),
         request_doc_id: Some(request_doc_id.into()),
         publication: MessagePublication::RequestExecution {
@@ -214,7 +214,7 @@ async fn seed_canonical_tool_transcript(
 
     if let Some(result) = result {
         let result_segment = OutputSegment {
-            agent_did: agent_did.into(),
+            node_did: node_did.into(),
             requester_did: requester_did.map(str::to_owned),
             session_id: session_id.into(),
             request_doc_id: request_doc_id.into(),
@@ -255,13 +255,13 @@ async fn seed_canonical_tool_transcript(
         let delivery_sequence = 1000 + sequence;
         let delivery = TranscriptMessage {
             message_key: gents::session::sequence_message_key(
-                agent_did,
+                node_did,
                 session_id,
                 requester_did,
                 delivery_sequence,
             ),
             session_id: session_id.into(),
-            agent_did: agent_did.into(),
+            node_did: node_did.into(),
             requester_did: requester_did.map(str::to_owned),
             request_doc_id: Some(request_doc_id.into()),
             publication: MessagePublication::ToolDelivery {
@@ -299,7 +299,7 @@ async fn seed_canonical_tool_transcript(
     let presentation = gents::tool_call_lifecycle::load_tool_call_presentation(
         &access,
         tool_call_doc_id,
-        agent_did,
+        node_did,
         session_id,
         requester_did,
     )
@@ -393,8 +393,7 @@ pub(super) async fn send_turn(ws: &mut ShimWebSocket, thread_id: &str, prompt: &
 pub(super) async fn seed_blank_materialized_completion(
     graphql: &str,
     request_id: &str,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
     session_id: &str,
 ) -> Result<()> {
     use gents::config_client::ConfigAccess;
@@ -410,16 +409,15 @@ pub(super) async fn seed_blank_materialized_completion(
     use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let blank_assistant = "\n\n\n";
-    let (request_doc_id, request_agent_did, requester_did) =
+    let (request_doc_id, request_node_did, requester_did) =
         exact_request_binding(graphql, request_id).await?;
-    anyhow::ensure!(request_agent_did == agent_did);
-    anyhow::ensure!(requester_did.as_deref() == Some(agent_did));
-    let _ = behavior_id;
+    anyhow::ensure!(request_node_did == node_did);
+    anyhow::ensure!(requester_did.as_deref() == Some(node_did));
     let generation = format!("codex-blank-{request_id}");
     let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
     let segment = OutputSegment {
-        agent_did: agent_did.to_owned(),
-        requester_did: Some(agent_did.to_owned()),
+        node_did: node_did.to_owned(),
+        requester_did: Some(node_did.to_owned()),
         session_id: session_id.to_owned(),
         request_doc_id: request_doc_id.clone(),
         source: OutputSource::ProviderTurn {
@@ -460,15 +458,10 @@ pub(super) async fn seed_blank_materialized_completion(
     let close_doc_id =
         gents_protocol::graphql::extract_mutation_doc_id(&segment_response, "AgentOutputSegment")?;
     let header = TranscriptMessage {
-        message_key: gents::session::sequence_message_key(
-            agent_did,
-            session_id,
-            Some(agent_did),
-            2,
-        ),
+        message_key: gents::session::sequence_message_key(node_did, session_id, Some(node_did), 2),
         session_id: session_id.to_owned(),
-        agent_did: agent_did.to_owned(),
-        requester_did: Some(agent_did.to_owned()),
+        node_did: node_did.to_owned(),
+        requester_did: Some(node_did.to_owned()),
         request_doc_id: Some(request_doc_id.clone()),
         publication: MessagePublication::RequestExecution {
             execution_generation: generation,
@@ -511,10 +504,10 @@ pub(super) async fn seed_running_background_tool(
     tool_call_key: &str,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
-    let (request_doc_id, agent_did, requester_did) =
+    let (request_doc_id, node_did, requester_did) =
         exact_request_binding(graphql, request_id).await?;
     let sequence =
-        next_session_message_sequence(graphql, &agent_did, session_id, &request_doc_id).await?;
+        next_session_message_sequence(graphql, &node_did, session_id, &request_doc_id).await?;
     let requester_field = requester_did
         .as_deref()
         .map(|did| format!(r#"requester_did: "{}","#, escape_graphql_string(did)))
@@ -526,7 +519,7 @@ pub(super) async fn seed_running_background_tool(
                 request_id: "{request_id}",
                 request_doc_id: "{request_doc_id}",
                 session_id: "{session_id}",
-                agent_did: "{agent_did}",
+                node_did: "{node_did}",
                 {requester_field}
                 message_sequence: {sequence},
                 tool_name: "bash",
@@ -541,7 +534,7 @@ pub(super) async fn seed_running_background_tool(
         request_id = escape_graphql_string(request_id),
         request_doc_id = escape_graphql_string(&request_doc_id),
         session_id = escape_graphql_string(session_id),
-        agent_did = escape_graphql_string(&agent_did),
+        node_did = escape_graphql_string(&node_did),
         now = escape_graphql_string(&now),
     );
     let tool_response = graphql_query(graphql, &mutation).await?;
@@ -549,7 +542,7 @@ pub(super) async fn seed_running_background_tool(
     seed_canonical_tool_transcript(
         graphql,
         &request_doc_id,
-        &agent_did,
+        &node_did,
         requester_did.as_deref(),
         session_id,
         &tool_call_doc_id,
@@ -566,11 +559,11 @@ pub(super) async fn seed_running_background_tool(
 
 pub(super) async fn seed_background_completion_wake(
     graphql: &str,
-    identity: &dyn gents::AgentIdentity,
-    behavior_id: &str,
+    identity: &dyn gents::NodeIdentity,
+    agent_id: &str,
     session_id: &str,
 ) -> Result<String> {
-    let agent_did = identity.did();
+    let node_did = identity.did();
     let source_request_id = Uuid::new_v4().to_string();
     let request_id = Uuid::new_v4().to_string();
     let source_created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -589,14 +582,14 @@ pub(super) async fn seed_background_completion_wake(
     let mut source = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         &source_request_id,
-        agent_did,
-        agent_did,
-        behavior_id,
+        node_did,
+        node_did,
+        agent_id,
         session_id,
         "completed source for background continuation",
         "interactive",
         &source_created_at,
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did),
     );
     gents::sign_agent_request_create(identity, &mut source).await?;
     let source_fields = source.graphql_input_fields().map_err(anyhow::Error::msg)?;
@@ -633,15 +626,15 @@ pub(super) async fn seed_background_completion_wake(
 
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
-            agent_did,
+            node_did,
             &source_request_id,
         );
     let mut wake = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         &request_id,
-        agent_did,
-        agent_did,
-        behavior_id,
+        node_did,
+        node_did,
+        agent_id,
         session_id,
         gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
         "scheduled",
@@ -661,13 +654,13 @@ pub(super) async fn seed_background_completion_wake(
 }
 
 /// Seed the running first request of a session caused by `parent_request_id`,
-/// under the parent's principal and behavior. Returns `(request_id, session_id)`.
+/// under the parent's principal and agent. Returns `(request_id, session_id)`.
 pub(super) async fn seed_caused_running_request(
     graphql: &str,
     parent_request_id: &str,
-    behavior_id: &str,
+    agent_id: &str,
 ) -> Result<(String, String)> {
-    let (parent_doc_id, agent_did, requester_did) =
+    let (parent_doc_id, node_did, requester_did) =
         exact_request_binding(graphql, parent_request_id).await?;
     let request_id = Uuid::new_v4().to_string();
     let session_id = Uuid::new_v4().to_string();
@@ -701,7 +694,7 @@ pub(super) async fn seed_caused_running_request(
                     request_id: "{parent_request_id}",
                     request_doc_id: "{parent_doc_id}",
                     session_id: "{session}",
-                    agent_did: "{agent_did}",
+                    node_did: "{node_did}",
                     {requester_field}
                     message_sequence: {sequence},
                     tool_name: "agent_new",
@@ -716,7 +709,7 @@ pub(super) async fn seed_caused_running_request(
             tool_call_id = escape_graphql_string(&tool_call_id),
             parent_request_id = escape_graphql_string(parent_request_id),
             parent_doc_id = escape_graphql_string(&parent_doc_id),
-            agent_did = escape_graphql_string(&agent_did),
+            node_did = escape_graphql_string(&node_did),
             now = escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
         ),
     )
@@ -727,9 +720,9 @@ pub(super) async fn seed_caused_running_request(
             create_AgentRequest(input: {{
                 purpose: "normal",
                 request_id: "{request_id}",
-                agent_did: "{agent_did}",
+                node_did: "{node_did}",
                 {requester_field}
-                behavior_id: "{behavior_id}",
+                agent_id: "{agent_id}",
                 session_id: "{session_id}",
                 caused_by_parent_request_id: "{parent_request_id}",
                 caused_by_parent_request_doc_id: "{parent_doc_id}",
@@ -746,8 +739,8 @@ pub(super) async fn seed_caused_running_request(
             }}) {{ _docID }}
         }}"#,
         request_id = escape_graphql_string(&request_id),
-        agent_did = escape_graphql_string(&agent_did),
-        behavior_id = escape_graphql_string(behavior_id),
+        node_did = escape_graphql_string(&node_did),
+        agent_id = escape_graphql_string(agent_id),
         session_id = escape_graphql_string(&session_id),
         parent_request_id = escape_graphql_string(parent_request_id),
         parent_doc_id = escape_graphql_string(&parent_doc_id),
@@ -763,16 +756,16 @@ pub(super) async fn seed_caused_running_request(
             r#"mutation {{
                 create_AgentSession(input: {{
                     session_id: "{session_id}",
-                    agent_did: "{agent_did}",
+                    node_did: "{node_did}",
                     {requester_field}
-                    behavior_id: "{behavior_id}",
+                    agent_id: "{agent_id}",
                     created_at: "{now}",
                     provenance: {{parent_request_doc_id: "{parent_doc_id}"}}
                 }}) {{ _docID }}
             }}"#,
             session_id = escape_graphql_string(&session_id),
-            agent_did = escape_graphql_string(&agent_did),
-            behavior_id = escape_graphql_string(behavior_id),
+            node_did = escape_graphql_string(&node_did),
+            agent_id = escape_graphql_string(agent_id),
             now = escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
             parent_doc_id = escape_graphql_string(&parent_doc_id),
         ),

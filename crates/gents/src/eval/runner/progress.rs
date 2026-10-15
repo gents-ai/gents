@@ -80,7 +80,7 @@ pub struct LiveSnapshot {
 /// after the final response. Estimates come from the owned loop's accounting.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionContextUsage {
-    pub agent_did: String,
+    pub node_did: String,
     pub session_id: String,
     pub requester_did: Option<String>,
     pub last_prompt_tokens: Option<u64>,

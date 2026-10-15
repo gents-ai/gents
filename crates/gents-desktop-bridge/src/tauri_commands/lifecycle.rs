@@ -5,7 +5,7 @@ use gents_desktop_core::local_runtime::{
     dangerously_overwrite_desktop_home, init_standard_local_runtime, reset_desktop_runtime_state,
     DesktopInitOptions, DesktopInitSummary,
 };
-use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
 use tokio::sync::watch;
 
 use crate::config::BootstrapPolicy;
@@ -63,10 +63,10 @@ pub async fn desktop_init_local_standard(
     }
     ensure_client_stopped_for_init(current_core(&state).is_some())?;
 
-    let agent_home = state.policy.agent_home.clone().ok_or_else(|| {
+    let node_home = state.policy.node_home.clone().ok_or_else(|| {
         BridgeError::new(
             BridgeErrorCode::Unsupported,
-            "agent home is not configured for this host",
+            "node home is not configured for this host",
         )
     })?;
     let desktop_paths = state.policy.desktop_paths.clone();
@@ -80,12 +80,12 @@ pub async fn desktop_init_local_standard(
     }
 
     init_standard_local_runtime(DesktopInitOptions {
-        agent_home,
+        node_home,
         desktop_paths,
         label: request
             .label
             .filter(|label| !label.trim().is_empty())
-            .unwrap_or_else(|| "Local Agent".to_string()),
+            .unwrap_or_else(|| "Forge".to_string()),
     })
     .await
     .map_err(BridgeError::classify_transport_error)
@@ -217,7 +217,7 @@ async fn run_detached_client_start<R: Runtime>(
                 let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
                 let orphan = if bridge.core.is_none() {
                     let updates_task = spawn_client_update_task(app.clone(), Arc::clone(&core));
-                    bridge.core = Some(Arc::clone(&core));
+                    bridge.install_core(Arc::clone(&core));
                     bridge.updates_task = Some(updates_task);
                     None
                 } else {
@@ -553,53 +553,54 @@ fn classify_client_start_error(
 }
 
 #[tauri::command]
-pub fn desktop_set_selected_agent<R: Runtime>(
-    app: AppHandle<R>,
+pub fn desktop_set_selected_node<R: Runtime>(
+    window: WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
-    agent_did: Option<String>,
+    node_did: Option<String>,
 ) -> Result<(), BridgeError> {
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::new(
-            BridgeErrorCode::ClientNotRunning,
-            "desktop client not initialized",
-        ));
-    };
-    let did = agent_did
+    let did = node_did
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    // The backend is shared by all native views; only a single-view host may
-    // narrow its observation/request lookup scope to the selected agent.
-    core.set_selected_agent_did(if app.webview_windows().len() > 1 {
-        None
-    } else {
-        did.clone()
-    });
+    let core = {
+        let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+        if !bridge.has_window(window.label()) {
+            return Ok(());
+        }
+        let core = bridge.core.clone().ok_or_else(|| {
+            BridgeError::new(
+                BridgeErrorCode::ClientNotRunning,
+                "desktop client not initialized",
+            )
+        })?;
+        bridge.set_window_selected_node(window.label(), did.clone());
+        core
+    };
 
     if let Some(did_str) = did {
         let core_arc = Arc::clone(&core);
         tauri::async_runtime::spawn(async move {
-            match core_arc.refresh_agent(&did_str).await {
+            match core_arc.refresh_node(&did_str).await {
                 Ok(Some(_version)) => {}
                 Ok(None) => {
-                    if let Err(err) = core_arc.ensure_agent_loaded(&did_str).await {
+                    if let Err(err) = core_arc.ensure_node_loaded(&did_str).await {
                         tracing::warn!(
                             error = %err,
-                            agent_did = %did_str,
-                            "ensure_agent_loaded failed"
+                            node_did = %did_str,
+                            "ensure_node_loaded failed"
                         );
                     }
                 }
                 Err(err) => {
                     tracing::warn!(
                         error = %err,
-                        agent_did = %did_str,
+                        node_did = %did_str,
                         "remote selection refresh failed"
                     );
-                    if let Err(err) = core_arc.ensure_agent_loaded(&did_str).await {
+                    if let Err(err) = core_arc.ensure_node_loaded(&did_str).await {
                         tracing::warn!(
                             error = %err,
-                            agent_did = %did_str,
-                            "ensure_agent_loaded failed after remote refresh failure"
+                            node_did = %did_str,
+                            "ensure_node_loaded failed after remote refresh failure"
                         );
                     }
                 }
@@ -914,7 +915,7 @@ mod tests {
         assert!(lifecycle_owner.try_lock().is_ok());
     }
 
-    /// A desktop state whose principal key an older build wrote with ambient
+    /// A desktop state whose node identity key an older build wrote with ambient
     /// (0644) permissions fails start as an incompatible local store, before
     /// any node or peer directory is opened, and the key is left as it was.
     #[cfg(unix)]

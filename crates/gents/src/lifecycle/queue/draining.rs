@@ -3,14 +3,14 @@ use super::*;
 pub(crate) async fn drain_automated_wakeups_in_txn(
     txn: &ConfigApplyTxn<'_>,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     reason: &str,
 ) -> Result<Vec<String>> {
     drain_pending_session_requests_where_in_txn(
         txn,
         session_id,
-        agent_did,
+        node_did,
         requester_did,
         reason,
         is_scheduled_automated_wakeup,
@@ -22,17 +22,17 @@ fn is_scheduled_automated_wakeup(row: &AgentRequestRow) -> bool {
     row.execution_origin.as_deref() == Some("scheduled") && row_is_automated_wakeup(row)
 }
 
-// SAFETY (#664): `agent_did` scopes both the pending-row scan and mutation.
+// SAFETY (#664): `node_did` scopes both the pending-row scan and mutation.
 // A foreign-DID replica sharing `session_id` cannot be drained by this owner.
 async fn drain_pending_session_requests_where_in_txn(
     txn: &ConfigApplyTxn<'_>,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     reason: &str,
     should_drain: fn(&AgentRequestRow) -> bool,
 ) -> Result<Vec<String>> {
-    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
+    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentRequest(
@@ -109,7 +109,7 @@ async fn drain_pending_session_requests_where_in_txn(
             );
             crate::trigger_engine::durable::publish_request_outcome(
                 txn,
-                agent_did,
+                node_did,
                 &row.request_id,
                 "interrupted",
                 reason,

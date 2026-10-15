@@ -159,8 +159,8 @@ mod tests {
                 "client",
                 "agent-config",
                 "backup",
-                "subagent-coordinator",
-                "subagent-host",
+                "agent-target-caller",
+                "agent-target-host",
                 "app-collections",
                 "client-index",
             ]
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(row.delivery, "push");
         assert_eq!(row.scope, "per-collection");
         let collections = row.collections.split(',').collect::<Vec<_>>();
-        assert!(collections.contains(&"AgentDirectoryEntry"));
+        assert!(collections.contains(&"NodeDirectoryEntry"));
         assert!(!collections.contains(&"PersonaConfigRequest"));
         assert!(collections.contains(&"Skill"));
         assert!(collections.contains(&"DatastoreToolSurface"));

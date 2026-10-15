@@ -1,4 +1,34 @@
 use super::*;
+use crate::support::mocks::fake_llm::{ChatAction, FakeLlm};
+use std::sync::Arc;
+
+fn has_exact_user_text(request: &Value, text: &str) -> bool {
+    request["messages"].as_array().is_some_and(|messages| {
+        messages.iter().any(|message| {
+            message["role"] == "user"
+                && (message["content"].as_str() == Some(text)
+                    || message["content"].as_array().is_some_and(|parts| {
+                        parts.iter().any(|part| part["text"].as_str() == Some(text))
+                    }))
+        })
+    })
+}
+
+async fn wait_for_main_provider_request(
+    captures: impl Fn() -> Vec<Value>,
+    prompt: &str,
+) -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !captures()
+            .iter()
+            .any(|request| has_exact_user_text(request, prompt))
+        {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .context("initial main provider request was not held")
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<()> {
@@ -11,19 +41,19 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
 
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-steer-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-steer-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -44,7 +74,7 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -79,6 +109,8 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
         read_typed_response(&mut ws, request_id(201)).await?;
     let started = read_turn_started(&mut ws).await?;
     assert_eq!(started.turn.id, turn_start.turn.id);
+    wait_for_main_provider_request(|| mock_endpoint.captured_chat_requests(), &initial_prompt)
+        .await?;
 
     send_client_request(
         &mut ws,
@@ -126,7 +158,7 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
     assert_eq!(steer.turn_id, turn_start.turn.id);
 
     let (steering_request_id, session_id, input) =
-        wait_for_request_input(&graphql, &agent_did, &steer_prompt).await?;
+        wait_for_request_input(&graphql, &node_did, &steer_prompt).await?;
     assert_eq!(session_id, thread_id);
     assert_eq!(
         input.queue.as_ref().expect("steering queue").source,
@@ -169,7 +201,7 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
     assert_eq!(second_steer.turn_id, turn_start.turn.id);
 
     let (second_steering_request_id, second_session_id, second_input) =
-        wait_for_request_input(&graphql, &agent_did, &second_steer_prompt).await?;
+        wait_for_request_input(&graphql, &node_did, &second_steer_prompt).await?;
     assert_eq!(second_session_id, thread_id);
     assert_eq!(
         second_input.queue.as_ref().expect("steering queue").queued_after_request_id.as_deref(),
@@ -218,19 +250,19 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
 
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-bg-interrupt-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-bg-interrupt-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -251,7 +283,7 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -290,8 +322,8 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
     let started = read_turn_started(&mut ws).await?;
     assert_eq!(started.turn.id, turn_start.turn.id);
 
-    let (gents_request_id, session_id, _behavior_id) =
-        wait_for_request(&graphql, &agent_did, &prompt).await?;
+    let (gents_request_id, session_id, _agent_id) =
+        wait_for_request(&graphql, &node_did, &prompt).await?;
     assert_eq!(session_id, thread_id);
     let tool_call_key = format!("{session_id}:codex-bg-interrupt");
     seed_running_background_tool(&graphql, &gents_request_id, &session_id, &tool_call_key).await?;
@@ -371,31 +403,44 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
     let steer_prompt = format!("queued steering {}", Uuid::new_v4().simple());
     let first_reply = format!("first-drain-{}", Uuid::new_v4().simple());
     let second_reply = format!("second-drain-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockChatEndpoint::start_routed_delayed(
+    let first_response_gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let responder_gate = first_response_gate.clone();
+    let responder_initial = initial_prompt.clone();
+    let responder_steer = steer_prompt.clone();
+    let responder_first = first_reply.clone();
+    let responder_second = second_reply.clone();
+    let mock_endpoint = FakeLlm::start(
         &model_name,
-        vec![
-            (steer_prompt.clone(), second_reply.clone()),
-            (initial_prompt.clone(), first_reply.clone()),
-        ],
-        "steer-drain-title".to_string(),
-        Duration::from_millis(750),
+        None,
+        Arc::new(move |request| {
+            if has_exact_user_text(request, &responder_steer) {
+                ChatAction::Sse(completion_text_sse(&responder_second))
+            } else if has_exact_user_text(request, &responder_initial) {
+                ChatAction::WaitThenSse(
+                    responder_gate.clone(),
+                    completion_text_sse(&responder_first),
+                )
+            } else {
+                ChatAction::Sse(completion_text_sse("steer-drain-title"))
+            }
+        }),
     )?;
 
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-steer-drain-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-steer-drain-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -416,7 +461,7 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -450,6 +495,8 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
         read_typed_response(&mut ws, request_id(301)).await?;
     let started = read_turn_started(&mut ws).await?;
     assert_eq!(started.turn.id, turn_start.turn.id);
+    wait_for_main_provider_request(|| mock_endpoint.captured_chat_requests(), &initial_prompt)
+        .await?;
 
     send_client_request(
         &mut ws,
@@ -469,6 +516,8 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
     .await?;
     let steer: codex::TurnSteerResponse = read_typed_response(&mut ws, request_id(302)).await?;
     assert_eq!(steer.turn_id, turn_start.turn.id);
+    wait_for_request_input(&graphql, &node_did, &steer_prompt).await?;
+    first_response_gate.add_permits(1);
 
     let capture = read_turn_capture(&mut ws).await?;
     assert_eq!(capture.turn.status, codex::TurnStatus::Completed);
@@ -483,11 +532,11 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
         capture.text
     );
 
-    let (_initial_request_id, initial_session_id, _behavior_id) =
-        wait_for_request(&graphql, &agent_did, &initial_prompt).await?;
+    let (initial_request_id, initial_session_id, _agent_id) =
+        wait_for_request(&graphql, &node_did, &initial_prompt).await?;
     assert_eq!(initial_session_id, thread_id);
     let (steering_request_id, steering_session_id, input) =
-        wait_for_request_input(&graphql, &agent_did, &steer_prompt).await?;
+        wait_for_request_input(&graphql, &node_did, &steer_prompt).await?;
     assert_eq!(steering_session_id, thread_id);
     assert_ne!(steering_request_id, turn_start.turn.id);
     assert_eq!(
@@ -502,6 +551,50 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
             .queued_after_request_id
             .as_deref(),
         Some(turn_start.turn.id.as_str())
+    );
+
+    assert_eq!(
+        input.queue.as_ref().unwrap().delivery,
+        gents_protocol::request_input::QueueDelivery::Steer
+    );
+    assert_eq!(
+        capture
+            .completed_user_inputs
+            .iter()
+            .filter(|items| items.iter().any(
+                |item| matches!(item, codex::UserInput::Text { text, .. } if text == &steer_prompt)
+            ))
+            .count(),
+        1,
+        "consumed input is announced exactly once on the original Codex turn"
+    );
+    let rows = graphql_query(&graphql, &format!(r#"{{ AgentRequest(filter: {{ node_did: {{_eq:"{}"}}, session_id: {{_eq:"{}"}}, request_id: {{_in:["{}","{}"]}} }}) {{ _docID request_id lifecycle_state superseded_by_request_doc_id failure_reason }} }}"#,
+        escape_graphql_string(&node_did), escape_graphql_string(&thread_id), escape_graphql_string(&initial_request_id), escape_graphql_string(&steering_request_id))).await?;
+    let rows = rows["data"]["AgentRequest"]
+        .as_array()
+        .context("request rows")?;
+    let active = rows
+        .iter()
+        .find(|row| row["request_id"] == initial_request_id)
+        .context("original active request")?;
+    let consumed = rows
+        .iter()
+        .find(|row| row["request_id"] == steering_request_id)
+        .context("consumed steering request")?;
+    assert_eq!(active["lifecycle_state"], "completed");
+    assert_eq!(consumed["lifecycle_state"], "superseded");
+    assert_eq!(consumed["failure_reason"], gents::lifecycle::FOLDED_REASON);
+    assert_eq!(consumed["superseded_by_request_doc_id"], active["_docID"]);
+    let captures = graphql_query(&graphql, &format!(r#"{{ RenderedRequest(filter: {{ request_id: {{_in:["{}","{}"]}} }}) {{ request_id request_doc_id }} }}"#, escape_graphql_string(&initial_request_id), escape_graphql_string(&steering_request_id))).await?;
+    let captures = captures["data"]["RenderedRequest"]
+        .as_array()
+        .context("rendered requests")?;
+    assert!(captures.len() >= 2);
+    assert!(
+        captures
+            .iter()
+            .all(|capture| capture["request_doc_id"] == active["_docID"]),
+        "steering must not start a second physical inference request"
     );
 
     let captured_requests = mock_endpoint.captured_chat_requests();
@@ -557,19 +650,19 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
 
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-caused-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-caused-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -590,7 +683,7 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -622,14 +715,14 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
     )
     .await?;
     let _: codex::TurnStartResponse = read_typed_response(&mut ws, request_id(230)).await?;
-    let (parent_request_id, session_id, behavior_id) =
-        wait_for_request(&graphql, &agent_did, &prompt).await?;
+    let (parent_request_id, session_id, agent_id) =
+        wait_for_request(&graphql, &node_did, &prompt).await?;
     assert_eq!(session_id, thread_id);
 
     let (caused_request_id, caused_thread_id) =
-        seed_caused_running_request(&graphql, &parent_request_id, &behavior_id).await?;
+        seed_caused_running_request(&graphql, &parent_request_id, &agent_id).await?;
     let (grandchild_request_id, grandchild_thread_id) =
-        seed_caused_running_request(&graphql, &caused_request_id, &behavior_id).await?;
+        seed_caused_running_request(&graphql, &caused_request_id, &agent_id).await?;
 
     send_client_request(
         &mut ws,

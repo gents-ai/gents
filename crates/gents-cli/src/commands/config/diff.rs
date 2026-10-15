@@ -13,7 +13,7 @@ pub(super) async fn config_diff(args: ConfigDiffArgs) -> Result<()> {
         root: &args.root,
         home: args.home.as_deref(),
         graphql: args.graphql.as_deref(),
-        bind_agent_did: args.bind_agent_did,
+        bind_node_did: args.bind_node_did,
         force_rebind_concrete_did: args.force_rebind_concrete_did,
         access: Some(&access),
     })
@@ -31,13 +31,12 @@ pub(crate) async fn diff_bound_desired_manifest(
 ) -> Result<desired_state::DesiredStateDiffReport> {
     let desired_manifest = &bound.manifest;
     let live_bundle = build_desired_state_live_bundle(&access, desired_manifest).await?;
-    let (live_principal, live_manifest) =
-        live_manifest_from_bundle(desired_manifest, &live_bundle)?;
+    let (live_node, live_manifest) = live_manifest_from_bundle(desired_manifest, &live_bundle)?;
     let report = desired_state::diff_manifests(
         root,
         access.mode(),
         desired_manifest,
-        live_principal.as_ref(),
+        live_node.as_ref(),
         &live_manifest,
         false,
     );

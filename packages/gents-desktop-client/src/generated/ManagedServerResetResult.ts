@@ -37,8 +37,8 @@ backupPath: string | null,
  */
 plannedPaths: Array<string>,
 /**
- * Entries a deletion removes, exactly. Narrower than the archive: of
- * `keys/` only the managed home's own key file is deleted.
+ * Entries a deletion removes, exactly. Refusal recovery can archive
+ * more keys; explicit full reset preserves unrelated keys in both modes.
  */
 deletePaths: Array<string>,
 /**
@@ -46,7 +46,15 @@ deletePaths: Array<string>,
  */
 retiredPaths: Array<string>,
 /**
- * Entries of the managed home left untouched: other agents' homes,
+ * Entries of the managed home left untouched: other nodes' homes,
  * backups, user files and anything outside the runtime's inventory.
  */
-retainedPaths: Array<string>, };
+retainedPaths: Array<string>,
+/**
+ * Browser data cleared through WebKit in both modes; never archived.
+ */
+browserPaths: Array<string>,
+/**
+ * Browser data whose native clearing completed during this reset.
+ */
+clearedBrowserPaths: Array<string>, };

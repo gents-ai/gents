@@ -105,7 +105,7 @@ mod tests {
             }
         );
         assert_eq!(
-            ObservedServeLifecycle::observe(&serde_json::json!({ "agent_did": "did:key:a" })),
+            ObservedServeLifecycle::observe(&serde_json::json!({ "node_did": "did:key:a" })),
             ObservedServeLifecycle::Outdated { version: None }
         );
         assert_eq!(

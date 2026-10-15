@@ -1,9 +1,9 @@
 /* Delayed cards on avatars: what a reader most wants to know without
-   opening anything. The agent: online, what it may touch, how much it
-   has, its DID. A behavior: what it is for, whether it is enabled, what it
+   opening anything. The node: online, what it may touch, how much it
+   has, its DID. An agent: what it is for, whether it is enabled, what it
    runs on, its access, whether its instructions are shared, and a way to
-   its settings. Shown where an avatar stands in for a behavior, not where
-   the behavior is already on screen. */
+   its settings. Shown where an avatar stands in for an agent, not where
+   the agent is already on screen. */
 import { useState, type ReactElement } from "react";
 import { ArrowUpRight } from "lucide-react";
 import type { NodeView } from "../../hooks/fleetStore";
@@ -14,8 +14,8 @@ import {
 } from "@gents/ui/components/hover-card";
 import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
-import { behaviorReadiness } from "@/lib/behavior-readiness";
-import { access, bashAccess, behaviorName, fileAccess, network } from "./behavior";
+import { agentReadiness } from "@/lib/agent-readiness";
+import { access, agentName, bashAccess, fileAccess, network } from "./behavior";
 import { agentOf } from "@/lib/agents";
 import { useHomeDid, useToolAuthority } from "@/hooks/useClient";
 import { isWorkingNode } from "@/lib/nodes";
@@ -34,7 +34,7 @@ const shortDid = (did: string) =>
 
 /* What a node may touch. The tool root and ceiling this machine was set up
    with are its own node's; any other node says it through its default
-   behavior's environment. */
+   agent's environment. */
 function NodeReach({ deployment }: { deployment: NodeView }) {
   const homeDid = useHomeDid();
   const own = useToolAuthority();
@@ -42,8 +42,8 @@ function NodeReach({ deployment }: { deployment: NodeView }) {
     ? own
     : { root: null, ceiling: null };
   const env =
-    deployment.behaviorEnvironments.find((e) => e.isDefault) ??
-    deployment.behaviorEnvironments[0];
+    deployment.agentEnvironments.find((e) => e.isDefault) ??
+    deployment.agentEnvironments[0];
   return (
     <>
       <Line label="Can touch">{root ?? env?.workspaceRoot ?? "—"}</Line>
@@ -55,7 +55,7 @@ function NodeReach({ deployment }: { deployment: NodeView }) {
   );
 }
 
-export function AgentHoverCard({
+export function NodeHoverCard({
   deployment,
   side = "right",
   children,
@@ -73,7 +73,7 @@ export function AgentHoverCard({
       <HoverCardContent side={side} align="start" className="w-80">
         <div className="flex items-baseline justify-between gap-3">
           <span className="font-heading text-lg font-medium text-heading">
-            {deployment.agentPrincipal.displayName ?? deployment.label}
+            {deployment.node.displayName ?? deployment.label}
           </span>
           <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <span
@@ -87,47 +87,46 @@ export function AgentHoverCard({
         </div>
         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
           <NodeReach deployment={deployment} />
-          <Line label="Behaviors">{deployment.behaviors.length}</Line>
+          <Line label="Agents">{deployment.agents.length}</Line>
           <Line label="Tasks">{deployment.tasks.length}</Line>
           <Line label="Inference">{deployment.inferenceBackends.length}</Line>
         </dl>
         <p
           className="mt-3 truncate font-mono text-[11px] text-muted-foreground"
-          title={deployment.agentDid}
+          title={deployment.nodeDid}
         >
-          {shortDid(deployment.agentDid)}
+          {shortDid(deployment.nodeDid)}
         </p>
       </HoverCardContent>
     </HoverCard>
   );
 }
 
-export function BehaviorHoverCard({
+export function AgentHoverCard({
   deployment,
-  behaviorId,
+  agentId,
   description,
   side = "right",
   children,
 }: {
   deployment: NodeView | null;
-  behaviorId: string | null;
+  agentId: string | null;
   description?: string;
   side?: "right" | "bottom" | "top" | "left";
   children: ReactElement;
 }) {
   const [open, setOpen] = useState(false);
-  const b = agentOf(deployment, behaviorId);
-  const env = deployment?.behaviorEnvironments.find((e) => e.behaviorId === behaviorId);
+  const b = agentOf(deployment, agentId);
+  const env = deployment?.agentEnvironments.find((e) => e.agentId === agentId);
   if (!deployment || !b) return children;
-  const readiness = behaviorReadiness(deployment, b.behaviorId);
+  const readiness = agentReadiness(deployment, b.agentId);
   const hasInstructions = Boolean(
     b.contextId &&
     deployment.contexts.some((context) => context.context_id === b.contextId),
   );
   const sharing = hasInstructions
-    ? deployment.behaviors.filter(
-        (behavior) =>
-          behavior.contextId === b.contextId && behavior.behaviorId !== b.behaviorId,
+    ? deployment.agents.filter(
+        (agent) => agent.contextId === b.contextId && agent.agentId !== b.agentId,
       )
     : [];
   const summary = description || b.description || undefined;
@@ -138,11 +137,11 @@ export function BehaviorHoverCard({
         side={side}
         align="start"
         className="w-80"
-        data-testid="behavior-hover-card"
+        data-testid="agent-hover-card"
       >
         <div className="flex items-baseline justify-between gap-3">
           <span className="font-heading text-lg font-medium text-heading">
-            {behaviorName(behaviorId, deployment)}
+            {agentName(agentId, deployment)}
           </span>
           {b.isDefault && (
             <span className="text-xs text-muted-foreground">Default</span>
@@ -167,7 +166,7 @@ export function BehaviorHoverCard({
                 ? "None yet"
                 : `Shared with ${
                     sharing.length <= 2
-                      ? sharing.map((behavior) => behavior.displayName).join(" and ")
+                      ? sharing.map((agent) => agent.displayName).join(" and ")
                       : `${sharing[0]!.displayName} and ${sharing.length - 1} more`
                   }`}
             </Line>
@@ -177,9 +176,9 @@ export function BehaviorHoverCard({
         <a
           href={href({
             name: "agent",
-            agentDid: deployment.agentDid,
-            section: "behaviors",
-            item: b.behaviorId,
+            nodeDid: deployment.nodeDid,
+            section: "agents",
+            item: b.agentId,
           })}
           className="mt-3 inline-flex items-center gap-1 text-sm text-foreground underline-offset-2 hover:underline"
         >

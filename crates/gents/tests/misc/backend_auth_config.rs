@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::sync::LazyLock;
 
-use crate::support::fixtures::test_behavior;
+use crate::support::fixtures::test_agent;
 
 static ENV_VAR_LOCK: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
@@ -42,7 +42,7 @@ impl Drop for TestEnvGuard {
 #[test]
 fn behavior_config_prefers_backend_specific_api_key_env_var() {
     let _env_guard = ENV_VAR_LOCK.blocking_lock();
-    let behavior = test_behavior("behavior-a", "backend-a", Some("GENTS_TEST_BACKEND_KEY"));
+    let behavior = test_agent("behavior-a", "backend-a", Some("GENTS_TEST_BACKEND_KEY"));
 
     let mut env = TestEnvGuard::new(&["GENTS_TEST_BACKEND_KEY"]);
     env.set("GENTS_TEST_BACKEND_KEY", "backend-key");

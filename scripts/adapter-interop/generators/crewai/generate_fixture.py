@@ -31,8 +31,8 @@ AGENTS = [
         "name": "planner",
         "role": "planner",
         "title": "CrewAI Planner",
-        "agent_did": "did:test:crewai-planner",
-        "behavior_id": "crewai.planner",
+        "node_did": "did:test:crewai-planner",
+        "agent_id": "crewai.planner",
         "goal": "Plan adapter interoperability work.",
         "backstory": "Plans multi-agent work and passes scoped tasks to researchers.",
         "response": (
@@ -44,9 +44,9 @@ AGENTS = [
         "name": "researcher",
         "role": "researcher",
         "title": "CrewAI Researcher",
-        "agent_did": "did:test:crewai-researcher",
-        "behavior_id": "crewai.researcher",
-        "goal": "Research CrewAI task and context behavior.",
+        "node_did": "did:test:crewai-researcher",
+        "agent_id": "crewai.researcher",
+        "goal": "Research CrewAI task and context handling.",
         "backstory": "Finds framework-specific evidence for projection compatibility.",
         "response": (
             "RESEARCH: CrewAI sequential tasks carry agent assignment and context; "
@@ -57,8 +57,8 @@ AGENTS = [
         "name": "reviewer",
         "role": "reviewer",
         "title": "CrewAI Reviewer",
-        "agent_did": "did:test:crewai-reviewer",
-        "behavior_id": "crewai.reviewer",
+        "node_did": "did:test:crewai-reviewer",
+        "agent_id": "crewai.reviewer",
         "goal": "Review and approve adapter output.",
         "backstory": "Approves the final mapped multi-agent task projection.",
         "response": "APPROVE: CrewAI projection output is ready",
@@ -69,8 +69,8 @@ HIERARCHICAL_MANAGER = {
     "name": "manager",
     "role": "manager",
     "title": "CrewAI Manager",
-    "agent_did": "did:test:crewai-manager",
-    "behavior_id": "crewai.manager",
+    "node_did": "did:test:crewai-manager",
+    "agent_id": "crewai.manager",
 }
 
 HIERARCHICAL_AGENTS = [
@@ -78,9 +78,9 @@ HIERARCHICAL_AGENTS = [
         "name": "researcher",
         "role": "researcher",
         "title": "CrewAI Hierarchical Researcher",
-        "agent_did": "did:test:crewai-hierarchical-researcher",
-        "behavior_id": "crewai.hierarchical_researcher",
-        "goal": "Research hierarchical CrewAI delegation behavior.",
+        "node_did": "did:test:crewai-hierarchical-researcher",
+        "agent_id": "crewai.hierarchical_researcher",
+        "goal": "Research hierarchical CrewAI delegation flow.",
         "backstory": "Receives delegated work from a hierarchical crew manager.",
         "request_id": HIERARCHICAL_RESEARCH_REQUEST_ID,
         "response": (
@@ -92,8 +92,8 @@ HIERARCHICAL_AGENTS = [
         "name": "reviewer",
         "role": "reviewer",
         "title": "CrewAI Hierarchical Reviewer",
-        "agent_did": "did:test:crewai-hierarchical-reviewer",
-        "behavior_id": "crewai.hierarchical_reviewer",
+        "node_did": "did:test:crewai-hierarchical-reviewer",
+        "agent_id": "crewai.hierarchical_reviewer",
         "goal": "Review hierarchical projection evidence.",
         "backstory": "Receives delegated review work from the manager.",
         "request_id": HIERARCHICAL_REVIEW_REQUEST_ID,
@@ -316,13 +316,14 @@ def build_projection(result: Any, tasks: list[Task]) -> dict[str, Any]:
         "projection_version": "v1",
         "source_request_id": REQUEST_ID,
         "source_session_id": CONTEXT_ID,
-        "source_agent_did": "did:test:crewai-crew",
-        "source_behavior_id": "crewai.sequential_crew",
+        "source_node_did": "did:test:crewai-crew",
+        "source_agent_id": "crewai.sequential_crew",
         "redaction_mode": "full",
         "provenance": {
             "runtime": "gents",
-            "source_projection_id": "run_timeline",
+            "source_projection_id": "external_adapter_capture",
             "source_projection_version": "v1",
+            "source_version_status": "external_adapter_capture",
             "actor_did": "did:test:crewai-fixture-reader",
         },
         "output": {
@@ -333,8 +334,8 @@ def build_projection(result: Any, tasks: list[Task]) -> dict[str, Any]:
                 "status": crew_status(result),
                 "participants": [
                     {
-                        "agent_did": definition["agent_did"],
-                        "behavior_id": definition["behavior_id"],
+                        "node_did": definition["node_did"],
+                        "agent_id": definition["agent_id"],
                         "role": definition["role"],
                     }
                     for definition in AGENTS
@@ -353,16 +354,16 @@ def build_projection(result: Any, tasks: list[Task]) -> dict[str, Any]:
                         "parent_request_id": REQUEST_ID,
                         "child_request_id": RESEARCH_REQUEST_ID,
                         "parent_tool_call_id": "crewai:context:planner-to-researcher",
-                        "agent_did": "did:test:crewai-researcher",
-                        "behavior_id": "crewai.researcher",
+                        "node_did": "did:test:crewai-researcher",
+                        "agent_id": "crewai.researcher",
                         "status": "completed",
                     },
                     {
                         "parent_request_id": RESEARCH_REQUEST_ID,
                         "child_request_id": REVIEW_REQUEST_ID,
                         "parent_tool_call_id": "crewai:context:researcher-to-reviewer",
-                        "agent_did": "did:test:crewai-reviewer",
-                        "behavior_id": "crewai.reviewer",
+                        "node_did": "did:test:crewai-reviewer",
+                        "agent_id": "crewai.reviewer",
                         "status": "completed",
                     },
                 ],
@@ -415,13 +416,14 @@ def build_hierarchical_projection(
         "projection_version": "v1",
         "source_request_id": HIERARCHICAL_REQUEST_ID,
         "source_session_id": HIERARCHICAL_CONTEXT_ID,
-        "source_agent_did": HIERARCHICAL_MANAGER["agent_did"],
-        "source_behavior_id": HIERARCHICAL_MANAGER["behavior_id"],
+        "source_node_did": HIERARCHICAL_MANAGER["node_did"],
+        "source_agent_id": HIERARCHICAL_MANAGER["agent_id"],
         "redaction_mode": "full",
         "provenance": {
             "runtime": "gents",
-            "source_projection_id": "run_timeline",
+            "source_projection_id": "external_adapter_capture",
             "source_projection_version": "v1",
+            "source_version_status": "external_adapter_capture",
             "actor_did": "did:test:crewai-fixture-reader",
         },
         "output": {
@@ -432,14 +434,14 @@ def build_hierarchical_projection(
                 "status": crew_status(result),
                 "participants": [
                     {
-                        "agent_did": HIERARCHICAL_MANAGER["agent_did"],
-                        "behavior_id": HIERARCHICAL_MANAGER["behavior_id"],
+                        "node_did": HIERARCHICAL_MANAGER["node_did"],
+                        "agent_id": HIERARCHICAL_MANAGER["agent_id"],
                         "role": HIERARCHICAL_MANAGER["role"],
                     },
                     *[
                         {
-                            "agent_did": definition["agent_did"],
-                            "behavior_id": definition["behavior_id"],
+                            "node_did": definition["node_did"],
+                            "agent_id": definition["agent_id"],
                             "role": definition["role"],
                         }
                         for definition in HIERARCHICAL_AGENTS
@@ -490,8 +492,8 @@ def build_hierarchical_projection(
                         "parent_tool_call_id": (
                             "crewai:hierarchical:delegate:manager-to-researcher"
                         ),
-                        "agent_did": HIERARCHICAL_AGENTS[0]["agent_did"],
-                        "behavior_id": HIERARCHICAL_AGENTS[0]["behavior_id"],
+                        "node_did": HIERARCHICAL_AGENTS[0]["node_did"],
+                        "agent_id": HIERARCHICAL_AGENTS[0]["agent_id"],
                         "status": "completed",
                     },
                     {
@@ -500,8 +502,8 @@ def build_hierarchical_projection(
                         "parent_tool_call_id": (
                             "crewai:hierarchical:delegate:manager-to-reviewer"
                         ),
-                        "agent_did": HIERARCHICAL_AGENTS[1]["agent_did"],
-                        "behavior_id": HIERARCHICAL_AGENTS[1]["behavior_id"],
+                        "node_did": HIERARCHICAL_AGENTS[1]["node_did"],
+                        "agent_id": HIERARCHICAL_AGENTS[1]["agent_id"],
                         "status": "completed",
                     },
                 ],
@@ -620,16 +622,16 @@ def sequential_mapping(result: Any) -> dict[str, Any]:
         "scenario_id": "crewai.sequential_crew",
         "request_id": REQUEST_ID,
         "session_id": CONTEXT_ID,
-        "agent_did": "did:test:crewai-crew",
-        "behavior_id": "crewai.sequential_crew",
+        "node_did": "did:test:crewai-crew",
+        "agent_id": "crewai.sequential_crew",
         "actor_did": "did:test:crewai-fixture-reader",
         "status": crew_status(result),
         "participants": [
             {
                 "native_name": definition["title"],
                 "role": definition["role"],
-                "agent_did": definition["agent_did"],
-                "behavior_id": definition["behavior_id"],
+                "node_did": definition["node_did"],
+                "agent_id": definition["agent_id"],
                 "request_id": request_id_for_agent(definition["name"]),
             }
             for definition in AGENTS
@@ -640,8 +642,8 @@ def sequential_mapping(result: Any) -> dict[str, Any]:
                 "child_request_id": RESEARCH_REQUEST_ID,
                 "parent_tool_call_id": "crewai:context:planner-to-researcher",
                 "tool_name": "task_context",
-                "agent_did": "did:test:crewai-researcher",
-                "behavior_id": "crewai.researcher",
+                "node_did": "did:test:crewai-researcher",
+                "agent_id": "crewai.researcher",
                 "status": "completed",
             },
             {
@@ -649,8 +651,8 @@ def sequential_mapping(result: Any) -> dict[str, Any]:
                 "child_request_id": REVIEW_REQUEST_ID,
                 "parent_tool_call_id": "crewai:context:researcher-to-reviewer",
                 "tool_name": "task_context",
-                "agent_did": "did:test:crewai-reviewer",
-                "behavior_id": "crewai.reviewer",
+                "node_did": "did:test:crewai-reviewer",
+                "agent_id": "crewai.reviewer",
                 "status": "completed",
             },
         ],
@@ -671,24 +673,24 @@ def hierarchical_mapping(result: Any) -> dict[str, Any]:
         "scenario_id": "crewai.hierarchical_crew",
         "request_id": HIERARCHICAL_REQUEST_ID,
         "session_id": HIERARCHICAL_CONTEXT_ID,
-        "agent_did": HIERARCHICAL_MANAGER["agent_did"],
-        "behavior_id": HIERARCHICAL_MANAGER["behavior_id"],
+        "node_did": HIERARCHICAL_MANAGER["node_did"],
+        "agent_id": HIERARCHICAL_MANAGER["agent_id"],
         "actor_did": "did:test:crewai-fixture-reader",
         "status": crew_status(result),
         "participants": [
             {
                 "native_name": HIERARCHICAL_MANAGER["title"],
                 "role": HIERARCHICAL_MANAGER["role"],
-                "agent_did": HIERARCHICAL_MANAGER["agent_did"],
-                "behavior_id": HIERARCHICAL_MANAGER["behavior_id"],
+                "node_did": HIERARCHICAL_MANAGER["node_did"],
+                "agent_id": HIERARCHICAL_MANAGER["agent_id"],
                 "request_id": HIERARCHICAL_REQUEST_ID,
             },
             *[
                 {
                     "native_name": definition["title"],
                     "role": definition["role"],
-                    "agent_did": definition["agent_did"],
-                    "behavior_id": definition["behavior_id"],
+                    "node_did": definition["node_did"],
+                    "agent_id": definition["agent_id"],
                     "request_id": definition["request_id"],
                 }
                 for definition in HIERARCHICAL_AGENTS
@@ -702,8 +704,8 @@ def hierarchical_mapping(result: Any) -> dict[str, Any]:
                     "crewai:hierarchical:delegate:manager-to-researcher"
                 ),
                 "tool_name": "delegate_work_to_coworker",
-                "agent_did": HIERARCHICAL_AGENTS[0]["agent_did"],
-                "behavior_id": HIERARCHICAL_AGENTS[0]["behavior_id"],
+                "node_did": HIERARCHICAL_AGENTS[0]["node_did"],
+                "agent_id": HIERARCHICAL_AGENTS[0]["agent_id"],
                 "status": "completed",
             },
             {
@@ -713,8 +715,8 @@ def hierarchical_mapping(result: Any) -> dict[str, Any]:
                     "crewai:hierarchical:delegate:manager-to-reviewer"
                 ),
                 "tool_name": "delegate_work_to_coworker",
-                "agent_did": HIERARCHICAL_AGENTS[1]["agent_did"],
-                "behavior_id": HIERARCHICAL_AGENTS[1]["behavior_id"],
+                "node_did": HIERARCHICAL_AGENTS[1]["node_did"],
+                "agent_id": HIERARCHICAL_AGENTS[1]["agent_id"],
                 "status": "completed",
             },
         ],
@@ -821,7 +823,7 @@ def write_hierarchical_fixture(
                 "manager": {
                     "name": HIERARCHICAL_MANAGER["name"],
                     "role": HIERARCHICAL_MANAGER["role"],
-                    "behavior_id": HIERARCHICAL_MANAGER["behavior_id"],
+                    "agent_id": HIERARCHICAL_MANAGER["agent_id"],
                 },
                 "agents": [
                     {

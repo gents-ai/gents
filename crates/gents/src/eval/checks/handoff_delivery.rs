@@ -32,7 +32,7 @@ use crate::eval::OutcomeKind;
 /// - `sources`: captures of the source collections, with `_docID`, whose
 ///   fields a `session_id_template` of the form `{{ doc.FIELD }}` names;
 /// - `goals` (optional): `Goal` rows with `goal_id`, `status`;
-/// - `runtime` (optional): `AgentRuntime` rows with `last_reconcile_error`.
+/// - `runtime` (optional): `NodeRuntime` rows with `last_reconcile_error`.
 ///
 /// Gates, each violation naming its ids: a request not terminal
 /// (`request_not_terminal`); a fire with no request, or naming a request the

@@ -1,4 +1,4 @@
-//! Physical P2P replication of canonical output and durable peer identity.
+//! Physical P2P replication of canonical output and durable peer identity (node identity).
 
 use anyhow::{Context, Result};
 use defra_p2p_adapter::P2pDocumentRequest;
@@ -31,7 +31,7 @@ async fn replicated_output_ordinal_twin_fails_closed_after_physical_p2p_import()
         .expect("replicated ordinal twin must invalidate the original canonical projection");
 }
 
-/// Two connected P2P nodes. Only `AgentNetwork` has a replicator route: the
+/// Two connected P2P nodes. Only `Network` has a replicator route: the
 /// exact-document push is sent through the replicator retry guard and returns
 /// Ok without sending when no route exists, while output collections must
 /// arrive only by the explicit push.
@@ -53,7 +53,7 @@ async fn connected_pair() -> Result<(TestDb, TestDb)> {
             .p2p()
             .context("peer has no P2P transport")?
             .add_replicator(
-                vec!["AgentNetwork".to_string()],
+                vec!["Network".to_string()],
                 Some(address),
                 Default::default(),
                 Vec::new(),
@@ -127,10 +127,10 @@ async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
     const ORIGINAL: &str = "original";
     const TWIN: &str = "intruder";
     let (a, b) = connected_pair().await?;
-    let agent_did = crate::support::AGENT_DID;
+    let node_did = crate::support::NODE_DID;
     crate::support::create_agent_message_in_scope(
         a.node.as_ref(),
-        agent_did,
+        node_did,
         None,
         SESSION,
         1,
@@ -142,8 +142,8 @@ async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
 
     let a_access = ConfigAccess::Local(a.node.clone());
     let header_query = format!(
-        "{{ AgentMessage(filter: {{ agent_did: {{ _eq: \"{}\" }}, session_id: {{ _eq: \"{}\" }}, sequence: {{ _eq: 1 }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}",
-        escape_graphql_string(agent_did),
+        "{{ AgentMessage(filter: {{ node_did: {{ _eq: \"{}\" }}, session_id: {{ _eq: \"{}\" }}, sequence: {{ _eq: 1 }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}",
+        escape_graphql_string(node_did),
         escape_graphql_string(SESSION),
     );
     let header_response = a_access.execute(&header_query).await?;
@@ -158,9 +158,9 @@ async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
         .as_deref()
         .context("original header omitted its request")?;
     let segment_query = format!(
-        "{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: \"{}\" }}, agent_did: {{ _eq: \"{}\" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}",
+        "{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: \"{}\" }}, node_did: {{ _eq: \"{}\" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}",
         escape_graphql_string(request_doc_id),
-        escape_graphql_string(agent_did),
+        escape_graphql_string(node_did),
     );
     let original_response = a_access.execute(&segment_query).await?;
     let original_rows = original_response["data"]["AgentOutputSegment"]
@@ -185,7 +185,7 @@ async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
     let (baseline_header, baseline_message) = gents::session::load_canonical_message_from_node(
         a.node.as_ref(),
         &header.doc_id,
-        agent_did,
+        node_did,
         None,
     )
     .await?;
@@ -276,7 +276,7 @@ async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
     let error = gents::session::load_canonical_message_from_node(
         a.node.as_ref(),
         &header.doc_id,
-        agent_did,
+        node_did,
         None,
     )
     .await

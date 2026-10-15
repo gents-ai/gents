@@ -33,7 +33,7 @@ open RenderedCapture
 /-- One capture delivery, flattened for emission. -/
 structure RenderedCaptureCase where
   name : String
-  agentDid : Nat
+  nodeDid : Nat
   sessionId : Nat
   requestId : Nat
   turnIndex : Nat
@@ -56,12 +56,12 @@ structure RenderedCaptureCase where
 /-- Two capture keys and whether the model considers them the same fact. -/
 structure RenderedCaptureKeyCase where
   name : String
-  leftAgentDid : Nat
+  leftNodeDid : Nat
   leftSessionId : Nat
   leftRequestId : Nat
   leftTurnIndex : Nat
   leftAttempt : Nat
-  rightAgentDid : Nat
+  rightNodeDid : Nat
   rightSessionId : Nat
   rightRequestId : Nat
   rightTurnIndex : Nat
@@ -179,12 +179,12 @@ theorem renderedCaptureStorageCases_no_fail_open :
 
 /-! ## Building the rows -/
 
-private def contractAgentDid : Nat := 7
+private def contractNodeDid : Nat := 7
 private def contractSessionId : Nat := 11
 private def contractRequestId : Nat := 23
 
 private def contractKey (turnIndex attempt : Nat) : CaptureKey :=
-  { agentDid := contractAgentDid
+  { nodeDid := contractNodeDid
   , sessionId := contractSessionId
   , requestId := contractRequestId
   , turnIndex := turnIndex
@@ -200,7 +200,7 @@ private def renderedCaptureCase
     , priorBinding := priorBinding.map (fun value => { value := value })
     }
   { name := name
-  , agentDid := contractAgentDid
+  , nodeDid := contractNodeDid
   , sessionId := contractSessionId
   , requestId := contractRequestId
   , turnIndex := turnIndex
@@ -269,12 +269,12 @@ theorem renderedCaptureCases_no_fail_open :
 private def renderedCaptureKeyCase
     (name : String) (left right : CaptureKey) : RenderedCaptureKeyCase :=
   { name := name
-  , leftAgentDid := left.agentDid
+  , leftNodeDid := left.nodeDid
   , leftSessionId := left.sessionId
   , leftRequestId := left.requestId
   , leftTurnIndex := left.turnIndex
   , leftAttempt := left.attempt
-  , rightAgentDid := right.agentDid
+  , rightNodeDid := right.nodeDid
   , rightSessionId := right.sessionId
   , rightRequestId := right.requestId
   , rightTurnIndex := right.turnIndex
@@ -292,8 +292,8 @@ def renderedCaptureKeyCases : List RenderedCaptureKeyCase :=
       (contractKey 0 0) (contractKey 0 1)
   , renderedCaptureKeyCase "turn_index_separates_facts"
       (contractKey 0 0) (contractKey 1 0)
-  , renderedCaptureKeyCase "agent_did_separates_facts"
-      (contractKey 0 0) { contractKey 0 0 with agentDid := contractAgentDid + 1 }
+  , renderedCaptureKeyCase "node_did_separates_facts"
+      (contractKey 0 0) { contractKey 0 0 with nodeDid := contractNodeDid + 1 }
   , renderedCaptureKeyCase "session_id_separates_facts"
       (contractKey 0 0) { contractKey 0 0 with sessionId := contractSessionId + 1 }
   , renderedCaptureKeyCase "request_doc_id_separates_facts"
@@ -305,7 +305,7 @@ theorem renderedCaptureKeyCases_pinned :
       [ ("identical_tuple_is_one_fact", true)
       , ("attempt_separates_facts", false)
       , ("turn_index_separates_facts", false)
-      , ("agent_did_separates_facts", false)
+      , ("node_did_separates_facts", false)
       , ("session_id_separates_facts", false)
       , ("request_doc_id_separates_facts", false)
       ] := by

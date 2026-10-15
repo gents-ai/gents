@@ -70,7 +70,7 @@ impl Target {
 }
 
 /// What an operator asks a job to change: the system prompt of the context the
-/// subject behavior names, or the prompt template of one of its tasks.
+/// subject agent names, or the prompt template of one of its tasks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JobTarget {
     Context,
@@ -130,7 +130,7 @@ fn document_id(collection: Collection, value: &Value) -> Option<String> {
 }
 
 fn document_owner(value: &Value) -> Option<String> {
-    value.get("agent_did")?.as_str().map(str::to_owned)
+    value.get("node_did")?.as_str().map(str::to_owned)
 }
 
 pub fn closure_digests(closure: &Closure) -> Result<Vec<FrozenDocument>> {
@@ -139,7 +139,7 @@ pub fn closure_digests(closure: &Closure) -> Result<Vec<FrozenDocument>> {
         .map(|(collection, value)| {
             Ok(FrozenDocument {
                 collection: *collection,
-                owner: document_owner(value).context("closure document has no agent_did")?,
+                owner: document_owner(value).context("closure document has no node_did")?,
                 id: document_id(*collection, value)
                     .context("closure document has no logical ID")?,
                 digest: desired_state_document_digest(value)?,
@@ -261,10 +261,10 @@ impl std::error::Error for BaselineMismatch {}
 /// the live configuration there and still be the same subject. These are the
 /// only such remaps:
 ///
-/// - The `AgentPrincipal`: a trial installs the pack's principal as its own
-///   fresh principal and names the subject behavior explicitly, so no
-///   principal setting of the live owner is part of what a trial runs.
-/// - An `AgentBehavior`'s `inference_profile_id` that names an inference slot:
+/// - The `Node`: a trial installs the pack's node as its own
+///   fresh node and names the subject agent explicitly, so no
+///   node setting of the live owner is part of what a trial runs.
+/// - An `Agent`'s `inference_profile_id` that names an inference slot:
 ///   the trial binds every slot to the eval target's profile, never to the
 ///   live binding.
 /// - `tags`: installing a pack stamps its provenance tag and merges retained
@@ -276,9 +276,9 @@ impl std::error::Error for BaselineMismatch {}
 /// publishes its own `WorkspaceRoot`, which no closure holds.
 fn remapped_by_trial(collection: Collection, field: Option<&str>, pack_document: &Value) -> bool {
     match (collection, field) {
-        (Collection::AgentPrincipal, _) => true,
+        (Collection::Node, _) => true,
         (_, Some("tags")) => true,
-        (Collection::AgentBehavior, Some(field)) => {
+        (Collection::Agent, Some(field)) => {
             field == "inference_profile_id"
                 && pack_document
                     .get(field)
@@ -369,7 +369,7 @@ mod tests {
     fn context(prompt: &str) -> Value {
         json!({
             "context_id": "monitor-context",
-            "agent_did": OWNER,
+            "node_did": OWNER,
             "display_name": "Monitor",
             "system_prompt": prompt,
         })
@@ -378,10 +378,10 @@ mod tests {
     fn closure(prompt: &str) -> Closure {
         vec![
             (
-                Collection::AgentBehavior,
+                Collection::Agent,
                 json!({
-                    "behavior_id": "monitor",
-                    "agent_did": OWNER,
+                    "agent_id": "monitor",
+                    "node_did": OWNER,
                     "context_id": "monitor-context",
                     "inference_profile_id": "local",
                 }),
@@ -408,7 +408,7 @@ mod tests {
 
         let after = apply_text(&before, &target(), "Watch the mailbox, and say why.\n").unwrap();
         assert_eq!(after.len(), before.len());
-        assert_eq!(after[0], before[0], "the behavior is untouched");
+        assert_eq!(after[0], before[0], "the agent is untouched");
         assert_eq!(
             current_text(&after, &target()).unwrap(),
             "Watch the mailbox, and say why.\n"
@@ -514,8 +514,8 @@ mod tests {
             Collection::Task,
             json!({
                 "task_id": "plan",
-                "agent_did": OWNER,
-                "behavior_id": "monitor",
+                "node_did": OWNER,
+                "agent_id": "monitor",
                 "prompt_template": "Plan {{ args.goal }}.\n",
             }),
         ));
@@ -527,7 +527,7 @@ mod tests {
         assert_eq!(
             after[..2],
             before[..2],
-            "the behavior and context are untouched"
+            "the agent and context are untouched"
         );
         assert_eq!(
             current_text(&after, &task).unwrap(),
@@ -564,6 +564,6 @@ mod tests {
     fn eval_definitions_never_enter_the_closure() {
         assert!(!is_closure_collection(Collection::EvalDefinition));
         assert!(is_closure_collection(Collection::AgentContext));
-        assert!(is_closure_collection(Collection::AgentBehavior));
+        assert!(is_closure_collection(Collection::Agent));
     }
 }

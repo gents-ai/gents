@@ -59,7 +59,7 @@ test.describe("desktop live browser smoke", () => {
       await secondEditor.fill("Reply with exactly: SECOND_VIEW_CONFIRMED");
       await second.getByRole("button", { name: "Send" }).click();
       const submitted = await waitForSubmittedRequest(liveRunner, {
-        agentDid: deployment.agentDid,
+        nodeDid: deployment.nodeDid,
         previousRequestIds,
       });
       await second.close();
@@ -71,7 +71,7 @@ test.describe("desktop live browser smoke", () => {
       previousRequestIds.add(submitted.requestId);
       await page.getByRole("button", { name: "Send" }).click();
       const firstSubmitted = await waitForSubmittedRequest(liveRunner, {
-        agentDid: deployment.agentDid,
+        nodeDid: deployment.nodeDid,
         previousRequestIds,
       });
       expect(firstSubmitted.sessionId).not.toBe(submitted.sessionId);
@@ -157,7 +157,7 @@ test.describe("desktop live browser smoke", () => {
       await page.getByRole("button", { name: "Send" }).click();
 
       submitted = await waitForSubmittedRequest(liveRunner, {
-        agentDid: deployment.agentDid,
+        nodeDid: deployment.nodeDid,
         previousRequestIds,
       });
       const completion = liveRunner.waitForRequestCompletion(submitted);
@@ -230,7 +230,7 @@ test.describe("desktop live browser smoke", () => {
       await attachLiveSmokeEvidence(testInfo, {
         baseUrl: liveRunner.baseUrl,
         deploymentLabel: liveRunner.deploymentLabel,
-        agentDid: liveRunner.agentDid,
+        nodeDid: liveRunner.nodeDid,
         toolRoot: liveRunner.toolRoot,
         sessionId: submitted.sessionId,
         requestId: submitted.requestId,
@@ -298,18 +298,21 @@ test.describe("desktop live browser smoke", () => {
       await page.getByRole("button", { name: "Send" }).click();
 
       submitted = await waitForSubmittedRequest(liveRunner, {
-        agentDid: deployment.agentDid,
+        nodeDid: deployment.nodeDid,
         previousRequestIds,
       });
       const completion = liveRunner.waitForRequestCompletion(submitted);
 
       const liveAssistant = page.getByTestId("live-assistant");
       const liveProse = () =>
-        liveAssistant.evaluate((element) => {
+        liveAssistant.locator('[data-slot="assistant-message"]').evaluate((element) => {
           const prose = element.cloneNode(true) as HTMLElement;
-          // Activity status is UI state, not retained model output.
+          // Reasoning's disclosure (including its word count) and activity
+          // status are separate from ReplyText's durable assistant content.
           prose
-            .querySelectorAll('[data-testid="activity-status"]')
+            .querySelectorAll(
+              ':scope > [data-slot="collapsible"], [data-testid="activity-status"]',
+            )
             .forEach((node) => node.remove());
           return (prose.textContent ?? "").trim();
         });
@@ -351,7 +354,7 @@ test.describe("desktop live browser smoke", () => {
       await page.getByRole("button", { name: "Send" }).click();
 
       const followup = await waitForSubmittedRequest(liveRunner, {
-        agentDid: deployment.agentDid,
+        nodeDid: deployment.nodeDid,
         previousRequestIds: new Set([...previousRequestIds, submitted.requestId]),
       });
       const followupCompletion = liveRunner.waitForRequestCompletion(followup);
@@ -490,15 +493,15 @@ async function firstDeployment(runner: LiveBridgeRunner): Promise<DeploymentView
 async function waitForSubmittedRequest(
   runner: LiveBridgeRunner,
   expected: {
-    agentDid: string;
+    nodeDid: string;
     previousRequestIds: Set<string>;
   },
 ) {
-  let request: { agentDid: string; requestId: string; sessionId: string } | null = null;
+  let request: { nodeDid: string; requestId: string; sessionId: string } | null = null;
   await expect
     .poll(
       async () => {
-        const deployment = await findDeployment(runner, expected.agentDid);
+        const deployment = await findDeployment(runner, expected.nodeDid);
         if (!deployment) {
           return false;
         }
@@ -509,7 +512,7 @@ async function waitForSubmittedRequest(
         );
         if (conversation?.latestRequestId) {
           request = {
-            agentDid: deployment.agentDid,
+            nodeDid: deployment.nodeDid,
             requestId: conversation.latestRequestId,
             sessionId: conversation.sessionId,
           };
@@ -524,13 +527,11 @@ async function waitForSubmittedRequest(
 
 async function findDeployment(
   runner: LiveBridgeRunner,
-  agentDid: string,
+  nodeDid: string,
 ): Promise<DeploymentView | null> {
   const snapshot = await runner.fetchSnapshot();
   return (
-    snapshot.client?.deployments.find(
-      (deployment) => deployment.agentDid === agentDid,
-    ) ??
+    snapshot.client?.deployments.find((deployment) => deployment.nodeDid === nodeDid) ??
     snapshot.client?.deployments[0] ??
     null
   );
@@ -543,10 +544,10 @@ function liveOptionsFromEnv(): LiveBridgeRunnerOptions {
     provider: process.env.GENTS_TAURI_LIVE_PROVIDER,
     apiKey: process.env.GENTS_TAURI_LIVE_API_KEY,
     apiKeyEnvVar: process.env.GENTS_TAURI_LIVE_API_KEY_ENV_VAR,
-    subagentInferenceUrl: process.env.GENTS_TAURI_LIVE_SUBAGENT_INFERENCE_URL,
-    subagentModelName: process.env.GENTS_TAURI_LIVE_SUBAGENT_MODEL_NAME,
-    subagentProvider: process.env.GENTS_TAURI_LIVE_SUBAGENT_PROVIDER,
-    subagentApiKey: process.env.GENTS_TAURI_LIVE_SUBAGENT_API_KEY,
-    subagentApiKeyEnvVar: process.env.GENTS_TAURI_LIVE_SUBAGENT_API_KEY_ENV_VAR,
+    agentTargetInferenceUrl: process.env.GENTS_TAURI_LIVE_AGENT_TARGET_INFERENCE_URL,
+    agentTargetModelName: process.env.GENTS_TAURI_LIVE_AGENT_TARGET_MODEL_NAME,
+    agentTargetProvider: process.env.GENTS_TAURI_LIVE_AGENT_TARGET_PROVIDER,
+    agentTargetApiKey: process.env.GENTS_TAURI_LIVE_AGENT_TARGET_API_KEY,
+    agentTargetApiKeyEnvVar: process.env.GENTS_TAURI_LIVE_AGENT_TARGET_API_KEY_ENV_VAR,
   };
 }

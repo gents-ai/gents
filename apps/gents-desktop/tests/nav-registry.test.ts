@@ -26,7 +26,7 @@ function byId(id: string): NavItem {
 }
 
 const mailbox: Route = { name: "mailbox" };
-const agent: Route = { name: "agent", agentDid: "did:x", section: "board:page" };
+const agent: Route = { name: "agent", nodeDid: "did:x", section: "board:page" };
 
 const make = (id: string, extra: Partial<NavItem> = {}): NavItem => ({
   id,
@@ -69,7 +69,7 @@ describe("nav registry", () => {
       registerNavItem(
         make("ctx", {
           to: (ctx) =>
-            ctx.selectedAgentDid ? { ...agent, agentDid: ctx.selectedAgentDid } : null,
+            ctx.selectedNodeDid ? { ...agent, nodeDid: ctx.selectedNodeDid } : null,
         }),
       ),
     );
@@ -87,13 +87,13 @@ describe("nav registry", () => {
     );
     vi.spyOn(console, "error").mockImplementation(() => {});
     const route: Route = { name: "sessions" };
-    const none = { mailboxCount: 0, selectedAgentDid: null };
+    const none = { mailboxCount: 0, selectedNodeDid: null };
     expect(navRowState(byId("ctx"), route, none).to).toBeNull();
     expect(
-      navRowState(byId("ctx"), route, { ...none, selectedAgentDid: "did:x" }).to,
+      navRowState(byId("ctx"), route, { ...none, selectedNodeDid: "did:x" }).to,
     ).toEqual({
       ...agent,
-      agentDid: "did:x",
+      nodeDid: "did:x",
     });
     expect(navRowState(byId("throws"), route, none).to).toBeNull();
     expect(navRowState(byId("bad"), route, none).to).toBeNull();

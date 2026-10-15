@@ -8,15 +8,17 @@ use rig::completion::{CompletionError, CompletionModel, CompletionRequest, Compl
 use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 use serde_json::json;
 
-use super::BehaviorDaemon;
+use super::inference::tests::InterruptionCapture;
+use super::AgentDaemon;
 use crate::agent::runtime::StartupBarrier;
-use crate::config::ResolvedBehavior;
+use crate::config::ResolvedAgent;
 use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
 use crate::llm::tool::ToolDyn;
 use crate::prompt::LayeredPromptBuilder;
 use crate::watcher::AgentRequest;
 use crate::Collection;
+use tracing::instrument::WithSubscriber;
 
 const TASK_ID: &str = "hook-task";
 const TRIGGER_ID: &str = "hook-trigger";
@@ -80,7 +82,7 @@ enum Lineage {
 
 struct Harness {
     node: Arc<defra_node::EmbeddedNode>,
-    behavior: Arc<ResolvedBehavior>,
+    agent_config: Arc<ResolvedAgent>,
     calls: Arc<AtomicUsize>,
     marks: tempfile::TempDir,
     _data: tempfile::TempDir,
@@ -101,16 +103,16 @@ impl Harness {
                 .expect("embedded node"),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let behavior = super::inference::tests::test_behavior_with_deadline(deadline);
-        crate::test_support::install_test_behavior(
+        let agent_config = super::inference::tests::test_agent_with_deadline(deadline);
+        crate::test_support::install_test_agent(
             node.as_ref(),
-            behavior.agent_did(),
-            &behavior.behavior_id,
+            agent_config.node_did(),
+            &agent_config.agent_id,
         )
         .await;
         Self {
             node,
-            behavior,
+            agent_config,
             calls: Arc::new(AtomicUsize::new(0)),
             marks: tempfile::tempdir().expect("hook marker directory"),
             _data: data,
@@ -118,7 +120,7 @@ impl Harness {
     }
 
     fn owner(&self) -> &str {
-        self.behavior.agent_did()
+        self.agent_config.node_did()
     }
 
     fn mark(&self, name: &str) -> PathBuf {
@@ -155,7 +157,7 @@ impl Harness {
             (
                 Collection::Schedule,
                 json!({
-                    "agent_did": owner,
+                    "node_did": owner,
                     "schedule_id": "hook-schedule",
                     "cadence": {"kind": "interval", "interval_secs": 3600},
                 }),
@@ -163,9 +165,9 @@ impl Harness {
             (
                 Collection::Task,
                 json!({
-                    "agent_did": owner,
+                    "node_did": owner,
                     "task_id": TASK_ID,
-                    "behavior_id": self.behavior.behavior_id,
+                    "agent_id": self.agent_config.agent_id,
                     "prompt_template": "run the gate",
                     "hooks": hooks,
                 }),
@@ -173,7 +175,7 @@ impl Harness {
             (
                 Collection::Trigger,
                 json!({
-                    "agent_did": owner,
+                    "node_did": owner,
                     "trigger_id": TRIGGER_ID,
                     "task_id": TASK_ID,
                     "source": {"kind": "schedule", "schedule_id": "hook-schedule"},
@@ -187,7 +189,7 @@ impl Harness {
         let response = crate::graphql::graphql_with_transaction_retry(
             self.node.as_ref(),
             &format!(
-                r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
+                r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
                 crate::graphql::escape_graphql_string(self.owner()),
                 crate::graphql::escape_graphql_string(TRIGGER_ID),
             ),
@@ -251,7 +253,7 @@ impl Harness {
             request_id,
             &owner,
             &owner,
-            &self.behavior.behavior_id,
+            &self.agent_config.agent_id,
             session_id,
             "run the gate",
             origin,
@@ -272,9 +274,9 @@ impl Harness {
         if workspace {
             create.workspace_id = Some(WORKSPACE_ID.to_owned());
             create.workspace_authority = Some("readWrite".into());
-            create.workspace_owner_agent_did = Some(owner.clone());
+            create.workspace_owner_node_did = Some(owner.clone());
         }
-        crate::sign_agent_request_create(self.behavior.principal_identity().as_ref(), &mut create)
+        crate::sign_agent_request_create(self.agent_config.node_identity().as_ref(), &mut create)
             .await
             .unwrap();
         let doc_id = match &fire {
@@ -302,7 +304,7 @@ impl Harness {
             .unwrap()
     }
 
-    fn daemon(&self, fail: bool) -> BehaviorDaemon<ScriptedModel> {
+    fn daemon(&self, fail: bool) -> AgentDaemon<ScriptedModel> {
         self.daemon_with(fail, BackgroundExecutionRegistry::default())
     }
 
@@ -310,7 +312,7 @@ impl Harness {
         &self,
         fail: bool,
         executions: BackgroundExecutionRegistry,
-    ) -> BehaviorDaemon<ScriptedModel> {
+    ) -> AgentDaemon<ScriptedModel> {
         self.daemon_model(fail, false, executions)
     }
 
@@ -319,17 +321,17 @@ impl Harness {
         fail: bool,
         hang: bool,
         executions: BackgroundExecutionRegistry,
-    ) -> BehaviorDaemon<ScriptedModel> {
-        let prompt_builder = LayeredPromptBuilder::for_behavior(
-            &self.behavior.system_prompt,
-            &self.behavior.behavior_id,
+    ) -> AgentDaemon<ScriptedModel> {
+        let prompt_builder = LayeredPromptBuilder::for_agent(
+            &self.agent_config.system_prompt,
+            &self.agent_config.agent_id,
             &[],
             false,
             &[],
         );
-        BehaviorDaemon::new(
+        AgentDaemon::new(
             self.node.clone(),
-            self.behavior.clone(),
+            self.agent_config.clone(),
             None,
             Arc::new(ScriptedModel {
                 calls: self.calls.clone(),
@@ -353,7 +355,7 @@ impl Harness {
             1,
             crate::request_admission::AgentRequestAdmissionVerifier::new(
                 self.node.clone(),
-                self.behavior.principal_identity().clone(),
+                self.agent_config.node_identity().clone(),
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
             ),
         )
@@ -510,9 +512,12 @@ async fn interrupting_a_held_after_success_hook_cancels_it_and_interrupts_the_re
         ]))
         .await;
     let request = harness.create_request(Lineage::ManualFire, false).await;
+    let capture = InterruptionCapture::default();
     let row = harness
         .run_interrupting_at(request, &harness.mark("verify-started"))
+        .with_subscriber(capture.subscriber())
         .await;
+    capture.assert_source("task_hook");
     assert_eq!(harness.calls(), 1, "{row}");
     assert_eq!(row["lifecycle_state"], "interrupted", "{row}");
     assert!(!harness.mark("verify-finished").exists());
@@ -539,9 +544,12 @@ async fn interrupting_a_before_hook_skips_the_agent_and_still_cleans_up() {
         ]))
         .await;
     let request = harness.create_request(Lineage::Trigger, false).await;
+    let capture = InterruptionCapture::default();
     let row = harness
         .run_interrupting_at(request, &harness.mark("prepare-started"))
+        .with_subscriber(capture.subscriber())
         .await;
+    capture.assert_source("task_hook");
     assert_eq!(harness.calls(), 0, "{row}");
     assert_eq!(row["lifecycle_state"], "interrupted", "{row}");
     assert!(!harness.mark("prepare-finished").exists());
@@ -576,7 +584,7 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
         adapter: crate::workspace::WorkspaceAdapterKind::GitWorktree
             .as_str()
             .to_string(),
-        owner_agent_did: owner.clone(),
+        owner_node_did: owner.clone(),
         writer_principal: owner.clone(),
         integrator_principal: owner.clone(),
         instruction_manifest: String::new(),
@@ -587,7 +595,7 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
     };
     let placement = crate::workspace::WorkspacePlacementDoc {
         workspace_id: WORKSPACE_ID.to_string(),
-        owner_agent_did: owner,
+        owner_node_did: owner,
         host_path: host_path.to_str().expect("utf-8 path").to_string(),
         repository_placement_id: "hook-repo".to_string(),
         adapter: crate::workspace::WorkspaceAdapterKind::GitWorktree
@@ -614,7 +622,7 @@ async fn workspace_bindings(harness: &Harness) -> Vec<crate::workspace::Workspac
     let response = crate::graphql::graphql_with_transaction_retry(
         harness.node.as_ref(),
         &format!(
-            r#"{{ WorkspaceBinding(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_agent_did: {{ _eq: "{}" }} }}) {{ binding_id workspace_id request_id request_doc_id authority owner_agent_did seal_hash lifecycle_state }} }}"#,
+            r#"{{ WorkspaceBinding(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ binding_id workspace_id request_id request_doc_id authority owner_node_did seal_hash lifecycle_state }} }}"#,
             crate::graphql::escape_graphql_string(WORKSPACE_ID),
             crate::graphql::escape_graphql_string(harness.owner()),
         ),
@@ -634,7 +642,7 @@ async fn materialize_writer_binding(harness: &Harness, request: &AgentRequest) {
         &crate::lifecycle::WorkspaceLineage {
             workspace_id: request.workspace_id.clone(),
             workspace_authority: request.workspace_authority.clone(),
-            workspace_owner_agent_did: request.workspace_owner_agent_did.clone(),
+            workspace_owner_node_did: request.workspace_owner_node_did.clone(),
             workspace_seal_hash: request.workspace_seal_hash.clone(),
         },
     )
@@ -658,7 +666,7 @@ async fn claim_admission_rejection_releases_the_bound_workspace() {
         harness.node.as_ref(),
         "test.remove_workspace_placement",
         &format!(
-            r#"mutation {{ delete_WorkspacePlacement(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_agent_did: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            r#"mutation {{ delete_WorkspacePlacement(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
             crate::graphql::escape_graphql_string(WORKSPACE_ID),
             crate::graphql::escape_graphql_string(harness.owner()),
         ),
@@ -956,9 +964,9 @@ async fn a_request_bound_to_a_disabled_hookless_task_fails_closed() {
         .apply(vec![(
             Collection::Task,
             json!({
-                "agent_did": harness.owner(),
+                "node_did": harness.owner(),
                 "task_id": TASK_ID,
-                "behavior_id": harness.behavior.behavior_id,
+                "agent_id": harness.agent_config.agent_id,
                 "prompt_template": "run the gate",
                 "enabled": false,
             }),
@@ -1015,7 +1023,7 @@ async fn workspace_seal_completes_before_the_after_phase_is_selected() {
         &crate::lifecycle::WorkspaceLineage {
             workspace_id: request.workspace_id.clone(),
             workspace_authority: request.workspace_authority.clone(),
-            workspace_owner_agent_did: request.workspace_owner_agent_did.clone(),
+            workspace_owner_node_did: request.workspace_owner_node_did.clone(),
             workspace_seal_hash: request.workspace_seal_hash.clone(),
         },
     )
@@ -1134,7 +1142,7 @@ async fn revocation_during_an_after_success_hook_cancels_it_and_still_cleans_up(
 #[tokio::test]
 async fn revocation_between_hooks_is_checked_before_the_next_renewal_poll() {
     let mut harness = Harness::new().await;
-    Arc::get_mut(&mut harness.behavior)
+    Arc::get_mut(&mut harness.agent_config)
         .unwrap()
         .stream_liveness_timeout = Duration::from_secs(120);
     let gate = harness.mark("revoked");
@@ -1182,4 +1190,33 @@ async fn revocation_between_hooks_is_checked_before_the_next_renewal_poll() {
         !harness.mark("second").exists(),
         "second ordinary hook launched AFTER the revocation write committed"
     );
+}
+
+#[tokio::test]
+async fn natural_finish_excludes_task_and_workspace_success_effects() {
+    let harness = Harness::new().await;
+    let mut request = harness.create_request(Lineage::ManualFire, false).await;
+    request.execution_origin = Some("interactive".into());
+    request.input = Default::default();
+    request.caused_by_trigger_id = None;
+    request.caused_by_source_doc_id = None;
+    request.caused_by_parent_tool_call_doc_id = None;
+    request.workspace_id = None;
+    request.workspace_authority = None;
+    assert!(super::permits_natural_finish(&request, false));
+    assert!(
+        !super::permits_natural_finish(&request, true),
+        "a Task without hooks still owns completion"
+    );
+    request.workspace_id = Some(WORKSPACE_ID.into());
+    for authority in ["readWrite", "integrate"] {
+        request.workspace_authority = Some(authority.into());
+        assert!(
+            !super::permits_natural_finish(&request, false),
+            "{authority} effects precede terminalization"
+        );
+    }
+    request.workspace_authority = Some("readOnly".into());
+    assert!(super::permits_natural_finish(&request, false));
+    assert!(!super::permits_natural_finish(&request, true));
 }

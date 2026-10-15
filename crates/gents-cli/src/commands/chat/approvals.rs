@@ -19,7 +19,7 @@ pub(super) fn parse_answer(line: &str) -> Answer {
     }
 }
 
-fn mine(request: &Request, session_id: &str) -> bool {
+pub(super) fn mine(request: &Request, session_id: &str) -> bool {
     request
         .session_id
         .as_deref()
@@ -59,6 +59,15 @@ pub(super) fn ask_on_terminal(request: &Request) -> Answer {
         eprintln!("{} No terminal to ask on; denied.", request.prompt());
         return Answer::Deny;
     }
+    show_prompt(request);
+    let mut line = String::new();
+    match std::io::stdin().read_line(&mut line) {
+        Ok(_) => parse_answer(&line),
+        Err(_) => Answer::Deny,
+    }
+}
+
+pub(super) fn show_prompt(request: &Request) {
     println!("{}", request.prompt());
     let file = if request.is_dir {
         String::new()
@@ -70,11 +79,6 @@ pub(super) fn ask_on_terminal(request: &Request) -> Answer {
         request.folder.display()
     );
     let _ = std::io::stdout().flush();
-    let mut line = String::new();
-    match std::io::stdin().read_line(&mut line) {
-        Ok(_) => parse_answer(&line),
-        Err(_) => Answer::Deny,
-    }
 }
 
 #[cfg(test)]

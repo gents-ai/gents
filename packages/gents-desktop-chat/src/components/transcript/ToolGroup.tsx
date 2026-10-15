@@ -95,11 +95,23 @@ function ToolPayloadAvailability({ tool }: { tool: RenderedToolCallView }) {
     case "ready":
       return null;
     case "loading":
-      return <p role="status" data-testid={`tool-output-loading-${tool.itemKey}`}>Loading tool output…</p>;
+      return (
+        <p role="status" data-testid={`tool-output-loading-${tool.itemKey}`}>
+          Loading tool output…
+        </p>
+      );
     case "denied":
-      return <p role="alert" data-testid={`tool-output-denied-${tool.itemKey}`}>Tool output unavailable: access denied.</p>;
+      return (
+        <p role="alert" data-testid={`tool-output-denied-${tool.itemKey}`}>
+          Tool output unavailable: access denied.
+        </p>
+      );
     case "invalid":
-      return <p role="alert" data-testid={`tool-output-invalid-${tool.itemKey}`}>Tool output could not be reconstructed.</p>;
+      return (
+        <p role="alert" data-testid={`tool-output-invalid-${tool.itemKey}`}>
+          Tool output could not be reconstructed.
+        </p>
+      );
   }
 }
 
@@ -147,7 +159,12 @@ function readCount(
 
 function ToolSummary({ tool }: { tool: RenderedToolCallView }) {
   if (tool.reconstruction.state !== "ready") {
-    return <><span className="tool-primary mono">{tool.toolName}</span>{commonBadges(tool)}</>;
+    return (
+      <>
+        <span className="tool-primary mono">{tool.toolName}</span>
+        {commonBadges(tool)}
+      </>
+    );
   }
   const view = tool.presentation;
   if (view.kind === "command") {
@@ -203,12 +220,12 @@ function ToolSummary({ tool }: { tool: RenderedToolCallView }) {
       </>
     );
   }
-  if (view.kind === "subagent") {
+  if (view.kind === "agent") {
     return (
       <>
-        <span className="tool-kind">subagent · {view.action}</span>
+        <span className="tool-kind">agent · {view.action}</span>
         <span className="tool-primary">
-          {view.name ?? view.sessionId ?? "subagent"}
+          {view.name ?? view.sessionId ?? "agent"}
         </span>
         {commonBadges(tool)}
         {compact(view.description) ? (
@@ -333,7 +350,7 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
           <Payload label="output" value={view.fallbackOutput} />
         </>
       ) : null}
-      {payloadReady && view.kind === "subagent" ? (
+      {payloadReady && view.kind === "agent" ? (
         <>
           <Payload
             label={view.action === "start" ? "assignment" : "message"}

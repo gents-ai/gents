@@ -1,6 +1,6 @@
 type DataPlanePairingDesired {
     peer_id: String @index(unique: true)
-    agent_did: String @index
+    node_did: String @index
     collections: [String!]!
     replicator_addresses: [String!]!
     template: String @index

@@ -8,7 +8,7 @@ use anyhow::Result;
 use tokio::sync::{mpsc, watch, Mutex};
 
 use crate::admission::AdmissionRegistry;
-use crate::agent::daemon::BehaviorDaemon;
+use crate::agent::daemon::AgentDaemon;
 use crate::completion_factory::build_admitted_model;
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
 use crate::prompt::LayeredPromptBuilder;
@@ -31,8 +31,8 @@ pub(super) struct RuntimeContext {
     pub(super) enrollment_authority: crate::agent::p2p_reconcile::EnrollmentAuthorityHandle,
 }
 
-pub(super) struct BehaviorResolution {
-    pub(super) behavior_id: String,
+pub(super) struct AgentResolution {
+    pub(super) agent_id: String,
     pub(super) rejection_reason: Option<String>,
 }
 
@@ -42,10 +42,10 @@ pub struct StartupBarrier {
 }
 
 impl StartupBarrier {
-    pub(super) fn new(behaviors: &[Arc<crate::config::ResolvedBehavior>]) -> Self {
-        let pending: BTreeSet<(String, u64)> = behaviors
+    pub(super) fn new(agents: &[Arc<crate::config::ResolvedAgent>]) -> Self {
+        let pending: BTreeSet<(String, u64)> = agents
             .iter()
-            .map(|behavior| (behavior.behavior_id.clone(), 1))
+            .map(|agent_config| (agent_config.agent_id.clone(), 1))
             .collect();
         let (pending_count_tx, _) = watch::channel(pending.len());
         Self {
@@ -54,9 +54,9 @@ impl StartupBarrier {
         }
     }
 
-    async fn release(&self, behavior_id: &str, generation: u64) -> bool {
+    async fn release(&self, agent_id: &str, generation: u64) -> bool {
         let mut pending = self.pending_standings.lock().await;
-        if pending.remove(&(behavior_id.to_string(), generation)) {
+        if pending.remove(&(agent_id.to_string(), generation)) {
             let _ = self.pending_count_tx.send_replace(pending.len());
             true
         } else {
@@ -64,9 +64,9 @@ impl StartupBarrier {
         }
     }
 
-    pub async fn register_behavior(&self, behavior_id: &str, generation: u64) {
+    pub async fn register_agent(&self, agent_id: &str, generation: u64) {
         let mut pending = self.pending_standings.lock().await;
-        if pending.insert((behavior_id.to_string(), generation)) {
+        if pending.insert((agent_id.to_string(), generation)) {
             self.pending_count_tx.send_replace(pending.len());
         }
     }
@@ -76,31 +76,31 @@ impl StartupBarrier {
         Self::new(&[])
     }
 
-    pub async fn mark_behavior_ready(&self, behavior_id: &str, generation: u64) -> bool {
-        self.release(behavior_id, generation).await
+    pub async fn mark_agent_ready(&self, agent_id: &str, generation: u64) -> bool {
+        self.release(agent_id, generation).await
     }
 
-    pub async fn mark_behavior_demoted(&self, behavior_id: &str, generation: u64) -> bool {
-        self.release(behavior_id, generation).await
+    pub async fn mark_agent_demoted(&self, agent_id: &str, generation: u64) -> bool {
+        self.release(agent_id, generation).await
     }
 
-    pub async fn mark_behavior_superseded(&self, behavior_id: &str, generation: u64) -> bool {
-        self.release(behavior_id, generation).await
+    pub async fn mark_agent_superseded(&self, agent_id: &str, generation: u64) -> bool {
+        self.release(agent_id, generation).await
     }
 
-    pub async fn is_pending(&self, behavior_id: &str, generation: u64) -> bool {
+    pub async fn is_pending(&self, agent_id: &str, generation: u64) -> bool {
         self.pending_standings
             .lock()
             .await
-            .contains(&(behavior_id.to_string(), generation))
+            .contains(&(agent_id.to_string(), generation))
     }
 
-    pub async fn pending_behaviors(&self) -> Vec<String> {
+    pub async fn pending_agents(&self) -> Vec<String> {
         self.pending_standings
             .lock()
             .await
             .iter()
-            .map(|(behavior_id, generation)| format!("{behavior_id}@{generation}"))
+            .map(|(agent_id, generation)| format!("{agent_id}@{generation}"))
             .collect()
     }
 
@@ -111,33 +111,36 @@ impl StartupBarrier {
 }
 
 impl RuntimeContext {
-    pub(super) async fn run_behavior(
+    pub(super) async fn run_agent(
         &self,
-        behavior: Arc<crate::config::ResolvedBehavior>,
+        agent_config: Arc<crate::config::ResolvedAgent>,
         tool_surface: Arc<ToolSurface>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
         slot_generation: u64,
         shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
         let tool_names = tool_surface.tool_names();
-        let api_key = match &behavior.backend_auth {
-            crate::document_config::BackendAuth::PrincipalOAuth { .. } => "no-key".to_owned(),
-            _ => behavior.completion_client_api_key()?,
+        let api_key = match &agent_config.backend_auth {
+            crate::document_config::BackendAuth::NodeOAuth { .. } => "no-key".to_owned(),
+            _ => agent_config.completion_client_api_key()?,
         };
         let allowed_targets =
-            tool_surface::resolve_subagent_target_descriptions(tool_surface.as_ref());
-        let prompt_builder =
-            LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref(), &allowed_targets);
+            tool_surface::resolve_agent_target_descriptions(tool_surface.as_ref());
+        let prompt_builder = LayeredPromptBuilder::new(
+            agent_config.as_ref(),
+            tool_surface.as_ref(),
+            &allowed_targets,
+        );
         let preamble = prompt_builder.preamble().to_string();
         let mut loop_tools = tool_surface.build_tools(&self.tool_runtime).await?;
-        if tool_surface.includes_skills() && !behavior.skills.is_empty() {
+        if tool_surface.includes_skills() && !agent_config.skills.is_empty() {
             let ceiling = crate::skills::skill_tool_ceiling(
                 tool_surface.tool_names(),
                 tool_surface.allowed_mcp_service_ids(),
                 tool_surface.includes_meta_tools(),
             );
             loop_tools.push(Box::new(crate::skills::LoadSkillTool::new(
-                behavior.skills.clone(),
+                agent_config.skills.clone(),
                 ceiling,
             )));
         }
@@ -149,16 +152,16 @@ impl RuntimeContext {
             tool_surface.background_tools(),
         );
         tracing::info!(
-            behavior_id = %behavior.behavior_id,
-            did = %behavior.agent_did(),
-            model = %behavior.model_name,
+            agent_id = %agent_config.agent_id,
+            did = %agent_config.node_did(),
+            model = %agent_config.model_name,
             tools = ?tool_names,
-            "building behavior runtime"
+            "building agent runtime"
         );
 
         let client = crate::llm::backend_client::build_backend_client(
             self.node.clone(),
-            behavior.as_ref(),
+            agent_config.as_ref(),
             &api_key,
             self.startup_readiness.build_timeout,
         )
@@ -167,8 +170,8 @@ impl RuntimeContext {
         let replay_issuer = client.replay_issuer()?;
 
         crate::llm::backend_client::with_backend_client!(client, |client| {
-            Box::pin(self.run_behavior_with_client(
-                behavior,
+            Box::pin(self.run_agent_with_client(
+                agent_config,
                 provider_family,
                 replay_issuer,
                 request_rx,
@@ -188,9 +191,9 @@ impl RuntimeContext {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) async fn run_behavior_with_client<C>(
+    pub(super) async fn run_agent_with_client<C>(
         &self,
-        behavior: Arc<crate::config::ResolvedBehavior>,
+        agent_config: Arc<crate::config::ResolvedAgent>,
         provider_family: Option<String>,
         replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
@@ -211,23 +214,23 @@ impl RuntimeContext {
         let model = Arc::new(build_admitted_model(
             client,
             self.admission_registry.clone(),
-            behavior.as_ref(),
+            agent_config.as_ref(),
         ));
         let request_admission = crate::request_admission::AgentRequestAdmissionVerifier::new(
             self.node.clone(),
-            behavior.principal_identity().clone(),
+            agent_config.node_identity().clone(),
             self.enrollment_authority.clone(),
         );
         let summary_compactor = crate::completion_factory::build_compaction_engine(
             self.node.clone(),
-            &behavior,
+            &agent_config,
             self.admission_registry.clone(),
             self.startup_readiness.build_timeout,
         )
         .await?;
-        let mut daemon = BehaviorDaemon::new(
+        let mut daemon = AgentDaemon::new(
             self.node.clone(),
-            behavior,
+            agent_config,
             provider_family,
             model,
             preamble,
@@ -257,14 +260,12 @@ impl RuntimeContext {
 mod startup_barrier_tests {
     use super::*;
 
-    fn behavior(behavior_id: &str) -> Arc<crate::config::ResolvedBehavior> {
+    fn agent_config(agent_id: &str) -> Arc<crate::config::ResolvedAgent> {
         Arc::new(
-            crate::agent::PendingAgentBehavior::new(behavior_id).build_with_identity_for_test(
+            crate::agent::PendingAgent::new(agent_id).build_with_identity_for_test(
                 crate::KeyIdentity::load_or_create(
-                    std::env::temp_dir().join(format!(
-                        "barrier-{behavior_id}-{}.key",
-                        uuid::Uuid::new_v4()
-                    )),
+                    std::env::temp_dir()
+                        .join(format!("barrier-{agent_id}-{}.key", uuid::Uuid::new_v4())),
                     None,
                 )
                 .unwrap(),
@@ -286,17 +287,17 @@ mod startup_barrier_tests {
     /// and anything between all complete.
     #[tokio::test]
     async fn release_before_and_after_wait_both_complete() {
-        let barrier = Arc::new(StartupBarrier::new(&[behavior("a"), behavior("b")]));
+        let barrier = Arc::new(StartupBarrier::new(&[agent_config("a"), agent_config("b")]));
 
         // Release one before any waiter exists.
-        barrier.mark_behavior_ready("a", 1).await;
+        barrier.mark_agent_ready("a", 1).await;
 
         let waiter = {
             let barrier = barrier.clone();
             tokio::spawn(async move { barrier.wait_ready().await })
         };
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        barrier.mark_behavior_ready("b", 1).await;
+        barrier.mark_agent_ready("b", 1).await;
 
         tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
             .await
@@ -310,20 +311,20 @@ mod startup_barrier_tests {
     #[tokio::test]
     async fn demotion_and_supersession_release_without_readiness() {
         let barrier = Arc::new(StartupBarrier::new(&[
-            behavior("healthy"),
-            behavior("unbuildable"),
-            behavior("retired"),
+            agent_config("healthy"),
+            agent_config("unbuildable"),
+            agent_config("retired"),
         ]));
 
-        barrier.mark_behavior_ready("healthy", 1).await;
-        barrier.mark_behavior_demoted("unbuildable", 1).await;
+        barrier.mark_agent_ready("healthy", 1).await;
+        barrier.mark_agent_demoted("unbuildable", 1).await;
         assert!(barrier.is_pending("retired", 1).await);
-        barrier.mark_behavior_superseded("retired", 1).await;
+        barrier.mark_agent_superseded("retired", 1).await;
         assert!(!barrier.is_pending("retired", 1).await);
 
         tokio::time::timeout(std::time::Duration::from_secs(1), barrier.wait_ready())
             .await
             .expect("all release classes together must free the barrier");
-        assert!(barrier.pending_behaviors().await.is_empty());
+        assert!(barrier.pending_agents().await.is_empty());
     }
 }

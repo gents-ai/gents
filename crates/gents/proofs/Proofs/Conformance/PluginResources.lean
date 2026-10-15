@@ -1,5 +1,10 @@
 import Proofs.ToolPolicy.Configuration
 import Proofs.ToolPolicy.PluginNetwork
+import Proofs.ToolPolicy.PluginInvocation
+import Proofs.Conformance.PluginReceipt
+
+import Proofs.ToolPolicy.PluginCalls
+import Proofs.Conformance.PluginEffects
 import Lean
 
 namespace Conformance.PluginResources
@@ -18,9 +23,9 @@ private def budgetsJson : Json := toJson <| [(64, 4096), (5, 900), (60, 900), (1
 
 private def modelSlotsJson : Json := toJson <| [false, true].flatMap fun declared =>
   [false, true].flatMap fun optional =>
-  [false, true].map fun behaviorFree => Json.mkObj [
-    ("declared", toJson declared), ("optional", toJson optional), ("behavior_free", toJson behaviorFree),
-    ("expected", toJson (pluginModelSlotAllowed declared optional behaviorFree))]
+  [false, true].map fun agentFree => Json.mkObj [
+    ("declared", toJson declared), ("optional", toJson optional), ("agent_free", toJson agentFree),
+    ("expected", toJson (pluginModelSlotAllowed declared optional agentFree))]
 
 section Network
 open ToolPolicy.PluginNetwork
@@ -115,7 +120,64 @@ private def callAccessJson : Json := toJson <| [PluginAccess.read, .readWrite].f
     ("call", toJson (pluginCallAccess declared writeFields setsWriteField).spelling),
     ("admitted", toJson (pluginCallAdmitted declared granted writeFields setsWriteField))]
 
+private def invocationJson : Json :=
+  let original : PluginInvocation.Record := ⟨"artifact", "sealed", "original", "original"⟩
+  toJson <| ["same", "removed", "replaced", "grant", "declaration", "binding"].flatMap fun change =>
+    [false, true].flatMap fun restart =>
+    [false, true].map fun bound =>
+      let current : Option PluginInvocation.Record := match change with
+        | "removed" => none
+        | "replaced" => some { original with digest := "replacement" }
+        | "grant" => some { original with grant := "changed" }
+        | "declaration" => some { original with declaration := "changed" }
+        | "binding" => some { original with binding := "changed" }
+        | _ => some original
+      Json.mkObj [
+        ("current", match current with
+          | none => Json.null
+          | some record => Json.mkObj [("digest", toJson record.digest),
+              ("grant", toJson record.grant), ("declaration", toJson record.declaration),
+              ("binding", toJson record.binding)]),
+        ("restart", toJson restart), ("bound", toJson bound),
+        ("admitted", toJson (PluginInvocation.admitted current original.digest
+          (if bound then some original else none))),
+        ("reusable", toJson (!restart && match current with
+          | none => false
+          | some current => PluginInvocation.reusable original current))]
+
+private def toolCallsJson : Json := Json.mkObj [
+  ("supported", toJson <| [("ordinary", PluginCalls.DispatchRoute.ordinary),
+    ("hook_owned", .hookOwned)].map fun (route, value) =>
+      Json.mkObj [("route", toJson route), ("expected", toJson (PluginCalls.supported value))]),
+  ("availability", toJson <| [false, true].flatMap fun grant =>
+    [("live", true), ("absent", false), ("child", PluginCalls.childDispatcher)].map fun (scope, live) =>
+      Json.mkObj [("grant", toJson grant), ("dispatcher", toJson scope),
+        ("expected", toJson (PluginCalls.available grant live))]),
+  ("reservation", toJson <| [0, 1, 63, 64, 65, 1000].map fun used => Json.mkObj [
+    ("used", toJson used), ("expected", toJson (PluginCalls.reserve used))]),
+  ("result_bytes", toJson <| [0, 1048575, 1048576, 1048577].map fun bytes => Json.mkObj [
+    ("bytes", toJson bytes), ("expected", toJson (PluginCalls.resultFits bytes))]),
+  ("settlement", toJson <| [("completed", PluginCalls.ChildOutcome.completed), ("failed", .failed),
+    ("unavailable", .unavailable), ("timed_out", .timedOut), ("cancelled", .cancelled),
+    ("fatal", .fatal)].map fun (name, outcome) => Json.mkObj [("outcome", toJson name),
+      ("expected", toJson (match PluginCalls.settle outcome with
+        | .result => "result" | .guestError => "guest_error" | .parentFatal => "parent_fatal"))]),
+  ("consent", toJson <| [false, true].flatMap fun interactive => [false, true].map fun composed =>
+    Json.mkObj [("interactive", toJson interactive), ("composed", toJson composed),
+      ("expected", toJson (match PluginCalls.consentRoute interactive composed with
+        | .ask => "ask" | .deny => "deny"))])]
+
+private def childAdmissionJson : Json := toJson <| [false, true].flatMap fun selected =>
+  [("ordinary", PluginCalls.DispatchRoute.ordinary), ("hook_owned", .hookOwned)].flatMap
+    fun (name, route) => [false, true].map fun admitted => Json.mkObj [
+      ("selected", toJson selected), ("route", toJson name), ("admitted", toJson admitted),
+      ("expected", toJson (PluginCalls.childAdmissible selected route admitted))]
+
 def casesJson : String := (Json.mkObj [("consent", consentJson), ("budgets", budgetsJson),
+  ("tool_calls", toolCallsJson), ("child_admission", childAdmissionJson),
+  ("tool_effects", PluginEffects.casesJson),
+  ("tool_effect_terminals", PluginEffects.terminalCasesJson),
+  ("tool_effect_accounting", PluginEffects.accountingCasesJson),
   ("model_slots", modelSlotsJson), ("network", networkJson),
-  ("call_access", callAccessJson)]).compress
+  ("call_access", callAccessJson), ("invocation", invocationJson), ("receipt", Conformance.PluginReceipt.casesJson)]).compress
 end Conformance.PluginResources

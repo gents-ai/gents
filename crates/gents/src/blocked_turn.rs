@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
-use gents_protocol::behavior_readiness::is_behavior_unavailable_rejection;
+use gents_protocol::node_readiness::is_behavior_unavailable_rejection;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ use crate::Collection;
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct FailedCall {
     pub(crate) backend_id: Option<String>,
-    pub(crate) behavior_id: Option<String>,
+    pub(crate) agent_id: Option<String>,
     pub(crate) call_kind: Option<String>,
     pub(crate) failure_reason: Option<String>,
     pub(crate) queued_at: Option<String>,
@@ -49,21 +49,21 @@ pub struct BlockedAccount {
 }
 
 /// A stopped turn: the reason, the account and profile it ran on, the
-/// behaviors that profile serves, the reported reset and the command that
+/// agents that profile serves, the reported reset and the command that
 /// moves the profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BlockedTurn {
     pub reason: BlockedReason,
     pub account: Option<BlockedAccount>,
     pub profile: Option<String>,
-    pub behaviors_on_profile: Vec<String>,
+    pub agents_on_profile: Vec<String>,
     /// `None` when the provider reported no reset.
     pub resets_at: Option<DateTime<Utc>>,
     pub switch_command: Option<String>,
 }
 
 /// The blocked value of a request, from one configuration snapshot, the
-/// principal's accounts, the request row and its last failed call. A call
+/// node's accounts, the request row and its last failed call. A call
 /// that started before its account's sign-in connected names no account.
 pub(crate) fn blocked_turn_from(
     references: &ConfigReferences,
@@ -78,11 +78,11 @@ pub(crate) fn blocked_turn_from(
     ) {
         return None;
     }
-    let behavior_id = call
-        .and_then(|call| call.behavior_id.as_deref())
-        .or(request.behavior_id.as_deref())
+    let agent_id = call
+        .and_then(|call| call.agent_id.as_deref())
+        .or(request.agent_id.as_deref())
         .unwrap_or_default();
-    let profiles = references.behavior_profiles(behavior_id);
+    let profiles = references.agent_profiles(agent_id);
     let stopped_by_call = call.and_then(|call| {
         let text = call.failure_reason.as_deref()?;
         let (reason, resets_at) = match classify_provider_limit(text, now) {
@@ -97,7 +97,7 @@ pub(crate) fn blocked_turn_from(
             },
         };
         let backend_id = call.backend_id.as_deref();
-        let profile = served_profile(references, behavior_id, call);
+        let profile = served_profile(references, agent_id, call);
         let started_at = call
             .started_at
             .as_deref()
@@ -146,9 +146,9 @@ pub(crate) fn blocked_turn_from(
     Some(BlockedTurn {
         reason,
         account,
-        behaviors_on_profile: profile
+        agents_on_profile: profile
             .as_deref()
-            .map(|profile| references.behaviors_on_profile(profile))
+            .map(|profile| references.agents_on_profile(profile))
             .unwrap_or_default(),
         switch_command: profile
             .as_deref()
@@ -158,14 +158,14 @@ pub(crate) fn blocked_turn_from(
     })
 }
 
-/// The profile of `behavior_id` that served `call`'s kind, while it is still
+/// The profile of `agent_id` that served `call`'s kind, while it is still
 /// on the call's backend; a sibling left there did not serve the call.
 pub(crate) fn served_profile(
     references: &ConfigReferences,
-    behavior_id: &str,
+    agent_id: &str,
     call: &FailedCall,
 ) -> Option<String> {
-    let profiles = references.behavior_profiles(behavior_id);
+    let profiles = references.agent_profiles(agent_id);
     let served = if call.call_kind.as_deref() == Some("compaction") {
         profiles.last()
     } else {
@@ -196,11 +196,11 @@ fn named(backend: &InferenceBackend, serving: ServingAccount) -> BlockedAccount 
 /// An unknown request is an error.
 pub async fn blocked_turn(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     request_id: &str,
 ) -> Result<Option<BlockedTurn>> {
     let (accounts, references, request, call) =
-        stopped_request(access, agent_did, request_id).await?;
+        stopped_request(access, node_did, request_id).await?;
     Ok(blocked_turn_from(
         &references,
         &accounts,
@@ -210,12 +210,12 @@ pub async fn blocked_turn(
     ))
 }
 
-/// What [`blocked_turn_from`] reads for `request_id`: the principal's
+/// What [`blocked_turn_from`] reads for `request_id`: the node's
 /// accounts, then one configuration snapshot, the request row and its last
 /// failed call. An unknown request is an error.
 pub(crate) async fn stopped_request(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     request_id: &str,
 ) -> Result<(
     Vec<AccountSummary>,
@@ -223,7 +223,7 @@ pub(crate) async fn stopped_request(
     AgentRequestRow,
     Option<FailedCall>,
 )> {
-    let accounts = list_accounts(access, agent_did).await?;
+    let accounts = list_accounts(access, node_did).await?;
     let (references, request, call) = access
         .transact_readonly("blocked_turn.request", |txn| {
             Box::pin(async move {
@@ -231,12 +231,12 @@ pub(crate) async fn stopped_request(
                     r#"request_id: {{ _eq: "{}" }}"#,
                     escape_graphql_string(request_id)
                 );
-                let request = requests_in_txn(txn, agent_did, &filter)
+                let request = requests_in_txn(txn, node_did, &filter)
                     .await?
                     .into_iter()
                     .next()
                     .with_context(|| format!("request {request_id:?} not found"))?;
-                stopped_in_txn(txn, agent_did, request).await
+                stopped_in_txn(txn, node_did, request).await
             })
         })
         .await?;
@@ -246,13 +246,13 @@ pub(crate) async fn stopped_request(
 /// [`blocked_turn`] for the latest request of `session_id`'s canonical Goal.
 pub async fn blocked_goal_turn(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> Result<Option<BlockedTurn>> {
-    let accounts = list_accounts(access, agent_did).await?;
+    let accounts = list_accounts(access, node_did).await?;
     let stopped = access
         .transact_readonly("blocked_turn.goal", |txn| {
-            Box::pin(goal_stopped_in_txn(txn, agent_did, session_id))
+            Box::pin(goal_stopped_in_txn(txn, node_did, session_id))
         })
         .await?;
     Ok(stopped.and_then(|(_, references, request, call)| {
@@ -264,7 +264,7 @@ pub async fn blocked_goal_turn(
 /// latest request and that request's last failed call.
 pub(crate) async fn goal_stopped_in_txn(
     txn: &ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> Result<
     Option<(
@@ -274,7 +274,7 @@ pub(crate) async fn goal_stopped_in_txn(
         Option<FailedCall>,
     )>,
 > {
-    let Some(goal) = crate::goal::load_canonical_goal_in_txn(txn, agent_did, session_id).await?
+    let Some(goal) = crate::goal::load_canonical_goal_in_txn(txn, node_did, session_id).await?
     else {
         return Ok(None);
     };
@@ -282,27 +282,27 @@ pub(crate) async fn goal_stopped_in_txn(
         r#"session_id: {{ _eq: "{}" }}"#,
         escape_graphql_string(session_id)
     );
-    let requests = requests_in_txn(txn, agent_did, &filter).await?;
+    let requests = requests_in_txn(txn, node_did, &filter).await?;
     let Some(request) = crate::goal::latest_goal_request(&goal, &requests).cloned() else {
         return Ok(None);
     };
-    let (references, request, call) = stopped_in_txn(txn, agent_did, request).await?;
+    let (references, request, call) = stopped_in_txn(txn, node_did, request).await?;
     Ok(Some((goal, references, request, call)))
 }
 
-/// `agent_did`'s requests matching `filter`, newest first.
+/// `node_did`'s requests matching `filter`, newest first.
 async fn requests_in_txn(
     txn: &ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     filter: &str,
 ) -> Result<Vec<AgentRequestRow>> {
     let response = txn
         .execute(&format!(
             r#"{{ AgentRequest(
-                filter: {{ agent_did: {{ _eq: "{}" }}, {filter} }},
+                filter: {{ node_did: {{ _eq: "{}" }}, {filter} }},
                 order: [{{ created_at: DESC }}, {{ request_id: DESC }}]
             ) {{ {SIGNED_REQUEST_FIELDS} failure_reason }} }}"#,
-            escape_graphql_string(agent_did)
+            escape_graphql_string(node_did)
         ))
         .await?;
     serde_json::from_value(
@@ -316,11 +316,11 @@ async fn requests_in_txn(
 
 async fn stopped_in_txn(
     txn: &ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     request: AgentRequestRow,
 ) -> Result<(ConfigReferences, AgentRequestRow, Option<FailedCall>)> {
     let call = last_failed_call_in_txn(txn, &request.request_id).await?;
-    let references = ConfigReferences::load_in_txn(txn, agent_did).await?;
+    let references = ConfigReferences::load_in_txn(txn, node_did).await?;
     Ok((references, request, call))
 }
 
@@ -338,7 +338,7 @@ pub(crate) async fn last_failed_call_in_txn(
                 filter: {{ request_id: {{ _eq: "{request_id}" }}, call_state: {{ _eq: "failed" }} }},
                 order: [{{ ended_at: DESC }}, {{ attempt: DESC }}],
                 limit: 1
-            ) {{ backend_id behavior_id call_kind failure_reason queued_at started_at }}
+            ) {{ backend_id agent_id call_kind failure_reason queued_at started_at }}
         }}"#
     );
     let response = txn.execute(&query).await?;

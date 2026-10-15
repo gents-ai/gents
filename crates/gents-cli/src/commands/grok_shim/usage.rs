@@ -61,23 +61,23 @@ fn context_info(
 
 pub(super) async fn session_info(
     node: &EmbeddedNode,
-    principal: &str,
-    behavior: &str,
+    node_did: &str,
+    agent_id: &str,
     session: &str,
     model: &str,
     model_name: &str,
     context_window: u64,
 ) -> Result<Value> {
-    let requests = super::sessions::load(node, principal, behavior, session).await?;
+    let requests = super::sessions::load(node, node_did, agent_id, session).await?;
     let observation =
-        load_session_inference_observation(node, principal, Some(principal), session).await?;
+        load_session_inference_observation(node, node_did, Some(node_did), session).await?;
     let mut context = context_info(&observation, context_window)?;
     let details = match observation.latest_context.as_ref() {
         Some(snapshot) => {
             gents::toolset::load_session_context_details(
                 node,
-                principal,
-                Some(principal),
+                node_did,
+                Some(node_did),
                 session,
                 snapshot,
             )
@@ -143,8 +143,10 @@ pub(super) async fn session_info(
     context["compactionCount"] = json!(compactions.len());
     // SessionInfo uses the extension's nested result envelope, unlike usage.
     // cwd is unknown, not the current client's claimed historical cwd.
+    // `agentName` is the stock SessionInfo wire key; it carries the bound
+    // agent's logical id, not the node DID.
     Ok(json!({"result":{
-        "sessionId":session, "cwd":"", "agentName":behavior, "model":model,
+        "sessionId":session, "cwd":"", "agentName":agent_id, "model":model,
         "modelDisplayName":model_name, "apiBackend":"gents", "turns":turns,
         "turnIndex":turns.saturating_sub(1), "context":context,
         "_meta":{"gents/partialContext":details.is_none(),
@@ -197,28 +199,27 @@ impl Totals {
 
 pub(super) async fn session_usage(
     node: &std::sync::Arc<EmbeddedNode>,
-    principal: &str,
-    behavior: &str,
+    node_did: &str,
+    agent_id: &str,
     session: &str,
 ) -> Result<Value> {
-    let roots = super::sessions::load(node, principal, behavior, session).await?;
-    let root =
-        load_session_inference_observation(node, principal, Some(principal), session).await?;
+    let roots = super::sessions::load(node, node_did, agent_id, session).await?;
+    let root = load_session_inference_observation(node, node_did, Some(node_did), session).await?;
     let mut totals = Totals::default();
     totals.add(&root.token_usage);
     totals.incomplete |= roots.iter().any(|row| !row.is_terminal());
     // A foreign-requester session sharing a caused label is its own scope,
-    // counted once under its exact principal/requester identity.
+    // counted once under its exact node/requester identity.
     let root_scope = SessionScope {
-        agent_did: principal.to_owned(),
+        node_did: node_did.to_owned(),
         session_id: session.to_owned(),
-        requester_did: Some(principal.to_owned()),
+        requester_did: Some(node_did.to_owned()),
     };
     for caused in load_caused_sessions(node, &[root_scope]).await? {
         totals.incomplete |= !caused.latest.is_terminal();
         let observation = load_session_inference_observation(
             node,
-            &caused.scope.agent_did,
+            &caused.scope.node_did,
             caused.scope.requester_did.as_deref(),
             &caused.scope.session_id,
         )

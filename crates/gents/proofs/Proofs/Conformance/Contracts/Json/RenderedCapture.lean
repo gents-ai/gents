@@ -8,7 +8,7 @@ open Conformance.ContractCases
 def renderedCaptureCaseJson (witness : RenderedCaptureCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"agent_did\":" ++ toString witness.agentDid ++ ","
+    ++ "\"node_did\":" ++ toString witness.nodeDid ++ ","
     ++ "\"session_id\":" ++ toString witness.sessionId ++ ","
     ++ "\"request_id\":" ++ toString witness.requestId ++ ","
     ++ "\"turn_index\":" ++ toString witness.turnIndex ++ ","
@@ -51,12 +51,12 @@ def renderedCaptureStorageCasesJson : String :=
 def renderedCaptureKeyCaseJson (witness : RenderedCaptureKeyCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"left_agent_did\":" ++ toString witness.leftAgentDid ++ ","
+    ++ "\"left_node_did\":" ++ toString witness.leftNodeDid ++ ","
     ++ "\"left_session_id\":" ++ toString witness.leftSessionId ++ ","
     ++ "\"left_request_id\":" ++ toString witness.leftRequestId ++ ","
     ++ "\"left_turn_index\":" ++ toString witness.leftTurnIndex ++ ","
     ++ "\"left_attempt\":" ++ toString witness.leftAttempt ++ ","
-    ++ "\"right_agent_did\":" ++ toString witness.rightAgentDid ++ ","
+    ++ "\"right_node_did\":" ++ toString witness.rightNodeDid ++ ","
     ++ "\"right_session_id\":" ++ toString witness.rightSessionId ++ ","
     ++ "\"right_request_id\":" ++ toString witness.rightRequestId ++ ","
     ++ "\"right_turn_index\":" ++ toString witness.rightTurnIndex ++ ","

@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use gents::agent::p2p_reconcile::GraphqlEnrollmentStore;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use gents::AgentIdentity;
+use gents::NodeIdentity;
 use gents_protocol::enrollment::{
     derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, EnrollmentDecisionKind,
     EnrollmentOfferRecord, EnrollmentRequestRecord, ENROLLMENT_PROTOCOL_VERSION,
@@ -56,8 +56,8 @@ pub async fn authorize_enrollment_peer(
     node: Arc<EmbeddedNode>,
     network_id: &str,
     network_name: &str,
-    admin_identity: Arc<dyn AgentIdentity>,
-    member_identity: Arc<dyn AgentIdentity>,
+    admin_identity: Arc<dyn NodeIdentity>,
+    member_identity: Arc<dyn NodeIdentity>,
     member_peer: &str,
     member_address: &str,
 ) -> AuthorizedEnrollment {
@@ -77,7 +77,7 @@ pub async fn authorize_enrollment_peer(
     network.sig = admin_identity
         .sign(&network.signing_payload())
         .await
-        .expect("sign AgentNetwork");
+        .expect("sign Network");
 
     let network_id_gql = escape_graphql_string(&network.network_id);
     let admin_did = escape_graphql_string(&network.admin_did);
@@ -87,7 +87,7 @@ pub async fn authorize_enrollment_peer(
     let admin_sig = escape_graphql_string(&bs58_sig(&network.sig));
     let network_mutation = format!(
         r#"mutation {{
-            upsert_AgentNetwork(
+            upsert_Network(
                 filter: {{ network_id: {{ _eq: "{network_id_gql}" }} }},
                 add: {{
                     network_id: "{network_id_gql}",
@@ -110,7 +110,7 @@ pub async fn authorize_enrollment_peer(
     let response = node.execute(&network_mutation).await;
     assert!(
         !response.has_errors(),
-        "upsert AgentNetwork failed: {:?}",
+        "upsert Network failed: {:?}",
         response.errors
     );
 

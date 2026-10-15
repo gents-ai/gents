@@ -6,7 +6,7 @@ use anyhow::Context;
 use gents::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
 use gents::eval::runner::embedded::EmbeddedHome;
 use gents::graphql::escape_graphql_string;
-use gents::{watcher::AgentRequest, AgentIdentity};
+use gents::{watcher::AgentRequest, NodeIdentity};
 use serde::Deserialize;
 
 pub mod accepted_turn;
@@ -25,23 +25,23 @@ pub mod snapshots;
 pub mod streaming_backend;
 pub mod waits;
 
-pub const AGENT_DID: &str = "did:test:test";
+pub const NODE_DID: &str = "did:test:test";
 pub const AGENT_NAME: &str = "test";
 pub const BACKEND_ID: &str = "backend-test";
 pub const DEADLINE_SECS: u64 = 300;
 
-pub fn materialization_identity() -> Arc<dyn AgentIdentity> {
-    materialization_identity_for(AGENT_DID)
+pub fn materialization_identity() -> Arc<dyn NodeIdentity> {
+    materialization_identity_for(NODE_DID)
 }
 
-pub fn materialization_identity_for(did: &str) -> Arc<dyn AgentIdentity> {
-    identity_stubs::SigningStubAgentIdentity::arc(did)
+pub fn materialization_identity_for(did: &str) -> Arc<dyn NodeIdentity> {
+    identity_stubs::SigningStubNodeIdentity::arc(did)
 }
 
 pub struct TestDb {
     home: EmbeddedHome,
     pub node: Arc<EmbeddedNode>,
-    pub node_identity: Arc<dyn AgentIdentity>,
+    pub node_identity: Arc<dyn NodeIdentity>,
     pub process_generation: u64,
 }
 
@@ -207,7 +207,7 @@ pub async fn create_request_with_signed_fields(
 ) -> String {
     create_request_for_agent_with_signed_fields(
         node,
-        AGENT_DID,
+        NODE_DID,
         request_id,
         session_id,
         status,
@@ -223,7 +223,7 @@ pub async fn create_request_with_signed_fields(
 #[allow(clippy::too_many_arguments)]
 pub async fn create_request_for_agent_with_signed_fields(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     request_id: &str,
     session_id: &str,
     lifecycle_state: &str,
@@ -236,7 +236,7 @@ pub async fn create_request_for_agent_with_signed_fields(
     let request_id = escape_graphql_string(request_id);
     let session_id = escape_graphql_string(session_id);
     let created_at = escape_graphql_string(created_at);
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let valid_until = valid_until
         .map(escape_graphql_string)
         .map(|value| format!(r#"valid_until: "{value}","#))
@@ -257,8 +257,8 @@ pub async fn create_request_for_agent_with_signed_fields(
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
                 purpose: "normal",
-                agent_did: "{agent_did}",
-                behavior_id: "{AGENT_NAME}",
+                node_did: "{node_did}",
+                agent_id: "{AGENT_NAME}",
                 session_id: "{session_id}",
                 retry_parent_request: "{retry_parent_request}",
                 retry_root_request: "{retry_root_request}",
@@ -272,7 +272,7 @@ pub async fn create_request_for_agent_with_signed_fields(
                 {input}
                 retry_count: 0,
                 max_retries: {max_retries},
-                subagent_depth: 0
+                request_hop: 0
             }}) {{ _docID }}
         }}"#,
         max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
@@ -355,8 +355,8 @@ pub async fn create_retry_request(
             create_AgentRequest(input: {{
                 request_id: "{request_id_escaped}",
                 purpose: "normal",
-                agent_did: "{AGENT_DID}",
-                behavior_id: "{AGENT_NAME}",
+                node_did: "{NODE_DID}",
+                agent_id: "{AGENT_NAME}",
                 session_id: "{session_id_escaped}",
                 retry_parent_request: "{retry_parent_escaped}",
                 retry_root_request: "{retry_root_escaped}",
@@ -454,9 +454,9 @@ pub fn build_request(
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id,
         request_id,
-        agent_did: AGENT_DID.into(),
+        node_did: NODE_DID.into(),
         requester_did: None,
-        behavior_id: AGENT_NAME.into(),
+        agent_id: AGENT_NAME.into(),
         session_id,
         content: "hello".into(),
         max_total_tokens: None,
@@ -467,7 +467,7 @@ pub fn build_request(
         execution_generation: None,
         execution_lease_secs: None,
         execution_lease_expires_at: None,
-        subagent_depth: 0,
+        request_hop: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
@@ -479,7 +479,7 @@ pub fn build_request(
         caused_by_trigger_context: None,
         workspace_id: None,
         workspace_authority: None,
-        workspace_owner_agent_did: None,
+        workspace_owner_node_did: None,
         workspace_seal_hash: None,
     }
 }
@@ -568,14 +568,14 @@ pub async fn seed_session_observation(
 
 pub fn session_document(
     session_id: &str,
-    behavior_id: &str,
+    agent_id: &str,
     created_at: &str,
 ) -> gents_protocol::session::AgentSession {
     gents_protocol::session::AgentSession {
         session_id: session_id.into(),
-        agent_did: AGENT_DID.into(),
+        node_did: NODE_DID.into(),
         requester_did: None,
-        behavior_id: behavior_id.into(),
+        agent_id: agent_id.into(),
         created_at: created_at.into(),
         closed_at: None,
         title: None,
@@ -586,36 +586,36 @@ pub fn session_document(
 }
 
 pub fn session_document_in_scope(
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
-    behavior_id: &str,
+    agent_id: &str,
     created_at: &str,
 ) -> gents_protocol::session::AgentSession {
     gents_protocol::session::AgentSession {
-        agent_did: agent_did.into(),
-        ..session_document(session_id, behavior_id, created_at)
+        node_did: node_did.into(),
+        ..session_document(session_id, agent_id, created_at)
     }
 }
 
 pub async fn create_agent_session(
     node: &EmbeddedNode,
     session_id: &str,
-    behavior_id: &str,
+    agent_id: &str,
     created_at: &str,
 ) {
-    create_session_document(node, &session_document(session_id, behavior_id, created_at)).await;
+    create_session_document(node, &session_document(session_id, agent_id, created_at)).await;
 }
 
 pub async fn create_agent_session_in_scope(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
-    behavior_id: &str,
+    agent_id: &str,
     created_at: &str,
 ) {
     create_session_document(
         node,
-        &session_document_in_scope(agent_did, session_id, behavior_id, created_at),
+        &session_document_in_scope(node_did, session_id, agent_id, created_at),
     )
     .await;
 }
@@ -629,7 +629,7 @@ pub async fn create_agent_message(
     timestamp: &str,
 ) {
     create_agent_message_in_scope(
-        node, AGENT_DID, None, session_id, sequence, role, content, timestamp,
+        node, NODE_DID, None, session_id, sequence, role, content, timestamp,
     )
     .await;
 }
@@ -637,7 +637,7 @@ pub async fn create_agent_message(
 #[allow(clippy::too_many_arguments)]
 pub async fn create_agent_message_in_scope(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
     sequence: u32,
@@ -666,7 +666,7 @@ pub async fn create_agent_message_in_scope(
 
     let request_doc_id = format!("fixture-request:{session_id}:{sequence}");
     let segment = OutputSegment {
-        agent_did: agent_did.into(),
+        node_did: node_did.into(),
         requester_did: requester_did.map(Into::into),
         session_id: session_id.into(),
         request_doc_id: request_doc_id.clone(),
@@ -727,13 +727,13 @@ pub async fn create_agent_message_in_scope(
 
     let message = TranscriptMessage {
         message_key: gents::session::sequence_message_key(
-            agent_did,
+            node_did,
             session_id,
             requester_did,
             sequence,
         ),
         session_id: session_id.into(),
-        agent_did: agent_did.into(),
+        node_did: node_did.into(),
         requester_did: requester_did.map(Into::into),
         request_doc_id: Some(request_doc_id),
         publication: MessagePublication::RequestExecution {
@@ -795,7 +795,7 @@ pub async fn create_agent_tool_call(
             create_AgentToolCall(input: {{
                 tool_call_key: "{tool_call_key}",
                 session_id: "{session_id_escaped}",
-                agent_did: "{AGENT_DID}",
+                node_did: "{NODE_DID}",
                 requester_did: null,
                 message_sequence: {message_sequence},
                 tool_name: "{tool_name_escaped}",
@@ -835,14 +835,14 @@ pub async fn create_compaction_entry(
     let summary_escaped = escape_graphql_string(summary);
     let created_at_escaped = escape_graphql_string(created_at);
     let compaction_key = escape_graphql_string(&gents::session::compaction_key(
-        AGENT_DID, session_id, None, sequence,
+        NODE_DID, session_id, None, sequence,
     ));
     let mutation = format!(
         r#"mutation {{
             create_CompactionEntry(input: {{
                 compaction_key: "{compaction_key}",
                 session_id: "{session_id_escaped}",
-                agent_did: "{AGENT_DID}",
+                node_did: "{NODE_DID}",
                 requester_did: null,
                 sequence: {sequence},
                 summary: "{summary_escaped}",
@@ -864,24 +864,24 @@ pub async fn create_compaction_entry(
     );
 }
 
-pub async fn create_agent_behavior(node: &EmbeddedNode, behavior_id: &str, agent_did: &str) {
+pub async fn create_agent(node: &EmbeddedNode, agent_id: &str, node_did: &str) {
     // No context means literal-empty instructions/tools and default compaction.
     // Provider/model selection has one owner: the referenced inference profile.
-    let profile_id = format!("{behavior_id}-inference");
+    let profile_id = format!("{agent_id}-inference");
     let profile: gents::document_config::InferenceProfile = serde_json::from_value(
-        serde_json::json!({"agent_did": agent_did, "profile_id": profile_id,
+        serde_json::json!({"node_did": node_did, "profile_id": profile_id,
             "backend_id": BACKEND_ID, "model_name": "test-model"}),
     )
     .expect("canonical inference fixture");
-    let behavior: gents::document_config::AgentBehavior = serde_json::from_value(
-        serde_json::json!({"agent_did": agent_did, "behavior_id": behavior_id,
+    let agent: gents::document_config::Agent = serde_json::from_value(
+        serde_json::json!({"node_did": node_did, "agent_id": agent_id,
             "display_name": "test behavior", "inference_profile_id": profile_id,
             "created_at": "2026-04-21T00:00:00Z"}),
     )
-    .expect("canonical behavior fixture");
+    .expect("canonical agent fixture");
     for (collection, document) in [
         ("InferenceProfile", serde_json::to_value(profile).unwrap()),
-        ("AgentBehavior", serde_json::to_value(behavior).unwrap()),
+        ("Agent", serde_json::to_value(agent).unwrap()),
     ] {
         let input = gents_protocol::graphql::graphql_input_literal(&document)
             .expect("render canonical config fixture");
@@ -941,7 +941,7 @@ pub async fn begin_owned_execution(
 ) -> anyhow::Result<String> {
     let writer = gents::DefraStreamWriter::new(
         node.clone(),
-        &lifecycle.request().agent_did,
+        &lifecycle.request().node_did,
         std::time::Duration::ZERO,
     );
     lifecycle.begin_owned_execution(&writer).await?;
@@ -957,10 +957,10 @@ pub async fn complete_pending_request_with_canonical_output(
     row: gents_protocol::row::AgentRequestRow,
     text: &str,
 ) -> anyhow::Result<String> {
-    let behavior_id = row
-        .behavior_id
+    let agent_id = row
+        .agent_id
         .clone()
-        .context("completion fixture request omitted behavior")?;
+        .context("completion fixture request omitted agent")?;
     let prompt = row
         .content
         .clone()
@@ -970,7 +970,7 @@ pub async fn complete_pending_request_with_canonical_output(
         .clone()
         .context("completion fixture request omitted session")?;
     anyhow::ensure!(
-        row.agent_did.as_deref() == Some(db.node_identity.did()),
+        row.node_did.as_deref() == Some(db.node_identity.did()),
         "completion fixture request is not owned by the fixture runtime identity"
     );
 
@@ -985,10 +985,10 @@ pub async fn complete_pending_request_with_canonical_output(
             )],
         )],
     )?;
-    fixtures::bind_behavior_backend(
+    fixtures::bind_agent_backend(
         db.node.as_ref(),
         db.node_identity.did(),
-        &behavior_id,
+        &agent_id,
         &backend_id,
         backend.endpoint(),
         "fixture-completion-model",
@@ -1010,8 +1010,8 @@ pub async fn complete_pending_request_with_canonical_output(
         "prepopulating completion fixture title failed: {:?}",
         title_response.errors
     );
-    let identity: std::sync::Arc<dyn gents::AgentIdentity> = db.node_identity.clone();
-    let agent = gents::Gents::from_default_behavior_documents(
+    let identity: std::sync::Arc<dyn gents::NodeIdentity> = db.node_identity.clone();
+    let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions::default(),
@@ -1059,8 +1059,8 @@ pub async fn load_request_row_by_logical_id(
     let response = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 2) {{
-                _docID request_id purpose agent_did requester_did behavior_id session_id content input
-                execution_origin created_at deadline valid_until subagent_depth
+                _docID request_id purpose node_did requester_did agent_id session_id content input
+                execution_origin created_at deadline valid_until request_hop
                 caused_by_parent_request_id caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id lifecycle_state
                 interrupt_requested_at execution_generation execution_lease_expires_at

@@ -13,13 +13,13 @@ export type InferenceSetupOptions = {
     request: ConfigComponentsPatchRequest,
   ) => Promise<unknown>;
   onProbeInferenceEndpoint: (endpoint: string) => Promise<InferenceProbeResult>;
-  onCodexLogin: (agentDid: string) => Promise<CodexLoginResult>;
+  onCodexLogin: (nodeDid: string) => Promise<CodexLoginResult>;
   /** Abort a ChatGPT sign-in whose browser was closed, so it does not hang. */
   onCancelCodexLogin?: () => Promise<unknown>;
   onCodexLoginUrl?: (
     onUrl: (url: string | null) => void,
   ) => Promise<() => void>;
-  onGrokLogin?: (agentDid: string) => Promise<GrokLoginResult>;
+  onGrokLogin?: (nodeDid: string) => Promise<GrokLoginResult>;
   onCancelGrokLogin?: () => Promise<unknown>;
   onGrokLoginUrl?: (onUrl: (url: string | null) => void) => Promise<() => void>;
 };

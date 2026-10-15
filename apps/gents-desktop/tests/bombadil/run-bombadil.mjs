@@ -52,6 +52,8 @@ const vite = spawn(
     "--strictPort",
     "--clearScreen",
     "false",
+    "--mode",
+    "browser-test",
   ],
   {
     cwd: rootDir,

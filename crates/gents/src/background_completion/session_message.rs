@@ -5,16 +5,16 @@ struct SessionMessageRow {
     #[serde(rename = "_docID")]
     doc_id: String,
     session_id: String,
-    agent_did: String,
+    node_did: String,
     #[serde(default)]
     requester_did: Option<String>,
 }
 
-const SESSION_MESSAGE_ROW_FIELDS: &str = "_docID session_id agent_did requester_did";
+const SESSION_MESSAGE_ROW_FIELDS: &str = "_docID session_id node_did requester_did";
 
 fn running_session_message_filter(local_did: &str) -> String {
     format!(
-        r#"agent_did: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "background" }}, spawned_by_tool_call_doc_id: {{ _eq: null }}, tool_name: {{ _in: ["{}", "{}"] }}"#,
+        r#"node_did: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "background" }}, spawned_by_tool_call_doc_id: {{ _eq: null }}, tool_name: {{ _in: ["{}", "{}"] }}"#,
         escape_graphql_string(local_did),
         crate::toolset::AGENT_NEW_TOOL_NAME,
         crate::toolset::AGENT_MESSAGE_TOOL_NAME,
@@ -112,7 +112,7 @@ async fn settle_row(node: &Arc<EmbeddedNode>, row: &SessionMessageRow) -> Result
     let Some(mut lifecycle) = ToolCallLifecycle::load_by_doc_id(
         node.clone(),
         &row.doc_id,
-        &row.agent_did,
+        &row.node_did,
         &row.session_id,
         row.requester_did.as_deref(),
     )

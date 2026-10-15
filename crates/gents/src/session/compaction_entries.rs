@@ -32,7 +32,7 @@ pub(super) struct CompactionGenerationRow {
     )]
     files_modified: String,
     #[serde(default)]
-    agent_did: String,
+    node_did: String,
     #[serde(default)]
     requester_did: Option<String>,
     #[serde(default)]
@@ -92,20 +92,20 @@ impl CompactionProjection for CompactionGenerationRow {
 }
 
 pub fn compaction_key(
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
     sequence: u32,
 ) -> String {
     format!(
         "compaction:{}",
-        serde_json::to_string(&(agent_did, session_id, requester_did, sequence))
+        serde_json::to_string(&(node_did, session_id, requester_did, sequence))
             .expect("session scope serializes")
     )
 }
 
 pub(super) fn validate_compaction_chain<T: CompactionProjection>(
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
     rows: &[T],
@@ -113,7 +113,7 @@ pub(super) fn validate_compaction_chain<T: CompactionProjection>(
     let mut prior_cursor = None;
     for (index, row) in rows.iter().enumerate() {
         let expected_sequence = u32::try_from(index + 1).context("compaction sequence overflow")?;
-        let expected_key = compaction_key(agent_did, session_id, requester_did, expected_sequence);
+        let expected_key = compaction_key(node_did, session_id, requester_did, expected_sequence);
         anyhow::ensure!(
             row.sequence() == expected_sequence && row.key() == expected_key,
             "ambiguous compaction chain for session {session_id}: expected {expected_key}, found {} at sequence {}",
@@ -159,11 +159,11 @@ fn compaction_generation<T: CompactionProjection>(rows: &[T]) -> Result<String> 
 pub(crate) async fn load_prompt_compaction_state(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     through_sequence: Option<u32>,
 ) -> Result<PromptCompactionState> {
-    let scope = super::query::session_scope_filter(agent_did, session_id, requester_did);
+    let scope = super::query::session_scope_filter(node_did, session_id, requester_did);
     // A background request is claimed against an immutable transcript high
     // water mark. A compaction produced later may only shape that request when
     // its cumulative canonical cursor is itself inside the claimed snapshot.
@@ -197,7 +197,7 @@ pub(crate) async fn load_prompt_compaction_state(
         Some(value) => serde_json::from_value(value.clone())?,
         None => Vec::new(),
     };
-    validate_compaction_chain(agent_did, session_id, requester_did, &rows)?;
+    validate_compaction_chain(node_did, session_id, requester_did, &rows)?;
     let active_len = through_sequence.map_or(rows.len(), |cutoff| {
         rows.iter()
             .rposition(|row| {
@@ -233,10 +233,10 @@ pub(crate) async fn load_prompt_compaction_state(
 pub async fn load_compaction_entries(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<CompactionEntry>> {
-    let scope = super::query::session_scope_filter(agent_did, session_id, requester_did);
+    let scope = super::query::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             CompactionEntry(
@@ -290,7 +290,7 @@ pub async fn load_compaction_entries(
 
 pub(crate) struct NewExactSessionCompaction<'a> {
     pub(crate) session_id: &'a str,
-    pub(crate) agent_did: &'a str,
+    pub(crate) node_did: &'a str,
     pub(crate) requester_did: Option<&'a str>,
     pub(crate) request_id: &'a str,
     pub(crate) request_doc_id: &'a str,
@@ -313,7 +313,7 @@ pub(crate) async fn save_exact_compaction_entry(
     save_compaction_entry_with_requester_did(
         node,
         input.session_id,
-        input.agent_did,
+        input.node_did,
         input.requester_did,
         input.request_id,
         input.request_doc_id,
@@ -334,7 +334,7 @@ pub(crate) async fn save_exact_compaction_entry(
 pub(crate) async fn save_compaction_entry(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     request_id: &str,
     request_doc_id: &str,
     summary: &str,
@@ -345,11 +345,11 @@ pub(crate) async fn save_compaction_entry(
     original_tokens: usize,
     compacted_tokens: usize,
 ) -> Result<CompactionEntry> {
-    let state = load_prompt_compaction_state(node, session_id, agent_did, None, None).await?;
+    let state = load_prompt_compaction_state(node, session_id, node_did, None, None).await?;
     save_compaction_entry_with_requester_did(
         node,
         session_id,
-        agent_did,
+        node_did,
         None,
         request_id,
         request_doc_id,
@@ -369,7 +369,7 @@ pub(crate) async fn save_compaction_entry(
 pub(crate) async fn save_compaction_entry_with_requester_did(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     request_id: &str,
     request_doc_id: &str,
@@ -385,15 +385,15 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
     let compacted_through_sequence = Some(compacted_through_sequence);
     let summary = summary.trim().to_string();
     let escaped_session_id = escape_graphql_string(session_id);
-    let scope = super::query::session_scope_filter(agent_did, session_id, requester_did);
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let scope = super::query::session_scope_filter(node_did, session_id, requester_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_request_doc_id = escape_graphql_string(request_doc_id);
     let requester_did_field = super::requester_did_create_field(requester_did);
     let summary = &summary;
     let scope = &scope;
     let escaped_session_id = &escaped_session_id;
-    let escaped_agent_did = &escaped_agent_did;
+    let escaped_node_did = &escaped_node_did;
     let escaped_request_id = &escaped_request_id;
     let escaped_request_doc_id = &escaped_request_doc_id;
     let requester_did_field = &requester_did_field;
@@ -412,7 +412,7 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                     ) {{
                         compaction_key sequence summary messages_compacted
                         compacted_through_sequence files_read files_modified
-                        agent_did requester_did request_id request_doc_id
+                        node_did requester_did request_id request_doc_id
                         original_tokens compacted_tokens created_at
                     }}
                 }}"#
@@ -425,14 +425,14 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                         .cloned()
                         .unwrap_or_else(|| serde_json::json!([])),
                 )?;
-                validate_compaction_chain(agent_did, session_id, requester_did, &rows)?;
+                validate_compaction_chain(node_did, session_id, requester_did, &rows)?;
                 let actual_generation = compaction_generation(&rows)?;
                 if actual_generation != expected_generation {
                     if let Some(entry) = reconcile_exact_redelivery(
                         &rows,
                         expected_generation,
                         session_id,
-                        agent_did,
+                        node_did,
                         requester_did,
                         request_id,
                         request_doc_id,
@@ -479,7 +479,7 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
 
                 let sequence =
                     u32::try_from(rows.len() + 1).context("compaction sequence overflow")?;
-                let compaction_key = compaction_key(agent_did, session_id, requester_did, sequence);
+                let compaction_key = compaction_key(node_did, session_id, requester_did, sequence);
                 // DefraDB canonicalizes fractional seconds with Go's RFC3339Nano
                 // formatter, which trims trailing zeros.  Emit whole seconds so the
                 // value returned from this create is byte-identical to the value
@@ -494,7 +494,7 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                     create_CompactionEntry(input: {{
                         compaction_key: "{compaction_key}"
                         session_id: "{escaped_session_id}"
-                        agent_did: "{escaped_agent_did}"
+                        node_did: "{escaped_node_did}"
                         {requester_did_field}
                         request_id: "{escaped_request_id}"
                         request_doc_id: "{escaped_request_doc_id}"
@@ -548,7 +548,7 @@ fn reconcile_exact_redelivery(
     rows: &[CompactionGenerationRow],
     expected_generation: &str,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     request_id: &str,
     request_doc_id: &str,
@@ -586,7 +586,7 @@ fn reconcile_exact_redelivery(
     let persisted_files_read = decode_paths(&persisted.files_read)?;
     let persisted_files_modified = decode_paths(&persisted.files_modified)?;
     let requester_matches = persisted.requester_did.as_deref() == requester_did;
-    let matches = persisted.agent_did == agent_did
+    let matches = persisted.node_did == node_did
         && requester_matches
         && persisted.request_id.as_deref() == Some(request_id)
         && persisted.request_doc_id.as_deref() == Some(request_doc_id)

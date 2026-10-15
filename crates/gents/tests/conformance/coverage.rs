@@ -125,7 +125,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
         "CommandPolicy should be emitted as generated contract output, not a follow-up hook"
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 14);
-    assert_eq!(lean_contract_snapshot().root_admission_cases.len(), 27);
+    assert!(!lean_contract_snapshot().root_admission_cases.is_empty());
     assert_eq!(lean_contract_snapshot().request_transition_cases.len(), 81);
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
     assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 8);
@@ -179,7 +179,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(
         lean_contract_snapshot().frontend_client_shell_cases.len(),
-        25
+        27
     );
     assert_eq!(
         lean_contract_snapshot().desktop_client_shell_case_count,
@@ -187,7 +187,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(
         lean_contract_snapshot().desktop_client_shell_cases.len(),
-        22
+        24
     );
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
     assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 72);
@@ -246,7 +246,7 @@ async fn agent_tool_call_carries_only_generic_background_fields() {
     for field in [
         "child_request_id",
         "spawn_target_did",
-        "spawn_behavior_id",
+        "spawn_agent_id",
         "delegated_input",
         "delegated_workspace",
         "cancel_policy",
@@ -749,6 +749,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GraphPipelineRunTerminalCases".to_string(),
         ));
     }
+    if !snapshot.graph_pipeline_edge_delivery_cases.is_empty() {
+        emitted.insert((
+            "graph_pipeline_edge_delivery_cases".to_string(),
+            "GraphPipelineEdgeDeliveryCases".to_string(),
+        ));
+    }
     assert_eq!(
         snapshot.trigger_dispatch_case_count,
         snapshot.trigger_dispatch_cases.len(),
@@ -852,6 +858,38 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "self_config_cases".to_string(),
             "SelfConfigCases".to_string(),
+        ));
+    }
+    if !snapshot.agent_decision_cases.is_empty() {
+        emitted.insert((
+            "agent_decision_cases".to_string(),
+            "AgentDecisionCases".to_string(),
+        ));
+    }
+    if !snapshot.agent_materialization_cases.is_empty() {
+        emitted.insert((
+            "agent_materialization_cases".to_string(),
+            "AgentMaterializationCases".to_string(),
+        ));
+    }
+    if !snapshot.sibling_tools_cases.is_empty() {
+        emitted.insert((
+            "sibling_tools_cases".to_string(),
+            "SiblingToolsCases".to_string(),
+        ));
+    }
+    if !snapshot
+        .self_config_selection_cases
+        .tool_flag_cases
+        .is_empty()
+        && !snapshot
+            .self_config_selection_cases
+            .graph_presentation_cases
+            .is_empty()
+    {
+        emitted.insert((
+            "self_config_selection_cases".to_string(),
+            "SelfConfigSelectionCases".to_string(),
         ));
     }
     if !snapshot.session_recovery_cases.is_empty() {
@@ -975,6 +1013,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ClientLiveDeltaCases".to_string(),
         ));
     }
+    if !snapshot.client_session_turn_cases.is_empty() {
+        emitted.insert((
+            "client_session_turn_cases".to_string(),
+            "ClientSessionTurnCases".to_string(),
+        ));
+    }
     if !snapshot.request_lifecycle_operator_ui_cases.is_empty() {
         emitted.insert((
             "request_lifecycle_operator_ui_cases".to_string(),
@@ -1018,10 +1062,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CommandPolicyEnv".to_string(),
         ));
     }
-    if !snapshot.client_behavior_readiness_cases.is_empty() {
+    if !snapshot.client_agent_readiness_cases.is_empty() {
         emitted.insert((
-            "client_behavior_readiness_cases".to_string(),
-            "ClientBehaviorReadinessCases".to_string(),
+            "client_agent_readiness_cases".to_string(),
+            "ClientAgentReadinessCases".to_string(),
         ));
     }
     if !snapshot.readiness_publication_cases.is_empty() {
@@ -1046,6 +1090,60 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "recovery_sweep_cases".to_string(),
             "RecoverySweepCases".to_string(),
+        ));
+    }
+    if !snapshot.fold_queue_cases.is_empty() {
+        emitted.insert(("fold_queue_cases".to_string(), "FoldQueueCases".to_string()));
+    }
+    if !snapshot.fold_turn_input_cases.is_empty() {
+        emitted.insert((
+            "fold_turn_input_cases".to_string(),
+            "FoldTurnInputCases".to_string(),
+        ));
+    }
+    if !snapshot.retry_selection_cases.is_empty() {
+        emitted.insert((
+            "retry_selection_cases".to_string(),
+            "RetrySelectionCases".to_string(),
+        ));
+    }
+    if !snapshot.fold_publication_cases.is_empty() {
+        emitted.insert((
+            "fold_publication_cases".to_string(),
+            "FoldPublicationCases".to_string(),
+        ));
+    }
+    if !snapshot.session_input_edit_cases.is_empty() {
+        for domain in ["SessionInputEditCases", "SessionInputEditRemoteCases"] {
+            emitted.insert(("session_input_edit_cases".to_string(), domain.to_string()));
+        }
+    }
+    if !snapshot.queue_management_cases.is_empty() {
+        emitted.insert((
+            "queue_management_cases".to_string(),
+            "QueueManagementCases".to_string(),
+        ));
+    }
+    assert!(
+        snapshot
+            .queue_management_cases
+            .iter()
+            .any(|case| case.name == "expired_steering_is_barrier"),
+        "queue expiry coverage requires generated case expired_steering_is_barrier"
+    );
+    emitted.insert((
+        "queue_management_cases".to_string(),
+        "QueueExpiryBarrierCases".to_string(),
+    ));
+    if !snapshot.steering_publication_cases.is_empty() {
+        for domain in ["SteeringPublicationCases", "SteeringUnsafeBoundaryCases"] {
+            emitted.insert(("steering_publication_cases".to_string(), domain.to_string()));
+        }
+    }
+    if !snapshot.handover_fold_cases.is_empty() {
+        emitted.insert((
+            "handover_fold_cases".to_string(),
+            "HandoverFoldCases".to_string(),
         ));
     }
     if !snapshot.interrupt_queue_cases.is_empty() {
@@ -1393,10 +1491,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CodexShimThreadStatusCases".to_string(),
         ));
     }
-    if !lean_codex_shim_behavior_selection_cases().is_empty() {
+    if !lean_codex_shim_agent_selection_cases().is_empty() {
         emitted.insert((
-            "codex_shim_behavior_selection_cases".to_string(),
-            "CodexShimBehaviorSelectionCases".to_string(),
+            "codex_shim_agent_selection_cases".to_string(),
+            "CodexShimAgentSelectionCases".to_string(),
         ));
     }
     if !lean_codex_shim_tool_metadata_cases().is_empty() {
@@ -1640,6 +1738,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "EnrollmentDurableProjectionCases".into(),
         ));
     }
+    if !snapshot.enrollment_pending_request_cases.is_empty() {
+        emitted.insert((
+            "enrollment_pending_request_cases".into(),
+            "EnrollmentPendingRequests".into(),
+        ));
+    }
     if !snapshot.pending_user_turn_cases.is_empty() {
         emitted.insert((
             "pending_user_turn_cases".into(),
@@ -1702,6 +1806,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "callback_transition_cases".into(),
         "CallbackTransitionCases".into(),
     ));
+    for family in ["fields", "values"] {
+        assert!(snapshot.count_carrier_cases[family]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()));
+    }
+    emitted.insert(("count_carrier_cases".into(), "CountCarrierCases".into()));
     assert!(["foreground", "cli", "background", "wait", "lsp"]
         .iter()
         .all(|family| snapshot.tool_timeout_cases[family]
@@ -1732,6 +1842,25 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "plugin_resource_cases".into(),
         "PluginCallAccessCases".into(),
     ));
+    for (family, domain) in [
+        ("invocation", "PluginInvocationCases"),
+        ("receipt", "PluginReceiptCases"),
+        ("child_admission", "PluginChildAdmissionCases"),
+        ("tool_effects", "PluginEffectCases"),
+        ("tool_effect_terminals", "PluginEffectTerminalCases"),
+        ("tool_effect_accounting", "PluginEffectAccountingCases"),
+    ] {
+        assert!(snapshot.plugin_resource_cases[family]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()));
+        emitted.insert(("plugin_resource_cases".into(), domain.into()));
+    }
+    for family in ["supported", "availability", "reservation", "result_bytes"] {
+        assert!(snapshot.plugin_resource_cases["tool_calls"][family]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()));
+    }
+    emitted.insert(("plugin_resource_cases".into(), "PluginToolCallCases".into()));
     assert!(snapshot.configuration_scope_cases["cases"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty()));

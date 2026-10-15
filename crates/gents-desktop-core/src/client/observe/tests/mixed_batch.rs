@@ -5,10 +5,19 @@ async fn scoped_missing_document_reload_preserves_other_owner_survivors() {
     let tempdir = tempfile::tempdir().unwrap();
     let node = Arc::new(NodeBuilder::default().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    seed_principal(node.as_ref(), "did:alpha").await;
+    seed_node(node.as_ref(), "did:alpha").await;
     let mut raw = node.subscribe(&[EventName::Update]);
-    seed_principal(node.as_ref(), "did:beta").await;
-    let update = raw.recv().await.unwrap().as_update().unwrap().clone();
+    seed_node(node.as_ref(), "did:beta").await;
+    let update = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = raw.recv().await.expect("committed update");
+            if let Some(update) = event.as_update().filter(|update| !update.doc_id.is_empty()) {
+                break update.clone();
+            }
+        }
+    })
+    .await
+    .expect("committed document update deadline");
     node.event_bus().unsubscribe(raw.id());
 
     let (store, mut changes) = ObservedStore::new(ClientStore::default());
@@ -37,18 +46,13 @@ async fn scoped_missing_document_reload_preserves_other_owner_survivors() {
     node.event_bus()
         .publish(events::Message::update(update.clone()));
     let mut absent = update;
-    absent.doc_id = "absent-principal-document".to_owned();
+    absent.doc_id = "absent-node-document".to_owned();
     node.event_bus().publish(events::Message::update(absent));
 
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let snapshot = store.snapshot();
-            let has = |did| {
-                snapshot
-                    .agent_principals
-                    .iter()
-                    .any(|row| row.agent_did == did)
-            };
+            let has = |did| snapshot.nodes.iter().any(|row| row.node_did == did);
             if has("did:alpha") && has("did:beta") {
                 break;
             }

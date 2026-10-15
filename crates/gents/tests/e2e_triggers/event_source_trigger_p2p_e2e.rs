@@ -32,12 +32,12 @@ use std::time::Duration;
 use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
+use crate::support::fixtures::{bind_default_agent_backend, test_identity};
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
 use crate::support::snapshots::{fetch_runtime_snapshot, is_routed_ready_after, RuntimeSnapshot};
@@ -68,20 +68,20 @@ async fn create_task(
     node: &EmbeddedNode,
     owner: &str,
     task_id: &str,
-    behavior_id: &str,
+    agent_id: &str,
     prompt_template: &str,
 ) {
     let escaped_owner = escape_graphql_string(owner);
     let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
+    let escaped_agent_id = escape_graphql_string(agent_id);
     let escaped_prompt_template = escape_graphql_string(prompt_template);
     let mutation = format!(
         r#"mutation {{
             create_Task(input: {{
-                agent_did: "{escaped_owner}",
+                node_did: "{escaped_owner}",
                 task_id: "{escaped_task_id}",
                 display_name: "{escaped_task_id}",
-                behavior_id: "{escaped_behavior_id}",
+                agent_id: "{escaped_agent_id}",
                 prompt_template: "{escaped_prompt_template}",
                 enabled: true
             }}) {{ _docID }}
@@ -111,14 +111,14 @@ async fn create_event_trigger_with_filter(
         r#"mutation {{
             create_EventSource(input: {{
                 event_source_id: "{escaped_trigger_id}",
-                agent_did: "{escaped_owner}",
+                node_did: "{escaped_owner}",
                 source_collection: "{escaped_source_collection}",
                 event_kind: "{escaped_event_kind}",
                 filter: "{escaped_filter}"
             }}) {{ _docID }}
             create_Trigger(input: {{
                 trigger_id: "{escaped_trigger_id}",
-                agent_did: "{escaped_owner}",
+                node_did: "{escaped_owner}",
                 task_id: "{escaped_task_id}",
                 source: {{ kind: "event", event_source_id: "{escaped_trigger_id}" }},
                 enabled: true,
@@ -134,7 +134,7 @@ async fn create_event_trigger_with_filter(
 
 async fn wait_for_runtime_snapshot<F>(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     predicate: F,
 ) -> RuntimeSnapshot
 where
@@ -143,7 +143,7 @@ where
     // Generous deadline: the control watcher debounce is 5s plus settle.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let last_snapshot = fetch_runtime_snapshot(node, agent_did).await;
+        let last_snapshot = fetch_runtime_snapshot(node, node_did).await;
         if let Some(snapshot) = last_snapshot.as_ref() {
             if predicate(snapshot) {
                 return snapshot.clone();
@@ -151,7 +151,7 @@ where
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {agent_did}; \
+            "timed out waiting for runtime snapshot for {node_did}; \
              last_snapshot={last_snapshot:?}"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -391,7 +391,7 @@ async fn p2p_replicated_doc_fires_event_trigger() {
 
     let identity = Arc::new(test_identity("event-trigger-p2p-agent"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         db_agent.node.as_ref(),
         identity.did(),
         "backend-event-trigger-p2p",
@@ -399,7 +399,7 @@ async fn p2p_replicated_doc_fires_event_trigger() {
     )
     .await;
 
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         db_agent.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -409,13 +409,13 @@ async fn p2p_replicated_doc_fires_event_trigger() {
     )
     .await
     .unwrap();
-    let agent_did = agent.agent_did().to_string();
-    let default_behavior_id = agent.default_behavior_id().to_string();
+    let node_did = agent.node_did().to_string();
+    let default_agent_id = agent.default_agent_id().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
     // Baseline reconcile — the generation our post-insert reconcile must exceed.
-    let startup = wait_for_runtime_snapshot(db_agent.node.as_ref(), &agent_did, |s| {
+    let startup = wait_for_runtime_snapshot(db_agent.node.as_ref(), &node_did, |s| {
         is_routed_ready_after(s, 0)
     })
     .await;
@@ -424,15 +424,15 @@ async fn p2p_replicated_doc_fires_event_trigger() {
     // Task + Trigger on node B, watching ReplicatedEvent.
     create_task(
         db_agent.node.as_ref(),
-        &agent_did,
+        &node_did,
         TASK_ID,
-        &default_behavior_id,
+        &default_agent_id,
         PROMPT_TEMPLATE,
     )
     .await;
     create_event_trigger_with_filter(
         db_agent.node.as_ref(),
-        &agent_did,
+        &node_did,
         TRIGGER_ID,
         TASK_ID,
         "ReplicatedEvent",
@@ -440,7 +440,7 @@ async fn p2p_replicated_doc_fires_event_trigger() {
         r#"{ kind: { _eq: "signup" } }"#,
     )
     .await;
-    wait_for_runtime_snapshot(db_agent.node.as_ref(), &agent_did, |s| {
+    wait_for_runtime_snapshot(db_agent.node.as_ref(), &node_did, |s| {
         is_routed_ready_after(s, initial_generation)
     })
     .await;

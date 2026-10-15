@@ -8,7 +8,7 @@ use crate::lifecycle::TriggerLineage;
 #[cfg(test)]
 pub(super) async fn session_request_create_mutation(
     parent: &AgentRequest,
-    behavior_id: &str,
+    agent_id: &str,
     content: &str,
     execution_origin: ExecutionOrigin,
     input: RequestInput,
@@ -18,8 +18,8 @@ pub(super) async fn session_request_create_mutation(
 ) -> Result<String> {
     session_request_create_mutation_at_hop(
         parent,
-        parent.subagent_depth,
-        behavior_id,
+        parent.request_hop,
+        agent_id,
         content,
         execution_origin,
         input,
@@ -37,7 +37,7 @@ pub(super) async fn session_request_create_mutation(
 pub(super) async fn session_request_create_mutation_at_hop(
     parent: &AgentRequest,
     hop: u32,
-    behavior_id: &str,
+    agent_id: &str,
     content: &str,
     execution_origin: ExecutionOrigin,
     input: RequestInput,
@@ -51,7 +51,7 @@ pub(super) async fn session_request_create_mutation_at_hop(
     );
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
-            &parent.agent_did,
+            &parent.node_did,
             &parent.request_id,
         );
     // A continuation stays in its parent's session under the requester that
@@ -59,8 +59,8 @@ pub(super) async fn session_request_create_mutation_at_hop(
     let identity = RequestIdentity {
         requester_did: parent.requester_did.clone(),
         request_id: request_id.to_string(),
-        agent_did: parent.agent_did.clone(),
-        behavior_id: behavior_id.to_string(),
+        node_did: parent.node_did.clone(),
+        agent_id: agent_id.to_string(),
         session_id: parent.session_id.clone(),
         content: content.to_string(),
         execution_origin,
@@ -72,7 +72,7 @@ pub(super) async fn session_request_create_mutation_at_hop(
             trigger_context: parent.caused_by_trigger_context.clone(),
             ..Default::default()
         },
-        subagent: Some(ParentLink {
+        parent: Some(ParentLink {
             depth: hop,
             parent_request_id: parent.request_id.clone(),
             parent_request_doc_id: parent.doc_id.clone(),

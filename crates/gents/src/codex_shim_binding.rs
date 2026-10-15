@@ -69,20 +69,20 @@ impl ShimBinding {
 
     pub fn observe_publish<'a>(
         &mut self,
-        runnable_behaviors: impl IntoIterator<Item = &'a str>,
+        runnable_agents: impl IntoIterator<Item = &'a str>,
         listen: impl FnOnce() -> bool,
     ) -> ShimBindingState {
-        if self.grants_listen(runnable_behaviors) {
+        if self.grants_listen(runnable_agents) {
             self.settle_listen(listen());
         }
         self.state
     }
 
-    pub fn grants_listen<'a>(&self, runnable_behaviors: impl IntoIterator<Item = &'a str>) -> bool {
+    pub fn grants_listen<'a>(&self, runnable_agents: impl IntoIterator<Item = &'a str>) -> bool {
         match self.state {
             ShimBindingState::Bound => false,
             ShimBindingState::Unbound(ShimUnboundReason::HostResource) => false,
-            ShimBindingState::Unbound(ShimUnboundReason::DependencyMissing) => runnable_behaviors
+            ShimBindingState::Unbound(ShimUnboundReason::DependencyMissing) => runnable_agents
                 .into_iter()
                 .any(|id| id == self.bound_behavior),
         }

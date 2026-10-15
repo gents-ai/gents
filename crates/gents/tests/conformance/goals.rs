@@ -1,8 +1,8 @@
 use gents::goal::{
     decide_goal_continuation, decide_model_goal_create, gate_goal_continuation,
     goal_continuation_materialization_step, goal_creation_fingerprint, goal_submission_step,
-    next_goal_infrastructure_retries, observe_goal_behavior_readiness, GoalAction,
-    GoalAuditObservation, GoalBehaviorObservation, GoalBehaviorReadiness, GoalContinuationAction,
+    next_goal_infrastructure_retries, observe_goal_agent_readiness, GoalAction,
+    GoalAgentObservation, GoalAgentReadiness, GoalAuditObservation, GoalContinuationAction,
     GoalContinuationFacts, GoalContinuationPhase, GoalCreateDisposition, GoalCreateRequest,
     GoalCreationFingerprint, GoalDecision, GoalFailureCause, GoalGatedDecision,
     GoalRequestTerminal, GoalState, GoalStatus, GoalSubmissionAction, GoalSubmissionState,
@@ -79,25 +79,25 @@ fn generated_goal_readiness_gate_cases_fence_retry_accounting() {
     assert_eq!(cases.len(), 20, "the goal readiness gate matrix drifted");
     for case in cases {
         let observation = match case.observation.as_str() {
-            "ready" => GoalBehaviorObservation::Ready {
+            "ready" => GoalAgentObservation::Ready {
                 newer_than_terminal: case.newer_than_terminal,
             },
-            "backend_recovering" => GoalBehaviorObservation::BackendRecovering,
-            "unavailable" => GoalBehaviorObservation::Unavailable,
-            "unassigned" => GoalBehaviorObservation::Unassigned,
-            "unknown" => GoalBehaviorObservation::Unknown,
+            "backend_recovering" => GoalAgentObservation::BackendRecovering,
+            "unavailable" => GoalAgentObservation::Unavailable,
+            "unassigned" => GoalAgentObservation::Unassigned,
+            "unknown" => GoalAgentObservation::Unknown,
             other => panic!("unknown observation {other:?} in Lean case {}", case.name),
         };
         let cause = match case.cause.as_str() {
             "attempt" => GoalFailureCause::Attempt,
-            "behavior_unavailable" => GoalFailureCause::BehaviorUnavailable,
+            "agent_unavailable" => GoalFailureCause::AgentUnavailable,
             other => panic!("unknown cause {other:?} in Lean case {}", case.name),
         };
-        let readiness = observe_goal_behavior_readiness(observation, case.settled);
+        let readiness = observe_goal_agent_readiness(observation, case.settled);
         let readiness_name = match readiness {
-            GoalBehaviorReadiness::Ready => "ready",
-            GoalBehaviorReadiness::Waiting => "waiting",
-            GoalBehaviorReadiness::Unavailable => "unavailable",
+            GoalAgentReadiness::Ready => "ready",
+            GoalAgentReadiness::Waiting => "waiting",
+            GoalAgentReadiness::Unavailable => "unavailable",
         };
         assert_eq!(
             readiness_name, case.expected_readiness,
@@ -121,7 +121,7 @@ fn generated_goal_readiness_gate_cases_fence_retry_accounting() {
         let gated = gate_goal_continuation(observation, case.settled, cause, &facts);
         let expected = match case.expected_gate.as_str() {
             "await_readiness" => GoalGatedDecision::AwaitReadiness,
-            "behavior_unavailable" => GoalGatedDecision::BehaviorUnavailable,
+            "agent_unavailable" => GoalGatedDecision::AgentUnavailable,
             other => GoalGatedDecision::Decided(
                 parse_goal_decision(other)
                     .unwrap_or_else(|| panic!("unknown gate {other:?} in Lean case {}", case.name)),
@@ -277,11 +277,8 @@ fn generated_task_goal_cases_fence_declaration_and_identity() {
         );
 
         if declaration_valid && case.goal_objective.is_some() {
-            let identity = gents::goal::task_goal_fire_identity(
-                &case.agent_did,
-                &case.task_id,
-                &case.fire_key,
-            );
+            let identity =
+                gents::goal::task_goal_fire_identity(&case.node_did, &case.task_id, &case.fire_key);
             assert_eq!(
                 case.expected_session_id.as_deref(),
                 Some(identity.session_id.as_str()),
@@ -310,10 +307,10 @@ fn generated_task_goal_recovery_cases_fence_request_witness() {
     assert_eq!(cases.len(), 10, "the Task goal recovery matrix drifted");
     for case in cases {
         let identity =
-            gents::goal::task_goal_fire_identity(&case.agent_did, &case.task_id, &case.fire_key);
+            gents::goal::task_goal_fire_identity(&case.node_did, &case.task_id, &case.fire_key);
         let expected = gents::goal::TaskGoalRequestBinding {
-            agent_did: case.agent_did.clone(),
-            behavior_id: case.behavior_id.clone(),
+            node_did: case.node_did.clone(),
+            agent_id: case.agent_id.clone(),
             session_id: identity.session_id,
             request_id: identity.request_id,
             retry_key: identity.retry_key,
@@ -321,14 +318,14 @@ fn generated_task_goal_recovery_cases_fence_request_witness() {
         let observed = case
             .request_present
             .then(|| gents::goal::TaskGoalRequestBinding {
-                agent_did: case
-                    .observed_agent_did
+                node_did: case
+                    .observed_node_did
                     .clone()
-                    .expect("present request must emit agent_did"),
-                behavior_id: case
-                    .observed_behavior_id
+                    .expect("present request must emit node_did"),
+                agent_id: case
+                    .observed_agent_id
                     .clone()
-                    .expect("present request must emit behavior_id"),
+                    .expect("present request must emit agent_id"),
                 session_id: case
                     .observed_session_id
                     .clone()

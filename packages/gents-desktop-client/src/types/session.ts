@@ -5,11 +5,13 @@ export type { SessionHydrationView } from "../generated/SessionHydrationView.js"
 export type { SessionLiveDeltaView } from "../generated/SessionLiveDeltaView.js";
 export type { SessionLiveTextPatchView } from "../generated/SessionLiveTextPatchView.js";
 export type { SessionProjectionRevisionView } from "../generated/SessionProjectionRevisionView.js";
+export type { FoldedInputView } from "../generated/FoldedInputView.js";
 export type { GoalView } from "../generated/GoalView.js";
 export type { MessageView } from "../generated/MessageView.js";
 export type { PendingTurnView } from "../generated/PendingTurnView.js";
 export type { RenderedTimelineItem } from "../generated/RenderedTimelineItem.js";
 export type { RenderedToolCallView } from "../generated/RenderedToolCallView.js";
+export type { RequestOriginView } from "../generated/RequestOriginView.js";
 export type { SessionCompactionView } from "../generated/SessionCompactionView.js";
 export type { SessionContextComponentsView } from "../generated/SessionContextComponentsView.js";
 export type { SessionContextView } from "../generated/SessionContextView.js";
@@ -26,8 +28,12 @@ export type RunTimelineEventView = { kind: string } & Record<string, unknown>;
 export type RequestTimelineView = {
   request_id: string;
   session_id?: string | null;
-  agent_did?: string | null;
-  behavior_id?: string | null;
+  node_did?: string | null;
+  agent_id?: string | null;
   child_request_ids?: string[];
   events: RunTimelineEventView[];
 };
+
+export type { PendingQueueEditRequest } from "../generated/PendingQueueEditRequest.js";
+export type { PendingQueueEditResult } from "../generated/PendingQueueEditResult.js";
+export type { PendingQueueEntryView } from "../generated/PendingQueueEntryView.js";

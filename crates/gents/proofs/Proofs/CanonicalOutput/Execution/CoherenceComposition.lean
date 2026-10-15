@@ -28,14 +28,22 @@ theorem Gate.evaluate_preserves_toolProjectionCoherent (operation : Gate.Operati
     exact (accepted_publication_is_composed_atomically before after generation closing
       message admissions (mapError_success Gate.Error.execution _ _ h)).2.2.1
   | authored generation closing message =>
-    exact publishAuthored_preserves_toolProjectionCoherent before after generation closing
-      message coherent (mapError_success Gate.Error.execution _ _ h)
+    rcases publishAuthoredComposed_success before after generation closing message
+      (mapError_success Gate.Error.execution _ _ h) with rfl | ⟨published, hp, rfl | ⟨_, rfl⟩⟩
+    · exact coherent
+    · exact publishAuthored_preserves_toolProjectionCoherent before _ generation closing
+        message coherent hp
+    · exact publishAuthored_preserves_toolProjectionCoherent before published generation closing
+        message coherent hp
   | headerOnly generation message admissions =>
     exact (header_only_publication_is_atomic before after generation message admissions
       (mapError_success Gate.Error.execution _ _ h)).2.2.2
   | dispatch generation permit =>
     exact (dispatch_requires_committed_intent_and_marks_running before after generation permit
       (mapError_success Gate.Error.execution _ _ h)).2.2
+  | admitPluginEffect generation admission =>
+    exact (plugin_effect_admission_has_input_and_owned_lifecycle before after generation admission
+      (mapError_success Gate.Error.execution _ _ h)).1
   | admitSpawned generation admission =>
     exact (spawned_background_admission_is_owned_without_fabricated_intent before after generation
       admission (mapError_success Gate.Error.execution _ _ h)).1
@@ -48,6 +56,9 @@ theorem Gate.evaluate_preserves_toolProjectionCoherent (operation : Gate.Operati
   | toolClose document authority record =>
     exact ToolDelivery.closeToolOutput_preserves_toolProjectionCoherent before after document authority record
       coherent (mapError_success Gate.Error.delivery _ _ h)
+  | pluginEffectClose document authority record payload =>
+    exact ToolDelivery.plugin_close_preserves_projection before after document authority record payload
+      (mapError_success Gate.Error.delivery _ _ h)
   | toolComplete document authority record message =>
     obtain ⟨closed, hclose, hdeliver⟩ := ToolDelivery.completeAndDeliver_success
       before after document authority record message

@@ -1,14 +1,20 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const call = vi.fn();
-vi.mock("../src/ui/screens/agent/bridgeCall", () => ({
-  call: (...args: unknown[]) => call(...args),
-  message: (error: unknown) => String(error),
-}));
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 import { PluginAccessPrompt } from "../src/ui/screens/PluginAccessPrompt";
+import { renderIn, testApp } from "./app-fixture";
+
+const pending = vi.fn();
+const decide = vi.fn();
+const show = () =>
+  renderIn(
+    testApp({
+      api: { listPendingPluginApprovals: pending, decidePluginApproval: decide },
+    }),
+    <PluginAccessPrompt />,
+  );
 
 const question = {
   id: "q1",
@@ -19,15 +25,15 @@ const question = {
 
 describe("PluginAccessPrompt", () => {
   beforeEach(() => {
-    call.mockReset();
+    pending.mockReset();
+    decide.mockReset();
+    decide.mockResolvedValue(undefined);
   });
 
   it("shows nothing while no plugin is waiting", async () => {
-    call.mockResolvedValue({ requests: [] });
-    render(<PluginAccessPrompt />);
-    await waitFor(() =>
-      expect(call).toHaveBeenCalledWith("desktop_plugin_approvals_pending"),
-    );
+    pending.mockResolvedValue({ requests: [] });
+    show();
+    await waitFor(() => expect(pending).toHaveBeenCalled());
     expect(screen.queryByText("Allow once")).toBeNull();
   });
 
@@ -37,25 +43,17 @@ describe("PluginAccessPrompt", () => {
     ["Always allow this folder", "always"],
     ["Deny", "deny"],
   ])("sends %s as %s", async (label, decision) => {
-    call.mockImplementation(async (command: string) =>
-      command === "desktop_plugin_approvals_pending" ? { requests: [question] } : null,
-    );
-    render(<PluginAccessPrompt />);
+    pending.mockResolvedValue({ requests: [question] });
+    show();
     await screen.findByText(question.prompt);
     fireEvent.click(screen.getByText(label));
-    await waitFor(() =>
-      expect(call).toHaveBeenCalledWith("desktop_plugin_approval_decide", {
-        id: "q1",
-        decision,
-      }),
-    );
+    await waitFor(() => expect(decide).toHaveBeenCalledWith("q1", decision));
   });
 
   it("does not bring back a request answered while a poll was out", async () => {
     let late!: (value: { requests: (typeof question)[] }) => void;
     let polls = 0;
-    call.mockImplementation(async (command: string) => {
-      if (command === "desktop_plugin_approval_decide") return null;
+    pending.mockImplementation(async () => {
       polls += 1;
       if (polls === 1) return { requests: [question] };
       /* the host read its queue before the answer reached it */
@@ -64,7 +62,7 @@ describe("PluginAccessPrompt", () => {
     /* the clock is held only to send the second poll on its tick */
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      render(<PluginAccessPrompt />);
+      show();
       await screen.findByText(question.prompt);
       act(() => vi.advanceTimersByTime(1000));
     } finally {

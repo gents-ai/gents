@@ -477,7 +477,7 @@ mod tests {
             attempt: 0,
         };
         let segment = OutputSegment {
-            agent_did: "did:key:agent".into(),
+            node_did: "did:key:agent".into(),
             requester_did: Some("did:key:user".into()),
             session_id: "session".into(),
             request_doc_id: "request".into(),
@@ -498,7 +498,7 @@ mod tests {
         let header = TranscriptMessage {
             message_key: "provider-turn".into(),
             session_id: "session".into(),
-            agent_did: "did:key:agent".into(),
+            node_did: "did:key:agent".into(),
             requester_did: Some("did:key:user".into()),
             request_doc_id: Some("request".into()),
             publication: MessagePublication::RequestExecution {

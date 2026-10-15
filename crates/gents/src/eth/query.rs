@@ -160,7 +160,7 @@ mod tests {
     fn doc(enabled: bool, methods: &[&str]) -> EthToolDocument {
         EthToolDocument {
             tool_id: "base-read".to_string(),
-            agent_did: "did:key:zAlice".to_string(),
+            node_did: "did:key:zAlice".to_string(),
             display_name: Some("base".to_string()),
             enabled,
             chain_id: Some(8453),

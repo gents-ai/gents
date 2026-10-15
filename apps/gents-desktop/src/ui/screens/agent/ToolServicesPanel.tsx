@@ -27,12 +27,11 @@ function Editor({
   service: ToolServiceRegistry;
 }) {
   const {
-    api,
-    actions: { changeConfig },
+    actions: { changeConfig, testToolService },
   } = useApp();
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "tool-services",
   };
   const saved = {
@@ -43,7 +42,7 @@ function Editor({
     lanIp: service.lan_ip ?? "",
     mcpPort: service.mcp_port != null ? String(service.mcp_port) : "",
     mcpPath: service.mcp_path ?? "",
-    sendAgentDid: service.send_agent_did ?? false,
+    sendNodeDid: service.send_node_did ?? false,
     enabled: service.enabled ?? true,
     tags: service.tags ?? [],
   };
@@ -82,7 +81,7 @@ function Editor({
           lan_ip: endpoint.lanIp,
           mcp_port: endpoint.mcpPort,
           mcp_path: endpoint.mcpPath,
-          send_agent_did: next.sendAgentDid,
+          send_node_did: next.sendNodeDid,
           enabled: next.enabled,
           tags: next.tags.length ? next.tags : null,
         },
@@ -98,7 +97,7 @@ function Editor({
     }
     try {
       const endpoint = endpointOf(d.draft);
-      const result = await api.testToolService({
+      const result = await testToolService({
         serviceId: service.service_id,
         ...endpoint,
       });
@@ -170,9 +169,9 @@ function Editor({
         />
         <SwitchRow
           id={id("send-agent")}
-          label="Send agent DID"
-          checked={d.draft.sendAgentDid}
-          onChange={(v) => d.set("sendAgentDid", v)}
+          label="Send node DID"
+          checked={d.draft.sendNodeDid}
+          onChange={(v) => d.set("sendNodeDid", v)}
         />
         <SwitchRow
           id={id("enabled")}
@@ -203,7 +202,7 @@ function Editor({
         onDelete={() =>
           changeConfig("deleteToolServiceConfig", {
             serviceId: service.service_id,
-            agentDid: deployment.agentDid,
+            nodeDid: deployment.nodeDid,
           })
         }
       />
@@ -221,7 +220,7 @@ export function ToolServicesPanel({
   const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "tool-services",
   };
   return (
@@ -240,7 +239,7 @@ export function ToolServicesPanel({
             onDelete={() =>
               changeConfig("deleteToolServiceConfig", {
                 serviceId: s.service_id,
-                agentDid: deployment.agentDid,
+                nodeDid: deployment.nodeDid,
               })
             }
           />
@@ -253,7 +252,7 @@ export function ToolServicesPanel({
         await changeConfig("saveToolServiceConfig", {
           document: {
             service_id,
-            agent_did: deployment.agentDid,
+            node_did: deployment.nodeDid,
             display_name: "New service",
             hostname: "127.0.0.1",
             mcp_port: 3333,
@@ -262,7 +261,7 @@ export function ToolServicesPanel({
         });
         navigate({
           name: "agent",
-          agentDid: deployment.agentDid,
+          nodeDid: deployment.nodeDid,
           section: "tool-services",
           item: service_id,
         });

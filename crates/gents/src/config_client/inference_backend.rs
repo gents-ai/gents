@@ -6,27 +6,27 @@ use std::collections::BTreeMap;
 
 pub async fn load_inference_backend_in_txn(
     txn: &ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     backend_id: &str,
 ) -> Result<Option<InferenceBackend>> {
-    super::desired_state::read_record(txn, Collection::InferenceBackend, agent_did, backend_id)
+    super::desired_state::read_record(txn, Collection::InferenceBackend, node_did, backend_id)
         .await?
         .map(|(_, value)| serde_json::from_value(value).context("decoding scoped InferenceBackend"))
         .transpose()
 }
 
-/// Every backend of `agent_did` in this transaction's snapshot.
+/// Every backend of `node_did` in this transaction's snapshot.
 pub async fn list_inference_backends_in_txn(
     txn: &ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<InferenceBackend>> {
     let fields = super::config_projection(Collection::InferenceBackend, None)?
         .0
         .join(" ");
     let response = txn
         .execute(&format!(
-            r#"{{ InferenceBackend(filter: {{ agent_did: {{ _eq: "{}" }} }}) {{ {fields} }} }}"#,
-            crate::graphql::escape_graphql_string(agent_did)
+            r#"{{ InferenceBackend(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ {fields} }} }}"#,
+            crate::graphql::escape_graphql_string(node_did)
         ))
         .await?;
     gents_protocol::graphql::graphql_rows_from_response(&response, "InferenceBackend")
@@ -66,7 +66,7 @@ pub async fn write_inference_backend_document(
                 super::desired_state::read_record(
                     txn,
                     Collection::InferenceBackend,
-                    &backend.agent_did,
+                    &backend.node_did,
                     &backend.backend_id,
                 )
                 .await?
@@ -77,15 +77,15 @@ pub async fn write_inference_backend_document(
         .await
 }
 
-/// Each backend of `agent_did` with the account it runs on.
+/// Each backend of `node_did` with the account it runs on.
 pub async fn serving_accounts(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<BTreeMap<String, ServingAccount>> {
-    let accounts = crate::oauth_credential::list_accounts(access, agent_did).await?;
+    let accounts = crate::oauth_credential::list_accounts(access, node_did).await?;
     let backends = access
         .transact("config.serving_accounts", |txn| {
-            Box::pin(async move { list_inference_backends_in_txn(txn, agent_did).await })
+            Box::pin(async move { list_inference_backends_in_txn(txn, node_did).await })
         })
         .await?;
     Ok(backends
@@ -136,7 +136,7 @@ mod tests {
             "http://127.0.0.1:1/v1"
         };
         serde_json::from_value(json!({
-            "agent_did": did, "backend_id": backend_id, "name": format!("name-{backend_id}"),
+            "node_did": did, "backend_id": backend_id, "name": format!("name-{backend_id}"),
             "provider_kind": provider_kind, "endpoint": endpoint, "auth": auth,
         }))
         .unwrap()
@@ -148,7 +148,7 @@ mod tests {
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::Local(node);
-        let oauth = |account_ref: Option<&str>| BackendAuth::PrincipalOAuth {
+        let oauth = |account_ref: Option<&str>| BackendAuth::NodeOAuth {
             account_ref: account_ref.map(str::to_owned),
         };
         for backend in [

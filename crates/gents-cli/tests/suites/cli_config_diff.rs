@@ -20,7 +20,7 @@ async fn config_diff_reports_no_changes_for_matching_live_state() -> Result<()> 
     run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -57,13 +57,13 @@ async fn config_diff_reports_no_changes_for_matching_live_state() -> Result<()> 
     );
     assert_eq!(
         output
-            .pointer("/counts/agent_principal/unchanged")
+            .pointer("/counts/node/unchanged")
             .and_then(Value::as_u64),
         Some(1)
     );
     assert_eq!(
         output
-            .pointer("/counts/agent_behaviors/unchanged")
+            .pointer("/counts/agents/unchanged")
             .and_then(Value::as_u64),
         Some(1)
     );
@@ -103,7 +103,7 @@ async fn config_diff_reports_updates_for_changed_backend_manifest() -> Result<()
     run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -158,7 +158,7 @@ async fn config_diff_reports_updates_for_changed_backend_manifest() -> Result<()
     );
     assert_eq!(
         output
-            .pointer("/counts/agent_behaviors/unchanged")
+            .pointer("/counts/agents/unchanged")
             .and_then(Value::as_u64),
         Some(1)
     );

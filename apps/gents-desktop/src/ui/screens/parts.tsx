@@ -1,12 +1,12 @@
 import type { ComponentProps } from "react";
 import { cn } from "@gents/ui/lib/utils";
-import type { BehaviorEnvironmentView } from "@source-inc/gents-desktop-client";
+import type { AgentEnvironmentView } from "@source-inc/gents-desktop-client";
 import { bashAccess, fileAccess, initials, network } from "./behavior";
 
 /* two-letter initials inside a quiet ring: raised face, hairline border,
    ordinary text ink */
 /* forwards every span prop, so a hover-card or tooltip trigger can render it */
-export function BehaviorAvatar({
+export function AgentInitials({
   name,
   className,
   ...props
@@ -25,7 +25,7 @@ export function BehaviorAvatar({
   );
 }
 
-/** What a behavior may do, as one sentence: files and commands, then the
+/** What an agent may do, as one sentence: files and commands, then the
     network. Its environment is read from the node, so it may still be
     loading. */
 export function AccessSentence({
@@ -34,7 +34,7 @@ export function AccessSentence({
 }: {
   name: string;
   env:
-    | Pick<BehaviorEnvironmentView, "fileAccess" | "bashAccess" | "networkAccess">
+    | Pick<AgentEnvironmentView, "fileAccess" | "bashAccess" | "networkAccess">
     | undefined;
 }) {
   return (

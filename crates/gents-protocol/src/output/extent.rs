@@ -17,7 +17,10 @@ pub struct OpenSourceExtent {
 
 fn writer_matches(source: &OutputSource, writer: &OutputWriter) -> bool {
     match (source, writer) {
-        (OutputSource::ProviderTurn { .. }, OutputWriter::RequestExecution { .. }) => true,
+        (
+            OutputSource::ProviderTurn { .. } | OutputSource::ToolEffectArguments { .. },
+            OutputWriter::RequestExecution { .. },
+        ) => true,
         (
             OutputSource::ToolCall {
                 tool_call_doc_id: a,
@@ -188,7 +191,7 @@ mod tests {
         (
             id.into(),
             OutputSegment {
-                agent_did: "a".into(),
+                node_did: "a".into(),
                 requester_did: None,
                 session_id: "s".into(),
                 request_doc_id: "r".into(),

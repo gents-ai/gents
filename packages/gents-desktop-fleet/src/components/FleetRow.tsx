@@ -29,8 +29,8 @@ export type FleetRowProps = {
   bootstrap: BootstrapSummary | null;
   deployment: DeploymentView;
   syncHealth?: SyncHealthView | null;
-  onOpenChat: (agentDid: string) => void;
-  onOpenConfig: (agentDid: string) => void;
+  onOpenChat: (nodeDid: string) => void;
+  onOpenConfig: (nodeDid: string) => void;
   onRemovePeer?: (peerId: string) => Promise<unknown> | void;
   onRenamePeer?: (peerId: string, label: string) => Promise<unknown> | void;
   onSetupInference?: (deployment: DeploymentView) => void;
@@ -72,14 +72,13 @@ export function FleetRow({
   const openWorkCount = deployment.sessions.filter(
     (session) => session.turnState && !isTerminalTurnState(session.turnState),
   ).length;
-  const defaultBehavior = deployment.behaviors.find(
-    (behavior) =>
-      behavior.behaviorId === deployment.agentPrincipal.defaultBehaviorId,
+  const defaultAgent = deployment.agents.find(
+    (agent) => agent.agentId === deployment.node.defaultAgentId,
   );
   const toolIcons = toolCeilingIcons(
     deployment.tools,
     deployment.contexts.find(
-      (context) => context.context_id === defaultBehavior?.contextId,
+      (context) => context.context_id === defaultAgent?.contextId,
     )?.tools_id,
     isLocalRuntimeSource(deployment.source) ? bootstrap?.initToolCeiling : null,
   );
@@ -95,7 +94,7 @@ export function FleetRow({
     ) {
       return;
     }
-    onOpenChat(deployment.agentDid);
+    onOpenChat(deployment.nodeDid);
   }
 
   return (
@@ -152,7 +151,7 @@ export function FleetRow({
               <button
                 className="fleet-agent-name"
                 data-testid={`fleet-detail-name-${deployment.peerId}`}
-                onClick={() => onOpenChat(deployment.agentDid)}
+                onClick={() => onOpenChat(deployment.nodeDid)}
                 title={`Open ${deployment.label} details`}
                 type="button"
               >
@@ -163,9 +162,8 @@ export function FleetRow({
               className="muted fleet-agent-summary"
               data-testid={`fleet-summary-${deployment.peerId}`}
             >
-              {deployment.behaviors.length} behaviors ·{" "}
-              {deployment.sessions.length} sessions · {deployment.tasks.length}{" "}
-              tasks
+              {deployment.agents.length} agents · {deployment.sessions.length}{" "}
+              sessions · {deployment.tasks.length} tasks
             </span>
             {status.lastError ? (
               <span
@@ -191,7 +189,7 @@ export function FleetRow({
         </div>
       </td>
       <td>
-        <Metric value={deployment.behaviors.length} label="total" />
+        <Metric value={deployment.agents.length} label="total" />
       </td>
       <td>
         <Metric value={enabledTaskCount} label="enabled" />
@@ -232,7 +230,7 @@ export function FleetRow({
       <td>
         <Metric title="Processing sessions" value={openWorkCount} />
       </td>
-      <td title="Last runtime state change reported by this agent (agents write this on change, not on a timer — an idle agent ages here without being dead)">
+      <td title="Last runtime state change reported by this node (nodes write this on change, not on a timer — an idle node ages here without being dead)">
         {formatRelativeTime(runtimeLastUpdate)}
       </td>
       <td className="fleet-actions-cell">
@@ -242,11 +240,11 @@ export function FleetRow({
             className="primary-button fleet-table-action fleet-open-chat-action"
             data-testid={`fleet-chat-${deployment.peerId}`}
             disabled={!chatReady}
-            onClick={() => onOpenChat(deployment.agentDid)}
+            onClick={() => onOpenChat(deployment.nodeDid)}
             title={
               chatReady
                 ? "Open chat"
-                : "Chat unlocks after signed enrollment and behavior readiness complete"
+                : "Chat unlocks after signed enrollment and node readiness complete"
             }
             type="button"
           >
@@ -256,8 +254,8 @@ export function FleetRow({
             aria-label={`Configure ${deployment.label}`}
             className="ghost-button fleet-table-action"
             data-testid={`fleet-config-${deployment.peerId}`}
-            onClick={() => onOpenConfig(deployment.agentDid)}
-            title="Configure agent"
+            onClick={() => onOpenConfig(deployment.nodeDid)}
+            title="Configure node"
             type="button"
           >
             <ConfigIcon />
@@ -277,7 +275,7 @@ export function FleetRow({
           <ConfirmDialog
             open={confirmingRemove}
             title="Remove deployment"
-            message={`Remove "${deployment.label}" from this desktop's saved deployments? The remote agent itself is not touched.`}
+            message={`Remove "${deployment.label}" from this desktop's saved deployments? The remote node itself is not touched.`}
             confirmLabel="Remove"
             danger
             onConfirm={() => {

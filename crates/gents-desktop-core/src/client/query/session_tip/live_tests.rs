@@ -9,10 +9,10 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
         .await
         .unwrap();
     ConfigAccess::write_local(&node, "test.live_request", r#"mutation {
-        create_AgentRequest(input: {request_id:"logical", purpose:"normal", agent_did:"agent",
+        create_AgentRequest(input: {request_id:"logical", purpose:"normal", node_did:"agent",
             requester_did:"reader", session_id:"session", lifecycle_state:"processing",
             execution_generation:"generation"}) { _docID }
-        create_AgentOutputSegment(input: {agent_did:"agent", session_id:"session",
+        create_AgentOutputSegment(input: {node_did:"agent", session_id:"session",
             request_doc_id:"historic", source:{kind:"invalid"}, payload:"must not be decoded"}) { _docID }
     }"#).await.unwrap();
     let data = execute_local_graphql_query(
@@ -41,7 +41,7 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
         let text = escape_graphql_string(text);
         let requester = escape_graphql_string(requester);
         ConfigAccess::write_local(&node, "test.live_segment", &format!(r#"mutation {{
-            create_AgentOutputSegment(input: {{agent_did:"agent", requester_did:"{requester}",
+            create_AgentOutputSegment(input: {{node_did:"agent", requester_did:"{requester}",
                 session_id:"session", request_doc_id:"{doc}", source:{source}, writer:{writer},
                 ordinal:{ordinal}, runs:[{{stream:0, bytes:{bytes}, declaration:{{block_index:0, part_index:0,
                     payload:{{kind:"text"}}}}}}], payload:"{text}", created_at:"2026-10-07T12:00:00Z"}}) {{ _docID }}
@@ -52,7 +52,7 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
         "test.live_close",
         &format!(
             r#"mutation {{
-        create_AgentOutputSegment(input: {{agent_did:"agent", requester_did:"reader",
+        create_AgentOutputSegment(input: {{node_did:"agent", requester_did:"reader",
             session_id:"session", request_doc_id:"{doc}", source:{source}, writer:{writer},
             ordinal:null, runs:null, payload:"", close:{{kind:"retracted"}},
             created_at:"2026-10-07T12:00:01Z"}}) {{ _docID }}
@@ -72,7 +72,7 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
             "test.inert_payload",
             &format!(
                 r#"mutation {{
-            create_AgentOutputSegment(input: {{agent_did:"agent", requester_did:"reader",
+            create_AgentOutputSegment(input: {{node_did:"agent", requester_did:"reader",
                 session_id:"session", request_doc_id:"{doc}", source:{inert_source},
                 payload:"{large_payload}"}}) {{ _docID }}
         }}"#
@@ -81,13 +81,13 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
         .await
         .unwrap();
     }
-    // Both the principal and request indexes exceed DefraDB's 1024-entry
+    // Both the node and request indexes exceed DefraDB's 1024-entry
     // estimation cap. A broad-index tie must not scan unrelated history.
     const INERT_ROWS: usize = 1_030;
     for start in (0..INERT_ROWS).step_by(32) {
         let batch = (start..(start + 32).min(INERT_ROWS)).map(|i| {
             let key = escape_graphql_string(&format!("tool-{i}"));
-            format!(r#"s{i}: create_AgentOutputSegment(input: {{agent_did:"agent", requester_did:"reader",
+            format!(r#"s{i}: create_AgentOutputSegment(input: {{node_did:"agent", requester_did:"reader",
                 session_id:"session", request_doc_id:"{doc}", source:{{kind:"tool_call", tool_call_doc_id:"{key}"}},
                 payload:"inert"}}) {{ _docID }}"#)
         }).collect::<Vec<_>>().join("\n");
@@ -102,13 +102,13 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
     let history = (0..32).map(|i| {
         let history_id = escape_graphql_string(&format!("history-{i}"));
         format!(r#"h{i}: create_AgentOutputSegment(input: {{
-            agent_did:"agent", requester_did:"reader", session_id:"session", request_doc_id:"{history_id}",
+            node_did:"agent", requester_did:"reader", session_id:"session", request_doc_id:"{history_id}",
             source:{{kind:"invalid"}}, payload:"unrelated history"}}) {{ _docID }}
             m{i}: create_AgentMessage(input: {{message_key:"{history_id}",
-                agent_did:"agent", requester_did:"reader", session_id:"session", request_doc_id:"{history_id}",
+                node_did:"agent", requester_did:"reader", session_id:"session", request_doc_id:"{history_id}",
                 publication:{{kind:"invalid"}}, blocks:"must not be decoded"}}) {{ _docID }}
             r{i}: create_AgentRequest(input: {{request_id:"{history_id}", purpose:"normal",
-                agent_did:"agent", requester_did:"reader", session_id:"session", lifecycle_state:"completed"}}) {{ _docID }}"#)
+                node_did:"agent", requester_did:"reader", session_id:"session", lifecycle_state:"completed"}}) {{ _docID }}"#)
     }).collect::<Vec<_>>().join("\n");
     ConfigAccess::write_local(
         &node,

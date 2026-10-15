@@ -34,7 +34,7 @@ an observation, never an authority to suppress later child usage. -/
 structure ParentScope where
   physical : CanonicalOutput.DocId
   logical : RequestId
-  agent : Nat
+  node : Nat
   session : SessionId
   state : RequestState
 
@@ -102,7 +102,7 @@ def titleBelongsTo (observation : Observation) (parent : ParentScope)
       titleSelfBindingValid row binding &&
         decide (binding.parentLogical = parent.logical ∧
           binding.parentPhysical = parent.physical ∧
-          binding.agent = parent.agent ∧
+          binding.node = parent.node ∧
           binding.session = parent.session)
   | none => false
 
@@ -272,7 +272,7 @@ theorem observe_usage_after_terminal (row : UsageRow) (usage : Usage) :
   exact ⟨rfl, rfl, rfl⟩
 
 private def witnessParent : ParentScope :=
-  { physical := 10, logical := 20, agent := 30, session := 40, state := .completed }
+  { physical := 10, logical := 20, node := 30, session := 40, state := .completed }
 
 private def witnessRow (physical : CanonicalOutput.DocId) (logical : RequestId)
     (usage : Option Usage) : UsageRow :=
@@ -289,7 +289,7 @@ private def witnessRow (physical : CanonicalOutput.DocId) (logical : RequestId)
 private def witnessTitleBinding : CanonicalOutput.Execution.Handover.TitleBinding :=
   { physicalRequest := 11, logicalRequest := 21,
     parentPhysical := 10, parentLogical := 20,
-    agent := 30, session := 40, authenticated := true }
+    node := 30, session := 40, authenticated := true }
 
 private def witnessObservation (row : UsageRow) : Observation :=
   { callIds := {7}

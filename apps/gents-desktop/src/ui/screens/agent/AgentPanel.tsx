@@ -1,6 +1,6 @@
-/* The agent itself: editable principal fields and identity/runtime facts. */
+/* The node itself: editable node fields and identity/runtime facts. */
 import type { NodeView } from "../../../hooks/fleetStore";
-import { isLocalAgent } from "@/lib/firstRun";
+import { isLocalNode } from "@/lib/firstRun";
 import { DraftActions, RefRow, SwitchRow, TagsRow, TextRow } from "./editors";
 import { useDraft } from "./draft";
 import { Fact, Group, Row } from "./rows";
@@ -13,9 +13,9 @@ import { useBootstrap } from "@/hooks/useClient";
 export function AgentPanel({ deployment }: { deployment: NodeView }) {
   const bootstrap = useBootstrap();
   const { changeConfig } = useApp().actions;
-  const agent = deployment.agentPrincipal;
-  const behaviors = deployment.behaviors.map((b) => ({
-    value: b.behaviorId,
+  const agent = deployment.node;
+  const agents = deployment.agents.map((b) => ({
+    value: b.agentId,
     label: b.enabled
       ? b.displayName
       : `${b.displayName} · disabled, enabled when saved as default`,
@@ -23,20 +23,20 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
   const d = useDraft(
     {
       displayName: agent.displayName ?? "",
-      defaultBehaviorId: agent.defaultBehaviorId ?? "",
+      defaultAgentId: agent.defaultAgentId ?? "",
       enabled: agent.enabled ?? true,
-      tags: deployment.principalConfig?.tags ?? [],
+      tags: deployment.nodeConfig?.tags ?? [],
     },
     async (next) => {
-      /* a new default lands with its enablement first; the principal's other
+      /* a new default lands with its enablement first; the node's other
          fields then save against an already valid default */
-      if (next.defaultBehaviorId !== agent.defaultBehaviorId)
-        await saveDefault(changeConfig, deployment, next.defaultBehaviorId);
-      await changeConfig("saveAgentConfig", {
+      if (next.defaultAgentId !== agent.defaultAgentId)
+        await saveDefault(changeConfig, deployment, next.defaultAgentId);
+      await changeConfig("saveNodeConfig", {
         document: {
-          agent_did: agent.agentDid,
+          node_did: agent.nodeDid,
           display_name: next.displayName.trim(),
-          default_behavior_id: next.defaultBehaviorId,
+          default_agent_id: next.defaultAgentId,
           enabled: next.enabled,
           created_at: agent.createdAt,
           created_by: agent.createdBy,
@@ -47,9 +47,7 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
     {
       problems: (next) => ({
         displayName: next.displayName.trim() ? undefined : "Display name is required",
-        defaultBehaviorId: next.defaultBehaviorId
-          ? undefined
-          : "Default behavior is required",
+        defaultAgentId: next.defaultAgentId ? undefined : "Default agent is required",
       }),
     },
   );
@@ -68,18 +66,18 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
         />
         <RefRow
           id="agent-default"
-          label="Default behavior"
+          label="Default agent"
           description="Used when a session does not choose one."
-          value={d.draft.defaultBehaviorId}
-          onChange={(v) => d.set("defaultBehaviorId", v)}
-          error={d.problems.defaultBehaviorId}
-          items={behaviors}
-          createLabel="New behavior…"
-          openRoute={(behaviorId) => ({
+          value={d.draft.defaultAgentId}
+          onChange={(v) => d.set("defaultAgentId", v)}
+          error={d.problems.defaultAgentId}
+          items={agents}
+          createLabel="New agent…"
+          openRoute={(agentId) => ({
             name: "agent",
-            agentDid: deployment.agentDid,
-            section: "behaviors",
-            item: behaviorId,
+            nodeDid: deployment.nodeDid,
+            section: "agents",
+            item: agentId,
           })}
         />
         <SwitchRow
@@ -99,29 +97,26 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
       </Group>
       <DraftActions
         draft={d}
-        fields={{ displayName: "agent-name", defaultBehaviorId: "agent-default" }}
+        fields={{ displayName: "agent-name", defaultAgentId: "agent-default" }}
       />
 
       <Group title="Identity">
         <Row
-          label="Agent DID"
-          description="The cryptographic principal. Permissions and audit are keyed by it."
+          label="Node DID"
+          description="The node's cryptographic identity. Permissions and audit are keyed by it."
         >
-          <Fact mono>{agent.agentDid}</Fact>
+          <Fact mono>{agent.nodeDid}</Fact>
         </Row>
         <Row label="Install name">
-          <Fact>{bootstrap?.initAgentName}</Fact>
+          <Fact>{bootstrap?.initNodeName}</Fact>
         </Row>
-        <Row
-          label="Tool ceiling"
-          description="The most any behavior on this agent may do."
-        >
+        <Row label="Tool ceiling" description="The most any agent on this node may do.">
           <Fact>{bootstrap?.initToolCeiling ?? "not configured"}</Fact>
         </Row>
         <Row label="Tool root" description="The directory tools are confined to.">
           <Fact mono>{bootstrap?.initToolRoot ?? "not configured"}</Fact>
         </Row>
-        <Row label="Peer" description="Where the agent's node runs.">
+        <Row label="Peer" description="Where the node's runtime runs.">
           <Fact mono>{deployment.peerId}</Fact>
         </Row>
         <Row label="Created">
@@ -134,21 +129,21 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
       <Group title="Runtime">
         <Row
           label="Reconcile"
-          description="The last pass of the agent's runtime over its configuration."
+          description="The last pass of the node's runtime over its configuration."
         >
           <Fact>
             {deployment.runtime?.reconcilePhase} ·{" "}
             {deployment.runtime?.lastReconcileResult}
           </Fact>
         </Row>
-        <Row label="Executors" description="Behavior executors in use over capacity.">
+        <Row label="Executors" description="Agent executors in use over capacity.">
           <Fact>
-            {deployment.runtime?.behaviorExecutorQueueDepth ?? 0} /{" "}
-            {deployment.runtime?.behaviorExecutorCapacity ?? 0}
+            {deployment.runtime?.agentExecutorQueueDepth ?? 0} /{" "}
+            {deployment.runtime?.agentExecutorCapacity ?? 0}
           </Fact>
         </Row>
       </Group>
-      {isLocalAgent(deployment, bootstrap?.initAgentDid) && <LocalServer />}
+      {isLocalNode(deployment, bootstrap?.initNodeDid) && <LocalServer />}
     </div>
   );
 }

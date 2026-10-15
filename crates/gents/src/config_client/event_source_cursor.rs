@@ -44,7 +44,7 @@ async fn trigger_binding(
         field: "source.event_source_id".into(),
         target: crate::Collection::EventSource,
         target_id: event_source_id.clone(),
-        agent_did: owner.to_owned(),
+        node_did: owner.to_owned(),
     })?;
     Ok((trigger, serde_json::from_value(source)?))
 }
@@ -86,7 +86,7 @@ async fn callback_binding(
         field: "event_source_id".into(),
         target: crate::Collection::EventSource,
         target_id: binding.event_source_id.clone(),
-        agent_did: owner.to_owned(),
+        node_did: owner.to_owned(),
     })?;
     Ok((binding, serde_json::from_value(source)?))
 }
@@ -158,8 +158,8 @@ pub(crate) async fn seed_referencing_consumers(
 ) -> Result<()> {
     let response = txn
         .execute(&format!(
-            "{{ Trigger(filter: {{agent_did: {{_eq: \"{owner}\"}}}}) {{trigger_id source}} \
-               CallbackBinding(filter: {{agent_did: {{_eq: \"{owner}\"}}, event_source_id: {{_eq: \"{}\"}}}}) {{binding_id}} }}",
+            "{{ Trigger(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{trigger_id source}} \
+               CallbackBinding(filter: {{node_did: {{_eq: \"{owner}\"}}, event_source_id: {{_eq: \"{}\"}}}}) {{binding_id}} }}",
             escape_graphql_string(event_source_id),
             owner = escape_graphql_string(owner),
         ))
@@ -508,7 +508,7 @@ async fn admitted_arrival(
         "arrival receipt disagrees with canonical identity"
     );
     let request = txn.execute(&format!(
-        "{{ AgentRequest(filter: {{agent_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}, limit: 2) {{ _docID }} }}",
+        "{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}, limit: 2) {{ _docID }} }}",
         escape_graphql_string(owner), escape_graphql_string(&request_id))).await?;
     Ok(request["data"]["AgentRequest"]
         .as_array()
@@ -531,7 +531,7 @@ async fn admitted_callback_arrival(
     let key = crate::callback::idempotency_key(binding_id, source_collection, source_doc_id);
     let response = txn
         .execute(&format!(
-            "{{ CallbackInvocation(filter: {{owner_agent_did: {{_eq: \"{}\"}}, idempotency_key: {{_eq: \"{}\"}}}}, limit: 2) {{ origin }} }}",
+            "{{ CallbackInvocation(filter: {{owner_node_did: {{_eq: \"{}\"}}, idempotency_key: {{_eq: \"{}\"}}}}, limit: 2) {{ origin }} }}",
             escape_graphql_string(owner),
             escape_graphql_string(&key),
         ))

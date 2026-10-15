@@ -474,7 +474,7 @@ const hostInjectsOneBridge =
   /useState\(\(\) =>\s*createDesktopApp\(\{[^}]*\.\.\.bridge\s*\}\)/m.test(
     desktopApp,
   ) &&
-  /useDesktopRuntime\(app,\s*bridge\.listenToUpdates\)/.test(desktopApp);
+  /useClientRuntime\(app,\s*bridge\.listenToUpdates\)/.test(desktopApp);
 if (
   !desktopApp.includes("const client = createDesktopClient();") ||
   !hostInjectsOneBridge ||
@@ -534,10 +534,10 @@ for (const sourceRoot of [
   }
 }
 for (const path of [
-  "apps/gents-desktop/src/hooks/desktopShellChatActions.ts",
-  "apps/gents-desktop/src/hooks/desktopShellConfigActions.ts",
-  "apps/gents-desktop/src/hooks/desktopShellPeerActions.ts",
-  "apps/gents-desktop/src/hooks/desktopShellTaskActions.ts",
+  "apps/gents-desktop/src/hooks/chatActions.ts",
+  "apps/gents-desktop/src/hooks/configActions.ts",
+  "apps/gents-desktop/src/hooks/peerActions.ts",
+  "apps/gents-desktop/src/hooks/taskActions.ts",
 ]) {
   if (
     !readFileSync(join(root, path), "utf8").includes("api: DesktopApiAdapter")
@@ -639,6 +639,79 @@ for (const [path, maximumLines] of [
   const lines = readFileSync(join(root, path), "utf8").split(/\r?\n/).length;
   if (lines > maximumLines) {
     failures.push(`${path} has ${lines} lines; maximum is ${maximumLines}`);
+  }
+}
+
+/* Screens read stores and call named actions; only the app's owners (in
+   src/hooks and src/lib) reach the native bridge. A component that imports
+   Tauri or holds the bridge's API fails. */
+const desktopRoot = join(root, "apps/gents-desktop");
+/* whether a `{ … } = useApp()` destructuring, nested braces and all, names
+   `api` */
+function destructuresApi(source) {
+  for (const end of source.matchAll(/\}\s*=\s*useApp\(\)/g)) {
+    let depth = 0;
+    for (let at = end.index; at >= 0; at -= 1) {
+      if (source[at] === "}") depth += 1;
+      else if (source[at] === "{" && --depth === 0) {
+        if (/(?:^|[{,\s])api\s*[,}:]/.test(source.slice(at, end.index + 1)))
+          return true;
+        break;
+      }
+    }
+  }
+  return false;
+}
+const bridgeAccess = [
+  [
+    (source) => /(?:\bfrom\s+|\bimport\(\s*)["']@tauri-apps\//.test(source),
+    "imports @tauri-apps",
+  ],
+  [
+    (source) => /\bbridgeCommand\s*\(/.test(source),
+    "sends a bridge command by name",
+  ],
+  [
+    (source) =>
+      /\buseApp\(\)\s*\.\s*api\b/.test(source) || destructuresApi(source),
+    "takes the bridge API from useApp()",
+  ],
+  [(source) => /\bDesktopApiAdapter\b/.test(source), "holds the bridge API"],
+];
+for (const file of [
+  ...filesUnder(join(desktopRoot, "src/ui"), (path) => /\.tsx?$/.test(path)),
+  ...filesUnder(join(desktopRoot, "src/components"), (path) =>
+    /\.tsx?$/.test(path),
+  ),
+]) {
+  const path = relative(desktopRoot, file);
+  const source = readFileSync(file, "utf8");
+  const reasons = bridgeAccess
+    .filter(([reaches]) => reaches(source))
+    .map(([, reason]) => reason);
+  if (reasons.length > 0) {
+    failures.push(
+      `${path} ${reasons.join(" and ")}; a component calls actions or an owner in src/hooks or src/lib instead`,
+    );
+  }
+}
+/* Tauri is the shell's native side: the app reaches it through one module,
+   and the bridge through the client package. The end-to-end boot modules
+   drive the shell directly; they are test scaffolding, not app code. */
+const reachesTauri = new Set([
+  "src/lib/nativeShell.ts",
+  "src/lib/nativeLocalE2e.ts",
+  "src/lib/nativeSimulatorE2e.ts",
+]);
+for (const file of filesUnder(join(desktopRoot, "src"), (path) =>
+  /(?<!\.test)\.tsx?$/.test(path),
+)) {
+  const path = relative(desktopRoot, file);
+  if (reachesTauri.has(path)) continue;
+  if (bridgeAccess[0][0](readFileSync(file, "utf8"))) {
+    failures.push(
+      `${path} imports @tauri-apps; the app reaches the shell through src/lib/nativeShell.ts`,
+    );
   }
 }
 

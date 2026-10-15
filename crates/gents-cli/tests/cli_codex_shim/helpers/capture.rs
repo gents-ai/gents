@@ -3,6 +3,7 @@ use super::*;
 #[derive(Debug)]
 pub(super) struct TurnCapture {
     pub(super) text: String,
+    pub(super) completed_user_inputs: Vec<Vec<codex::UserInput>>,
     pub(super) turn: codex::Turn,
     pub(super) started_tools: Vec<String>,
     pub(super) completed_tool_ids: Vec<String>,
@@ -28,6 +29,7 @@ pub(super) async fn read_turn_to_completion(
 
 pub(super) async fn read_turn_capture(ws: &mut ShimWebSocket) -> Result<TurnCapture> {
     let mut text = String::new();
+    let mut completed_user_inputs = Vec::new();
     let mut started_tools = Vec::new();
     let mut completed_tool_ids = Vec::new();
     let mut completed_tools = Vec::new();
@@ -58,6 +60,9 @@ pub(super) async fn read_turn_capture(ws: &mut ShimWebSocket) -> Result<TurnCapt
                         _ => {}
                     },
                     codex::ServerNotification::ItemCompleted(completed) => match completed.item {
+                        codex::ThreadItem::UserMessage { content, .. } => {
+                            completed_user_inputs.push(content)
+                        }
                         codex::ThreadItem::McpToolCall { id, tool, .. } => {
                             event_order.push(TurnStreamEvent::ToolCompleted);
                             completed_tool_ids.push(id);
@@ -74,6 +79,7 @@ pub(super) async fn read_turn_capture(ws: &mut ShimWebSocket) -> Result<TurnCapt
                         let turn_completed_tool_ids = mcp_tool_ids(&completed.turn);
                         return Ok(TurnCapture {
                             text,
+                            completed_user_inputs,
                             turn: completed.turn,
                             started_tools,
                             completed_tool_ids,
@@ -179,7 +185,7 @@ pub(super) fn assert_turn_has_agent_text(turn: &codex::Turn, expected: &str) {
 
 pub(super) async fn wait_for_request_input(
     graphql: &str,
-    agent_did: &str,
+    node_did: &str,
     content: &str,
 ) -> Result<(String, String, gents_protocol::request_input::RequestInput)> {
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
@@ -197,8 +203,8 @@ pub(super) async fn wait_for_request_input(
                 }}
             }}"#,
             gents::session::public_request_filter(&format!(
-                r#"agent_did: {{ _eq: "{}" }}, content: {{ _eq: "{}" }}"#,
-                escape_graphql_string(agent_did),
+                r#"node_did: {{ _eq: "{}" }}, content: {{ _eq: "{}" }}"#,
+                escape_graphql_string(node_did),
                 escape_graphql_string(content),
             )),
         );
@@ -222,7 +228,7 @@ pub(super) async fn wait_for_request_input(
         }
 
         if std::time::Instant::now() >= deadline {
-            bail!("timed out waiting for AgentRequest input for {agent_did}");
+            bail!("timed out waiting for AgentRequest input for {node_did}");
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }

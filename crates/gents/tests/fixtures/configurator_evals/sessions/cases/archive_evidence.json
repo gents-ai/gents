@@ -80,7 +80,7 @@
           "name": "source_headers",
           "collection": "AgentMessage",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "requester_did": {

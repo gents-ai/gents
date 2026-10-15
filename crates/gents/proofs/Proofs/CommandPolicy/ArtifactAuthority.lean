@@ -73,7 +73,7 @@ def ArtifactBinding.eligible (c : ArtifactBinding) : Bool :=
 
 /-- Deliberately separate from ordinary attenuation: an explicit artifact selection
 can obtain this contextual grant; no WorkspaceWrite-to-artifact conversion exists.
-`requested` is the result AFTER behavior/selection/operator-ceiling meet, never a
+`requested` is the result AFTER agent/selection/operator-ceiling meet, never a
 raw model or tool-selection request that bypasses a restrictive ceiling. -/
 def admitArtifact (requested : ExecutionMode) (binding : Option ArtifactBinding) : Bool :=
   requested == .artifactWrite && binding.any ArtifactBinding.eligible

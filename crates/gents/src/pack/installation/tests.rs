@@ -12,10 +12,10 @@ async fn access() -> ConfigAccess {
 
 fn config(tools: &[(&str, &str)]) -> PackConfig {
     serde_json::from_value(json!({
-        "agent_principal": {"agent_did": OWNER},
+        "node": {"node_did": OWNER},
         "tools": tools
             .iter()
-            .map(|(id, name)| json!({"tools_id": id, "display_name": name, "agent_did": OWNER, "tags": ["gents:pack:demo"]}))
+            .map(|(id, name)| json!({"tools_id": id, "display_name": name, "node_did": OWNER, "tags": ["gents:pack:demo"]}))
             .collect::<Vec<_>>(),
     }))
     .unwrap()
@@ -49,8 +49,8 @@ async fn install(
 async fn edit_tools(access: &ConfigAccess, id: &str, name: &str) {
     let edit = crate::config_client::DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: Collection::Tools,
-        add: json!({"tools_id": id, "display_name": name, "agent_did": OWNER}),
-        update: json!({"tools_id": id, "display_name": name, "agent_did": OWNER}),
+        add: json!({"tools_id": id, "display_name": name, "node_did": OWNER}),
+        update: json!({"tools_id": id, "display_name": name, "node_did": OWNER}),
     }])
     .unwrap();
     access
@@ -218,6 +218,120 @@ async fn a_document_the_new_version_drops_is_removed_and_history_is_kept() {
     assert_eq!(row["history"], json!([identity("1").digest]));
 }
 
+/// A plugin-store record is no pack install: the listings skip it, `gents
+/// pack remove` refers it to `gents plugin remove`, and the removal of its
+/// last plugin deletes it.
+#[tokio::test]
+async fn a_plugin_store_record_is_not_a_pack_install() {
+    let access = access().await;
+    let home = tempfile::tempdir().unwrap();
+    record_plugin_store_change(
+        &access,
+        OWNER,
+        home.path(),
+        "acme/demo",
+        Some(&identity("1")),
+    )
+    .await
+    .unwrap();
+    installation_doc_id(&access).await;
+    assert!(list_installed_packs(&access, OWNER)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        read_installed_pack(&access, OWNER, "acme/demo")
+            .await
+            .unwrap(),
+        None
+    );
+    let refused = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("gents plugin remove"),
+        "{refused:#}"
+    );
+
+    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
+        .await
+        .unwrap();
+    let rows = access
+        .execute("{ PackInstallation { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(rows["data"]["PackInstallation"], json!([]));
+}
+
+/// Over a documents install of the same coordinate, a plugin-store change
+/// keeps that install's record: its identity and documents stay, so a
+/// removal still deletes by them, and an installed name joins its plugins.
+#[tokio::test]
+async fn a_plugin_store_change_keeps_a_documents_install_record() {
+    let access = access().await;
+    let home = tempfile::tempdir().unwrap();
+    install(
+        &access,
+        "1",
+        &config(&[("alpha", "Alpha")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let extra = InstalledPackPlugin {
+        name: "extra".into(),
+        digest: format!("sha256:{}", "a".repeat(64)),
+    };
+    let plugin_only = PackIdentity {
+        plugins: vec![extra.clone()],
+        ..identity("2")
+    };
+    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", Some(&plugin_only))
+        .await
+        .unwrap();
+    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        read_installed_pack(&access, OWNER, "acme/demo")
+            .await
+            .unwrap(),
+        Some(InstalledPack {
+            coordinate: "acme/demo".into(),
+            version: "1".into(),
+            digest: identity("1").digest,
+        })
+    );
+    let removed = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    assert_eq!(removed.documents.removed, vec!["Tools/alpha"]);
+    assert_eq!(
+        removed.documents.plugins,
+        vec![identity("1").plugins[0].clone(), extra]
+    );
+}
+
+/// A pack whose configuration is only its Node records no documents,
+/// yet is a pack install: listed, removable, and kept by plugin-store
+/// changes, unlike a plugin-store record.
+#[tokio::test]
+async fn a_documentless_pack_install_is_not_a_plugin_store_record() {
+    let access = access().await;
+    let home = tempfile::tempdir().unwrap();
+    install(&access, "1", &config(&[]), DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
+        .await
+        .unwrap();
+    assert_eq!(list_installed_packs(&access, OWNER).await.unwrap().len(), 1);
+    remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap();
+}
+
 async fn installation_doc_id(access: &ConfigAccess) -> String {
     access
         .execute("{ PackInstallation { _docID } }")
@@ -350,7 +464,7 @@ async fn read_installed_pack_fails_loudly_on_a_malformed_record() {
 async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     let schema = gents_protocol::schemas::PACK_INSTALLATION.replace(
-        r#"@index(fields: ["agent_did", "coordinate"], unique: true)"#,
+        r#"@index(fields: ["node_did", "coordinate"], unique: true)"#,
         "",
     );
     node.add_schema(&schema).await.unwrap();
@@ -358,7 +472,7 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
 
     for digest_seed in ["1", "2"] {
         let input = json!({
-            "agent_did": OWNER,
+            "node_did": OWNER,
             "coordinate": "acme/duplicated",
             "version": "1",
             "digest": format!("sha256:{}", digest_seed.repeat(64)),
@@ -393,14 +507,14 @@ async fn dependency_fixture() -> (
 ) {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::document_config::ensure_agent_principal(&node, OWNER)
+    crate::document_config::ensure_node(&node, OWNER)
         .await
         .unwrap();
     for profile in ["claude", "glm", "grok"] {
-        crate::test_support::install_test_behavior(&node, OWNER, profile).await;
+        crate::test_support::install_test_agent(&node, OWNER, profile).await;
     }
     let options = crate::graph_package::GraphPackageInstallBindings {
-        agent_did: OWNER.into(),
+        node_did: OWNER.into(),
         inference_slots: std::collections::BTreeMap::from([
             ("coordinator".into(), "claude:inference".into()),
             ("worker".into(), "glm:inference".into()),
@@ -638,19 +752,19 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
     let seed = crate::config_client::DesiredStateApplyPlan::new(vec![
         home(
             Collection::InferenceBackend,
-            json!({"agent_did":OWNER,"backend_id":"backend","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}}),
+            json!({"node_did":OWNER,"backend_id":"backend","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}}),
         ),
         home(
             Collection::InferenceProfile,
-            json!({"agent_did":OWNER,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
+            json!({"node_did":OWNER,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
         ),
         home(
-            Collection::AgentBehavior,
-            json!({"agent_did":OWNER,"behavior_id":"chosen","inference_profile_id":"profile"}),
+            Collection::Agent,
+            json!({"node_did":OWNER,"agent_id":"chosen","inference_profile_id":"profile"}),
         ),
         home(
-            Collection::AgentPrincipal,
-            json!({"agent_did":OWNER,"default_behavior_id":"chosen"}),
+            Collection::Node,
+            json!({"node_did":OWNER,"default_agent_id":"chosen"}),
         ),
     ])
     .unwrap();
@@ -669,13 +783,13 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
     }))
     .unwrap();
     let authored = json!({
-        "agent_principal": {},
+        "node": {},
         "tools": [{"tools_id":"pack-tools","display_name":"Pack tools"}],
     });
     let pack = crate::pack::load_pack_config(
         &manifest,
         &crate::pack::PackInstallOptions {
-            agent_did: OWNER.into(),
+            node_did: OWNER.into(),
         },
         &|_| Ok(serde_json::to_vec(&authored)?),
         &|_| None,
@@ -686,12 +800,12 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
         .unwrap();
 
     let principal = access
-        .execute("{ AgentPrincipal { default_behavior_id } }")
+        .execute("{ Node { default_agent_id } }")
         .await
         .unwrap();
     assert_eq!(
-        principal["data"]["AgentPrincipal"],
-        json!([{"default_behavior_id": "chosen"}])
+        principal["data"]["Node"],
+        json!([{"default_agent_id": "chosen"}])
     );
     assert_eq!(tools_ids(&access).await, ["pack-tools"]);
 }

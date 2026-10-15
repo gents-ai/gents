@@ -89,7 +89,7 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
             let presentation = super::load_tool_call_presentation(
                 &ConfigAccess::Local(admission.node.clone()),
                 &tool_doc_id,
-                &admission.agent_did,
+                &admission.node_did,
                 &format!("session-background-{}", case.name),
                 None,
             )

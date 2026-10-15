@@ -116,7 +116,7 @@ export function EventSourceEditor({
   const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "event-sources",
   };
   const saved = {
@@ -300,7 +300,7 @@ export function EventSourceEditor({
           onDelete={() =>
             changeConfig("deleteEventSourceConfig", {
               eventSourceId: source.event_source_id,
-              agentDid: deployment.agentDid,
+              nodeDid: deployment.nodeDid,
             })
           }
         />
@@ -319,7 +319,7 @@ export function EventSourcesPanel({
   const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "event-sources",
   };
   return (
@@ -352,7 +352,7 @@ export function EventSourcesPanel({
             onDelete={() =>
               changeConfig("deleteEventSourceConfig", {
                 eventSourceId: s.event_source_id,
-                agentDid: deployment.agentDid,
+                nodeDid: deployment.nodeDid,
               })
             }
             warning={dependentsWarning(deployment, "event-source", s.event_source_id)}
@@ -365,7 +365,7 @@ export function EventSourcesPanel({
         const event_source_id = newId("evsrc");
         await changeConfig("saveEventSourceConfig", {
           document: {
-            agent_did: deployment.agentDid,
+            node_did: deployment.nodeDid,
             event_source_id,
             display_name: "New event source",
             source_collection: "AgentRequest",
@@ -374,7 +374,7 @@ export function EventSourcesPanel({
         });
         navigate({
           name: "agent",
-          agentDid: deployment.agentDid,
+          nodeDid: deployment.nodeDid,
           section: "event-sources",
           item: event_source_id,
         });

@@ -4,21 +4,21 @@ import type {
   DesktopApiAdapter,
   MailboxItemView,
 } from "@source-inc/gents-desktop-client";
-import { createDesktopShellMailboxActions } from "../src/hooks/desktopShellMailboxActions";
+import { createMailboxActions } from "../src/hooks/mailboxActions";
 import { shellStores } from "./shell-fixture";
 
 const item = {
   itemId: "item-1",
   action: "start_request",
   kind: "ask",
-  targetAgentDid: "did:agent",
-  targetBehaviorId: "engineer",
+  targetNodeDid: "did:node",
+  targetAgentId: "engineer",
   sessionId: "session-1",
 } as MailboxItemView;
 
 function mailbox(api: DesktopApiAdapter) {
   const stores = shellStores();
-  const actions = createDesktopShellMailboxActions({
+  const actions = createMailboxActions({
     api,
     stores,
     refreshSnapshot: async () => {},
@@ -40,8 +40,8 @@ describe("answering a mailbox question", () => {
     const answer = { option_ids: ["yes"], free_text: null };
     await actions.answerMailboxQuestion(item, answer);
     expect(sendChatMessage).toHaveBeenCalledWith({
-      agentDid: "did:agent",
-      behaviorId: "engineer",
+      nodeDid: "did:node",
+      agentId: "engineer",
       sessionId: "session-1",
       content: "",
       causedBySourceDocId: "item-1",

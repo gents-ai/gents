@@ -16,7 +16,7 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 
 use super::enrollment_reconcile::EnrollmentAuthorityHandle;
 use super::graphql_helpers::{first_row, graphql_string_list_literal, rows};
@@ -49,7 +49,7 @@ pub struct EnrollmentEndpointEntry {
     /// Durable materialization key; may be directional and is not a transport peer id.
     pub desired_id: String,
     pub peer_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub address: String,
     pub request_digest: String,
     pub authorization_sequence: u64,
@@ -330,17 +330,17 @@ async fn reconcile_prepared_peer(
     let mut ops_applied = Vec::new();
     let mut replayed_replicators = Vec::new();
 
-    // #664 residual convergence: a subagent peer can be partitioned longer
+    // #664 residual convergence: an agent-target peer can be partitioned longer
     // than the persisted per-request redrive cap. DefraDB's idempotent
     // add_replicator path deliberately skips initial replay for an existing
     // identity, so after a real reconnect force-reinstall every otherwise-
-    // converged subagent replicator. This replays current owner-authored DAG
+    // converged agent-target replicator. This replays current owner-authored DAG
     // heads (including arbitrarily old terminal requests) and does not create
     // any new same-value request history. If the desired identity itself
     // changed, the ordinary diff already contains teardown+install and is the
     // replay; avoid doing it twice.
     if (reconnected || force_replay)
-        && desired_state.uses_subagent_template()
+        && desired_state.uses_agent_target_template()
         && fresh_enrollment_generation_or_close(store, enrollment_generation.as_ref()).await
     {
         for address in desired_state
@@ -471,7 +471,7 @@ async fn peer_already_active(admin: &dyn RemoteP2pAdmin, peer_id: &str) -> bool 
 
 pub async fn run_pairing_reconciler(
     node: Arc<EmbeddedNode>,
-    identity: Arc<dyn AgentIdentity>,
+    identity: Arc<dyn NodeIdentity>,
     enrollment: EnrollmentAuthorityHandle,
     cancel: CancellationToken,
 ) -> Result<()> {
@@ -679,7 +679,7 @@ async fn sweep_pairings(
                     tracing::info!(
                         peer_id = %outcome.peer_id,
                         replicators = ?outcome.replayed_replicators,
-                        "replayed subagent replicators after peer reconnect"
+                        "replayed agent-target replicators after peer reconnect"
                     );
                 }
                 (true, outcome.peer_active)
@@ -737,7 +737,7 @@ pub fn update_applied_after_success(
 #[derive(Clone)]
 pub struct GraphqlPairingStateStore {
     node: Arc<EmbeddedNode>,
-    identity: Arc<dyn AgentIdentity>,
+    identity: Arc<dyn NodeIdentity>,
     enrollment: Option<EnrollmentAuthorityHandle>,
     exact_enrollment: Option<EnrollmentEndpointEntry>,
 }
@@ -748,7 +748,7 @@ impl GraphqlPairingStateStore {
     /// Runtime data-plane materialization must instead use
     /// [`Self::with_enrollment_authority`] so it cannot bypass the durable
     /// enrollment projection.
-    pub fn for_explicit_desired(node: Arc<EmbeddedNode>, identity: Arc<dyn AgentIdentity>) -> Self {
+    pub fn for_explicit_desired(node: Arc<EmbeddedNode>, identity: Arc<dyn NodeIdentity>) -> Self {
         Self {
             node,
             identity,
@@ -759,7 +759,7 @@ impl GraphqlPairingStateStore {
 
     pub fn with_enrollment_authority(
         node: Arc<EmbeddedNode>,
-        identity: Arc<dyn AgentIdentity>,
+        identity: Arc<dyn NodeIdentity>,
         enrollment: EnrollmentAuthorityHandle,
     ) -> Self {
         Self {
@@ -774,7 +774,7 @@ impl GraphqlPairingStateStore {
     /// enrollment generation. The desired document is evidence only.
     pub fn for_enrollment_materialization(
         node: Arc<EmbeddedNode>,
-        identity: Arc<dyn AgentIdentity>,
+        identity: Arc<dyn NodeIdentity>,
         entry: EnrollmentEndpointEntry,
     ) -> Self {
         Self {
@@ -807,7 +807,7 @@ impl GraphqlPairingStateStore {
             let entry = EnrollmentEndpointEntry {
                 desired_id: fence.member_peer.clone(),
                 peer_id: fence.member_peer,
-                agent_did: fence.member_did,
+                node_did: fence.member_did,
                 address: fence.member_ticket,
                 request_digest: fence.request_digest,
                 authorization_sequence: fence.authorization_sequence,
@@ -816,7 +816,7 @@ impl GraphqlPairingStateStore {
             (entry, generation)
         } else if let Some(exact) = self.exact_enrollment.as_ref() {
             let generation = EnrollmentRouteGeneration {
-                member_did: exact.agent_did.clone(),
+                member_did: exact.node_did.clone(),
                 member_peer: exact.peer_id.clone(),
                 member_ticket: exact.address.clone(),
                 request_digest: exact.request_digest.clone(),
@@ -872,7 +872,7 @@ fn materialized_enrollment_entry(
 ) -> Option<MaterializedDataPlaneEntry> {
     entries
         .iter()
-        .find(|entry| entry.desired_id == peer_id && entry.agent_did != self_did)
+        .find(|entry| entry.desired_id == peer_id && entry.node_did != self_did)
         .cloned()
         .map(|endpoint| MaterializedDataPlaneEntry {
             endpoint,
@@ -913,7 +913,7 @@ fn enrollment_base_row(
     // materialization witness; hostile row fields cannot alter its endpoint,
     // scope, or transport identity.
     row.peer_id = Some(entry.endpoint.desired_id.clone());
-    row.agent_did = Some(self_did.to_string());
+    row.node_did = Some(self_did.to_string());
     row.collections = None;
     row.replicator_addresses = Some(vec![entry.endpoint.address.clone()]);
     row.template = Some(super::templates::CLIENT_TEMPLATE.to_string());
@@ -932,7 +932,7 @@ fn local_data_plane_row(
     // A local data-plane document may choose only the non-protocol collection
     // overlay. Current enrollment remains the transport and identity gate.
     row.peer_id = Some(entry.endpoint.peer_id.clone());
-    row.agent_did = Some(self_did.to_string());
+    row.node_did = Some(self_did.to_string());
     row.replicator_addresses = Some(vec![entry.endpoint.address.clone()]);
     Some(row)
 }
@@ -950,7 +950,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
             r#"{{
                 PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
                     peer_id
-                    agent_did
+                    node_did
                     replicator_addresses
                     template
                     source
@@ -960,7 +960,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
                 }}
                 DataPlanePairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
                     peer_id
-                    agent_did
+                    node_did
                     collections
                     replicator_addresses
                     template
@@ -995,7 +995,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
         Ok(LoadedPairingDesired {
             state: merge_layered_desired(
                 self.identity.did(),
-                &entry.endpoint.agent_did,
+                &entry.endpoint.node_did,
                 base,
                 data_plane,
             ),
@@ -1018,7 +1018,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
         }
         Ok(self.exact_enrollment.as_ref().is_some_and(|entry| {
             enrollment_entry_is_fresh_at(entry, Utc::now())
-                && entry.agent_did == generation.member_did
+                && entry.node_did == generation.member_did
                 && entry.peer_id == generation.member_peer
                 && entry.address == generation.member_ticket
                 && entry.request_digest == generation.request_digest
@@ -1136,7 +1136,7 @@ struct PairingStateRow {
     #[serde(default)]
     peer_id: Option<String>,
     #[serde(default)]
-    agent_did: Option<String>,
+    node_did: Option<String>,
     collections: Option<Vec<String>>,
     replicator_addresses: Option<Vec<String>>,
     #[serde(default)]
@@ -1210,14 +1210,14 @@ fn desired_from_pairing_row(
         return Ok(None);
     }
 
-    let peer_did = row.agent_did.as_deref().map(str::trim).unwrap_or_default();
+    let peer_did = row.node_did.as_deref().map(str::trim).unwrap_or_default();
     if peer_did.is_empty() && scope_requires_peer_did(&template.scope) {
         anyhow::bail!(
             "pairing row for peer-DID-dependent template {template_id:?} has a blank \
-             agent_did; refusing to install an unscoped replicator (skipping peer)"
+             node_did; refusing to install an unscoped replicator (skipping peer)"
         );
     }
-    let (requester_did, owner_agent_did, direction) = if template.scope == Scope::ClientRoute {
+    let (requester_did, owner_node_did, direction) = if template.scope == Scope::ClientRoute {
         let route_id = row
             .peer_id
             .as_deref()
@@ -1241,12 +1241,8 @@ fn desired_from_pairing_row(
     .iter()
     .map(|&collection| collection.to_string())
     .collect::<BTreeSet<_>>();
-    let replicator_filter = super::policy::resolve_template_filters(
-        template,
-        direction,
-        requester_did,
-        owner_agent_did,
-    );
+    let replicator_filter =
+        super::policy::resolve_template_filters(template, direction, requester_did, owner_node_did);
 
     let subscription_collections = match template.delivery {
         Delivery::Push => BTreeSet::new(),
@@ -1290,14 +1286,14 @@ fn data_plane_desired_from_pairing_row(
     }
 
     if let Some(row_did) = row
-        .agent_did
+        .node_did
         .as_deref()
         .map(str::trim)
         .filter(|did| !did.is_empty())
     {
         if row_did != self_did {
             anyhow::bail!(
-                "DataPlanePairingDesired for peer {} scopes agent_did {} but this node is {}; \
+                "DataPlanePairingDesired for peer {} scopes node_did {} but this node is {}; \
                  refusing to install a data-plane replicator for a foreign DID",
                 signed_endpoint.peer_id,
                 row_did,
@@ -1333,11 +1329,11 @@ fn data_plane_desired_from_pairing_row(
     } else {
         super::policy::PairingDirection::RuntimeToClient
     };
-    let peer_did = signed_endpoint.agent_did.trim();
+    let peer_did = signed_endpoint.node_did.trim();
     if data_plane_scope_requires_signed_peer_did(&template.scope) && peer_did.is_empty() {
         anyhow::bail!(
             "DataPlanePairingDesired for peer {} uses template {template_id:?} but the signed \
-             PeerEndpoint has a blank agent_did",
+             PeerEndpoint has a blank node_did",
             signed_endpoint.peer_id
         );
     }
@@ -1454,7 +1450,7 @@ fn data_plane_scope_filter(
             })
             .collect(),
         Scope::ClientRoute => {
-            let (requester_did, owner_agent_did) = match client_route_direction {
+            let (requester_did, owner_node_did) = match client_route_direction {
                 super::policy::PairingDirection::ClientToRuntime => (local_did, signed_peer_did),
                 super::policy::PairingDirection::RuntimeToClient => (signed_peer_did, local_did),
             };
@@ -1462,7 +1458,7 @@ fn data_plane_scope_filter(
                 resolve_template(super::templates::CLIENT_TEMPLATE).expect("client template"),
                 client_route_direction,
                 requester_did,
-                owner_agent_did,
+                owner_node_did,
             )
         }
     }

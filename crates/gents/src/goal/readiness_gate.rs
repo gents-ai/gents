@@ -1,15 +1,14 @@
 //! Executable mirror of `proofs/Proofs/GoalAutomation/ReadinessGate.lean` and
-//! its native adapters over the canonical behavior-readiness row.
+//! its native adapters over the canonical node-readiness row.
 use super::*;
 use crate::runtime_status::{ReconcilePhase, ReconcileResult};
 use gents_protocol::row::{
-    is_behavior_unavailable_rejection, project_behavior_readiness, AgentBehaviorReadinessRow,
-    AgentRequestRow, BehaviorReadinessUnavailableReason, BehaviorReadinessUnknownReason,
-    ProjectedBehaviorReadiness,
+    is_behavior_unavailable_rejection, project_node_readiness, AgentReadinessUnavailableReason,
+    AgentReadinessUnknownReason, AgentRequestRow, NodeReadinessRow, ProjectedAgentReadiness,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GoalBehaviorObservation {
+pub enum GoalAgentObservation {
     Ready { newer_than_terminal: bool },
     BackendRecovering,
     Unavailable,
@@ -17,7 +16,7 @@ pub enum GoalBehaviorObservation {
     Unknown,
 }
 
-impl GoalBehaviorObservation {
+impl GoalAgentObservation {
     pub fn newer_than_terminal(self) -> bool {
         match self {
             Self::Ready {
@@ -29,7 +28,7 @@ impl GoalBehaviorObservation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GoalBehaviorReadiness {
+pub enum GoalAgentReadiness {
     Ready,
     Waiting,
     Unavailable,
@@ -38,14 +37,14 @@ pub enum GoalBehaviorReadiness {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GoalFailureCause {
     Attempt,
-    BehaviorUnavailable,
+    AgentUnavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GoalGatedDecision {
     Decided(GoalDecision),
     AwaitReadiness,
-    BehaviorUnavailable,
+    AgentUnavailable,
 }
 
 /// Inputs of the existing `decide_goal_continuation` owner.
@@ -64,20 +63,20 @@ pub struct GoalContinuationFacts {
 }
 
 /// Mirror of `ReadinessGate.observe`.
-pub fn observe_goal_behavior_readiness(
-    observation: GoalBehaviorObservation,
+pub fn observe_goal_agent_readiness(
+    observation: GoalAgentObservation,
     settled: bool,
-) -> GoalBehaviorReadiness {
+) -> GoalAgentReadiness {
     match observation {
-        GoalBehaviorObservation::Ready { .. } => GoalBehaviorReadiness::Ready,
-        GoalBehaviorObservation::BackendRecovering | GoalBehaviorObservation::Unknown => {
-            GoalBehaviorReadiness::Waiting
+        GoalAgentObservation::Ready { .. } => GoalAgentReadiness::Ready,
+        GoalAgentObservation::BackendRecovering | GoalAgentObservation::Unknown => {
+            GoalAgentReadiness::Waiting
         }
-        GoalBehaviorObservation::Unavailable | GoalBehaviorObservation::Unassigned => {
+        GoalAgentObservation::Unavailable | GoalAgentObservation::Unassigned => {
             if settled {
-                GoalBehaviorReadiness::Unavailable
+                GoalAgentReadiness::Unavailable
             } else {
-                GoalBehaviorReadiness::Waiting
+                GoalAgentReadiness::Waiting
             }
         }
     }
@@ -97,7 +96,7 @@ fn base_goal_decision(cause: GoalFailureCause, facts: &GoalContinuationFacts) ->
             facts.wrapup_requested,
             facts.wrapup_completed,
         ),
-        GoalFailureCause::BehaviorUnavailable => decide_goal_continuation(
+        GoalFailureCause::AgentUnavailable => decide_goal_continuation(
             facts.status,
             GoalRequestTerminal::Completed,
             facts.session_idle,
@@ -121,7 +120,7 @@ fn publishes(decision: GoalDecision) -> bool {
 
 /// Mirror of `ReadinessGate.gate`.
 pub fn gate_goal_continuation(
-    observation: GoalBehaviorObservation,
+    observation: GoalAgentObservation,
     settled: bool,
     cause: GoalFailureCause,
     facts: &GoalContinuationFacts,
@@ -130,16 +129,16 @@ pub fn gate_goal_continuation(
     if !publishes(base) {
         return GoalGatedDecision::Decided(base);
     }
-    match observe_goal_behavior_readiness(observation, settled) {
-        GoalBehaviorReadiness::Ready
-            if cause == GoalFailureCause::BehaviorUnavailable
+    match observe_goal_agent_readiness(observation, settled) {
+        GoalAgentReadiness::Ready
+            if cause == GoalFailureCause::AgentUnavailable
                 && !observation.newer_than_terminal() =>
         {
             GoalGatedDecision::AwaitReadiness
         }
-        GoalBehaviorReadiness::Ready => GoalGatedDecision::Decided(base),
-        GoalBehaviorReadiness::Waiting => GoalGatedDecision::AwaitReadiness,
-        GoalBehaviorReadiness::Unavailable => GoalGatedDecision::BehaviorUnavailable,
+        GoalAgentReadiness::Ready => GoalGatedDecision::Decided(base),
+        GoalAgentReadiness::Waiting => GoalGatedDecision::AwaitReadiness,
+        GoalAgentReadiness::Unavailable => GoalGatedDecision::AgentUnavailable,
     }
 }
 
@@ -153,7 +152,7 @@ pub enum GoalClaimedDecision {
 
 /// Mirror of `ReadinessGate.claimedGate`.
 pub fn gate_claimed_goal_continuation(
-    observation: GoalBehaviorObservation,
+    observation: GoalAgentObservation,
     settled: bool,
     child_exists: bool,
     state: &GoalState,
@@ -165,10 +164,10 @@ pub fn gate_claimed_goal_continuation(
     {
         return GoalClaimedDecision::Inactive;
     }
-    match observe_goal_behavior_readiness(observation, settled) {
-        GoalBehaviorReadiness::Ready => GoalClaimedDecision::Materialize,
-        GoalBehaviorReadiness::Waiting => GoalClaimedDecision::AwaitReadiness,
-        GoalBehaviorReadiness::Unavailable => GoalClaimedDecision::Stop,
+    match observe_goal_agent_readiness(observation, settled) {
+        GoalAgentReadiness::Ready => GoalClaimedDecision::Materialize,
+        GoalAgentReadiness::Waiting => GoalClaimedDecision::AwaitReadiness,
+        GoalAgentReadiness::Unavailable => GoalClaimedDecision::Stop,
     }
 }
 
@@ -193,7 +192,7 @@ pub fn next_goal_infrastructure_retries(
 }
 
 /// Routing rejects an unclaimed request with the readiness public message
-/// when its behavior cannot accept work. A claim always writes
+/// when its agent cannot accept work. A claim always writes
 /// `execution_generation`, so its absence proves nothing executed.
 pub fn goal_failure_cause(request: &AgentRequestRow) -> GoalFailureCause {
     let unclaimed = request.execution_generation.is_none();
@@ -203,7 +202,7 @@ pub fn goal_failure_cause(request: &AgentRequestRow) -> GoalFailureCause {
         .as_deref()
         .is_some_and(is_behavior_unavailable_rejection);
     if failed && unclaimed && readiness_rejection {
-        GoalFailureCause::BehaviorUnavailable
+        GoalFailureCause::AgentUnavailable
     } else {
         GoalFailureCause::Attempt
     }
@@ -211,22 +210,22 @@ pub fn goal_failure_cause(request: &AgentRequestRow) -> GoalFailureCause {
 
 /// `newer_than_terminal` compares the row's write time with the terminal
 /// request's; a missing or unparseable time is never newer.
-pub fn goal_behavior_observation(
-    projected: &ProjectedBehaviorReadiness,
+pub fn goal_agent_observation(
+    projected: &ProjectedAgentReadiness,
     newer_than_terminal: bool,
-) -> GoalBehaviorObservation {
+) -> GoalAgentObservation {
     match projected {
-        ProjectedBehaviorReadiness::Ready => GoalBehaviorObservation::Ready {
+        ProjectedAgentReadiness::Ready => GoalAgentObservation::Ready {
             newer_than_terminal,
         },
-        ProjectedBehaviorReadiness::Unavailable(
-            BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable,
-        ) => GoalBehaviorObservation::BackendRecovering,
-        ProjectedBehaviorReadiness::Unavailable(_) => GoalBehaviorObservation::Unavailable,
-        ProjectedBehaviorReadiness::Unknown(
-            BehaviorReadinessUnknownReason::BehaviorNotAssigned,
-        ) => GoalBehaviorObservation::Unassigned,
-        ProjectedBehaviorReadiness::Unknown(_) => GoalBehaviorObservation::Unknown,
+        ProjectedAgentReadiness::Unavailable(
+            AgentReadinessUnavailableReason::BackendTemporarilyUnavailable,
+        ) => GoalAgentObservation::BackendRecovering,
+        ProjectedAgentReadiness::Unavailable(_) => GoalAgentObservation::Unavailable,
+        ProjectedAgentReadiness::Unknown(AgentReadinessUnknownReason::AgentNotAssigned) => {
+            GoalAgentObservation::Unassigned
+        }
+        ProjectedAgentReadiness::Unknown(_) => GoalAgentObservation::Unknown,
     }
 }
 
@@ -250,45 +249,45 @@ pub(crate) fn goal_reconcile_settled(
         && last_result != Some(ReconcileResult::Error.as_str())
 }
 
-pub const GOAL_READINESS_WAIT_PREFIX: &str = "waiting for behavior readiness: ";
+pub const GOAL_READINESS_WAIT_PREFIX: &str = "waiting for agent readiness: ";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ObservedGoalBehavior {
-    pub observation: GoalBehaviorObservation,
+pub struct ObservedGoalAgent {
+    pub observation: GoalAgentObservation,
     pub settled: bool,
     /// Presentation-safe reason recorded when the Goal waits or stops on it.
     pub reason: String,
 }
 
-impl ObservedGoalBehavior {
+impl ObservedGoalAgent {
     pub fn waiting_reason(&self) -> String {
         format!("{GOAL_READINESS_WAIT_PREFIX}{}", self.reason)
     }
 }
 
-pub async fn observe_goal_behavior(
+pub async fn observe_goal_agent(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: Option<&str>,
+    node_did: &str,
+    agent_id: Option<&str>,
     terminalized_at: Option<&str>,
-) -> Result<ObservedGoalBehavior> {
-    let escaped_did = escape_graphql_string(agent_did);
+) -> Result<ObservedGoalAgent> {
+    let escaped_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
-            AgentBehaviorReadiness(filter: {{ agent_did: {{ _eq: "{escaped_did}" }} }}, limit: 1) {{
-                agent_did snapshot_json updated_at
+            NodeReadiness(filter: {{ node_did: {{ _eq: "{escaped_did}" }} }}, limit: 1) {{
+                node_did snapshot_json updated_at
             }}
-            AgentRuntime(filter: {{ agent_did: {{ _eq: "{escaped_did}" }} }}, limit: 1) {{
+            NodeRuntime(filter: {{ node_did: {{ _eq: "{escaped_did}" }} }}, limit: 1) {{
                 reconcile_phase last_reconcile_result
             }}
         }}"#
     );
     let response =
-        graphql_with_transaction_retry(node, &query, "query goal behavior readiness").await?;
-    let readiness_row = rows::<AgentBehaviorReadinessRow>(&response, "AgentBehaviorReadiness")?
+        graphql_with_transaction_retry(node, &query, "query goal agent readiness").await?;
+    let readiness_row = rows::<NodeReadinessRow>(&response, "NodeReadiness")?
         .into_iter()
         .next();
-    let runtime = rows::<serde_json::Value>(&response, "AgentRuntime")?
+    let runtime = rows::<serde_json::Value>(&response, "NodeRuntime")?
         .into_iter()
         .next();
     let settled = runtime.as_ref().is_some_and(|row| {
@@ -302,46 +301,35 @@ pub async fn observe_goal_behavior(
         readiness_row.as_ref().map(|row| row.updated_at.as_str()),
         terminalized_at,
     );
-    let behavior_id = behavior_id.map(str::trim).filter(|id| !id.is_empty());
-    let projected = match behavior_id {
-        Some(behavior_id) => project_behavior_readiness(
-            readiness_row.as_ref(),
-            agent_did,
-            [behavior_id],
-            None,
-            Utc::now(),
-        )
-        .behaviors
-        .remove(behavior_id)
-        .unwrap_or(ProjectedBehaviorReadiness::Unknown(
-            BehaviorReadinessUnknownReason::BehaviorNotAssigned,
-        )),
-        None => {
-            ProjectedBehaviorReadiness::Unknown(BehaviorReadinessUnknownReason::BehaviorNotAssigned)
+    let agent_id = agent_id.map(str::trim).filter(|id| !id.is_empty());
+    let projected = match agent_id {
+        Some(agent_id) => {
+            project_node_readiness(readiness_row.as_ref(), node_did, [agent_id], None)
+                .agents
+                .remove(agent_id)
+                .unwrap_or(ProjectedAgentReadiness::Unknown(
+                    AgentReadinessUnknownReason::AgentNotAssigned,
+                ))
         }
+        None => ProjectedAgentReadiness::Unknown(AgentReadinessUnknownReason::AgentNotAssigned),
     };
-    let observation = goal_behavior_observation(&projected, newer_than_terminal);
-    let label = behavior_id.unwrap_or("<none>");
+    let observation = goal_agent_observation(&projected, newer_than_terminal);
+    let label = agent_id.unwrap_or("<none>");
     let reason = match projected {
-        ProjectedBehaviorReadiness::Unavailable(reason) => {
-            format!(
-                "behavior {label} is unavailable: {}",
-                reason.public_message()
-            )
+        ProjectedAgentReadiness::Unavailable(reason) => {
+            format!("agent {label} is unavailable: {}", reason.public_message())
         }
-        ProjectedBehaviorReadiness::Unknown(
-            BehaviorReadinessUnknownReason::BehaviorNotAssigned,
-        ) => {
-            format!("behavior {label} is not assigned to this runtime")
+        ProjectedAgentReadiness::Unknown(AgentReadinessUnknownReason::AgentNotAssigned) => {
+            format!("agent {label} is not assigned to this runtime")
         }
-        ProjectedBehaviorReadiness::Ready => {
-            format!("behavior {label} readiness has not been republished since its rejection")
+        ProjectedAgentReadiness::Ready => {
+            format!("agent {label} readiness has not been republished since its rejection")
         }
-        ProjectedBehaviorReadiness::Unknown(reason) => {
-            format!("behavior {label} readiness is unknown ({reason:?})")
+        ProjectedAgentReadiness::Unknown(reason) => {
+            format!("agent {label} readiness is unknown ({reason:?})")
         }
     };
-    Ok(ObservedGoalBehavior {
+    Ok(ObservedGoalAgent {
         observation,
         settled,
         reason,
@@ -354,23 +342,23 @@ mod tests {
 
     #[test]
     fn projected_readiness_maps_onto_the_modeled_observation() {
-        use BehaviorReadinessUnavailableReason as Reason;
-        use BehaviorReadinessUnknownReason as Unknown;
+        use AgentReadinessUnavailableReason as Reason;
+        use AgentReadinessUnknownReason as Unknown;
         assert_eq!(
-            goal_behavior_observation(&ProjectedBehaviorReadiness::Ready, false),
-            GoalBehaviorObservation::Ready {
+            goal_agent_observation(&ProjectedAgentReadiness::Ready, false),
+            GoalAgentObservation::Ready {
                 newer_than_terminal: false
             }
         );
         assert_eq!(
-            goal_behavior_observation(
-                &ProjectedBehaviorReadiness::Unavailable(Reason::BackendTemporarilyUnavailable),
+            goal_agent_observation(
+                &ProjectedAgentReadiness::Unavailable(Reason::BackendTemporarilyUnavailable),
                 true
             ),
-            GoalBehaviorObservation::BackendRecovering
+            GoalAgentObservation::BackendRecovering
         );
         for reason in [
-            Reason::BehaviorDisabled,
+            Reason::AgentDisabled,
             Reason::RuntimeConfigurationInvalid,
             Reason::BackendNotConfigured,
             Reason::BackendDisabled,
@@ -381,29 +369,28 @@ mod tests {
             Reason::ExecutorStartFailed,
         ] {
             assert_eq!(
-                goal_behavior_observation(&ProjectedBehaviorReadiness::Unavailable(reason), true),
-                GoalBehaviorObservation::Unavailable,
+                goal_agent_observation(&ProjectedAgentReadiness::Unavailable(reason), true),
+                GoalAgentObservation::Unavailable,
                 "{reason:?}"
             );
         }
         assert_eq!(
-            goal_behavior_observation(
-                &ProjectedBehaviorReadiness::Unknown(Unknown::BehaviorNotAssigned),
+            goal_agent_observation(
+                &ProjectedAgentReadiness::Unknown(Unknown::AgentNotAssigned),
                 true
             ),
-            GoalBehaviorObservation::Unassigned
+            GoalAgentObservation::Unassigned
         );
         for reason in [
             Unknown::ReadinessMissing,
             Unknown::ReadinessMalformed,
             Unknown::ReadinessVersionUnsupported,
-            Unknown::ReadinessStale,
             Unknown::ProcessNotReady,
             Unknown::RouterGenerationStale,
         ] {
             assert_eq!(
-                goal_behavior_observation(&ProjectedBehaviorReadiness::Unknown(reason), true),
-                GoalBehaviorObservation::Unknown,
+                goal_agent_observation(&ProjectedAgentReadiness::Unknown(reason), true),
+                GoalAgentObservation::Unknown,
                 "{reason:?}"
             );
         }
@@ -453,7 +440,7 @@ mod tests {
             request_id: "child".into(),
             lifecycle_state: Some(RequestLifecycleState::Failed),
             failure_reason: Some(
-                BehaviorReadinessUnavailableReason::RuntimeConfigurationInvalid
+                AgentReadinessUnavailableReason::RuntimeConfigurationInvalid
                     .public_message()
                     .into(),
             ),
@@ -461,7 +448,7 @@ mod tests {
         };
         assert_eq!(
             goal_failure_cause(&rejected),
-            GoalFailureCause::BehaviorUnavailable
+            GoalFailureCause::AgentUnavailable
         );
         let unassigned = AgentRequestRow {
             failure_reason: Some(gents_protocol::row::BEHAVIOR_NOT_ASSIGNED_MESSAGE.into()),
@@ -469,7 +456,7 @@ mod tests {
         };
         assert_eq!(
             goal_failure_cause(&unassigned),
-            GoalFailureCause::BehaviorUnavailable
+            GoalFailureCause::AgentUnavailable
         );
         let claimed = AgentRequestRow {
             execution_generation: Some("generation".into()),
@@ -489,10 +476,10 @@ mod tests {
     }
 
     #[test]
-    fn a_credentials_rejection_is_behavior_unavailable() {
+    fn a_credentials_rejection_is_agent_unavailable() {
         for reason in [
-            BehaviorReadinessUnavailableReason::CredentialsRequired,
-            BehaviorReadinessUnavailableReason::ToolConfigurationInvalid,
+            AgentReadinessUnavailableReason::CredentialsRequired,
+            AgentReadinessUnavailableReason::ToolConfigurationInvalid,
         ] {
             let rejected = AgentRequestRow {
                 request_id: "child".into(),
@@ -502,7 +489,7 @@ mod tests {
             };
             assert_eq!(
                 goal_failure_cause(&rejected),
-                GoalFailureCause::BehaviorUnavailable,
+                GoalFailureCause::AgentUnavailable,
                 "{reason:?}"
             );
         }

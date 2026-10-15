@@ -1,5 +1,7 @@
 use super::*;
-use crate::tool_surface::{BehaviorToolConfig, FileToolMode, ResolvedToolSelection, ToolCeiling};
+use crate::tool_surface::{
+    AgentToolSurfaceConfig, FileToolMode, ResolvedToolSelection, ToolCeiling,
+};
 use crate::toolset::shared::ToolContext;
 use crate::toolset::{CommandConstraints, CommandExecutionMode, CommandNetworkMode};
 
@@ -91,7 +93,7 @@ fn sample_config(
         digest: config_digest(&workspace, &servers, &constraints),
         workspace,
         session_id: session_id.into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         servers,
         constraints,
         format_on_write: false,
@@ -161,8 +163,8 @@ fn tool_surface_includes_lsp_when_policy_allows() {
     selection.file_tool_root = Some(root.path().to_path_buf());
     let ceiling = ToolCeiling::readonly_at(root.path());
     let config =
-        BehaviorToolConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
-    let surface = config.resolve_with_subagent_tools_for_mcp_presence(false, Default::default());
+        AgentToolSurfaceConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
+    let surface = config.resolve_with_agent_tools_for_mcp_presence(false, Default::default());
     assert!(surface.tool_names().iter().any(|name| name == "lsp"));
 }
 
@@ -175,8 +177,8 @@ fn tool_surface_omits_lsp_when_disabled() {
     selection.file_tool_root = Some(root.path().to_path_buf());
     let ceiling = ToolCeiling::readonly_at(root.path());
     let config =
-        BehaviorToolConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
-    let surface = config.resolve_with_subagent_tools_for_mcp_presence(false, Default::default());
+        AgentToolSurfaceConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
+    let surface = config.resolve_with_agent_tools_for_mcp_presence(false, Default::default());
     assert!(!surface.tool_names().iter().any(|name| name == "lsp"));
 }
 
@@ -470,7 +472,7 @@ async fn workspace_edit_preflights_every_file_before_writing_any_file() {
     );
     let key = PoolKey {
         session_id: "s-atomic-preflight".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -845,7 +847,7 @@ async fn request_cancel_does_not_kill_pooled_server() {
     );
     let key = PoolKey {
         session_id: "s-cancel".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -901,8 +903,8 @@ fn readonly_surface_uses_file_tool_root_not_cwd() {
     selection.file_tool_root = Some(root.path().to_path_buf());
     let ceiling = ToolCeiling::readonly_at(root.path());
     let config =
-        BehaviorToolConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
-    let surface = config.resolve_with_subagent_tools_for_mcp_presence(false, Default::default());
+        AgentToolSurfaceConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
+    let surface = config.resolve_with_agent_tools_for_mcp_presence(false, Default::default());
     let lsp = surface.lsp_config().expect("lsp advertised");
     assert_eq!(
         std::fs::canonicalize(&lsp.workspace).unwrap_or(lsp.workspace.clone()),
@@ -996,7 +998,7 @@ async fn simultaneous_first_calls_share_one_process() {
     );
     let key = PoolKey {
         session_id: "s-singleflight".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -1037,7 +1039,7 @@ async fn resolved_executable_path_is_subject_to_command_prefix_policy() {
     config.digest = config_digest(&config.workspace, &config.servers, &config.constraints);
     let key = PoolKey {
         session_id: "s-resolved-prefix".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1112,7 +1114,7 @@ while True:
     );
     let key = PoolKey {
         session_id: "s-empty-array".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1123,6 +1125,7 @@ while True:
         "textDocument/documentSymbol",
         serde_json::json!({"textDocument":{"uri": super::uri::path_to_file_uri(&root.path().join("lib.rs"))}}),
         std::time::Duration::from_secs(2),
+        std::time::Duration::from_secs(super::MAX_ACTION_TIMEOUT_SECS),
         true,
     )
     .await
@@ -1135,6 +1138,7 @@ while True:
         "workspace/symbol",
         serde_json::json!({"query":"missing"}),
         std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(super::MAX_ACTION_TIMEOUT_SECS),
         true,
     )
     .await
@@ -1145,6 +1149,154 @@ while True:
         "genuinely empty results must stop after the bounded retry count: {:?}",
         started.elapsed()
     );
+}
+
+#[tokio::test]
+async fn semantic_retry_waits_for_a_busy_server_to_settle() {
+    let Some((result, _)) = busy_fixture_symbols("status", 10).await else {
+        return;
+    };
+    let result = result.expect("null from a busy server should be retried after it settles");
+    assert_eq!(result[0]["name"], "settled");
+}
+
+#[tokio::test]
+async fn semantic_retry_waits_on_progress_when_server_status_is_never_sent() {
+    let Some((result, _)) = busy_fixture_symbols("progress", 10).await else {
+        return;
+    };
+    let result = result.expect("null during open progress should be retried after it ends");
+    assert_eq!(result[0]["name"], "settled");
+}
+
+#[tokio::test]
+async fn semantic_retry_ignores_progress_once_server_status_is_quiescent() {
+    let Some((result, elapsed)) = busy_fixture_symbols("quiescent-progress", 30).await else {
+        return;
+    };
+    assert!(result.expect("empty answer").is_null());
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "a quiescent server's empty answer must not wait on unrelated progress: {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn semantic_retry_reports_a_server_that_exits_while_busy() {
+    let Some((result, elapsed)) = busy_fixture_symbols("exit", 30).await else {
+        return;
+    };
+    let error = result.expect_err("an exited server must fail the request");
+    assert!(error.contains("language server has exited"), "{error}");
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "an exited server must not read as indexing until the deadline: {elapsed:?}"
+    );
+}
+
+const BUSY_FIXTURE_PY: &str = r#"
+import json, sys, threading
+mode = sys.argv[1]
+lock = threading.Lock()
+settled = threading.Event()
+def read():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        if line in (b'\r\n', b'\n'):
+            break
+        key, _, value = line.decode().partition(':')
+        headers[key.strip().lower()] = value.strip()
+    n = int(headers.get('content-length', '0'))
+    return json.loads(sys.stdin.buffer.read(n) or b'null')
+def write(obj):
+    body = json.dumps(obj).encode()
+    with lock:
+        sys.stdout.buffer.write(f'Content-Length: {len(body)}\r\n\r\n'.encode())
+        sys.stdout.buffer.write(body)
+        sys.stdout.buffer.flush()
+def status(quiescent):
+    write({"jsonrpc":"2.0","method":"experimental/serverStatus","params":{"health":"ok","quiescent":quiescent}})
+def progress(kind):
+    write({"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":kind,"title":"Indexing"}}})
+def settle():
+    settled.set()
+    if mode == 'status':
+        status(True)
+    else:
+        progress('end')
+while True:
+    msg = read()
+    if msg is None:
+        break
+    method = msg.get('method')
+    mid = msg.get('id')
+    if method == 'initialize':
+        write({"jsonrpc":"2.0","id":mid,"result":{"capabilities":{}}})
+        if mode in ('status', 'exit'):
+            status(False)
+        if mode in ('progress', 'quiescent-progress'):
+            progress('begin')
+        if mode == 'quiescent-progress':
+            status(True)
+        if mode in ('status', 'progress'):
+            threading.Timer(1.5, settle).start()
+    elif method == 'textDocument/documentSymbol':
+        result = [{"name":"settled","kind":12,"range":{"start":{"line":0,"character":0}},"selectionRange":{"start":{"line":0,"character":0}}}] if settled.is_set() else None
+        write({"jsonrpc":"2.0","id":mid,"result":result})
+        if mode == 'exit':
+            sys.exit(0)
+    elif method == 'exit':
+        break
+    elif mid is not None:
+        write({"jsonrpc":"2.0","id":mid,"result":None})
+"#;
+
+async fn busy_fixture_symbols(
+    mode: &str,
+    timeout_secs: u64,
+) -> Option<(Result<serde_json::Value, String>, std::time::Duration)> {
+    if !python3_available() {
+        return None;
+    }
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("lib.rs"), "fn settled() {}\n").unwrap();
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname='t'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+    let pool = LspPool::new();
+    let mut server = fixture_server(BUSY_FIXTURE_PY.into());
+    server.args.push(mode.into());
+    let session_id = format!("s-busy-{mode}");
+    let config = sample_config(
+        root.path().to_path_buf(),
+        FileToolMode::ReadOnly,
+        &session_id,
+        vec![server.clone()],
+    );
+    let key = PoolKey {
+        session_id,
+        agent_id: "b1".into(),
+        workspace_root: root.path().to_path_buf(),
+        server_name: server.name.clone(),
+        config_digest: config.digest.clone(),
+    };
+    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let started = std::time::Instant::now();
+    let result = super::actions::request_maybe_retry(
+        lease.client(),
+        "textDocument/documentSymbol",
+        serde_json::json!({"textDocument":{"uri": super::uri::path_to_file_uri(&root.path().join("lib.rs"))}}),
+        std::time::Duration::from_secs(timeout_secs),
+        std::time::Duration::from_secs(super::MAX_ACTION_TIMEOUT_SECS),
+        true,
+    )
+    .await;
+    Some((result, started.elapsed()))
 }
 
 #[tokio::test]
@@ -1169,7 +1321,7 @@ async fn ensure_open_resyncs_when_disk_text_changes_out_of_band() {
     );
     let key = PoolKey {
         session_id: "s-resync".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1244,7 +1396,7 @@ while True:
     );
     let key = PoolKey {
         session_id: "s-restart".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1265,6 +1417,54 @@ while True:
     let _second = pool.get_or_start(key, &server, &config).await.unwrap();
     let starts = std::fs::read_to_string(counter).unwrap();
     assert_eq!(starts.lines().count(), 2, "{starts:?}");
+}
+
+#[tokio::test]
+async fn rust_analyzer_readiness_waits_for_workspace_and_quiescence() {
+    if !python3_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("lib.rs"), "fn x() {}\n").unwrap();
+    let fixture = FIXTURE_PY
+        .replace("while True:\n    msg = read()", "status_polls = 0\nwhile True:\n    msg = read()")
+        .replace("    elif method == 'shutdown':", r#"    elif method == 'rust-analyzer/analyzerStatus':
+        status_polls += 1
+        write({"jsonrpc":"2.0","method":"experimental/serverStatus","params":{"quiescent":status_polls <= 14 or status_polls > 28}})
+        write({"jsonrpc":"2.0","id":mid,"result":"  " if status_polls <= 14 else "Workspace loaded"})
+    elif method == 'fixture/statusPolls':
+        write({"jsonrpc":"2.0","id":mid,"result":status_polls})
+    elif method == 'shutdown':"#);
+    let mut server = fixture_server(fixture);
+    server.name = "rust-analyzer".into();
+    server.workspace_ready_timings = Some(serde_json::json!({"initial": 30_000}));
+    let config = sample_config(
+        root.path().to_path_buf(),
+        FileToolMode::ReadOnly,
+        "s-readiness",
+        vec![server.clone()],
+    );
+    let key = PoolKey {
+        session_id: "s-readiness".into(),
+        agent_id: "b1".into(),
+        workspace_root: root.path().to_path_buf(),
+        server_name: server.name.clone(),
+        config_digest: config.digest.clone(),
+    };
+    let pool = LspPool::new();
+    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let polls = lease
+        .client()
+        .request("fixture/statusPolls", serde_json::json!({}))
+        .await
+        .unwrap()
+        .as_u64()
+        .unwrap();
+    lease.client().shutdown_exit().await;
+    assert!(
+        polls > 28,
+        "readiness returned before a nonempty workspace status and quiescence: {polls}"
+    );
 }
 
 #[tokio::test]
@@ -1323,7 +1523,7 @@ while True:
     );
     let key = PoolKey {
         session_id: "s-backoff".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -1369,7 +1569,7 @@ async fn idle_sweep_retires_zero_lease_ready_clients() {
     );
     let key = PoolKey {
         session_id: "s-idle".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -1452,7 +1652,7 @@ while True:
     config.format_on_write = true;
     let key = PoolKey {
         session_id: "s-fmt".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -1537,7 +1737,7 @@ async fn rust_analyzer_starts_and_reports_ready() {
             new_name: None,
             apply: None,
             payload: None,
-            timeout: Some(40),
+            timeout: Some(120),
         })
         .await
         .expect("rust-analyzer must return document symbols after cold start");
@@ -2033,7 +2233,7 @@ while True:
     );
     let key = PoolKey {
         session_id: "s-start-cancel".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -2112,7 +2312,7 @@ while True:
     );
     let key = PoolKey {
         session_id: "s-drop-cancel".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -2348,7 +2548,7 @@ async fn start_client_initializes_with_pool_key_workspace() {
     );
     let key = PoolKey {
         session_id: "s-overlay-root".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: overlay.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -2405,7 +2605,7 @@ pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispa
     let tool = LspTool::new(config.clone(), pool.clone()).unwrap();
     let key = PoolKey {
         session_id: config.session_id.clone(),
-        behavior_id: config.behavior_id.clone(),
+        agent_id: config.agent_id.clone(),
         workspace_root: source.clone(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),

@@ -4,7 +4,7 @@ async fn materializer_with_node() -> (Arc<defra_node::EmbeddedNode>, ProductionM
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
-        snapshot_with_behavior_and_schedules(integration_test_behavior("general"), HashMap::new());
+        snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     (node, materializer)
@@ -14,16 +14,16 @@ async fn materializer_with_node() -> (Arc<defra_node::EmbeddedNode>, ProductionM
 async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_behavior("general");
-    let agent_did = behavior.agent_did().to_string();
-    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let behavior = integration_test_agent("general");
+    let node_did = behavior.node_did().to_string();
+    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: "task-goal-release".to_string(),
         name: Some("release task".to_string()),
-        behavior_id: "general".to_string(),
+        agent_id: "general".to_string(),
         prompt_template: "implement release".to_string(),
         goal_objective_template: Some("ship release".to_string()),
         goal_token_budget: Some(4_096),
@@ -31,7 +31,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         hooks: Vec::new(),
     };
     let fire_key = "event:release-trigger:doc:release-42";
-    let identity = crate::goal::task_goal_fire_identity(&agent_did, &task.task_id, fire_key);
+    let identity = crate::goal::task_goal_fire_identity(&node_did, &task.task_id, fire_key);
 
     let invalid = materializer
         .materialize(
@@ -52,7 +52,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         .expect_err("an invalid declaration must roll back before publication");
     assert!(invalid.to_string().contains("non-empty"), "{invalid:#}");
     assert!(
-        crate::goal::load_canonical_goal(node.as_ref(), &agent_did, &identity.session_id)
+        crate::goal::load_canonical_goal(node.as_ref(), &node_did, &identity.session_id)
             .await
             .unwrap()
             .is_none(),
@@ -103,7 +103,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         Some(identity.request_id.clone())
     );
 
-    let goal = crate::goal::load_canonical_goal(node.as_ref(), &agent_did, &identity.session_id)
+    let goal = crate::goal::load_canonical_goal(node.as_ref(), &node_did, &identity.session_id)
         .await
         .unwrap()
         .expect("Goal must commit with its first request");
@@ -114,18 +114,18 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{
-                request_id agent_did session_id retry_key lifecycle_state content
+                request_id node_did session_id retry_key lifecycle_state content
                 caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind
                 caused_by_source_doc_id caused_by_correlation admission_kind
                 runtime_source_request_id runtime_source_kind
             }}
             GoalCreationClaim(filter: {{ creation_key: {{ _eq: "{}" }} }}) {{
-                agent_did session_id objective token_budget
+                node_did session_id objective token_budget
             }}
         }}"#,
         escape_graphql_string(&identity.retry_key),
         escape_graphql_string(&crate::goal::deterministic_goal_creation_key(
-            &agent_did,
+            &node_did,
             &identity.session_id,
         )),
     );
@@ -154,7 +154,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         request["request_id"].as_str(),
         Some(identity.request_id.as_str())
     );
-    assert_eq!(request["agent_did"].as_str(), Some(agent_did.as_str()));
+    assert_eq!(request["node_did"].as_str(), Some(node_did.as_str()));
     assert_eq!(
         request["session_id"].as_str(),
         Some(identity.session_id.as_str())
@@ -190,7 +190,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     );
 
     assert_eq!(
-        crate::goal::delete_goals_for_session(node.as_ref(), &agent_did, &identity.session_id)
+        crate::goal::delete_goals_for_session(node.as_ref(), &node_did, &identity.session_id)
             .await
             .expect("clear Goal and creation claim before source checkpoint"),
         1
@@ -206,24 +206,24 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
 }
 
 #[tokio::test]
-async fn goal_task_identity_and_recovery_are_scoped_by_agent_did() {
+async fn goal_task_identity_and_recovery_are_scoped_by_node_did() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let first_behavior = integration_test_behavior("general");
-    let first_did = first_behavior.agent_did().to_string();
-    let first_snapshot = snapshot_with_behavior_and_schedules(first_behavior, HashMap::new());
+    let first_behavior = integration_test_agent("general");
+    let first_did = first_behavior.node_did().to_string();
+    let first_snapshot = snapshot_with_agent_and_schedules(first_behavior, HashMap::new());
     let (_first_tx, first_rx) = watch::channel(first_snapshot);
     let first_materializer = ProductionMaterializer::new(node.clone(), first_rx);
-    let second_behavior = integration_test_behavior("general");
-    let second_did = second_behavior.agent_did().to_string();
-    let second_snapshot = snapshot_with_behavior_and_schedules(second_behavior, HashMap::new());
+    let second_behavior = integration_test_agent("general");
+    let second_did = second_behavior.node_did().to_string();
+    let second_snapshot = snapshot_with_agent_and_schedules(second_behavior, HashMap::new());
     let (_second_tx, second_rx) = watch::channel(second_snapshot);
     let second_materializer = ProductionMaterializer::new(node, second_rx);
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: "shared-task-id".to_string(),
         name: None,
-        behavior_id: "general".to_string(),
+        agent_id: "general".to_string(),
         prompt_template: "shared prompt".to_string(),
         goal_objective_template: Some("shared objective".to_string()),
         goal_token_budget: None,
@@ -289,16 +289,16 @@ async fn goal_task_identity_and_recovery_are_scoped_by_agent_did() {
 async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_behavior("general");
-    let agent_did = behavior.agent_did().to_string();
-    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let behavior = integration_test_agent("general");
+    let node_did = behavior.node_did().to_string();
+    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: "foreign-collision-task".to_string(),
         name: None,
-        behavior_id: "general".to_string(),
+        agent_id: "general".to_string(),
         prompt_template: "prompt".to_string(),
         goal_objective_template: Some("objective".to_string()),
         goal_token_budget: None,
@@ -306,14 +306,14 @@ async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id(
         hooks: Vec::new(),
     };
     let fire_key = "foreign-collision-fire";
-    let identity = crate::goal::task_goal_fire_identity(&agent_did, &task.task_id, fire_key);
+    let identity = crate::goal::task_goal_fire_identity(&node_did, &task.task_id, fire_key);
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{}",
                 purpose: "normal",
-                agent_did: "did:key:foreign-task-owner",
-                behavior_id: "general",
+                node_did: "did:key:foreign-task-owner",
+                agent_id: "general",
                 session_id: "{}",
                 retry_key: "{}",
                 content: "foreign collision",
@@ -344,14 +344,14 @@ async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id(
 async fn create_request(
     node: &defra_node::EmbeddedNode,
     request_id: &str,
-    agent_did: &str,
+    node_did: &str,
     lifecycle_state: &str,
     trigger_id: &str,
     trigger_kind: TriggerKind,
     correlation: &str,
 ) {
     let request_id = escape_graphql_string(request_id);
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let lifecycle_state = escape_graphql_string(lifecycle_state);
     let trigger_id = escape_graphql_string(trigger_id);
     let correlation = escape_graphql_string(correlation);
@@ -361,8 +361,8 @@ async fn create_request(
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
                 purpose: "normal",
-                agent_did: "{agent_did}",
-                behavior_id: "general",
+                node_did: "{node_did}",
+                agent_id: "general",
                 session_id: "{request_id}",
                 content: "production marker test",
                 lifecycle_state: "{lifecycle_state}",
@@ -458,15 +458,15 @@ async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
 async fn materializer_rejects_workspace_from_different_explicit_owner() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    let behavior = integration_test_behavior("general");
+    let behavior = integration_test_agent("general");
     insert_ready_workspace(
         &node,
         "ws-owner",
         "did:key:z-correct-owner",
-        behavior.agent_did(),
+        behavior.node_did(),
     )
     .await;
-    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let context = writer_context("ws-owner", "did:key:z-wrong-owner");
@@ -606,7 +606,7 @@ fn workspace_writer_task() -> ResolvedTask {
         emit_outcome: false,
         task_id: "task-ws".to_string(),
         name: None,
-        behavior_id: "general".to_string(),
+        agent_id: "general".to_string(),
         prompt_template: "patch".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -616,7 +616,7 @@ fn workspace_writer_task() -> ResolvedTask {
 }
 
 fn writer_context(workspace_id: &str, owner: &str) -> String {
-    serde_json::json!({"version":1,"source_fields":{"workspace_id":workspace_id,"workspace_owner_agent_did":owner,"workspace_authority":"readWrite"}}).to_string()
+    serde_json::json!({"version":1,"source_fields":{"workspace_id":workspace_id,"workspace_owner_node_did":owner,"workspace_authority":"readWrite"}}).to_string()
 }
 
 async fn insert_ready_workspace(
@@ -636,7 +636,7 @@ async fn insert_ready_workspace(
             branch: "topic".into(),
             creation_policy: "git_worktree_diff".into(),
             adapter: "git_worktree".into(),
-            owner_agent_did: owner.into(),
+            owner_node_did: owner.into(),
             writer_principal: writer_principal.into(),
             integrator_principal: "did:key:integrator".into(),
             instruction_manifest: "{}".into(),
@@ -662,11 +662,11 @@ async fn workspace_requests(
         r#"{{
             AgentRequest(filter: {{ workspace_id: {{ _eq: "{id}" }} }}) {{
                 request_id
-                agent_did
+                node_did
                 lifecycle_state
                 workspace_id
                 workspace_seal_hash
-                workspace_owner_agent_did
+                workspace_owner_node_did
                 workspace_authority
             }}
         }}"#,
@@ -691,12 +691,12 @@ async fn workspace_requests(
 async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    let behavior = integration_test_behavior("general");
-    let owner = behavior.agent_did().to_string();
+    let behavior = integration_test_agent("general");
+    let owner = behavior.node_did().to_string();
     // The event-source document carries the workspace id and authority but
     // not its owner. The canonical workspace owner supplies that binding.
     insert_ready_workspace(&node, "ws-incomplete", &owner, &owner).await;
-    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let context=serde_json::json!({"version":1,"source_fields":{"workspace_id":"ws-incomplete","workspace_authority":"readWrite"}}).to_string();
@@ -721,7 +721,7 @@ async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace(
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0]["request_id"].as_str(), Some(request_id.as_str()));
     assert_eq!(
-        rows[0]["workspace_owner_agent_did"].as_str(),
+        rows[0]["workspace_owner_node_did"].as_str(),
         Some(owner.as_str())
     );
     assert_eq!(rows[0]["workspace_authority"].as_str(), Some("readWrite"));
@@ -731,8 +731,8 @@ async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace(
 async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    let behavior = integration_test_behavior("general");
-    let owner = behavior.agent_did().to_string();
+    let behavior = integration_test_agent("general");
+    let owner = behavior.node_did().to_string();
     insert_ready_workspace(
         &node,
         "ws-foreign-ownerless",
@@ -740,7 +740,7 @@ async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
         &owner,
     )
     .await;
-    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let context = serde_json::json!({"version":1,"source_fields":{"workspace_id":"ws-foreign-ownerless","workspace_authority":"readOnly"}}).to_string();
@@ -776,17 +776,17 @@ async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
 async fn materializer_preserves_explicit_workspace_owner_distinct_from_executor() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_behavior("general");
-    let executor = behavior.agent_did().to_owned();
+    let behavior = integration_test_agent("general");
+    let executor = behavior.node_did().to_owned();
     assert_ne!(executor, "did:key:z-workspace-owner");
     insert_ready_workspace(
         node.as_ref(),
         "ws-stamp",
         "did:key:z-workspace-owner",
-        behavior.agent_did(),
+        behavior.node_did(),
     )
     .await;
-    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let context = writer_context("ws-stamp", "did:key:z-workspace-owner");
@@ -809,12 +809,12 @@ async fn materializer_preserves_explicit_workspace_owner_distinct_from_executor(
         .expect("explicit workspace owner survives request publication");
     let rows = workspace_requests(node.as_ref(), "ws-stamp").await;
     assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["agent_did"].as_str(), Some(executor.as_str()));
+    assert_eq!(rows[0]["node_did"].as_str(), Some(executor.as_str()));
     assert_eq!(rows[0]["workspace_id"].as_str(), Some("ws-stamp"));
     assert_eq!(rows[0]["workspace_authority"].as_str(), Some("readWrite"));
     assert_eq!(rows[0]["request_id"].as_str(), Some(request_id.as_str()));
     assert_eq!(
-        rows[0]["workspace_owner_agent_did"].as_str(),
+        rows[0]["workspace_owner_node_did"].as_str(),
         Some("did:key:z-workspace-owner")
     );
 }
@@ -823,15 +823,15 @@ async fn materializer_preserves_explicit_workspace_owner_distinct_from_executor(
 async fn goal_task_workspace_activation_retry_is_idempotent() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_behavior("general");
+    let behavior = integration_test_agent("general");
     insert_ready_workspace(
         node.as_ref(),
         "ws-goal-retry",
         "did:key:z-workspace-owner",
-        behavior.agent_did(),
+        behavior.node_did(),
     )
     .await;
-    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let context = writer_context("ws-goal-retry", "did:key:z-workspace-owner");
@@ -879,7 +879,7 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
     let rows = workspace_requests(node.as_ref(), "ws-goal-retry").await;
     assert_eq!(rows.len(), 1, "retry must reuse the staged request");
     assert_eq!(
-        rows[0]["workspace_owner_agent_did"].as_str(),
+        rows[0]["workspace_owner_node_did"].as_str(),
         Some("did:key:z-workspace-owner")
     );
     assert_eq!(rows[0]["lifecycle_state"].as_str(), Some("pending"));
@@ -889,15 +889,15 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
 async fn unique_read_write_denial_does_not_leave_claimable_request() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_behavior("general");
+    let behavior = integration_test_agent("general");
     insert_ready_workspace(
         node.as_ref(),
         "ws-rw",
         "did:key:z-workspace-owner",
-        behavior.agent_did(),
+        behavior.node_did(),
     )
     .await;
-    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let context = writer_context("ws-rw", "did:key:z-workspace-owner");
@@ -959,12 +959,12 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
 async fn claimed_trigger_request(
     node: &Arc<defra_node::EmbeddedNode>,
     request_id: &str,
-    agent_did: &str,
+    node_did: &str,
 ) -> crate::lifecycle::RequestLifecycle {
     create_request(
         node,
         request_id,
-        agent_did,
+        node_did,
         "pending",
         "latest",
         TriggerKind::Event,
@@ -983,10 +983,10 @@ async fn claimed_trigger_request(
         crate::graphql::first_row(&result, "AgentRequest")
             .unwrap()
             .unwrap();
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
-        agent_did,
+        node_did,
         row.try_into().unwrap(),
         60,
     );
@@ -1057,13 +1057,13 @@ async fn canonical_partial_streams(
 #[tokio::test]
 async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically() {
     let (node, materializer) = materializer_with_node().await;
-    let agent_did = "did:key:z-execution-owner";
+    let node_did = "did:key:z-execution-owner";
     for state in ["claimed", "processing"] {
         let request_id = format!("live-{state}");
-        let mut lifecycle = claimed_trigger_request(&node, &request_id, agent_did).await;
+        let mut lifecycle = claimed_trigger_request(&node, &request_id, node_did).await;
         let writer = crate::streaming::DefraStreamWriter::new(
             node.clone(),
-            agent_did,
+            node_did,
             std::time::Duration::ZERO,
         );
         if state == "processing" {
@@ -1093,7 +1093,7 @@ async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically
         let before = lifecycle.request().execution_generation.clone();
         assert_eq!(
             materializer
-                .supersede_active_runtime_requests_for_trigger(agent_did, "latest", None)
+                .supersede_active_runtime_requests_for_trigger(node_did, "latest", None)
                 .await
                 .unwrap(),
             1
@@ -1102,7 +1102,7 @@ async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically
             .execute(&format!(
                 r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
-                _docID request_id agent_did requester_did session_id lifecycle_state
+                _docID request_id node_did requester_did session_id lifecycle_state
                 execution_generation terminal_output terminalized_at
             }}
         }}"#
@@ -1125,7 +1125,7 @@ async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically
         }
         assert_eq!(
             materializer
-                .supersede_active_runtime_requests_for_trigger(agent_did, "latest", None)
+                .supersede_active_runtime_requests_for_trigger(node_did, "latest", None)
                 .await
                 .unwrap(),
             0
@@ -1138,7 +1138,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
-        snapshot_with_behavior_and_schedules(integration_test_behavior("general"), HashMap::new());
+        snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot.clone());
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let identity = gents_protocol::trigger_delivery::FireIdentity {
@@ -1171,8 +1171,8 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
         Box::pin(async move {
             assert!(crate::trigger_engine::durable::stage_fire_receipt(txn, &fire).await?);
             txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) {create_AgentRequest(input: $input) {_docID}}", &serde_json::json!({"input": {
-                "request_id": fire.request_id, "agent_did": fire.identity.owner_did,
-                "session_id": fire.session_id, "behavior_id": "general", "purpose": "normal",
+                "request_id": fire.request_id, "node_did": fire.identity.owner_did,
+                "session_id": fire.session_id, "agent_id": "general", "purpose": "normal",
                 "lifecycle_state": "processing", "caused_by_trigger_id": "replay-trigger",
                 "created_at": fire.created_at
             }})).await?;
@@ -1183,7 +1183,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
     let engine = TriggerEngine::new(rx, Arc::new(materializer));
     let mut task = resolved_task("{{ doc.field_added_after_admission }}");
     task.task_id = "replay-task".into();
-    task.behavior_id = "general".into();
+    task.agent_id = "general".into();
     let result = engine.dispatch(FireIntent {
         trigger_id: Some("replay-trigger".into()), trigger_kind: TriggerKind::Event,
         task, concurrency: ConcurrencyMode::LatestOnly,

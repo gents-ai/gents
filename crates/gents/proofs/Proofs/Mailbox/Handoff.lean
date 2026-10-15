@@ -24,7 +24,7 @@ structure Producer where
   requestDocId : String
   sessionId : String
   requesterDid : String
-  agentDid : String
+  nodeDid : String
   lease : RequestExecutionLease.World Nat
   tool : ToolExecution.ToolCallContext
   deriving DecidableEq
@@ -48,11 +48,11 @@ def eligible (producer : Producer) (request : CreateRequest) : Bool :=
       request.sessionId != "" && request.requestId != 0 &&
       producer.sessionId != "" && producer.requestId != 0 &&
       producer.requestDocId != "" &&
-      producer.requesterDid != "" && producer.agentDid != "" &&
+      producer.requesterDid != "" && producer.nodeDid != "" &&
       request.sessionId == producer.sessionId &&
       request.requestId == producer.requestId &&
       request.identity.requesterDid == producer.requesterDid &&
-      request.identity.agentDid == producer.agentDid &&
+      request.identity.nodeDid == producer.nodeDid &&
       producer.tool.requestId == producer.requestId
 
 /-- An explicit, session-bound handoff only. The three calls are the existing
@@ -86,7 +86,7 @@ theorem successful_handoff_has_stored_question_and_terminal_producer
       receipt.question.sessionId = producer.sessionId ∧
       receipt.question.requestId = producer.requestId ∧
       receipt.question.identity.requesterDid = producer.requesterDid ∧
-      receipt.question.identity.agentDid = producer.agentDid := by
+      receipt.question.identity.nodeDid = producer.nodeDid := by
   by_cases he : eligible producer request = true
   · unfold fileAndComplete? at h
     simp only [he, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
@@ -112,7 +112,7 @@ theorem successful_handoff_has_stored_question_and_terminal_producer
                 have hbinding : request.sessionId = producer.sessionId ∧
                     request.requestId = producer.requestId ∧
                     request.identity.requesterDid = producer.requesterDid ∧
-                    request.identity.agentDid = producer.agentDid := by
+                    request.identity.nodeDid = producer.nodeDid := by
                   simp [eligible] at he
                   aesop
                 exact ⟨hstored.1, hterminal.2, htoolState,
@@ -131,7 +131,7 @@ def claimLinkedReply? (receipt : Receipt) (item : Item)
     (envelope : ReplyEnvelope) (reply : ReplyEvidence) : Option Item := do
   if item.identity != receipt.question.identity ||
       envelope.docId != receipt.question.docId ||
-      envelope.targetAgentDid != receipt.question.identity.agentDid ||
+      envelope.targetNodeDid != receipt.question.identity.nodeDid ||
       envelope.sessionId != some receipt.question.sessionId ||
       receipt.question.sessionId == "" ||
       reply.requestDocId == receipt.producer.requestDocId then none
@@ -145,7 +145,7 @@ theorem successful_linked_reply_has_original_session_and_new_request
       reply.sessionId = receipt.question.sessionId ∧
       reply.sourceDocId = receipt.question.docId ∧
       reply.requesterDid = receipt.question.identity.requesterDid ∧
-      reply.agentDid = receipt.question.identity.agentDid ∧
+      reply.nodeDid = receipt.question.identity.nodeDid ∧
       reply.requestDocId ≠ receipt.producer.requestDocId := by
   unfold claimLinkedReply? at h
   split at h
@@ -159,9 +159,9 @@ theorem successful_linked_reply_has_original_session_and_new_request
 def question (key doc : String) (request : RequestId)
     (session content : String) : CreateRequest :=
   { identity :=
-      { itemKey := key, requesterDid := "owner", agentDid := "agent",
+      { itemKey := key, requesterDid := "owner", nodeDid := "node",
         sourceKind := .agent, sourceId := "condition-key", kind := .ask }
-    context := ⟨"owner", "agent"⟩
+    context := ⟨"owner", "node"⟩
     docId := doc
     handling := .startRequest
     sessionId := session
@@ -170,7 +170,7 @@ def question (key doc : String) (request : RequestId)
 
 def producer : Producer :=
   { requestId := 1, requestDocId := "parent-doc", sessionId := "session"
-    requesterDid := "owner", agentDid := "agent"
+    requesterDid := "owner", nodeDid := "node"
     lease := { (RequestExecutionLease.initial Nat) with
       request := .processing, lease := .active 7 10 10,
       usedGenerations := [7], now := 5 }
@@ -188,7 +188,7 @@ theorem filed_question_precedes_owned_completion :
 
 theorem failed_filing_cannot_complete_handoff :
     (fileAndComplete? {} producer
-      { openQuestion with context := ⟨"foreign", "agent"⟩ } 7) = none := by
+      { openQuestion with context := ⟨"foreign", "node"⟩ } 7) = none := by
   native_decide
 
 /-- An old terminal condition row cannot masquerade as the current open
@@ -204,19 +204,19 @@ theorem terminal_old_question_cannot_satisfy_current_handoff :
 theorem foreign_agent_cannot_reuse_open_question :
     let stored := applyCreate {} openQuestion
     let foreign := { openQuestion with
-      identity := { openQuestion.identity with agentDid := "other-agent" },
-      context := ⟨"owner", "other-agent"⟩ }
+      identity := { openQuestion.identity with nodeDid := "other-node" },
+      context := ⟨"owner", "other-node"⟩ }
     (storedCreateReceipt? stored foreign).isNone = true := by
   native_decide
 
 def replyEnvelope : ReplyEnvelope :=
   { docId := "mailbox-doc", handling := .startRequest,
-    targetAgentDid := "agent", behaviorId := "repair",
+    targetNodeDid := "node", agentId := "repair",
     sessionId := some "session", deadlineValid := true }
 
 def replyEvidence : ReplyEvidence :=
   { requestDocId := "reply-doc", sourceDocId := "mailbox-doc",
-    requesterDid := "owner", agentDid := "agent", behaviorId := "repair",
+    requesterDid := "owner", nodeDid := "node", agentId := "repair",
     sessionId := "session", authenticated := true, interactive := true }
 
 theorem linked_reply_is_a_new_request_in_original_session :

@@ -17,7 +17,7 @@ fn digest16_base58(left: &str, right: &str) -> String {
     bs58::encode(&digest[..16]).into_string()
 }
 
-/// Canonical signing form of the enrollment server's `AgentNetwork` root.
+/// Canonical signing form of the enrollment server's `Network` root.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkRecord {
     pub network_id: String,

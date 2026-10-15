@@ -86,7 +86,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                 None,
             )
             .unwrap();
-            let identity: &dyn AgentIdentity = if case.request["authorized"] == false {
+            let identity: &dyn NodeIdentity = if case.request["authorized"] == false {
                 &foreign
             } else {
                 f.identity.as_ref()
@@ -143,7 +143,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                 "denied" | "illegal" | "conflict" => {
                     let error = format!("{:#}", result.unwrap_err());
                     let expected_reason = match case.name.as_str() {
-                        "unauthorized_cannot_publish" => "target principal",
+                        "unauthorized_cannot_publish" => "target node",
                         "foreign_parent_cannot_recover" => "predecessor must uniquely belong",
                         "non_latest_parent_cannot_publish" => "no longer the latest",
                         "nonterminal_parent_cannot_publish" => "predecessor must be terminal",

@@ -11,6 +11,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use gents_protocol::plugin::{
+    PluginEnvironmentGrant, PluginExecutionAuthority, PluginExecutionLimits,
+    PluginExecutionReceipt, PluginExecutionVerdict, PluginFilesystemGrant, PluginFilesystemScope,
+    PluginHttpGrant,
+};
+use sha2::{Digest, Sha256};
 
 use super::http_calls;
 use super::model_calls::{self, ModelResolver};
@@ -109,6 +115,91 @@ pub struct PluginCall {
     /// One sentence for the operator when the plugin's model binding could
     /// not be used and the plugin ran without a model; `None` otherwise.
     pub binding_note: Option<String>,
+    pub receipt: PluginExecutionReceipt,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{source:#}")]
+struct PluginAttemptError {
+    source: anyhow::Error,
+    receipt: PluginExecutionReceipt,
+}
+
+fn json_digest(value: &serde_json::Value) -> String {
+    // serde_json::Value contains no non-JSON values; canonicalization cannot fail.
+    let canonical = crate::workspace::canonical_json_string(value)
+        .expect("JSON value has a canonical encoding");
+    format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
+}
+
+pub(super) fn initial_receipt(
+    record: &InstalledPlugin,
+    input: &serde_json::Value,
+) -> PluginExecutionReceipt {
+    PluginExecutionReceipt {
+        coordinate: format!("{}/{}", record.namespace, record.name),
+        artifact_digest: record.digest.clone(),
+        input_digest: json_digest(input),
+        output_digest: None,
+        authority: None,
+        limits: None,
+        verdict: PluginExecutionVerdict::AdmissionRefused,
+    }
+}
+
+fn authority(
+    manifold: &Manifold,
+    bound_field: Option<&str>,
+    model: bool,
+    http: Option<&http_calls::Session>,
+    tools: bool,
+) -> PluginExecutionAuthority {
+    use afterburner_core::manifold::{EnvAccess, FsAccess, NetAccess};
+    let scope = |roots: &[PathBuf]| match bound_field {
+        Some(field) => PluginFilesystemScope::BoundInput {
+            field: field.to_owned(),
+        },
+        None => PluginFilesystemScope::Installed {
+            roots: roots.len() as u64,
+        },
+    };
+    PluginExecutionAuthority {
+        filesystem: match &manifold.fs {
+            FsAccess::None => PluginFilesystemGrant::None,
+            FsAccess::ReadOnly(roots) => PluginFilesystemGrant::ReadOnly(scope(roots)),
+            FsAccess::ReadWrite(roots) => PluginFilesystemGrant::ReadWrite(scope(roots)),
+        },
+        environment: match &manifold.env {
+            EnvAccess::None => PluginEnvironmentGrant::None,
+            EnvAccess::AllowList(keys) => PluginEnvironmentGrant::AllowList(keys.clone()),
+            EnvAccess::Full => PluginEnvironmentGrant::Full,
+        },
+        host_http: match &manifold.net {
+            _ if http.is_none() => None,
+            NetAccess::None => None,
+            NetAccess::OutboundHttp(hosts) | NetAccess::OutboundFull(hosts) => {
+                Some(PluginHttpGrant {
+                    hosts: hosts.clone(),
+                    timeout_ms: http.map(http_calls::Session::request_timeout_ms),
+                })
+            }
+        },
+        host_model: model,
+        host_tools: tools,
+    }
+}
+
+fn receipt_verdict(verdict: super::PluginVerdict) -> PluginExecutionVerdict {
+    use super::PluginVerdict as V;
+    match verdict {
+        V::Success => PluginExecutionVerdict::Success,
+        V::Refused => PluginExecutionVerdict::Refused,
+        V::OutOfFuel => PluginExecutionVerdict::OutOfFuel,
+        V::OutOfMemory => PluginExecutionVerdict::OutOfMemory,
+        V::Timeout => PluginExecutionVerdict::Timeout,
+        V::BadOutput => PluginExecutionVerdict::BadOutput,
+        V::Failed => PluginExecutionVerdict::Failed,
+    }
 }
 
 /// Calls installed plugins from one gents home.
@@ -134,6 +225,33 @@ impl Default for PluginExecutor {
 }
 
 impl PluginExecutor {
+    /// Callback planners receive only canonical JSON and a sealed WASI sandbox.
+    /// The callback owner validates its content address and output ActionPlan.
+    pub(crate) fn call_sealed_artifact(
+        artifact: &[u8],
+        input: &serde_json::Value,
+        budget: PluginBudget,
+    ) -> Result<PluginOutcome> {
+        Self::sealed_artifact_runner(artifact)?.call(input, &budget)
+    }
+
+    pub(crate) fn validate_sealed_artifact(artifact: &[u8]) -> Result<()> {
+        Self::sealed_artifact_runner(artifact).map(|_| ())
+    }
+
+    fn sealed_artifact_runner(artifact: &[u8]) -> Result<PluginRunner> {
+        static DECLARATION: std::sync::LazyLock<crate::pack::PackPlugin> =
+            std::sync::LazyLock::new(|| {
+                serde_json::from_value(serde_json::json!({
+                    "name": "callback-planner", "description": "Callback ActionPlan",
+                    "language": "rust", "artifact": "plugins/callback.afb",
+                    "input_schema": {"type":"object"}
+                }))
+                .expect("the sealed callback declaration is a valid PackPlugin")
+            });
+        PluginRunner::compile_within(artifact, &DECLARATION, &Manifold::sealed())
+    }
+
     /// Plugins installed under `home`; `None` has none installed.
     pub fn new(home: Option<PathBuf>) -> Self {
         if let Some(home) = &home {
@@ -237,16 +355,19 @@ impl PluginExecutor {
         let granted = scope.granted(&resolved.target);
         let covered = granted.is_some_and(|granted| granted >= access);
         if !covered {
-            let allowed = context.interactive && {
-                let request = approval::Request::new(
-                    &plugin,
-                    &resolved,
-                    access,
-                    context.session_id.map(str::to_owned),
-                );
-                approval::ask(home, &request, approval::WAIT)
-                    .await
-                    .map_err(|error| refuse(format!("{error:#}")))?
+            let allowed = match approval::consent(context.interactive) {
+                approval::Consent::Deny => false,
+                approval::Consent::Ask => {
+                    let request = approval::Request::new(
+                        &plugin,
+                        &resolved,
+                        access,
+                        context.session_id.map(str::to_owned),
+                    );
+                    approval::ask(home, &request, approval::WAIT)
+                        .await
+                        .map_err(|error| refuse(format!("{error:#}")))?
+                }
             };
             if !allowed {
                 return Err(refuse(not_allowed(
@@ -276,6 +397,7 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
         tool_root: Option<&Path>,
+        tool_calls: bool,
     ) -> Result<PluginCall> {
         let session = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
         let workdir = session
@@ -283,19 +405,48 @@ impl PluginExecutor {
             .and_then(|context| context.workspace_cwd.clone())
             .or_else(|| tool_root.map(Path::to_path_buf));
         let session_id = session.and_then(|context| context.session_id);
+        // Bind against the record the call will run (see `run`).
+        let record = &self.resolve(
+            &format!("{}/{}", record.namespace, record.name),
+            Some(&record.digest),
+        )?;
         let context = BindContext {
             workdir: workdir.as_deref(),
             session_id: session_id.as_deref(),
             interactive: approval::interactive(),
         };
-        match self
+        let bound = self
             .bind_input(record, &input, &context)
             .await
-            .map_err(anyhow::Error::msg)?
-        {
-            Some(bound) => self.call_bound(record, input, bound).await,
-            None => self.call(record, input).await,
-        }
+            .map_err(anyhow::Error::msg)?;
+        self.run(
+            record,
+            input,
+            bound,
+            super::tool_calls::Session::for_call(tool_calls),
+        )
+        .await
+    }
+
+    pub async fn call_data_bound_with_receipt(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        tool_root: Option<&Path>,
+        tool_calls: bool,
+    ) -> (Result<PluginCall>, PluginExecutionReceipt) {
+        let refused = initial_receipt(record, &input);
+        let result = self
+            .call_data_bound(record, input, tool_root, tool_calls)
+            .await;
+        let receipt = match &result {
+            Ok(call) => call.receipt.clone(),
+            Err(error) => error
+                .downcast_ref::<PluginAttemptError>()
+                .map(|error| error.receipt.clone())
+                .unwrap_or(refused),
+        };
+        (result, receipt)
     }
 
     /// The installed record for `coordinate`, which must still be the
@@ -326,7 +477,7 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
     ) -> Result<PluginCall> {
-        self.run(record, input, None).await
+        self.run(record, input, None, None).await
     }
 
     /// [`Self::call`] with `bound` granted for this one call, in the
@@ -338,7 +489,7 @@ impl PluginExecutor {
         input: serde_json::Value,
         bound: BoundDir,
     ) -> Result<PluginCall> {
-        self.run(record, input, Some(bound)).await
+        self.run(record, input, Some(bound), None).await
     }
 
     async fn run(
@@ -346,32 +497,84 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
         bound: Option<BoundDir>,
+        tools: Option<super::tool_calls::Session>,
     ) -> Result<PluginCall> {
-        let admitted = self.admit(record)?;
-        let coordinate = format!("{}/{}", record.namespace, record.name);
-        let (model, binding_note) = self.model_session(record).await?;
-        let outcome = drive(
-            &coordinate,
-            admitted.runner.clone(),
-            model,
-            input,
-            admitted.budget,
-            bound,
-        )
-        .await?;
-        Ok(PluginCall {
-            coordinate,
-            digest: record.digest.clone(),
-            outcome,
-            binding_note,
-        })
+        let mut receipt = initial_receipt(record, &input);
+        let result: Result<PluginCall> = async {
+            let coordinate = receipt.coordinate.clone();
+            let current = self.resolve(&coordinate, Some(&record.digest))?;
+            anyhow::ensure!(
+                bound.is_none() || current == *record,
+                "plugin {coordinate} was reinstalled while this call was being authorized; call again"
+            );
+            let record = &current;
+            let admitted = self.admit(record)?;
+            let (model, binding_note) = self.model_session(record).await?;
+            let calls = HostCalls {
+                model,
+                http: http_calls::Session::for_grant(&coordinate, &admitted.runner.manifold)?,
+                tools,
+            };
+            let first_input = if calls.is_empty() {
+                input.clone()
+            } else {
+                calls.prepare_input(input.clone())?
+            };
+            let (effective_input, manifold) = match &bound {
+                Some(bound) => admitted.runner.prepare_bound(&first_input, bound)?,
+                None => (first_input, admitted.runner.manifold.clone()),
+            };
+            receipt.input_digest = json_digest(&effective_input);
+            receipt.limits = Some(PluginExecutionLimits {
+                fuel: admitted.budget.fuel,
+                memory_bytes: admitted.budget.memory_bytes,
+                wall_ms: admitted.budget.wall_clock.as_millis().try_into().unwrap_or(u64::MAX),
+                max_output_bytes: admitted.budget.max_output_bytes as u64,
+            });
+            let bound_field = bound
+                .as_ref()
+                .and(record.declaration.bind_dir.as_ref())
+                .map(|binding| binding.input_field.as_str());
+            receipt.authority = Some(authority(
+                &manifold,
+                bound_field,
+                calls.model.is_some(),
+                calls.http.as_ref(),
+                calls.tools.is_some(),
+            ));
+            receipt.verdict = PluginExecutionVerdict::ExecutionError;
+            let outcome = drive_with_calls(
+                &coordinate,
+                admitted.runner.clone(),
+                calls,
+                input,
+                admitted.budget,
+                bound,
+            )
+            .await
+            .inspect_err(|error| {
+                if error.downcast_ref::<super::GuestTrap>().is_some() {
+                    receipt.verdict = PluginExecutionVerdict::Failed;
+                }
+            })?;
+            receipt.verdict = receipt_verdict(outcome.verdict);
+            if outcome.verdict == super::PluginVerdict::Success {
+                receipt.output_digest = Some(json_digest(&outcome.output));
+            }
+            Ok(PluginCall {
+                coordinate,
+                digest: record.digest.clone(),
+                outcome,
+                binding_note,
+                receipt: receipt.clone(),
+            })
+        }.await;
+        result.map_err(|source| PluginAttemptError { source, receipt }.into())
     }
 
     fn admit(&self, record: &InstalledPlugin) -> Result<Arc<Admitted>> {
-        if let Some(admitted) = self.admitted.get(&record.digest) {
-            if admitted.granted == record.granted && admitted.declaration == record.declaration {
-                return Ok(admitted);
-            }
+        if let Some(admitted) = self.cached_admission(record) {
+            return Ok(admitted);
         }
         let home = self
             .home
@@ -381,6 +584,13 @@ impl PluginExecutor {
             format!("installed plugin digest {:?} is not sha256", record.digest)
         })?;
         let bytes = store::read_bytes(home, digest_hex)?;
+        anyhow::ensure!(
+            store::content_digest_hex(&bytes) == digest_hex,
+            "installed plugin {}/{} bytes do not match their digest {}; reinstall it",
+            record.namespace,
+            record.name,
+            record.digest
+        );
         let afb = afterburner_afb::Afb::from_bytes(&bytes).map_err(|error| {
             anyhow::anyhow!(
                 "installed plugin {}/{} is not a readable .afb: {error}",
@@ -423,6 +633,17 @@ impl PluginExecutor {
         Ok(admitted)
     }
 
+    fn cached_admission(&self, record: &InstalledPlugin) -> Option<Arc<Admitted>> {
+        self.admitted.get(&record.digest).filter(|admitted| {
+            admitted.granted == record.granted && admitted.declaration == record.declaration
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cached_admission_matches(&self, record: &InstalledPlugin) -> bool {
+        self.cached_admission(record).is_some()
+    }
+
     #[cfg(test)]
     pub(crate) fn admitted_len(&self) -> usize {
         self.admitted.len()
@@ -440,7 +661,7 @@ pub async fn call_runner(
     budget: PluginBudget,
     bound: Option<BoundDir>,
 ) -> Result<PluginOutcome> {
-    drive(coordinate, runner, None, input, budget, bound).await
+    drive(coordinate, runner, None, input, budget, bound, None).await
 }
 
 async fn drive(
@@ -450,11 +671,24 @@ async fn drive(
     input: serde_json::Value,
     budget: PluginBudget,
     bound: Option<BoundDir>,
+    tools: Option<super::tool_calls::Session>,
 ) -> Result<PluginOutcome> {
     let calls = HostCalls {
         model,
         http: http_calls::Session::for_grant(coordinate, &runner.manifold)?,
+        tools,
     };
+    drive_with_calls(coordinate, runner, calls, input, budget, bound).await
+}
+
+async fn drive_with_calls(
+    coordinate: &str,
+    runner: Arc<PluginRunner>,
+    calls: HostCalls,
+    input: serde_json::Value,
+    budget: PluginBudget,
+    bound: Option<BoundDir>,
+) -> Result<PluginOutcome> {
     let round: rounds::Round = Arc::new(move |input, budget| match &bound {
         Some(bound) => runner.call_bound(&input, &budget, bound),
         None => runner.call(&input, &budget),

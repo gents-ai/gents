@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 
-/// A gents home's persisted `init.json`: home path, agent name, agent DID,
+/// A gents home's persisted `init.json`: home path, node name, node DID,
 /// key path, identity backend, and tool policy. Written once at `gents
 /// init` (or, for a gents-cloud cell, at cell provisioning) and read back
 /// by every entry point that opens the home afterward.
@@ -26,8 +26,8 @@ const INIT_CONFIG_FILE_NAME: &str = "init.json";
 #[serde(bound(deserialize = "ToolPackage: Deserialize<'de>, ToolCeiling: Deserialize<'de>"))]
 pub struct StoredInitConfig<ToolPackage = String, ToolCeiling = String> {
     pub home: String,
-    pub agent_name: String,
-    pub agent_did: String,
+    pub node_name: String,
+    pub node_did: String,
     pub key_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity_backend: Option<String>,
@@ -155,21 +155,34 @@ pub fn lock_store(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
 }
 
 /// Takes the store lock of a home's default data directory whether or not
-/// that directory exists yet, without creating it. With the directory
-/// present this is [`lock_store`]; without it, the lock sits where
-/// [`lock_store`] will look once the directory is created under the
-/// canonical home, so a runtime or `init` that creates the store afterwards
-/// is excluded by the same lock.
+/// that directory exists yet, without creating it (see [`lock_store_at`]).
 pub fn lock_home_store(home_dir: &Path) -> Result<StoreLock> {
-    let data_dir = default_data_dir(home_dir);
-    match fs::symlink_metadata(&data_dir) {
-        Ok(_) => lock_store(home_dir, &data_dir),
+    lock_store_at(home_dir, &default_data_dir(home_dir))
+}
+
+/// Takes `data_dir`'s store lock whether or not that directory exists yet,
+/// without creating it. With the directory present this is [`lock_store`];
+/// without it, the lock sits where [`lock_store`] will look once the
+/// directory is created under its canonical parent, so a holder that creates
+/// the store afterwards is excluded by the same lock.
+pub fn lock_store_at(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
+    match fs::symlink_metadata(data_dir) {
+        Ok(_) => lock_store(home_dir, data_dir),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let (Some(parent), Some(name)) = (data_dir.parent(), data_dir.file_name()) else {
+                anyhow::bail!(
+                    "data directory {} cannot be the filesystem root",
+                    data_dir.display()
+                );
+            };
             // The lock file is deliberately not a runtime home entry: a
             // reset leaves it in place while held.
-            let lock_dir = fs::canonicalize(home_dir)
-                .with_context(|| format!("resolving home {}", home_dir.display()))?;
-            lock_path(home_dir, lock_dir.join(format!("{DATA_DIR_NAME}.lock")))
+            let lock_dir = fs::canonicalize(parent)
+                .with_context(|| format!("resolving {}", parent.display()))?;
+            lock_path(
+                home_dir,
+                lock_dir.join(format!("{}.lock", name.to_string_lossy())),
+            )
         }
         Err(error) => {
             Err(error).with_context(|| format!("inspecting data directory {}", data_dir.display()))
@@ -249,8 +262,8 @@ fn lock_path(home_dir: &Path, path: PathBuf) -> Result<StoreLock> {
 }
 
 /// The default identity key path under a gents home, for the named agent.
-pub fn default_key_path(home_dir: &Path, agent_name: &str) -> PathBuf {
-    keys_dir(home_dir).join(format!("{agent_name}.key"))
+pub fn default_key_path(home_dir: &Path, node_name: &str) -> PathBuf {
+    keys_dir(home_dir).join(format!("{node_name}.key"))
 }
 
 /// The directory a gents home keeps its file keys in.
@@ -306,7 +319,7 @@ pub fn read_init_config<ToolPackage: DeserializeOwned, ToolCeiling: DeserializeO
 /// Identity backend whose key never leaves the Secure Enclave.
 pub const SECURE_ENCLAVE_IDENTITY_BACKEND: &str = "macos-secure-enclave";
 
-/// Refuse to serve a home whose principal cannot own DefraDB node access
+/// Refuse to serve a home whose node cannot own DefraDB node access
 /// control.
 ///
 /// Node access control needs the node DID's private key bytes, which a
@@ -515,10 +528,16 @@ fn retire_entries_with(
             private_dir(backup).with_context(|| format!("creating backup {}", backup.display()))?;
             let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
             let result = (|| -> Result<()> {
+                let mut created: Vec<&str> = Vec::new();
                 for group in groups {
                     let target_dir = backup.join(group.name);
-                    private_dir(&target_dir)
-                        .with_context(|| format!("creating {}", target_dir.display()))?;
+                    // A group may recur, so entries other entries depend on
+                    // can be retired after them.
+                    if !created.contains(&group.name) {
+                        private_dir(&target_dir)
+                            .with_context(|| format!("creating {}", target_dir.display()))?;
+                        created.push(group.name);
+                    }
                     for entry in group.entries {
                         if present(entry)?.is_none() {
                             continue;
@@ -609,8 +628,8 @@ mod tests {
                 super::init_config_path(home.path()),
                 serde_json::json!({
                     "home": home.path(),
-                    "agent_name": "a",
-                    "agent_did": "did:key:z6Mk",
+                    "node_name": "a",
+                    "node_did": "did:key:z6Mk",
                     "key_path": null,
                     "identity_backend": backend,
                     "tool_ceiling": "readonly",
@@ -723,6 +742,30 @@ mod tests {
             home_entries(&temp.path().join("absent"), &[]).unwrap(),
             HomeEntries::default()
         );
+    }
+
+    #[test]
+    fn archive_accepts_a_group_retired_in_two_passes() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        let (logs, record) = (root.join("logs"), root.join("init.json"));
+        write(&logs.join("a.log"), "log");
+        write(&record, "{}");
+        let backup = root.join("backup");
+        let (first, second) = (vec![logs.clone()], vec![record.clone()]);
+        let groups = [
+            RetireGroup {
+                name: "home",
+                entries: &first,
+            },
+            RetireGroup {
+                name: "home",
+                entries: &second,
+            },
+        ];
+        retire_entries(&groups, RetireDisposition::Archive { backup: &backup }).unwrap();
+        assert!(backup.join("home/logs/a.log").is_file());
+        assert!(backup.join("home/init.json").is_file());
     }
 
     #[test]
@@ -1048,8 +1091,8 @@ mod tests {
     fn sample() -> StoredInitConfig<String, String> {
         StoredInitConfig {
             home: "/home/user/.gents".to_string(),
-            agent_name: "default".to_string(),
-            agent_did: "did:key:z6Mk...".to_string(),
+            node_name: "default".to_string(),
+            node_did: "did:key:z6Mk...".to_string(),
             key_path: Some("/home/user/.gents/keys/default.key".to_string()),
             identity_backend: None,
             keychain_label: None,
@@ -1070,7 +1113,7 @@ mod tests {
     }
 
     #[test]
-    fn default_key_path_nests_under_keys_by_agent_name() {
+    fn default_key_path_nests_under_keys_by_node_name() {
         assert_eq!(
             default_key_path(Path::new("/home/user/.gents"), "default"),
             PathBuf::from("/home/user/.gents/keys/default.key")

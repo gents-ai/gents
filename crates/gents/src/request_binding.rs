@@ -77,9 +77,9 @@ pub(crate) async fn load_agent_request_by_doc_id(
                 _docID
                 request_id
                 purpose
-                agent_did
+                node_did
                 requester_did
-                behavior_id
+                agent_id
                 session_id
                 content
                 max_total_tokens
@@ -87,7 +87,7 @@ pub(crate) async fn load_agent_request_by_doc_id(
                 execution_origin
                 created_at
                 deadline
-                subagent_depth
+                request_hop
                 caused_by_parent_request_id
                 caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
@@ -99,7 +99,7 @@ pub(crate) async fn load_agent_request_by_doc_id(
                 caused_by_trigger_context
                 workspace_id
                 workspace_authority
-                workspace_owner_agent_did
+                workspace_owner_node_did
                 workspace_seal_hash
             }}
         }}"#,

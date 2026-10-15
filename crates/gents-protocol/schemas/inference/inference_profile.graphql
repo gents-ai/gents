@@ -1,6 +1,6 @@
-type InferenceProfile @branchable @index(fields: ["agent_did", "profile_id"], unique: true) {
+type InferenceProfile @branchable @index(fields: ["node_did", "profile_id"], unique: true) {
     profile_id: String
-    agent_did: String @index
+    node_did: String @index
     display_name: String
     description: String
     backend_id: String @index

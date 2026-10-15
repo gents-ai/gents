@@ -52,7 +52,7 @@ describe("request trace panel", () => {
         },
       ],
     });
-    render(<RequestTracePanel agentDid="did:a" api={api} rootRequestId="req-1" />);
+    render(<RequestTracePanel nodeDid="did:a" api={api} rootRequestId="req-1" />);
 
     await waitFor(() => expect(screen.getByText("user: hi")).toBeInTheDocument());
     expect(
@@ -75,7 +75,7 @@ describe("request trace panel", () => {
 
   it("surfaces fetch failures with a retry affordance", async () => {
     const api = adapterWith(null, true);
-    render(<RequestTracePanel agentDid="did:a" api={api} rootRequestId="req-1" />);
+    render(<RequestTracePanel nodeDid="did:a" api={api} rootRequestId="req-1" />);
 
     await waitFor(() =>
       expect(screen.getByTestId("trace-error")).toHaveTextContent("peer unreachable"),
@@ -86,7 +86,7 @@ describe("request trace panel", () => {
   it("asks for a request when none is selected", () => {
     render(
       <RequestTracePanel
-        agentDid="did:a"
+        nodeDid="did:a"
         api={adapterWith(null)}
         rootRequestId={null}
       />,

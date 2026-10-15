@@ -111,7 +111,7 @@ fn client_sync_cannot_regrow_a_synthetic_owner_or_runtime_readiness_join() {
         .expect("bridge sync projection source boundary");
 
     for source in [owner, projection, bridge] {
-        assert!(!source.contains("AgentBehaviorReadiness"));
+        assert!(!source.contains("NodeReadiness"));
         assert!(!source.contains("SyncHealthState::Stalled"));
     }
     assert!(!projection.contains("stuck_since"));
@@ -183,7 +183,7 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
         .expect("signed direct materializer source boundary");
     assert!(!signed_direct_materializer.contains("add_AgentRequest(input:"));
     assert!(!signed_direct_materializer.contains("status: \"processing\""));
-    assert!(signed_direct_materializer.contains("Arc<dyn crate::identity::AgentIdentity>"));
+    assert!(signed_direct_materializer.contains("Arc<dyn crate::identity::NodeIdentity>"));
     // #1336: this site now builds and signs its AgentRequestCreate through
     // the shared constructor rather than hand-rolling
     // AgentRequestCreate::base(...) itself.
@@ -191,7 +191,7 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
     assert!(signed_direct_materializer.contains("verify_fresh_local_self_request"));
     assert!(signed_direct_materializer.contains("claim_with_identity"));
     assert!(!oneshot.contains("add_AgentRequest(input:"));
-    assert!(oneshot.contains("behavior.principal_identity().clone()"));
+    assert!(oneshot.contains("agent.node_identity().clone()"));
 
     // The runtime constructor owns stamped request fields for every client.
     for (name, source) in [
@@ -266,15 +266,14 @@ fn clean_break_has_no_legacy_pairing_or_remote_snapshot_authority() {
 }
 
 #[test]
-fn request_and_persona_admission_have_no_logical_only_recovery_or_terminal_mutation() {
+fn request_admission_has_no_logical_only_recovery_or_terminal_mutation() {
     let request_admission = include_str!("../../src/request_admission.rs");
-    let persona = include_str!("../../src/agent/p2p_reconcile/persona_requests.rs");
+    let modules = include_str!("../../src/agent/p2p_reconcile/mod.rs");
 
     assert!(!request_admission.contains("parent_authorizes_subagent_target"));
     assert!(request_admission.contains("load_exact_parent_request"));
     assert!(request_admission.contains("row.doc_id.as_deref() == Some(source_doc_id)"));
-    assert!(!persona.contains("filter: {{ request_key:"));
-    assert!(persona.contains("filter: {{ _docID:"));
+    assert!(!modules.contains("mod persona_requests"));
 }
 
 #[test]

@@ -228,7 +228,7 @@ pub async fn promote(
         let pack = materialize_pack(
             &path,
             &origin.owner,
-            &origin.subject.behavior_id,
+            &origin.subject.agent_id,
             &origin.target.job_target(),
         )?;
         let text = baseline_text(&pack)?;
@@ -500,7 +500,7 @@ mod tests {
             Collection::AgentContext,
             json!({
                 "context_id": "monitor-context",
-                "agent_did": OWNER,
+                "node_did": OWNER,
                 "display_name": "Monitor",
                 "system_prompt": "An operator wrote this by hand.\n",
             }),
@@ -765,10 +765,10 @@ mod tests {
         // A document of the frozen closure that the promotion does not write.
         harness
             .install(vec![(
-                Collection::AgentBehavior,
+                Collection::Agent,
                 json!({
-                    "behavior_id": "monitor",
-                    "agent_did": OWNER,
+                    "agent_id": "monitor",
+                    "node_did": OWNER,
                     "display_name": "Monitor, renamed",
                     "context_id": "monitor-context",
                     "inference_profile_id": "local",
@@ -781,11 +781,7 @@ mod tests {
             .unwrap_err();
         let refusal = promote_refused(&error).unwrap_or_else(|| panic!("{error:#}"));
         assert_eq!(refusal.reason, "stale_closure");
-        assert!(
-            refusal.detail.contains("AgentBehavior"),
-            "{}",
-            refusal.detail
-        );
+        assert!(refusal.detail.contains("Agent"), "{}", refusal.detail);
         assert_eq!(
             live_prompt(harness.access()).await.as_deref(),
             Some(BASELINE_PROMPT),
@@ -920,7 +916,7 @@ mod tests {
         let round = checkpoint(&job.journal).unwrap().round;
         let prompt =
             crate::optimization::driver::candidate_dir(&request.jobs_dir, &request.job_id, round)
-                .join("agent_behaviors/monitor/system_prompt.md");
+                .join("agents/monitor/system_prompt.md");
         assert!(prompt.exists(), "{}", prompt.display());
         std::fs::write(&prompt, "Edited on disk after the job accepted it.\n").unwrap();
 

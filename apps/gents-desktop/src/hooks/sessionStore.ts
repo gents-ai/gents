@@ -24,10 +24,9 @@ export type SessionFacts = {
   toolsRevision: number;
   /** every tool call, in transcript order; the same array until a tool changes */
   tools: readonly RenderedToolCallView[];
-  /** the request ids on the transcript's user rows that stand for a turn —
-      a pending turn, or the saved prompt row that owns one — every one
-      naming the request by its id; a request's other user rows (workspace
-      instructions, tool delivery) name it too but stand for no turn */
+  /** the request ids on the transcript's input rows: a pending turn's
+      request id, and a saved or automated entry's input request id
+      (`inputRequestId`), falling back to its document id */
   userRequestIds: ReadonlySet<string>;
 };
 
@@ -54,7 +53,7 @@ const NO_FACTS: SessionFacts = {
 export const IDLE_LOAD: SessionLoadState = {
   phase: "idle",
   sessionId: null,
-  agentDid: null,
+  nodeDid: null,
   found: null,
   error: null,
 };
@@ -71,13 +70,13 @@ export function createSessionStore(session: DesktopSessionSnapshot | null = null
 
 /** The held read when it is the selected session's: a read for the previous
     selection can still be held while the next one loads. */
-export function heldFor<S extends { sessionId: string; agentDid?: string | null }>(
+export function heldFor<S extends { sessionId: string; nodeDid?: string | null }>(
   held: S | null,
   sessionId: string | null,
-  agentDid: string | null,
+  nodeDid: string | null,
 ): S | null {
   return held?.sessionId === sessionId &&
-    (!agentDid || !held.agentDid || held.agentDid === agentDid)
+    (!nodeDid || !held.nodeDid || held.nodeDid === nodeDid)
     ? held
     : null;
 }
@@ -138,8 +137,11 @@ function factsOf(
     after.flatMap((item) =>
       item.kind === "pendingUserTurn"
         ? [item.requestId]
-        : item.kind === "userMessage" && item.ownsTurn && item.requestId
-          ? [item.requestId]
+        : item.kind === "userMessage" || item.kind === "automatedInput"
+          ? [
+              item.inputRequestId ??
+                (item.kind === "userMessage" && item.ownsTurn ? item.requestId : null),
+            ].filter((id): id is string => Boolean(id))
           : [],
     ),
   );
@@ -155,12 +157,12 @@ function factsOf(
 
 /**
  * Whether the bridge holds a request the app sent, by the request's id (what
- * a send returns): once it does, the transcript has a row for it, its
- * pending turn or the saved prompt row that owns its turn, both naming the
- * request by its id. Should that row sit outside the loaded window, the
- * request is known by the session's latest request; and should no read
- * happen to show it as the latest, by the latest having moved on from
- * `latestWhenSent`, the one the session showed when the request was sent.
+ * a send returns): once it does, the transcript has a row for it (its pending
+ * turn, or its saved or folded entry by `inputRequestId`), the session lists
+ * it as queued behind the running turn or as folded into a claimed turn, or
+ * it is the session's latest request; and should no read happen to show any
+ * of these, the latest has moved on from `latestWhenSent`, the one the
+ * session showed when the request was sent.
  */
 export function holdsRequest(
   state: SessionState,
@@ -172,6 +174,8 @@ export function holdsRequest(
   return (
     latest === sent.requestId ||
     state.facts.userRequestIds.has(sent.requestId) ||
+    session.queuedTurns.some((turn) => turn.requestId === sent.requestId) ||
+    session.foldedInputs.some((folded) => folded.requestId === sent.requestId) ||
     (latest !== null && latest !== sent.latestWhenSent)
   );
 }
@@ -182,11 +186,14 @@ export function holdsRequest(
 export type SessionHeader = Pick<
   DesktopSessionSnapshot,
   | "sessionId"
-  | "agentDid"
-  | "behaviorId"
+  | "nodeDid"
+  | "agentId"
   | "turnState"
   | "latestRequestId"
   | "pendingTurn"
+  | "queuedTurns"
+  | "pendingQueue"
+  | "foldedInputs"
   | "hydration"
 >;
 
@@ -194,11 +201,14 @@ export function headerOf(session: DesktopSessionSnapshot | null): SessionHeader 
   if (!session) return null;
   return {
     sessionId: session.sessionId,
-    agentDid: session.agentDid,
-    behaviorId: session.behaviorId,
+    nodeDid: session.nodeDid,
+    agentId: session.agentId,
     turnState: session.turnState,
     latestRequestId: session.latestRequestId,
     pendingTurn: session.pendingTurn,
+    queuedTurns: session.queuedTurns,
+    pendingQueue: session.pendingQueue,
+    foldedInputs: session.foldedInputs,
     hydration: session.hydration,
   };
 }

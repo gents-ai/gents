@@ -1,11 +1,11 @@
 {
   "install": {
     "documents": [
-      "AgentBehavior/change-unit-integrator",
-      "AgentBehavior/change-unit-record",
-      "AgentBehavior/change-unit-rejected",
-      "AgentBehavior/change-unit-reviewer",
-      "AgentBehavior/change-unit-writer",
+      "Agent/change-unit-integrator",
+      "Agent/change-unit-record",
+      "Agent/change-unit-rejected",
+      "Agent/change-unit-reviewer",
+      "Agent/change-unit-writer",
       "AgentContext/change-unit-integrator-context",
       "AgentContext/change-unit-record-context",
       "AgentContext/change-unit-rejected-context",

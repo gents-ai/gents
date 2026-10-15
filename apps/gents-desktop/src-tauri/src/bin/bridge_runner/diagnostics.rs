@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::live_fixture::LiveBridgeFixture;
 use gents_desktop_bridge::snapshot::{
     apply_session_timeline_page_with_query, build_runtime_snapshot,
-    build_session_snapshot_for_agent_with_transcript,
+    build_session_snapshot_for_node_with_transcript,
 };
 use gents_desktop_bridge::types::{
     turn_state_label, DesktopClientSnapshot, DesktopSessionSnapshot, RenderedTimelineItem,
@@ -56,9 +56,9 @@ pub(crate) struct InferenceCallDiagnostics {
     call_id: String,
     request_id: String,
     request_doc_id: String,
-    agent_did: String,
+    node_did: String,
     backend_id: Option<String>,
-    behavior_id: Option<String>,
+    agent_id: Option<String>,
     call_kind: String,
     call_state: String,
 }
@@ -106,7 +106,7 @@ pub(crate) async fn build_desktop_client_snapshot(
     let _ = refresh_store_with_timeout(fixture.desktop_core().as_ref()).await;
     if let Err(error) = overlay_fixture_operator_config(fixture).await {
         tracing::warn!(
-            agent_did = fixture.agent_did(),
+            node_did = fixture.node_did(),
             error = %error,
             "live bridge runtime-owned config overlay failed"
         );
@@ -125,21 +125,21 @@ async fn overlay_fixture_operator_config(fixture: &LiveBridgeFixture) -> anyhow:
     }
     let remote = fixture.remote_core().store().snapshot();
     let local = fixture.desktop_core().store().snapshot();
-    let overlayed = local.overlay_agent_operator_config(fixture.agent_did(), &remote);
+    let overlayed = local.overlay_node_operator_config(fixture.node_did(), &remote);
     fixture.desktop_core().store().replace_snapshot(overlayed);
     Ok(())
 }
 
 pub(crate) async fn build_desktop_session_snapshot(
     fixture: &LiveBridgeFixture,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
     session_id: &str,
     request_id: Option<&str>,
     timeline_limit: Option<usize>,
     timeline_before_item_key: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
     let _ = refresh_store_with_timeout(fixture.desktop_core().as_ref()).await;
-    let resolved_agent_did = agent_did.map(str::to_owned).or_else(|| {
+    let resolved_node_did = node_did.map(str::to_owned).or_else(|| {
         fixture
             .desktop_core()
             .store()
@@ -147,18 +147,18 @@ pub(crate) async fn build_desktop_session_snapshot(
             .sessions
             .iter()
             .find(|session| session.session_id == session_id)
-            .map(|session| session.agent_did.clone())
+            .map(|session| session.node_did.clone())
     });
-    let agent_did = resolved_agent_did.as_deref();
-    // A local-standard route is self-authored by the target agent. Production
-    // enrollment uses the desktop principal instead; this fixture deliberately
-    // bypasses enrollment, so its transcript namespace is the agent DID rather
-    // than requester_did:null or the desktop principal.
-    let requester_scope = fixture.requester_scope(agent_did, session_id, request_id);
+    let node_did = resolved_node_did.as_deref();
+    // A local-standard route is self-authored by the target node. Production
+    // enrollment uses the desktop node instead; this fixture deliberately
+    // bypasses enrollment, so its transcript namespace is the node DID rather
+    // than requester_did:null or the desktop node.
+    let requester_scope = fixture.requester_scope(node_did, session_id, request_id);
     let page = match gents_desktop_core::client::load_session_transcript_page(
         fixture.remote_core().node(),
         session_id,
-        agent_did,
+        node_did,
         requester_scope.as_deref(),
         timeline_before_item_key,
         timeline_limit,
@@ -179,7 +179,7 @@ pub(crate) async fn build_desktop_session_snapshot(
         match gents_desktop_core::client::load_session_context_store(
             fixture.remote_core().node(),
             session_id,
-            agent_did,
+            node_did,
             requester_scope.as_deref(),
         )
         .await
@@ -197,9 +197,9 @@ pub(crate) async fn build_desktop_session_snapshot(
     } else {
         None
     };
-    let mut snapshot = build_session_snapshot_for_agent_with_transcript(
+    let mut snapshot = build_session_snapshot_for_node_with_transcript(
         fixture.desktop_core().as_ref(),
-        agent_did,
+        node_did,
         session_id,
         request_id,
         Some(&page.store),
@@ -236,7 +236,7 @@ pub(crate) async fn build_request_diagnostics_bundle(
         fixture.desktop_core().as_ref(),
         session_id,
         request_id,
-        fixture.requester_scope(Some(fixture.agent_did()), session_id, Some(request_id)),
+        fixture.requester_scope(Some(fixture.node_did()), session_id, Some(request_id)),
     )
     .await;
     let mut remote = build_request_diagnostics(
@@ -244,7 +244,7 @@ pub(crate) async fn build_request_diagnostics_bundle(
         fixture.remote_core().as_ref(),
         session_id,
         request_id,
-        fixture.requester_scope(Some(fixture.agent_did()), session_id, Some(request_id)),
+        fixture.requester_scope(Some(fixture.node_did()), session_id, Some(request_id)),
     )
     .await;
     let access = ConfigAccess::Local(fixture.remote_core().node_arc());
@@ -252,7 +252,7 @@ pub(crate) async fn build_request_diagnostics_bundle(
         Ok(rows)
             if rows.request.request_id == request_id
                 && rows.request.session_id.as_deref() == Some(session_id)
-                && rows.request.agent_did.as_deref() == Some(fixture.agent_did()) =>
+                && rows.request.node_did.as_deref() == Some(fixture.node_did()) =>
         {
             if let Some(request_doc_id) = rows.request.doc_id.as_deref() {
                 remote.inference_calls = rows
@@ -261,15 +261,15 @@ pub(crate) async fn build_request_diagnostics_bundle(
                     .filter(|call| {
                         call.request_doc_id.as_deref() == Some(request_doc_id)
                             && call.request_id == request_id
-                            && call.agent_did.as_deref() == Some(fixture.agent_did())
+                            && call.node_did.as_deref() == Some(fixture.node_did())
                     })
                     .map(|call| InferenceCallDiagnostics {
                         call_id: call.call_id,
                         request_id: call.request_id,
                         request_doc_id: request_doc_id.to_string(),
-                        agent_did: fixture.agent_did().to_string(),
+                        node_did: fixture.node_did().to_string(),
                         backend_id: call.backend_id,
-                        behavior_id: call.behavior_id,
+                        agent_id: call.agent_id,
                         call_kind: call.call_kind,
                         call_state: call.call_state,
                     })
@@ -281,7 +281,7 @@ pub(crate) async fn build_request_diagnostics_bundle(
         }
         Ok(_) => {
             remote.inference_diagnostics_error =
-                Some("timeline request does not match agent/session scope".to_string());
+                Some("timeline request does not match node/session scope".to_string());
         }
         Err(error) => remote.inference_diagnostics_error = Some(error.to_string()),
     }
@@ -302,18 +302,18 @@ async fn build_request_diagnostics(
         .iter()
         .find(|row| row.request_id == request_id)
         .cloned();
-    let resolved_agent_did = snapshot
+    let resolved_node_did = snapshot
         .sessions
         .iter()
         .find(|session| session.session_id == session_id)
-        .map(|session| session.agent_did.clone());
+        .map(|session| session.node_did.clone());
     // The rendered session uses the same bounded page as the app. Counts use a
     // separate explicit diagnostic read so acceptance evidence is exact rather
     // than silently capped by the interactive row budget.
     let transcript_page = gents_desktop_core::client::load_session_transcript_page(
         core.node(),
         session_id,
-        resolved_agent_did.as_deref(),
+        resolved_node_did.as_deref(),
         requester_scope.as_deref(),
         None,
         Some(gents_desktop_core::client::MAX_SESSION_TRANSCRIPT_PAGE_SIZE),
@@ -325,7 +325,7 @@ async fn build_request_diagnostics(
         match gents_desktop_core::client::load_session_diagnostics_store(
             core.node(),
             session_id,
-            resolved_agent_did.as_deref(),
+            resolved_node_did.as_deref(),
             requester_scope.as_deref(),
         )
         .await
@@ -351,9 +351,9 @@ async fn build_request_diagnostics(
                     .is_some_and(|value| matches!(value, "completed" | "success" | "ok"))
         })
         .count();
-    let session_snapshot = build_session_snapshot_for_agent_with_transcript(
+    let session_snapshot = build_session_snapshot_for_node_with_transcript(
         core,
-        resolved_agent_did.as_deref(),
+        resolved_node_did.as_deref(),
         session_id,
         Some(request_id),
         transcript_store,

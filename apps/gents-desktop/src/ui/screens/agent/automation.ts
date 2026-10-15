@@ -2,7 +2,7 @@
    run Nightly audit with Implementer", and a readiness line that says why
    it will not fire. From the loaded documents and the bridge's readiness. */
 import type { NodeView } from "../../../hooks/fleetStore";
-import { behaviorReadiness } from "@/lib/behavior-readiness";
+import { agentReadiness } from "@/lib/agent-readiness";
 import type {
   EventSource,
   Schedule,
@@ -79,7 +79,7 @@ export type Readiness =
   { ok: true; note: string | null } | { ok: false; reason: string };
 
 /* why a trigger will not fire, in the order a user can fix it: its own
-   switch and references from the loaded documents, then the behavior's
+   switch and references from the loaded documents, then the agent's
    readiness as the bridge reports it. `ok` means nothing here blocks it;
    it is never shown as a promise that the run will succeed. */
 export function triggerReadiness(deployment: NodeView, t: TriggerView): Readiness {
@@ -96,11 +96,11 @@ export function triggerReadiness(deployment: NodeView, t: TriggerView): Readines
   const task = deployment.tasks.find((x) => x.taskId === cfg.task_id);
   if (!task) return { ok: false, reason: "Task is missing" };
   if (task.enabled === false) return { ok: false, reason: "Task is disabled" };
-  const b = agentOf(deployment, task.behaviorId);
-  if (!b) return { ok: false, reason: "Behavior is missing" };
-  /* whether the behavior can run is the bridge's readiness decision, not a
+  const b = agentOf(deployment, task.agentId);
+  if (!b) return { ok: false, reason: "Agent is missing" };
+  /* whether the agent can run is the bridge's readiness decision, not a
      guess from the documents here */
-  const readiness = behaviorReadiness(deployment, b.behaviorId);
+  const readiness = agentReadiness(deployment, b.agentId);
   if (!readiness.ready)
     return { ok: false, reason: `${b.displayName}: ${readiness.reason}` };
   if (t.lastStatus === "failed")
@@ -117,7 +117,7 @@ export function triggerReadiness(deployment: NodeView, t: TriggerView): Readines
 export function actionInWords(deployment: NodeView, t: TriggerView): string {
   const task = deployment.tasks.find((x) => x.taskId === t.config.task_id);
   if (!task) return "run a missing task";
-  const b = agentOf(deployment, task.behaviorId);
+  const b = agentOf(deployment, task.agentId);
   return `run ${task.name ?? task.taskId}${b ? ` with ${b.displayName}` : ""}`;
 }
 
@@ -129,7 +129,7 @@ export function profileLabel(deployment: NodeView, profileId: string) {
   return name.includes(p.model_name) ? name : `${name} · ${p.model_name}`;
 }
 
-/* what a Tools document lets a behavior do, in one line: "files rw · bash on · no network" */
+/* what a Tools document lets an agent do, in one line: "files rw · bash on · no network" */
 export function toolsInWords(tools: Tools | null | undefined): string {
   if (!tools) return "no tools";
   const files = tools.host?.files?.mode;
@@ -145,6 +145,6 @@ export function toolsInWords(tools: Tools | null | undefined): string {
   if (bash && bash.mode !== "Off")
     parts.push(bash.network_mode === "enabled" ? "network" : "no network");
   if (tools.remote) parts.push("remote");
-  if (tools.subagents) parts.push("subagents");
+  if (tools.agents) parts.push("agents");
   return parts.join(" · ");
 }

@@ -1,6 +1,6 @@
 # Single durable session document per `gents_protocol::session::AgentSession`.
 # Identity, owner and requester scope are established at creation; display names
-# resolve from the principal/behavior, never copied into session identity.
+# resolve from the node/agent, never copied into session identity.
 # Absent requester scope grants no wildcard authority.
 #
 # Nested canonical values (title, provenance, observation) use the verified JSON
@@ -12,14 +12,14 @@
 #
 # Ordering for projection/listing is created_at then the logical session_id /
 # request_id labels, never the physical document ID.
-type AgentSession @branchable @index(fields: ["agent_did", "session_id"], unique: true) {
-    # Logical session label; unique only within the agent_did scope.
+type AgentSession @branchable @index(fields: ["node_did", "session_id"], unique: true) {
+    # Logical session label; unique only within the node_did scope.
     session_id: String @index @immutable
-    agent_did: String @index @immutable
+    node_did: String @index @immutable
     requester_did: String @index @immutable
-    # The only configuration selection: AgentBehavior -> AgentContext and
+    # The only configuration selection: Agent -> AgentContext and
     # InferenceProfile. No context/profile/backend/model copies or overrides.
-    behavior_id: String @index @immutable
+    agent_id: String @index @immutable
     # Original creation time, unchanged by resume, close or later requests.
     created_at: String @index @immutable
     # Explicit close time; absent for an open session. Reopening clears it

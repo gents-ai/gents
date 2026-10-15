@@ -96,12 +96,12 @@ pub async fn prepare_document_pack_install(
         let package = crate::graph_package::load_archive_graph_package_with_environment(
             archive,
             &PackInstallOptions {
-                agent_did: owner.to_owned(),
+                node_did: owner.to_owned(),
             },
             environment,
         )?;
         let bindings = GraphPackageInstallBindings {
-            agent_did: owner.to_owned(),
+            node_did: owner.to_owned(),
             inference_slots: preview.bindings.clone(),
         };
         crate::graph_package::prepare_loaded_graph_package_install(access, &package, &bindings)

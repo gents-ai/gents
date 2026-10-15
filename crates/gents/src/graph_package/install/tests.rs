@@ -12,14 +12,14 @@ async fn fixture() -> (Arc<EmbeddedNode>, ConfigAccess, GraphPackageInstallBindi
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let owner = "did:key:package-owner";
-    crate::document_config::ensure_agent_principal(&node, owner)
+    crate::document_config::ensure_node(&node, owner)
         .await
         .unwrap();
     for profile in ["claude", "glm", "grok"] {
-        crate::test_support::install_test_behavior(&node, owner, profile).await;
+        crate::test_support::install_test_agent(&node, owner, profile).await;
     }
     let options = GraphPackageInstallBindings {
-        agent_did: owner.into(),
+        node_did: owner.into(),
         inference_slots: BTreeMap::from([
             ("coordinator".into(), "claude:inference".into()),
             ("worker".into(), "glm:inference".into()),
@@ -52,7 +52,7 @@ async fn prepare_package_refuses_a_write_collection_the_package_does_not_declare
 #[test]
 fn explicit_graph_selection_preserves_authored_identity_and_rejects_ambiguity() {
     let options = GraphPackageInstallBindings {
-        agent_did: "did:key:owner".into(),
+        node_did: "did:key:owner".into(),
         inference_slots: BTreeMap::new(),
     };
     let mut package = load_test_graph_package("review_graph", &options);
@@ -86,11 +86,11 @@ async fn missing_or_foreign_owner_does_not_register_package_schema() {
             .is_err()
     );
     let missing = GraphPackageInstallBindings {
-        agent_did: "did:key:missing".into(),
+        node_did: "did:key:missing".into(),
         inference_slots: options.inference_slots.clone(),
     };
     assert!(
-        install_test_graph_package(&access, &missing.agent_did, "review_graph", &missing)
+        install_test_graph_package(&access, &missing.node_did, "review_graph", &missing)
             .await
             .is_err()
     );
@@ -103,13 +103,13 @@ async fn invalid_retained_reference_fails_before_any_package_schema_write() {
     let response = node
         .execute(
             r#"mutation { create_Task(input: {
-        agent_did: "did:key:package-owner", task_id: "unrelated-broken-task",
-        behavior_id: "missing-behavior", prompt_template: "Keep this reference visible"
+        node_did: "did:key:package-owner", task_id: "unrelated-broken-task",
+        agent_id: "missing-behavior", prompt_template: "Keep this reference visible"
     }) { _docID } }"#,
         )
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let error = install_test_graph_package(&access, &options.agent_did, "review_graph", &options)
+    let error = install_test_graph_package(&access, &options.node_did, "review_graph", &options)
         .await
         .unwrap_err();
     assert!(
@@ -118,16 +118,16 @@ async fn invalid_retained_reference_fails_before_any_package_schema_write() {
     );
     assert!(node.get_collection("CodeReviewJob").unwrap().is_none());
     let response = node
-        .execute("{ AgentBehavior { behavior_id } GraphRevision { digest } }")
+        .execute("{ Agent { agent_id } GraphRevision { digest } }")
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let data = response.data.unwrap();
     assert_eq!(
-        data["AgentBehavior"]
+        data["Agent"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|behavior| behavior["behavior_id"].as_str().unwrap())
+            .map(|behavior| behavior["agent_id"].as_str().unwrap())
             .collect::<BTreeSet<_>>(),
         BTreeSet::from(["claude", "glm", "grok"])
     );
@@ -145,7 +145,7 @@ async fn existing_package_schema_must_match_types_indexes_and_immutability() {
     );
     assert_ne!(incompatible, expected);
     node.add_schema(&incompatible).await.unwrap();
-    let error = install_test_graph_package(&access, &options.agent_did, "review_graph", &options)
+    let error = install_test_graph_package(&access, &options.node_did, "review_graph", &options)
         .await
         .unwrap_err();
     assert!(
@@ -160,8 +160,8 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
     let (node, access, options) = fixture().await;
     let metadata = node
         .execute(
-            r#"mutation { update_AgentPrincipal(filter: {
-        agent_did: {_eq: "did:key:package-owner"}
+            r#"mutation { update_Node(filter: {
+        node_did: {_eq: "did:key:package-owner"}
     }, input: {display_name: "Keep owner metadata", tags: ["unrelated-owner-tag"]}) {_docID} }"#,
         )
         .await;
@@ -169,8 +169,8 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
     let unrelated = node
         .execute(
             r#"mutation { create_Task(input: {
-        agent_did: "did:key:package-owner", task_id: "unrelated-task",
-        behavior_id: "review-recon", prompt_template: "Keep me", enabled: false
+        node_did: "did:key:package-owner", task_id: "unrelated-task",
+        agent_id: "review-recon", prompt_template: "Keep me", enabled: false
     }) {_docID} }"#,
         )
         .await;
@@ -181,20 +181,20 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
     .unwrap()
     .documents()
     .iter()
-    .filter(|document| document.collection != Collection::AgentPrincipal)
+    .filter(|document| document.collection != Collection::Node)
     .count();
-    let first = install_test_graph_package(&access, &options.agent_did, "review_graph", &options)
+    let first = install_test_graph_package(&access, &options.node_did, "review_graph", &options)
         .await
         .unwrap();
     let user_tag = node
         .execute(
-            r#"mutation { update_AgentBehavior(filter: {
-        agent_did: {_eq: "did:key:package-owner"}, behavior_id: {_eq: "review-recon"}
+            r#"mutation { update_Agent(filter: {
+        node_did: {_eq: "did:key:package-owner"}, agent_id: {_eq: "review-recon"}
     }, input: {tags: ["gents:pack:review_graph", "user-label"]}) {_docID} }"#,
         )
         .await;
     assert!(!user_tag.has_errors(), "{:?}", user_tag.errors);
-    let second = install_test_graph_package(&access, &options.agent_did, "review_graph", &options)
+    let second = install_test_graph_package(&access, &options.node_did, "review_graph", &options)
         .await
         .unwrap();
     assert_eq!(first, second);
@@ -203,11 +203,11 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
     let state = node
         .execute(
             r#"{
-        AgentPrincipal {agent_did display_name tags}
-        AgentBehavior {behavior_id agent_did context_id inference_profile_id tags}
+        Node {node_did display_name tags}
+        Agent {agent_id node_did context_id inference_profile_id tags}
         AgentContext {context_id tags}
         Tools {tools_id tags}
-        Task {task_id agent_did goal_objective_template goal_token_budget tags}
+        Task {task_id node_did goal_objective_template goal_token_budget tags}
         GraphDefinition {graph_id tags}
         GraphRevision {digest artifacts_complete plan_json}
         InferenceProfile {profile_id tags}
@@ -217,14 +217,8 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
         .await;
     assert!(!state.has_errors(), "{:?}", state.errors);
     let data = state.data.unwrap();
-    assert_eq!(
-        data["AgentPrincipal"][0]["display_name"],
-        "Keep owner metadata"
-    );
-    assert_eq!(
-        data["AgentPrincipal"][0]["tags"],
-        json!(["unrelated-owner-tag"])
-    );
+    assert_eq!(data["Node"][0]["display_name"], "Keep owner metadata");
+    assert_eq!(data["Node"][0]["tags"], json!(["unrelated-owner-tag"]));
     assert_eq!(data["GraphRevision"].as_array().unwrap().len(), 1);
     assert_eq!(data["GraphRevision"][0]["artifacts_complete"], true);
     assert!(data["Task"]
@@ -249,9 +243,9 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
         ("review-verify", "grok:inference"),
         ("review-triage", "claude:inference"),
     ]);
-    for behavior in data["AgentBehavior"].as_array().unwrap() {
-        let behavior_id = behavior["behavior_id"].as_str().unwrap();
-        let Some(profile_id) = expected_bindings.get(behavior_id) else {
+    for behavior in data["Agent"].as_array().unwrap() {
+        let agent_id = behavior["agent_id"].as_str().unwrap();
+        let Some(profile_id) = expected_bindings.get(agent_id) else {
             assert!(behavior["tags"].is_null());
             continue;
         };
@@ -261,11 +255,11 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
             .unwrap()
             .contains(&json!("gents:pack:review_graph")));
     }
-    let review_recon = data["AgentBehavior"]
+    let review_recon = data["Agent"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|behavior| behavior["behavior_id"] == "review-recon")
+        .find(|behavior| behavior["agent_id"] == "review-recon")
         .unwrap();
     assert!(review_recon["tags"]
         .as_array()
@@ -332,7 +326,7 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
             .any(|artifact| artifact.collection == collection));
     }
     for collection in [
-        Collection::AgentPrincipal,
+        Collection::Node,
         Collection::InferenceProfile,
         Collection::InferenceBackend,
         Collection::InferenceSampling,
@@ -346,7 +340,7 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
     activate_graph_revision(
         &node,
         None,
-        &options.agent_did,
+        &options.node_did,
         &first.graph_id,
         &first.revision_digest,
         None,
@@ -355,14 +349,14 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
     .unwrap();
     assert_eq!(
         first,
-        install_test_graph_package(&access, &options.agent_did, "review_graph", &options)
+        install_test_graph_package(&access, &options.node_did, "review_graph", &options)
             .await
             .unwrap()
     );
     let run = start_graph_run(
         &node,
         None,
-        &options.agent_did,
+        &options.node_did,
         &first.graph_id,
         None,
         "review",
@@ -394,18 +388,18 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
     );
     // Identical authored logical IDs may coexist under another selected DID.
     let foreign = GraphPackageInstallBindings {
-        agent_did: "did:key:second-owner".into(),
+        node_did: "did:key:second-owner".into(),
         inference_slots: BTreeMap::from([
             ("coordinator".into(), "package:inference".into()),
             ("worker".into(), "package:inference".into()),
             ("verifier".into(), "package:inference".into()),
         ]),
     };
-    crate::document_config::ensure_agent_principal(&node, &foreign.agent_did)
+    crate::document_config::ensure_node(&node, &foreign.node_did)
         .await
         .unwrap();
-    crate::test_support::install_test_behavior(&node, &foreign.agent_did, "package").await;
-    let other = install_test_graph_package(&access, &foreign.agent_did, "review_graph", &foreign)
+    crate::test_support::install_test_agent(&node, &foreign.node_did, "package").await;
+    let other = install_test_graph_package(&access, &foreign.node_did, "review_graph", &foreign)
         .await
         .unwrap();
     assert_eq!(other.graph_id, first.graph_id);
@@ -413,14 +407,14 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
     activate_graph_revision(
         &node,
         None,
-        &foreign.agent_did,
+        &foreign.node_did,
         &other.graph_id,
         &other.revision_digest,
         None,
     )
     .await
     .unwrap();
-    for (owner, receipt) in [(&options.agent_did, &first), (&foreign.agent_did, &other)] {
+    for (owner, receipt) in [(&options.node_did, &first), (&foreign.node_did, &other)] {
         let selected = load_installed_package_plan(&access, "review_graph", owner)
             .await
             .unwrap()
@@ -445,13 +439,13 @@ async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
 #[tokio::test]
 async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
     let (node, access, options) = fixture().await;
-    let first = install_test_graph_package(&access, &options.agent_did, "review_graph", &options)
+    let first = install_test_graph_package(&access, &options.node_did, "review_graph", &options)
         .await
         .unwrap();
     activate_graph_revision(
         &node,
         None,
-        &options.agent_did,
+        &options.node_did,
         &first.graph_id,
         &first.revision_digest,
         None,
@@ -478,7 +472,7 @@ async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
     concurrent.package_digest = digest_bytes(b"concurrent distribution");
     let concurrent_receipt = install_loaded_graph_package(
         &access,
-        &options.agent_did,
+        &options.node_did,
         &concurrent,
         &options,
         None,
@@ -489,7 +483,7 @@ async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
     activate_graph_revision(
         &node,
         None,
-        &options.agent_did,
+        &options.node_did,
         &concurrent_receipt.graph_id,
         &concurrent_receipt.revision_digest,
         Some(&first.revision_digest),
@@ -499,7 +493,7 @@ async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
 
     let error = commit_prepared_graph_package_install(
         &access,
-        &options.agent_did,
+        &options.node_did,
         &successor,
         &prepared,
         &Default::default(),

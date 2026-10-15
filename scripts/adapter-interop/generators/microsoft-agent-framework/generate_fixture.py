@@ -33,8 +33,8 @@ AGENTS = [
     {
         "name": "Researcher",
         "role": "researcher",
-        "agent_did": "did:test:microsoft-agent-framework-researcher",
-        "behavior_id": "microsoft_agent_framework.researcher",
+        "node_did": "did:test:microsoft-agent-framework-researcher",
+        "agent_id": "microsoft_agent_framework.researcher",
         "description": "Collects evidence from the shared group-chat conversation.",
         "instructions": "Gather concise facts that help map this workflow.",
         "request_id": RESEARCH_REQUEST_ID,
@@ -46,8 +46,8 @@ AGENTS = [
     {
         "name": "Writer",
         "role": "writer",
-        "agent_did": "did:test:microsoft-agent-framework-writer",
-        "behavior_id": "microsoft_agent_framework.writer",
+        "node_did": "did:test:microsoft-agent-framework-writer",
+        "agent_id": "microsoft_agent_framework.writer",
         "description": "Synthesizes the adapter projection mapping.",
         "instructions": "Write the final projection mapping in one concise answer.",
         "request_id": WRITER_REQUEST_ID,
@@ -61,8 +61,8 @@ AGENTS = [
 ORCHESTRATOR = {
     "name": "group_chat_orchestrator",
     "role": "orchestrator",
-    "agent_did": "did:test:microsoft-agent-framework-orchestrator",
-    "behavior_id": "microsoft_agent_framework.group_chat_orchestrator",
+    "node_did": "did:test:microsoft-agent-framework-orchestrator",
+    "agent_id": "microsoft_agent_framework.group_chat_orchestrator",
 }
 
 
@@ -186,13 +186,14 @@ def build_projection(
         "projection_version": "v1",
         "source_request_id": REQUEST_ID,
         "source_session_id": CONTEXT_ID,
-        "source_agent_did": ORCHESTRATOR["agent_did"],
-        "source_behavior_id": ORCHESTRATOR["behavior_id"],
+        "source_node_did": ORCHESTRATOR["node_did"],
+        "source_agent_id": ORCHESTRATOR["agent_id"],
         "redaction_mode": "full",
         "provenance": {
             "runtime": "gents",
-            "source_projection_id": "run_timeline",
+            "source_projection_id": "external_adapter_capture",
             "source_projection_version": "v1",
+            "source_version_status": "external_adapter_capture",
             "actor_did": "did:test:microsoft-agent-framework-fixture-reader",
         },
         "output": {
@@ -203,14 +204,14 @@ def build_projection(
                 "status": "completed" if outputs else "stopped",
                 "participants": [
                     {
-                        "agent_did": ORCHESTRATOR["agent_did"],
-                        "behavior_id": ORCHESTRATOR["behavior_id"],
+                        "node_did": ORCHESTRATOR["node_did"],
+                        "agent_id": ORCHESTRATOR["agent_id"],
                         "role": ORCHESTRATOR["role"],
                     },
                     *[
                         {
-                            "agent_did": definition["agent_did"],
-                            "behavior_id": definition["behavior_id"],
+                            "node_did": definition["node_did"],
+                            "agent_id": definition["agent_id"],
                             "role": definition["role"],
                         }
                         for definition in AGENTS
@@ -244,16 +245,16 @@ def build_projection(
                         "parent_request_id": REQUEST_ID,
                         "child_request_id": RESEARCH_REQUEST_ID,
                         "parent_tool_call_id": "msaf:group-chat:round:0:Researcher",
-                        "agent_did": AGENTS[0]["agent_did"],
-                        "behavior_id": AGENTS[0]["behavior_id"],
+                        "node_did": AGENTS[0]["node_did"],
+                        "agent_id": AGENTS[0]["agent_id"],
                         "status": "completed",
                     },
                     {
                         "parent_request_id": REQUEST_ID,
                         "child_request_id": WRITER_REQUEST_ID,
                         "parent_tool_call_id": "msaf:group-chat:round:1:Writer",
-                        "agent_did": AGENTS[1]["agent_did"],
-                        "behavior_id": AGENTS[1]["behavior_id"],
+                        "node_did": AGENTS[1]["node_did"],
+                        "agent_id": AGENTS[1]["agent_id"],
                         "status": "completed",
                     },
                 ],
@@ -354,24 +355,24 @@ def build_mapping(clients: dict[str, ScriptedChatClient]) -> dict[str, Any]:
         "scenario_id": "microsoft_agent_framework.group_chat",
         "request_id": REQUEST_ID,
         "session_id": CONTEXT_ID,
-        "agent_did": ORCHESTRATOR["agent_did"],
-        "behavior_id": ORCHESTRATOR["behavior_id"],
+        "node_did": ORCHESTRATOR["node_did"],
+        "agent_id": ORCHESTRATOR["agent_id"],
         "actor_did": "did:test:microsoft-agent-framework-fixture-reader",
         "status": "completed" if outputs else "stopped",
         "participants": [
             {
                 "native_name": ORCHESTRATOR["name"],
                 "role": ORCHESTRATOR["role"],
-                "agent_did": ORCHESTRATOR["agent_did"],
-                "behavior_id": ORCHESTRATOR["behavior_id"],
+                "node_did": ORCHESTRATOR["node_did"],
+                "agent_id": ORCHESTRATOR["agent_id"],
                 "request_id": REQUEST_ID,
             },
             *[
                 {
                     "native_name": definition["name"],
                     "role": definition["role"],
-                    "agent_did": definition["agent_did"],
-                    "behavior_id": definition["behavior_id"],
+                    "node_did": definition["node_did"],
+                    "agent_id": definition["agent_id"],
                     "request_id": definition["request_id"],
                 }
                 for definition in AGENTS
@@ -383,8 +384,8 @@ def build_mapping(clients: dict[str, ScriptedChatClient]) -> dict[str, Any]:
                 "child_request_id": RESEARCH_REQUEST_ID,
                 "parent_tool_call_id": "msaf:group-chat:round:0:Researcher",
                 "tool_name": "group_chat_request",
-                "agent_did": AGENTS[0]["agent_did"],
-                "behavior_id": AGENTS[0]["behavior_id"],
+                "node_did": AGENTS[0]["node_did"],
+                "agent_id": AGENTS[0]["agent_id"],
                 "status": "completed",
             },
             {
@@ -392,8 +393,8 @@ def build_mapping(clients: dict[str, ScriptedChatClient]) -> dict[str, Any]:
                 "child_request_id": WRITER_REQUEST_ID,
                 "parent_tool_call_id": "msaf:group-chat:round:1:Writer",
                 "tool_name": "group_chat_request",
-                "agent_did": AGENTS[1]["agent_did"],
-                "behavior_id": AGENTS[1]["behavior_id"],
+                "node_did": AGENTS[1]["node_did"],
+                "agent_id": AGENTS[1]["agent_id"],
                 "status": "completed",
             },
         ],

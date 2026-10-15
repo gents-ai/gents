@@ -10,7 +10,7 @@
 //! rust-analyzer --version
 //! GENTS_LIVE_LSP=1 GENTS_EVAL_TARGET=workstation-1 \
 //!   GENTS_LSP_RUST_PACK_DIR=<packs checkout>/packs/gents/lsp_rust \
-//!   cargo test -p gents --test e2e_live \
+//!   cargo test -p gents --features live-e2e --test e2e_live \
 //!   lsp_live_model_uses_rust_analyzer \
 //!   -- --ignored --test-threads=1 --nocapture
 //! ```
@@ -25,9 +25,9 @@ use gents::defra_node::EmbeddedNode;
 use gents::document_config::{FileTools, HostTools, IntegrationTools, LspTools, Tools};
 use gents::{DocumentRuntimeOptions, FileToolMode, Gents, ToolCeiling};
 
-use gents::AgentIdentity;
+use gents::NodeIdentity;
 
-use crate::support::fixtures::{configure_behavior_tools, test_identity};
+use crate::support::fixtures::{configure_agent_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::{
     bind_target, live_target, wait_for_assistant_answer, wait_for_request_terminal,
@@ -98,7 +98,7 @@ fn pack_lsp_config() -> String {
     let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|err| {
         panic!("parse {}: {err}", path.display());
     });
-    value["tools"]
+    let raw_config = value["tools"]
         .as_array()
         .and_then(|tools| {
             tools
@@ -106,13 +106,88 @@ fn pack_lsp_config() -> String {
                 .find(|tools| tools["tools_id"] == "lsp-readonly")
         })
         .and_then(|tools| tools["integrations"]["lsp"]["config"].as_str())
-        .unwrap_or_else(|| panic!("{} missing lsp-readonly Tools config", path.display()))
-        .to_owned()
+        .unwrap_or_else(|| panic!("{} missing lsp-readonly Tools config", path.display()));
+    let mut config: serde_json::Value =
+        serde_json::from_str(raw_config).expect("pack LSP server configuration");
+    // This qualification queries source-declared enum symbols; compiling build scripts
+    // and procedural macros would contend with the enclosing workspace build.
+    let settings = &mut config["servers"]["rust-analyzer"]["settings"]["rust-analyzer"];
+    settings["cargo"]["buildScripts"]["enable"] = serde_json::json!(false);
+    settings["procMacro"]["enable"] = serde_json::json!(false);
+    serde_json::to_string(&config).expect("serialize live LSP server configuration")
+}
+
+fn load_pack_system_prompt(root: &std::path::Path) -> anyhow::Result<String> {
+    use anyhow::Context;
+    use gents::pack::{load_pack_config, PackInstallOptions, PackManifest};
+
+    let manifest: PackManifest =
+        serde_json::from_slice(&std::fs::read(root.join("manifest.json"))?)?;
+    let config = load_pack_config(
+        &manifest,
+        &PackInstallOptions {
+            node_did: "did:key:lsp-live-fixture".into(),
+        },
+        &|path| Ok(std::fs::read(root.join(path))?),
+        &|name| std::env::var(name).ok(),
+    )?;
+    let agent = config
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == "lsp-coder")
+        .context("pack has no lsp-coder Agent")?;
+    let context_id = agent
+        .context_id
+        .as_deref()
+        .context("lsp-coder has no Context")?;
+    config
+        .contexts
+        .iter()
+        .find(|context| context.context_id == context_id)
+        .context("lsp-coder Context is missing")?
+        .system_prompt
+        .clone()
+        .context("lsp-coder Context has no system prompt")
 }
 
 fn pack_system_prompt() -> String {
-    std::fs::read_to_string(pack_dir().join("agent_behaviors/lsp_coder/system_prompt.md"))
-        .expect("pack system prompt")
+    load_pack_system_prompt(&pack_dir()).expect("load pack lsp-coder system prompt")
+}
+
+#[test]
+fn lsp_pack_prompt_follows_agent_context_sidecar_reference() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("README.md"), "LSP prompt fixture\n").unwrap();
+    std::fs::create_dir_all(root.path().join("custom_assets")).unwrap();
+    std::fs::write(
+        root.path().join("custom_assets/prompt.md"),
+        "Exact prompt\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("manifest.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "manifest_version":1,"name":"lsp_test","version":"1",
+            "description":"Fixture","kind":"documents","authors":["Test"],
+            "assets":["README.md","pack_config.json","custom_assets/prompt.md"],
+            "config":"pack_config.json",
+            "inference_slots":[{"name":"coder","description":"Fixture coder","agents":["lsp-coder"]}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("pack_config.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "node":{},
+            "agents":[{"agent_id":"lsp-coder","context_id":"distinct-context","inference_profile_id":"gents:inference-slot:coder"}],
+            "contexts":[{"context_id":"distinct-context","system_prompt":"./custom_assets/prompt.md"}]
+        })).unwrap(),
+    ).unwrap();
+    assert_eq!(
+        load_pack_system_prompt(root.path()).unwrap(),
+        "Exact prompt\n"
+    );
 }
 
 fn pack_unscripted_prompt() -> String {
@@ -179,19 +254,19 @@ async fn lsp_live_model_uses_rust_analyzer() {
     let _cwd = CurrentDirGuard::set(&workspace);
 
     let db = test_db("lsp-live").await;
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("lsp-live"));
+    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("lsp-live"));
 
-    let (agent_did, behavior_id) =
+    let (node_did, agent_id) =
         bind_target(db.node.as_ref(), identity.as_ref(), &live_target()).await;
 
-    configure_behavior_tools(
+    configure_agent_tools(
         db.node.as_ref(),
-        &agent_did,
-        &behavior_id,
+        &node_did,
+        &agent_id,
         Some(pack_system_prompt()),
         Tools {
             tools_id: "lsp-live-tools".to_string(),
-            agent_did: agent_did.clone(),
+            node_did: node_did.clone(),
             host: Some(HostTools {
                 root: Some(workspace.display().to_string()),
                 files: Some(FileTools {
@@ -213,7 +288,7 @@ async fn lsp_live_model_uses_rust_analyzer() {
     )
     .await;
 
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         Arc::clone(&identity),
         DocumentRuntimeOptions {
@@ -225,16 +300,16 @@ async fn lsp_live_model_uses_rust_analyzer() {
     .expect("boot agent");
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
-    let booted = BootedAgent::new(shutdown_tx, handle, agent_did.clone());
+    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
+    let booted = BootedAgent::new(shutdown_tx, handle, node_did.clone());
 
     // UX arm: no paths, line numbers, symbol-discovery steps, retries, or
     // status choreography. The model must discover and use the semantic tool.
     let unscripted_request_id = "lsp-live-unscripted-1";
     create_runtime_request(
         db.node.as_ref(),
-        &agent_did,
-        &behavior_id,
+        &node_did,
+        &agent_id,
         unscripted_request_id,
         "lsp-live-unscripted-session-1",
         &pack_unscripted_prompt(),
@@ -246,10 +321,10 @@ async fn lsp_live_model_uses_rust_analyzer() {
         Duration::from_secs(600),
     )
     .await;
-    assert_eq!(
-        terminal, "completed",
-        "unscripted live lsp run must complete"
-    );
+    let mut failures = Vec::new();
+    if terminal != "completed" {
+        failures.push(format!("unscripted live lsp run must complete: {terminal}"));
+    }
     let unscripted_calls = fetch_tool_calls(&db.node, unscripted_request_id).await;
     let useful_semantic = unscripted_calls.iter().any(|call| {
         call.tool_name.as_deref() == Some("lsp")
@@ -267,29 +342,31 @@ async fn lsp_live_model_uses_rust_analyzer() {
             )
             && !result_is_error(call)
     });
-    assert!(
-        useful_semantic,
-        "unscripted arm must produce at least one useful semantic lsp result; calls: {:?}",
-        summarize_calls(unscripted_calls.iter())
-    );
+    if !useful_semantic {
+        failures.push(format!(
+            "unscripted arm must produce at least one useful semantic lsp result; calls: {:?}",
+            summarize_calls(unscripted_calls.iter())
+        ));
+    }
     let unscripted_answer = wait_for_assistant_answer(
         db.node.as_ref(),
         unscripted_request_id,
         Duration::from_secs(10),
     )
     .await;
-    assert!(
-        answer_reports_meet_contract(&unscripted_answer),
-        "unscripted answer must report that the more restrictive mode wins in Disabled < Inherit < Enabled order; got:\n{unscripted_answer}"
-    );
+    if !answer_reports_meet_contract(&unscripted_answer) {
+        failures.push(format!(
+            "unscripted answer must report that the more restrictive mode wins in Disabled < Inherit < Enabled order; got:\n{unscripted_answer}"
+        ));
+    }
 
     // Deterministic arm: retained as a stable harness/protocol regression gate.
     let request_id = "lsp-live-req-1";
     let prompt = pack_default_prompt();
     create_runtime_request(
         db.node.as_ref(),
-        &agent_did,
-        &behavior_id,
+        &node_did,
+        &agent_id,
         request_id,
         "lsp-live-session-1",
         &prompt,
@@ -298,38 +375,45 @@ async fn lsp_live_model_uses_rust_analyzer() {
 
     let terminal =
         wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(600)).await;
-    assert_eq!(terminal, "completed", "live lsp run must complete");
+    if terminal != "completed" {
+        failures.push(format!("live lsp run must complete: {terminal}"));
+    }
 
     let calls = fetch_tool_calls(&db.node, request_id).await;
     let lsp_calls: Vec<_> = calls
         .iter()
         .filter(|call| call.tool_name.as_deref() == Some("lsp"))
         .collect();
-    assert!(
-        !lsp_calls.is_empty(),
-        "model must persist at least one lsp tool call; calls: {:?}",
-        summarize_calls(calls.iter())
-    );
-    let meet_hover = find_hover(&lsp_calls, MEET_FILE, "meet", &["Disabled", "Inherit"]);
-    assert!(!result_is_error(meet_hover));
-
-    let advertised_hover = find_hover(
-        &lsp_calls,
-        ADVERTISED_FILE,
-        "lsp_advertised",
-        &["FileToolMode"],
-    );
-    assert!(!result_is_error(advertised_hover));
+    if lsp_calls.is_empty() {
+        failures.push(format!(
+            "model must persist at least one lsp tool call; calls: {:?}",
+            summarize_calls(calls.iter())
+        ));
+    }
+    for (file, symbol, required) in [
+        (MEET_FILE, "meet", &["Disabled", "Inherit"][..]),
+        (ADVERTISED_FILE, "lsp_advertised", &["FileToolMode"][..]),
+    ] {
+        if matching_hover(&lsp_calls, file, symbol, required).is_none() {
+            failures.push(format!(
+                "need a completed hover on {file} symbol={symbol} quoting {required:?}; lsp calls: {:?}",
+                summarize_calls(lsp_calls.iter().copied())
+            ));
+        }
+    }
 
     let answer =
         wait_for_assistant_answer(db.node.as_ref(), request_id, Duration::from_secs(10)).await;
-    assert!(
-        answer.contains("FileToolMode")
-            || (answer.contains("Disabled") && answer.contains("Inherit")),
-        "assistant must report a rust-analyzer fact; got:\n{answer}"
-    );
+    if !(answer.contains("FileToolMode")
+        || (answer.contains("Disabled") && answer.contains("Inherit")))
+    {
+        failures.push(format!(
+            "assistant must report a rust-analyzer fact; got:\n{answer}"
+        ));
+    }
 
     booted.shutdown().await;
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
 /// `tool_policy.rs` defines several `meet` methods, so a hover on the right
@@ -340,27 +424,32 @@ fn find_hover<'a>(
     symbol: &str,
     required: &[&str],
 ) -> &'a ToolCallRow {
-    calls
-        .iter()
-        .copied()
-        .find(|call| {
-            call_completed(call)
-                && action_of(call).as_deref() == Some("hover")
-                && file_of(call)
-                    .is_some_and(|path| gents::toolset::result_path_matches(file, &path))
-                && symbol_of(call).as_deref() == Some(symbol)
-                && !result_is_error(call)
-                && call
-                    .result
-                    .as_deref()
-                    .is_some_and(|text| required.iter().all(|needle| text.contains(needle)))
-        })
+    matching_hover(calls, file, symbol, required)
         .unwrap_or_else(|| {
             panic!(
                 "need a completed hover on {file} symbol={symbol} quoting {required:?}; lsp calls: {:?}",
                 summarize_calls(calls.iter().copied())
             )
         })
+}
+
+fn matching_hover<'a>(
+    calls: &[&'a ToolCallRow],
+    file: &str,
+    symbol: &str,
+    required: &[&str],
+) -> Option<&'a ToolCallRow> {
+    calls.iter().copied().find(|call| {
+        call_completed(call)
+            && action_of(call).as_deref() == Some("hover")
+            && file_of(call).is_some_and(|path| gents::toolset::result_path_matches(file, &path))
+            && symbol_of(call).as_deref() == Some(symbol)
+            && !result_is_error(call)
+            && call
+                .result
+                .as_deref()
+                .is_some_and(|text| required.iter().all(|needle| text.contains(needle)))
+    })
 }
 
 fn call_completed(call: &ToolCallRow) -> bool {
@@ -448,6 +537,7 @@ fn summarize_calls<'a>(
     Option<String>,
     Option<String>,
     Option<String>,
+    Option<String>,
 )> {
     calls
         .into_iter()
@@ -455,6 +545,7 @@ fn summarize_calls<'a>(
             (
                 call.tool_name.clone(),
                 action_of(call),
+                call.args.clone(),
                 call.status.clone(),
                 call.result.clone(),
             )

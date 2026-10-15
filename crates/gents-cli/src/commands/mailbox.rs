@@ -7,7 +7,7 @@ use crate::cli::args::{
     MailboxAccessArgs, MailboxCommand, MailboxItemArgs, MailboxListArgs, MailboxReplyArgs,
 };
 use crate::cli::output_format::OutputFormat;
-use crate::{print_json, resolve_agent_did, resolve_config_access};
+use crate::{print_json, resolve_config_access, resolve_node_did};
 
 pub(crate) async fn dispatch(command: MailboxCommand) -> Result<()> {
     match command {
@@ -23,7 +23,7 @@ async fn reply(args: MailboxReplyArgs) -> Result<()> {
         .output
         .ensure_supported("mailbox reply", &[OutputFormat::Json])?;
     let home = args.item.access.home.as_deref();
-    let principal = resolve_agent_did(home, None)?;
+    let principal = resolve_node_did(home, None)?;
     let graphql = crate::resolve_graphql_endpoint(args.item.access.graphql.as_deref(), home)?;
     let access = ConfigAccess::Graphql(graphql.clone());
     let item = load_item(&access, &args.item.doc_id)
@@ -31,7 +31,7 @@ async fn reply(args: MailboxReplyArgs) -> Result<()> {
         .context("MailboxItem not found")?;
     anyhow::ensure!(
         item.requester_did == principal,
-        "MailboxItem is not owned by the local principal"
+        "MailboxItem is not owned by the local node"
     );
     anyhow::ensure!(
         item.parsed_status() == Some(MailboxStatus::Open),
@@ -42,16 +42,16 @@ async fn reply(args: MailboxReplyArgs) -> Result<()> {
         "MailboxItem does not accept request replies"
     );
     anyhow::ensure!(
-        item.target_agent_did == principal,
-        "local-self mailbox replies require the local principal as target; use the paired client for a remote target"
+        item.target_node_did == principal,
+        "local-self mailbox replies require the local node as target; use the paired client for a remote target"
     );
-    crate::request_helpers::ensure_local_request_signer(home, &item.target_agent_did)?;
+    crate::request_helpers::ensure_local_request_signer(home, &item.target_node_did)?;
     let submitted = crate::create_agent_request(
         &graphql,
-        &item.target_agent_did,
+        &item.target_node_did,
         &args.message,
         item.session_id.as_deref(),
-        Some(&item.target_behavior_id),
+        Some(&item.target_agent_id),
         crate::RequestSubmitOptions {
             caused_by_source_doc_id: Some(item.doc_id.clone()),
             ..Default::default()
@@ -71,7 +71,7 @@ async fn access_and_principal(args: &MailboxAccessArgs) -> Result<(crate::Comman
     // requester flag. Remote storage enforcement remains the paired-client
     // trust boundary documented by the mailbox design.
     let principal =
-        resolve_agent_did(args.home.as_deref(), None).context("resolving mailbox principal DID")?;
+        resolve_node_did(args.home.as_deref(), None).context("resolving mailbox node DID")?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     Ok((access, principal))
 }
@@ -114,7 +114,7 @@ async fn show(args: MailboxItemArgs) -> Result<()> {
         .await?
         .context("MailboxItem not found")?;
     if item.requester_did != principal {
-        bail!("MailboxItem is not owned by the local principal");
+        bail!("MailboxItem is not owned by the local node");
     }
     print_json(&serde_json::to_value(item)?)
 }

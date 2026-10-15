@@ -1,8 +1,8 @@
-/* A behavior as its editor drafts it: the fields, the context choice
+/* An agent as its editor drafts it: the fields, the context choice
    (an existing one, a duplicate or an empty one), what makes a draft
-   unsavable, and a new behavior's starting draft. */
+   unsavable, and a new agent's starting draft. */
 import type { NodeView } from "../../../hooks/fleetStore";
-import type { AgentContext, BehaviorView } from "@source-inc/gents-desktop-client";
+import type { AgentContext, AgentView } from "@source-inc/gents-desktop-client";
 import { newId } from "./draft";
 import { defaultAgentOf } from "@/lib/agents";
 
@@ -41,9 +41,9 @@ export const contextFields = (c: AgentContext | null) => ({
 
 export const nameOf = (c: AgentContext) => c.display_name ?? c.context_id;
 
-/* the behaviors that point at a context, as saved */
+/* the agents that point at a context, as saved */
 export const usersOf = (deployment: NodeView, contextId: string) =>
-  deployment.behaviors.filter((b) => b.contextId === contextId);
+  deployment.agents.filter((b) => b.contextId === contextId);
 
 export const listNames = (names: string[]) =>
   names.length <= 2 ? names.join(" and ") : `${names[0]} and ${names.length - 1} more`;
@@ -58,16 +58,16 @@ export function freshName(deployment: NodeView, base: string) {
 /* what stops a save, keyed by the field that shows it */
 export function problems(deployment: NodeView, next: Draft, draft = false) {
   const out: Partial<Record<keyof Draft, string>> = {};
-  if (!next.displayName.trim()) out.displayName = "Give the behavior a name.";
+  if (!next.displayName.trim()) out.displayName = "Give the agent a name.";
   if (!next.contextChoice)
     out.contextChoice =
-      "Choose a context or start one. Without one the behavior has no instructions and no tools.";
+      "Choose a context or start one. Without one the agent has no instructions and no tools.";
   else if (
     !isNew(next.contextChoice) &&
     !deployment.contexts.some((c) => c.context_id === next.contextChoice)
   )
     out.contextChoice = "That context no longer exists. Choose another.";
-  /* a draft's context is named after the behavior at save */
+  /* a draft's context is named after the agent at save */
   if (!draft && isNew(next.contextChoice) && !next.contextName.trim())
     out.contextName = "Name the new context.";
   if (!next.inferenceProfileId)
@@ -104,11 +104,11 @@ export const FIELD_ORDER: [keyof Draft, string][] = [
   ["inferenceProfileId", "profile"],
 ];
 
-/* the behavior a draft starts from: nothing saved, the default model */
-export function newBehaviorView(deployment: NodeView): BehaviorView {
+/* the agent a draft starts from: nothing saved, the default model */
+export function newAgentView(deployment: NodeView): AgentView {
   return {
-    behaviorId: newId("behavior"),
-    agentDid: deployment.agentDid,
+    agentId: newId("agent"),
+    nodeDid: deployment.nodeDid,
     displayName: "",
     description: null,
     contextId: null,
@@ -123,10 +123,10 @@ export function newBehaviorView(deployment: NodeView): BehaviorView {
   };
 }
 
-/** A new behavior drafted beside another page, before its first save. */
+/** A new agent drafted beside another page, before its first save. */
 export type DraftMode = {
-  /* the new behavior's id once saved */
-  onSaved: (behaviorId: string) => void;
+  /* the new agent's id once saved */
+  onSaved: (agentId: string) => void;
   onCancel: () => void;
   /* from a session's composer: saved enabled, to be used at once */
   enabled?: boolean;

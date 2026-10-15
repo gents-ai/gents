@@ -6,15 +6,15 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::startup_readiness::StartupReadinessOptions;
 use gents::{
-    ensure_runtime_schemas, AgentIdentity, DocumentRuntimeOptions, Gents, ProcessLifecycleState,
+    ensure_runtime_schemas, DocumentRuntimeOptions, Gents, NodeIdentity, ProcessLifecycleState,
     ToolCeiling,
 };
 use gents_protocol::row::{
-    BehaviorReadinessSnapshot, BehaviorReadinessState, BehaviorReadinessUnavailableReason,
+    AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessSnapshot,
 };
 use tokio::sync::watch;
 
-use crate::support::fixtures::bind_default_behavior_backend;
+use crate::support::fixtures::bind_default_agent_backend;
 use crate::support::fixtures::test_identity;
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::waits::RecordingProcessObserver;
@@ -25,7 +25,7 @@ const STARTUP_DEADLOCK_GUARD: std::time::Duration = std::time::Duration::from_se
 
 #[derive(Clone, Debug)]
 struct BuildFailure {
-    behavior_id: String,
+    agent_id: String,
     failure_number: u32,
     budget: u32,
     error: String,
@@ -75,14 +75,14 @@ impl RecordingBuildFailureObserver {
 }
 
 impl gents::startup_readiness::StartupBuildFailureObserver for RecordingBuildFailureObserver {
-    fn on_build_failure(&self, behavior_id: &str, failure_number: u32, budget: u32, error: &str) {
+    fn on_build_failure(&self, agent_id: &str, failure_number: u32, budget: u32, error: &str) {
         let count = {
             let mut failures = self
                 .failures
                 .lock()
                 .expect("build failure observer mutex poisoned");
             failures.push(BuildFailure {
-                behavior_id: behavior_id.to_string(),
+                agent_id: agent_id.to_string(),
                 failure_number,
                 budget,
                 error: error.to_string(),
@@ -93,18 +93,18 @@ impl gents::startup_readiness::StartupBuildFailureObserver for RecordingBuildFai
     }
 }
 
-async fn wait_for_behavior_readiness(
+async fn wait_for_node_readiness(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
-    state: BehaviorReadinessState,
-    reason: Option<BehaviorReadinessUnavailableReason>,
-) -> BehaviorReadinessSnapshot {
-    let escaped_did = escape_graphql_string(agent_did);
+    node_did: &str,
+    agent_id: &str,
+    state: AgentReadinessState,
+    reason: Option<AgentReadinessUnavailableReason>,
+) -> NodeReadinessSnapshot {
+    let escaped_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
-            AgentBehaviorReadiness(
-                filter: {{ agent_did: {{ _eq: "{escaped_did}" }} }},
+            NodeReadiness(
+                filter: {{ node_did: {{ _eq: "{escaped_did}" }} }},
                 limit: 1
             ) {{
                 snapshot_json
@@ -118,18 +118,16 @@ async fn wait_for_behavior_readiness(
         if let Some(snapshot) = response
             .data
             .as_ref()
-            .and_then(|data| data.get("AgentBehaviorReadiness"))
+            .and_then(|data| data.get("NodeReadiness"))
             .and_then(serde_json::Value::as_array)
             .and_then(|rows| rows.first())
             .and_then(|row| row.get("snapshot_json"))
             .and_then(serde_json::Value::as_str)
-            .and_then(|json| serde_json::from_str::<BehaviorReadinessSnapshot>(json).ok())
+            .and_then(|json| serde_json::from_str::<NodeReadinessSnapshot>(json).ok())
         {
             if snapshot.process_state.accepts_work()
-                && snapshot.behaviors.iter().any(|entry| {
-                    entry.behavior_id == behavior_id
-                        && entry.state == state
-                        && entry.reason == reason
+                && snapshot.agents.iter().any(|entry| {
+                    entry.agent_id == agent_id && entry.state == state && entry.reason == reason
                 })
             {
                 return snapshot;
@@ -153,7 +151,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     );
     ensure_runtime_schemas(node.as_ref()).await?;
     let mock_endpoint = MockModelEndpoint::start("default")?;
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         node.as_ref(),
         identity.did(),
         "backend-559",
@@ -182,7 +180,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
 
     let observer = Arc::new(RecordingProcessObserver::default());
     let build_failure_observer = Arc::new(RecordingBuildFailureObserver::default());
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
@@ -202,7 +200,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
         },
     )
     .await?;
-    let default_behavior_id = agent.default_behavior_id().to_string();
+    let default_agent_id = agent.default_agent_id().to_string();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let run_task = tokio::spawn(agent.run(shutdown_rx));
 
@@ -225,21 +223,21 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     assert_eq!(failures[1].failure_number, 2);
     assert!(failures
         .iter()
-        .all(|failure| failure.behavior_id == default_behavior_id));
+        .all(|failure| failure.agent_id == default_agent_id));
     assert!(failures.iter().all(|failure| failure.budget == 2));
     assert!(failures
         .iter()
         .all(|failure| failure.error.contains("GENTS_TEST_559_UNSET_KEY")));
 
-    let readiness = wait_for_behavior_readiness(
+    let readiness = wait_for_node_readiness(
         node.as_ref(),
         identity.did(),
-        &default_behavior_id,
-        BehaviorReadinessState::Unavailable,
-        Some(BehaviorReadinessUnavailableReason::ExecutorStartFailed),
+        &default_agent_id,
+        AgentReadinessState::Unavailable,
+        Some(AgentReadinessUnavailableReason::ExecutorStartFailed),
     )
     .await;
-    assert_eq!(readiness.behaviors.len(), 1);
+    assert_eq!(readiness.agents.len(), 1);
 
     let _ = shutdown_tx.send(true);
     run_task.await??;
@@ -247,7 +245,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     let observed = observer.states();
     assert!(
         observed.contains(&ProcessLifecycleState::Ready),
-        "process must reach Ready despite the un-buildable behavior; observed {observed:?}"
+        "process must reach Ready despite the un-buildable agent; observed {observed:?}"
     );
 
     Ok(())
@@ -288,7 +286,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
     );
     ensure_runtime_schemas(node.as_ref()).await?;
     let mock_endpoint = MockModelEndpoint::start("default")?;
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         node.as_ref(),
         identity.did(),
         "backend-559-late",
@@ -309,7 +307,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
 
     let observer = Arc::new(RecordingProcessObserver::default());
     let build_failure_observer = Arc::new(RecordingBuildFailureObserver::default());
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
@@ -329,7 +327,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
         },
     )
     .await?;
-    let default_behavior_id = agent.default_behavior_id().to_string();
+    let default_agent_id = agent.default_agent_id().to_string();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let run_task = tokio::spawn(agent.run(shutdown_rx));
 
@@ -348,18 +346,18 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
     assert!(failures.iter().all(|failure| failure.budget == 10));
     assert!(failures
         .iter()
-        .all(|failure| failure.behavior_id == default_behavior_id));
+        .all(|failure| failure.agent_id == default_agent_id));
     assert!(failures.iter().all(|failure| failure.error.contains(VAR)));
 
-    let readiness = wait_for_behavior_readiness(
+    let readiness = wait_for_node_readiness(
         node.as_ref(),
         identity.did(),
-        &default_behavior_id,
-        BehaviorReadinessState::Ready,
+        &default_agent_id,
+        AgentReadinessState::Ready,
         None,
     )
     .await;
-    assert_eq!(readiness.behaviors.len(), 1);
+    assert_eq!(readiness.agents.len(), 1);
 
     let _ = shutdown_tx.send(true);
     run_task.await??;

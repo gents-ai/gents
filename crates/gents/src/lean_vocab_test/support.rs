@@ -48,6 +48,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) graph_pipeline_validation_cases: Vec<LeanGraphPipelineValidationCase>,
     pub(crate) graph_pipeline_revision_gate_cases: Vec<LeanGraphPipelineRevisionGateCase>,
     pub(crate) graph_pipeline_run_terminal_cases: Vec<LeanGraphPipelineRunTerminalCase>,
+    pub(crate) graph_pipeline_edge_delivery_cases: Vec<LeanGraphPipelineEdgeDeliveryCase>,
     pub(crate) goal_claimed_publication_cases: Vec<serde_json::Value>,
     pub(crate) goal_request_head_cases: Vec<serde_json::Value>,
     pub(crate) goal_operator_resume_cases: Vec<serde_json::Value>,
@@ -63,6 +64,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) workspace_path_capability_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_alias_cases: Vec<serde_json::Value>,
     pub(crate) logical_output_obligation_cases: Vec<serde_json::Value>,
+    pub(crate) count_carrier_cases: serde_json::Value,
     pub(crate) schema_argument_repair_cases: Vec<serde_json::Value>,
     pub(crate) invalid_tool_progress_cases: Vec<serde_json::Value>,
     pub(crate) repeated_tool_failure_cases: Vec<serde_json::Value>,
@@ -115,6 +117,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) session_hydration_start_cases: Vec<LeanSessionHydrationStartCase>,
     pub(crate) enrollment_cases: Vec<LeanEnrollmentCase>,
     pub(crate) enrollment_durable_projection_cases: Vec<LeanEnrollmentDurableProjectionCase>,
+    pub(crate) enrollment_pending_request_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
     pub(crate) enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
     pub(crate) agent_request_admission_cases: Vec<LeanAgentRequestAdmissionCase>,
@@ -132,10 +135,11 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) frontend_client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) desktop_client_shell_case_count: usize,
     pub(crate) desktop_client_shell_cases: Vec<LeanClientShellCase>,
+    pub(crate) client_session_turn_cases: Vec<LeanSessionTurnCase>,
     pub(crate) request_lifecycle_operator_ui_cases: Vec<LeanClientShellCase>,
     pub(crate) client_live_delta_cases: Vec<serde_json::Value>,
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
-    pub(crate) client_behavior_readiness_cases: Vec<LeanClientBehaviorReadinessCase>,
+    pub(crate) client_agent_readiness_cases: Vec<LeanClientAgentReadinessCase>,
     pub(crate) startup_readiness_cases: Vec<LeanStartupReadinessCase>,
     pub(crate) readiness_publication_cases: Vec<LeanReadinessPublicationCase>,
     pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
@@ -151,6 +155,10 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) lsp_action_cases: Vec<LeanLspActionCase>,
     pub(crate) self_config_field_tables: Vec<LeanSelfConfigFieldTable>,
     pub(crate) self_config_cases: Vec<LeanSelfConfigCase>,
+    pub(crate) agent_decision_cases: Vec<LeanAgentDecisionCase>,
+    pub(crate) agent_materialization_cases: Vec<LeanAgentMaterializationCase>,
+    pub(crate) sibling_tools_cases: Vec<LeanSiblingToolsCase>,
+    pub(crate) self_config_selection_cases: LeanSelfConfigSelectionCases,
     pub(crate) session_recovery_cases: Vec<LeanSessionRecoveryCase>,
     pub(crate) inference_slot_accounting_cases: Vec<LeanInferenceSlotAccountingCase>,
     pub(crate) fleet_slot_accounting_cases: Vec<LeanFleetSlotAccountingCase>,
@@ -200,7 +208,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) codex_shim_projection_cases: Vec<LeanCodexShimProjectionCase>,
     pub(crate) codex_shim_reasoning_projection_cases: Vec<LeanCodexShimReasoningProjectionCase>,
     pub(crate) codex_shim_thread_status_cases: Vec<LeanCodexShimThreadStatusCase>,
-    pub(crate) codex_shim_behavior_selection_cases: Vec<LeanCodexShimBehaviorSelectionCase>,
+    pub(crate) codex_shim_agent_selection_cases: Vec<LeanCodexShimAgentSelectionCase>,
     pub(crate) codex_shim_tool_metadata_cases: Vec<LeanCodexShimToolMetadataCase>,
     pub(crate) codex_shim_context_usage_cases: Vec<LeanCodexShimContextUsageCase>,
     pub(crate) codex_shim_compaction_projection_cases: Vec<LeanCodexShimCompactionProjectionCase>,
@@ -218,6 +226,14 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
     pub(crate) canonical_spawned_target_rejection_cases: Vec<LeanSpawnedTargetRejectionCase>,
     pub(crate) interrupt_queue_cases: Vec<LeanInterruptQueueCase>,
+    pub(crate) fold_queue_cases: Vec<LeanFoldQueueCase>,
+    pub(crate) fold_turn_input_cases: Vec<LeanFoldTurnInputCase>,
+    pub(crate) handover_fold_cases: Vec<LeanHandoverFoldCase>,
+    pub(crate) fold_publication_cases: Vec<LeanFoldPublicationCase>,
+    pub(crate) steering_publication_cases: Vec<LeanFoldPublicationCase>,
+    pub(crate) queue_management_cases: Vec<LeanQueueManagementCase>,
+    pub(crate) session_input_edit_cases: Vec<LeanSessionInputEditCase>,
+    pub(crate) retry_selection_cases: Vec<LeanRetrySelectionCase>,
     pub(crate) canonical_worker_capacity_cases: Vec<LeanWorkerCapacityCase>,
     pub(crate) canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
     pub(crate) terminal_diagnostic_presentation_cases: Vec<LeanTerminalDiagnosticPresentationCase>,
@@ -294,9 +310,9 @@ pub(crate) struct LeanMailboxHandoffCase {
     pub(crate) request_id: u64,
     pub(crate) producer_request_id: u64,
     pub(crate) tool_request_id: u64,
-    pub(crate) producer_agent_did: String,
+    pub(crate) producer_node_did: String,
     pub(crate) producer_requester_did: String,
-    pub(crate) question_agent_did: String,
+    pub(crate) question_node_did: String,
     pub(crate) question_requester_did: String,
     pub(crate) session_id: String,
     pub(crate) request_doc_id: String,
@@ -317,6 +333,7 @@ pub(crate) struct LeanRootAdmissionCase {
     pub(crate) operation: String,
     pub(crate) authored: String,
     pub(crate) blank: bool,
+    pub(crate) stored: bool,
     pub(crate) observation: String,
     pub(crate) configured: bool,
     pub(crate) ceiling: Option<LeanCanonicalPath>,
@@ -324,7 +341,7 @@ pub(crate) struct LeanRootAdmissionCase {
     pub(crate) published: Vec<LeanCanonicalPath>,
     pub(crate) candidate: Option<LeanCanonicalPath>,
     pub(crate) expected: bool,
-    pub(crate) stored_requires_root: bool,
+    pub(crate) effective: Option<LeanCanonicalPath>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -357,15 +374,45 @@ pub(crate) struct LeanPairingReconcileCase {
     pub(crate) after: LeanPairingReconcileSnapshot,
 }
 
+/// Which compiler diagnostic realizes Lean `topologyValid = false`
+/// (`Conformance.GraphPipelineContracts.TopologyFault`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanGraphTopologyFault {
+    Valid,
+    MissingInputBinding,
+    Cycle,
+}
+
+/// Which compiler diagnostic realizes Lean `withinBounds = false`
+/// (`Conformance.GraphPipelineContracts.BoundsFault`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanGraphBoundsFault {
+    Within,
+    NodeLimit,
+    InvocationCeiling,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanGraphPipelineValidationCase {
     pub(crate) name: String,
     pub(crate) types_valid: bool,
-    pub(crate) topology_valid: bool,
+    pub(crate) topology_fault: LeanGraphTopologyFault,
     pub(crate) capabilities_authorized: bool,
-    pub(crate) within_bounds: bool,
+    pub(crate) bounds_fault: LeanGraphBoundsFault,
     pub(crate) terminal_result_declared: bool,
     pub(crate) expected_valid: bool,
+}
+
+/// Where the active pointer stands relative to the candidate revision
+/// (`Conformance.GraphPipelineContracts.ActivePointer`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanGraphActivePointer {
+    Empty,
+    Current,
+    Other,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -373,6 +420,7 @@ pub(crate) struct LeanGraphPipelineRevisionGateCase {
     pub(crate) name: String,
     pub(crate) status: String,
     pub(crate) artifacts_complete: bool,
+    pub(crate) active_pointer: LeanGraphActivePointer,
     pub(crate) activation_precondition_met: bool,
     pub(crate) pointer_matches: bool,
     pub(crate) expected_activate: bool,
@@ -390,6 +438,19 @@ pub(crate) struct LeanGraphPipelineRunTerminalCase {
     pub(crate) expected_succeed: bool,
     pub(crate) expected_fail: bool,
     pub(crate) expected_cancel: bool,
+}
+
+/// One graph edge (`Conformance.GraphPipelineContracts.edgeDeliveryCases`):
+/// its concurrency and delivery group in their wire shapes, and the verdicts
+/// of `GraphPipeline.graphEdgeConcurrencyValid` and `graphEdgeValid`.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LeanGraphPipelineEdgeDeliveryCase {
+    pub(crate) name: String,
+    pub(crate) concurrency: String,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) delivery: Option<serde_json::Value>,
+    pub(crate) expected_concurrency_valid: bool,
+    pub(crate) expected_valid: bool,
 }
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanVocabularyContract {
@@ -427,7 +488,7 @@ pub(crate) struct LeanWorkspaceBindingRef {
     pub(crate) workspace_id: String,
     pub(crate) request_id: String,
     pub(crate) authority: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) seal_hash: Option<String>,
     pub(crate) state: String,
 }
@@ -438,12 +499,12 @@ pub(crate) struct LeanWorkspaceBindingCase {
     pub(crate) workspace_id: String,
     pub(crate) workspace_state: String,
     pub(crate) workspace_seal_hash: Option<String>,
-    pub(crate) owner_agent_did: String,
+    pub(crate) owner_node_did: String,
     pub(crate) creation_policy: String,
     pub(crate) existing: Vec<LeanWorkspaceBindingRef>,
     pub(crate) candidate: LeanWorkspaceBindingRef,
     pub(crate) git_metadata_write: bool,
-    pub(crate) behavior_command_mode: String,
+    pub(crate) agent_command_mode: String,
     pub(crate) legal: bool,
 }
 
@@ -452,7 +513,7 @@ pub(crate) struct LeanCallbackCase {
     pub(crate) journal_prefix_legal: bool,
     pub(crate) name: String,
     pub(crate) invocation_id: String,
-    pub(crate) owner_agent_did: String,
+    pub(crate) owner_node_did: String,
     pub(crate) state: String,
     pub(crate) journal: Vec<String>,
     pub(crate) result_emitted: bool,
@@ -644,7 +705,7 @@ pub(crate) struct LeanGoalCreateCase {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanTaskGoalPublicationCase {
     pub(crate) name: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) task_id: String,
     pub(crate) fire_key: String,
     pub(crate) goal_objective: Option<String>,
@@ -662,14 +723,14 @@ pub(crate) struct LeanTaskGoalPublicationCase {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanTaskGoalRecoveryCase {
     pub(crate) name: String,
-    pub(crate) agent_did: String,
-    pub(crate) behavior_id: String,
+    pub(crate) node_did: String,
+    pub(crate) agent_id: String,
     pub(crate) task_id: String,
     pub(crate) fire_key: String,
     pub(crate) request_present: bool,
     pub(crate) request_binding_matches: bool,
-    pub(crate) observed_agent_did: Option<String>,
-    pub(crate) observed_behavior_id: Option<String>,
+    pub(crate) observed_node_did: Option<String>,
+    pub(crate) observed_agent_id: Option<String>,
     pub(crate) observed_session_id: Option<String>,
     pub(crate) observed_request_id: Option<String>,
     pub(crate) observed_retry_key: Option<String>,
@@ -707,7 +768,7 @@ pub(crate) struct LeanSessionHydrationDecisionCase {
     pub(crate) name: String,
     pub(crate) paired: bool,
     pub(crate) pairing_requester_matches: bool,
-    pub(crate) pairing_agent_matches: bool,
+    pub(crate) pairing_node_matches: bool,
     pub(crate) active_member: bool,
     pub(crate) membership_network_matches: bool,
     pub(crate) owns_session: bool,
@@ -735,6 +796,7 @@ pub(crate) struct LeanSessionHydrationMessage {
     pub(crate) session: u64,
     pub(crate) request: Option<u64>,
     pub(crate) origin: Option<u64>,
+    pub(crate) tool_delivery: Option<u64>,
     pub(crate) refs: Vec<LeanSessionHydrationPayloadRef>,
 }
 
@@ -752,8 +814,26 @@ pub(crate) struct LeanSessionHydrationOwner {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSessionHydrationTool {
+    pub(crate) id: String,
+    pub(crate) name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSessionHydrationEffect {
+    pub(crate) id: u64,
+    pub(crate) parent: Option<u64>,
+    pub(crate) ordinal: Option<u32>,
+    pub(crate) spawned: bool,
+    pub(crate) tool_call_id: String,
+    pub(crate) terminal: Option<LeanSessionHydrationPayloadRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanSessionHydrationSegment {
     pub(crate) id: u64,
+    pub(crate) kind: String,
+    pub(crate) tool: Option<LeanSessionHydrationTool>,
     pub(crate) request: u64,
     pub(crate) source: LeanSessionHydrationOwner,
     pub(crate) writer: LeanSessionHydrationOwner,
@@ -766,7 +846,7 @@ pub(crate) struct LeanSessionHydrationAccess {
     pub(crate) state: String,
     pub(crate) peer: String,
     pub(crate) requester: String,
-    pub(crate) agent: String,
+    pub(crate) node: String,
     pub(crate) session: String,
     pub(crate) native_session: u64,
 }
@@ -776,7 +856,7 @@ pub(crate) struct LeanSessionHydrationRequest {
     pub(crate) key: String,
     pub(crate) peer: String,
     pub(crate) requester: String,
-    pub(crate) agent: String,
+    pub(crate) node: String,
     pub(crate) session: String,
     pub(crate) native_session: u64,
 }
@@ -790,6 +870,8 @@ pub(crate) struct LeanSessionHydrationClosureInput {
     pub(crate) access: Vec<LeanSessionHydrationAccess>,
     pub(crate) denied_headers: Vec<u64>,
     pub(crate) denied_segments: Vec<u64>,
+    pub(crate) bases: Vec<LeanSessionHydrationDocumentKey>,
+    pub(crate) observed_effects: Vec<LeanSessionHydrationEffect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -821,9 +903,9 @@ pub(crate) struct LeanSessionHydrationApplyCase {
 pub(crate) struct LeanSessionHydrationProgressCase {
     pub(crate) name: String,
     pub(crate) prev_session: String,
-    pub(crate) prev_agent: String,
+    pub(crate) prev_node: String,
     pub(crate) session: String,
-    pub(crate) agent: String,
+    pub(crate) node: String,
     pub(crate) prev_phase: String,
     pub(crate) prev_merged: usize,
     pub(crate) prev_served: Option<usize>,
@@ -884,7 +966,7 @@ pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) offer_network_id: String,
     pub(crate) offer_admin_did: String,
     pub(crate) offer_server_peer: String,
-    pub(crate) offer_owner_agent: String,
+    pub(crate) offer_owner_node: String,
     pub(crate) offer_profile: String,
     pub(crate) challenge: String,
     pub(crate) request_id: String,
@@ -904,7 +986,7 @@ pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) observed_candidate_peer: String,
     pub(crate) resolved_candidate_did: String,
     pub(crate) candidate_ticket_peer: String,
-    pub(crate) owner_agent: String,
+    pub(crate) owner_node: String,
     pub(crate) client_nonce: String,
     pub(crate) issued_at: String,
     pub(crate) expires_at: String,
@@ -920,7 +1002,7 @@ pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) decision_admin_did: String,
     pub(crate) decision_candidate_did: String,
     pub(crate) decision_candidate_peer: String,
-    pub(crate) decision_owner_agent: String,
+    pub(crate) decision_owner_node: String,
     pub(crate) decision_admin_signed: bool,
     pub(crate) decision_fresh: bool,
     pub(crate) revision_kind: String,
@@ -933,7 +1015,7 @@ pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) revision_admin_did: String,
     pub(crate) revision_member_did: String,
     pub(crate) revision_member_peer: String,
-    pub(crate) revision_owner_agent: String,
+    pub(crate) revision_owner_node: String,
     pub(crate) revision_admin_signed: bool,
     pub(crate) receipt_request_id: String,
     pub(crate) receipt_request_digest: String,
@@ -942,7 +1024,7 @@ pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) receipt_member_did: String,
     pub(crate) receipt_member_peer: String,
     pub(crate) receipt_server_peer: String,
-    pub(crate) receipt_owner_agent: String,
+    pub(crate) receipt_owner_node: String,
     pub(crate) receipt_authorization_sequence: usize,
     pub(crate) receipt_authorization_expires_at: String,
     pub(crate) receipt_direction: String,
@@ -1128,6 +1210,7 @@ pub(crate) struct LeanCausalHopCallCase {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanLifecycleTransitionCase {
+    pub(crate) stopped_before_running: bool,
     pub(crate) name: String,
     pub(crate) domain: String,
     pub(crate) from: String,
@@ -1332,8 +1415,8 @@ pub(crate) fn lean_runtime_reconcile_cases() -> &'static [LeanRuntimeReconcileCa
     &lean_contract_snapshot().runtime_reconcile_cases
 }
 
-pub(crate) fn lean_client_behavior_readiness_cases() -> &'static [LeanClientBehaviorReadinessCase] {
-    &lean_contract_snapshot().client_behavior_readiness_cases
+pub(crate) fn lean_client_agent_readiness_cases() -> &'static [LeanClientAgentReadinessCase] {
+    &lean_contract_snapshot().client_agent_readiness_cases
 }
 
 pub(crate) fn lean_runtime_reconcile_case(name: &str) -> &'static LeanRuntimeReconcileCase {
@@ -1393,6 +1476,22 @@ pub(crate) fn lean_self_config_cases() -> &'static [LeanSelfConfigCase] {
     &lean_contract_snapshot().self_config_cases
 }
 
+pub(crate) fn lean_agent_decision_cases() -> &'static [LeanAgentDecisionCase] {
+    &lean_contract_snapshot().agent_decision_cases
+}
+
+pub(crate) fn lean_agent_materialization_cases() -> &'static [LeanAgentMaterializationCase] {
+    &lean_contract_snapshot().agent_materialization_cases
+}
+
+pub(crate) fn lean_self_config_selection_cases() -> &'static LeanSelfConfigSelectionCases {
+    &lean_contract_snapshot().self_config_selection_cases
+}
+
+pub(crate) fn lean_sibling_tools_cases() -> &'static [LeanSiblingToolsCase] {
+    &lean_contract_snapshot().sibling_tools_cases
+}
+
 pub(crate) fn lean_tool_policy_case(name: &str) -> &'static LeanToolPolicyCase {
     lean_tool_policy_cases()
         .iter()
@@ -1418,6 +1517,10 @@ pub(crate) fn lean_client_shell_case(name: &str) -> &'static LeanClientShellCase
 
 pub(crate) fn lean_desktop_client_shell_cases() -> &'static [LeanClientShellCase] {
     &lean_contract_snapshot().desktop_client_shell_cases
+}
+
+pub(crate) fn lean_client_session_turn_cases() -> &'static [LeanSessionTurnCase] {
+    &lean_contract_snapshot().client_session_turn_cases
 }
 
 pub(crate) fn lean_request_lifecycle_operator_ui_cases() -> &'static [LeanClientShellCase] {
@@ -1580,9 +1683,9 @@ pub(crate) fn lean_codex_shim_thread_status_cases() -> &'static [LeanCodexShimTh
     &lean_contract_snapshot().codex_shim_thread_status_cases
 }
 
-pub(crate) fn lean_codex_shim_behavior_selection_cases(
-) -> &'static [LeanCodexShimBehaviorSelectionCase] {
-    &lean_contract_snapshot().codex_shim_behavior_selection_cases
+pub(crate) fn lean_codex_shim_agent_selection_cases() -> &'static [LeanCodexShimAgentSelectionCase]
+{
+    &lean_contract_snapshot().codex_shim_agent_selection_cases
 }
 
 pub(crate) fn lean_codex_shim_tool_metadata_cases() -> &'static [LeanCodexShimToolMetadataCase] {
@@ -1716,7 +1819,7 @@ pub(crate) fn lean_interrupt_queue_cases() -> &'static [LeanInterruptQueueCase] 
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanInterruptQueueCase {
     pub(crate) name: String,
-    pub(crate) agent_id: u64,
+    pub(crate) node_id: u64,
     pub(crate) requester_id: Option<u64>,
     pub(crate) session_id: u64,
     pub(crate) active_request_id: Option<u64>,
@@ -1751,6 +1854,278 @@ pub(crate) struct LeanInterruptQueueObservation {
     pub(crate) pending: Vec<u64>,
     pub(crate) terminal: Vec<u64>,
     pub(crate) latched: bool,
+}
+
+pub(crate) fn lean_fold_queue_cases() -> &'static [LeanFoldQueueCase] {
+    &lean_contract_snapshot().fold_queue_cases
+}
+
+/// `SessionQueue.FoldCases`: queue events and the model's observation.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldQueueCase {
+    pub(crate) name: String,
+    pub(crate) node_id: u64,
+    pub(crate) session_id: u64,
+    pub(crate) inputs: Vec<LeanFoldQueueInput>,
+    pub(crate) expected: LeanFoldQueueObservation,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanFoldQueueInput {
+    Enqueue { entry: LeanFoldQueueEntry },
+    Claim { admitted: Vec<u64> },
+    Consume,
+    Finish,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldQueueEntry {
+    pub(crate) request_id: u64,
+    pub(crate) execution_origin: String,
+    pub(crate) delivery: String,
+    pub(crate) order_key: u64,
+    pub(crate) source: String,
+    pub(crate) policy: String,
+    pub(crate) queued_after: Option<u64>,
+    pub(crate) requester_id: Option<u64>,
+    pub(crate) turn_context: u64,
+    pub(crate) fresh: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldQueueObservation {
+    pub(crate) active: Option<u64>,
+    pub(crate) pending: Vec<u64>,
+    pub(crate) folding: Vec<u64>,
+    pub(crate) terminal: Vec<u64>,
+    pub(crate) claims: Vec<LeanFoldQueueClaim>,
+}
+
+pub(crate) fn lean_fold_turn_input_cases() -> &'static [LeanFoldTurnInputCase] {
+    &lean_contract_snapshot().fold_turn_input_cases
+}
+
+/// `SessionQueue.TurnInput` with its executable authored entries and
+/// provider order.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldTurnInputCase {
+    pub(crate) name: String,
+    pub(crate) context: Option<String>,
+    pub(crate) head: String,
+    pub(crate) folded: Vec<LeanFoldTurnInputFolded>,
+    pub(crate) authored: Vec<LeanFoldTurnInputAuthored>,
+    pub(crate) provider_input: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldTurnInputFolded {
+    pub(crate) request_id: u64,
+    pub(crate) content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldTurnInputAuthored {
+    pub(crate) key: LeanFoldAuthoredKey,
+    pub(crate) content: String,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanFoldAuthoredKey {
+    Context,
+    Prompt,
+    Folded { request_id: u64 },
+}
+
+pub(crate) fn lean_retry_selection_cases() -> &'static [LeanRetrySelectionCase] {
+    &lean_contract_snapshot().retry_selection_cases
+}
+
+/// `SessionQueue.FoldCases.retrySelectionCases`: whether a user retry resumes
+/// and which of its claim's selected messages it answers.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanRetrySelectionCase {
+    pub(crate) name: String,
+    pub(crate) parent_published: bool,
+    pub(crate) selected: Vec<u64>,
+    pub(crate) resume: bool,
+    pub(crate) answered: Vec<u64>,
+}
+
+pub(crate) fn lean_queue_management_cases() -> &'static [LeanQueueManagementCase] {
+    &lean_contract_snapshot().queue_management_cases
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanQueueManagementCase {
+    pub(crate) name: String,
+    pub(crate) before: LeanQueueManagementState,
+    pub(crate) operation: LeanQueueManagementOperation,
+    pub(crate) expected: Option<LeanQueueManagementState>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanQueueManagementState {
+    pub(crate) active: Option<u64>,
+    pub(crate) pending: Vec<LeanFoldQueueEntry>,
+    pub(crate) folding: Vec<LeanFoldQueueEntry>,
+    pub(crate) terminal: Vec<u64>,
+}
+
+/// A session queue in native request IDs, compared whole against the model.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct QueueImage {
+    pub(crate) active: Option<String>,
+    pub(crate) folding: Vec<String>,
+    pub(crate) pending: Vec<String>,
+    pub(crate) terminal: BTreeSet<String>,
+}
+
+impl LeanQueueManagementState {
+    pub(crate) fn image(&self, native: impl Fn(u64) -> String) -> QueueImage {
+        let ids = |entries: &[LeanFoldQueueEntry]| {
+            entries
+                .iter()
+                .map(|entry| native(entry.request_id))
+                .collect()
+        };
+        QueueImage {
+            active: self.active.map(&native),
+            folding: ids(&self.folding),
+            pending: ids(&self.pending),
+            terminal: self.terminal.iter().copied().map(&native).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanQueueManagementOperation {
+    Intake {
+        active: LeanFoldQueueEntry,
+        admitted: Vec<u64>,
+        safe_boundary: bool,
+    },
+    Replace {
+        caller: Option<u64>,
+        expected: Vec<u64>,
+        offset: usize,
+        count: usize,
+        replacements: Vec<LeanFoldQueueEntry>,
+    },
+}
+
+pub(crate) fn lean_steering_publication_cases() -> &'static [LeanFoldPublicationCase] {
+    &lean_contract_snapshot().steering_publication_cases
+}
+
+pub(crate) fn lean_fold_publication_cases() -> &'static [LeanFoldPublicationCase] {
+    &lean_contract_snapshot().fold_publication_cases
+}
+
+/// `CanonicalOutput.Execution.FoldPublication`: composed claim, publication,
+/// recovery and finish scripts with the model's observation after each step.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldPublicationCase {
+    pub(crate) name: String,
+    pub(crate) head: u64,
+    pub(crate) selected: u64,
+    pub(crate) steps: Vec<LeanFoldPublicationStep>,
+    pub(crate) expected: Vec<LeanFoldPublicationObservation>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanFoldPublicationStep {
+    ObserveDeadline {
+        now: u64,
+        deadline: u64,
+    },
+    EnqueueSteering {
+        request_id: u64,
+    },
+    Intake {
+        generation: u64,
+        safe_boundary: bool,
+    },
+    FinishOrIntake {
+        generation: u64,
+        safe_boundary: bool,
+    },
+    CancelFirstPending,
+    PublishPrompt {
+        generation: u64,
+    },
+    PublishChangedPrompt {
+        generation: u64,
+    },
+    PublishFolded {
+        generation: u64,
+        request_id: u64,
+    },
+    AcceptTurn {
+        generation: u64,
+    },
+    Recover {
+        expected: u64,
+        fresh: u64,
+    },
+    Terminalize {
+        generation: u64,
+    },
+    Finish,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldPublicationObservation {
+    pub(crate) accepted: bool,
+    pub(crate) active: Option<u64>,
+    pub(crate) pending: Vec<u64>,
+    pub(crate) folding: Vec<u64>,
+    pub(crate) terminal: Vec<u64>,
+    pub(crate) authored_keys: Vec<String>,
+}
+
+pub(crate) fn lean_handover_fold_cases() -> &'static [LeanHandoverFoldCase] {
+    &lean_contract_snapshot().handover_fold_cases
+}
+
+/// `Handover.Cases.foldClaimCases`: a verified-folding claim through the
+/// handover owner.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanHandoverFoldCase {
+    pub(crate) name: String,
+    pub(crate) pending: Vec<LeanFoldQueueEntry>,
+    pub(crate) admitted: Vec<u64>,
+    pub(crate) expected: LeanHandoverFoldObservation,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanHandoverFoldObservation {
+    pub(crate) active: Option<u64>,
+    pub(crate) folding: Vec<u64>,
+    pub(crate) pending: Vec<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanFoldQueueClaim {
+    pub(crate) head: u64,
+    pub(crate) folded: Vec<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2658,4 +3033,74 @@ pub(crate) fn lean_budget_rehydration_cases() -> &'static [LeanBudgetRehydration
 
 pub(crate) fn lean_application_write_cases() -> &'static [serde_json::Value] {
     &lean_contract_snapshot().application_write_cases
+}
+
+pub(crate) fn lean_session_input_edit_cases() -> &'static [LeanSessionInputEditCase] {
+    &lean_contract_snapshot().session_input_edit_cases
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionInputEditCase {
+    pub(crate) name: String,
+    pub(crate) initial: LeanSessionInputEditState,
+    pub(crate) history: Vec<LeanSessionInputEditStep>,
+    pub(crate) before: LeanSessionInputEditState,
+    pub(crate) now: u64,
+    pub(crate) command: LeanSessionInputEditCommand,
+    pub(crate) authority: LeanSessionInputEditAuthority,
+    pub(crate) after: LeanSessionInputEditState,
+    pub(crate) receipt: Option<LeanSessionInputEditReceipt>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanSessionInputEditStep {
+    Apply {
+        now: u64,
+        authority: LeanSessionInputEditAuthority,
+        command: LeanSessionInputEditCommand,
+    },
+    LoseReceipts,
+    OtherSession {
+        session: u64,
+    },
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionInputEditState {
+    pub(crate) queue: LeanQueueManagementState,
+    pub(crate) receipts: Vec<LeanSessionInputEditReceipt>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionInputEditCommand {
+    pub(crate) id: u64,
+    pub(crate) digest: u64,
+    pub(crate) caller: Option<u64>,
+    pub(crate) has_peer: bool,
+    pub(crate) issued_at: u64,
+    pub(crate) expires_at: u64,
+    pub(crate) expected: Vec<u64>,
+    pub(crate) offset: usize,
+    pub(crate) count: usize,
+    pub(crate) replacements: Vec<LeanFoldQueueEntry>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionInputEditAuthority {
+    pub(crate) signature_valid: bool,
+    pub(crate) replacements_valid: bool,
+    pub(crate) command_identity_unique: bool,
+    pub(crate) session_owned: bool,
+    pub(crate) requester_is_node: bool,
+    pub(crate) enrollment_fresh: bool,
+    pub(crate) route_applied: bool,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionInputEditReceipt {
+    pub(crate) command_id: u64,
+    pub(crate) digest: u64,
+    pub(crate) outcome: String,
+    pub(crate) request_ids: Vec<u64>,
 }

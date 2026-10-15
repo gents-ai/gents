@@ -5,33 +5,27 @@ use gents::collection::Collection;
 #[cfg(test)]
 use gents::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
 use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::AgentBehaviorDocument;
+use gents::AgentDocument;
 
-pub async fn upsert_agent_behavior_on(
-    access: &ConfigAccess,
-    document: &AgentBehaviorDocument,
-) -> Result<()> {
+pub async fn upsert_agent_on(access: &ConfigAccess, document: &AgentDocument) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::AgentBehavior,
+        collection: Collection::Agent,
         add: value.clone(),
         update: value,
     }])?;
-    super::apply_plan(access, "desktop.behavior.save", plan).await
+    super::apply_plan(access, "desktop.agent.save", plan).await
 }
 
 #[cfg(test)]
-pub async fn upsert_agent_behavior(
-    node: &EmbeddedNode,
-    document: &AgentBehaviorDocument,
-) -> Result<()> {
+pub async fn upsert_agent(node: &EmbeddedNode, document: &AgentDocument) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::AgentBehavior,
+        collection: Collection::Agent,
         add: value.clone(),
         update: value,
     }])?;
-    ConfigAccess::transact_local(node, None, "desktop.behavior.save", |txn| {
+    ConfigAccess::transact_local(node, None, "desktop.agent.save", |txn| {
         let plan = &plan;
         Box::pin(async move {
             apply_desired_state_plan(txn, plan).await?;
@@ -42,43 +36,35 @@ pub async fn upsert_agent_behavior(
 }
 
 #[cfg(test)]
-pub async fn delete_agent_behavior(
-    node: &EmbeddedNode,
-    agent_did: &str,
-    id: &str,
-) -> Result<usize> {
+pub async fn delete_agent(node: &EmbeddedNode, node_did: &str, id: &str) -> Result<usize> {
     super::delete_scoped_document_local(
         node,
-        "desktop.behavior.delete",
-        Collection::AgentBehavior,
-        agent_did,
+        "desktop.agent.delete",
+        Collection::Agent,
+        node_did,
         id,
     )
     .await
 }
 
-pub async fn delete_agent_behavior_on(
-    access: &ConfigAccess,
-    agent_did: &str,
-    id: &str,
-) -> Result<usize> {
+pub async fn delete_agent_on(access: &ConfigAccess, node_did: &str, id: &str) -> Result<usize> {
     super::delete_scoped_document(
         access,
-        "desktop.behavior.delete",
-        Collection::AgentBehavior,
-        agent_did,
+        "desktop.agent.delete",
+        Collection::Agent,
+        node_did,
         id,
     )
     .await
 }
 
 #[cfg(test)]
-pub async fn delete_agent_context(node: &EmbeddedNode, agent_did: &str, id: &str) -> Result<usize> {
+pub async fn delete_agent_context(node: &EmbeddedNode, node_did: &str, id: &str) -> Result<usize> {
     super::delete_scoped_document_local(
         node,
         "desktop.context.delete",
         Collection::AgentContext,
-        agent_did,
+        node_did,
         id,
     )
     .await
@@ -86,14 +72,14 @@ pub async fn delete_agent_context(node: &EmbeddedNode, agent_did: &str, id: &str
 
 pub async fn delete_agent_context_on(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     id: &str,
 ) -> Result<usize> {
     super::delete_scoped_document(
         access,
         "desktop.context.delete",
         Collection::AgentContext,
-        agent_did,
+        node_did,
         id,
     )
     .await
@@ -110,9 +96,9 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:context-delete";
-        gents::ensure_agent_principal(&node, owner).await?;
+        gents::ensure_node(&node, owner).await?;
         let context = json!({
-            "agent_did": owner,
+            "node_did": owner,
             "context_id": "temporary",
             "display_name": "Temporary"
         });
@@ -137,30 +123,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn behavior_and_profile_deletion_obey_canonical_owned_references() -> Result<()> {
+    async fn agent_and_profile_deletion_obey_canonical_owned_references() -> Result<()> {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::Local(node.clone());
         for owner in ["did:test:alpha", "did:test:beta"] {
-            gents::ensure_agent_principal(&node, owner).await?;
+            gents::ensure_node(&node, owner).await?;
             let backend = serde_json::from_value(json!({
-                "agent_did":owner, "backend_id":"backend", "name":"Backend",
+                "node_did":owner, "backend_id":"backend", "name":"Backend",
                 "provider_kind":"OpenAiCompatible", "endpoint":"http://localhost:8000/v1", "auth":{"kind":"unauthenticated"}
             }))?;
             gents::config_client::write_inference_backend_document(&access, &backend).await?;
             let profile = serde_json::from_value(json!({
-                "agent_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high"
+                "node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high"
             }))?;
             super::super::profile::upsert_inference_profile(&node, &profile).await?;
-            let behavior = serde_json::from_value(json!({
-                "agent_did":owner,"behavior_id":"review","inference_profile_id":"profile"
+            let agent = serde_json::from_value(json!({
+                "node_did":owner,"agent_id":"review","inference_profile_id":"profile"
             }))?;
-            upsert_agent_behavior(&node, &behavior).await?;
+            upsert_agent(&node, &agent).await?;
         }
         let invalid = serde_json::from_value(json!({
-            "agent_did":"did:test:alpha","behavior_id":"review","inference_profile_id":"profile","context_id":"missing"
+            "node_did":"did:test:alpha","agent_id":"review","inference_profile_id":"profile","context_id":"missing"
         }))?;
-        assert!(upsert_agent_behavior(&node, &invalid).await.is_err());
+        assert!(upsert_agent(&node, &invalid).await.is_err());
         assert!(super::super::profile::delete_inference_profile(
             &node,
             "did:test:alpha",
@@ -171,10 +157,10 @@ mod tests {
         // The shared closure owns local target references; foreign destinations
         // remain governed by delegation admission, not global label lookup.
         let target = json!({
-            "agent_did":"did:test:alpha","target_id":"target","target_agent_did":"did:test:alpha","behavior_id":"review","name":"reviewer"
+            "node_did":"did:test:alpha","target_id":"target","target_node_did":"did:test:alpha","agent_id":"review","name":"reviewer"
         });
         let target_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-            collection: Collection::SubagentTarget,
+            collection: Collection::AgentTarget,
             add: target.clone(),
             update: target,
         }])?;
@@ -187,23 +173,20 @@ mod tests {
                 })
             })
             .await?;
-        assert!(delete_agent_behavior(&node, "did:test:alpha", "review")
+        assert!(delete_agent(&node, "did:test:alpha", "review")
             .await
             .is_err());
-        assert_eq!(
-            delete_agent_behavior(&node, "did:test:beta", "review").await?,
-            1
-        );
+        assert_eq!(delete_agent(&node, "did:test:beta", "review").await?, 1);
         assert_eq!(
             super::super::profile::delete_inference_profile(&node, "did:test:beta", "profile")
                 .await?,
             1
         );
-        assert!(delete_agent_behavior(&node, "did:test:alpha", "review")
+        assert!(delete_agent(&node, "did:test:alpha", "review")
             .await
             .is_err());
         let remove_target = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
-            Collection::SubagentTarget,
+            Collection::AgentTarget,
             "did:test:alpha".into(),
             "target".into(),
         )])?;
@@ -217,28 +200,28 @@ mod tests {
             })
             .await?;
         let fallback_profile = serde_json::from_value(json!({
-            "agent_did":"did:test:alpha","profile_id":"fallback","backend_id":"backend","model_name":"model"
+            "node_did":"did:test:alpha","profile_id":"fallback","backend_id":"backend","model_name":"model"
         }))?;
         super::super::profile::upsert_inference_profile(&node, &fallback_profile).await?;
         let fallback = serde_json::from_value(json!({
-            "agent_did":"did:test:alpha","behavior_id":"fallback","inference_profile_id":"fallback"
+            "node_did":"did:test:alpha","agent_id":"fallback","inference_profile_id":"fallback"
         }))?;
-        upsert_agent_behavior(&node, &fallback).await?;
+        upsert_agent(&node, &fallback).await?;
         for default in ["review", "fallback"] {
             access
-                .transact("test.principal.default", |txn| {
+                .transact("test.node.default", |txn| {
                     Box::pin(async move {
                         let (_, mut value) = read_desired_state_record_in_txn(
                             txn,
-                            Collection::AgentPrincipal,
+                            Collection::Node,
                             "did:test:alpha",
                             "did:test:alpha",
                         )
                         .await?
                         .unwrap();
-                        value["default_behavior_id"] = json!(default);
+                        value["default_agent_id"] = json!(default);
                         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                            collection: Collection::AgentPrincipal,
+                            collection: Collection::Node,
                             add: value.clone(),
                             update: value,
                         }])?;
@@ -248,14 +231,14 @@ mod tests {
                 })
                 .await?;
             if default == "review" {
-                assert!(delete_agent_behavior(&node, "did:test:alpha", "review")
+                assert!(delete_agent(&node, "did:test:alpha", "review")
                     .await
                     .is_err());
                 let disable = super::super::principal::patch_config_components(
                     &node,
                     "did:test:alpha",
                     &[(
-                        gents::config_client::patch::SelfConfigTarget::AgentBehavior,
+                        gents::config_client::patch::SelfConfigTarget::Agent,
                         "review".into(),
                         vec![("enabled".into(), Some(json!(false)))],
                     )],
@@ -268,10 +251,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(
-            delete_agent_behavior(&node, "did:test:alpha", "review").await?,
-            1
-        );
+        assert_eq!(delete_agent(&node, "did:test:alpha", "review").await?, 1);
         assert_eq!(
             super::super::profile::delete_inference_profile(&node, "did:test:alpha", "profile")
                 .await?,

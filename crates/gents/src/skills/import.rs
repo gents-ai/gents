@@ -76,7 +76,7 @@ pub struct OpenAiTool {
 pub fn load_skill_source(
     source: &Path,
     skill_id: &str,
-    agent_did: &str,
+    node_did: &str,
     resolve: impl Fn(&Path) -> Result<PathBuf>,
 ) -> Result<SkillDocument> {
     anyhow::ensure!(!skill_id.trim().is_empty(), "skill_id must not be blank");
@@ -133,7 +133,7 @@ pub fn load_skill_source(
         .transpose()?;
     Ok(SkillDocument {
         skill_id: skill_id.to_owned(),
-        agent_did: agent_did.to_owned(),
+        node_did: node_did.to_owned(),
         name: Some(frontmatter.name.unwrap_or_else(|| skill_id.to_owned())),
         description: frontmatter.description,
         instructions: Some(body),

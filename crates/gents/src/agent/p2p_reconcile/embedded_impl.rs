@@ -306,9 +306,9 @@ mod tests {
 
     use super::*;
     use crate::agent::completion_retry::CompletionRetryProfileFields;
-    use crate::agent::daemon::BehaviorDaemon;
+    use crate::agent::daemon::AgentDaemon;
     use crate::agent::p2p_reconcile::templates::{
-        Scope, SUBAGENT_COORDINATOR_TEMPLATE, SUBAGENT_HOST_TEMPLATE,
+        Scope, AGENT_TARGET_CALLER_TEMPLATE, AGENT_TARGET_HOST_TEMPLATE,
     };
     use crate::agent::p2p_reconcile::{combine_filters, equality_filter};
     use crate::agent::p2p_reconcile::{
@@ -317,15 +317,15 @@ mod tests {
     use crate::agent::p2p_reconcile::{resolve_template, scope_filter};
     use crate::agent::runtime::StartupBarrier;
     use crate::backend_provider::BackendProviderKind;
-    use crate::config::{ResolvedBehavior, SamplingConfig};
+    use crate::config::{ResolvedAgent, SamplingConfig};
     use crate::defra_node::P2PConfig;
     use crate::ensure_runtime_schemas;
     use crate::graphql::escape_graphql_string;
     use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
-    use crate::identity::{AgentIdentity, KeyIdentity, RuntimePrincipal};
+    use crate::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
     use crate::llm::tool::ToolDyn;
     use crate::prompt::LayeredPromptBuilder;
-    use crate::tool_surface::BehaviorToolConfig;
+    use crate::tool_surface::AgentToolSurfaceConfig;
     use gents_protocol::enrollment::{
         derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, EnrollmentDecisionKind,
         EnrollmentOfferRecord, EnrollmentRequestRecord, ENROLLMENT_PROTOCOL_VERSION,
@@ -446,7 +446,7 @@ mod tests {
         test
     }
 
-    async fn runtime_test_node_with_identity(identity: &dyn AgentIdentity) -> TestNode {
+    async fn runtime_test_node_with_identity(identity: &dyn NodeIdentity) -> TestNode {
         let test = p2p_node_with_identity(Some(identity.did())).await;
         ensure_runtime_schemas(&test.node)
             .await
@@ -460,8 +460,8 @@ mod tests {
 
     async fn authorize_enrollment_peer(
         node: Arc<EmbeddedNode>,
-        admin_identity: Arc<dyn AgentIdentity>,
-        member_identity: Arc<dyn AgentIdentity>,
+        admin_identity: Arc<dyn NodeIdentity>,
+        member_identity: Arc<dyn NodeIdentity>,
         member_peer: &str,
         member_ticket: &str,
     ) -> String {
@@ -485,7 +485,7 @@ mod tests {
             .expect("sign test network");
         let response = node
             .execute(&format!(
-                r#"mutation {{ create_AgentNetwork(input: {{
+                r#"mutation {{ create_Network(input: {{
                     network_id: "{}", admin_did: "{}", display_name: "{}",
                     default_template: "{}", created_at: "{}", admin_sig: "{}"
                 }}) {{ _docID }} }}"#,
@@ -499,7 +499,7 @@ mod tests {
             .await;
         assert!(
             !response.has_errors(),
-            "create signed AgentNetwork: {:?}",
+            "create signed Network: {:?}",
             response.errors
         );
 
@@ -661,17 +661,17 @@ mod tests {
         }
     }
 
-    fn test_behavior(identity: Arc<dyn AgentIdentity>) -> Arc<ResolvedBehavior> {
-        let principal = Arc::new(RuntimePrincipal {
-            agent_did: identity.did().to_string(),
+    fn test_agent(identity: Arc<dyn NodeIdentity>) -> Arc<ResolvedAgent> {
+        let principal = Arc::new(RuntimeNode {
+            node_did: identity.did().to_string(),
             identity,
-            default_behavior_id: "behavior-1".to_string(),
+            default_agent_id: "behavior-1".to_string(),
             display_name: None,
             enabled: true,
         });
-        Arc::new(ResolvedBehavior {
-            behavior_id: "behavior-1".to_string(),
-            principal,
+        Arc::new(ResolvedAgent {
+            agent_id: "behavior-1".to_string(),
+            node: principal,
             backend_id: Some("backend-behavior-1".to_string()),
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
             openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
@@ -684,7 +684,7 @@ mod tests {
             max_turns: 2,
             max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
             system_prompt: "system".to_string(),
-            tools: BehaviorToolConfig::meta_only(),
+            tools: AgentToolSurfaceConfig::meta_only(),
             compaction: None,
             compaction_inference: None,
             max_total_tokens: None,
@@ -702,22 +702,22 @@ mod tests {
 
     fn behavior_daemon(
         node: Arc<EmbeddedNode>,
-        behavior: Arc<ResolvedBehavior>,
+        behavior: Arc<ResolvedAgent>,
         authority: super::super::EnrollmentAuthorityHandle,
         calls: Arc<AtomicUsize>,
-    ) -> BehaviorDaemon<CountingReplyModel> {
-        let prompt_builder = LayeredPromptBuilder::for_behavior(
+    ) -> AgentDaemon<CountingReplyModel> {
+        let prompt_builder = LayeredPromptBuilder::for_agent(
             &behavior.system_prompt,
-            &behavior.behavior_id,
+            &behavior.agent_id,
             &[],
             false,
             &[],
         );
         let runtime_status = crate::runtime_status::RuntimeStatusHandle::new(
             node.clone(),
-            behavior.agent_did().to_string(),
+            behavior.node_did().to_string(),
         );
-        BehaviorDaemon::new(
+        AgentDaemon::new(
             node.clone(),
             behavior.clone(),
             None,
@@ -734,7 +734,7 @@ mod tests {
             1,
             crate::request_admission::AgentRequestAdmissionVerifier::new(
                 node,
-                behavior.principal_identity().clone(),
+                behavior.node_identity().clone(),
                 authority,
             ),
         )
@@ -742,7 +742,7 @@ mod tests {
     }
 
     /// Accept one `agent_new` call on the coordinator addressed to the
-    /// host principal and materialize its Peer request through the
+    /// host node and materialize its Peer request through the
     /// session-message owner. Returns the caused request id.
     async fn seed_peer_session_message(
         node: &Arc<EmbeddedNode>,
@@ -783,7 +783,7 @@ mod tests {
         let accepted = publication.accepted_tools.into_iter().next().unwrap();
         let mut row = ToolCallLifecycle::from_accepted(
             node.clone(),
-            lifecycle.request().agent_did.clone(),
+            lifecycle.request().node_did.clone(),
             lifecycle.request().requester_did.clone(),
             accepted,
             lifecycle.claimed_deadline_at().unwrap(),
@@ -791,17 +791,17 @@ mod tests {
         )
         .expect("adopt accepted agent_new");
         let cause = crate::lifecycle::SessionMessageCause {
-            caller_agent_did: lifecycle.request().agent_did.clone(),
+            caller_node_did: lifecycle.request().node_did.clone(),
             caller_request_id: lifecycle.request().request_id.clone(),
             caller_request_doc_id: lifecycle.request().doc_id.clone(),
-            caller_hop: lifecycle.request().subagent_depth,
+            caller_hop: lifecycle.request().request_hop,
             tool_call_id: row.tool_call_id().to_owned(),
             tool_call_doc_id: row.doc_id().unwrap().to_owned(),
             correlation: None,
         };
         let target = crate::lifecycle::SessionMessageTarget {
-            agent_did: host_did.to_owned(),
-            behavior_id: "behavior-1".to_owned(),
+            node_did: host_did.to_owned(),
+            agent_id: "behavior-1".to_owned(),
             session_id: uuid::Uuid::new_v4().to_string(),
         };
         let plan = crate::session_message::plan(
@@ -880,18 +880,18 @@ mod tests {
         requester_did: Option<&str>,
     ) {
         let request_id = escape_graphql_string(request_id);
-        let agent_did = "did:key:host";
+        let node_did = "did:key:host";
         let requester_did_field = crate::session::requester_did_create_field(requester_did);
         let session_id = escape_graphql_string(session_id);
-        let behavior_id = escape_graphql_string(&format!("{agent_did}:default"));
+        let agent_id = escape_graphql_string(&format!("{node_did}:default"));
         let mutation = format!(
             r#"mutation {{
                 create_AgentRequest(input: {{
                     request_id: "{request_id}",
                     purpose: "normal",
-                    agent_did: "{agent_did}",
+                    node_did: "{node_did}",
                     {requester_did_field}
-                    behavior_id: "{behavior_id}",
+                    agent_id: "{agent_id}",
                     session_id: "{session_id}",
                     retry_parent_request: "",
                     retry_root_request: "{request_id}",
@@ -905,7 +905,7 @@ mod tests {
                     deadline: "2026-07-06T01:00:00Z",
                     retry_count: 0,
                     max_retries: 3,
-                    subagent_depth: 0
+                    request_hop: 0
                 }}) {{ _docID }}
             }}"#
         );
@@ -922,7 +922,7 @@ mod tests {
                     tool_call_key: "{tool_call_key}",
                     request_id: "parent-match",
                     session_id: "issue-604-session",
-                    agent_did: "did:key:coord",
+                    node_did: "did:key:coord",
                     requester_did: "{requester_did}",
                     message_sequence: 1,
                     tool_name: "agent_new",
@@ -936,24 +936,23 @@ mod tests {
         exec(node, &mutation, "seed AgentToolCall").await;
     }
 
-    async fn seed_subagent_return_artifacts(
+    async fn seed_agent_target_return_artifacts(
         node: &Arc<EmbeddedNode>,
         suffix: &str,
         requester_did: Option<&str>,
     ) -> (String, String, String, u32) {
         let request_id = format!("return-{suffix}-response");
         let session_id = format!("return-{suffix}-session");
-        let agent_did = "did:key:host";
-        let behavior_id = "did:key:host:default";
+        let node_did = "did:key:host";
+        let agent_id = "did:key:host:default";
 
         seed_agent_request_for_session(node, &request_id, &session_id, requester_did).await;
 
-        crate::session::ensure_session_with_behavior_id_and_requester_did(
+        crate::session::ensure_session_with_agent_id_and_requester_did(
             node,
             &session_id,
-            "default",
-            agent_did,
-            behavior_id,
+            node_did,
+            agent_id,
             requester_did,
         )
         .await
@@ -967,10 +966,10 @@ mod tests {
             crate::watcher::agent_request_from_mutation_response(&response, "update_AgentRequest")
                 .expect("decode routed request")
                 .expect("routed request");
-        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
             Arc::clone(node),
             "default",
-            agent_did,
+            node_did,
             request,
             60,
         );
@@ -980,7 +979,7 @@ mod tests {
         );
         let writer = crate::streaming::DefraStreamWriter::new(
             Arc::clone(node),
-            agent_did,
+            node_did,
             Duration::from_secs(60),
         );
         lifecycle
@@ -1116,7 +1115,7 @@ mod tests {
     /// builtin template's filter fields must be `@immutable` in the target
     /// collection's schema, or `add_replicator` rejects the install at
     /// pairing time (the exact failure that shipped in #873's merge: the
-    /// machine template filters `AgentDirectoryEntry.source_did`, which the
+    /// machine template filters `NodeDirectoryEntry.source_did`, which the
     /// amended schema left mutable). Runs against real runtime schemas so a
     /// new template or filter rule cannot pass review while violating the
     /// constraint defradb only enforces at install time.
@@ -1331,11 +1330,11 @@ mod tests {
     #[tokio::test]
     async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_authority() {
         let identity_temp = tempfile::tempdir().expect("identity tempdir");
-        let coordinator_identity: Arc<dyn AgentIdentity> = Arc::new(
+        let coordinator_identity: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_or_create(identity_temp.path().join("coordinator.key"), None)
                 .expect("coordinator identity"),
         );
-        let host_identity: Arc<dyn AgentIdentity> = Arc::new(
+        let host_identity: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_or_create(identity_temp.path().join("host.key"), None)
                 .expect("host identity"),
         );
@@ -1355,13 +1354,13 @@ mod tests {
         let parent_response = coordinator
             .execute(&format!(
                 r#"mutation {{ create_AgentRequest(input: {{
-                    request_id: "{parent_request_id}", agent_did: "{coordinator_did}",
+                    request_id: "{parent_request_id}", node_did: "{coordinator_did}",
                     purpose: "normal",
-                    requester_did: "{coordinator_did}", behavior_id: "parent-behavior",
+                    requester_did: "{coordinator_did}", agent_id: "parent-behavior",
                     session_id: "remote-session", retry_root_request: "{parent_request_id}",
                     content: "remote parent", lifecycle_state: "pending",
                     execution_origin: "interactive", created_at: "2026-08-30T00:00:00Z",
-                    retry_count: 0, max_retries: 3, subagent_depth: 0
+                    retry_count: 0, max_retries: 3, request_hop: 0
                 }}) {{ _docID }} }}"#,
             ))
             .await;
@@ -1393,7 +1392,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-        let mut parent_lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+        let mut parent_lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
             coordinator.clone(),
             "parent-behavior",
             &coordinator_did,
@@ -1434,27 +1433,26 @@ mod tests {
         )
         .await;
 
-        // The receiving principal's own behavior configures the request; the
+        // The receiving node's own agent configures the request; the
         // Peer branch reads only the requester's ACP authority, not a flag.
         let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
-            "tools_id":"host-tools","agent_did":host_did
+            "tools_id":"host-tools","node_did":host_did
         }))
         .unwrap();
         let context: crate::document_config::AgentContext =
             serde_json::from_value(serde_json::json!({
-                "context_id":"host-context","agent_did":host_did,"tools_id":"host-tools"
+                "context_id":"host-context","node_did":host_did,"tools_id":"host-tools"
             }))
             .unwrap();
-        let behavior: crate::document_config::AgentBehavior =
-            serde_json::from_value(serde_json::json!({
-                "behavior_id":"behavior-1","agent_did":host_did,"context_id":"host-context",
-                "inference_profile_id":"host-profile"
-            }))
-            .unwrap();
+        let behavior: crate::document_config::Agent = serde_json::from_value(serde_json::json!({
+            "agent_id":"behavior-1","node_did":host_did,"context_id":"host-context",
+            "inference_profile_id":"host-profile"
+        }))
+        .unwrap();
         for (collection, document) in [
             ("Tools", serde_json::to_value(tools).unwrap()),
             ("AgentContext", serde_json::to_value(context).unwrap()),
-            ("AgentBehavior", serde_json::to_value(behavior).unwrap()),
+            ("Agent", serde_json::to_value(behavior).unwrap()),
         ] {
             let input = gents_protocol::graphql::graphql_input_literal(&document).unwrap();
             exec(
@@ -1466,7 +1464,7 @@ mod tests {
         }
 
         let template =
-            resolve_template(SUBAGENT_COORDINATOR_TEMPLATE).expect("subagent-coordinator template");
+            resolve_template(AGENT_TARGET_CALLER_TEMPLATE).expect("agent-target-caller template");
         let collections = template
             .collections
             .iter()
@@ -1536,7 +1534,7 @@ mod tests {
             "the caller's tool rows never replicate to the host"
         );
 
-        let behavior = test_behavior(host_identity.clone());
+        let behavior = test_agent(host_identity.clone());
         let fresh_calls = Arc::new(AtomicUsize::new(0));
         let mut fresh_daemon = behavior_daemon(
             host.clone(),
@@ -1613,7 +1611,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embedded_subagent_host_replays_only_return_projection() {
+    async fn embedded_agent_target_host_replays_only_return_projection() {
         let sender_test = runtime_test_node().await;
         let receiver_test = runtime_test_node().await;
         let sender = Arc::clone(&sender_test.node);
@@ -1624,13 +1622,14 @@ mod tests {
         let receiver_addresses = wait_for_peer_info(&receiver_admin).await;
 
         let (match_request_id, match_session_id, match_header_doc_id, match_sequence) =
-            seed_subagent_return_artifacts(&sender, "match", Some("did:key:coord")).await;
+            seed_agent_target_return_artifacts(&sender, "match", Some("did:key:coord")).await;
         let (unrelated_request_id, _unrelated_session_id, _unrelated_header, _unrelated_sequence) =
-            seed_subagent_return_artifacts(&sender, "unrelated", None).await;
+            seed_agent_target_return_artifacts(&sender, "unrelated", None).await;
         let (foreign_request_id, _foreign_session_id, _foreign_header, _foreign_sequence) =
-            seed_subagent_return_artifacts(&sender, "foreign", Some("did:key:other")).await;
+            seed_agent_target_return_artifacts(&sender, "foreign", Some("did:key:other")).await;
 
-        let template = resolve_template(SUBAGENT_HOST_TEMPLATE).expect("subagent-host template");
+        let template =
+            resolve_template(AGENT_TARGET_HOST_TEMPLATE).expect("agent-target-host template");
         let collections = template
             .collections
             .iter()
@@ -1643,13 +1642,13 @@ mod tests {
             .expect("connect sender to receiver");
         wait_for_active_peer(&sender_admin).await;
         wait_for_active_peer(&receiver_admin).await;
-        // `subagent-host` is a Push template. Production deliberately leaves
+        // `agent-target-host` is a Push template. Production deliberately leaves
         // the subscription set empty so whole collections never gossip; the
         // two per-peer replicators below are the only authorized channels.
         receiver_admin
             .add_replicator(&sender_addresses, &collections, &PairingFilters::default())
             .await
-            .expect("authorize only the subagent return projection");
+            .expect("authorize only the agent-target return projection");
 
         let filters = scope_filter(
             &template.scope,

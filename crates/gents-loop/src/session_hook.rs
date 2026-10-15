@@ -4,8 +4,7 @@
 //! tool-call/result transition, a pre-completion prompt check) through a
 //! [`SessionHook`] instead of writing DefraDB itself. `gents`'s
 //! `DefraSessionHook` (native) implements it; the loop only ever calls these
-//! ten methods, exactly what `agent/loop_stream.rs`, its `one_shot`
-//! sub-module, and `stream_processor.rs` call on the hook today.
+//! owned seams used by the loop and its stream processor.
 //!
 //! `run_loop_stream` and `StreamProcessor` take `H: SessionHook` as a type
 //! parameter (not `Arc<dyn SessionHook>`): every call site already holds a
@@ -30,6 +29,43 @@ pub trait CanonicalSessionHook<Accepted: Send>: SessionHook {
 
 #[async_trait]
 pub trait SessionHook: Send + Sync {
+    /// Admit one child under an already running plugin call. Implementations
+    /// must bind its canonical arguments and physical parent before returning
+    /// the internal identity consumed by the ordinary dispatch hooks.
+    async fn admit_tool_effect(
+        &self,
+        _parent_internal_id: &str,
+        _ordinal: u32,
+        _tool_name: &str,
+        _arguments: &str,
+    ) -> Result<String, String> {
+        Err("tool effects require a durable session owner".to_owned())
+    }
+
+    /// Release a derived-call admission, settling its exact durable child if
+    /// cancellation or deadline interrupted the before hook.
+    async fn finish_tool_effect(
+        &self,
+        _internal_id: &str,
+        _interruption: Option<&ToolOutcome>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Supplies admitted candidates; only the writer acknowledgment admits them
+    /// into the provider projection, since queued input can change before publication.
+    async fn pending_steering_inputs(
+        &self,
+    ) -> anyhow::Result<Vec<crate::loop_stream::FoldedPrompt>> {
+        Ok(Vec::new())
+    }
+
+    async fn finish_steering_snapshot(
+        &self,
+    ) -> anyhow::Result<Option<crate::loop_stream::SteeringSnapshot>> {
+        Ok(None)
+    }
+
     /// Called once per completion turn, before the provider is dispatched:
     /// persists the prompt (and the per-request context message on turn 1)
     /// and gives the hook a chance to terminate the loop early.

@@ -1,4 +1,6 @@
+import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
+import Proofs.Conformance.EnrollmentPendingRequests
 import Proofs.Conformance.GraphWorkspaceLineage
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
@@ -28,6 +30,7 @@ import Proofs.Conformance.Contracts.Json.CodexShim
 import Proofs.Conformance.Contracts.Json.Workspace
 import Proofs.Conformance.Contracts.Json.Callback
 import Proofs.Conformance.Contracts.Json.SelfConfig
+import Proofs.Conformance.Contracts.Json.SelfConfigAgent
 import Proofs.Conformance.Contracts.Json.Goal
 import Proofs.Conformance.GoalClaimedReadiness
 import Proofs.Conformance.Contracts.Json.SessionHydration
@@ -70,6 +73,7 @@ import Proofs.Conformance.RootAdmission
 import Proofs.Conformance.Contracts.Json.ExecutionGate
 import Proofs.Conformance.Contracts.Json.DispatchObservation
 import Proofs.Conformance.Contracts.Json.InterruptQueue
+import Proofs.Conformance.Contracts.Json.FoldQueue
 import Proofs.Conformance.Contracts.Json.WorkerCapacity
 import Proofs.Conformance.Contracts.Json.CausalHop
 import Proofs.Conformance.Contracts.Json.PayloadPresentation
@@ -123,6 +127,8 @@ def snapshotJson : String :=
       ++ Conformance.GraphPipelineContracts.revisionGateCasesJson ++ ","
     ++ "\"graph_pipeline_run_terminal_cases\":"
       ++ Conformance.GraphPipelineContracts.runTerminalCasesJson ++ ","
+    ++ "\"graph_pipeline_edge_delivery_cases\":"
+      ++ Conformance.GraphPipelineContracts.edgeDeliveryCasesJson ++ ","
     ++ "\"request_transition_cases\":"
       ++ jsonArray (requestTransitionCases.map lifecycleTransitionCaseJson) ++ ","
     ++ "\"provider_eof_cases\":"
@@ -137,6 +143,19 @@ def snapshotJson : String :=
       ++ Conformance.ExecutionGateContracts.casesJson ++ ","
     ++ "\"interrupt_queue_cases\":"
       ++ Conformance.InterruptQueueContracts.casesJson ++ ","
+    ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
+    ++ "\"queue_management_cases\":" ++ FoldQueueContracts.managementCasesJson ++ ","
+    ++ "\"steering_publication_cases\":" ++ FoldQueueContracts.steeringPublicationCasesJson ++ ","
+    ++ "\"fold_queue_cases\":"
+      ++ Conformance.FoldQueueContracts.casesJson ++ ","
+    ++ "\"fold_turn_input_cases\":"
+      ++ Conformance.FoldQueueContracts.turnInputCasesJson ++ ","
+    ++ "\"handover_fold_cases\":"
+      ++ Conformance.FoldQueueContracts.handoverCasesJson ++ ","
+    ++ "\"fold_publication_cases\":"
+      ++ Conformance.FoldQueueContracts.publicationCasesJson ++ ","
+    ++ "\"retry_selection_cases\":"
+      ++ Conformance.FoldQueueContracts.retrySelectionCasesJson ++ ","
     ++ "\"canonical_dispatch_observation_cases\":"
       ++ Conformance.DispatchObservationContracts.casesJson ++ ","
     ++ "\"canonical_spawned_target_rejection_cases\":"
@@ -191,6 +210,8 @@ def snapshotJson : String :=
       ++ enrollmentCasesJson ++ ","
     ++ "\"enrollment_durable_projection_cases\":"
       ++ enrollmentDurableProjectionCasesJson ++ ","
+    ++ "\"enrollment_pending_request_cases\":"
+      ++ Conformance.EnrollmentPendingRequests.casesJson ++ ","
     ++ "\"enrollment_encoding_cases\":"
       ++ enrollmentEncodingCasesJson ++ ","
     ++ "\"enrollment_digest_cases\":"
@@ -219,6 +240,8 @@ def snapshotJson : String :=
       ++ toString Conformance.ClientShellContracts.desktopClientShellCaseCount ++ ","
     ++ "\"desktop_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
+    ++ "\"client_session_turn_cases\":"
+      ++ Conformance.ClientShellContracts.sessionTurnCasesJson ++ ","
     ++ "\"request_lifecycle_operator_ui_cases\":"
       ++ Conformance.ClientShellContracts.requestLifecycleOperatorUiCasesJson ++ ","
     ++ "\"client_live_delta_cases\":"
@@ -229,8 +252,8 @@ def snapshotJson : String :=
       ++ readinessPublicationCasesJson ++ ","
     ++ "\"runtime_reconcile_cases\":"
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
-    ++ "\"client_behavior_readiness_cases\":"
-      ++ jsonArray (clientBehaviorReadinessCases.map clientBehaviorReadinessCaseJson) ++ ","
+    ++ "\"client_agent_readiness_cases\":"
+      ++ jsonArray (clientAgentReadinessCases.map clientAgentReadinessCaseJson) ++ ","
     ++ "\"apply_reconcile_cases\":"
       ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
     ++ "\"eval_outcome_cases\":"
@@ -254,6 +277,14 @@ def snapshotJson : String :=
     ++ "\"schema_publication_cases\":" ++ schemaPublicationCasesJson ++ ","
     ++ "\"self_config_cases\":"
       ++ selfConfigCasesJson ++ ","
+    ++ "\"agent_decision_cases\":"
+      ++ agentDecisionCasesJson ++ ","
+    ++ "\"agent_materialization_cases\":"
+      ++ agentMaterializationCasesJson ++ ","
+    ++ "\"sibling_tools_cases\":"
+      ++ siblingToolsCasesJson ++ ","
+    ++ "\"self_config_selection_cases\":"
+      ++ selfConfigSelectionCasesJson ++ ","
     ++ "\"session_recovery_cases\":"
       ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
     ++ "\"inference_slot_accounting_cases\":"
@@ -351,8 +382,8 @@ def snapshotJson : String :=
       ++ codexShimReasoningProjectionCasesJson ++ ","
     ++ "\"codex_shim_thread_status_cases\":"
       ++ codexShimThreadStatusCasesJson ++ ","
-    ++ "\"codex_shim_behavior_selection_cases\":"
-      ++ codexShimBehaviorSelectionCasesJson ++ ","
+    ++ "\"codex_shim_agent_selection_cases\":"
+      ++ codexShimAgentSelectionCasesJson ++ ","
     ++ "\"codex_shim_tool_metadata_cases\":"
       ++ codexShimToolMetadataCasesJson ++ ","
     ++ "\"codex_shim_context_usage_cases\":"
@@ -369,6 +400,7 @@ def snapshotJson : String :=
     ++ "\"composed_invariant_witnesses\":"
       ++ jsonArray
         (composedInvariantWitnesses.map composedInvariantWitnessJson) ++ ","
+    ++ "\"count_carrier_cases\":" ++ Conformance.CountCarrier.casesJson ++ ","
     ++ "\"logical_output_obligation_cases\":"
       ++ Conformance.LogicalOutputObligationContracts.casesJson ++ ","
     ++ "\"mailbox_notification_cases\":"
@@ -388,9 +420,9 @@ def snapshotJson : String :=
     ++ "\"tool_timeout_cases\":"
       ++ Conformance.ToolTimeouts.casesJson ++ ","
     ++ "\"scope_collection_rules\":{"
-      ++ "\"subagentCoordinatorRules\":"
-        ++ scopeRulesJson ScopeTemplates.subagentCoordinatorRules
-      ++ ",\"subagentHostRules\":" ++ scopeRulesJson ScopeTemplates.subagentHostRules ++ "},"
+      ++ "\"agentTargetCallerRules\":"
+        ++ scopeRulesJson ScopeTemplates.agentTargetCallerRules
+      ++ ",\"agentTargetHostRules\":" ++ scopeRulesJson ScopeTemplates.agentTargetHostRules ++ "},"
     ++ "\"causal_hop_contract\":"
       ++ Conformance.CausalHopContracts.contractJson ++ ","
     ++ "\"operator_base_freeze_cases\":"

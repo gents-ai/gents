@@ -161,7 +161,7 @@ structure IsolatedWorkspace where
   baseSha : String
   branch : String
   creationPolicy : CreationPolicy
-  ownerAgentDid : String
+  ownerNodeDid : String
   sealHash : Option String
   state : WorkspaceState
   pathCapability : WorkspacePathCapability := .exactPaths []
@@ -172,7 +172,7 @@ structure WorkspaceBinding where
   workspaceId : String
   requestId : String
   authority : BindingAuthority
-  agentDid : String
+  nodeDid : String
   sealHash : Option String
   state : BindingState
   deriving DecidableEq, Repr

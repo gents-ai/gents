@@ -19,7 +19,7 @@ async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> 
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             "cli-mailbox",
             "--model-name",
             &model_name,
@@ -27,24 +27,24 @@ async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> 
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let mutation = format!(
         r#"mutation {{ create_MailboxItem(input: {{
             item_key: "runtime:request-doc:ask:1", requester_did: "{did}",
-            agent_did: "{did}", status: "open", kind: "ask", action: "ack",
+            node_did: "{did}", status: "open", kind: "ask", action: "ack",
             title: "CLI attention", summary: "check from the terminal", payload: null,
             source_kind: "runtime", source_id: "request-doc", session_id: null,
             request_id: null, graph_run_id: null, cause_doc_id: null,
-            target_agent_did: "{did}", target_behavior_id: "default",
+            target_node_did: "{did}", target_agent_id: "default",
             expected_collection: null, parent_item_id: null, deadline_at: null,
             created_at: "2026-08-25T12:00:00Z", updated_at: "2026-08-25T12:00:00Z",
             resolved_at: null, resolved_doc_id: null
         }}) {{ _docID }} }}"#,
-        did = escape_graphql_string(&agent_did),
+        did = escape_graphql_string(&node_did),
     );
     let created = graphql_query(&graphql, &mutation).await?;
     let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&created, "MailboxItem")
@@ -54,7 +54,7 @@ async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> 
     let rows = listed.as_array().context("mailbox list array")?;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["title"], Value::String("CLI attention".into()));
-    assert_eq!(rows[0]["requester_did"], Value::String(agent_did));
+    assert_eq!(rows[0]["requester_did"], Value::String(node_did));
 
     let dismissed = run_cli_json(
         &home_dir,

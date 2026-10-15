@@ -138,7 +138,7 @@ impl LspWritethrough {
         let workspace_root = super::overlay_workspace_or(&self.config.workspace);
         let key = PoolKey {
             session_id,
-            behavior_id: self.config.behavior_id.clone(),
+            agent_id: self.config.agent_id.clone(),
             workspace_root,
             server_name: server.name.clone(),
             config_digest: self.config.digest.clone(),

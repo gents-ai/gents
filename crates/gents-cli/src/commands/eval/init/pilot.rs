@@ -32,7 +32,7 @@ const PILOT_CELL: &str = "pilot";
 const ROWS_BUDGET_BYTES: usize = 2048;
 
 /// What the author is told to make of the digest.
-const INSTRUCTION: &str = "A failing check may mean a wrong case (the case expects what the behavior should not do, or its capture or params miss what the behavior did: a matcher miss, empty versus absent rows, a keyword that did not survive) or a wrong subject (the behavior really fails it). One trial per case cannot tell noise from either; judge each failure from its rows.";
+const INSTRUCTION: &str = "A failing check may mean a wrong case (the case expects what the agent should not do, or its capture or params miss what the agent did: a matcher miss, empty versus absent rows, a keyword that did not survive) or a wrong subject (the agent really fails it). One trial per case cannot tell noise from either; judge each failure from its rows.";
 
 /// What the pilot ran and whether the pack changed after it.
 pub(crate) struct PilotOutcome {
@@ -169,7 +169,7 @@ async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<
     let config = gents::pack::load_pack_config(
         &manifest,
         &gents::pack::PackInstallOptions {
-            agent_did: ctx.owner.clone(),
+            node_did: ctx.owner.clone(),
         },
         &|path| {
             assets
@@ -215,7 +215,7 @@ async fn run_split(
         cells: vec![CellArg {
             cell_id: PILOT_CELL.to_owned(),
             pack: init.subject_dir.display().to_string(),
-            behavior: Some(init.dossier.behavior_id.clone()),
+            agent: Some(init.dossier.agent_id.clone()),
         }],
         profiles: vec![(PILOT_CELL.to_owned(), init.profile.clone())],
         split,
@@ -286,7 +286,7 @@ async fn failing_rows(
             .map(|verdict| verdict.stage_id.as_str())
             .collect();
         let locator = TrialLocator {
-            trial_agent_did: latest.trial_agent_did.clone(),
+            trial_node_did: latest.trial_node_did.clone(),
             session_id: latest.session_id.clone(),
             home_hint: latest.home_hint.clone(),
         };
@@ -512,7 +512,7 @@ mod tests {
 
     fn context<'a>(fixture: &Fixture, registry: &'a CheckRegistry, out: &Path) -> InitContext<'a> {
         let mut subject = dossier();
-        subject.behavior_id = "monitor".into();
+        subject.agent_id = "monitor".into();
         InitContext {
             dossier: subject,
             registry,

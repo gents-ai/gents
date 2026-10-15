@@ -14,12 +14,13 @@ use super::super::cause_derivation::{derive_tool_call_cause, RequestEvidence, To
 use super::super::types::{
     is_live_turn_state, normalize_optional, turn_state_label, CommandDenialView,
     DerivedCancelCauseView, DesktopSessionSnapshot, GoalView, MessageReconstructionView,
-    MessageView, PendingTurnView, ReconstructionState, RequestOutcomeView, RetryEligibilityView,
-    SessionCompactionView, SessionContextView, SessionHydrationView, SessionLiveDeltaView,
-    SessionLiveTextPatchView, SessionProjectionRevisionView, SessionTimelinePageView, ToolCallView,
+    MessageView, PendingTurnView, ReconstructionState, RequestOriginView, RequestOutcomeView,
+    RetryEligibilityView, SessionCompactionView, SessionContextView, SessionHydrationView,
+    SessionLiveDeltaView, SessionLiveTextPatchView, SessionProjectionRevisionView,
+    SessionTimelinePageView, ToolCallView,
 };
 use super::timeline::build_rendered_timeline;
-use super::{request_matches_agent, source_matches_agent};
+use super::{request_matches_node, source_matches_node};
 
 #[path = "session/command_denial.rs"]
 mod command_denial;
@@ -43,7 +44,7 @@ pub use live_delta::build_session_live_delta;
 #[cfg(test)]
 pub(crate) use live_delta::build_session_live_delta_from_store;
 use pending_turn::{build_pending_turn, project_retry_eligibility};
-use projection::build_session_snapshot_from_store_for_agent_with_transcript;
+use projection::build_session_snapshot_from_store_for_node_with_transcript;
 #[cfg(test)]
 use request_context::decode_latest_request_context;
 use request_context::load_latest_session_request_context;
@@ -62,6 +63,76 @@ pub(super) fn message_is_runtime_control(
         .cloned()
         .unwrap_or_default();
     gents::lifecycle::is_runtime_control_message(&request_input, &message.message.message_key)
+}
+
+/// Who put `request` into its session, when not the person. A session
+/// message names its sender's session only when this replica holds the exact
+/// causing request.
+pub(super) fn request_origin_view(
+    store: &ClientStore,
+    request: &AgentRequestRow,
+) -> Option<RequestOriginView> {
+    use gents::lifecycle::RequestOrigin;
+    Some(match gents::lifecycle::request_origin(request) {
+        RequestOrigin::Person => return None,
+        RequestOrigin::SessionMessage {
+            parent_request_doc_id,
+        } => {
+            let parent = parent_request_doc_id.and_then(|doc_id| {
+                store
+                    .requests
+                    .iter()
+                    .find(|row| row.doc_id.as_deref() == Some(doc_id))
+            });
+            RequestOriginView::SessionMessage {
+                sender_node_did: parent
+                    .and_then(|row| normalize_optional(row.node_did.as_deref()))
+                    .or_else(|| normalize_optional(request.requester_did.as_deref())),
+                sender_session_id: parent
+                    .and_then(|row| normalize_optional(row.session_id.as_deref())),
+                sender_request_id: parent
+                    .map(|row| row.request_id.clone())
+                    .or_else(|| normalize_optional(request.caused_by_parent_request_id.as_deref())),
+            }
+        }
+        RequestOrigin::Trigger {
+            trigger_id,
+            trigger_kind,
+        } => RequestOriginView::Trigger {
+            trigger_id: trigger_id.to_owned(),
+            trigger_kind: trigger_kind.map(str::to_owned),
+        },
+        RequestOrigin::GoalContinuation { goal_id, sequence } => {
+            RequestOriginView::GoalContinuation {
+                goal_id: goal_id.map(str::to_owned),
+                sequence,
+            }
+        }
+        RequestOrigin::BackgroundCompletion => RequestOriginView::BackgroundCompletion,
+    })
+}
+
+/// The origin of a user-role transcript entry: that of the request it was
+/// published under, or a background completion for a delivered notification.
+pub(super) fn message_origin(
+    store: &ClientStore,
+    message: &TranscriptMessageRow,
+    requests_by_id: &HashMap<&str, &AgentRequestRow>,
+) -> Option<RequestOriginView> {
+    if message.message.role != gents_protocol::output::MessageRole::User {
+        return None;
+    }
+    if gents::background_completion::is_background_completion_notification_message_key(
+        &message.message.message_key,
+    ) {
+        return Some(RequestOriginView::BackgroundCompletion);
+    }
+    message
+        .message
+        .request_doc_id
+        .as_deref()
+        .and_then(|request_id| requests_by_id.get(request_id))
+        .and_then(|request| request_origin_view(store, request))
 }
 
 pub(super) fn request_is_background_completion(request: &AgentRequestRow) -> bool {
@@ -92,17 +163,17 @@ pub fn build_session_snapshot_from_store(
     session_id: &str,
     preferred_request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
-    build_session_snapshot_from_store_for_agent(store, None, session_id, preferred_request_id)
+    build_session_snapshot_from_store_for_node(store, None, session_id, preferred_request_id)
 }
 
 #[cfg(test)]
-pub fn build_session_snapshot_from_store_for_agent(
+pub fn build_session_snapshot_from_store_for_node(
     store: &gents_desktop_core::client::ClientStore,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
-    build_session_snapshot_from_store_for_agent_with_transcript(
+    build_session_snapshot_from_store_for_node_with_transcript(
         store,
         store,
         store,
@@ -112,7 +183,7 @@ pub fn build_session_snapshot_from_store_for_agent(
         true,
         true,
         true,
-        agent_did,
+        node_did,
         session_id,
         preferred_request_id,
     )
@@ -123,15 +194,15 @@ pub fn build_session_snapshot_from_store_for_agent(
 /// off `latest_request_id`: a newly submitted request has no accounting until
 /// its first provider dispatch, so the previous measured request remains visible.
 #[cfg(test)]
-pub async fn build_session_snapshot_for_agent(
+pub async fn build_session_snapshot_for_node(
     core: &ClientCore,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
-    build_session_snapshot_for_agent_with_transcript(
+    build_session_snapshot_for_node_with_transcript(
         core,
-        agent_did,
+        node_did,
         session_id,
         preferred_request_id,
         None,
@@ -144,9 +215,9 @@ pub async fn build_session_snapshot_for_agent(
     .await
 }
 
-pub async fn build_session_snapshot_for_agent_with_transcript(
+pub async fn build_session_snapshot_for_node_with_transcript(
     core: &ClientCore,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
     transcript_store: Option<&ClientStore>,
@@ -157,19 +228,19 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
     include_live_tail: bool,
 ) -> Option<DesktopSessionSnapshot> {
     let (store, projection_revision) = core.store().snapshot_with_revision();
-    let unreadable = agent_did.and_then(|agent_did| {
-        core.session_unreadable_reason(session_id, agent_did)
-            .map(|reason| super::unreadable_hydration_view(session_id, agent_did, reason))
+    let unreadable = node_did.and_then(|node_did| {
+        core.session_unreadable_reason(session_id, node_did)
+            .map(|reason| super::unreadable_hydration_view(session_id, node_did, reason))
     });
-    let hydration = match agent_did {
+    let hydration = match node_did {
         Some(_) if unreadable.is_some() => unreadable,
-        Some(agent_did) => match core.session_hydration_status(session_id, agent_did).await {
+        Some(node_did) => match core.session_hydration_status(session_id, node_did).await {
             Ok((progress, detail)) => Some(super::to_hydration_view(&progress, detail)),
             Err(error) => {
                 tracing::warn!(
                     error = %error,
                     session_id,
-                    agent_did,
+                    node_did,
                     "loading session-keyed hydration progress failed"
                 );
                 None
@@ -177,22 +248,51 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
         },
         None => None,
     };
-    let request_ids = agent_did.map_or_else(
+    let pending_queue = match node_did {
+        Some(node_did)
+            if include_live_tail
+                && core
+                    .session_unreadable_reason(session_id, node_did)
+                    .is_none() =>
+        {
+            match core.pending_user_queue(node_did, session_id).await {
+                Ok(queue) => Some(
+                    queue
+                        .entries
+                        .into_iter()
+                        .map(|entry| crate::types::PendingQueueEntryView {
+                            request_doc_id: entry.request_doc_id,
+                            request_id: entry.request_id,
+                            content: entry.content,
+                            editable: entry.editable,
+                            edit_group: entry.edit_group,
+                        })
+                        .collect(),
+                ),
+                Err(error) => {
+                    tracing::warn!(session_id, node_did, error = %error, "pending queue unavailable");
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+    let request_ids = node_did.map_or_else(
         || store.requests_for_session(session_id),
-        |agent_did| store.requests_for_session_for_agent(session_id, agent_did),
+        |node_did| store.requests_for_session_for_node(session_id, node_did),
     );
     let request_ids = request_ids
         .into_iter()
         .map(|request| request.request_id.clone())
         .collect::<Vec<_>>();
-    let loaded_context = match agent_did {
-        Some(agent_did) => {
-            match load_latest_session_request_context(core.node(), agent_did, &request_ids).await {
+    let loaded_context = match node_did {
+        Some(node_did) => {
+            match load_latest_session_request_context(core.node(), node_did, &request_ids).await {
                 Ok(context) => context,
                 Err(error) => {
                     tracing::warn!(
                         target: "gents_desktop::chat",
-                        agent_did,
+                        node_did,
                         session_id,
                         error = %error,
                         "loading latest session context accounting failed"
@@ -203,7 +303,7 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
         }
         None => None,
     };
-    let mut snapshot = build_session_snapshot_from_store_for_agent_with_transcript(
+    let mut snapshot = build_session_snapshot_from_store_for_node_with_transcript(
         store.as_ref(),
         transcript_store.unwrap_or(store.as_ref()),
         context_store.or(transcript_store).unwrap_or(store.as_ref()),
@@ -213,7 +313,7 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
         context_totals_exact,
         context_totals_exact,
         include_live_tail,
-        agent_did,
+        node_did,
         session_id,
         preferred_request_id,
     );
@@ -225,7 +325,7 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
                 build_hydration_only_session_snapshot(
                     store.as_ref(),
                     session_id,
-                    agent_did.expect("hydration progress is keyed by an agent DID"),
+                    node_did.expect("hydration progress is keyed by a node DID"),
                     hydration.clone(),
                     context_totals_exact,
                 )
@@ -244,8 +344,10 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
         }
         snapshot.projection_revision = Some(SessionProjectionRevisionView {
             store_version: projection_revision.store_version,
+            provenance_version: projection_revision.provenance_version,
         });
         snapshot.hydration = hydration;
+        snapshot.pending_queue = pending_queue;
     }
     snapshot
 }
@@ -253,15 +355,15 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
 fn build_hydration_only_session_snapshot(
     store: &ClientStore,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     hydration: SessionHydrationView,
     context_totals_exact: bool,
 ) -> DesktopSessionSnapshot {
     DesktopSessionSnapshot {
         live_cursor: None,
         session_id: session_id.to_string(),
-        agent_did: Some(agent_did.to_string()),
-        behavior_id: None,
+        node_did: Some(node_did.to_string()),
+        agent_id: None,
         title: None,
         preview_text: None,
         status: None,
@@ -271,10 +373,13 @@ fn build_hydration_only_session_snapshot(
         retry_eligibility: project_retry_eligibility(None),
         latest_request_outcome: None,
         pending_turn: None,
+        queued_turns: Vec::new(),
+        pending_queue: None,
+        folded_inputs: Vec::new(),
         context: build_session_context_from_stores(
             store,
             store,
-            Some(agent_did),
+            Some(node_did),
             None,
             session_id,
             context_totals_exact,
@@ -300,7 +405,7 @@ mod hydration_only_tests {
             "did:test:requester",
             SessionHydrationView {
                 session_id: "session-1".to_string(),
-                agent_did: "did:test:requester".to_string(),
+                node_did: "did:test:requester".to_string(),
                 phase: "requested".to_string(),
                 merged_count: 0,
                 covered_count: 0,
@@ -311,7 +416,7 @@ mod hydration_only_tests {
         );
 
         assert_eq!(snapshot.session_id, "session-1");
-        assert_eq!(snapshot.agent_did.as_deref(), Some("did:test:requester"));
+        assert_eq!(snapshot.node_did.as_deref(), Some("did:test:requester"));
         assert_eq!(
             snapshot.hydration.as_ref().map(|view| view.phase.as_str()),
             Some("requested")
@@ -354,7 +459,7 @@ mod paging_coverage_tests {
                     doc_id: Some("request-doc".into()),
                     request_id: "request".into(),
                     session_id: Some("session".into()),
-                    agent_did: Some("agent".into()),
+                    node_did: Some("node".into()),
                     purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
                     content: Some("hello".into()),
                     lifecycle_state: Some(RequestLifecycleState::Processing),
@@ -367,7 +472,7 @@ mod paging_coverage_tests {
                     doc_id: "prompt-doc".into(),
                     message: serde_json::from_value(serde_json::json!({
                         "message_key":"authored:request-doc:prompt", "session_id":"session",
-                        "agent_did":"agent", "request_doc_id":"request-doc", "sequence":0,
+                        "node_did":"node", "request_doc_id":"request-doc", "sequence":0,
                         "role":"user", "outcome":"complete", "blocks":[],
                         "publication":{"kind":"request_execution","execution_generation":"generation"},
                         "created_at":"2026-09-30T00:00:00Z"
@@ -385,7 +490,7 @@ mod paging_coverage_tests {
                 ownership.by_request_doc_id.insert(
                     doc.into(),
                     gents_desktop_core::client::RequestPromptFact {
-                        agent_did: "agent".into(),
+                        node_did: "node".into(),
                         session_id: "session".into(),
                         requester_did: None,
                         materialized: case["materialized"].as_bool().unwrap(),
@@ -394,7 +499,7 @@ mod paging_coverage_tests {
                 );
             }
             let page = ClientStore::default();
-            let snapshot = build_session_snapshot_from_store_for_agent_with_transcript(
+            let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
                 &store,
                 &page,
                 &store,
@@ -404,7 +509,7 @@ mod paging_coverage_tests {
                 case["complete"].as_bool().unwrap(),
                 false,
                 true,
-                Some("agent"),
+                Some("node"),
                 "session",
                 Some("request"),
             )

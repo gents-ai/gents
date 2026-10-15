@@ -6,7 +6,7 @@ use anyhow::Context;
 /// provenance, observation) are DefraDB JSON scalar columns: read the bare
 /// field name, never an object subselection, and decode through the canonical
 /// protocol owners.
-pub const AGENT_SESSION_FIELDS: &str = "session_id agent_did requester_did behavior_id \
+pub const AGENT_SESSION_FIELDS: &str = "session_id node_did requester_did agent_id \
 created_at closed_at title provenance observation tags _docID";
 
 /// Validate one decoded canonical session at the document boundary: required
@@ -17,8 +17,8 @@ pub(super) fn validate_agent_session(
 ) -> Result<()> {
     for (name, value) in [
         ("session_id", session.session_id.as_str()),
-        ("agent_did", session.agent_did.as_str()),
-        ("behavior_id", session.behavior_id.as_str()),
+        ("node_did", session.node_did.as_str()),
+        ("agent_id", session.agent_id.as_str()),
     ] {
         anyhow::ensure!(!value.trim().is_empty(), "session {name} must be nonblank");
     }
@@ -71,7 +71,7 @@ pub fn decode_session_row(row: &serde_json::Value) -> Result<SessionOwnerRow> {
 }
 
 pub fn session_scope_filter(
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> String {
@@ -80,8 +80,8 @@ pub fn session_scope_filter(
         None => "null".to_string(),
     };
     format!(
-        r#"agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }}"#,
-        escape_graphql_string(agent_did),
+        r#"node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }}"#,
+        escape_graphql_string(node_did),
         escape_graphql_string(session_id)
     )
 }
@@ -105,11 +105,11 @@ pub fn public_request_filter(scope: &str) -> String {
 /// Duplicate rows for one label are a data error, never a silent pick.
 pub(super) async fn load_agent_session_row(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<SessionOwnerRow>> {
-    load_agent_session_rows(node, agent_did, session_id, requester_did)
+    load_agent_session_rows(node, node_did, session_id, requester_did)
         .await
         .and_then(|mut rows| {
             anyhow::ensure!(rows.len() <= 1, "duplicate AgentSession rows for one label");
@@ -119,11 +119,11 @@ pub(super) async fn load_agent_session_row(
 
 pub(super) async fn load_agent_session_rows(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<SessionOwnerRow>> {
-    let scope = session_scope_filter(agent_did, session_id, requester_did);
+    let scope = session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentSession(
@@ -143,12 +143,12 @@ pub(super) async fn load_agent_session_rows(
 
 pub(super) async fn load_agent_session(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<gents_protocol::session::AgentSession>> {
     Ok(
-        load_agent_session_row(node, agent_did, session_id, requester_did)
+        load_agent_session_row(node, node_did, session_id, requester_did)
             .await?
             .map(|row| row.session),
     )
@@ -156,11 +156,11 @@ pub(super) async fn load_agent_session(
 
 pub(super) async fn require_agent_session(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<gents_protocol::session::AgentSession> {
-    load_agent_session(node, agent_did, session_id, requester_did)
+    load_agent_session(node, node_did, session_id, requester_did)
         .await?
         .ok_or_else(|| {
             anyhow::anyhow!(
@@ -169,18 +169,18 @@ pub(super) async fn require_agent_session(
         })
 }
 
-/// The requester that owns the existing session `(agent_did, session_id)`,
+/// The requester that owns the existing session `(node_did, session_id)`,
 /// whichever requester that is; `None` when no session exists yet. Runtime
 /// deliveries into an existing session adopt it (Lean
 /// `Enrollment.runtimeRequesterScope`).
 pub(crate) async fn load_session_requester_scope(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> Result<Option<String>> {
     let query = format!(
-        r#"{{ AgentSession(filter: {{ agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {AGENT_SESSION_FIELDS} }} }}"#,
-        escape_graphql_string(agent_did),
+        r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {AGENT_SESSION_FIELDS} }} }}"#,
+        escape_graphql_string(node_did),
         escape_graphql_string(session_id)
     );
     let response = crate::graphql::graphql_with_transaction_retry(
@@ -199,25 +199,25 @@ pub(crate) async fn load_session_requester_scope(
 
 pub(crate) async fn require_session(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<()> {
-    require_agent_session(node, agent_did, session_id, requester_did)
+    require_agent_session(node, node_did, session_id, requester_did)
         .await
         .map(|_| ())
 }
 
-pub(crate) async fn load_session_behavior_id(
+pub(crate) async fn load_session_agent_id(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<String>> {
     Ok(
-        load_agent_session(node, agent_did, session_id, requester_did)
+        load_agent_session(node, node_did, session_id, requester_did)
             .await?
-            .map(|session| session.behavior_id),
+            .map(|session| session.agent_id),
     )
 }
 
@@ -249,8 +249,8 @@ mod session_decoder_tests {
     #[test]
     fn database_identity_is_separate_from_strict_session_payload() {
         let mut row = serde_json::json!({
-            "_docID":"physical-session", "session_id":"session", "agent_did":"owner",
-            "behavior_id":"behavior", "created_at":"2026-09-09T22:30:00.123456+00:00",
+            "_docID":"physical-session", "session_id":"session", "node_did":"owner",
+            "agent_id":"agent", "created_at":"2026-09-09T22:30:00.123456+00:00",
             "observation":{"last_activity_at":"2026-09-09T22:31:00.654321Z"}
         });
         let decoded = decode_session_row(&row).unwrap();

@@ -65,7 +65,7 @@ fn show_config(pack: &super::PackSource) -> Result<()> {
     let config = gents::pack::load_pack_config(
         manifest,
         &gents::pack::PackInstallOptions {
-            agent_did: SHOW_CONFIG_OWNER.into(),
+            node_did: SHOW_CONFIG_OWNER.into(),
         },
         &|path| pack.asset(path).map(Vec::from),
         &|_| None,
@@ -153,7 +153,7 @@ fn document_digests(
     let config = gents::pack::load_pack_config(
         pack.manifest(),
         &gents::pack::PackInstallOptions {
-            agent_did: COMPARED_OWNER.into(),
+            node_did: COMPARED_OWNER.into(),
         },
         &|path| pack.asset(path).map(Vec::from),
         &|_| None,
@@ -222,10 +222,7 @@ mod tests {
         }))
         .await
         .unwrap();
-        assert_eq!(
-            report["config"]["agent_behaviors"][0]["behavior_id"],
-            "fixture-worker"
-        );
+        assert_eq!(report["config"]["agents"][0]["agent_id"], "fixture-worker");
         assert_eq!(report["scenario"]["seed"]["collection"], "FixtureJob");
     }
 }

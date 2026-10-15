@@ -8,16 +8,16 @@ graph-pipeline contract tests. It is test data, not a shipped pack, and
 drifts from the official pack by design.
 
 Internal ids are unchanged from the source pack (graph id `code-review`,
-capability/task/behavior ids `review-*`, and every schema), so tests written
+capability/task/agent ids `review-*`, and every schema), so tests written
 against the real pack's shape keep working against this fixture. Prompts are
 trimmed to a few lines; no plan is shipped, so install always compiles fresh.
 
 ## Configuration
 
-Four behaviors (`review-recon`, `review-scan`, `review-verify`,
+Four agents (`review-recon`, `review-scan`, `review-verify`,
 `review-triage`) bound to the `coordinator`, `worker` and `verifier`
 inference slots, same as the source pack. Capabilities scope their allowed
-caller to `${GENTS_PACK_AGENT_DID}`. The fixture ships no inference backend
+caller to `${GENTS_PACK_NODE_DID}`. The fixture ships no inference backend
 or profile; a test supplies the three slot bindings at install time through
 `GraphPackageInstallBindings`.
 

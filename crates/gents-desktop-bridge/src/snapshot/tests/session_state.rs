@@ -13,9 +13,9 @@ use lean_vocab_test::{
 fn session(requester_did: Option<&str>) -> AgentSession {
     AgentSession {
         session_id: "session-1".into(),
-        agent_did: "did:test:amy".into(),
+        node_did: "did:test:amy".into(),
         requester_did: requester_did.map(str::to_owned),
-        behavior_id: "amy-default".into(),
+        agent_id: "amy-default".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
         title: Some(SessionTitle {
@@ -41,8 +41,8 @@ fn request(id: &str, state: RequestLifecycleState) -> AgentRequestRow {
         purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some(id.into()),
         request_id: id.into(),
-        agent_did: Some("did:test:amy".into()),
-        behavior_id: Some("amy-default".into()),
+        node_did: Some("did:test:amy".into()),
+        agent_id: Some("amy-default".into()),
         session_id: Some("session-1".into()),
         content: Some(format!("{id} prompt")),
         lifecycle_state: Some(state),
@@ -73,54 +73,194 @@ fn request_state_for_turn(turn_state: Option<&str>) -> RequestLifecycleState {
     }
 }
 
+const CONTRACT_NODE: &str = "did:test:contract-agent";
+
+fn lean_requester(id: usize) -> Option<String> {
+    (id != 1).then(|| format!("did:test:requester-{id}"))
+}
+
+/// The native rows a `SessionTurn.Row` list stands for, in arrival order.
+fn lean_session_rows(
+    session_id: &str,
+    rows: &[lean_vocab_test::LeanSessionTurnRow],
+) -> Vec<AgentRequestRow> {
+    use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let owner = row
+                .folded_into
+                .map(|doc| rows.iter().find(|candidate| candidate.doc == doc));
+            let lifecycle = match (row.state.as_str(), row.folded_into) {
+                ("unclaimed", _) => RequestLifecycleState::Pending,
+                ("active", _) => RequestLifecycleState::Processing,
+                ("terminal", Some(_)) => RequestLifecycleState::Superseded,
+                ("terminal", None) => RequestLifecycleState::Completed,
+                (other, _) => panic!("unsupported Lean row state {other:?}"),
+            };
+            AgentRequestRow {
+                purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+                doc_id: Some(format!("doc-{}", row.doc)),
+                request_id: contract_request_id(row.request),
+                node_did: Some(CONTRACT_NODE.into()),
+                requester_did: lean_requester(row.requester),
+                agent_id: Some("contract-agent".into()),
+                session_id: Some(session_id.into()),
+                content: Some(format!("input {}", row.request)),
+                lifecycle_state: Some(lifecycle),
+                execution_origin: Some("interactive".into()),
+                created_at: Some(format!("2026-04-21T12:00:{index:02}Z")),
+                retry_parent_request: row.retry_parent.map(contract_request_id),
+                superseded_by_request: owner.map(|owner| {
+                    owner.map_or("req-missing".into(), |o| contract_request_id(o.request))
+                }),
+                superseded_by_request_doc_id: row.folded_into.map(|doc| format!("doc-{doc}")),
+                failure_reason: row
+                    .folded_into
+                    .map(|_| gents::lifecycle::FOLDED_REASON.to_owned()),
+                input: row.queued_after.map(|after| RequestInput {
+                    queue: Some(RequestQueue {
+                        delivery: Default::default(),
+                        position: None,
+                        source: QueueSource::User,
+                        policy: QueuePolicy::Append,
+                        key: None,
+                        queued_after_request_id: Some(contract_request_id(after)),
+                        interrupted_request_id: None,
+                        background_completion_wake_version: None,
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
+fn contract_session(
+    session_id: &str,
+    requester_did: Option<String>,
+    newest: Option<&AgentRequestRow>,
+) -> AgentSession {
+    AgentSession {
+        session_id: session_id.into(),
+        node_did: CONTRACT_NODE.into(),
+        requester_did,
+        agent_id: "contract-agent".into(),
+        created_at: "2026-04-21T12:00:00Z".into(),
+        closed_at: None,
+        title: None,
+        tags: Vec::new(),
+        provenance: None,
+        observation: newest.map(|newest| SessionObservation {
+            last_activity_at: "2026-04-21T12:01:00Z".into(),
+            preview: Some("contract prompt".into()),
+            latest_request: Some(SessionRequestObservation {
+                request_doc_id: newest.doc_id.clone().expect("contract rows are physical"),
+                request_id: newest.request_id.clone(),
+                lifecycle_state: newest.lifecycle_state.expect("contract rows have state"),
+            }),
+        }),
+    }
+}
+
 fn client_shell_contract_store(case: &lean_vocab_test::LeanClientShellCase) -> ClientStore {
-    let mut rows = ClientStoreRows::default();
     let session_id = contract_session_id(
         case.desktop_selected_session_id
             .expect("desktop contract case should select a session"),
     );
-    let request_id = case.desktop_observed_request_id.map(contract_request_id);
+    let requests = if case.desktop_rows.is_empty() {
+        case.desktop_observed_request_id
+            .map(|id| AgentRequestRow {
+                purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+                doc_id: Some(contract_request_id(id)),
+                request_id: contract_request_id(id),
+                node_did: Some(CONTRACT_NODE.into()),
+                agent_id: Some("contract-agent".into()),
+                session_id: Some(session_id.clone()),
+                content: Some("contract prompt".into()),
+                lifecycle_state: Some(request_state_for_turn(
+                    case.desktop_observed_turn_state.as_deref(),
+                )),
+                execution_origin: Some("interactive".into()),
+                created_at: Some("2026-04-21T12:00:00Z".into()),
+                ..Default::default()
+            })
+            .into_iter()
+            .collect()
+    } else {
+        lean_session_rows(&session_id, &case.desktop_rows)
+    };
+    let mut rows = ClientStoreRows::default();
     if case.desktop_snapshot_present {
-        rows.sessions.push(AgentSession {
-            session_id: session_id.clone(),
-            agent_did: "did:test:contract-agent".into(),
-            requester_did: None,
-            behavior_id: "contract-behavior".into(),
-            created_at: "2026-04-21T12:00:00Z".into(),
-            closed_at: None,
-            title: None,
-            tags: Vec::new(),
-            provenance: None,
-            observation: request_id.clone().map(|request_id| SessionObservation {
-                last_activity_at: "2026-04-21T12:01:00Z".into(),
-                preview: Some("contract prompt".into()),
-                latest_request: Some(SessionRequestObservation {
-                    request_doc_id: request_id.clone(),
-                    request_id,
-                    lifecycle_state: request_state_for_turn(
-                        case.desktop_observed_turn_state.as_deref(),
-                    ),
-                }),
-            }),
-        });
+        rows.sessions
+            .push(contract_session(&session_id, None, requests.last()));
     }
-    if let Some(request_id) = request_id {
-        rows.requests.push(AgentRequestRow {
-            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-            doc_id: Some(request_id.clone()),
-            request_id,
-            agent_did: Some("did:test:contract-agent".into()),
-            behavior_id: Some("contract-behavior".into()),
-            session_id: Some(session_id),
-            content: Some("contract prompt".into()),
-            lifecycle_state: Some(request_state_for_turn(
-                case.desktop_observed_turn_state.as_deref(),
-            )),
-            execution_origin: Some("interactive".into()),
-            ..Default::default()
-        });
-    }
+    rows.requests = requests;
     ClientStore::from_rows(rows)
+}
+
+fn request_ids_for_docs(rows: &[AgentRequestRow], docs: &[usize]) -> Vec<String> {
+    docs.iter()
+        .map(|doc| {
+            rows.iter()
+                .find(|row| row.doc_id.as_deref() == Some(format!("doc-{doc}").as_str()))
+                .expect("expected doc is a case row")
+                .request_id
+                .clone()
+        })
+        .collect()
+}
+
+#[test]
+fn session_snapshot_binds_generated_session_turn_cases() {
+    let cases = lean_vocab_test::lean_client_session_turn_cases();
+    assert_eq!(cases.len(), 13);
+    for case in cases {
+        let rows = lean_session_rows("session-1", &case.rows);
+        let newest = rows.last().expect("case has rows");
+        let store = ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![contract_session(
+                "session-1",
+                newest.requester_did.clone(),
+                Some(newest),
+            )],
+            requests: rows.clone(),
+            ..ClientStoreRows::default()
+        });
+        let snapshot =
+            build_session_snapshot_from_store(&store, "session-1", None).expect("snapshot");
+        assert_eq!(
+            snapshot.latest_request_id,
+            request_ids_for_docs(&rows, &[case.expected_turn_doc]).pop(),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            snapshot
+                .queued_turns
+                .iter()
+                .map(|turn| turn.request_id.clone())
+                .collect::<Vec<_>>(),
+            request_ids_for_docs(&rows, &case.expected_queued_docs),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            snapshot
+                .folded_inputs
+                .iter()
+                .map(|input| input.request_id.clone())
+                .collect::<Vec<_>>(),
+            case.expected_folded_requests
+                .iter()
+                .copied()
+                .map(contract_request_id)
+                .collect::<Vec<_>>(),
+            "{}",
+            case.name
+        );
+    }
 }
 
 #[test]
@@ -129,7 +269,7 @@ fn session_snapshot_projects_durable_goal_state() {
         goal_id: "goal-1".into(),
         creation_key: None,
         session_id: "session-1".into(),
-        agent_did: "did:test:amy".into(),
+        node_did: "did:test:amy".into(),
         objective: Some("Ship the durable controller".into()),
         tags: Vec::new(),
         status: Some("active".into()),
@@ -150,7 +290,7 @@ fn session_snapshot_projects_durable_goal_state() {
         created_at: None,
         updated_at: None,
     };
-    let snapshot = build_session_snapshot_from_store_for_agent(
+    let snapshot = build_session_snapshot_from_store_for_node(
         &ClientStore::from_rows(ClientStoreRows {
             sessions: vec![session(None)],
             goals: vec![goal],
@@ -199,7 +339,7 @@ fn requester_scope_does_not_cross_canonical_output_facts() {
         sessions: vec![session(None), session(Some("did:test:other"))],
         ..ClientStoreRows::default()
     };
-    push_canonical_text_message_for_agent(
+    push_canonical_text_message_for_node(
         &mut rows,
         "owner",
         "session-1",
@@ -210,7 +350,7 @@ fn requester_scope_does_not_cross_canonical_output_facts() {
         "did:test:amy",
         None,
     );
-    push_canonical_text_message_for_agent(
+    push_canonical_text_message_for_node(
         &mut rows,
         "other",
         "session-1",
@@ -222,13 +362,9 @@ fn requester_scope_does_not_cross_canonical_output_facts() {
         Some("did:test:other"),
     );
     let store = ClientStore::from_rows(rows);
-    let snapshot = build_session_snapshot_from_store_for_agent(
-        &store,
-        Some("did:test:amy"),
-        "session-1",
-        None,
-    )
-    .expect("snapshot");
+    let snapshot =
+        build_session_snapshot_from_store_for_node(&store, Some("did:test:amy"), "session-1", None)
+            .expect("snapshot");
     assert_eq!(snapshot.messages.len(), 1);
     assert_eq!(snapshot.messages[0].message_key, "owner");
 }
@@ -269,7 +405,7 @@ fn session_snapshot_uses_canonical_session_without_materialized_observation() {
     });
     let snapshot = build_session_snapshot_from_store(&store, "session-1", None).expect("snapshot");
     assert_eq!(snapshot.session_id, "session-1");
-    assert_eq!(snapshot.agent_did.as_deref(), Some("did:test:amy"));
+    assert_eq!(snapshot.node_did.as_deref(), Some("did:test:amy"));
     assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
 }
 
@@ -309,7 +445,7 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
         purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some("req-old".into()),
         request_id: "req-old".into(),
-        agent_did: Some("did:test:amy".into()),
+        node_did: Some("did:test:amy".into()),
         session_id: Some("session-1".into()),
         lifecycle_state: Some(RequestLifecycleState::Completed),
         ..Default::default()
@@ -331,7 +467,13 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
 #[test]
 fn session_snapshot_projection_consumes_generated_client_shell_contract_cases() {
     let cases = lean_desktop_client_shell_cases();
-    assert_eq!(cases.len(), 22);
+    assert_eq!(cases.len(), 24);
+    assert!(cases
+        .iter()
+        .any(|case| !case.desktop_queued_request_ids.is_empty()));
+    assert!(cases
+        .iter()
+        .any(|case| !case.desktop_folded_request_ids.is_empty()));
     for case in cases {
         let session_id = contract_session_id(
             case.desktop_selected_session_id
@@ -361,6 +503,34 @@ fn session_snapshot_projection_consumes_generated_client_shell_contract_cases() 
             assert_eq!(
                 snapshot.turn_state.as_deref(),
                 case.desktop_expected_turn_state.as_deref(),
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                snapshot
+                    .queued_turns
+                    .iter()
+                    .map(|turn| turn.request_id.clone())
+                    .collect::<Vec<_>>(),
+                case.desktop_queued_request_ids
+                    .iter()
+                    .copied()
+                    .map(contract_request_id)
+                    .collect::<Vec<_>>(),
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                snapshot
+                    .folded_inputs
+                    .iter()
+                    .map(|input| input.request_id.clone())
+                    .collect::<Vec<_>>(),
+                case.desktop_folded_request_ids
+                    .iter()
+                    .copied()
+                    .map(contract_request_id)
+                    .collect::<Vec<_>>(),
                 "{}",
                 case.name
             );
@@ -484,7 +654,7 @@ fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
             rows.output_segments.push(OutputSegmentRow {
                 doc_id: format!("{}-open", case.name),
                 segment: OutputSegment {
-                    agent_did: "did:test:amy".into(),
+                    node_did: "did:test:amy".into(),
                     requester_did: None,
                     session_id: "session-1".into(),
                     request_doc_id: "req-2".into(),
@@ -553,7 +723,7 @@ fn session_snapshot_transcript_rendering_consumes_generated_transcript_cases() {
             rows.tool_calls.push(
                 serde_json::from_value(serde_json::json!({
                     "_docID": format!("{}-tool-{index}", case.name),
-                    "agent_did": "did:test:amy",
+                    "node_did": "did:test:amy",
                     "request_doc_id": "req-1",
                     "tool_call_key": format!("{}-tool-{index}", case.name),
                     "session_id": "session-1",
@@ -667,6 +837,38 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
 }
 
 #[test]
+fn session_snapshot_retains_modeled_terminal_provider_evidence() {
+    for case in lean_vocab_test::lean_request_transition_cases()
+        .iter()
+        .filter(|case| case.to == "interrupted" && case.classification == "legal")
+    {
+        for certificate in [None, Some(case.stopped_before_running)] {
+            let mut row = request("req-2", RequestLifecycleState::Interrupted);
+            row.stopped_before_running = certificate;
+            let snapshot = build_session_snapshot_from_store(
+                &ClientStore::from_rows(ClientStoreRows {
+                    sessions: vec![session(None)],
+                    requests: vec![row],
+                    ..ClientStoreRows::default()
+                }),
+                "session-1",
+                Some("req-2"),
+            )
+            .expect("snapshot");
+            assert_eq!(
+                snapshot
+                    .latest_request_outcome
+                    .unwrap()
+                    .stopped_before_running,
+                certificate,
+                "{}",
+                case.name
+            );
+        }
+    }
+}
+
+#[test]
 fn session_snapshot_derives_cancel_causes_from_request_and_tool() {
     let mut interrupted = request("req-2", RequestLifecycleState::Interrupted);
     interrupted.failure_reason = Some("completion cancelled".into());
@@ -679,7 +881,7 @@ fn session_snapshot_derives_cancel_causes_from_request_and_tool() {
                 "_docID": "cancelled-tool-doc",
                 "tool_call_key": "cancelled-tool",
                 "tool_call_id": "cancelled-call",
-                "agent_did": "did:test:amy",
+                "node_did": "did:test:amy",
                 "session_id": "session-1",
                 "request_id": "req-2",
                 "request_doc_id": "req-2",
@@ -726,7 +928,7 @@ fn tool_cancel_cause_uses_only_its_physical_request_owner() {
                     "_docID": "cancelled-tool-doc",
                     "tool_call_key": "cancelled-tool",
                     "tool_call_id": "cancelled-call",
-                    "agent_did": "did:test:amy",
+                    "node_did": "did:test:amy",
                     "session_id": "session-1",
                     "request_id": "req-2",
                     "request_doc_id": request_doc_id,
@@ -765,6 +967,58 @@ fn session_snapshot_projects_failed_request_reason_without_response_storage() {
     assert_eq!(outcome.failure_reason.as_deref(), Some("provider exploded"));
     assert!(outcome.cancel_cause.is_none());
     assert!(snapshot.retry_eligibility.eligible);
+}
+
+/// A request refused before claim never publishes a transcript row; once the
+/// app stops tracking it, the session observation the runtime advanced at the
+/// refusal is the only fact anchoring the failed turn, its reason and Retry.
+#[test]
+fn refused_latest_request_observation_keeps_the_failed_turn_reason_retry_and_prompt_visible() {
+    let refusal_reason =
+        "request admission denied: request activates a skill outside its context allowlist";
+    let mut refused_session = session(None);
+    refused_session.observation = Some(SessionObservation {
+        last_activity_at: "2026-04-21T12:02:00Z".into(),
+        preview: Some("run the disallowed skill".into()),
+        latest_request: Some(SessionRequestObservation {
+            request_doc_id: "req-2".into(),
+            request_id: "req-2".into(),
+            lifecycle_state: RequestLifecycleState::Failed,
+        }),
+    });
+    let mut refused = request("req-2", RequestLifecycleState::Failed);
+    refused.content = Some("run the disallowed skill".into());
+    refused.failure_reason = Some(refusal_reason.into());
+    let snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![refused_session],
+            requests: vec![request("req-1", RequestLifecycleState::Completed), refused],
+            ..ClientStoreRows::default()
+        }),
+        "session-1",
+        None,
+    )
+    .expect("snapshot");
+    assert_eq!(
+        snapshot.latest_request_id.as_deref(),
+        Some("req-2"),
+        "the observation, not row order, anchors the post-tracking latest request"
+    );
+    assert_eq!(snapshot.turn_state.as_deref(), Some("failed"));
+    let outcome = snapshot.latest_request_outcome.expect("request outcome");
+    assert_eq!(outcome.failure_reason.as_deref(), Some(refusal_reason));
+    assert!(snapshot.retry_eligibility.eligible);
+    let pending = snapshot.pending_turn.expect("refused prompt stays visible");
+    assert_eq!(pending.request_id, "req-2");
+    assert_eq!(pending.content, "run the disallowed skill");
+    assert_eq!(pending.lifecycle_state.as_deref(), Some("failed"));
+    assert!(
+        snapshot
+            .timeline_items
+            .iter()
+            .any(|item| matches!(item, RenderedTimelineItem::PendingUserTurn { request_id, .. } if request_id == "req-2")),
+        "the timeline keeps a user-turn stand-in for the refused request"
+    );
 }
 
 #[test]

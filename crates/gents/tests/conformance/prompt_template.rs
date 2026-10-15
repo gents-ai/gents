@@ -1,5 +1,5 @@
 //! Task templates use the production renderer; LayeredPromptBuilder preserves
-//! literal system preambles. Earlier system-prompt rendering in the behavior
+//! literal system preambles. Earlier system-prompt rendering in the agent
 //! builder remains a runtime migration; these hand-authored cases cover assembly
 //! and rendering, not generated task-render witnesses or dispatch persistence.
 
@@ -12,9 +12,9 @@ use gents::template::{render_template, task_node_ctx, TemplateError, TemplateSco
 /// hand-rolled struct.
 fn task_with_template(template: &str) -> Task {
     serde_json::from_value(serde_json::json!({
-        "agent_did": "did:key:zPRINCIPAL",
+        "node_did": "did:key:zNODE",
         "task_id": "fence-task",
-        "behavior_id": "fence",
+        "agent_id": "fence",
         "prompt_template": template
     }))
     .expect("compact canonical task document")
@@ -22,8 +22,8 @@ fn task_with_template(template: &str) -> Task {
 
 /// A fixture scope using production node/context construction. Dispatch itself
 /// is exercised by the trigger engine tests.
-fn fire_scope(behavior_id: &str, now: &str, args: serde_json::Value) -> TemplateScope {
-    let (node, ctx) = task_node_ctx("did:key:zPRINCIPAL", behavior_id, now);
+fn fire_scope(agent_id: &str, now: &str, args: serde_json::Value) -> TemplateScope {
+    let (node, ctx) = task_node_ctx("did:key:zNODE", agent_id, now);
     TemplateScope {
         session: None,
         request: None,
@@ -40,8 +40,8 @@ fn fire_scope(behavior_id: &str, now: &str, args: serde_json::Value) -> Template
 /// does not evaluate it (Template.assembled_preamble_literal).
 #[test]
 fn system_preamble_is_literal_template_syntax_is_inert() {
-    let literal = "You are {{ node.behavior_id }}. Now: {{ ctx.now }}.";
-    let builder = LayeredPromptBuilder::for_behavior(literal, "fence", &["bash"], false, &[]);
+    let literal = "You are {{ node.agent_id }}. Now: {{ ctx.now }}.";
+    let builder = LayeredPromptBuilder::for_agent(literal, "fence", &["bash"], false, &[]);
 
     let preamble = builder.preamble();
     assert!(
@@ -50,7 +50,7 @@ fn system_preamble_is_literal_template_syntax_is_inert() {
     );
     // The binding-looking syntax is inert: nothing substituted it.
     assert!(
-        preamble.contains("{{ node.behavior_id }}") && preamble.contains("{{ ctx.now }}"),
+        preamble.contains("{{ node.agent_id }}") && preamble.contains("{{ ctx.now }}"),
         "the preamble evaluated template syntax that must stay literal: {preamble}"
     );
 }
@@ -63,7 +63,7 @@ fn task_template_substitutes_only_in_the_task_slot() {
     let literal = "Deploy {{ args.target }} now.";
     let task = task_with_template(literal);
 
-    let builder = LayeredPromptBuilder::for_behavior(literal, "fence", &["bash"], false, &[]);
+    let builder = LayeredPromptBuilder::for_agent(literal, "fence", &["bash"], false, &[]);
     let preamble = builder.preamble();
     assert!(
         preamble.starts_with(literal) && !preamble.contains("TREE"),
@@ -84,7 +84,7 @@ fn task_template_substitutes_only_in_the_task_slot() {
 #[test]
 fn task_template_renders_per_invocation() {
     let task =
-        task_with_template("Review {{ args.target }} at {{ ctx.now }} on {{ node.behavior_id }}.");
+        task_with_template("Review {{ args.target }} at {{ ctx.now }} on {{ node.agent_id }}.");
 
     let first = render_template(
         &task.prompt_template,
@@ -116,7 +116,7 @@ fn task_template_renders_per_invocation() {
 fn task_render_depends_only_on_read_variables() {
     let task = task_with_template("Work {{ args.task }}");
 
-    let (node, ctx_a) = task_node_ctx("did:key:zPRINCIPAL", "fence", "T1");
+    let (node, ctx_a) = task_node_ctx("did:key:zNODE", "fence", "T1");
     let a = TemplateScope {
         session: None,
         request: None,
@@ -127,7 +127,7 @@ fn task_render_depends_only_on_read_variables() {
         node,
         ctx: ctx_a,
     };
-    let (node_b, ctx_b) = task_node_ctx("did:key:zPRINCIPAL", "fence", "T2");
+    let (node_b, ctx_b) = task_node_ctx("did:key:zNODE", "fence", "T2");
     let b = TemplateScope {
         session: None,
         request: None,

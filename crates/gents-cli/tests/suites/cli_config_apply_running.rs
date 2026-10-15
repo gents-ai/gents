@@ -19,7 +19,7 @@ async fn config_apply_reconciles_running_context_without_restart() -> Result<()>
     let init = run_init_json(
         &home,
         &[
-            "--agent-name",
+            "--node-name",
             "running-apply",
             "--model-name",
             &model,
@@ -27,10 +27,10 @@ async fn config_apply_reconciles_running_context_without_restart() -> Result<()>
             endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut server = spawn_server(&home, port)?;
     wait_for_port(port, &mut server)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     run_cli_text(
         &home,
         &[
@@ -40,8 +40,8 @@ async fn config_apply_reconciles_running_context_without_restart() -> Result<()>
             root.to_str().unwrap(),
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
         ],
     )?;
     let path = root.join("pack_config.json");

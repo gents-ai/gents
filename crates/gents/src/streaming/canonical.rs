@@ -32,6 +32,8 @@ pub(crate) struct ProviderPublicationPlan {
     pub(crate) tool_deadline_at: String,
     /// Provider-native ids of the calls this turn accepts as background rows.
     pub(crate) background_calls: Vec<String>,
+    /// The queued message this authored publication answers and supersedes.
+    pub(crate) consumes_folded: Option<crate::lifecycle::queue::FoldedConsumption>,
 }
 
 /// Provider-native ids of a turn's `agent_new`/`agent_message` calls: a
@@ -349,7 +351,7 @@ pub(crate) async fn close_provider_attempt_at(
 
 fn validate_closing_shape(prepared: &OutputSegment, closing: &OutputSegment) -> Result<()> {
     anyhow::ensure!(
-        closing.agent_did == prepared.agent_did
+        closing.node_did == prepared.node_did
             && closing.requester_did == prepared.requester_did
             && closing.session_id == prepared.session_id
             && closing.request_doc_id == prepared.request_doc_id
@@ -475,7 +477,7 @@ async fn partial_header_in_txn(
     let headers = crate::session::load_request_headers_in_txn(
         txn,
         &prepared.session_id,
-        &prepared.agent_did,
+        &prepared.node_did,
         prepared.requester_did.as_deref(),
         &prepared.request_doc_id,
     )
@@ -510,7 +512,7 @@ async fn partial_header_in_txn(
         crate::session::load_canonical_message_in_txn(
             txn,
             &existing.doc_id,
-            &prepared.agent_did,
+            &prepared.node_did,
             prepared.requester_did.as_deref(),
         )
         .await?;
@@ -561,14 +563,14 @@ async fn partial_header_in_txn(
     }
     let sequence = crate::lifecycle::queue::next_append_sequence_in_transaction(
         txn,
-        &prepared.agent_did,
+        &prepared.node_did,
         &prepared.session_id,
     )
     .await?;
     let derived = TranscriptMessage {
         message_key,
         session_id: prepared.session_id.clone(),
-        agent_did: prepared.agent_did.clone(),
+        node_did: prepared.node_did.clone(),
         requester_did: prepared.requester_did.clone(),
         request_doc_id: Some(prepared.request_doc_id.clone()),
         publication: MessagePublication::RequestRecovery {
@@ -601,7 +603,7 @@ async fn partial_header_in_txn(
     crate::session::load_canonical_message_in_txn(
         txn,
         &message_doc_id,
-        &prepared.agent_did,
+        &prepared.node_did,
         prepared.requester_did.as_deref(),
     )
     .await?;
@@ -632,7 +634,7 @@ pub(crate) async fn publish_provider_turn_at(
     publish_provider_turn_with_time(node, generation, plan, Some(now)).await
 }
 
-async fn publish_provider_turn_with_time(
+pub(super) async fn publish_provider_turn_with_time(
     node: &EmbeddedNode,
     generation: &str,
     plan: ProviderPublicationPlan,
@@ -672,7 +674,12 @@ async fn publish_provider_turn_with_time(
                 LeaseObservation { request: state, generation: owner, deadline_ms: deadline },
                 generation, fixture_now.unwrap_or_else(Utc::now).timestamp_millis()), "provider publication lost its live lease");
 
-            let records = load_source_in_txn(txn, exemplar).await?;
+            let mut reader = crate::session::TxnCanonicalReader::new_single(
+                txn, &exemplar.node_did, exemplar.requester_did.as_deref(),
+            );
+            let records = reader.load_source(
+                &exemplar.request_doc_id, &exemplar.session_id, &exemplar.source,
+            ).await?;
             if records.iter().any(|row| row.segment.close.is_some()) {
                 if let Some(candidate) = exemplar.close.as_ref() {
                     let accepted = records
@@ -683,17 +690,28 @@ async fn publish_provider_turn_with_time(
                         return Err(ProviderCloseRejection::InvalidExtent.into());
                     }
                 }
-                return replay_publication_in_txn(
+                let accepted_writer = records
+                    .iter()
+                    .find(|row| row.segment.close.is_some())
+                    .map(|row| row.segment.writer.clone());
+                let published = replay_publication_in_txn(
                     txn,
+                    &mut reader,
                     exemplar,
                     generation,
+                    accepted_writer.as_ref(),
                     &message_key,
                     expected.as_ref(),
                     &background_calls,
                 )
-                .await;
+                .await?;
+                if let Some(consumption) = plan.consumes_folded.as_ref() {
+                    crate::lifecycle::queue::ensure_folded_consumed_in_txn(txn, consumption).await?;
+                }
+                return Ok(published);
             }
             anyhow::ensure!(records.iter().all(|row| row.segment.close.is_none()), "provider source is already closed");
+
             let prepared = exemplar;
             let mut observations = records.iter().map(|row| ObservedSegment { doc_id: &row.doc_id, segment: &row.segment }).collect::<Vec<_>>();
             if prepared.ordinal.is_some() {
@@ -725,7 +743,7 @@ async fn publish_provider_turn_with_time(
             ).await?;
             let close_doc_id = created_doc_id(&created, "AgentOutputSegment")?;
             let sequence = crate::lifecycle::queue::next_append_sequence_in_transaction(
-                txn, &prepared.agent_did, &prepared.session_id,
+                txn, &prepared.node_did, &prepared.session_id,
             ).await?;
             anyhow::ensure!(
                 background_calls
@@ -748,7 +766,7 @@ async fn publish_provider_turn_with_time(
                         "request_id": request.request_id,
                         "request_doc_id": prepared.request_doc_id,
                         "session_id": prepared.session_id,
-                        "agent_did": prepared.agent_did,
+                        "node_did": prepared.node_did,
                         "requester_did": prepared.requester_did,
                         "message_sequence": sequence,
                         "tool_name": tool.name,
@@ -764,7 +782,7 @@ async fn publish_provider_turn_with_time(
             let message = TranscriptMessage {
                 message_key,
                 session_id: prepared.session_id.clone(),
-                agent_did: prepared.agent_did.clone(),
+                node_did: prepared.node_did.clone(),
                 requester_did: prepared.requester_did.clone(),
                 request_doc_id: Some(prepared.request_doc_id.clone()),
                 publication: MessagePublication::RequestExecution { execution_generation: generation.to_owned() },
@@ -779,9 +797,7 @@ async fn publish_provider_turn_with_time(
                 CREATE_AGENT_MESSAGE_MUTATION, &transcript_message_create_variables(&message)?,
             ).await?;
             let message_doc_id = created_doc_id(&created, "AgentMessage")?;
-            let (_, reconstructed) = crate::session::load_canonical_message_in_txn(
-                txn, &message_doc_id, &prepared.agent_did, prepared.requester_did.as_deref(),
-            ).await?;
+            let (_, reconstructed) = reader.load_created_message(&message_doc_id, &close_doc_id).await?;
             anyhow::ensure!(
                 &reconstructed == expected.as_ref(),
                 "first publication native message changed"
@@ -799,6 +815,16 @@ async fn publish_provider_turn_with_time(
                 input: {{ execution_generation: "{escaped_generation}" }}) {{ _docID }} }}"#)).await?;
             anyhow::ensure!(response.data.as_ref().and_then(|data| data.get("update_AgentRequest"))
                 .is_some_and(crate::graphql::response_has_documents), "provider publication lost request CAS");
+            if let Some(consumption) = plan.consumes_folded.as_ref() {
+                anyhow::ensure!(
+                    crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
+                        fixture_now.unwrap_or_else(Utc::now),
+                        Some(DateTime::parse_from_rfc3339(&tool_deadline_at)?.with_timezone(&Utc)),
+                    ),
+                    "request deadline expired before steering consumption"
+                );
+                crate::lifecycle::queue::consume_folded_in_txn(txn, consumption, &prepared.created_at, expected.as_ref()).await?;
+            }
             let accepted_tools = encoded.tool_calls.iter().zip(tool_doc_ids).map(|(tool, tool_call_doc_id)| {
                 super::AcceptedToolCall {
                     tool_call_doc_id,
@@ -830,8 +856,10 @@ async fn publish_provider_turn_with_time(
 
 async fn replay_publication_in_txn(
     txn: &ConfigApplyTxn<'_>,
+    reader: &mut crate::session::TxnCanonicalReader<'_, '_>,
     exemplar: &OutputSegment,
     generation: &str,
+    accepted_writer: Option<&OutputWriter>,
     message_key: &str,
     expected: &gents_protocol::message::Message,
     background_calls: &[String],
@@ -841,10 +869,10 @@ async fn replay_publication_in_txn(
         |did| format!("\"{}\"", escape_graphql_string(did)),
     );
     let response = txn.execute_local_response(&format!(
-        r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#,
+        r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#,
         escape_graphql_string(message_key),
         escape_graphql_string(&exemplar.request_doc_id),
-        escape_graphql_string(&exemplar.agent_did),
+        escape_graphql_string(&exemplar.node_did),
     )).await?;
     let rows = response
         .data
@@ -857,20 +885,26 @@ async fn replay_publication_in_txn(
         "closed provider source has no unique accepted header"
     );
     let row = decode_transcript_message_row(&rows[0])?;
+    let MessagePublication::RequestExecution {
+        execution_generation: accepted_generation,
+    } = &row.message.publication
+    else {
+        anyhow::bail!("publication replay generation changed");
+    };
+    // Lean `reuseAuthored`: a reclaimed generation, already authorized on the
+    // live lease above, reuses the identical authored entry an earlier
+    // generation of this request accepted. Provider turns stay generation-bound.
     anyhow::ensure!(
-        row.message.publication
-            == MessagePublication::RequestExecution {
-                execution_generation: generation.to_owned(),
-            },
+        accepted_generation == generation
+            || (matches!(exemplar.source, OutputSource::Authored { .. })
+                && accepted_writer
+                    == Some(&OutputWriter::RequestExecution {
+                        execution_generation: accepted_generation.clone(),
+                    })),
         "publication replay generation changed"
     );
-    let (_, reconstructed) = crate::session::load_canonical_message_in_txn(
-        txn,
-        &row.doc_id,
-        &exemplar.agent_did,
-        exemplar.requester_did.as_deref(),
-    )
-    .await?;
+    reader.observe_headers(std::slice::from_ref(&row));
+    let (_, reconstructed) = reader.load_message(&row.doc_id).await?;
     anyhow::ensure!(
         &reconstructed == expected,
         "publication replay native message changed"
@@ -889,7 +923,7 @@ async fn replay_publication_in_txn(
             continue;
         };
         let response = txn.execute_local_response(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_doc_id session_id agent_did requester_did message_sequence tool_call_id tool_name lifecycle_state await_mode }} }}"#,
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_doc_id session_id node_did requester_did message_sequence tool_call_id tool_name lifecycle_state await_mode }} }}"#,
             escape_graphql_string(tool_call_doc_id),
         )).await?;
         let tools = response
@@ -909,8 +943,8 @@ async fn replay_publication_in_txn(
                 == Some(exemplar.request_doc_id.as_str())
                 && tool.get("session_id").and_then(serde_json::Value::as_str)
                     == Some(exemplar.session_id.as_str())
-                && tool.get("agent_did").and_then(serde_json::Value::as_str)
-                    == Some(exemplar.agent_did.as_str())
+                && tool.get("node_did").and_then(serde_json::Value::as_str)
+                    == Some(exemplar.node_did.as_str())
                 && tool
                     .get("requester_did")
                     .and_then(serde_json::Value::as_str)
@@ -1107,9 +1141,9 @@ async fn load_request_in_txn(
         .execute_local_response(&format!(
             r#"{{ AgentRequest(
         filter: {{ _docID: {{ _eq: "{id}" }} }}) {{
-        _docID request_id purpose agent_did requester_did session_id lifecycle_state
-        execution_generation execution_lease_expires_at subagent_depth
-        workspace_id workspace_owner_agent_did workspace_authority workspace_seal_hash
+        _docID request_id purpose node_did requester_did session_id lifecycle_state
+        execution_generation execution_lease_expires_at request_hop
+        workspace_id workspace_owner_node_did workspace_authority workspace_seal_hash
     }} }}"#
         ))
         .await?;
@@ -1121,7 +1155,7 @@ async fn load_request_in_txn(
     let row = rows.pop().expect("one request checked");
     anyhow::ensure!(
         row.doc_id.as_deref() == Some(prepared.request_doc_id.as_str())
-            && row.agent_did.as_deref() == Some(prepared.agent_did.as_str())
+            && row.node_did.as_deref() == Some(prepared.node_did.as_str())
             && row.requester_did == prepared.requester_did
             && row.session_id.as_deref() == Some(prepared.session_id.as_str()),
         "provider segment crossed its request owner or session"
@@ -1150,6 +1184,8 @@ async fn load_source_in_txn(
     txn: &ConfigApplyTxn<'_>,
     prepared: &OutputSegment,
 ) -> Result<Vec<OutputSegmentRow>> {
+    #[cfg(test)]
+    crate::session::record_request_output_scan();
     let response = txn
         .execute_local_response(
             &crate::session::canonical_rows::request_output_segments_query(
@@ -1165,7 +1201,7 @@ async fn load_source_in_txn(
         .context("source query omitted rows")?;
     crate::session::canonical_rows::decode_scoped_request_output_segments(
         rows,
-        &prepared.agent_did,
+        &prepared.node_did,
         Some(&prepared.session_id),
         prepared.requester_did.as_deref(),
     )

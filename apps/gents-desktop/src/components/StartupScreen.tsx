@@ -15,7 +15,7 @@ import { DiagnosticsHint } from "../ui/screens/setup/SetupProgress";
 const STARTUP_ASIDES = [
   "Catalyzing dilithium converters.",
   "Configuring the human-computer interface.",
-  "Waking up the agents.",
+  "Waking up the nodes.",
   "Immanentizing the eschaton.",
   "Teaching the gossip network some manners.",
   "Aligning the durable timelines.",
@@ -37,7 +37,7 @@ function useAside() {
 /** Where startup has got to, until the client is ready: each step, the
     managed server's wait, and on failure the ways on. */
 export function StartupScreen() {
-  const { api, lifecycle } = useApp();
+  const { actions, lifecycle } = useApp();
   const startup = useStartup();
   const aside = useAside();
   const waiting = startup.managedServerWait !== null;
@@ -52,14 +52,16 @@ export function StartupScreen() {
           Math.max(now, managedServerWait.since),
         )
       : null;
-  const openLoginItems = api.openManagedServerLoginItems;
+  const openLoginItems = actions.localServerOffers.loginItems
+    ? actions.openLocalServerLoginItems
+    : undefined;
   const skip = (testId: string) => (
     <Button
       variant="outline"
       data-testid={testId}
       onClick={lifecycle.skipManagedServerWait}
     >
-      Continue without the local agent
+      Continue without the local node
     </Button>
   );
 
@@ -116,7 +118,7 @@ export function StartupScreen() {
 
         <ol aria-label="Startup progress" className="grid gap-2">
           {status.managedServerState && (
-            <StartupStep label="Check local agent" state={status.managedServerState} />
+            <StartupStep label="Check local node" state={status.managedServerState} />
           )}
           <StartupStep label="Read saved connections" state={status.connectionState} />
           <StartupStep label="Start secure client" state={status.clientState} />
@@ -144,7 +146,7 @@ export function StartupScreen() {
                       data-testid="startup-restart-managed-server"
                       onClick={() => void lifecycle.restartManagedServer()}
                     >
-                      Restart agent
+                      Restart node
                     </Button>
                   )}
                   {skip("startup-continue-without-managed-server")}

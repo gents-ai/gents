@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Result};
-use gents_protocol::row::{decode_behavior_readiness_snapshot, AgentBehaviorReadinessRow};
+use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
 use serde_json::Value;
 
 use super::fs::read_runtime_state_json;
@@ -11,7 +11,7 @@ use super::process::run_cli_json;
 
 pub async fn wait_for_runtime_ready(
     graphql: &str,
-    agent_did: &str,
+    node_did: &str,
     timeout: Duration,
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
@@ -20,26 +20,24 @@ pub async fn wait_for_runtime_ready(
             graphql,
             &format!(
                 r#"{{
-                    AgentBehaviorReadiness(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{
-                        agent_did
+                    NodeReadiness(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{
+                        node_did
                         snapshot_json
                         updated_at
                     }}
                 }}"#,
-                escape_graphql_string(agent_did),
+                escape_graphql_string(node_did),
             ),
         )
         .await;
         let last_observation = format!("{response:?}");
         match response {
             Ok(response) => {
-                if let Ok(row) = first_graphql_row(&response, "AgentBehaviorReadiness") {
-                    if let Ok(row) =
-                        serde_json::from_value::<AgentBehaviorReadinessRow>(row.clone())
-                    {
-                        if let Ok(snapshot) = decode_behavior_readiness_snapshot(&row, agent_did) {
+                if let Ok(row) = first_graphql_row(&response, "NodeReadiness") {
+                    if let Ok(row) = serde_json::from_value::<NodeReadinessRow>(row.clone()) {
+                        if let Ok(snapshot) = decode_node_readiness_snapshot(&row, node_did) {
                             if snapshot.process_state
-                                == gents_protocol::row::BehaviorReadinessProcessState::Ready
+                                == gents_protocol::row::NodeReadinessProcessState::Ready
                                 && snapshot.active_generation > 0
                                 && snapshot.router_generation == snapshot.active_generation
                             {
@@ -61,7 +59,7 @@ pub async fn wait_for_runtime_ready(
         }
 
         if Instant::now() >= deadline {
-            bail!("timed out waiting for authoritative runtime readiness for {agent_did}; last observation: {last_observation}");
+            bail!("timed out waiting for authoritative runtime readiness for {node_did}; last observation: {last_observation}");
         }
 
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -109,7 +107,7 @@ pub async fn wait_for_runtime_state_graphql(
 
 pub async fn wait_for_runtime_quiescence(
     graphql: &str,
-    agent_did: &str,
+    node_did: &str,
     minimum_generation: i64,
     quiet_period: Duration,
 ) -> Result<i64> {
@@ -123,33 +121,32 @@ pub async fn wait_for_runtime_quiescence(
             graphql,
             &format!(
                 r#"{{
-                    AgentBehaviorReadiness(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{
-                        agent_did
+                    NodeReadiness(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{
+                        node_did
                         snapshot_json
                         updated_at
                     }}
-                    AgentRuntime(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{
+                    NodeRuntime(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{
                         reconcile_phase
                         last_reconcile_result
                     }}
                 }}"#,
-                escape_graphql_string(agent_did),
-                escape_graphql_string(agent_did),
+                escape_graphql_string(node_did),
+                escape_graphql_string(node_did),
             ),
         )
         .await?;
         if let (Ok(readiness_row), Ok(runtime_row)) = (
-            first_graphql_row(&response, "AgentBehaviorReadiness"),
-            first_graphql_row(&response, "AgentRuntime"),
+            first_graphql_row(&response, "NodeReadiness"),
+            first_graphql_row(&response, "NodeRuntime"),
         ) {
             last_runtime_row = Some(serde_json::json!({
                 "readiness": readiness_row,
                 "diagnostic": runtime_row,
             }));
-            let decoded_row =
-                serde_json::from_value::<AgentBehaviorReadinessRow>(readiness_row.clone())?;
-            let readiness = decode_behavior_readiness_snapshot(&decoded_row, agent_did)
-                .map_err(|reason| anyhow!("invalid behavior readiness: {reason:?}"))?;
+            let decoded_row = serde_json::from_value::<NodeReadinessRow>(readiness_row.clone())?;
+            let readiness = decode_node_readiness_snapshot(&decoded_row, node_did)
+                .map_err(|reason| anyhow!("invalid agent readiness: {reason:?}"))?;
             let generation = i64::try_from(readiness.active_generation).unwrap_or(i64::MAX);
             let phase = runtime_row
                 .get("reconcile_phase")
@@ -187,7 +184,7 @@ pub async fn wait_for_runtime_quiescence(
 
         if Instant::now() >= deadline {
             bail!(
-                "timed out waiting for authoritative runtime quiescence at generation >= {minimum_generation} for {agent_did}; last_runtime_row={}",
+                "timed out waiting for authoritative runtime quiescence at generation >= {minimum_generation} for {node_did}; last_runtime_row={}",
                 last_runtime_row
                     .map(|row| row.to_string())
                     .unwrap_or_else(|| "null".to_string())
@@ -200,12 +197,12 @@ pub async fn wait_for_runtime_quiescence(
 fn runtime_schema_is_starting(error: &anyhow::Error) -> bool {
     let message = error.to_string();
     message.contains("Cannot query field")
-        && (message.contains("AgentRuntime") || message.contains("AgentBehaviorReadiness"))
+        && (message.contains("NodeRuntime") || message.contains("NodeReadiness"))
 }
 
 pub async fn wait_for_request(
     graphql: &str,
-    agent_did: &str,
+    node_did: &str,
     content: &str,
 ) -> Result<(String, String, String)> {
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -219,12 +216,12 @@ pub async fn wait_for_request(
                 ) {{
                     request_id
                     session_id
-                    behavior_id
+                    agent_id
                 }}
             }}"#,
             gents::session::public_request_filter(&format!(
-                r#"agent_did: {{ _eq: "{}" }}, content: {{ _eq: "{}" }}"#,
-                escape_graphql_string(agent_did),
+                r#"node_did: {{ _eq: "{}" }}, content: {{ _eq: "{}" }}"#,
+                escape_graphql_string(node_did),
                 escape_graphql_string(content),
             )),
         );
@@ -238,19 +235,19 @@ pub async fn wait_for_request(
                 .get("session_id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("AgentRequest row missing session_id: {row}"))?;
-            let behavior_id = row
-                .get("behavior_id")
+            let agent_id = row
+                .get("agent_id")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             return Ok((
                 request_id.to_string(),
                 session_id.to_string(),
-                behavior_id.to_string(),
+                agent_id.to_string(),
             ));
         }
 
         if Instant::now() >= deadline {
-            bail!("timed out waiting for AgentRequest for {agent_did}");
+            bail!("timed out waiting for AgentRequest for {node_did}");
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -361,7 +358,7 @@ pub async fn wait_for_tool_call(graphql: &str, session_id: &str, tool_name: &str
                         limit: 1
                     ) {{
                         _docID
-                        agent_did
+                        node_did
                         requester_did
                         request_doc_id
                         session_id
@@ -411,7 +408,7 @@ pub async fn wait_for_completed_tool_calls(
                         order: {{ started_at: ASC }}
                     ) {{
                         _docID
-                        agent_did
+                        node_did
                         requester_did
                         request_doc_id
                         session_id
@@ -461,15 +458,14 @@ pub async fn canonical_tool_result_text(graphql: &str, call: &Value) -> Result<S
             .ok_or_else(|| anyhow!("completed tool row missing {field}: {call}"))
     };
     let tool_doc_id = required("_docID")?;
-    let agent_did = required("agent_did")?;
+    let node_did = required("node_did")?;
     let session_id = required("session_id")?;
     required("request_doc_id")?;
     let requester_did = call.get("requester_did").and_then(Value::as_str);
     let access = ConfigAccess::Graphql(super::graphql::served_endpoint(graphql));
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        match load_tool_call_result(&access, tool_doc_id, agent_did, session_id, requester_did)
-            .await
+        match load_tool_call_result(&access, tool_doc_id, node_did, session_id, requester_did).await
         {
             Ok(message) => return render_tool_result(&message),
             Err(error) if Instant::now() < deadline => {
@@ -481,10 +477,10 @@ pub async fn canonical_tool_result_text(graphql: &str, call: &Value) -> Result<S
     }
 }
 
-pub async fn wait_for_completed_inference_behaviors(
+pub async fn wait_for_completed_inference_agents(
     graphql: &str,
     backend_id: &str,
-    expected_behavior_ids: &[&str],
+    expected_agent_ids: &[&str],
 ) -> Result<Vec<Value>> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -497,7 +493,7 @@ pub async fn wait_for_completed_inference_behaviors(
                         order: {{ queued_at: ASC }}
                     ) {{
                         request_id
-                        behavior_id
+                        agent_id
                         backend_id
                         call_kind
                         call_state
@@ -512,9 +508,9 @@ pub async fn wait_for_completed_inference_behaviors(
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let all_completed = expected_behavior_ids.iter().all(|expected| {
+        let all_completed = expected_agent_ids.iter().all(|expected| {
             rows.iter().any(|row| {
-                row.get("behavior_id").and_then(Value::as_str) == Some(*expected)
+                row.get("agent_id").and_then(Value::as_str) == Some(*expected)
                     && row.get("call_kind").and_then(Value::as_str) == Some("inference")
                     && row.get("call_state").and_then(Value::as_str) == Some("completed")
             })
@@ -525,8 +521,8 @@ pub async fn wait_for_completed_inference_behaviors(
 
         if Instant::now() >= deadline {
             bail!(
-                "timed out waiting for completed inference calls on backend {backend_id} for behaviors {:?}; last rows={}",
-                expected_behavior_ids,
+                "timed out waiting for completed inference calls on backend {backend_id} for agents {:?}; last rows={}",
+                expected_agent_ids,
                 Value::Array(rows)
             );
         }

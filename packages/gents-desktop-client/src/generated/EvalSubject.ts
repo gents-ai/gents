@@ -4,7 +4,7 @@ import type { EvalSubjectKind } from "./EvalSubjectKind.js";
 export type EvalSubject = { kind: EvalSubjectKind, inference_slots?: Array<string> | null,
 /**
  * The trial's process ceiling also grants host bash, confined to its
- * workspace root, as a desktop node's ceiling does. Behaviors the subject
+ * workspace root, as a desktop node's ceiling does. Agents the subject
  * configures at run time (a crew's builds and git reads) need it; the
  * subject pack's own Tools still may not grant host bash to an embedded
  * trial.

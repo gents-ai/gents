@@ -4,21 +4,21 @@ import { describe, expect, it } from "vitest";
 import type { MailboxItemView, SessionSummary } from "@source-inc/gents-desktop-client";
 
 import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
-import { NodeBehaviorStack } from "../src/ui/screens/NodeBehaviorStack";
+import { NodeAgentStack } from "../src/ui/screens/NodeBehaviorStack";
 import { node, renderIn, testApp } from "./app-fixture";
 import { deployment } from "./config-panel-wiring/fixtures";
 
-const behavior = (behaviorId: string, displayName: string) => ({
-  ...deployment.behaviors[0],
-  behaviorId,
+const agent = (agentId: string, displayName: string) => ({
+  ...deployment.agents[0],
+  agentId,
   displayName,
 });
 
 const summary = (over: Partial<SessionSummary>) =>
   ({
     sessionId: "session",
-    agentDid: "did:key:here",
-    behaviorId: null,
+    nodeDid: "did:key:here",
+    agentId: null,
     title: null,
     turnState: null,
     updatedAt: null,
@@ -29,43 +29,76 @@ const summary = (over: Partial<SessionSummary>) =>
 function twoNodes(remote: Record<string, unknown> = {}) {
   return testApp({
     deployments: [
-      node({ agentDid: "did:key:here", behaviors: [behavior("default", "Default")] }),
+      node({ nodeDid: "did:key:here", agents: [agent("default", "Default")] }),
       node({
-        agentDid: "did:key:there",
-        behaviors: [behavior("reviewer", "Code Reviewer")],
+        nodeDid: "did:key:there",
+        agents: [agent("reviewer", "Code Reviewer")],
         ...remote,
       }),
     ],
-    selection: { agentDid: "did:key:here" },
+    selection: { nodeDid: "did:key:here" },
   });
 }
 
-describe("a behavior on another node", () => {
+describe("a agent on another node", () => {
   it("is named by the node that runs it, not the selected one", () => {
     renderIn(
       twoNodes(),
-      <NodeBehaviorStack nodeDid="did:key:there" behaviorId="reviewer" keyboard />,
+      <NodeAgentStack nodeDid="did:key:there" agentId="reviewer" keyboard />,
     );
     expect(
-      screen.getByRole("button", { name: "About Code Reviewer behavior" }),
+      screen.getByRole("button", { name: "About Code Reviewer agent" }),
     ).toBeInTheDocument();
   });
 
-  it("names a worker's behavior by the worker's node", () => {
+  it("names a worker's agent by the worker's node", () => {
     const worker = summary({
       sessionId: "worker",
-      agentDid: "did:key:there",
-      behaviorId: "reviewer",
+      nodeDid: "did:key:there",
+      agentId: "reviewer",
     });
     renderIn(
       twoNodes(),
-      <NodeBehaviorStack
-        nodeDid="did:key:here"
-        behaviorId="default"
-        workers={[worker]}
-      />,
+      <NodeAgentStack nodeDid="did:key:here" agentId="default" workers={[worker]} />,
     );
     expect(screen.getByText("Cr")).toBeInTheDocument();
+  });
+
+  it("keeps same-named agents on distinct nodes separate from the parent and each other", () => {
+    const app = testApp({
+      deployments: [
+        node({ nodeDid: "did:key:here", agents: [agent("default", "Local Agent")] }),
+        node({
+          nodeDid: "did:key:there",
+          agents: [agent("default", "Remote Reviewer")],
+        }),
+        node({ nodeDid: "did:key:other", agents: [agent("default", "Third Checker")] }),
+      ],
+      selection: { nodeDid: "did:key:here" },
+    });
+    renderIn(
+      app,
+      <NodeAgentStack
+        nodeDid="did:key:here"
+        agentId="default"
+        workers={[
+          summary({ sessionId: "first", nodeDid: "did:key:there", agentId: "default" }),
+          summary({
+            sessionId: "duplicate",
+            nodeDid: "did:key:there",
+            agentId: "default",
+          }),
+          summary({
+            sessionId: "second",
+            nodeDid: "did:key:other",
+            agentId: "default",
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("La")).toBeInTheDocument();
+    expect(screen.getAllByText("Rr")).toHaveLength(1);
+    expect(screen.getAllByText("Tc")).toHaveLength(1);
   });
 
   it("titles a mailbox item's session from the node that lists it", () => {
@@ -73,7 +106,7 @@ describe("a behavior on another node", () => {
       itemId: "item-1",
       itemKey: "key-1",
       requesterDid: "did:key:person",
-      agentDid: "did:key:there",
+      nodeDid: "did:key:there",
       status: "open",
       kind: "finished",
       action: "ack",
@@ -86,8 +119,8 @@ describe("a behavior on another node", () => {
       requestId: null,
       graphRunId: null,
       causeDocId: null,
-      targetAgentDid: "did:key:there",
-      targetBehaviorId: "reviewer",
+      targetNodeDid: "did:key:there",
+      targetAgentId: "reviewer",
       expectedCollection: null,
       parentItemId: null,
       deadlineAt: null,
@@ -99,7 +132,7 @@ describe("a behavior on another node", () => {
         sessions: [
           summary({
             sessionId: "remote-session",
-            agentDid: "did:key:there",
+            nodeDid: "did:key:there",
             title: "Diff review",
           }),
         ],

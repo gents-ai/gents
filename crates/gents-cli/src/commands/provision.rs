@@ -12,15 +12,15 @@ use crate::desired_state;
 use crate::shared::*;
 use crate::{
     default_key_path, print_json, read_init_config, resolve_config_access, resolve_home_dir,
-    DEFAULT_AGENT_NAME,
+    DEFAULT_NODE_NAME,
 };
 
 pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
-    let agent_name = resolve_provision_agent_name(&args);
+    let node_name = resolve_provision_node_name(&args);
     let identity = ensure_home_identity(
         &home_dir,
-        &agent_name,
+        &node_name,
         args.bootstrap_file_identity,
         args.bootstrap_macos_keychain,
         args.bootstrap_macos_secure_enclave,
@@ -35,7 +35,7 @@ pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
         root: &args.root,
         home: Some(&home_dir),
         graphql: None,
-        bind_agent_did: Some(ManifestAgentDidBindingArg::Home),
+        bind_node_did: Some(ManifestNodeDidBindingArg::Home),
         force_rebind_concrete_did: true,
         access: Some(&access),
     })
@@ -51,7 +51,7 @@ pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
         ok,
         home: home_dir.display().to_string(),
         root: args.root.display().to_string(),
-        agent_did: bound.context.target_agent_did.clone(),
+        node_did: bound.context.target_node_did.clone(),
         identity,
         apply: apply_report,
         diff: diff_report,
@@ -72,7 +72,7 @@ struct ProvisionReport {
     ok: bool,
     home: String,
     root: String,
-    agent_did: String,
+    node_did: String,
     identity: ProvisionIdentityReport,
     apply: ConfigApplyReport,
     diff: desired_state::DesiredStateDiffReport,
@@ -82,35 +82,35 @@ struct ProvisionReport {
 #[derive(Debug, Serialize)]
 struct ProvisionIdentityReport {
     status: &'static str,
-    agent_name: String,
-    agent_did: String,
+    node_name: String,
+    node_did: String,
     key_path: Option<String>,
     identity_backend: Option<String>,
     keychain_label: Option<String>,
     secure_enclave_label: Option<String>,
 }
 
-fn resolve_provision_agent_name(args: &ProvisionArgs) -> String {
-    if let Some(agent_name) = args
-        .agent_name
+fn resolve_provision_node_name(args: &ProvisionArgs) -> String {
+    if let Some(node_name) = args
+        .node_name
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return agent_name.to_string();
+        return node_name.to_string();
     }
     args.root
         .file_name()
         .and_then(|value| value.to_str())
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_AGENT_NAME)
+        .unwrap_or(DEFAULT_NODE_NAME)
         .to_string()
 }
 
 async fn ensure_home_identity(
     home_dir: &Path,
-    agent_name: &str,
+    node_name: &str,
     bootstrap_file_identity: bool,
     bootstrap_macos_keychain: bool,
     bootstrap_macos_secure_enclave: bool,
@@ -151,11 +151,11 @@ async fn ensure_home_identity(
     let key_path = if bootstrap_macos_keychain || bootstrap_macos_secure_enclave {
         None
     } else {
-        Some(default_key_path(home_dir, agent_name))
+        Some(default_key_path(home_dir, node_name))
     };
     let initialized = write_identity_only_home_metadata(IdentityOnlyHomeOptions {
         home: home_dir,
-        agent_name,
+        node_name,
         key_path: key_path.as_deref(),
         identity_backend: if bootstrap_macos_secure_enclave {
             IdentityBackendArg::MacosSecureEnclave
@@ -177,11 +177,11 @@ async fn ensure_home_identity(
 }
 
 fn report_from_stored_identity(config: StoredInitConfig) -> Option<ProvisionIdentityReport> {
-    let agent_did = config.agent_did.trim().to_string();
-    (!agent_did.is_empty()).then_some(ProvisionIdentityReport {
+    let node_did = config.node_did.trim().to_string();
+    (!node_did.is_empty()).then_some(ProvisionIdentityReport {
         status: "existing",
-        agent_name: config.agent_name,
-        agent_did,
+        node_name: config.node_name,
+        node_did,
         key_path: config.key_path,
         identity_backend: config.identity_backend,
         keychain_label: config.keychain_label,
@@ -192,8 +192,8 @@ fn report_from_stored_identity(config: StoredInitConfig) -> Option<ProvisionIden
 fn report_from_initialized_identity(summary: IdentityOnlyHomeSummary) -> ProvisionIdentityReport {
     ProvisionIdentityReport {
         status: "initialized",
-        agent_name: summary.agent_name,
-        agent_did: summary.agent_did,
+        node_name: summary.node_name,
+        node_did: summary.node_did,
         key_path: summary.key_path,
         identity_backend: summary.identity_backend,
         keychain_label: summary.keychain_label,
@@ -205,7 +205,7 @@ fn next_steps(home_dir: &Path, root: &Path) -> Vec<String> {
     vec![
         format!("gents server --home {}", home_dir.display()),
         format!(
-            "gents config diff --root {} --home {} --bind-agent-did home",
+            "gents config diff --root {} --home {} --bind-node-did home",
             root.display(),
             home_dir.display()
         ),
@@ -247,8 +247,8 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(observed.status, "existing");
-        assert_eq!(observed.agent_did, original.agent_did);
-        assert_eq!(observed.agent_name, "owner");
+        assert_eq!(observed.node_did, original.node_did);
+        assert_eq!(observed.node_name, "owner");
         assert_eq!(
             std::fs::read(gents::home::init_config_path(&home)).unwrap(),
             before

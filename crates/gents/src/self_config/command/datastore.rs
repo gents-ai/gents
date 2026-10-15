@@ -67,7 +67,7 @@ impl ConfigCommandTool {
         let listing = !preview && (verb == "list" || verb == "get" && argv.len() == 1);
         anyhow::ensure!(
             !listing,
-            "surface IDs are listed in a behavior's Tools: read {{\"argv\":[\"tools\",\"get\"],\"options\":{{\"behavior\":\"BEHAVIOR_ID\"}}}}, then [\"datastore\",\"get\",SURFACE_ID] for one of its datastore.datastore_tool_surface_ids"
+            "surface IDs are listed in an agent's Tools: read {{\"argv\":[\"tools\",\"get\"],\"options\":{{\"agent\":\"AGENT_ID\"}}}}, then [\"datastore\",\"get\",SURFACE_ID] for one of its datastore.datastore_tool_surface_ids"
         );
         let id = required_resource_id(argv.get(1), "SURFACE_ID")?;
         let target = SelfConfigTarget::DatastoreToolSurface;
@@ -84,10 +84,10 @@ impl ConfigCommandTool {
         request.resolve_unique = Box::new(move |_| Ok(surface_id.clone()));
         request.allow_create = verb == "create";
         request.require_create = verb == "create";
-        let owner = self.agent_did.clone();
+        let owner = self.node_did.clone();
         request.on_create = Box::new(move |id, doc| {
             doc.insert("surface_id".into(), json!(id));
-            doc.insert("agent_did".into(), json!(owner));
+            doc.insert("node_did".into(), json!(owner));
             Ok(())
         });
         self.patch(

@@ -13,7 +13,7 @@ structure GroupScenario where
   candidate : Candidate
 
 def key (did correlation : String) : EventGroupKey :=
-  { agentDid := did
+  { nodeDid := did
   , consumer := .trigger "event-a"
   , consumerConfigKey := "config-1"
   , correlation := correlation
@@ -106,7 +106,7 @@ def consumerJson : EventConsumer → String
 
 def keyJson (value : EventGroupKey) : String :=
   "{"
-    ++ "\"agent_did\":" ++ jsonString value.agentDid ++ ","
+    ++ "\"node_did\":" ++ jsonString value.nodeDid ++ ","
     ++ "\"consumer\":" ++ consumerJson value.consumer ++ ","
     ++ "\"consumer_config_key\":" ++ jsonString value.consumerConfigKey ++ ","
     ++ "\"correlation\":" ++ jsonString value.correlation

@@ -330,7 +330,7 @@ fn is_generated_eval_pack(dir: &Path) -> bool {
         && load_pack_config(
             &manifest,
             &PackInstallOptions {
-                agent_did: "did:key:eval-init-replace-check".to_owned(),
+                node_did: "did:key:eval-init-replace-check".to_owned(),
             },
             &|path| {
                 assets
@@ -434,11 +434,11 @@ pub(crate) fn readme(
     );
     let _ = writeln!(
         text,
-        "Eval definition `{}` (comparability version {}), drafted by `gents eval init` on {} for behavior `{}` of pack `{}` ({}), bound to inference slot {}.\n",
+        "Eval definition `{}` (comparability version {}), drafted by `gents eval init` on {} for agent `{}` of pack `{}` ({}), bound to inference slot {}.\n",
         definition.definition_id,
         definition.comparability_version,
         chrono::Utc::now().format("%Y-%m-%d"),
-        subject.behavior_id,
+        subject.agent_id,
         subject.pack_name,
         subject.pack_digest,
         definition
@@ -576,7 +576,7 @@ fn write_files(
     }
     escape_strings(&mut entry);
     entry["cases"] = json!(references);
-    let config = json!({"agent_principal": {}, "eval_definitions": [entry]});
+    let config = json!({"node": {}, "eval_definitions": [entry]});
     let mut bytes = serde_json::to_vec_pretty(&config)?;
     bytes.push(b'\n');
     files.insert(CONFIG.to_owned(), bytes);
@@ -655,7 +655,7 @@ async fn install_and_read_back(
     let config = load_pack_config(
         manifest,
         &PackInstallOptions {
-            agent_did: owner.clone(),
+            node_did: owner.clone(),
         },
         &|path| {
             assets
@@ -672,13 +672,13 @@ async fn install_and_read_back(
         );
     };
     let mut as_drafted = expected.clone();
-    as_drafted.agent_did = owner.clone();
+    as_drafted.node_did = owner.clone();
     anyhow::ensure!(
         *loaded == as_drafted,
         "the loaded definition differs from the validated draft"
     );
 
-    gents::ensure_agent_principal(home.node.as_ref(), &owner).await?;
+    gents::ensure_node(home.node.as_ref(), &owner).await?;
     let access = ConfigAccess::Local(home.node.clone());
     let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
     access
@@ -776,7 +776,7 @@ mod tests {
         let config = load_pack_config(
             &manifest,
             &PackInstallOptions {
-                agent_did: OWNER.into(),
+                node_did: OWNER.into(),
             },
             &|path| Ok(assets[path].clone()),
             &|_| None,
@@ -815,7 +815,7 @@ mod tests {
 
         let config: serde_json::Value =
             serde_json::from_slice(&std::fs::read(out.join("pack_config.json")).unwrap()).unwrap();
-        assert_eq!(config["agent_principal"], json!({}));
+        assert_eq!(config["node"], json!({}));
         assert_eq!(
             config["eval_definitions"][0]["cases"],
             json!([
@@ -837,7 +837,7 @@ mod tests {
         );
         assert!(!readme.contains("## Pilot"), "{readme}");
         assert!(
-            readme.contains("for behavior `canary` of pack `eval_canary` (sha256:canary)"),
+            readme.contains("for agent `canary` of pack `eval_canary` (sha256:canary)"),
             "{readme}"
         );
     }
@@ -962,7 +962,7 @@ mod tests {
     fn an_out_that_overlaps_the_subject_is_refused() {
         let root = tempfile::tempdir().unwrap();
         let subject = root.path().join("packs/subject");
-        std::fs::create_dir_all(subject.join("agent_behaviors")).unwrap();
+        std::fs::create_dir_all(subject.join("agents")).unwrap();
         let refused = |out: &Path| {
             let error = refuse_subject_overlap(out, &subject)
                 .expect_err("an overlapping --out is refused")
@@ -973,7 +973,7 @@ mod tests {
         refused(&subject);
         refused(&root.path().join("packs/../packs/subject"));
         // Inside it, existing or not.
-        refused(&subject.join("agent_behaviors"));
+        refused(&subject.join("agents"));
         refused(&subject.join("evals/new"));
         // Containing it.
         refused(&root.path().join("packs"));
@@ -1003,12 +1003,12 @@ mod tests {
         // Every step reports rather than panics, so the node is shut down
         // before any assertion can fail.
         let found = async {
-            gents::ensure_agent_principal(home.node.as_ref(), &owner).await?;
+            gents::ensure_node(home.node.as_ref(), &owner).await?;
             let (manifest, assets) = read_pack(&out)?;
             let config = load_pack_config(
                 &manifest,
                 &PackInstallOptions {
-                    agent_did: owner.clone(),
+                    node_did: owner.clone(),
                 },
                 &|path| Ok(assets[path].clone()),
                 &|_| None,

@@ -28,17 +28,17 @@ pub async fn build_meta_tools(
     health: ServiceHealthMap,
     local_hostname: String,
     local_subnet: Option<String>,
-    agent_did: String,
+    node_did: String,
     allowed_mcp_service_ids: Vec<String>,
     remote_tools: crate::document_config::RemoteTools,
 ) -> anyhow::Result<Vec<Box<dyn crate::llm::tool::ToolDyn>>> {
     let ctx = MetaToolContext {
         node,
-        mcp_pool: mcp_pool.for_agent(&agent_did),
+        mcp_pool: mcp_pool.for_agent(&node_did),
         health,
         local_hostname,
         local_subnet,
-        agent_did,
+        node_did,
         allowed_mcp_service_ids,
         remote_tools,
     };

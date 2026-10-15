@@ -10,15 +10,15 @@
       "capture": [
         {
           "kind": "documents",
-          "name": "behaviors",
-          "collection": "AgentBehavior",
+          "name": "agents",
+          "collection": "Agent",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
-            "behavior_id",
+            "agent_id",
             "display_name",
             "context_id",
             "inference_profile_id"
@@ -29,7 +29,7 @@
           "name": "profiles",
           "collection": "InferenceProfile",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -47,7 +47,7 @@
           "name": "executions",
           "collection": "InferenceExecution",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -66,7 +66,7 @@
           "name": "backends",
           "collection": "InferenceBackend",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -97,8 +97,8 @@
           "params": {
             "links": [
               {
-                "capture": "behaviors",
-                "key": "behavior_id",
+                "capture": "agents",
+                "key": "agent_id",
                 "id": "engineer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
@@ -137,15 +137,15 @@
       "capture": [
         {
           "kind": "documents",
-          "name": "behaviors",
-          "collection": "AgentBehavior",
+          "name": "agents",
+          "collection": "Agent",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
-            "behavior_id",
+            "agent_id",
             "display_name",
             "context_id",
             "inference_profile_id"
@@ -156,7 +156,7 @@
           "name": "profiles",
           "collection": "InferenceProfile",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -174,7 +174,7 @@
           "name": "executions",
           "collection": "InferenceExecution",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -193,7 +193,7 @@
           "name": "backends",
           "collection": "InferenceBackend",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -223,8 +223,8 @@
           "params": {
             "links": [
               {
-                "capture": "behaviors",
-                "key": "behavior_id",
+                "capture": "agents",
+                "key": "agent_id",
                 "id": "engineer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
@@ -237,8 +237,8 @@
                 ]
               },
               {
-                "capture": "behaviors",
-                "key": "behavior_id",
+                "capture": "agents",
+                "key": "agent_id",
                 "id": "engineer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
@@ -262,8 +262,8 @@
                 ]
               },
               {
-                "capture": "behaviors",
-                "key": "behavior_id",
+                "capture": "agents",
+                "key": "agent_id",
                 "id": "engineer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",

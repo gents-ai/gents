@@ -261,7 +261,7 @@ describe("profile model recommendation ownership", () => {
       ...fixture,
       inferenceSampling: [
         {
-          agent_did: fixture.agentDid,
+          node_did: fixture.nodeDid,
           sampling_id: null,
           top_k: 42,
         } as never,

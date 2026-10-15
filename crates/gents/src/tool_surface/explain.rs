@@ -5,10 +5,10 @@ use serde::Serialize;
 use crate::defra_query::DEFRA_QUERY_TOOL_NAME;
 use crate::meta_tools::META_TOOL_NAMES;
 use crate::toolset::{
-    background_tool_names, subagent_tool_names, CONTEXT_BUDGET_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
+    agent_tool_names, background_tool_names, CONTEXT_BUDGET_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
 };
 
-use super::{BehaviorToolConfig, RuntimeToolAvailability, ToolPolicySurface, ToolSurface};
+use super::{AgentToolSurfaceConfig, RuntimeToolAvailability, ToolPolicySurface, ToolSurface};
 
 const MEMORY_TOOL_NAME: &str = "memory";
 
@@ -39,14 +39,14 @@ pub struct ToolSurfacePolicyTrace {
 impl ToolSurfaceExplanation {
     #[allow(dead_code)]
     pub(crate) fn from_resolved(
-        config: &BehaviorToolConfig,
+        config: &AgentToolSurfaceConfig,
         surface: &ToolSurface,
     ) -> ToolSurfaceExplanation {
         Self::from_resolved_with_runtime(config, &RuntimeToolAvailability::all(), surface)
     }
 
     pub(crate) fn from_resolved_with_runtime(
-        config: &BehaviorToolConfig,
+        config: &AgentToolSurfaceConfig,
         availability: &RuntimeToolAvailability,
         surface: &ToolSurface,
     ) -> ToolSurfaceExplanation {
@@ -55,7 +55,7 @@ impl ToolSurfaceExplanation {
         builder.include_many("host", surface.host_tools.tool_names());
         explain_meta(config, surface, &mut builder);
         explain_goals(config, surface, &mut builder);
-        explain_subagents(config, surface, &mut builder);
+        explain_agents(config, surface, &mut builder);
         explain_background(config, surface, &mut builder);
         builder.include_many(
             "custom",
@@ -97,7 +97,7 @@ impl ToolSurfaceExplanation {
         builder.finish(
             tool_names,
             ToolSurfacePolicyTrace {
-                requested: policy_summary(config.behavior_policy()),
+                requested: policy_summary(config.agent_policy()),
                 ceiling: policy_summary(config.ceiling_policy()),
                 runtime: policy_summary(&availability.policy),
                 effective: policy_summary(&config.static_policy().meet(&availability.policy)),
@@ -106,46 +106,45 @@ impl ToolSurfaceExplanation {
     }
 }
 
-impl BehaviorToolConfig {
+impl AgentToolSurfaceConfig {
     pub fn explain_with_runtime(
         &self,
         mcp_services_online: bool,
-        own_agent_did: &str,
-        active_behavior_ids: &HashSet<String>,
+        own_node_did: &str,
+        active_agent_ids: &HashSet<String>,
     ) -> ToolSurfaceExplanation {
         let availability = RuntimeToolAvailability::for_mcp_presence(mcp_services_online);
-        let surface = self.resolve_with_available_subagent_targets_for_runtime_availability(
+        let surface = self.resolve_with_available_agent_targets_for_runtime_availability(
             availability.clone(),
-            own_agent_did,
-            active_behavior_ids,
+            own_node_did,
+            active_agent_ids,
         );
         ToolSurfaceExplanation::from_resolved_with_runtime(self, &availability, &surface)
     }
 
-    pub(crate) fn resolve_with_available_subagent_targets_for_runtime_availability(
+    pub(crate) fn resolve_with_available_agent_targets_for_runtime_availability(
         &self,
         availability: RuntimeToolAvailability,
-        own_agent_did: &str,
-        active_behavior_ids: &HashSet<String>,
+        own_node_did: &str,
+        active_agent_ids: &HashSet<String>,
     ) -> ToolSurface {
-        let mut subagent_tools = self.subagent_tools().clone();
-        subagent_tools.targets.retain(|target| {
-            target.target_agent_did != own_agent_did
-                || active_behavior_ids.contains(&target.behavior_id)
+        let mut agent_tools = self.agent_tools().clone();
+        agent_tools.targets.retain(|target| {
+            target.target_node_did != own_node_did || active_agent_ids.contains(&target.agent_id)
         });
-        self.resolve_with_subagent_tools_for_runtime_availability(availability, subagent_tools)
+        self.resolve_with_agent_tools_for_runtime_availability(availability, agent_tools)
     }
 
     pub fn explain_with_runtime_availability(
         &self,
         availability: RuntimeToolAvailability,
-        own_agent_did: &str,
-        active_behavior_ids: &HashSet<String>,
+        own_node_did: &str,
+        active_agent_ids: &HashSet<String>,
     ) -> ToolSurfaceExplanation {
-        let surface = self.resolve_with_available_subagent_targets_for_runtime_availability(
+        let surface = self.resolve_with_available_agent_targets_for_runtime_availability(
             availability.clone(),
-            own_agent_did,
-            active_behavior_ids,
+            own_node_did,
+            active_agent_ids,
         );
         ToolSurfaceExplanation::from_resolved_with_runtime(self, &availability, &surface)
     }
@@ -226,7 +225,7 @@ fn into_vec_map(map: BTreeMap<String, BTreeSet<String>>) -> BTreeMap<String, Vec
 }
 
 fn explain_meta(
-    config: &BehaviorToolConfig,
+    config: &AgentToolSurfaceConfig,
     surface: &ToolSurface,
     builder: &mut ExplanationBuilder,
 ) {
@@ -271,14 +270,14 @@ fn explain_meta(
         } else {
             builder.warn(
                 "meta_requested_no_online_mcp",
-                "Meta tools are configured on, but no principal-local enabled ToolServiceRegistry row is currently available.",
+                "Meta tools are configured on, but no node-local enabled ToolServiceRegistry row is currently available.",
             );
         }
     }
 }
 
 fn explain_goals(
-    config: &BehaviorToolConfig,
+    config: &AgentToolSurfaceConfig,
     surface: &ToolSurface,
     builder: &mut ExplanationBuilder,
 ) {
@@ -303,32 +302,32 @@ fn explain_goals(
     }
 }
 
-fn explain_subagents(
-    config: &BehaviorToolConfig,
+fn explain_agents(
+    config: &AgentToolSurfaceConfig,
     surface: &ToolSurface,
     builder: &mut ExplanationBuilder,
 ) {
-    let included = subagent_tool_names(&surface.subagent_tools);
-    let agent_new_included = surface.subagent_tools.agent_new_enabled();
+    let included = agent_tool_names(&surface.agent_tools);
+    let agent_new_included = surface.agent_tools.agent_new_enabled();
     if !included.is_empty() {
-        builder.include_many("subagent", included);
+        builder.include_many("agent", included);
     }
     if agent_new_included {
         return;
     }
-    if config.subagent_tools().agent_new_enabled() {
-        builder.unavailable("subagent", crate::toolset::AGENT_NEW_TOOL_NAME);
+    if config.agent_tools().agent_new_enabled() {
+        builder.unavailable("agent", crate::toolset::AGENT_NEW_TOOL_NAME);
         builder.warn(
-            "subagent_targets_unavailable",
-            "agent_new is configured, but every local target's behavior is inactive.",
+            "agent_targets_unavailable",
+            "agent_new is configured, but every local target's agent is inactive.",
         );
     } else {
-        builder.exclude("subagent", crate::toolset::AGENT_NEW_TOOL_NAME);
+        builder.exclude("agent", crate::toolset::AGENT_NEW_TOOL_NAME);
     }
 }
 
 fn explain_background(
-    config: &BehaviorToolConfig,
+    config: &AgentToolSurfaceConfig,
     surface: &ToolSurface,
     builder: &mut ExplanationBuilder,
 ) {
@@ -342,7 +341,7 @@ fn explain_background(
     }
 }
 
-fn explain_memory(config: &BehaviorToolConfig, builder: &mut ExplanationBuilder) {
+fn explain_memory(config: &AgentToolSurfaceConfig, builder: &mut ExplanationBuilder) {
     if !config.memory_requested() {
         builder.exclude("built_in_memory", MEMORY_TOOL_NAME);
         return;
@@ -367,7 +366,7 @@ fn explain_memory(config: &BehaviorToolConfig, builder: &mut ExplanationBuilder)
 }
 
 fn explain_builtin_reads(
-    config: &BehaviorToolConfig,
+    config: &AgentToolSurfaceConfig,
     surface: &ToolSurface,
     builder: &mut ExplanationBuilder,
 ) {
@@ -498,10 +497,10 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
         ],
     );
     summary.insert(
-        "subagent".to_string(),
+        "agent".to_string(),
         vec![
             format!("session_messages:{}", policy.session_messages),
-            format!("targets:{}", policy.subagent_targets.kind()),
+            format!("targets:{}", policy.agent_targets.kind()),
         ],
     );
     summary.insert(
@@ -534,46 +533,46 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
 #[cfg(test)]
 mod target_scope_tests {
     use super::*;
-    use crate::document_config::SubagentTargetDocument;
-    use crate::tool_surface::{ResolvedToolSelection, SubagentToolConfig, ToolCeiling};
+    use crate::document_config::AgentTargetDocument;
+    use crate::tool_surface::{AgentToolConfig, ResolvedToolSelection, ToolCeiling};
 
     #[test]
     fn remote_target_stays_listed_and_inactive_local_target_is_dropped() {
-        let target = SubagentTargetDocument {
+        let target = AgentTargetDocument {
             target_id: "remote-worker".into(),
-            agent_did: "did:key:caller".into(),
-            target_agent_did: "did:key:remote".into(),
-            behavior_id: "worker".into(),
+            node_did: "did:key:caller".into(),
+            target_node_did: "did:key:remote".into(),
+            agent_id: "worker".into(),
             name: "remote worker".into(),
             description: None,
             tags: Vec::new(),
         };
-        for (target_agent_did, local_behaviors, expected) in [
+        for (target_node_did, local_agents, expected) in [
             ("did:key:remote", HashSet::new(), 1),
             ("did:key:caller", HashSet::new(), 0),
             ("did:key:caller", HashSet::from(["worker".to_owned()]), 1),
         ] {
-            let target = SubagentTargetDocument {
-                target_agent_did: target_agent_did.into(),
+            let target = AgentTargetDocument {
+                target_node_did: target_node_did.into(),
                 ..target.clone()
             };
-            let config = BehaviorToolConfig::from_selection_with_subagent_tools(
+            let config = AgentToolSurfaceConfig::from_selection_with_agent_tools(
                 "coordinator",
                 ResolvedToolSelection::default(),
                 &ToolCeiling::meta_only(),
-                SubagentToolConfig {
+                AgentToolConfig {
                     targets: vec![target.clone()],
                     enabled: true,
                 },
                 Vec::new(),
             )
             .unwrap();
-            let surface = config.resolve_with_available_subagent_targets_for_runtime_availability(
+            let surface = config.resolve_with_available_agent_targets_for_runtime_availability(
                 RuntimeToolAvailability::all(),
                 "did:key:caller",
-                &local_behaviors,
+                &local_agents,
             );
-            assert_eq!(surface.subagent_targets().len(), expected);
+            assert_eq!(surface.agent_targets().len(), expected);
         }
     }
 }

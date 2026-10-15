@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use gents_desktop_core::home_reset::*;
+use gents_desktop_core::preference::{ReviewedHome, StoredManagedServer, MANAGED_SERVER_CONFIG};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,40 +20,16 @@ use crate::tauri_commands::service_executable::{
     ensure_installable_location, resolve_service_executable,
 };
 use crate::types::{
-    HomeResetDisposition, IncompatibleStoreScope, IncompatibleStoreView, ManagedServerResetRequest,
-    ManagedServerResetResult, ManagedServerRestartRequest, ManagedServerRootValidation,
-    ManagedServerRootValidationRequest, ManagedServerStartRequest, ManagedServerState,
-    ManagedServerStatus, ManagedServerToolCeiling,
+    HomeResetDisposition, ManagedServerResetRequest, ManagedServerResetResult,
+    ManagedServerRestartRequest, ManagedServerRootValidation, ManagedServerRootValidationRequest,
+    ManagedServerStartRequest, ManagedServerState, ManagedServerStatus, ManagedServerToolCeiling,
 };
-
-const MANAGED_SERVER_CONFIG: &str = "managed-server.json";
 
 #[derive(Debug, Clone)]
 struct ManagedPairingTarget {
-    agent_name: String,
-    agent_did: String,
+    node_name: String,
+    node_did: String,
     graphql: String,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct StoredManagedServer {
-    agent_name: String,
-    #[serde(default)]
-    tool_ceiling: Option<ManagedServerToolCeiling>,
-    #[serde(default)]
-    tool_root: Option<String>,
-    /// The canonical home and init identity the ceiling and root were
-    /// reviewed for. A remembered grant applies only to that home.
-    #[serde(default)]
-    reviewed_for: Option<ReviewedHome>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ReviewedHome {
-    home: String,
-    agent_did: String,
 }
 
 /// What an initialized home says about itself in `init.json`.
@@ -201,8 +178,8 @@ async fn observe_managed_server_status<R: Runtime>(
     };
     // Native process state is not runtime readiness. Probe the status endpoint
     // on every read so the frontend gets the live DID and route.
-    let port = match state.policy.agent_home.as_deref() {
-        Some(agent_home) => observe_port_readiness(agent_home).await?,
+    let port = match state.policy.node_home.as_deref() {
+        Some(node_home) => observe_port_readiness(node_home).await?,
         None => PortReadiness::NotListening,
     };
     let mut managed = state.managed_server.lock().await;
@@ -211,10 +188,9 @@ async fn observe_managed_server_status<R: Runtime>(
     {
         managed.approval_refused = false;
     }
-    if let (Some(exit), Some(agent_home)) = (last_exit.as_ref(), state.policy.agent_home.as_deref())
-    {
+    if let (Some(exit), Some(node_home)) = (last_exit.as_ref(), state.policy.node_home.as_deref()) {
         if let Some(kind) = exit.refused_store().filter(|_| !managed.starting) {
-            managed.incompatible_store = Some(refused_runtime_store(agent_home, Some(kind)));
+            managed.incompatible_store = Some(refused_runtime_store(node_home, Some(kind)));
         }
     }
     let crash_loop =
@@ -260,7 +236,7 @@ async fn observe_managed_server_status<R: Runtime>(
         | PortReadiness::Outdated { .. }
         | PortReadiness::NotListening => {}
     }
-    status.pairing_ready = pairing_is_ready(state, status.agent_did.as_deref()).await;
+    status.pairing_ready = pairing_is_ready(state, status.node_did.as_deref()).await;
     Ok(status)
 }
 
@@ -304,12 +280,12 @@ fn project_foreign_port(status: &mut ManagedServerStatus, message: &str, startin
     }
 }
 
-async fn pairing_is_ready(state: &DesktopAppState, agent_did: Option<&str>) -> bool {
-    let (Some(core), Some(agent_did)) = (current_core(state), agent_did) else {
+async fn pairing_is_ready(state: &DesktopAppState, node_did: Option<&str>) -> bool {
+    let (Some(core), Some(node_did)) = (current_core(state), node_did) else {
         return false;
     };
     core.peer_records().await.iter().any(|peer| {
-        peer.agent_did == agent_did
+        peer.node_did == node_did
             && peer.is_enrollment()
             && peer.is_managed_runtime()
             && peer.is_chat_ready_at(chrono::Utc::now())
@@ -330,8 +306,8 @@ pub async fn desktop_managed_server_start<R: Runtime>(
 type LifecycleGuard<'a> = tokio::sync::MutexGuard<'a, ()>;
 
 const START_CANCELLED: &str =
-    "Starting the local agent was cancelled because the agent was stopped, restarted, or reconfigured.";
-const START_SUPERSEDED: &str = "This start of the local agent was replaced by a newer start.";
+    "Starting the local Node was cancelled because the Node was stopped, restarted, or reconfigured.";
+const START_SUPERSEDED: &str = "This start of the local Node was replaced by a newer start.";
 
 /// A start or restart waiting outside the lifecycle lock, and why it was
 /// cancelled.
@@ -428,7 +404,7 @@ async fn ensure_no_start_waiting(state: &DesktopAppState) -> Result<(), BridgeEr
     if state.managed_server.lock().await.start_wait.is_some() {
         return Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
-            "The local agent is still starting. Change start at login after it finishes.",
+            "The local Node is still starting. Change start at login after it finishes.",
         ));
     }
     Ok(())
@@ -460,7 +436,7 @@ enum Launched {
 struct NativeLaunch<'a, R: Runtime> {
     app: &'a AppHandle<R>,
     state: &'a DesktopAppState,
-    agent_home: &'a Path,
+    node_home: &'a Path,
     enable_at_login: bool,
 }
 
@@ -496,7 +472,7 @@ impl<R: Runtime> ManagedLaunch for NativeLaunch<'_, R> {
     }
 
     async fn await_ready(&self) -> anyhow::Result<Readiness> {
-        wait_for_managed_server(self.app, self.state, self.agent_home).await
+        wait_for_managed_server(self.app, self.state, self.node_home).await
     }
 }
 
@@ -608,17 +584,17 @@ async fn start_managed_server<'a, R: Runtime>(
     state: &'a DesktopAppState,
     lifecycle: LifecycleGuard<'a>,
 ) -> Result<ManagedServerStatus, BridgeError> {
-    let agent_name = request.agent_name.trim();
-    if agent_name.is_empty() {
+    let node_name = request.node_name.trim();
+    if node_name.is_empty() {
         return Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
-            "agentName is required",
+            "nodeName is required",
         ));
     }
-    let agent_home = state.policy.agent_home.clone().ok_or_else(|| {
+    let node_home = state.policy.node_home.clone().ok_or_else(|| {
         BridgeError::new(
             BridgeErrorCode::Unsupported,
-            "managed server requires a local agent home",
+            "managed server requires a local node home",
         )
     })?;
     let stored = load_bound_preference(state).await?;
@@ -627,18 +603,18 @@ async fn start_managed_server<'a, R: Runtime>(
         request.tool_root.as_deref(),
         stored.as_ref(),
     )?;
-    refuse_renaming_home(&agent_home, agent_name).await?;
-    gents::home::ensure_home_identity_can_serve(&agent_home)
+    refuse_renaming_home(&node_home, node_name).await?;
+    gents::home::ensure_home_identity_can_serve(&node_home)
         .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
 
     let mut carried_wait = None;
     let mut replace_loaded_job = false;
-    let (ready, initial_enabled, _lifecycle) = match matching_external_server(&agent_home).await? {
+    let (ready, initial_enabled, _lifecycle) = match matching_external_server(&node_home).await? {
         Some(external) => (Some(external), false, lifecycle),
         None => {
             // Before anything below unloads a job this launch could not replace.
             ensure_launchable_here(app, state)?;
-            let outdated = match observe_port_readiness(&agent_home).await? {
+            let outdated = match observe_port_readiness(&node_home).await? {
                 PortReadiness::Outdated { version } => Some(version),
                 _ => None,
             };
@@ -663,7 +639,7 @@ async fn start_managed_server<'a, R: Runtime>(
                 && !initial_native.requires_approval
                 && !replace_loaded_job
             {
-                match wait_for_booting_managed_server(app, state, &agent_home, lifecycle).await? {
+                match wait_for_booting_managed_server(app, state, &node_home, lifecycle).await? {
                     BootOutcome::Ready(ready, lifecycle) => (Some(ready), enabled, lifecycle),
                     BootOutcome::NeedsLaunch(lifecycle, wait) => {
                         carried_wait = Some(wait);
@@ -692,12 +668,12 @@ async fn start_managed_server<'a, R: Runtime>(
             ));
         }
         if let (Some(core), Some(target)) = (current_core(state), pairing_target(&external)) {
-            core.refresh_local_standard_peer(&agent_home, &target.agent_name)
+            core.refresh_local_standard_peer(&node_home, &target.node_name)
                 .await
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
-            start_managed_runtime_pairing(&state, core, agent_home, target).await;
+            start_managed_runtime_pairing(&state, core, node_home, target).await;
         }
-        external.pairing_ready = pairing_is_ready(state, external.agent_did.as_deref()).await;
+        external.pairing_ready = pairing_is_ready(state, external.node_did.as_deref()).await;
         return Ok(external);
     }
     let lifecycle = _lifecycle;
@@ -718,14 +694,14 @@ async fn start_managed_server<'a, R: Runtime>(
         }
         // A fresh home has no identity to compare yet. Provisioning is safe
         // either way, and the check below names any other runtime on the port.
-        if gents_server::server_host::initialized_home(&agent_home) {
-            ensure_default_port_identity(&agent_home).await?;
+        if gents_server::server_host::initialized_home(&node_home) {
+            ensure_default_port_identity(&node_home).await?;
         }
         gents_server::server_host::ensure_standard_home(
             gents_server::server_host::ProvisionOptions {
-                home: agent_home.clone(),
-                agent_name: agent_name.to_string(),
-                tool_ceiling: authority.tool_ceiling.into(),
+                home: node_home.clone(),
+                node_name: node_name.to_string(),
+                tool_ceiling: runtime_tool_ceiling(authority.tool_ceiling),
                 tool_root: authority.tool_root.clone(),
                 store_key_custody: state.policy.store_key_custody,
             },
@@ -734,16 +710,16 @@ async fn start_managed_server<'a, R: Runtime>(
         let (tool_ceiling, tool_root) = authority.stored();
         save_confirmed_preference(
             state,
-            &agent_home,
+            &node_home,
             &StoredManagedServer {
-                agent_name: agent_name.to_string(),
+                node_name: node_name.to_string(),
                 tool_ceiling: Some(tool_ceiling),
                 tool_root,
                 reviewed_for: None,
             },
         )
         .await?;
-        ensure_default_port_identity(&agent_home).await?;
+        ensure_default_port_identity(&node_home).await?;
         // Install even when a unit file already exists. `install` leaves a
         // matching definition alone and refuses while the service is active.
         // A stopped unit can still name a previous mount or runtime.
@@ -759,18 +735,18 @@ async fn start_managed_server<'a, R: Runtime>(
             let launch = NativeLaunch {
                 app,
                 state,
-                agent_home: &agent_home,
+                node_home: &node_home,
                 enable_at_login: false,
             };
             match launch_managed_server(state, &token, lifecycle, &launch).await {
                 Ok((ready, lifecycle)) => {
                     let initialized: anyhow::Result<()> = async {
-                        validate_ready_runtime(&ready, &authority, &agent_home)?;
+                        validate_ready_runtime(&ready, &authority, &node_home)?;
                         if current_core(state).is_none() {
                             init_standard_local_runtime(DesktopInitOptions {
-                                agent_home: agent_home.clone(),
+                                node_home: node_home.clone(),
                                 desktop_paths: state.policy.desktop_paths.clone(),
-                                label: agent_name.to_string(),
+                                label: node_name.to_string(),
                             })
                             .await?;
                         }
@@ -804,7 +780,7 @@ async fn start_managed_server<'a, R: Runtime>(
                 app,
                 state,
                 &token,
-                &agent_home,
+                &node_home,
                 initial_enabled,
                 failure,
             )
@@ -818,13 +794,13 @@ async fn start_managed_server<'a, R: Runtime>(
     }
     let stored = load_bound_preference(state).await?;
     let native = run_native(native_service(app, state)?, |service| service.status()).await?;
-    let mut status = if let Some(external) = matching_external_server(&agent_home).await? {
+    let mut status = if let Some(external) = matching_external_server(&node_home).await? {
         project_external_status(external, &native)
     } else {
         let managed = state.managed_server.lock().await;
         status_from(&managed, stored.as_ref(), Some(&native), None, None)
     };
-    status.pairing_ready = pairing_is_ready(state, status.agent_did.as_deref()).await;
+    status.pairing_ready = pairing_is_ready(state, status.node_did.as_deref()).await;
     Ok(status)
 }
 
@@ -899,7 +875,7 @@ async fn fail_managed_start<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
     token: &StartWait,
-    agent_home: &Path,
+    node_home: &Path,
     initial_enabled: bool,
     failure: LaunchFailure<'_>,
 ) -> BridgeError {
@@ -925,11 +901,11 @@ async fn fail_managed_start<R: Runtime>(
         .is_some_and(|error| error.code == BridgeErrorCode::IncompatibleLocalStore)
         || matches!(
             gents::storage_backend::incompatible_store_kind(&gents::home::default_data_dir(
-                agent_home
+                node_home
             )),
             Ok(Some(_))
         );
-    let refused_store = refused.then(|| refused_runtime_store(agent_home, refused_kind));
+    let refused_store = refused.then(|| refused_runtime_store(node_home, refused_kind));
     state.managed_server.lock().await.incompatible_store = refused_store.clone();
     emit_status(app, state).await;
     if let Some(store) = refused_store {
@@ -947,17 +923,17 @@ async fn fail_managed_start<R: Runtime>(
     }
 }
 
-const ARCHIVE_CONSEQUENCE: &str = "The old home is moved, not changed, into a timestamped backup next to it. Nothing in it is imported into the new home.";
-const DELETE_CONSEQUENCE: &str =
-    "The old home is permanently deleted. Nothing in it is imported into the new home.";
-
-/// Previews, archives, or deletes a local home this version cannot open.
+/// Previews or retires local state through the shared home reset plan.
+/// Explicit full resets stop the runtime and client, then hand retirement to
+/// a helper that waits for this process and its webviews to exit.
 ///
-/// In scope are the managed runtime home's own entries (a fixed inventory,
+/// For refused stores, scope is the managed runtime home's own entries (a fixed inventory,
 /// [`gents::home::RUNTIME_HOME_ENTRIES`]) when the runtime refused its store,
 /// and the desktop client's state when the client refused its store or when
 /// the runtime home is retired (the client's pairing is bound to that
-/// runtime). Everything else in either root stays in place.
+/// runtime). Full reset also includes the service definition and desktop logs,
+/// and clears browser data through WebKit in either disposition. Other homes
+/// and files outside the inventory stay in place.
 ///
 /// A preview changes nothing and cancels nothing. The confirmation it returns
 /// pins the exact planned set: an action whose plan differs, before or after
@@ -968,20 +944,52 @@ pub async fn desktop_managed_server_reset<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
 ) -> Result<ManagedServerResetResult, BridgeError> {
+    let full_reset = request.full_reset.unwrap_or(false);
+    if full_reset && !cfg!(target_os = "macos") {
+        return Err(BridgeError::new(
+            BridgeErrorCode::Unsupported,
+            "Full desktop reset is supported on macOS.",
+        ));
+    }
     let disposition = request.disposition.unwrap_or(HomeResetDisposition::Archive);
     let Some(confirmation) = request.confirmation.as_deref() else {
-        return Ok(plan_state_reset(&state).await?.preview());
+        return Ok(plan_state_reset(&state, full_reset).await?.preview());
     };
     let _lifecycle = lock_lifecycle_superseding_start(&state).await;
-    retire_incompatible_home(&app, &state, confirmation, disposition).await
+    retire_incompatible_home(&app, &state, confirmation, disposition, full_reset).await
 }
 
-async fn plan_state_reset(state: &DesktopAppState) -> Result<HomeResetPlan, BridgeError> {
+async fn plan_state_reset(
+    state: &DesktopAppState,
+    full_reset: bool,
+) -> Result<HomeResetPlan, BridgeError> {
     let runtime_home = state
         .policy
-        .agent_home
+        .node_home
         .as_deref()
         .filter(|_| state.policy.managed_server == ManagedServerPolicy::Allowed);
+    if full_reset {
+        let user_home = resolve_user_home(dirs::home_dir())?;
+        let home = runtime_home.ok_or_else(|| {
+            BridgeError::new(
+                BridgeErrorCode::Unsupported,
+                "Full reset requires a locally managed runtime.",
+            )
+        })?;
+        let config = gents_server::native_service::NativeServiceConfig::new(
+            home.to_path_buf(),
+            std::env::current_exe().map_err(|error| BridgeError::untyped(error.to_string()))?,
+        )
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        let platform = gents_server::native_service::NativeServicePlatform::current()
+            .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        return plan_full_reset(
+            Some(home),
+            &state.policy.desktop_paths,
+            &user_home,
+            &config.definition_path(platform),
+        );
+    }
     let runtime_store = state.managed_server.lock().await.incompatible_store.clone();
     let client_store = state
         .bridge
@@ -1000,19 +1008,6 @@ async fn plan_state_reset(state: &DesktopAppState) -> Result<HomeResetPlan, Brid
     )
 }
 
-/// How the desktop client state relates to the managed home, as
-/// `managed-server.json`'s `reviewedFor` records it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClientBinding {
-    /// No reviewed home is remembered, or its home cannot be read.
-    Unbound,
-    /// The client was paired with this exact home and identity.
-    BoundToHome,
-    /// The reviewed home is gone or now carries another identity: the
-    /// pairing names a node that no longer exists here.
-    Orphaned,
-}
-
 /// A path is not identity: only the reviewed home itself being gone, or now
 /// carrying another DID, orphans the client. A configured home that moved or
 /// changed while the reviewed identity still exists keeps the client state.
@@ -1028,11 +1023,11 @@ fn classify_binding(
     if configured.is_some_and(|home| home.reviewed == *reviewed) {
         return ClientBinding::BoundToHome;
     }
-    if configured.is_some_and(|home| home.reviewed.agent_did == reviewed.agent_did) {
+    if configured.is_some_and(|home| home.reviewed.node_did == reviewed.node_did) {
         return ClientBinding::Unbound;
     }
     match reviewed_home {
-        Some(home) if home.reviewed.agent_did == reviewed.agent_did => ClientBinding::Unbound,
+        Some(home) if home.reviewed.node_did == reviewed.node_did => ClientBinding::Unbound,
         Some(_) => ClientBinding::Orphaned,
         // An init marker that exists but cannot be read is not evidence the
         // node is gone.
@@ -1042,7 +1037,7 @@ fn classify_binding(
 }
 
 async fn client_binding(state: &DesktopAppState) -> ClientBinding {
-    let Some(agent_home) = state.policy.agent_home.as_deref() else {
+    let Some(node_home) = state.policy.node_home.as_deref() else {
         return ClientBinding::Unbound;
     };
     let reviewed = match load_preference(state).await {
@@ -1059,8 +1054,8 @@ async fn client_binding(state: &DesktopAppState) -> ClientBinding {
     let Some(reviewed) = reviewed else {
         return ClientBinding::Unbound;
     };
-    let configured = read_home_identity(agent_home).await;
-    let reviewed_path = Path::new(&reviewed.home);
+    let configured = read_home_identity(node_home).await;
+    let reviewed_path = Path::new(&reviewed.node_home);
     let reviewed_home = read_home_identity(reviewed_path).await;
     let Ok(reviewed_init_present) = present(&gents::home::init_config_path(reviewed_path)) else {
         return ClientBinding::Unbound;
@@ -1117,8 +1112,9 @@ async fn retire_incompatible_home<R: Runtime>(
     state: &DesktopAppState,
     confirmation: &str,
     disposition: HomeResetDisposition,
+    full_reset: bool,
 ) -> Result<ManagedServerResetResult, BridgeError> {
-    let plan = plan_state_reset(state).await?;
+    let plan = plan_state_reset(state, full_reset).await?;
     plan.check_confirmation(confirmation, disposition)?;
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ").to_string();
     // Refuse a rename across filesystems before anything is stopped.
@@ -1136,12 +1132,19 @@ async fn retire_incompatible_home<R: Runtime>(
     // exists and held (never moved) until the entries are retired, so neither
     // can open or create the store meanwhile. Older runtimes do not take it;
     // the service stop and endpoint check above cover them.
+    if full_reset {
+        run_native(native_service(app, state)?, |service| service.stop(true)).await?;
+        let native = run_native(native_service(app, state)?, |service| service.status()).await?;
+        ensure_managed_runtime_stopped(native.is_active_or_transitioning())?;
+    }
     let _store_lock = match plan.runtime.as_ref() {
         Some((home, _)) => {
             // The service definition names this home; a fresh setup installs
             // it again. Removing it keeps login from launching a runtime on an
             // emptied home.
-            run_native(native_service(app, state)?, |service| service.uninstall()).await?;
+            if !full_reset {
+                run_native(native_service(app, state)?, |service| service.uninstall()).await?;
+            }
             let native =
                 run_native(native_service(app, state)?, |service| service.status()).await?;
             ensure_managed_runtime_stopped(native.is_active_or_transitioning())?;
@@ -1160,9 +1163,29 @@ async fn retire_incompatible_home<R: Runtime>(
     };
     // The stopped service and client may have changed the homes: act only on
     // the set the user confirmed.
-    let settled = plan_state_reset(state).await?;
+    let settled = plan_state_reset(state, full_reset).await?;
     settled.check_confirmation(confirmation, disposition)?;
 
+    if full_reset {
+        let executable = resolve_service_executable(app, state.policy.desktop_paths.root())?;
+        executable.install()?;
+        let executable = executable.service_path().to_path_buf();
+        let home = state.policy.node_home.clone().ok_or_else(|| {
+            BridgeError::new(
+                BridgeErrorCode::Unsupported,
+                "No managed runtime home is configured.",
+            )
+        })?;
+        let desktop = state.policy.desktop_paths.root().to_path_buf();
+        let confirmation = confirmation.to_owned();
+        tokio::task::spawn_blocking(move || {
+            launch_reset_helper(&executable, &home, &desktop, &confirmation, disposition)
+        })
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))??;
+        app.exit(0);
+        return Ok(settled.preview());
+    }
     let result = settled.retire(disposition, backup.as_deref())?;
     drop(_client);
     drop(_store_lock);
@@ -1191,6 +1214,72 @@ async fn retire_incompatible_home<R: Runtime>(
     );
     emit_status(app, state).await;
     Ok(result)
+}
+
+/// The helper reserves reset before acknowledging readiness, then waits for
+/// this process (including its webviews) to exit before touching browser data.
+fn launch_reset_helper(
+    executable: &Path,
+    home: &Path,
+    desktop: &Path,
+    confirmation: &str,
+    disposition: HomeResetDisposition,
+) -> Result<(), BridgeError> {
+    launch_reset_helper_with_timeout(
+        executable,
+        home,
+        desktop,
+        confirmation,
+        disposition,
+        Duration::from_secs(15),
+    )
+}
+
+fn launch_reset_helper_with_timeout(
+    executable: &Path,
+    home: &Path,
+    desktop: &Path,
+    confirmation: &str,
+    disposition: HomeResetDisposition,
+    timeout: Duration,
+) -> Result<(), BridgeError> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let launch = || -> anyhow::Result<()> {
+        let mut command = Command::new(executable);
+        command
+            .args(["desktop", "reset", "--home"])
+            .arg(home)
+            .arg("--confirm")
+            .arg(confirmation)
+            .arg("--wait-for-desktop")
+            .arg("--desktop-pid")
+            .arg(std::process::id().to_string())
+            .arg("--desktop-executable")
+            .arg(std::env::current_exe()?)
+            .env("GENTS_DESKTOP_HOME", desktop)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        if disposition == HomeResetDisposition::Delete {
+            command.arg("--delete");
+        }
+        let mut child = command.spawn()?;
+        let mut stdout = child.stdout.take().expect("piped reset stdout");
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let mut ready = [0];
+            let read = stdout.read_exact(&mut ready);
+            let _ = send.send(read.is_ok() && ready[0] == b'R');
+        });
+        if receive.recv_timeout(timeout) != Ok(true) {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("The reset helper could not prepare; your local state has not been retired. Run gents desktop reset to review and retry.");
+        }
+        Ok(())
+    };
+    launch().map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error:#}")))
 }
 
 /// Fails closed unless nothing serves the managed home: no runtime answers
@@ -1238,732 +1327,14 @@ fn ensure_managed_endpoint_stopped(
     }
 }
 
-/// The canonical user home a reset measures its roots against. Without it a
-/// broad root cannot be recognized, so the reset is refused rather than
-/// guessed at.
-fn resolve_user_home(user_home: Option<PathBuf>) -> Result<PathBuf, BridgeError> {
-    let user_home = user_home
-        .filter(|home| !home.as_os_str().is_empty())
-        .ok_or_else(|| {
-            BridgeError::new(
-                BridgeErrorCode::InvalidArgument,
-                "The user home directory cannot be determined; reset was refused.",
-            )
-        })?;
-    std::fs::canonicalize(&user_home).map_err(|error| {
-        BridgeError::new(
-            BridgeErrorCode::InvalidArgument,
-            format!(
-                "The user home directory {} cannot be resolved ({error}); reset was refused.",
-                user_home.display()
-            ),
-        )
-    })
-}
-
-/// A root whose entries a reset may retire: not the filesystem root, and
-/// neither the user's home directory nor any ancestor of it. `root` and
-/// `user_home` are canonical, so aliases of either compare equal.
-fn ensure_retirable_root(root: &Path, label: &str, user_home: &Path) -> Result<(), BridgeError> {
-    let broad = root.parent().is_none() || user_home.starts_with(root);
-    if broad {
-        return Err(BridgeError::new(
-            BridgeErrorCode::InvalidArgument,
-            format!(
-                "The {label} {} is too broad to reset; reset was refused.",
-                root.display()
-            ),
-        ));
-    }
-    Ok(())
-}
-
-fn canonical_root(path: &Path, label: &str) -> Result<PathBuf, BridgeError> {
-    std::fs::canonicalize(path).map_err(|error| {
-        BridgeError::new(
-            BridgeErrorCode::Backend,
-            format!("Cannot resolve {label} {}: {error}", path.display()),
-        )
-    })
-}
-
-/// What a home reset would retire, derived from the refused stores.
-#[derive(Debug)]
-struct HomeResetPlan {
-    /// The canonical managed home and its refused store. A home without a
-    /// refused store is in scope only because the retired client state was
-    /// paired with it.
-    runtime: Option<(PathBuf, Option<gents::storage_backend::IncompatibleStore>)>,
-    client: Option<gents::storage_backend::IncompatibleStore>,
-    /// The client state is retired because its paired node is gone.
-    orphaned_client: bool,
-    desktop_root: PathBuf,
-    runtime_entries: gents::home::HomeEntries,
-    /// The runtime entries a Delete removes: the owned entries, except that
-    /// `keys/` is narrowed to the managed home's identity and recorded store key (other homes
-    /// may keep keys there). Archive moves all of `keys/`: it is recoverable.
-    delete_home_entries: Vec<PathBuf>,
-    /// `keys/`, removed after a Delete only if nothing else is left in it.
-    delete_prunes_keys: Option<PathBuf>,
-    /// Present client-state entries in scope.
-    client_entries: Vec<PathBuf>,
-    store_keys: Vec<RetiredStoreKey>,
-}
-
-/// Keychain custody outlives filesystem retirement. Its record stays until
-/// deletion succeeds, so a denied Keychain operation can be retried. Archives
-/// retain both the key and its record so the archived store remains readable.
-#[derive(Debug)]
-struct RetiredStoreKey {
-    record: gents::store_key::StoreEncryption,
-    key_file: PathBuf,
-    record_files: Vec<PathBuf>,
-}
-
-fn recorded_store_key(
-    record_file: PathBuf,
-    key_file: PathBuf,
-    home: bool,
-) -> Option<RetiredStoreKey> {
-    let value: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&record_file).ok()?).ok()?;
-    let value = if home {
-        value.get("store_encryption")?.clone()
-    } else {
-        value
-    };
-    Some(RetiredStoreKey {
-        record: serde_json::from_value(value).ok()?,
-        key_file,
-        record_files: vec![record_file],
-    })
-}
-
-fn add_store_key(keys: &mut Vec<RetiredStoreKey>, key: RetiredStoreKey) {
-    if let Some(existing) = keys
-        .iter_mut()
-        .find(|existing| existing.record == key.record && existing.key_file == key.key_file)
-    {
-        existing.record_files.extend(key.record_files);
-    } else {
-        keys.push(key);
-    }
-}
-
-fn upgrade_retirement(
-    data: &Path,
-    key_file: PathBuf,
-) -> Result<(Vec<PathBuf>, Option<RetiredStoreKey>), BridgeError> {
-    let read = || -> anyhow::Result<_> {
-        let entries = gents::store_key::upgrade::retirement_entries(data)?;
-        let key = gents::store_key::upgrade::pending_record(data)?.map(|record| RetiredStoreKey {
-            record,
-            key_file,
-            record_files: vec![gents::store_key::upgrade::journal_path(data)],
-        });
-        Ok((entries, key))
-    };
-    read().map_err(|error| {
-        BridgeError::new(
-            BridgeErrorCode::Backend,
-            format!("Inspecting store upgrade: {error:#}"),
-        )
-    })
-}
-
-/// The managed home's own key file inside its `keys/` directory, as its
-/// `init.json` names it (`key_path`, else the default for `agent_name`).
-fn own_home_key(home: &Path, keys: &Path) -> Option<PathBuf> {
-    let record: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(gents::home::init_config_path(home)).ok()?).ok()?;
-    let key = record
-        .get("key_path")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            record
-                .get("agent_name")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(|name| gents::home::default_key_path(home, name))
-        })?;
-    let parent = std::fs::canonicalize(key.parent()?).ok()?;
-    let name = key.file_name()?;
-    (parent == keys).then(|| keys.join(name))
-}
-
-fn lock_home_for_retirement(home: &Path) -> Result<gents::home::StoreLock, BridgeError> {
-    gents::home::lock_home_store(home)
-        .map_err(|error| BridgeError::new(BridgeErrorCode::InvalidArgument, format!("{error:#}")))
-}
-
-fn is_store_lock(path: &Path) -> bool {
-    path.parent().is_some_and(|home| {
-        gents::home::default_data_dir(home)
-            .file_name()
-            .is_some_and(|data| {
-                path.file_name()
-                    .is_some_and(|name| *name == *format!("{}.lock", data.to_string_lossy()))
-            })
-    })
-}
-
-fn present(path: &Path) -> Result<bool, BridgeError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(BridgeError::new(
-            BridgeErrorCode::Backend,
-            format!("Inspecting {}: {error}", path.display()),
-        )),
-    }
-}
-
-fn plan_home_reset(
-    runtime_home: Option<&Path>,
-    runtime_store: Option<gents::storage_backend::IncompatibleStore>,
-    client_store: Option<gents::storage_backend::IncompatibleStore>,
-    desktop_paths: &gents_desktop_core::client::DesktopPaths,
-    user_home: &Path,
-    binding: ClientBinding,
-) -> Result<HomeResetPlan, BridgeError> {
-    let inspect = |path: &Path| {
-        gents::storage_backend::incompatible_store_kind(path).map_err(|error| {
-            BridgeError::new(
-                BridgeErrorCode::Backend,
-                format!("Inspecting {}: {error}", path.display()),
-            )
-        })
-    };
-    let runtime_home = match runtime_home {
-        Some(configured_home) if present(configured_home)? => {
-            reject_symlink(configured_home, "managed home")?;
-            let home = canonical_root(configured_home, "managed home")?;
-            let data = gents::home::default_data_dir(&home);
-            reject_symlink_if_present(&data, "managed data")?;
-            reject_symlink_if_present(
-                &gents::home::init_config_path(&home),
-                "managed init marker",
-            )?;
-            let marked = inspect(&data)?.map(|kind| gents::storage_backend::IncompatibleStore {
-                kind,
-                data_path: data.clone(),
-            });
-            marked
-                .or(runtime_store.map(|store| match store.kind {
-                    gents::storage_backend::IncompatibleStoreKind::InsecureKey => store,
-                    _ => gents::storage_backend::IncompatibleStore {
-                        data_path: data.clone(),
-                        ..store
-                    },
-                }))
-                .map_or(Some((home.clone(), None)), |store| {
-                    Some((home, Some(store)))
-                })
-        }
-        _ => None,
-    };
-    reject_symlink_if_present(desktop_paths.root(), "desktop client state")?;
-    reject_symlink_if_present(desktop_paths.node_data_dir(), "desktop client store")?;
-    let client = inspect(desktop_paths.node_data_dir())?
-        .map(|kind| gents::storage_backend::IncompatibleStore {
-            kind,
-            data_path: desktop_paths.node_data_dir().to_path_buf(),
-        })
-        .or(client_store);
-    let orphaned_client = binding == ClientBinding::Orphaned;
-    let runtime = runtime_home.filter(|(home, store)| {
-        // Starting fresh retires the client's pairing with this home; left in
-        // place, first-run setup would provision onto it and relaunch the
-        // runtime on a store that may not open.
-        store.is_some()
-            || (client.is_some()
-                && binding == ClientBinding::BoundToHome
-                && gents_server::server_host::initialized_home(home))
-    });
-    if runtime.is_none() && client.is_none() && !orphaned_client {
-        return Err(BridgeError::new(
-            BridgeErrorCode::InvalidArgument,
-            "No local store is marked as legacy or incompatible; reset was refused.",
-        ));
-    }
-    let desktop_root = if present(desktop_paths.root())? {
-        canonical_root(desktop_paths.root(), "desktop client state")?
-    } else {
-        desktop_paths.root().to_path_buf()
-    };
-    if let Some((home, _)) = runtime.as_ref() {
-        ensure_retirable_root(home, "managed home", user_home)?;
-    }
-    let retires_client_state = runtime.is_some() || client.is_some() || orphaned_client;
-    if retires_client_state {
-        ensure_retirable_root(&desktop_root, "desktop client state", user_home)?;
-    }
-    let mut runtime_entries = match runtime.as_ref() {
-        Some((home, _)) => {
-            gents::home::home_entries(home, &[desktop_root.clone()]).map_err(|error| {
-                BridgeError::new(
-                    BridgeErrorCode::Backend,
-                    format!("Listing {}: {error:#}", home.display()),
-                )
-            })?
-        }
-        None => gents::home::HomeEntries::default(),
-    };
-    let mut client_entries = Vec::new();
-    if retires_client_state {
-        // Entries are derived from the canonical root, never from the raw
-        // configured path.
-        let canonical = gents_desktop_core::client::DesktopPaths::from_root(&desktop_root);
-        for entry in canonical
-            .client_state_entries()
-            .into_iter()
-            .chain(std::iter::once(desktop_root.join(MANAGED_SERVER_CONFIG)))
-        {
-            if present(&entry)? {
-                client_entries.push(entry);
-            }
-        }
-    }
-    let mut delete_home_entries = Vec::new();
-    let mut delete_prunes_keys = None;
-    let mut store_keys = Vec::new();
-    if retires_client_state {
-        let canonical = gents_desktop_core::client::DesktopPaths::from_root(&desktop_root);
-        if let Some(key) = recorded_store_key(
-            canonical.store_encryption_path().to_path_buf(),
-            canonical.store_key_path().to_path_buf(),
-            false,
-        ) {
-            add_store_key(&mut store_keys, key);
-        }
-        let (entries, key) = upgrade_retirement(
-            canonical.node_data_dir(),
-            canonical.store_key_path().to_path_buf(),
-        )?;
-        client_entries.extend(entries);
-        if let Some(key) = key {
-            add_store_key(&mut store_keys, key);
-        }
-    }
-    if let Some((home, _)) = runtime.as_ref() {
-        let (entries, upgrade_key) = upgrade_retirement(
-            &gents::home::default_data_dir(home),
-            gents::store_key::home_key_file(home),
-        )?;
-        runtime_entries
-            .retained
-            .retain(|path| !entries.contains(path));
-        runtime_entries.owned.extend(entries);
-        if let Some(key) = recorded_store_key(
-            gents::home::init_config_path(home),
-            gents::store_key::home_key_file(home),
-            true,
-        ) {
-            add_store_key(&mut store_keys, key);
-        }
-        if let Some(key) = upgrade_key {
-            add_store_key(&mut store_keys, key);
-        }
-        for key in store_keys
-            .iter()
-            .filter(|key| key.key_file == gents::store_key::home_key_file(home))
-        {
-            if matches!(key.record.custody, gents::store_key::StoreKeyCustody::File)
-                && std::fs::canonicalize(home.join("keys"))
-                    .is_ok_and(|keys| keys == home.join("keys"))
-                && present(&key.key_file)?
-            {
-                delete_home_entries.push(key.key_file.clone());
-            }
-        }
-        let keys = home.join("keys");
-        for entry in &runtime_entries.owned {
-            if *entry != keys {
-                delete_home_entries.push(entry.clone());
-                continue;
-            }
-            if let Some(key) = own_home_key(home, &keys) {
-                if present(&key)? {
-                    delete_home_entries.push(key);
-                }
-            }
-            delete_prunes_keys = Some(keys.clone());
-        }
-    }
-    Ok(HomeResetPlan {
-        runtime,
-        client,
-        orphaned_client,
-        desktop_root,
-        runtime_entries,
-        delete_home_entries,
-        delete_prunes_keys,
-        client_entries,
-        store_keys,
-    })
-}
-
-impl HomeResetPlan {
-    /// The desktop client state is retired with its runtime: its pairing
-    /// names the runtime identity being retired.
-    fn retires_client_state(&self) -> bool {
-        self.client.is_some() || self.runtime.is_some() || self.orphaned_client
-    }
-
-    fn refused_stores(&self) -> impl Iterator<Item = &gents::storage_backend::IncompatibleStore> {
-        self.runtime
-            .iter()
-            .filter_map(|(_, store)| store.as_ref())
-            .chain(&self.client)
-    }
-
-    fn anchor(&self) -> &Path {
-        self.runtime
-            .as_ref()
-            .map_or(self.desktop_root.as_path(), |(home, _)| home.as_path())
-    }
-
-    fn home_entries(&self, disposition: HomeResetDisposition) -> &[PathBuf] {
-        match disposition {
-            HomeResetDisposition::Archive => &self.runtime_entries.owned,
-            HomeResetDisposition::Delete => &self.delete_home_entries,
-        }
-    }
-
-    fn planned(&self, disposition: HomeResetDisposition) -> impl Iterator<Item = &PathBuf> {
-        self.home_entries(disposition)
-            .iter()
-            .chain(&self.client_entries)
-    }
-
-    /// Deletion is offered only for stores known to come from an older
-    /// release; a store another, possibly newer, build wrote may still be
-    /// wanted by that build.
-    ///
-    /// A paired runtime retired without a refusal was never opened, so its
-    /// store is unclassified and may belong to a newer build: archive only.
-    fn deletable(&self) -> bool {
-        self.runtime
-            .as_ref()
-            .is_none_or(|(_, store)| store.is_some())
-            && self.refused_stores().next().is_some()
-            && self.refused_stores().all(|store| store.kind.is_older())
-    }
-
-    /// A digest of everything the action would touch or leave, so a
-    /// confirmation authorizes exactly the previewed set.
-    fn digest(&self, disposition: HomeResetDisposition) -> String {
-        let mut hasher = blake3::Hasher::new();
-        let mut line = |label: &str, path: &Path| {
-            hasher.update(label.as_bytes());
-            hasher.update(path.as_os_str().as_encoded_bytes());
-            hasher.update(b"\n");
-        };
-        line("anchor", self.anchor());
-        for path in self.home_entries(disposition) {
-            line("home", path);
-        }
-        for path in &self.client_entries {
-            line("desktop", path);
-        }
-        // The store lock appears once the reset takes it; it is never retired.
-        for path in self
-            .runtime_entries
-            .retained
-            .iter()
-            .filter(|path| !is_store_lock(path))
-        {
-            line("retained", path);
-        }
-        for key in &self.store_keys {
-            hasher.update(&serde_json::to_vec(&key.record).expect("store encryption serializes"));
-        }
-        hasher.finalize().to_hex()[..12].to_string()
-    }
-
-    fn confirmation(&self, disposition: HomeResetDisposition) -> String {
-        let anchor = self.anchor().to_string_lossy();
-        let digest = self.digest(disposition);
-        match disposition {
-            HomeResetDisposition::Archive => {
-                format!("RESET {anchor} AND ARCHIVE LOCAL HISTORY [{digest}]")
-            }
-            HomeResetDisposition::Delete => format!("DELETE {anchor} PERMANENTLY [{digest}]"),
-        }
-    }
-
-    fn check_confirmation(
-        &self,
-        supplied: &str,
-        disposition: HomeResetDisposition,
-    ) -> Result<(), BridgeError> {
-        if disposition == HomeResetDisposition::Delete && !self.deletable() {
-            return Err(BridgeError::new(
-                BridgeErrorCode::InvalidArgument,
-                "A store another Gents version wrote is not deleted from here; back it up or keep it.",
-            ));
-        }
-        if supplied != self.confirmation(disposition) {
-            return Err(BridgeError::new(
-                BridgeErrorCode::InvalidArgument,
-                "The home changed since it was reviewed, or the confirmation does not match this action. Review it again.",
-            ));
-        }
-        Ok(())
-    }
-
-    fn preview(&self) -> ManagedServerResetResult {
-        let view =
-            |scope, store: &gents::storage_backend::IncompatibleStore| IncompatibleStoreView {
-                scope,
-                path: store.data_path.to_string_lossy().into_owned(),
-                detail: store.to_string(),
-                older: store.kind.is_older(),
-                unsafe_key: store.kind
-                    == gents::storage_backend::IncompatibleStoreKind::InsecureKey,
-            };
-        let paths = |paths: &mut dyn Iterator<Item = &PathBuf>| {
-            paths
-                .map(|path| path.to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-        };
-        ManagedServerResetResult {
-            managed_home: self
-                .runtime
-                .as_ref()
-                .map(|(home, _)| home.to_string_lossy().into_owned()),
-            desktop_home: self
-                .retires_client_state()
-                .then(|| self.desktop_root.to_string_lossy().into_owned()),
-            stores: self
-                .runtime
-                .iter()
-                .filter_map(|(_, store)| store.as_ref())
-                .map(|store| view(IncompatibleStoreScope::Runtime, store))
-                .chain(
-                    self.client
-                        .iter()
-                        .map(|store| view(IncompatibleStoreScope::Client, store)),
-                )
-                .collect(),
-            confirmation: self.confirmation(HomeResetDisposition::Archive),
-            delete_confirmation: self
-                .deletable()
-                .then(|| self.confirmation(HomeResetDisposition::Delete)),
-            consequence: ARCHIVE_CONSEQUENCE.into(),
-            completed: false,
-            disposition: None,
-            backup_path: None,
-            planned_paths: paths(&mut self.planned(HomeResetDisposition::Archive)),
-            delete_paths: if self.deletable() {
-                paths(&mut self.planned(HomeResetDisposition::Delete))
-            } else {
-                Vec::new()
-            },
-            retired_paths: Vec::new(),
-            retained_paths: paths(&mut self.runtime_entries.retained.iter()),
-        }
-    }
-
-    /// A fresh sibling of the anchor: `<anchor>-backup-<stamp>`.
-    fn backup_path(&self, stamp: &str) -> Result<PathBuf, BridgeError> {
-        let anchor = self.anchor();
-        let (Some(parent), Some(name)) = (anchor.parent(), anchor.file_name()) else {
-            return Err(BridgeError::new(
-                BridgeErrorCode::InvalidArgument,
-                "The home has no parent directory to hold a backup.",
-            ));
-        };
-        let base = format!("{}-backup-{stamp}", name.to_string_lossy());
-        let mut backup = parent.join(&base);
-        for suffix in 1..100_u8 {
-            if !present(&backup)? {
-                return Ok(backup);
-            }
-            backup = parent.join(format!("{base}-{suffix}"));
-        }
-        Err(BridgeError::new(
-            BridgeErrorCode::Backend,
-            format!("No free backup name next to {}.", anchor.display()),
-        ))
-    }
-
-    fn groups(&self, disposition: HomeResetDisposition) -> [gents::home::RetireGroup<'_>; 2] {
-        [
-            gents::home::RetireGroup {
-                name: "home",
-                entries: self.home_entries(disposition),
-            },
-            gents::home::RetireGroup {
-                name: "desktop",
-                entries: &self.client_entries,
-            },
-        ]
-    }
-
-    fn preflight(&self, backup: &Path) -> Result<(), BridgeError> {
-        gents::home::archive_preflight(&self.groups(HomeResetDisposition::Archive), backup)
-            .map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error:#}")))
-    }
-
-    fn retire(
-        &self,
-        disposition: HomeResetDisposition,
-        backup: Option<&Path>,
-    ) -> Result<ManagedServerResetResult, BridgeError> {
-        self.retire_with_key_cleanup(disposition, backup, |record, key_file| {
-            record.delete_key(key_file)
-        })
-    }
-
-    fn retire_with_key_cleanup(
-        &self,
-        disposition: HomeResetDisposition,
-        backup: Option<&Path>,
-        mut delete_key: impl FnMut(&gents::store_key::StoreEncryption, &Path) -> anyhow::Result<()>,
-    ) -> Result<ManagedServerResetResult, BridgeError> {
-        let retire_as = match (disposition, backup) {
-            (HomeResetDisposition::Archive, Some(backup)) => {
-                self.preflight(backup)?;
-                gents::home::RetireDisposition::Archive { backup }
-            }
-            (HomeResetDisposition::Delete, None) => gents::home::RetireDisposition::Delete,
-            _ => {
-                return Err(BridgeError::new(
-                    BridgeErrorCode::InvalidArgument,
-                    "An archive needs a backup location and a deletion has none.",
-                ))
-            }
-        };
-        let keychain_keys: Vec<_> = self
-            .store_keys
-            .iter()
-            .filter(|key| {
-                disposition == HomeResetDisposition::Delete
-                    && matches!(
-                        key.record.custody,
-                        gents::store_key::StoreKeyCustody::MacosKeychain { .. }
-                    )
-            })
-            .collect();
-        let keep_record = |path: &&PathBuf| {
-            !keychain_keys
-                .iter()
-                .any(|key| key.record_files.contains(*path))
-        };
-        let home_entries: Vec<_> = self
-            .home_entries(disposition)
-            .iter()
-            .filter(keep_record)
-            .cloned()
-            .collect();
-        let client_entries: Vec<_> = self
-            .client_entries
-            .iter()
-            .filter(keep_record)
-            .cloned()
-            .collect();
-        let groups = [
-            gents::home::RetireGroup {
-                name: "home",
-                entries: &home_entries,
-            },
-            gents::home::RetireGroup {
-                name: "desktop",
-                entries: &client_entries,
-            },
-        ];
-        let mut retired = gents::home::retire_entries(&groups, retire_as)
-            .map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error:#}")))?;
-        for key in keychain_keys {
-            delete_key(&key.record, &key.key_file).map_err(|error| {
-                BridgeError::new(
-                    BridgeErrorCode::Backend,
-                    format!("Removing retired store key: {error:#}"),
-                )
-            })?;
-            retired.extend(
-                gents::home::retire_entries(
-                    &[gents::home::RetireGroup {
-                        name: "key_record",
-                        entries: &key.record_files,
-                    }],
-                    gents::home::RetireDisposition::Delete,
-                )
-                .map_err(|error| {
-                    BridgeError::new(BridgeErrorCode::Backend, format!("{error:#}"))
-                })?,
-            );
-        }
-        if disposition == HomeResetDisposition::Delete {
-            if let Some(keys) = self.delete_prunes_keys.as_ref() {
-                // Only an empty directory is removed; another home's key
-                // file keeps it in place.
-                if std::fs::remove_dir(keys).is_ok() {
-                    retired.push(keys.clone());
-                }
-            }
-        }
-        Ok(ManagedServerResetResult {
-            consequence: match disposition {
-                HomeResetDisposition::Archive => ARCHIVE_CONSEQUENCE,
-                HomeResetDisposition::Delete => DELETE_CONSEQUENCE,
-            }
-            .into(),
-            completed: true,
-            disposition: Some(disposition),
-            backup_path: backup.map(|path| path.to_string_lossy().into_owned()),
-            retired_paths: retired
-                .iter()
-                .map(|path| path.to_string_lossy().into_owned())
-                .collect(),
-            ..self.preview()
-        })
-    }
-}
-
-fn reject_symlink(path: &Path, label: &str) -> Result<(), BridgeError> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-        BridgeError::new(
-            BridgeErrorCode::Backend,
-            format!("Inspecting {label} {}: {error}", path.display()),
-        )
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(BridgeError::new(
-            BridgeErrorCode::PathEscapesRoot,
-            format!("{label} must not be a symbolic link"),
-        ));
-    }
-    Ok(())
-}
-
-fn reject_symlink_if_present(path: &Path, label: &str) -> Result<(), BridgeError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(BridgeError::new(
-            BridgeErrorCode::PathEscapesRoot,
-            format!("{label} must not be a symbolic link"),
-        )),
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(BridgeError::new(
-            BridgeErrorCode::Backend,
-            format!("Inspecting {label} {}: {error}", path.display()),
-        )),
-    }
-}
-
-impl From<ManagedServerToolCeiling> for gents_server::server_host::ManagedToolCeiling {
-    fn from(value: ManagedServerToolCeiling) -> Self {
-        match value {
-            ManagedServerToolCeiling::MetaOnly => Self::MetaOnly,
-            ManagedServerToolCeiling::Readonly => Self::Readonly,
-            ManagedServerToolCeiling::Readwrite => Self::Readwrite,
-        }
+fn runtime_tool_ceiling(
+    value: ManagedServerToolCeiling,
+) -> gents_server::server_host::ManagedToolCeiling {
+    use gents_server::server_host::ManagedToolCeiling;
+    match value {
+        ManagedServerToolCeiling::MetaOnly => ManagedToolCeiling::MetaOnly,
+        ManagedServerToolCeiling::Readonly => ManagedToolCeiling::Readonly,
+        ManagedServerToolCeiling::Readwrite => ManagedToolCeiling::Readwrite,
     }
 }
 
@@ -2021,12 +1392,12 @@ async fn observe_native_progress<R: Runtime>(
 async fn wait_for_managed_server<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
-    agent_home: &Path,
+    node_home: &Path,
 ) -> anyhow::Result<Readiness> {
     await_runtime_readiness(
         MANAGED_SERVER_READY_TIMEOUT,
         MANAGED_SERVER_POLL_INTERVAL,
-        || observe_port_readiness(agent_home),
+        || observe_port_readiness(node_home),
         || observe_native_progress(app, state),
     )
     .await
@@ -2171,7 +1542,7 @@ async fn adopt_booting_runtime<'a>(
 async fn wait_for_booting_managed_server<'a, R: Runtime>(
     app: &AppHandle<R>,
     state: &'a DesktopAppState,
-    agent_home: &Path,
+    node_home: &Path,
     lifecycle: LifecycleGuard<'a>,
 ) -> Result<BootOutcome<'a>, BridgeError> {
     let token = begin_start_wait(state).await;
@@ -2184,7 +1555,7 @@ async fn wait_for_booting_managed_server<'a, R: Runtime>(
         state,
         &token,
         lifecycle,
-        wait_for_managed_server(app, state, agent_home),
+        wait_for_managed_server(app, state, node_home),
     )
     .await;
     if token.is_cancelled() {
@@ -2193,7 +1564,7 @@ async fn wait_for_booting_managed_server<'a, R: Runtime>(
     if matches!(adopted, Ok(BootOutcome::NeedsLaunch(..))) {
         return adopted.map_err(|error| BridgeError::untyped(format!("{error:#}")));
     }
-    let result = settle_adoption(state, &token, agent_home, adopted).await;
+    let result = settle_adoption(state, &token, node_home, adopted).await;
     emit_status(app, state).await;
     result
 }
@@ -2203,7 +1574,7 @@ async fn wait_for_booting_managed_server<'a, R: Runtime>(
 async fn settle_adoption<'a>(
     state: &'a DesktopAppState,
     token: &StartWait,
-    agent_home: &Path,
+    node_home: &Path,
     adopted: anyhow::Result<BootOutcome<'a>>,
 ) -> Result<BootOutcome<'a>, BridgeError> {
     finish_start_wait(state, token).await;
@@ -2230,7 +1601,7 @@ async fn settle_adoption<'a>(
     let mut managed = state.managed_server.lock().await;
     managed.last_error = Some(typed.message.clone());
     managed.incompatible_store = (typed.code == BridgeErrorCode::IncompatibleLocalStore)
-        .then(|| refused_runtime_store(agent_home, refused));
+        .then(|| refused_runtime_store(node_home, refused));
     Err(typed)
 }
 
@@ -2329,7 +1700,7 @@ enum PortReadiness {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ForeignRuntime {
     port: u16,
-    agent_did: Option<String>,
+    node_did: Option<String>,
     home: Option<String>,
 }
 
@@ -2345,16 +1716,16 @@ impl ForeignRuntime {
         };
         Self {
             port,
-            agent_did: field("agent_did"),
+            node_did: field("node_did"),
             home: field("home"),
         }
     }
 
     fn message(&self) -> String {
         let port = self.port;
-        let Some(did) = self.agent_did.as_deref() else {
+        let Some(did) = self.node_did.as_deref() else {
             return format!(
-                "Port {port} is in use by a program that does not advertise a Gents identity, and the local agent needs that port. Quit that program, then start the agent again."
+                "Port {port} is in use by a program that does not advertise a Gents identity, and the local Node needs that port. Quit that program, then start the Node again."
             );
         };
         let (located, home) = match self.home.as_deref() {
@@ -2362,24 +1733,22 @@ impl ForeignRuntime {
             None => (String::new(), "<its home>"),
         };
         format!(
-            "Port {port} is already served by a different Gents agent ({did}){located}, and the local agent needs that port. Stop the other agent with `gents service stop --home {home}` if it runs as a background service, or with Ctrl-C in the terminal running `gents server`. Or restart it on another port with `gents server --home {home} --http-port <port>`."
+            "Port {port} is already served by a different Gents Node ({did}){located}, and the local Node needs that port. Stop the other Node with `gents service stop --home {home}` if it runs as a background service, or with Ctrl-C in the terminal running `gents server`. Or restart it on another port with `gents server --home {home} --http-port <port>`."
         )
     }
 }
 
 fn occupied_port_message(port: u16) -> String {
     format!(
-        "Port {port} is in use by another program that is not a Gents agent, and the local agent needs that port. Quit that program, then start the agent again."
+        "Port {port} is in use by another program that is not a Gents Node, and the local Node needs that port. Quit that program, then start the Node again."
     )
 }
 
 /// Who answers on the managed port. Any answer on a fresh home, or one that
 /// does not carry the initialized identity, belongs to another runtime.
-async fn observe_port_readiness(
-    agent_home: &std::path::Path,
-) -> Result<PortReadiness, BridgeError> {
-    let config = gents_server::server_host::ServerConfig::standard(agent_home.to_path_buf());
-    let Some(payload) = default_port_payload(Some(agent_home)).await? else {
+async fn observe_port_readiness(node_home: &std::path::Path) -> Result<PortReadiness, BridgeError> {
+    let config = gents_server::server_host::ServerConfig::standard(node_home.to_path_buf());
+    let Some(payload) = default_port_payload(Some(node_home)).await? else {
         let address = std::net::SocketAddr::new(config.http_addr, config.http_port);
         let accepts = tokio::time::timeout(
             Duration::from_millis(250),
@@ -2393,8 +1762,8 @@ async fn observe_port_readiness(
             PortReadiness::NotListening
         });
     };
-    let initialized_did = if gents_server::server_host::initialized_home(agent_home) {
-        read_initialized_did(agent_home).await
+    let initialized_did = if gents_server::server_host::initialized_home(node_home) {
+        read_initialized_did(node_home).await
     } else {
         None
     };
@@ -2411,7 +1780,7 @@ fn classify_port_payload(
     payload: serde_json::Value,
 ) -> PortReadiness {
     let live_did = payload
-        .get("agent_did")
+        .get("node_did")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .to_string();
@@ -2430,14 +1799,14 @@ fn classify_port_payload(
 fn validate_ready_runtime(
     status: &ManagedServerStatus,
     authority: &EffectiveManagedAuthority,
-    agent_home: &Path,
+    node_home: &Path,
 ) -> anyhow::Result<()> {
-    let expected_did = std::fs::read(agent_home.join("init.json"))
+    let expected_did = std::fs::read(node_home.join("init.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         .and_then(|value| {
             value
-                .get("agent_did")
+                .get("node_did")
                 .and_then(serde_json::Value::as_str)
                 .filter(|did| !did.trim().is_empty())
                 .map(str::to_owned)
@@ -2447,13 +1816,13 @@ fn validate_ready_runtime(
         .as_ref()
         .map(|path| path.to_string_lossy().into_owned());
     if expected_did.is_none()
-        || status.agent_did.as_deref() != expected_did.as_deref()
+        || status.node_did.as_deref() != expected_did.as_deref()
         || status.effective_tool_ceiling != Some(authority.tool_ceiling)
         || status.effective_tool_root.as_deref() != expected_root.as_deref()
     {
         anyhow::bail!(
             "native runtime readiness did not match the initialized identity and reviewed host authority (live did={:?} ceiling={:?} root={:?}; expected did={:?} ceiling={:?} root={:?})",
-            status.agent_did,
+            status.node_did,
             status.effective_tool_ceiling,
             status.effective_tool_root,
             expected_did,
@@ -2502,7 +1871,7 @@ pub(crate) fn refresh_packaged_install<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
 ) -> Result<(), BridgeError> {
-    if state.policy.agent_home.is_none() {
+    if state.policy.node_home.is_none() {
         return Ok(());
     }
     // The setup thread is outside the async runtime. Waiting here keeps a
@@ -2563,11 +1932,11 @@ pub(crate) async fn restart_outdated_managed_job<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
 ) -> Result<(), BridgeError> {
-    let Some(agent_home) = state.policy.agent_home.clone() else {
+    let Some(node_home) = state.policy.node_home.clone() else {
         return Ok(());
     };
     let _lifecycle = state.managed_server_lifecycle.lock().await;
-    let PortReadiness::Outdated { version } = observe_port_readiness(&agent_home).await? else {
+    let PortReadiness::Outdated { version } = observe_port_readiness(&node_home).await? else {
         return Ok(());
     };
     if !run_native(native_service(app, state)?, |service| service.status())
@@ -2610,10 +1979,10 @@ fn build_native_service<R: Runtime>(
     state: &DesktopAppState,
     install_runtime: bool,
 ) -> Result<gents_server::native_service::NativeServiceManager, BridgeError> {
-    let home = state.policy.agent_home.clone().ok_or_else(|| {
+    let home = state.policy.node_home.clone().ok_or_else(|| {
         BridgeError::new(
             BridgeErrorCode::Unsupported,
-            "managed server requires a local agent home",
+            "managed server requires a local node home",
         )
     })?;
     let executable = resolve_service_executable(app, state.policy.desktop_paths.root())?;
@@ -2629,8 +1998,8 @@ fn build_native_service<R: Runtime>(
     config.stderr_path = Some(crate::logging::runtime_error_log(
         state.policy.desktop_paths.root(),
     ));
-    // Login Items shows the code-signing personal name unless the agent
-    // names the desktop bundle that installed it.
+    // Login Items shows the code-signing identity name unless the
+    // agent names the desktop bundle that installed it.
     let bundle_id = app.config().identifier.clone();
     if !bundle_id.trim().is_empty() {
         config.associated_bundle_id = Some(bundle_id);
@@ -2665,11 +2034,11 @@ where
 }
 
 pub(super) async fn start_running_managed_pairing(state: &DesktopAppState, core: Arc<ClientCore>) {
-    let Some(agent_home) = state.policy.agent_home.clone() else {
-        tracing::warn!("managed pairing requires a local agent home");
+    let Some(node_home) = state.policy.node_home.clone() else {
+        tracing::warn!("managed pairing requires a local node home");
         return;
     };
-    let target = match matching_external_server(&agent_home).await {
+    let target = match matching_external_server(&node_home).await {
         Ok(status) => status.as_ref().and_then(pairing_target),
         Err(error) => {
             tracing::warn!(
@@ -2682,24 +2051,24 @@ pub(super) async fn start_running_managed_pairing(state: &DesktopAppState, core:
     };
     let Some(target) = target else { return };
     if let Err(error) = core
-        .refresh_local_standard_peer(&agent_home, &target.agent_name)
+        .refresh_local_standard_peer(&node_home, &target.node_name)
         .await
     {
         tracing::warn!(
             target: "gents_desktop::managed_server",
-            agent_did = %target.agent_did,
+            node_did = %target.node_did,
             error = %error,
             "failed to refresh native managed runtime route before pairing"
         );
         return;
     }
-    start_managed_runtime_pairing(state, core, agent_home, target).await;
+    start_managed_runtime_pairing(state, core, node_home, target).await;
 }
 
 async fn start_managed_runtime_pairing(
     state: &DesktopAppState,
     core: Arc<ClientCore>,
-    agent_home: std::path::PathBuf,
+    node_home: std::path::PathBuf,
     target: ManagedPairingTarget,
 ) {
     // A durably paired runtime skips pairing below, so its replicated schema
@@ -2719,7 +2088,7 @@ async fn start_managed_runtime_pairing(
                 {
                     tracing::warn!(
                         target: "gents_desktop::managed_server",
-                        agent_did = %observed_target.agent_did,
+                        node_did = %observed_target.node_did,
                         error = %error,
                         "managed runtime replicated schema observation failed"
                     );
@@ -2729,7 +2098,7 @@ async fn start_managed_runtime_pairing(
     }
 
     if core.peer_records().await.iter().any(|peer| {
-        peer.agent_did == target.agent_did
+        peer.node_did == target.node_did
             && peer.is_enrollment()
             && peer.is_managed_runtime()
             && peer.is_chat_ready_at(chrono::Utc::now())
@@ -2752,7 +2121,7 @@ async fn start_managed_runtime_pairing(
             &cancel,
             MANAGED_PAIRING_ATTEMPTS,
             MANAGED_PAIRING_RETRY_DELAY,
-            || ensure_managed_runtime_pairing(Arc::clone(&core), &agent_home, &target, &cancel),
+            || ensure_managed_runtime_pairing(Arc::clone(&core), &node_home, &target, &cancel),
         )
         .await;
         match paired {
@@ -2760,14 +2129,14 @@ async fn start_managed_runtime_pairing(
             Err(PairingFailure::Cancelled) => {
                 tracing::info!(
                     target: "gents_desktop::managed_server",
-                    agent_did = %target.agent_did,
+                    node_did = %target.node_did,
                     "background managed runtime pairing was cancelled"
                 );
             }
             Err(error) => {
                 tracing::warn!(
                     target: "gents_desktop::managed_server",
-                    agent_did = %target.agent_did,
+                    node_did = %target.node_did,
                     error = %error,
                     "background managed runtime pairing failed"
                 );
@@ -2955,11 +2324,11 @@ async fn observe_managed_runtime_schema(
     target: &ManagedPairingTarget,
 ) -> Result<(), String> {
     let observation = core
-        .begin_runtime_schema_observation(&target.agent_did, &target.graphql)
+        .begin_runtime_schema_observation(&target.node_did, &target.graphql)
         .ok_or_else(|| {
             format!(
                 "managed runtime {} no longer routes through {}",
-                target.agent_did, target.graphql
+                target.node_did, target.graphql
             )
         })?;
     let endpoint = observation
@@ -2974,12 +2343,12 @@ async fn observe_managed_runtime_schema(
 
 async fn ensure_managed_runtime_pairing(
     core: Arc<ClientCore>,
-    agent_home: &std::path::Path,
+    node_home: &std::path::Path,
     target: &ManagedPairingTarget,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<(), PairingFailure> {
     if core.peer_records().await.iter().any(|peer| {
-        peer.agent_did == target.agent_did
+        peer.node_did == target.node_did
             && peer.is_enrollment()
             && peer.is_managed_runtime()
             && peer.is_chat_ready_at(chrono::Utc::now())
@@ -3011,7 +2380,7 @@ async fn ensure_managed_runtime_pairing(
             core.active_status_enrollment_requests()
                 .await
                 .map(|requests| {
-                    select_managed_request(requests, &target.agent_did, live_peer.as_deref())
+                    select_managed_request(requests, &target.node_did, live_peer.as_deref())
                 })
                 .map_err(|error| format!("{error:#}"))
         },
@@ -3026,7 +2395,7 @@ async fn ensure_managed_runtime_pairing(
         // Authoring installs and unwinds bootstrap replication state, so it
         // is not interrupted; cancellation is observed once it returns.
         || async {
-            core.request_status_enrollment_with_label(&status, Some(&target.agent_name))
+            core.request_status_enrollment_with_label(&status, Some(&target.node_name))
                 .await
                 .map(|request| request.request_id)
                 .map_err(|error| {
@@ -3044,7 +2413,7 @@ async fn ensure_managed_runtime_pairing(
         MANAGED_PAIRING_POLL_INTERVAL,
         || async {
             core.peer_records().await.iter().any(|peer| {
-                peer.agent_did == target.agent_did
+                peer.node_did == target.node_did
                     && peer.is_enrollment()
                     && peer.is_managed_runtime()
                     && peer.is_chat_ready_at(chrono::Utc::now())
@@ -3052,7 +2421,7 @@ async fn ensure_managed_runtime_pairing(
         },
         || async {
             match gents_server::server_host::approve_managed_client_enrollment(
-                agent_home,
+                node_home,
                 &target.graphql,
                 &request_id,
             )
@@ -3082,7 +2451,7 @@ async fn ensure_managed_runtime_pairing(
     .await?;
     tracing::info!(
         target: "gents_desktop::managed_server",
-        agent_did = %target.agent_did,
+        node_did = %target.node_did,
         "managed runtime desktop pairing is ready"
     );
     Ok(())
@@ -3110,13 +2479,13 @@ fn live_server_peer(status: &serde_json::Value) -> Option<String> {
 /// serving from `live_peer`.
 fn select_managed_request(
     requests: Vec<EnrollmentRequestResult>,
-    agent_did: &str,
+    node_did: &str,
     live_peer: Option<&str>,
 ) -> Option<EnrollmentRequestResult> {
     let live_peer = live_peer?;
     requests
         .into_iter()
-        .filter(|request| request.owner_agent == agent_did && request.server_peer == live_peer)
+        .filter(|request| request.owner_node == node_did && request.server_peer == live_peer)
         .max_by(|left, right| {
             left.expires_at
                 .cmp(&right.expires_at)
@@ -3171,12 +2540,12 @@ fn enrollment_request_is_not_visible_yet(message: &str) -> bool {
 
 fn pairing_target(status: &ManagedServerStatus) -> Option<ManagedPairingTarget> {
     Some(ManagedPairingTarget {
-        agent_name: status.agent_name.as_deref()?.trim().to_string(),
-        agent_did: status.agent_did.as_deref()?.trim().to_string(),
+        node_name: status.node_name.as_deref()?.trim().to_string(),
+        node_did: status.node_did.as_deref()?.trim().to_string(),
         graphql: status.graphql.as_deref()?.trim().to_string(),
     })
     .filter(|target| {
-        !target.agent_name.is_empty() && !target.agent_did.is_empty() && !target.graphql.is_empty()
+        !target.node_name.is_empty() && !target.node_did.is_empty() && !target.graphql.is_empty()
     })
 }
 
@@ -3209,11 +2578,11 @@ pub(super) async fn drain_managed_runtime_pairing(state: &DesktopAppState) {
 /// The runtime on the default port when it is this home's. A fresh first-run
 /// home never adopts a neighbor's `gents server`.
 async fn matching_external_server(
-    agent_home: &std::path::Path,
+    node_home: &std::path::Path,
 ) -> Result<Option<ManagedServerStatus>, BridgeError> {
     // A booting runtime is observed through its native service until it
     // reports ready; discovery and pairing need its runtime.json.
-    Ok(match observe_port_readiness(agent_home).await? {
+    Ok(match observe_port_readiness(node_home).await? {
         PortReadiness::Ready(status) => Some(status),
         PortReadiness::Foreign(_)
         | PortReadiness::Booting
@@ -3227,11 +2596,11 @@ fn managed_status_from_payload(payload: serde_json::Value, live_did: &str) -> Ma
     ManagedServerStatus {
         state: ManagedServerState::External,
         auto_start: false,
-        agent_name: payload
-            .get("agent_name")
+        node_name: payload
+            .get("node_name")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string),
-        agent_did: (!live_did.is_empty()).then(|| live_did.to_string()),
+        node_did: (!live_did.is_empty()).then(|| live_did.to_string()),
         graphql: payload
             .get("desktop_graphql")
             .or_else(|| payload.get("graphql"))
@@ -3276,10 +2645,10 @@ fn refused_kind(error: &anyhow::Error) -> Option<gents::storage_backend::Incompa
 /// The managed runtime's refused store: the legacy marker when present,
 /// otherwise the refusal the runtime reported by its exit status.
 fn refused_runtime_store(
-    agent_home: &Path,
+    node_home: &Path,
     reported: Option<gents::storage_backend::IncompatibleStoreKind>,
 ) -> gents::storage_backend::IncompatibleStore {
-    let data_path = gents::home::default_data_dir(agent_home);
+    let data_path = gents::home::default_data_dir(node_home);
     let kind = gents::storage_backend::incompatible_store_kind(&data_path)
         .ok()
         .flatten()
@@ -3288,19 +2657,19 @@ fn refused_runtime_store(
     let data_path = match kind {
         // The exit status names the refusal, not the key; its directory
         // under the home is where the runtime keeps keys.
-        gents::storage_backend::IncompatibleStoreKind::InsecureKey => agent_home.join("keys"),
+        gents::storage_backend::IncompatibleStoreKind::InsecureKey => node_home.join("keys"),
         _ => data_path,
     };
     gents::storage_backend::IncompatibleStore { kind, data_path }
 }
 
 async fn default_port_payload(
-    agent_home: Option<&Path>,
+    node_home: Option<&Path>,
 ) -> Result<Option<serde_json::Value>, BridgeError> {
-    let Some(agent_home) = agent_home else {
+    let Some(node_home) = node_home else {
         return Ok(None);
     };
-    let config = gents_server::server_host::ServerConfig::standard(agent_home.to_path_buf());
+    let config = gents_server::server_host::ServerConfig::standard(node_home.to_path_buf());
     match gents_desktop_core::local_runtime::fetch_runtime_connection_payload(&config.status_url())
         .await
     {
@@ -3309,8 +2678,8 @@ async fn default_port_payload(
     }
 }
 
-async fn ensure_default_port_identity(agent_home: &Path) -> Result<(), BridgeError> {
-    match observe_port_readiness(agent_home).await? {
+async fn ensure_default_port_identity(node_home: &Path) -> Result<(), BridgeError> {
+    match observe_port_readiness(node_home).await? {
         PortReadiness::Foreign(foreign) => Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
             foreign.message(),
@@ -3340,7 +2709,7 @@ fn ensure_native_owns_running_endpoint(
     {
         return Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
-            "The running local agent is not owned by the native Gents service. Stop it explicitly before using managed controls.",
+            "The running local Node is not owned by the native Gents service. Stop it explicitly before using managed controls.",
         ));
     }
     Ok(())
@@ -3395,8 +2764,8 @@ async fn stop_managed_server_locked<R: Runtime>(
         managed.approval_refused = false;
     }
     // The returned status names another home's runtime on the port.
-    let port = match state.policy.agent_home.as_deref() {
-        Some(agent_home) => observe_port_readiness(agent_home).await?,
+    let port = match state.policy.node_home.as_deref() {
+        Some(node_home) => observe_port_readiness(node_home).await?,
         None => PortReadiness::NotListening,
     };
     let native = run_native(native_service(app, state)?, |service| service.status()).await?;
@@ -3426,20 +2795,20 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
         request.tool_ceiling,
         request.tool_root.as_deref(),
     )?;
-    let agent_home = state.policy.agent_home.clone().ok_or_else(|| {
+    let node_home = state.policy.node_home.clone().ok_or_else(|| {
         BridgeError::new(
             BridgeErrorCode::Unsupported,
-            "managed server requires a local agent home",
+            "managed server requires a local node home",
         )
     })?;
     // Refused before taking the lifecycle lock, which supersedes an
     // in-flight start: a refused restart must not cancel it.
-    refuse_renaming_home(&agent_home, &request.agent_name).await?;
+    refuse_renaming_home(&node_home, &request.node_name).await?;
     let lifecycle = lock_lifecycle_superseding_start(&state).await;
     ensure_launchable_here(&app, &state)?;
-    let port = observe_port_readiness(&agent_home).await?;
+    let port = observe_port_readiness(&node_home).await?;
     let previous_did = match &port {
-        PortReadiness::Ready(status) => status.agent_did.clone(),
+        PortReadiness::Ready(status) => status.node_did.clone(),
         PortReadiness::Foreign(_)
         | PortReadiness::Booting
         | PortReadiness::Outdated { .. }
@@ -3460,9 +2829,9 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
     drain_managed_runtime_pairing(&state).await;
     let was_enabled = service_status.enabled;
     let provision = gents_server::server_host::ProvisionOptions {
-        home: agent_home.clone(),
-        agent_name: request.agent_name.clone(),
-        tool_ceiling: tool_ceiling.into(),
+        home: node_home.clone(),
+        node_name: request.node_name.clone(),
+        tool_ceiling: runtime_tool_ceiling(tool_ceiling),
         tool_root: authority.tool_root.clone(),
         store_key_custody: state.policy.store_key_custody,
     };
@@ -3476,9 +2845,9 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
         || async {
             save_confirmed_preference(
                 &state,
-                &agent_home,
+                &node_home,
                 &StoredManagedServer {
-                    agent_name: request.agent_name.clone(),
+                    node_name: request.node_name.clone(),
                     tool_ceiling: Some(tool_ceiling),
                     tool_root: tool_root.clone(),
                     reviewed_for: None,
@@ -3493,8 +2862,8 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
         emit_status(&app, &state).await;
         return Err(error);
     }
-    if let (Some(core), Some(agent_did)) = (current_core(&state), previous_did.as_deref()) {
-        if let Err(error) = core.mark_managed_runtime_restarting(agent_did).await {
+    if let (Some(core), Some(node_did)) = (current_core(&state), previous_did.as_deref()) {
+        if let Err(error) = core.mark_managed_runtime_restarting(node_did).await {
             let message = format!(
                 "The agent was stopped, but desktop restart bookkeeping failed: {error:#}. Retry Restart Agent."
             );
@@ -3508,13 +2877,13 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
     let launch = NativeLaunch {
         app: &app,
         state: &state,
-        agent_home: &agent_home,
+        node_home: &node_home,
         enable_at_login: was_enabled,
     };
     // Another runtime on the port does not keep this job from stopping, but
     // a job launched into it could only crash loop.
     let install = async {
-        ensure_default_port_identity(&agent_home)
+        ensure_default_port_identity(&node_home)
             .await
             .map_err(|mut error| {
                 error.message = format!("Your agent was stopped; {}", error.message);
@@ -3526,7 +2895,7 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
         .await
     };
     let launched = match install_then_launch(&state, &token, lifecycle, install, &launch).await {
-        Ok((ready, lifecycle)) => match validate_ready_runtime(&ready, &authority, &agent_home) {
+        Ok((ready, lifecycle)) => match validate_ready_runtime(&ready, &authority, &node_home) {
             Ok(()) => Ok(lifecycle),
             Err(error) => Err(LaunchFailure {
                 error,
@@ -3544,7 +2913,7 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
         }
         Err(failure) => {
             return Err(
-                fail_managed_start(&app, &state, &token, &agent_home, was_enabled, failure).await,
+                fail_managed_start(&app, &state, &token, &node_home, was_enabled, failure).await,
             )
         }
     };
@@ -3553,11 +2922,11 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
         start_running_managed_pairing(&state, core).await;
     }
     let native = run_native(native_service(&app, &state)?, |service| service.status()).await?;
-    let mut status = matching_external_server(&agent_home)
+    let mut status = matching_external_server(&node_home)
         .await?
         .map(|external| project_external_status(external, &native))
         .ok_or_else(|| BridgeError::untyped("native service did not become ready"))?;
-    status.pairing_ready = pairing_is_ready(&state, status.agent_did.as_deref()).await;
+    status.pairing_ready = pairing_is_ready(&state, status.node_did.as_deref()).await;
     Ok(status)
 }
 
@@ -3670,7 +3039,7 @@ fn status_from(
             .as_ref()
             .map(ToString::to_string)
             .unwrap_or_else(|| {
-                "The background agent cannot open its home: it was created by an older Gents version.".to_string()
+                "The background Node cannot open its home: it was created by an older Gents version.".to_string()
             })
     });
     let crashed = refused_store.or_else(|| {
@@ -3678,7 +3047,7 @@ fn status_from(
             .filter(|_| settled)
             .map(|(exit, restarts)| {
                 format!(
-                    "The background agent keeps exiting before it becomes ready: it {} and was restarted {restarts} times in a row. Restart the agent, or check its log.",
+                    "The background Node keeps exiting before it becomes ready: it {} and was restarted {restarts} times in a row. Restart the Node, or check its log.",
                     exit.reason
                 )
             })
@@ -3691,7 +3060,7 @@ fn status_from(
                     })
                     .map(|exit| {
                         format!(
-                            "The background agent failed and will not be restarted: it {} after {} restarts. Start the agent again, or check its log.",
+                            "The background Node failed and will not be restarted: it {} after {} restarts. Start the Node again, or check its log.",
                             exit.reason, exit.restarts
                         )
                     })
@@ -3719,8 +3088,8 @@ fn status_from(
             ManagedServerState::Disabled
         },
         auto_start: native.is_some_and(|status| status.enabled),
-        agent_name: stored.map(|stored| stored.agent_name.clone()),
-        agent_did: None,
+        node_name: stored.map(|stored| stored.node_name.clone()),
+        node_did: None,
         graphql: None,
         effective_tool_ceiling: stored.and_then(|value| value.tool_ceiling),
         effective_tool_root: stored.and_then(|value| value.tool_root.clone()),
@@ -3763,27 +3132,27 @@ async fn emit_status<R: Runtime>(app: &AppHandle<R>, state: &DesktopAppState) {
     let _ = app.emit(MANAGED_SERVER_UPDATED_EVENT, status);
 }
 
-async fn read_initialized_did(agent_home: &std::path::Path) -> Option<String> {
-    tokio::fs::read(agent_home.join("init.json"))
+async fn read_initialized_did(node_home: &std::path::Path) -> Option<String> {
+    tokio::fs::read(node_home.join("init.json"))
         .await
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         .and_then(|value| {
             value
-                .get("agent_did")
+                .get("node_did")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
         })
 }
 
-async fn read_initialized_name(agent_home: &std::path::Path) -> Option<String> {
-    tokio::fs::read(agent_home.join("init.json"))
+async fn read_initialized_name(node_home: &std::path::Path) -> Option<String> {
+    tokio::fs::read(node_home.join("init.json"))
         .await
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         .and_then(|value| {
             value
-                .get("agent_name")
+                .get("node_name")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
         })
@@ -3793,13 +3162,13 @@ async fn read_initialized_name(agent_home: &std::path::Path) -> Option<String> {
 /// name, so a start or restart naming another agent is refused before
 /// anything (stop, provisioning, preferences) touches the home.
 async fn refuse_renaming_home(
-    agent_home: &std::path::Path,
+    node_home: &std::path::Path,
     requested: &str,
 ) -> Result<(), BridgeError> {
-    if !gents_server::server_host::initialized_home(agent_home) {
+    if !gents_server::server_host::initialized_home(node_home) {
         return Ok(());
     }
-    let initialized = read_initialized_name(agent_home).await;
+    let initialized = read_initialized_name(node_home).await;
     if name_confirmed_by_home(requested, initialized.as_deref()) {
         return Ok(());
     }
@@ -3808,11 +3177,11 @@ async fn refuse_renaming_home(
         BridgeErrorCode::InvalidArgument,
         match initialized {
             Some(name) => format!(
-                "This computer already has a local agent named {name}, so {requested} was not created. Go back to continue with {name}."
+                "This computer already has a local Node named {name}, so {requested} was not created. Go back to continue with {name}."
             ),
             None => format!(
-                "The local agent home at {} has no readable agent name; it was left unchanged.",
-                agent_home.display()
+                "The local node home at {} has no readable node name; it was left unchanged.",
+                node_home.display()
             ),
         },
     ))
@@ -3827,14 +3196,14 @@ fn name_confirmed_by_home(requested: &str, initialized: Option<&str>) -> bool {
 /// stored preference is left as it was.
 async fn save_confirmed_preference(
     state: &DesktopAppState,
-    agent_home: &std::path::Path,
+    node_home: &std::path::Path,
     stored: &StoredManagedServer,
 ) -> Result<(), BridgeError> {
     if name_confirmed_by_home(
-        &stored.agent_name,
-        read_initialized_name(agent_home).await.as_deref(),
+        &stored.node_name,
+        read_initialized_name(node_home).await.as_deref(),
     ) {
-        let reviewed_for = read_home_identity(agent_home)
+        let reviewed_for = read_home_identity(node_home)
             .await
             .map(|identity| identity.reviewed);
         save_preference(
@@ -3849,9 +3218,9 @@ async fn save_confirmed_preference(
     Ok(())
 }
 
-async fn read_home_identity(agent_home: &std::path::Path) -> Option<HomeIdentity> {
-    let home = tokio::fs::canonicalize(agent_home).await.ok()?;
-    let bytes = tokio::fs::read(agent_home.join("init.json")).await.ok()?;
+async fn read_home_identity(node_home: &std::path::Path) -> Option<HomeIdentity> {
+    let home = tokio::fs::canonicalize(node_home).await.ok()?;
+    let bytes = tokio::fs::read(node_home.join("init.json")).await.ok()?;
     let init: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     let text = |key: &str| {
         init.get(key)
@@ -3862,8 +3231,8 @@ async fn read_home_identity(agent_home: &std::path::Path) -> Option<HomeIdentity
     };
     Some(HomeIdentity {
         reviewed: ReviewedHome {
-            home: home.to_string_lossy().into_owned(),
-            agent_did: text("agent_did")?,
+            node_home: home.to_string_lossy().into_owned(),
+            node_did: text("node_did")?,
         },
         tool_ceiling: text("tool_ceiling").as_deref().and_then(parse_tool_ceiling),
         tool_root: text("tool_root"),
@@ -3908,7 +3277,7 @@ fn start_authority(
             Some((ceiling, root)) => EffectiveManagedAuthority::from_request(ceiling, root),
             None => Err(BridgeError::new(
                 BridgeErrorCode::InvalidArgument,
-                "Review host access for this agent home before starting it.",
+                "Review host access for this node home before starting it.",
             )),
         },
     }
@@ -3920,8 +3289,8 @@ async fn load_bound_preference(
     let Some(stored) = load_preference(state).await? else {
         return Ok(None);
     };
-    let home = match state.policy.agent_home.as_deref() {
-        Some(agent_home) => read_home_identity(agent_home).await,
+    let home = match state.policy.node_home.as_deref() {
+        Some(node_home) => read_home_identity(node_home).await,
         None => None,
     };
     Ok(Some(bind_preference(stored, home.as_ref())))
@@ -3986,26 +3355,26 @@ mod tests {
     use super::*;
     use crate::state::ManagedServerState as ManagedServerRuntimeState;
 
-    fn write_home(agent_home: &Path, did: &str, ceiling: &str, root: Option<&str>) {
+    fn write_home(node_home: &Path, did: &str, ceiling: &str, root: Option<&str>) {
         let init = serde_json::json!({
-            "home": agent_home.display().to_string(),
-            "agent_name": "Forge",
-            "agent_did": did,
+            "home": node_home.display().to_string(),
+            "node_name": "Forge",
+            "node_did": did,
             "key_path": null,
             "tool_ceiling": ceiling,
             "tool_root": root,
         });
-        write(&agent_home.join("init.json"), &init.to_string());
+        write(&node_home.join("init.json"), &init.to_string());
     }
 
     /// Reviewed for the Forge home as it stands, then saved through the
     /// same confirm-and-bind path start and restart use.
-    async fn remember_forge_grant(state: &DesktopAppState, agent_home: &Path, root: &str) {
+    async fn remember_forge_grant(state: &DesktopAppState, node_home: &Path, root: &str) {
         save_confirmed_preference(
             state,
-            agent_home,
+            node_home,
             &StoredManagedServer {
-                agent_name: "Forge".to_string(),
+                node_name: "Forge".to_string(),
                 tool_ceiling: Some(ManagedServerToolCeiling::Readwrite),
                 tool_root: Some(root.to_string()),
                 reviewed_for: None,
@@ -4028,10 +3397,10 @@ mod tests {
         use tauri::webview::InvokeRequest;
 
         let (temp, state) = orchestration_state();
-        let agent_home = state.policy.agent_home.clone().expect("agent home");
+        let node_home = state.policy.node_home.clone().expect("node home");
         let desktop_root = state.policy.desktop_paths.root().to_path_buf();
-        write_home(&agent_home, "did:key:forge", "MetaOnly", None);
-        let before = std::fs::read(agent_home.join("init.json")).unwrap();
+        write_home(&node_home, "did:key:forge", "MetaOnly", None);
+        let before = std::fs::read(node_home.join("init.json")).unwrap();
         let root = temp.path().join("work");
         std::fs::create_dir_all(&root).unwrap();
         let app = tauri::test::mock_builder()
@@ -4054,7 +3423,7 @@ mod tests {
                 url: "http://tauri.localhost".parse().expect("invoke URL"),
                 body: InvokeBody::Json(serde_json::json!({
                     "request": {
-                        "agentName": "Scout",
+                        "nodeName": "Scout",
                         "toolCeiling": "readwrite",
                         "toolRoot": root.display().to_string(),
                     }
@@ -4065,7 +3434,7 @@ mod tests {
         )
         .expect_err("a request naming another agent must be refused");
         assert!(!desktop_root.join(MANAGED_SERVER_CONFIG).exists());
-        let after = std::fs::read(agent_home.join("init.json")).unwrap();
+        let after = std::fs::read(node_home.join("init.json")).unwrap();
         assert_eq!(after, before, "{cmd} rewrote the initialized home");
         (temp, after, error.to_string())
     }
@@ -4074,7 +3443,7 @@ mod tests {
     fn start_naming_another_agent_leaves_the_home_untouched() {
         let (_temp, _, error) = invoke_on_forge_home("desktop_managed_server_start");
         assert!(
-            error.contains("already has a local agent named Forge"),
+            error.contains("already has a local Node named Forge"),
             "{error}"
         );
     }
@@ -4083,7 +3452,7 @@ mod tests {
     fn restart_naming_another_agent_leaves_the_home_untouched() {
         let (_temp, _, error) = invoke_on_forge_home("desktop_managed_server_restart");
         assert!(
-            error.contains("already has a local agent named Forge"),
+            error.contains("already has a local Node named Forge"),
             "{error}"
         );
     }
@@ -4091,11 +3460,11 @@ mod tests {
     #[tokio::test]
     async fn a_remembered_grant_reconnects_only_the_home_it_was_reviewed_for() {
         let (temp, state) = orchestration_state();
-        let agent_home = state.policy.agent_home.clone().expect("agent home");
+        let node_home = state.policy.node_home.clone().expect("node home");
         let root = std::fs::canonicalize(temp.path()).unwrap();
         let root = root.to_string_lossy().into_owned();
-        write_home(&agent_home, "did:key:forge", "Readwrite", Some(&root));
-        remember_forge_grant(&state, &agent_home, &root).await;
+        write_home(&node_home, "did:key:forge", "Readwrite", Some(&root));
+        remember_forge_grant(&state, &node_home, &root).await;
 
         let bound = load_bound_preference(&state).await.unwrap();
         let authority = start_authority(None, None, bound.as_ref()).expect("reviewed home");
@@ -4108,38 +3477,38 @@ mod tests {
     #[tokio::test]
     async fn a_replaced_or_missing_home_needs_a_fresh_review_and_is_not_rewritten() {
         let (temp, state) = orchestration_state();
-        let agent_home = state.policy.agent_home.clone().expect("agent home");
+        let node_home = state.policy.node_home.clone().expect("node home");
         let root = std::fs::canonicalize(temp.path()).unwrap();
         let root = root.to_string_lossy().into_owned();
-        write_home(&agent_home, "did:key:forge", "Readwrite", Some(&root));
-        remember_forge_grant(&state, &agent_home, &root).await;
+        write_home(&node_home, "did:key:forge", "Readwrite", Some(&root));
+        remember_forge_grant(&state, &node_home, &root).await;
 
         // Another identity now lives at the same path.
-        write_home(&agent_home, "did:key:other", "MetaOnly", None);
-        let before = std::fs::read(agent_home.join("init.json")).unwrap();
+        write_home(&node_home, "did:key:other", "MetaOnly", None);
+        let before = std::fs::read(node_home.join("init.json")).unwrap();
         let bound = load_bound_preference(&state).await.unwrap();
         assert_eq!(bound.as_ref().unwrap().tool_ceiling, None);
         let error = start_authority(None, None, bound.as_ref()).unwrap_err();
         assert_eq!(error.code, BridgeErrorCode::InvalidArgument);
-        assert_eq!(std::fs::read(agent_home.join("init.json")).unwrap(), before);
+        assert_eq!(std::fs::read(node_home.join("init.json")).unwrap(), before);
 
-        std::fs::remove_file(agent_home.join("init.json")).unwrap();
+        std::fs::remove_file(node_home.join("init.json")).unwrap();
         let bound = load_bound_preference(&state).await.unwrap();
         assert!(start_authority(None, None, bound.as_ref()).is_err());
-        assert!(!agent_home.join("init.json").exists());
+        assert!(!node_home.join("init.json").exists());
     }
 
     #[tokio::test]
     async fn a_home_whose_authority_changed_needs_a_fresh_review() {
         let (temp, state) = orchestration_state();
-        let agent_home = state.policy.agent_home.clone().expect("agent home");
+        let node_home = state.policy.node_home.clone().expect("node home");
         let root = std::fs::canonicalize(temp.path()).unwrap();
         let root = root.to_string_lossy().into_owned();
-        write_home(&agent_home, "did:key:forge", "Readwrite", Some(&root));
-        remember_forge_grant(&state, &agent_home, &root).await;
+        write_home(&node_home, "did:key:forge", "Readwrite", Some(&root));
+        remember_forge_grant(&state, &node_home, &root).await;
         let remembered = load_preference(&state).await.unwrap();
 
-        write_home(&agent_home, "did:key:forge", "Readonly", Some(&root));
+        write_home(&node_home, "did:key:forge", "Readonly", Some(&root));
         assert_eq!(
             load_preference(&state).await.unwrap().unwrap().tool_ceiling,
             remembered.unwrap().tool_ceiling
@@ -4151,18 +3520,18 @@ mod tests {
     #[tokio::test]
     async fn reprovisioning_with_another_name_leaves_the_home_and_preference_alone() {
         let (_temp, state) = orchestration_state();
-        let agent_home = state.policy.agent_home.clone().expect("agent home");
+        let node_home = state.policy.node_home.clone().expect("node home");
         let init = serde_json::json!({
-            "home": agent_home.display().to_string(),
-            "agent_name": "Forge",
-            "agent_did": "did:key:forge",
+            "home": node_home.display().to_string(),
+            "node_name": "Forge",
+            "node_did": "did:key:forge",
             "key_path": null,
             "tool_ceiling": "Readwrite",
             "tool_root": null,
         });
-        write(&agent_home.join("init.json"), &init.to_string());
+        write(&node_home.join("init.json"), &init.to_string());
         let forge = StoredManagedServer {
-            agent_name: "Forge".to_string(),
+            node_name: "Forge".to_string(),
             tool_ceiling: Some(ManagedServerToolCeiling::Readwrite),
             tool_root: None,
             reviewed_for: None,
@@ -4172,9 +3541,9 @@ mod tests {
         // What restart does with a stale requested name.
         gents_server::server_host::ensure_standard_home(
             gents_server::server_host::ProvisionOptions {
-                home: agent_home.clone(),
-                agent_name: "Scout".to_string(),
-                tool_ceiling: ManagedServerToolCeiling::Readwrite.into(),
+                home: node_home.clone(),
+                node_name: "Scout".to_string(),
+                tool_ceiling: runtime_tool_ceiling(ManagedServerToolCeiling::Readwrite),
                 tool_root: None,
                 store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
             },
@@ -4183,9 +3552,9 @@ mod tests {
         .unwrap();
         save_confirmed_preference(
             &state,
-            &agent_home,
+            &node_home,
             &StoredManagedServer {
-                agent_name: "Scout".to_string(),
+                node_name: "Scout".to_string(),
                 ..forge.clone()
             },
         )
@@ -4193,17 +3562,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            read_initialized_name(&agent_home).await.as_deref(),
+            read_initialized_name(&node_home).await.as_deref(),
             Some("Forge")
         );
         let stored = load_preference(&state).await.unwrap().expect("preference");
-        assert_eq!(stored.agent_name, "Forge");
+        assert_eq!(stored.node_name, "Forge");
 
-        save_confirmed_preference(&state, &agent_home, &forge)
+        save_confirmed_preference(&state, &node_home, &forge)
             .await
             .unwrap();
         assert_eq!(
-            load_preference(&state).await.unwrap().unwrap().agent_name,
+            load_preference(&state).await.unwrap().unwrap().node_name,
             "Forge"
         );
     }
@@ -4217,12 +3586,39 @@ mod tests {
         ));
         write(
             &home.path().join("init.json"),
-            r#"{"agent_did":"did:key:forge","agent_name":"Forge"}"#,
+            r#"{"node_did":"did:key:forge","node_name":"Forge"}"#,
         );
         let initialized = read_initialized_name(home.path()).await;
         assert_eq!(initialized.as_deref(), Some("Forge"));
         assert!(!name_confirmed_by_home("Scout", initialized.as_deref()));
         assert!(name_confirmed_by_home("Forge", initialized.as_deref()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stalled_reset_helper_is_killed_without_retiring_state() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let script = temp.path().join("helper");
+        std::fs::write(&script, "#!/bin/sh\nexec sleep 60\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let home = temp.path().join("home");
+        write(&home.join("init.json"), "original state");
+        let before = std::time::Instant::now();
+        let result = launch_reset_helper_with_timeout(
+            &script,
+            &home,
+            temp.path(),
+            "confirmation",
+            HomeResetDisposition::Archive,
+            Duration::from_millis(30),
+        );
+        assert!(result.is_err());
+        assert!(before.elapsed() < Duration::from_secs(10));
+        assert_eq!(
+            std::fs::read_to_string(home.join("init.json")).unwrap(),
+            "original state"
+        );
     }
 
     fn not_the_user_home() -> &'static Path {
@@ -4249,14 +3645,14 @@ mod tests {
         write(&home.join("data/MANIFEST"), "REGOMAN old lineage");
         write(
             &home.join("init.json"),
-            r#"{"agent_did":"did:key:old","agent_name":"local"}"#,
+            r#"{"node_did":"did:key:old","node_name":"local"}"#,
         );
         write(&home.join("keys/local.key"), "identity");
         write(&home.join("runtime.json"), "{}");
         write(&home.join("p2p-secret-key"), "p2p");
         write(
             &home.join("grok-port-home/init.json"),
-            r#"{"agent_did":"did:key:other"}"#,
+            r#"{"node_did":"did:key:other"}"#,
         );
         write(&home.join("grok-port-home/data/MANIFEST"), "REGOMAN other");
         let desktop = gents_desktop_core::client::DesktopPaths::from_root(temp.join("desktop"));
@@ -4265,7 +3661,10 @@ mod tests {
             "REGOMAN old client",
         );
         write(desktop.peer_directory_path(), "{}");
-        write(desktop.principal_metadata_path(), "{}");
+        write(
+            desktop.principal_metadata_path(),
+            r#"{"did":"did:key:z6MkClient","public_key_bytes":[1,2,3]}"#,
+        );
         write(desktop.identity_key_path(), "principal");
         write(desktop.iroh_secret_key_path(), "iroh");
         write(&desktop.root().join(MANAGED_SERVER_CONFIG), "{}");
@@ -4544,13 +3943,13 @@ mod tests {
     #[test]
     fn a_reviewed_home_that_is_gone_or_reidentified_orphans_the_client_state() {
         let reviewed = ReviewedHome {
-            home: "/homes/a".into(),
-            agent_did: "did:key:a".into(),
+            node_home: "/homes/a".into(),
+            node_did: "did:key:a".into(),
         };
         let identity = |home: &str, did: &str| HomeIdentity {
             reviewed: ReviewedHome {
-                home: home.into(),
-                agent_did: did.into(),
+                node_home: home.into(),
+                node_did: did.into(),
             },
             tool_ceiling: None,
             tool_root: None,
@@ -4613,10 +4012,10 @@ mod tests {
         write(&desktop.node_data_dir().join("MANIFEST"), "REGOMAN");
         write(desktop.peer_directory_path(), "{}");
         let stored = serde_json::json!({
-            "agentName": "Mandrake",
+            "nodeName": "Mandrake",
             "reviewedFor": {
-                "home": temp.path().join("agent").to_string_lossy(),
-                "agentDid": "did:key:gone"
+                "nodeHome": temp.path().join("agent").to_string_lossy(),
+                "nodeDid": "did:key:gone"
             }
         });
         write(
@@ -4652,10 +4051,10 @@ mod tests {
         let desktop = state.policy.desktop_paths.clone();
         write(&desktop.node_data_dir().join("MANIFEST"), "REGOMAN");
         let stored = serde_json::json!({
-            "agentName": "Mandrake",
+            "nodeName": "Mandrake",
             "reviewedFor": {
-                "home": temp.path().join("agent").to_string_lossy(),
-                "agentDid": "did:key:gone"
+                "nodeHome": temp.path().join("agent").to_string_lossy(),
+                "nodeDid": "did:key:gone"
             }
         });
         write(
@@ -4683,14 +4082,14 @@ mod tests {
         let home = temp.path().join("agent");
         write(
             &home.join("init.json"),
-            r#"{"agent_did":"did:key:here","agent_name":"Mandrake"}"#,
+            r#"{"node_did":"did:key:here","node_name":"Mandrake"}"#,
         );
         write(&desktop.node_data_dir().join("MANIFEST"), "REGOMAN");
         let stored = serde_json::json!({
-            "agentName": "Mandrake",
+            "nodeName": "Mandrake",
             "reviewedFor": {
-                "home": std::fs::canonicalize(&home).unwrap().to_string_lossy(),
-                "agentDid": "did:key:here"
+                "nodeHome": std::fs::canonicalize(&home).unwrap().to_string_lossy(),
+                "nodeDid": "did:key:here"
             }
         });
         write(
@@ -4982,7 +4381,7 @@ mod tests {
                 &home.join("data"),
             )
             .expect("fresh setup after retirement");
-            write(&home.join("init.json"), r#"{"agent_name":"fresh"}"#);
+            write(&home.join("init.json"), r#"{"node_name":"fresh"}"#);
             record_reset_store_key(&home, &desktop, &fresh);
             for (key_file, data) in [
                 (key_file, home.join("data")),
@@ -5557,7 +4956,7 @@ mod tests {
     #[test]
     fn status_priority_is_starting_then_failed_then_stopped_then_disabled() {
         let stored = StoredManagedServer {
-            agent_name: "local".to_string(),
+            node_name: "local".to_string(),
             tool_ceiling: Some(ManagedServerToolCeiling::Readwrite),
             tool_root: Some("/Users/test".to_string()),
             reviewed_for: None,
@@ -5603,8 +5002,8 @@ mod tests {
             ManagedServerStatus {
                 state: ManagedServerState::External,
                 auto_start: false,
-                agent_name: Some("local".to_string()),
-                agent_did: Some("did:key:preserved".to_string()),
+                node_name: Some("local".to_string()),
+                node_did: Some("did:key:preserved".to_string()),
                 graphql: Some("http://127.0.0.1:9191/graphql".to_string()),
                 effective_tool_ceiling: Some(ManagedServerToolCeiling::Readwrite),
                 effective_tool_root: Some("/Users/test".to_string()),
@@ -5628,7 +5027,7 @@ mod tests {
         );
 
         assert_eq!(external.state, ManagedServerState::External);
-        assert_eq!(external.agent_did.as_deref(), Some("did:key:preserved"));
+        assert_eq!(external.node_did.as_deref(), Some("did:key:preserved"));
         assert!(external.auto_start);
     }
 
@@ -5657,8 +5056,8 @@ mod tests {
             ManagedServerStatus {
                 state: ManagedServerState::External,
                 auto_start: false,
-                agent_name: Some("local".to_string()),
-                agent_did: Some("did:key:ready".to_string()),
+                node_name: Some("local".to_string()),
+                node_did: Some("did:key:ready".to_string()),
                 graphql: Some("http://127.0.0.1:9191/graphql".to_string()),
                 effective_tool_ceiling: Some(ManagedServerToolCeiling::MetaOnly),
                 effective_tool_root: None,
@@ -5690,8 +5089,8 @@ mod tests {
             ManagedServerStatus {
                 state: ManagedServerState::External,
                 auto_start: true,
-                agent_name: Some("local".to_string()),
-                agent_did: Some("did:key:ready".to_string()),
+                node_name: Some("local".to_string()),
+                node_did: Some("did:key:ready".to_string()),
                 graphql: Some("http://127.0.0.1:9191/graphql".to_string()),
                 effective_tool_ceiling: Some(ManagedServerToolCeiling::MetaOnly),
                 effective_tool_root: None,
@@ -5837,7 +5236,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(
             temp.path().join("init.json"),
-            r#"{"agent_did":"did:key:zReady"}"#,
+            r#"{"node_did":"did:key:zReady"}"#,
         )
         .unwrap();
         let authority = EffectiveManagedAuthority {
@@ -5847,8 +5246,8 @@ mod tests {
         let missing_authority = ManagedServerStatus {
             state: ManagedServerState::Running,
             auto_start: false,
-            agent_name: Some("Mandrake".into()),
-            agent_did: Some("did:key:zReady".into()),
+            node_name: Some("Mandrake".into()),
+            node_did: Some("did:key:zReady".into()),
             graphql: Some("http://127.0.0.1:9191/api/v0/graphql".into()),
             effective_tool_ceiling: None,
             effective_tool_root: None,
@@ -5884,8 +5283,7 @@ mod tests {
     #[test]
     fn restart_command_validates_reviewed_authority_through_tauri_ipc() {
         use crate::config::{
-            AgentHomePolicy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy,
-            ManagedServerPolicy,
+            AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, NodeHomePolicy,
         };
         use crate::snapshot::projection::SnapshotGrants;
         use crate::state::{resolve_policy, DesktopAppState};
@@ -5897,7 +5295,7 @@ mod tests {
             &BridgeConfig {
                 home: HomePolicy::FixedRoot(temp.path().join("desktop")),
                 bootstrap: BootstrapPolicy::LocalRuntimeAllowed {
-                    agent_home: AgentHomePolicy::Fixed(temp.path().join("agent")),
+                    node_home: NodeHomePolicy::Fixed(temp.path().join("agent")),
                 },
                 app_meta: AppMeta {
                     app_name: "managed-restart-test".to_string(),
@@ -5927,7 +5325,7 @@ mod tests {
                 url: "http://tauri.localhost".parse().expect("invoke URL"),
                 body: InvokeBody::Json(serde_json::json!({
                     "request": {
-                        "agentName": "Workshop Agent",
+                        "nodeName": "Workshop Agent",
                         "toolCeiling": "readwrite",
                         "toolRoot": "relative/path"
                     }
@@ -5995,12 +5393,12 @@ mod tests {
         );
     }
 
-    fn ready_status(agent_did: &str) -> ManagedServerStatus {
+    fn ready_status(node_did: &str) -> ManagedServerStatus {
         ManagedServerStatus {
             state: ManagedServerState::External,
             auto_start: false,
-            agent_name: Some("local".to_string()),
-            agent_did: Some(agent_did.to_string()),
+            node_name: Some("local".to_string()),
+            node_did: Some(node_did.to_string()),
             graphql: Some("http://127.0.0.1:9191/graphql".to_string()),
             effective_tool_ceiling: Some(ManagedServerToolCeiling::MetaOnly),
             effective_tool_root: None,
@@ -6039,7 +5437,7 @@ mod tests {
         let Readiness::Ready(ready) = ready else {
             panic!("expected readiness");
         };
-        assert_eq!(ready.agent_did.as_deref(), Some("did:key:slow"));
+        assert_eq!(ready.node_did.as_deref(), Some("did:key:slow"));
         assert_eq!(probes.load(Ordering::SeqCst), 6);
     }
 
@@ -6048,8 +5446,8 @@ mod tests {
         let did = "did:key:managed";
         let payload = |lifecycle: serde_json::Value| {
             serde_json::json!({
-                "agent_did": did,
-                "agent_name": "Managed",
+                "node_did": did,
+                "node_name": "Managed",
                 "graphql": "http://127.0.0.1:9191/api/v0/graphql",
                 gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD: lifecycle,
             })
@@ -6065,7 +5463,7 @@ mod tests {
         else {
             panic!("a runtime that reports ready is ready");
         };
-        assert_eq!(status.agent_did.as_deref(), Some(did));
+        assert_eq!(status.node_did.as_deref(), Some(did));
         assert!(matches!(
             classify_port_payload(
                 9191,
@@ -6132,7 +5530,7 @@ mod tests {
         let observed = classify_port_payload(
             9191,
             Some(did),
-            serde_json::json!({ "agent_did": did, "version": "0.18.2", "status": "ok" }),
+            serde_json::json!({ "node_did": did, "version": "0.18.2", "status": "ok" }),
         );
         let PortReadiness::Outdated { version } = observed else {
             panic!("an older runtime is outdated, not booting");
@@ -6230,7 +5628,7 @@ mod tests {
             network_id: "network".to_string(),
             admin_did: "did:key:admin".to_string(),
             server_peer: server_peer.to_string(),
-            owner_agent: "did:key:managed".to_string(),
+            owner_node: "did:key:managed".to_string(),
             state: state.to_string(),
             expires_at: expires_at.to_string(),
         }
@@ -6727,8 +6125,7 @@ mod tests {
 
     fn orchestration_state() -> (tempfile::TempDir, DesktopAppState) {
         use crate::config::{
-            AgentHomePolicy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy,
-            ManagedServerPolicy,
+            AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, NodeHomePolicy,
         };
         use crate::snapshot::projection::SnapshotGrants;
         use crate::state::resolve_policy;
@@ -6738,7 +6135,7 @@ mod tests {
             &BridgeConfig {
                 home: HomePolicy::FixedRoot(temp.path().join("desktop")),
                 bootstrap: BootstrapPolicy::LocalRuntimeAllowed {
-                    agent_home: AgentHomePolicy::Fixed(temp.path().join("agent")),
+                    node_home: NodeHomePolicy::Fixed(temp.path().join("agent")),
                 },
                 app_meta: AppMeta {
                     app_name: "managed-start-test".to_string(),
@@ -6836,7 +6233,7 @@ mod tests {
             .await
             .ok()
             .expect("start continues after approval");
-        assert_eq!(ready.agent_did.as_deref(), Some("did:key:a"));
+        assert_eq!(ready.node_did.as_deref(), Some("did:key:a"));
         assert_eq!(
             launch
                 .approval_waits
@@ -7215,7 +6612,7 @@ mod tests {
         let (adopted, ()) = tokio::join!(adopt, observer);
         match adopted.unwrap() {
             BootOutcome::Ready(ready, _lifecycle) => {
-                assert_eq!(ready.agent_did.as_deref(), Some("did:key:booted"))
+                assert_eq!(ready.node_did.as_deref(), Some("did:key:booted"))
             }
             BootOutcome::NeedsLaunch(..) => panic!("a ready runtime is adopted"),
         }
@@ -7678,7 +7075,7 @@ mod tests {
         let error = error.to_string();
         assert!(error.contains("exited with code 78"), "{error}");
         assert!(
-            error.contains("another program that is not a Gents agent"),
+            error.contains("another program that is not a Gents Node"),
             "{error}"
         );
     }
@@ -7849,8 +7246,8 @@ mod tests {
     #[test]
     fn any_runtime_on_the_port_of_a_fresh_home_is_foreign_and_named() {
         let payload = serde_json::json!({
-            "agent_did": "did:key:other",
-            "agent_name": "other",
+            "node_did": "did:key:other",
+            "node_name": "other",
             "home": "/Users/test/other-home",
             gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD: "ready",
         });
@@ -7890,7 +7287,7 @@ mod tests {
     fn a_foreign_runtime_fails_a_loaded_job_and_names_itself_when_stopped() {
         let foreign = ForeignRuntime {
             port: 9191,
-            agent_did: Some("did:key:other".to_string()),
+            node_did: Some("did:key:other".to_string()),
             home: None,
         };
         let loaded = gents_server::native_service::NativeServiceStatus {
@@ -7937,7 +7334,7 @@ mod tests {
             let port = classify_port_payload(
                 9191,
                 initialized_did,
-                serde_json::json!({ "agent_did": "did:key:other" }),
+                serde_json::json!({ "node_did": "did:key:other" }),
             );
             assert!(matches!(port, PortReadiness::Foreign(_)));
             for job_loaded in [false, true] {
@@ -8043,7 +7440,7 @@ mod tests {
 
     async fn skewed_managed_runtime(
         temp: &tempfile::TempDir,
-        agent_did: &str,
+        node_did: &str,
     ) -> (Arc<ClientCore>, StatusServer) {
         use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
 
@@ -8065,7 +7462,7 @@ mod tests {
             .version_id = "bafy-next-release".to_string();
         let server = StatusServer::start(
             serde_json::json!({
-                "agent_did": agent_did,
+                "node_did": node_did,
                 gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD: next_release,
                 gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD: "ready",
             })
@@ -8073,7 +7470,7 @@ mod tests {
         )
         .await;
         core.add_managed_enrollment_peer_for_test(
-            agent_did,
+            node_did,
             &server.graphql(),
             "/tmp/managed-home",
             1,
@@ -8088,10 +7485,10 @@ mod tests {
         use gents_desktop_core::client::{project_sync_health, SyncHealthState};
 
         let (temp, state) = orchestration_state();
-        let agent_did = "did:key:managed-runtime";
-        let (core, server) = skewed_managed_runtime(&temp, agent_did).await;
+        let node_did = "did:key:managed-runtime";
+        let (core, server) = skewed_managed_runtime(&temp, node_did).await;
         assert!(core.peer_records().await.iter().any(|peer| {
-            peer.agent_did == agent_did
+            peer.node_did == node_did
                 && peer.is_enrollment()
                 && peer.is_managed_runtime()
                 && peer.is_chat_ready_at(chrono::Utc::now())
@@ -8103,8 +7500,8 @@ mod tests {
             Arc::clone(&core),
             temp.path().join("agent"),
             ManagedPairingTarget {
-                agent_name: "Managed".to_string(),
-                agent_did: agent_did.to_string(),
+                node_name: "Managed".to_string(),
+                node_did: node_did.to_string(),
                 graphql: server.graphql(),
             },
         )
@@ -8150,7 +7547,7 @@ mod tests {
         use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
 
         let (temp, state) = orchestration_state();
-        let agent_did = "did:key:starting-runtime";
+        let node_did = "did:key:starting-runtime";
         let core = Arc::new(
             ClientCore::start_with_paths_and_options(
                 DesktopPaths::from_root(temp.path().join("client")),
@@ -8161,7 +7558,7 @@ mod tests {
         );
         let server = StatusServer::start(
             serde_json::json!({
-                "agent_did": agent_did,
+                "node_did": node_did,
                 gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD: null,
             })
             .to_string(),
@@ -8172,8 +7569,8 @@ mod tests {
             Arc::clone(&core),
             temp.path().join("agent"),
             ManagedPairingTarget {
-                agent_name: "Starting".to_string(),
-                agent_did: agent_did.to_string(),
+                node_name: "Starting".to_string(),
+                node_did: node_did.to_string(),
                 graphql: server.graphql(),
             },
         )
@@ -8206,15 +7603,15 @@ mod tests {
     #[tokio::test]
     async fn managed_schema_observation_refuses_a_target_whose_route_was_replaced() {
         let temp = tempfile::tempdir().expect("temp");
-        let agent_did = "did:key:managed-runtime";
-        let (core, route_a) = skewed_managed_runtime(&temp, agent_did).await;
+        let node_did = "did:key:managed-runtime";
+        let (core, route_a) = skewed_managed_runtime(&temp, node_did).await;
         let target_a = ManagedPairingTarget {
-            agent_name: "Managed".to_string(),
-            agent_did: agent_did.to_string(),
+            node_name: "Managed".to_string(),
+            node_did: node_did.to_string(),
             graphql: route_a.graphql(),
         };
         let route_b = "http://127.0.0.1:1/api/v0/graphql";
-        core.add_managed_enrollment_peer_for_test(agent_did, route_b, "/tmp/managed-home", 2)
+        core.add_managed_enrollment_peer_for_test(node_did, route_b, "/tmp/managed-home", 2)
             .await
             .expect("route B replaces route A");
 
@@ -8243,11 +7640,11 @@ mod tests {
     #[tokio::test]
     async fn managed_schema_fetched_across_a_route_change_is_ignored() {
         let temp = tempfile::tempdir().expect("temp");
-        let agent_did = "did:key:managed-runtime";
-        let (core, server) = skewed_managed_runtime(&temp, agent_did).await;
+        let node_did = "did:key:managed-runtime";
+        let (core, server) = skewed_managed_runtime(&temp, node_did).await;
         let target = ManagedPairingTarget {
-            agent_name: "Managed".to_string(),
-            agent_did: agent_did.to_string(),
+            node_name: "Managed".to_string(),
+            node_did: node_did.to_string(),
             graphql: server.graphql(),
         };
 
@@ -8261,7 +7658,7 @@ mod tests {
             .await
             .expect("status request in flight");
         core.add_managed_enrollment_peer_for_test(
-            agent_did,
+            node_did,
             &server.graphql(),
             "/tmp/managed-home",
             2,

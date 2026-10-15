@@ -32,7 +32,7 @@ import { Hint } from "./Hint";
 
 import { ActivityLine } from "./Thinking";
 import { activityStatus } from "./activity-status";
-import { BehaviorAvatar } from "./parts";
+import { AgentInitials } from "./parts";
 import { Markdown } from "./Markdown";
 import { StreamText } from "./StreamText";
 import {
@@ -45,6 +45,12 @@ import {
   type HeldLive,
 } from "./stream-reveal";
 import { type Workers } from "./workers";
+import {
+  AutomatedInput,
+  QueuedInputs,
+  UserInputWithState,
+  pendingInputState,
+} from "./TranscriptInputs";
 import { type ParentWork } from "./parentWork";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { readableReasoning, reasoningWithheld } from "./tool-summary";
@@ -92,6 +98,8 @@ function copyActions(text: string | null | undefined) {
    labeled with its sender */
 const ParentContext = createContext<ParentWork | null>(null);
 
+const AppliedInputsContext = createContext<ReadonlySet<string>>(new Set());
+
 const TranscriptItem = memo(function TranscriptItem({
   item,
   final = false,
@@ -101,26 +109,53 @@ const TranscriptItem = memo(function TranscriptItem({
   final?: boolean;
 }) {
   const parentWork = useContext(ParentContext);
+  const appliedInputs = useContext(AppliedInputsContext);
   switch (item.kind) {
+    case "automatedInput":
+      return (
+        <AutomatedInput
+          origin={item.origin}
+          content={item.content}
+          reconstruction={item.reconstruction}
+        />
+      );
     case "userMessage":
     case "pendingUserTurn": {
+      const state =
+        item.kind === "pendingUserTurn"
+          ? pendingInputState(item.lifecycleState, item.foldedIntoRequestId)
+          : item.inputRequestId && appliedInputs.has(item.inputRequestId)
+            ? "Applied"
+            : null;
+      if (item.kind === "pendingUserTurn" && item.origin) {
+        return (
+          <AutomatedInput origin={item.origin} content={item.content} state={state} />
+        );
+      }
       const sender = parentWork?.sentBy(item.requestId) ?? null;
+      if (!sender) {
+        return (
+          <UserInputWithState
+            content={item.content ?? ""}
+            state={state}
+            actions={copyActions(item.content)}
+          />
+        );
+      }
       const message = (
         <UserMessage actions={copyActions(item.content)}>{item.content}</UserMessage>
       );
-      if (!sender) return message;
       const senderName = sender.summary?.title ?? "another session";
       /* a turn another session sent wears that session's mark, the way any
          other sender would; its state, where the mark cannot say it, is a
          chip seated on the bubble's bottom edge */
-      const state = item.kind === "pendingUserTurn" ? "Queued" : null;
       return (
         /* the mark hangs in the transcript's right gutter, seated on the
            first line's center: the bubble's own my-1 and py-3 put that 26px
            down, half the avatar is 12 */
         <div className={cn("relative", state && "mb-2")}>
-          <BehaviorAvatar
-            name={sender.behaviorName ?? senderName}
+          <AgentInitials
+            name={sender.agentName ?? senderName}
             /* in the gutter where there is one; seated on the bubble's
                top corner when the screen is too narrow to spare it */
             className="absolute -top-1 right-2 size-6 text-[10px] ring-2 ring-background sm:top-3.5 sm:-right-8 sm:ring-0"
@@ -158,7 +193,13 @@ const STOP_SOURCES: Record<string, string> = {
   deadline: "its deadline",
 };
 
-function StoppedNotice({ cause }: { cause: DerivedCancelCauseView | null }) {
+function StoppedNotice({
+  cause,
+  stoppedBeforeRunning,
+}: {
+  cause: DerivedCancelCauseView | null;
+  stoppedBeforeRunning: boolean;
+}) {
   const headline =
     cause?.cause === "userCancelled"
       ? "You stopped this response."
@@ -172,7 +213,8 @@ function StoppedNotice({ cause }: { cause: DerivedCancelCauseView | null }) {
       data-testid="stopped-notice"
     >
       <p className="flex items-center gap-2">
-        {headline}
+        <span>{stoppedBeforeRunning ? "Stopped before running" : "Stopped"}</span>
+        <span>{headline}</span>
         {cause && (
           <CollapsibleTrigger className="cursor-pointer underline decoration-border underline-offset-4 hover:text-foreground">
             Details
@@ -337,6 +379,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   inFlight,
   stopping = false,
   scroller,
+  content,
   session,
   workers,
   parentWork,
@@ -346,6 +389,8 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   stopping?: boolean;
   /** the transcript's scroller, once mounted */
   scroller: HTMLElement | null;
+  /** everything the scroller scrolls, once mounted */
+  content: HTMLElement | null;
   session: DesktopSessionSnapshot | null;
   workers: Workers;
   parentWork: ParentWork;
@@ -354,6 +399,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   const { actions } = useApp();
   const loadingOlder = useOlderPages(
     scroller,
+    content,
     session?.sessionId ?? null,
     session?.timelinePage?.hasOlder ?? false,
     () => actions.loadOlderSessionTimeline(),
@@ -367,6 +413,14 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     ? activityStatus(session?.timelineItems ?? [], stopping)
     : null;
   const wasInterrupted = session?.turnState === "interrupted";
+  const appliedInputIds = (session?.foldedInputs ?? [])
+    .map((input) => input.requestId)
+    .sort()
+    .join("\n");
+  const appliedInputs = useMemo(
+    () => new Set(appliedInputIds ? appliedInputIds.split("\n") : []),
+    [appliedInputIds],
+  );
   const responseError =
     latest?.failureReason?.trim() ||
     (session?.turnState === "failed"
@@ -445,7 +499,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
         continue;
       }
       const k = e.item.kind;
-      if (k === "userMessage" || k === "pendingUserTurn") {
+      if (k === "userMessage" || k === "pendingUserTurn" || k === "automatedInput") {
         if (last) keys.add(last);
         last = null;
       } else if (k === "assistantMessage" && e.item.content?.trim()) last = e.key;
@@ -490,41 +544,48 @@ export const TranscriptPanel = memo(function TranscriptPanel({
         </div>
       )}
       <WorkerActionsContext.Provider value={workerActions}>
-        <ParentContext.Provider value={parentWork}>
-          <GroupStateContext.Provider value={groupState}>
-            <TranscriptWindowProvider scroller={scroller} session={sessionKey}>
-              {entries.map((entry, index) =>
-                entry.kind === "item" ? (
-                  /* keyed for the pager, which holds the reader's place
+        <AppliedInputsContext.Provider value={appliedInputs}>
+          <ParentContext.Provider value={parentWork}>
+            <GroupStateContext.Provider value={groupState}>
+              <TranscriptWindowProvider scroller={scroller} session={sessionKey}>
+                {entries.map((entry, index) =>
+                  entry.kind === "item" ? (
+                    /* keyed for the pager, which holds the reader's place
                      by the row under their eye while older pages land */
-                  <ItemRow
-                    key={drawKey(keys, entry.item)}
-                    rowKey={drawKey(keys, entry.item)}
-                    timelineKey={entry.key}
-                    item={entry.item}
-                    final={finalKeys.has(entry.key)}
-                    drawn={entries.length - index <= ALWAYS_DRAWN}
-                  />
-                ) : (
-                  <GroupRow
-                    key={entry.key}
-                    entry={entry}
-                    workers={workers}
-                    drawn={entries.length - index <= ALWAYS_DRAWN}
-                  />
-                ),
-              )}
-            </TranscriptWindowProvider>
-          </GroupStateContext.Provider>
-          {continuing && showError && <FailedEarlier message={responseError} />}
-          {continuing &&
-            session?.timelineItems
-              .filter((item) => item.kind === "liveAssistant")
-              .map((item) => <TranscriptItem key={item.itemKey} item={item} />)}
-        </ParentContext.Provider>
+                    <ItemRow
+                      key={drawKey(keys, entry.item)}
+                      rowKey={drawKey(keys, entry.item)}
+                      timelineKey={entry.key}
+                      item={entry.item}
+                      final={finalKeys.has(entry.key)}
+                      drawn={entries.length - index <= ALWAYS_DRAWN}
+                    />
+                  ) : (
+                    <GroupRow
+                      key={entry.key}
+                      entry={entry}
+                      workers={workers}
+                      drawn={entries.length - index <= ALWAYS_DRAWN}
+                    />
+                  ),
+                )}
+              </TranscriptWindowProvider>
+            </GroupStateContext.Provider>
+            {continuing && showError && <FailedEarlier message={responseError} />}
+            {continuing &&
+              session?.timelineItems
+                .filter((item) => item.kind === "liveAssistant")
+                .map((item) => <TranscriptItem key={item.itemKey} item={item} />)}
+          </ParentContext.Provider>
+        </AppliedInputsContext.Provider>
       </WorkerActionsContext.Provider>
       {wasInterrupted && !inFlight && (
-        <StoppedNotice cause={session?.latestRequestOutcome?.cancelCause ?? null} />
+        <StoppedNotice
+          cause={session?.latestRequestOutcome?.cancelCause ?? null}
+          stoppedBeforeRunning={
+            session?.latestRequestOutcome?.stoppedBeforeRunning === true
+          }
+        />
       )}
       {showError && (
         <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3">
@@ -554,6 +615,20 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           <ActivityLine status={status} />
         </div>
       </div>
+      <QueuedInputs
+        queued={session?.queuedTurns ?? []}
+        queue={session?.pendingQueue ?? null}
+        onEdit={
+          session?.nodeDid
+            ? (edit) =>
+                actions.editPendingQueue({
+                  ...edit,
+                  nodeDid: session.nodeDid!,
+                  sessionId: session.sessionId,
+                })
+            : undefined
+        }
+      />
     </div>
   );
 });

@@ -8,22 +8,22 @@ use serde_json::Value;
 #[tokio::test]
 async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let agent_home = tempdir.path().join("agent-home");
+    let node_home = tempdir.path().join("node-home");
 
     {
-        let node = initialized_agent_node(tempdir.path(), &agent_home, "background-test").await?;
+        let node = initialized_node(tempdir.path(), &node_home, "background-test").await?;
         ensure_runtime_schemas(&node).await?;
         seed_background_tool_calls(&node).await?;
     }
 
-    let agent_home = agent_home.to_str().context("agent home utf8")?;
+    let node_home = node_home.to_str().context("node home utf8")?;
     let output = run_cli_json(
         tempdir.path(),
         &[
             "background",
             "list",
             "--home",
-            agent_home,
+            node_home,
             "--request",
             "req-background",
             "--state",
@@ -66,7 +66,7 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
             "background",
             "list",
             "--home",
-            agent_home,
+            node_home,
             "--request",
             "req-background",
             "--age-gt",
@@ -87,7 +87,7 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
             "background",
             "list",
             "--home",
-            agent_home,
+            node_home,
             "--request",
             "req-background",
             "--state",
@@ -119,7 +119,7 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
             "background",
             "list",
             "--home",
-            agent_home,
+            node_home,
             "--request",
             "req-background",
         ],
@@ -145,8 +145,8 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
         r#"mutation {
             create_AgentRequest(input: {purpose: "normal", 
                 request_id: "req-background",
-                agent_did: "did:test:test",
-                behavior_id: "default",
+                node_did: "did:test:test",
+                agent_id: "default",
                 session_id: "session-background",
                 content: "background list fixture",
                 lifecycle_state: "processing",
@@ -158,8 +158,8 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
             }) { _docID }
             create_AgentRequest(input: {purpose: "normal", 
                 request_id: "req-other",
-                agent_did: "did:test:test",
-                behavior_id: "default",
+                node_did: "did:test:test",
+                agent_id: "default",
                 session_id: "session-other",
                 content: "background list other fixture",
                 lifecycle_state: "processing",

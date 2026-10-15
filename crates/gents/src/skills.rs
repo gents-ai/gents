@@ -4,7 +4,7 @@
 //! A [`Skill`] declares the tools it *depends on* (`tool_refs`); it never
 //! *grants* them (decision D3, Codex-faithful). [`effective_skills`] computes
 //! the context's explicit skill whitelist, filtered by owner and enablement. [`skill_tools`] intersects a skill's
-//! declared refs with the behavior's resolved tool ceiling and degrades when a
+//! declared refs with the agent's resolved tool ceiling and degrades when a
 //! dep is missing, so activation can never widen the tool surface beyond the
 //! ceiling — the executable counterpart of `Skills.activation_subset_ceiling`.
 //!
@@ -20,7 +20,7 @@ pub use import::{parse_skill_md, SkillFrontmatter};
 #[derive(Debug, Clone)]
 pub struct Skill {
     pub skill_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub name: String,
     pub description: String,
     pub instructions: String,
@@ -32,14 +32,14 @@ pub struct Skill {
 
 pub fn effective_skills<'a>(
     skills: &'a [Skill],
-    behavior_principal: &str,
+    node_did: &str,
     skill_ids: &[String],
 ) -> Vec<&'a Skill> {
     let selected: BTreeSet<&str> = skill_ids.iter().map(String::as_str).collect();
     skills
         .iter()
         .filter(|skill| {
-            skill.agent_did == behavior_principal
+            skill.node_did == node_did
                 && skill.enabled
                 && selected.contains(skill.skill_id.as_str())
         })
@@ -141,7 +141,7 @@ pub fn render_activated_skill(skill: &Skill, ceiling: &SkillToolCeiling) -> Stri
     let missing = missing_tool_refs(skill, ceiling);
     if !missing.is_empty() {
         out.push_str(&format!(
-            "\n\nNote: this skill references tools that are not available to this behavior \
+            "\n\nNote: this skill references tools that are not available to this agent \
              and cannot be used: {}.",
             missing.join(", ")
         ));
@@ -334,7 +334,7 @@ fn is_reserved_client_slash_command(command: &str) -> bool {
             | "status"
             | "statusline"
             | "stop"
-            | "subagents"
+            | "agents"
             | "test-approval"
             | "theme"
             | "title"
@@ -418,10 +418,10 @@ impl crate::llm::tool::Tool for LoadSkillTool {
 mod tests {
     use super::*;
 
-    fn skill(id: &str, principal: &str, tool_refs: &[&str]) -> Skill {
+    fn skill(id: &str, node_did: &str, tool_refs: &[&str]) -> Skill {
         Skill {
             skill_id: id.to_string(),
-            agent_did: principal.to_string(),
+            node_did: node_did.to_string(),
             name: format!("{id}-name"),
             description: format!("{id}-desc"),
             instructions: format!("{id}-instructions"),
@@ -482,23 +482,23 @@ mod tests {
         );
     }
 
-    /// S-Skill-3 (candidate_set respects principal): every effective skill
-    /// belongs to the behavior's principal and is enabled.
+    /// S-Skill-3 (candidate_set respects ownership): every effective skill
+    /// belongs to the requesting node and is enabled.
     #[test]
-    fn effective_skills_respect_principal() {
+    fn effective_skills_respect_node_ownership() {
         let skills = vec![
             skill("a", "did:p", &[]),
             skill("b", "did:p", &[]),
             skill("c", "did:other", &[]),
         ];
         for got in effective_skills(&skills, "did:p", &["b".to_string()]) {
-            assert_eq!(got.agent_did, "did:p");
+            assert_eq!(got.node_did, "did:p");
             assert!(got.enabled);
         }
     }
 
     /// S-Skill-1 (activation_subset_ceiling): the union of every active skill's
-    /// resolved tools is a subset of the behavior ceiling — activation never
+    /// resolved tools is a subset of the agent ceiling — activation never
     /// widens the tool surface.
     #[test]
     fn skill_tools_never_widen_the_ceiling() {
@@ -604,7 +604,7 @@ mod tests {
 
     #[test]
     fn skill_tool_ceiling_unrestricted_mcp_allows_any_service() {
-        // Default behavior: meta tools on + EMPTY allowlist == any MCP service
+        // Default: meta tools on + EMPTY allowlist == any MCP service
         // allowed. A skill's MCP tool_ref must NOT be flagged unavailable, since
         // it may well be a reachable service we cannot enumerate.
         let ceiling = skill_tool_ceiling(

@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "build_and_run",
-      "prompt": "Author a graph whose data enters only through a declared input that the run supplies \u2014 nothing may be hardcoded in the node prompts. Graph id 'g-input-manifest'. 1) Create tasks bound to this engineer behavior: 't-render-word' whose prompt_template interpolates the declared input word into its rendered request and emits it on port 'out' (render the actual word, not just an id or reference to it); 't-upper-word' that uppercases its input and emits on port 'out'. 2) Author graph 'g-input-manifest': node 'render' bound to t-render-word, node 'upper' bound to t-upper-word, edge render.out -> upper.in, declared input entry 'word' feeding node 'render', result 'uppercased' from node 'upper' port 'out', cardinality one. 3) Preview; correct and re-preview on any validation error; do not run an invalid graph. 4) Run it, supplying input {\"word\": \"manifest\"}. 5) Read the run back with get_graph_run and its result with get_graph_result.",
+      "prompt": "Author a graph whose data enters only through a declared input that the run supplies \u2014 nothing may be hardcoded in the node prompts. Graph id 'g-input-manifest'. 1) Create tasks bound to this engineer agent: 't-render-word' whose prompt_template interpolates the declared input word into its rendered request and emits it on port 'out' (render the actual word, not just an id or reference to it); 't-upper-word' that uppercases its input and emits on port 'out'. 2) Author graph 'g-input-manifest': node 'render' bound to t-render-word, node 'upper' bound to t-upper-word, edge render.out -> upper.in, declared input entry 'word' feeding node 'render', result 'uppercased' from node 'upper' port 'out', cardinality one. 3) Preview; correct and re-preview on any validation error; do not run an invalid graph. 4) Run it, supplying input {\"word\": \"manifest\"}. 5) Read the run back with get_graph_run and its result with get_graph_result.",
       "deadline_secs": 600,
       "checks": [
         {
@@ -82,7 +82,7 @@
           "name": "run_calls",
           "collection": "AgentToolCall",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "tool_name": {
@@ -136,7 +136,7 @@
             "graph_id": {
               "_eq": "g-input-manifest"
             },
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },

@@ -8,16 +8,17 @@ describe("kit session submission status", () => {
       <SessionSubmissionStatus
         activityStatus={{
           kind: "waiting",
-          label: "Waiting for the agent…",
-          detail: "Your message is queued until the enrolled agent claims it.",
+          label: "Waiting for the node…",
+          detail:
+            "The node has not started this request yet. Messages you send now wait behind it.",
           animated: true,
         }}
       />,
     );
-    expect(screen.getByRole("status")).toHaveTextContent("Waiting for the agent…");
+    expect(screen.getByRole("status")).toHaveTextContent("Waiting for the node…");
     expect(screen.getByRole("status")).toHaveAttribute(
       "title",
-      expect.stringContaining("Your message is queued"),
+      expect.stringContaining("The node has not started this request yet"),
     );
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });

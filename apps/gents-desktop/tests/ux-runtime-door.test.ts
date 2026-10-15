@@ -4,11 +4,8 @@
    thing faked; the loader evaluates the modules for real. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+/* the two door verbs, as the app configures them from its client adapter */
 const call = vi.fn();
-vi.mock("@/screens/agent/bridgeCall", () => ({
-  call: (...args: unknown[]) => call(...args),
-  message: (error: unknown) => String(error),
-}));
 
 import { isUxPluginLive } from "@/contrib/activate";
 import { retireRuntimeUxPlugin } from "@/contrib/loader";
@@ -16,6 +13,7 @@ import { installUxHost, type UxHost } from "@/contrib/plugin";
 import { resetUxPluginStore, uxPluginRecords } from "@/contrib/plugins-store";
 import { registry } from "@/contrib/registry";
 import {
+  configureUxDoors,
   reloadRuntimeUxPlugins,
   resetRuntimeDoor,
   scanRuntimeUxPlugins,
@@ -82,18 +80,19 @@ beforeEach(() => {
   sources.clear();
   listGate = Promise.resolve();
   call.mockReset();
-  call.mockImplementation(async (command: string, args?: { id?: string }) => {
-    if (command === "desktop_ux_plugins_list") {
+  configureUxDoors({
+    list: async () => {
+      call("desktop_ux_plugins_list");
       await listGate;
       return { plugins: [...listings] };
-    }
-    if (command === "desktop_ux_plugin_source") {
-      const source = sources.get(args?.id ?? "");
+    },
+    source: async (id: string) => {
+      call("desktop_ux_plugin_source", { id });
+      const source = sources.get(id);
       if (source instanceof Error) throw source;
-      if (source === undefined) throw new Error(`no source for ${args?.id}`);
+      if (source === undefined) throw new Error(`no source for ${id}`);
       return { source, css: null, digest: "sha256:0" };
-    }
-    throw new Error(`unexpected bridge command ${command}`);
+    },
   });
 });
 afterEach(() => {

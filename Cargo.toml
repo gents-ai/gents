@@ -86,6 +86,7 @@ gents-lean-contract = { path = "crates/gents-lean-contract" }
 # Keep DefraDB defaults off: Gents selects Iroh P2P and Lens execution without
 # SourceHub ACP or the legacy libp2p transport (defradb.rs#1431-#1435).
 defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "980190cb3d0e8298e038a07c34dff94fd710893a", default-features = false }
+defra-http = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "980190cb3d0e8298e038a07c34dff94fd710893a" }
 defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "980190cb3d0e8298e038a07c34dff94fd710893a", default-features = false }
 dirs = "5"
 events = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "980190cb3d0e8298e038a07c34dff94fd710893a" }

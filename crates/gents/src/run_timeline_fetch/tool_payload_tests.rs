@@ -10,7 +10,7 @@ fn admitted() -> (ToolLifecycleObservation, TimelineMessageRow) {
     let header = TranscriptMessage {
         message_key: "accept".into(),
         session_id: "session".into(),
-        agent_did: "did:test:agent".into(),
+        node_did: "did:test:agent".into(),
         requester_did: None,
         request_doc_id: Some("request-physical".into()),
         publication: MessagePublication::RequestExecution {

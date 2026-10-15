@@ -49,7 +49,7 @@ def splitSeedsTask (taskId : String) (split : SeedSplit) (triggers : List SeedTr
     c.seedCollections.any (fun collection => seedReachesTask taskId collection triggers sources)
 
 /-- A task-template optimization needs a seed route in both development splits.
-The pack loader has already bound owners and resolved the target task's behavior.
+The pack loader has already bound owners and resolved the target task's agent.
 Only stage seeds count: fixtures precede runtime boot, and prompt stages do not
 render the target template. Filters, grouping and the contents of seed documents
 remain runtime evidence; this admission rule establishes structural reachability,

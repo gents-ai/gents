@@ -23,7 +23,7 @@ export function MarkLink({ className }: { className?: string }) {
   return (
     <a
       href={href({ name: "agents" })}
-      aria-label="Agents"
+      aria-label="Nodes"
       className={cn(
         "grid size-7 shrink-0 place-items-center rounded-md bg-ink text-background",
         className,

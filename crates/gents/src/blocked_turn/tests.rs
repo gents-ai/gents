@@ -3,7 +3,7 @@ use std::sync::Arc;
 use chrono::{Duration, TimeZone};
 use defra_node::EmbeddedNode;
 use gents_loop::provider_limit::{persisted_failure_reason, ProviderLimitHeaders};
-use gents_protocol::behavior_readiness::BehaviorReadinessUnavailableReason;
+use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::{json, Value};
 
@@ -23,13 +23,13 @@ fn now() -> DateTime<Utc> {
 
 fn backend(backend_id: &str, account_ref: Option<&str>, name: &str) -> (Collection, Value) {
     let auth = match account_ref {
-        Some(account_ref) => json!({"kind": "principal_oauth", "account_ref": account_ref}),
-        None => json!({"kind": "principal_oauth"}),
+        Some(account_ref) => json!({"kind": "node_oauth", "account_ref": account_ref}),
+        None => json!({"kind": "node_oauth"}),
     };
     (
         Collection::InferenceBackend,
         json!({
-            "agent_did": DID, "backend_id": backend_id, "name": name,
+            "node_did": DID, "backend_id": backend_id, "name": name,
             "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
             "auth": auth,
         }),
@@ -39,37 +39,33 @@ fn backend(backend_id: &str, account_ref: Option<&str>, name: &str) -> (Collecti
 fn profile(profile_id: &str, backend_id: &str) -> (Collection, Value) {
     (
         Collection::InferenceProfile,
-        json!({"agent_did": DID, "profile_id": profile_id, "backend_id": backend_id, "model_name": "model-x"}),
+        json!({"node_did": DID, "profile_id": profile_id, "backend_id": backend_id, "model_name": "model-x"}),
     )
 }
 
-/// A behavior on `profile`; with `compaction`, its context compacts with
+/// An agent on `profile`; with `compaction`, its context compacts with
 /// that profile.
-fn behavior(
-    behavior_id: &str,
-    profile: &str,
-    compaction: Option<&str>,
-) -> Vec<(Collection, Value)> {
+fn behavior(agent_id: &str, profile: &str, compaction: Option<&str>) -> Vec<(Collection, Value)> {
     let Some(compaction) = compaction else {
         return vec![(
-            Collection::AgentBehavior,
-            json!({"agent_did": DID, "behavior_id": behavior_id, "inference_profile_id": profile}),
+            Collection::Agent,
+            json!({"node_did": DID, "agent_id": agent_id, "inference_profile_id": profile}),
         )];
     };
-    let context = format!("context-{behavior_id}");
-    let compaction_id = format!("compaction-{behavior_id}");
+    let context = format!("context-{agent_id}");
+    let compaction_id = format!("compaction-{agent_id}");
     vec![
         (
             Collection::Compaction,
-            json!({"agent_did": DID, "compaction_id": compaction_id, "inference_profile_id": compaction}),
+            json!({"node_did": DID, "compaction_id": compaction_id, "inference_profile_id": compaction}),
         ),
         (
             Collection::AgentContext,
-            json!({"agent_did": DID, "context_id": context, "compaction_id": compaction_id}),
+            json!({"node_did": DID, "context_id": context, "compaction_id": compaction_id}),
         ),
         (
-            Collection::AgentBehavior,
-            json!({"agent_did": DID, "behavior_id": behavior_id, "context_id": context, "inference_profile_id": profile}),
+            Collection::Agent,
+            json!({"node_did": DID, "agent_id": agent_id, "context_id": context, "inference_profile_id": profile}),
         ),
     ]
 }
@@ -114,8 +110,8 @@ fn accounts() -> Vec<AccountSummary> {
 fn failed_request(failure_reason: &str) -> AgentRequestRow {
     AgentRequestRow {
         request_id: "request-1".into(),
-        agent_did: Some(DID.into()),
-        behavior_id: Some("x".into()),
+        node_did: Some(DID.into()),
+        agent_id: Some("x".into()),
         lifecycle_state: Some(RequestLifecycleState::Failed),
         failure_reason: Some(failure_reason.into()),
         ..Default::default()
@@ -126,7 +122,7 @@ fn call(backend_id: &str, call_kind: &str, failure_reason: String) -> FailedCall
     let at = (now() - Duration::minutes(5)).to_rfc3339();
     FailedCall {
         backend_id: Some(backend_id.into()),
-        behavior_id: Some("x".into()),
+        agent_id: Some("x".into()),
         call_kind: Some(call_kind.into()),
         failure_reason: Some(failure_reason),
         queued_at: Some(at.clone()),
@@ -188,7 +184,7 @@ fn rejected_headers_limit() {
             reason: BlockedReason::UsageLimit,
             account: label_b(),
             profile: Some("main".into()),
-            behaviors_on_profile: vec!["x".into(), "y".into()],
+            agents_on_profile: vec!["x".into(), "y".into()],
             resets_at: Utc.timestamp_opt(1_790_354_400, 0).single(),
             switch_command: Some("gents config profile set-account main".into()),
         })
@@ -227,7 +223,7 @@ fn compaction_call_names_the_compaction_profile() {
     .expect("blocked");
     assert_eq!(turn.account, label_b());
     assert_eq!(turn.profile.as_deref(), Some("summ"));
-    assert_eq!(turn.behaviors_on_profile, ["x"]);
+    assert_eq!(turn.agents_on_profile, ["x"]);
     assert_eq!(
         turn.switch_command.as_deref(),
         Some("gents config profile set-account summ")
@@ -249,7 +245,7 @@ fn call_kind_picks_the_profile_when_both_share_the_backend() {
     };
     let compaction = stopped("compaction");
     assert_eq!(compaction.profile.as_deref(), Some("summ"));
-    assert_eq!(compaction.behaviors_on_profile, ["x"]);
+    assert_eq!(compaction.agents_on_profile, ["x"]);
     assert_eq!(
         compaction.switch_command.as_deref(),
         Some("gents config profile set-account summ")
@@ -275,28 +271,28 @@ fn a_moved_profile_is_not_replaced_by_its_sibling() {
 }
 
 #[test]
-fn behaviors_on_profile_counts_direct_and_compaction_users() {
+fn agents_on_profile_counts_direct_and_compaction_users() {
     let mut documents = documents(B, A);
     documents.extend(behavior("z", "summ", Some("main")));
-    // A pack-installed behavior names its bound profile directly
+    // A pack-installed agent names its bound profile directly
     // (`bind_pack_install_config` writes the profile id).
     documents.push((
-        Collection::AgentBehavior,
-        json!({"agent_did": DID, "behavior_id": "pack-w", "inference_profile_id": "main"}),
+        Collection::Agent,
+        json!({"node_did": DID, "agent_id": "pack-w", "inference_profile_id": "main"}),
     ));
     let references = references(documents);
     assert_eq!(
-        references.behaviors_on_profile("main"),
+        references.agents_on_profile("main"),
         ["pack-w", "x", "y", "z"]
     );
-    assert_eq!(references.behavior_profiles("x"), ["main", "summ"]);
-    assert_eq!(references.behavior_profiles("z"), ["summ", "main"]);
-    assert_eq!(references.behavior_profiles("y"), ["main"]);
+    assert_eq!(references.agent_profiles("x"), ["main", "summ"]);
+    assert_eq!(references.agent_profiles("z"), ["summ", "main"]);
+    assert_eq!(references.agent_profiles("y"), ["main"]);
 }
 
 #[test]
 fn routing_refusal_names_the_unavailable_account() {
-    let credentials = BehaviorReadinessUnavailableReason::CredentialsRequired.public_message();
+    let credentials = AgentReadinessUnavailableReason::CredentialsRequired.public_message();
     let mut disabled = accounts();
     disabled[1].enabled = false;
     let turn = blocked(
@@ -326,7 +322,7 @@ fn routing_refusal_names_the_unavailable_account() {
         "the backend keeps the label as its name"
     );
 
-    let tools = BehaviorReadinessUnavailableReason::ToolConfigurationInvalid.public_message();
+    let tools = AgentReadinessUnavailableReason::ToolConfigurationInvalid.public_message();
     let turn = blocked(
         &references(documents(A, B)),
         &disabled,
@@ -464,7 +460,7 @@ fn the_value_holds_no_secret() {
 async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::ensure_agent_principal(&node, DID).await.unwrap();
+    crate::ensure_node(&node, DID).await.unwrap();
     let access = ConfigAccess::Local(node.clone());
     let sign_in = |who: &str| {
         crate::claude_oauth::credential_from_login_tokens(
@@ -532,14 +528,14 @@ async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
             &format!(
                 r#"mutation {{
                     create_AgentRequest(input: {{
-                        request_id: "request-1" purpose: "normal" agent_did: "{DID}"
-                        behavior_id: "x" session_id: "session-1" content: "run"
+                        request_id: "request-1" purpose: "normal" node_did: "{DID}"
+                        agent_id: "x" session_id: "session-1" content: "run"
                         lifecycle_state: "failed" failure_reason: "{request_failure}"
                         created_at: "{at}"
                     }}) {{ _docID }}
                     create_InferenceCall(input: {{
                         call_id: "call-1" request_id: "request-1" call_seq: 1
-                        backend_id: "{b_backend}" behavior_id: "x" agent_did: "{DID}"
+                        backend_id: "{b_backend}" agent_id: "x" node_did: "{DID}"
                         call_kind: "inference" attempt: 1 call_state: "failed"
                         failure_reason: "{request_failure}"
                         queued_at: "{at}" started_at: "{at}" ended_at: "{at}"
@@ -562,7 +558,7 @@ async fn wrappers_read_the_stored_turn() {
     assert_eq!(turn.reason, BlockedReason::UsageLimit);
     assert_eq!(turn.account, label_b());
     assert_eq!(turn.profile.as_deref(), Some("main"));
-    assert_eq!(turn.behaviors_on_profile, ["x", "y"]);
+    assert_eq!(turn.agents_on_profile, ["x", "y"]);
     assert_eq!(turn.resets_at, Utc.timestamp_opt(1_790_354_400, 0).single());
 
     crate::goal::set_goal_from_access(

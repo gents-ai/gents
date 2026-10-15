@@ -15,8 +15,8 @@ temp copy.
 
 ## Configuration
 
-One behavior, `fixture-worker`, bound to the `worker` inference slot. The
-capability scopes its allowed caller to `${GENTS_PACK_AGENT_DID}`.
+One agent, `fixture-worker`, bound to the `worker` inference slot. The
+capability scopes its allowed caller to `${GENTS_PACK_NODE_DID}`.
 ## Declared topology
 
 Compiled capability edges.

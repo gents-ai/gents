@@ -4,10 +4,8 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import {
-  acceptsAsyncResult,
-  acceptsLiveCursor,
-} from "../../src/hooks/desktopShellRuntime";
+import { acceptsLiveCursor } from "../../src/hooks/liveDelta";
+import { acceptsAsyncResult } from "../../src/hooks/observationOrdering";
 import {
   projectStartupPhaseAfterSnapshot,
   type DesktopStartupPhase,

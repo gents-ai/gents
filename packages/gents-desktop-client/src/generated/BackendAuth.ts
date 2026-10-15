@@ -4,4 +4,4 @@
  * Authentication selection on a backend, not a second credential store.
  * A tagged value prevents competing raw-key and environment-key settings.
  */
-export type BackendAuth = { "kind": "unauthenticated" } | { "kind": "api_key", key: string, } | { "kind": "environment", variable: string, } | { "kind": "principal_oauth", account_ref?: string, };
+export type BackendAuth = { "kind": "unauthenticated" } | { "kind": "api_key", key: string, } | { "kind": "environment", variable: string, } | { "kind": "node_oauth", account_ref?: string, };

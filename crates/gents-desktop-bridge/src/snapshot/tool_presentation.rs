@@ -29,7 +29,7 @@ pub(super) fn project_tool_presentation(tool: &ToolCallView) -> ToolPresentation
         return project_file_edit(tool, name);
     }
     if AGENT_TOOL_NAMES.contains(&name) {
-        return project_subagent(tool, name);
+        return project_agent(tool, name);
     }
     if PROCESS_TOOLS.contains(&name) {
         return project_process(tool, name);
@@ -410,6 +410,7 @@ fn project_file_edit(tool: &ToolCallView, operation: &str) -> ToolPresentationVi
     ToolPresentationView::FileEdit {
         operation: operation.to_string(),
         path: string_field(args.as_ref(), "path").or_else(|| string_field(meta.as_ref(), "path")),
+        reveal_path: string_field(meta.as_ref(), "resolved_path"),
         created: bool_field(meta.as_ref(), "created"),
         replacements_applied: i64_field(meta.as_ref(), "replacements_applied"),
         diff,
@@ -426,7 +427,7 @@ fn action_label(name: &str, suffix: &str) -> String {
     }
 }
 
-fn project_subagent(tool: &ToolCallView, name: &str) -> ToolPresentationView {
+fn project_agent(tool: &ToolCallView, name: &str) -> ToolPresentationView {
     let args = json_object(tool.args.as_deref());
     let result = json_object(tool.result.as_deref());
     let session_id = string_field(args.as_ref(), "session_id")
@@ -445,7 +446,7 @@ fn project_subagent(tool: &ToolCallView, name: &str) -> ToolPresentationView {
             .and_then(Value::as_str)
             .map(|task_id| format!("task {task_id}"))
     });
-    ToolPresentationView::Subagent {
+    ToolPresentationView::Agent {
         action: match name {
             AGENT_NEW_TOOL_NAME => "start",
             AGENT_MESSAGE_TOOL_NAME => "message",
@@ -546,6 +547,54 @@ mod tests {
             denial: None,
             cancel_cause: None,
         }
+    }
+
+    #[test]
+    fn file_reveal_uses_resolved_result_path_without_changing_display_path() {
+        for result in [
+            r#"gents_fs: {"ok":true,"status":"success","tool":"write_file","path":"file.txt","resolved_path":"/root/work/file.txt","returned_count":0,"total_count":0,"truncated":false,"bytes_written":4,"created":true,"content_hash":"hash"}
+write_file: wrote 4 bytes to file.txt"#,
+            r#"{"ok":true,"status":"success","tool":"write_file","path":"file.txt","resolved_path":"/root/work/file.txt","returned_count":0,"total_count":0,"truncated":false,"bytes_written":4,"created":true,"content_hash":"hash"}"#,
+        ] {
+            let projected = project_file_edit(
+                &tool(
+                    "write_file",
+                    r#"{"path":"file.txt","resolved_path":"/wrong"}"#,
+                    result,
+                    "completed",
+                ),
+                "write_file",
+            );
+            let ToolPresentationView::FileEdit {
+                path, reveal_path, ..
+            } = projected
+            else {
+                panic!("expected file edit");
+            };
+            assert_eq!(path.as_deref(), Some("file.txt"));
+            assert_eq!(
+                reveal_path.as_deref(),
+                Some("/root/work/file.txt"),
+                "native file result: {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn file_reveal_does_not_infer_a_resolved_path_from_arguments() {
+        let projected = project_file_edit(
+            &tool(
+                "write_file",
+                r#"{"path":"file.txt","resolved_path":"/wrong"}"#,
+                "write failed",
+                "failed",
+            ),
+            "write_file",
+        );
+        let ToolPresentationView::FileEdit { reveal_path, .. } = projected else {
+            panic!("expected file edit");
+        };
+        assert_eq!(reveal_path, None);
     }
 
     fn diff_of(projected: ToolPresentationView) -> Vec<(ToolDiffLineKind, String)> {
@@ -726,18 +775,18 @@ mod tests {
     }
 
     #[test]
-    fn agents_tools_present_as_subagent_rows_by_action() {
+    fn agents_tools_present_as_agent_rows_by_action() {
         let presented = |name: &str, args: &str, result: &str| match project_tool_presentation(
             &tool(name, args, result, "completed"),
         ) {
-            ToolPresentationView::Subagent {
+            ToolPresentationView::Agent {
                 action,
                 name,
                 session_id,
                 description,
                 ..
             } => (action, name, session_id, description),
-            other => panic!("{name} must present as a subagent row: {other:?}"),
+            other => panic!("{name} must present as an agent row: {other:?}"),
         };
         assert_eq!(
             presented(

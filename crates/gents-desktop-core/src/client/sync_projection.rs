@@ -154,7 +154,7 @@ mod tests {
         ClientPeerStatus {
             peer_id: "peer-1".into(),
             label: "Studio".into(),
-            agent_did: "did:test:agent".into(),
+            node_did: "did:test:node".into(),
             addr: "/ip4/10.0.0.1/tcp/1".into(),
             dial_succeeded,
             last_error: None,

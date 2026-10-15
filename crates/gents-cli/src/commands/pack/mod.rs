@@ -458,24 +458,24 @@ impl SubjectPack {
         dir
     }
 
-    /// The pack's one inference-slot behavior; refused when it declares
+    /// The pack's one inference-slot agent; refused when it declares
     /// none or several.
-    pub(crate) fn default_behavior(&self) -> Result<String> {
-        let mut behaviors: Vec<&String> = self
+    pub(crate) fn default_agent(&self) -> Result<String> {
+        let mut agents: Vec<&String> = self
             .manifest
             .metadata
             .inference_slots
             .iter()
-            .flat_map(|slot| slot.behaviors.iter())
+            .flat_map(|slot| slot.agents.iter())
             .collect();
-        behaviors.sort();
-        behaviors.dedup();
-        match behaviors.as_slice() {
+        agents.sort();
+        agents.dedup();
+        match agents.as_slice() {
             [only] => Ok((*only).clone()),
             _ => anyhow::bail!(
-                "pack {} declares {} behaviors in its inference slots; name one as <pack>:<behavior>",
+                "pack {} declares {} agents in its inference slots; name one as <pack>:<agent>",
                 self.manifest.name,
-                behaviors.len()
+                agents.len()
             ),
         }
     }
@@ -530,17 +530,17 @@ pub(crate) fn single_slot(manifest: &PackManifest) -> Result<&gents::pack::PackI
     }
 }
 
-/// The `(slot, behavior)` of a pack with one inference slot holding one
-/// behavior, which is how an eval author pack names the behavior it runs.
-pub(crate) fn single_slot_behavior(manifest: &PackManifest) -> Result<(String, String)> {
+/// The `(slot, agent)` of a pack with one inference slot holding one
+/// agent, which is how an eval author pack names the agent it runs.
+pub(crate) fn single_slot_agent(manifest: &PackManifest) -> Result<(String, String)> {
     let slot = single_slot(manifest)?;
-    match slot.behaviors.as_slice() {
+    match slot.agents.as_slice() {
         [only] => Ok((slot.name.clone(), only.clone())),
-        behaviors => anyhow::bail!(
-            "pack {} slot {} declares {} behaviors; expected exactly one",
+        agents => anyhow::bail!(
+            "pack {} slot {} declares {} agents; expected exactly one",
             manifest.name,
             slot.name,
-            behaviors.len()
+            agents.len()
         ),
     }
 }
@@ -598,6 +598,41 @@ pub(crate) fn rollback_pack_plugin_records(
     gents::plugin::install::rollback_pack_plugin_records(home, previous)
 }
 
+/// Records a plugin-store change of `coordinate` in `home`'s node for the
+/// home's Node (`gents::pack::record_plugin_store_change`), after the
+/// store itself changed. An uninitialized home has no node, so no runtime to
+/// wake: the next start resolves the plugin store as it is.
+pub(crate) async fn record_plugin_store_change(
+    home: &std::path::Path,
+    coordinate: &str,
+    installed: Option<&gents::pack::PackIdentity>,
+) -> Result<()> {
+    if !gents::home::init_config_path(home).is_file() {
+        return Ok(());
+    }
+    let (access, owner) = resolve_scope_owner(&GraphScopeArgs {
+        home: Some(home.to_owned()),
+        graphql: None,
+        node_did: None,
+    })
+    .await?;
+    gents::pack::record_plugin_store_change(&access, &owner, home, coordinate, installed).await
+}
+
+/// Reports a failed node notification after a plugin removal as a warning:
+/// the store change already happened and cannot be retried, and a call of a
+/// removed plugin fails closed on its own.
+pub(crate) fn warn_on_unrecorded_removal(coordinate: &str, recorded: Result<()>) {
+    if let Err(error) = recorded {
+        tracing::warn!(
+            coordinate,
+            error = %error,
+            "plugins removed, but the node was not told: a running runtime keeps the removed \
+             tools listed (their calls fail) until it restarts or its configuration changes",
+        );
+    }
+}
+
 /// The owner whose profiles `requested` names for a plugins pack's model
 /// slots, after checking each slot exists and its profile can serve a plugin;
 /// `None` when nothing is requested, which opens no store.
@@ -647,14 +682,14 @@ pub(crate) async fn resolve_scope_owner(
 ) -> Result<(crate::CommandAccess, String)> {
     let (access, _) =
         crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
-    let owner = super::config::binding::resolve_target_agent_did(
-        scope.agent_did.as_deref(),
-        if scope.agent_did.is_some() {
+    let owner = super::config::binding::resolve_target_node_did(
+        scope.node_did.as_deref(),
+        if scope.node_did.is_some() {
             None
         } else if scope.graphql.is_some() {
-            Some(ManifestAgentDidBindingArg::Live)
+            Some(ManifestNodeDidBindingArg::Live)
         } else {
-            Some(ManifestAgentDidBindingArg::Home)
+            Some(ManifestNodeDidBindingArg::Home)
         },
         scope.home.as_deref(),
         scope.graphql.as_deref(),
@@ -698,13 +733,13 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             )
             .await?;
             let bind_mode = if args.scope.graphql.is_some() {
-                Some(ManifestAgentDidBindingArg::Live)
+                Some(ManifestNodeDidBindingArg::Live)
             } else {
-                Some(ManifestAgentDidBindingArg::Home)
+                Some(ManifestNodeDidBindingArg::Home)
             };
-            let owner = super::config::binding::resolve_target_agent_did(
-                args.scope.agent_did.as_deref(),
-                if args.scope.agent_did.is_some() {
+            let owner = super::config::binding::resolve_target_node_did(
+                args.scope.node_did.as_deref(),
+                if args.scope.node_did.is_some() {
                     None
                 } else {
                     bind_mode
@@ -743,7 +778,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 report.errors
             );
             let mut authored = authored.expect("checked pack configuration");
-            super::config::binding::rebind_manifest_to_agent(
+            super::config::binding::rebind_manifest_to_node(
                 &mut authored,
                 &owner,
                 args.force_rebind_concrete_did,
@@ -901,7 +936,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             anyhow::ensure!(
                 args.bindings.is_none()
                     && args.scope.graphql.is_none()
-                    && (args.scope.agent_did.is_none() || !requested.is_empty())
+                    && (args.scope.node_did.is_none() || !requested.is_empty())
                     && !args.force_rebind_concrete_did,
                 "asset and plugins packs install locally with --home; identity and graph binding flags do not apply"
             );
@@ -930,6 +965,14 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             // by name (`gents plugin run <name>`) as one installed on its
             // own. A failure past this point (the record write) must not
             // leave the plugins installed above orphaned.
+            let prior_record = gents::pack::read_home_install(
+                &home,
+                &format!(
+                    "{}/{}",
+                    pack.manifest().metadata.namespace,
+                    pack.manifest().name
+                ),
+            )?;
             let rollback = snapshot_pack_plugin_records(&home, pack.manifest());
             let installed_plugins = install_pack_plugins(
                 &home,
@@ -964,11 +1007,36 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 ux: pack.manifest().metadata.ux.clone(),
                 registry: pack.registry_url().map(str::to_owned),
             };
-            if let Err(error) =
-                bind_plugin_slots(&home, pack.manifest(), slot_owner.as_deref(), &requested)
-                    .and_then(|()| gents::pack::write_home_install(&home, &record))
-            {
+            // The node record goes last, in one transaction: a failure
+            // before it leaves the node untouched, and undoing the store and
+            // home record restores everything else.
+            let recorded = async {
+                bind_plugin_slots(&home, pack.manifest(), slot_owner.as_deref(), &requested)?;
+                gents::pack::write_home_install(&home, &record)?;
+                if !record.plugins.is_empty() {
+                    let identity = gents::pack::PackIdentity::new(
+                        pack.manifest(),
+                        pack.digest(),
+                        record.plugins.clone(),
+                    );
+                    record_plugin_store_change(&home, &record.coordinate, Some(&identity)).await?;
+                }
+                anyhow::Ok(())
+            }
+            .await;
+            if let Err(error) = recorded {
                 rollback_pack_plugin_records(&home, &rollback);
+                let restored = match &prior_record {
+                    Some(prior) => gents::pack::write_home_install(&home, prior),
+                    None => gents::pack::forget_home_install(&home, &record.coordinate),
+                };
+                if let Err(restore) = restored {
+                    tracing::error!(
+                        coordinate = %record.coordinate,
+                        error = %restore,
+                        "failed to restore the pack install record after a failed pack install",
+                    );
+                }
                 return Err(error);
             }
             crate::print_json(&json!({
@@ -1132,7 +1200,7 @@ mod tests {
         let config = gents::pack::load_pack_config(
             pack.manifest(),
             &gents::pack::PackInstallOptions {
-                agent_did: "did:key:zPackCatalogValidationOwner".into(),
+                node_did: "did:key:zPackCatalogValidationOwner".into(),
             },
             &|path| pack.asset(path).map(Vec::from),
             &|_| None,
@@ -1200,7 +1268,7 @@ mod tests {
         let scope = GraphScopeArgs {
             home: Some(tempfile::tempdir().unwrap().path().to_owned()),
             graphql: None,
-            agent_did: None,
+            node_did: None,
         };
         let none = resolve_plugin_slot_owner(&scope, &manifest, &BTreeMap::new()).await;
         assert_eq!(none.unwrap(), None);

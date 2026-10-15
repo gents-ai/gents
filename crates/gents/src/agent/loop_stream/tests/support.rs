@@ -471,6 +471,8 @@ pub(super) fn config(max_turns: usize) -> LoopConfig {
         deadline: None,
         max_turns,
         output_obligation_gate: None,
+        folded_prompts: Vec::new(),
+        authored_input: None,
     }
 }
 
@@ -655,33 +657,56 @@ pub(super) async fn owned_test_hook_with_policy(
     crate::streaming::DefraStreamWriter,
     crate::lifecycle::RequestLifecycle,
 ) {
-    owned_test_hook_with_identity_policy(None, policy).await
+    let (node, hook, writer, lifecycle, _) =
+        owned_test_hook_with_identity_policy(None, policy, None).await;
+    (node, hook, writer, lifecycle)
 }
 
 pub(super) async fn owned_test_hook_with_identity(
-    identity: Arc<dyn crate::AgentIdentity>,
+    identity: Arc<dyn crate::NodeIdentity>,
 ) -> (
     Arc<defra_node::EmbeddedNode>,
     DefraSessionHook,
     crate::streaming::DefraStreamWriter,
     crate::lifecycle::RequestLifecycle,
 ) {
-    owned_test_hook_with_identity_policy(Some(identity), FailurePolicy::default()).await
+    let (node, hook, writer, lifecycle, _) =
+        owned_test_hook_with_identity_policy(Some(identity), FailurePolicy::default(), None).await;
+    (node, hook, writer, lifecycle)
+}
+
+pub(super) async fn owned_test_hook_with_folded_case(
+    case: &crate::lean_vocab_test::LeanFoldTurnInputCase,
+) -> (
+    Arc<defra_node::EmbeddedNode>,
+    DefraSessionHook,
+    crate::streaming::DefraStreamWriter,
+    crate::lifecycle::RequestLifecycle,
+    std::collections::HashMap<u64, String>,
+) {
+    let key_dir = tempfile::tempdir().unwrap();
+    let identity = Arc::new(
+        crate::identity::KeyIdentity::load_or_create(key_dir.path().join("folded.key"), None)
+            .unwrap(),
+    );
+    owned_test_hook_with_identity_policy(Some(identity), FailurePolicy::default(), Some(case)).await
 }
 
 async fn owned_test_hook_with_identity_policy(
-    identity: Option<Arc<dyn crate::AgentIdentity>>,
+    identity: Option<Arc<dyn crate::NodeIdentity>>,
     policy: FailurePolicy,
+    folded_case: Option<&crate::lean_vocab_test::LeanFoldTurnInputCase>,
 ) -> (
     Arc<defra_node::EmbeddedNode>,
     DefraSessionHook,
     crate::streaming::DefraStreamWriter,
     crate::lifecycle::RequestLifecycle,
+    std::collections::HashMap<u64, String>,
 ) {
-    let agent_did = identity
+    let node_did = identity
         .as_ref()
         .map_or("did:test:test", |identity| identity.did());
-    let requester_did = identity.as_ref().map(|_| agent_did);
+    let requester_did = identity.as_ref().map(|_| node_did);
     let data_path = std::env::temp_dir().join(format!("agent-owned-loop-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
@@ -693,11 +718,10 @@ async fn owned_test_hook_with_identity_policy(
     ensure_runtime_schemas(&node).await.unwrap();
     let session_id = uuid::Uuid::new_v4().to_string();
     let request_id = uuid::Uuid::new_v4().to_string();
-    crate::session::ensure_session_with_behavior_id_and_requester_did(
+    crate::session::ensure_session_with_agent_id_and_requester_did(
         &node,
         &session_id,
-        "general",
-        agent_did,
+        node_did,
         "general",
         requester_did,
     )
@@ -711,15 +735,15 @@ async fn owned_test_hook_with_identity_policy(
                 crate::lifecycle::RequestIdentity {
                     requester_did: requester_did.map(str::to_owned),
                     request_id: request_id.clone(),
-                    agent_did: agent_did.to_owned(),
-                    behavior_id: "general".to_owned(),
+                    node_did: node_did.to_owned(),
+                    agent_id: "general".to_owned(),
                     session_id: session_id.clone(),
                     content: "owned loop test".to_owned(),
                     execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
                     created_at: now,
                 },
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                    agent_did,
+                    node_did,
                 ),
             ),
             crate::lifecycle::RequestSigner::Identity(identity.as_ref()),
@@ -730,7 +754,7 @@ async fn owned_test_hook_with_identity_policy(
         .unwrap()
     } else {
         format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", agent_did: "did:test:test", behavior_id: "general", session_id: "{}", subagent_depth: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "did:test:test", agent_id: "general", session_id: "{}", request_hop: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
             crate::graphql::escape_graphql_string(&request_id),
             crate::graphql::escape_graphql_string(&session_id),
             crate::graphql::escape_graphql_string(&request_id),
@@ -744,6 +768,68 @@ async fn owned_test_hook_with_identity_policy(
     )
     .await
     .unwrap();
+    let mut folded_docs = std::collections::HashMap::new();
+    if let Some(case) = folded_case {
+        let signer = identity
+            .as_ref()
+            .expect("folded fixture requires signed identity");
+        let mut predecessor = request_id.clone();
+        for folded in &case.folded {
+            let id = format!("{request_id}-folded-{}", folded.request_id);
+            let mut spec = crate::lifecycle::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                crate::lifecycle::RequestIdentity {
+                    requester_did: Some(node_did.to_owned()),
+                    request_id: id.clone(),
+                    node_did: node_did.to_owned(),
+                    agent_id: "general".into(),
+                    session_id: session_id.clone(),
+                    content: folded.content.clone(),
+                    execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: chrono::Utc::now()
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                },
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                    node_did,
+                ),
+            );
+            spec.input.queue = Some(gents_protocol::request_input::RequestQueue {
+                source: gents_protocol::request_input::QueueSource::User,
+                policy: gents_protocol::request_input::QueuePolicy::Append,
+                delivery: gents_protocol::request_input::QueueDelivery::Queue,
+                position: None,
+                key: None,
+                queued_after_request_id: Some(predecessor),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            });
+            let create = crate::lifecycle::build_signed_request(
+                spec,
+                crate::lifecycle::RequestSigner::Identity(signer.as_ref()),
+            )
+            .await
+            .unwrap();
+            let result = crate::config_client::ConfigAccess::Local(node.clone())
+                .write("test.folded_request", &create.graphql_mutation().unwrap())
+                .await
+                .unwrap();
+            let doc =
+                gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest").unwrap();
+            let loaded = crate::config_client::ConfigAccess::Local(node.clone())
+                .execute(&format!(
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                    crate::graphql::escape_graphql_string(&doc),
+                    crate::request_admission::SIGNED_REQUEST_FIELDS,
+                ))
+                .await
+                .unwrap();
+            let signed_row =
+                serde_json::from_value(loaded["data"]["AgentRequest"][0].clone()).unwrap();
+            crate::request_admission::verify_request_receipt_signature(&signed_row).unwrap();
+            folded_docs.insert(folded.request_id, doc);
+            predecessor = id;
+        }
+    }
     let loaded = crate::graphql::graphql_with_transaction_retry(
         &node,
         &format!(
@@ -762,8 +848,7 @@ async fn owned_test_hook_with_identity_policy(
     let hook = DefraSessionHook::resume_with_identity_policy(
         node.clone(),
         &session_id,
-        "general",
-        agent_did,
+        node_did,
         requester_did,
         policy,
     )
@@ -774,20 +859,28 @@ async fn owned_test_hook_with_identity_policy(
         .unwrap();
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
-        agent_did,
+        node_did,
         row.try_into().unwrap(),
         60,
     );
+    if let Some(case) = folded_case {
+        let admitted = case
+            .folded
+            .iter()
+            .map(|folded| folded_docs[&folded.request_id].clone())
+            .collect();
+        lifecycle.set_fold_admitted(admitted);
+    }
     assert_eq!(
         lifecycle.claim().await.unwrap(),
         crate::lifecycle::ClaimOutcome::Claimed
     );
-    let writer = crate::streaming::DefraStreamWriter::new(node.clone(), agent_did, Duration::ZERO);
+    let writer = crate::streaming::DefraStreamWriter::new(node.clone(), node_did, Duration::ZERO);
     lifecycle.begin_owned_execution(&writer).await.unwrap();
-    (node, hook, writer, lifecycle)
+    (node, hook, writer, lifecycle, folded_docs)
 }
 
 pub(super) fn transient_provider_error(label: &str) -> CompletionError {

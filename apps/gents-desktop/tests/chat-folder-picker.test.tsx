@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({ toast }));
-vi.mock("../src/ui/lib/pickDirectory", () => ({
+vi.mock("../src/lib/nativeShell", () => ({
   canPickDirectory: () => true,
   pickDirectory: vi.fn().mockRejectedValue(new Error("dialog unavailable")),
 }));

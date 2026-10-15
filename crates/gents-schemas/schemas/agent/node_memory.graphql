@@ -1,0 +1,7 @@
+type NodeMemory @branchable {
+    memory_id: String @index(unique: true)
+    node_did: String @index
+    key: String @index
+    value: String
+    updated_at: String @index(direction: DESC)
+}

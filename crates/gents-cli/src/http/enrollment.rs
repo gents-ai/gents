@@ -5,7 +5,7 @@ use chrono::{Duration, SecondsFormat, Utc};
 use defra_p2p_adapter::P2POperations;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
-use gents::AgentIdentity;
+use gents::NodeIdentity;
 use gents_protocol::enrollment::{
     derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, EnrollmentOfferRecord,
     EnrollmentOperatorAction, EnrollmentOperatorDecisionCommand, EnrollmentOperatorQuery,
@@ -23,13 +23,13 @@ pub(crate) type EnrollmentDecisionServiceHandle = Arc<RwLock<Option<EnrollmentDe
 
 #[derive(Clone)]
 pub(crate) struct EnrollmentDecisionService {
-    identity: Arc<dyn AgentIdentity>,
+    identity: Arc<dyn NodeIdentity>,
     node: Arc<EmbeddedNode>,
     store: gents::agent::p2p_reconcile::GraphqlEnrollmentStore,
 }
 
 impl EnrollmentDecisionService {
-    pub(crate) fn new(identity: Arc<dyn AgentIdentity>, node: Arc<EmbeddedNode>) -> Self {
+    pub(crate) fn new(identity: Arc<dyn NodeIdentity>, node: Arc<EmbeddedNode>) -> Self {
         Self {
             store: gents::agent::p2p_reconcile::GraphqlEnrollmentStore::new(
                 node.clone(),
@@ -193,7 +193,7 @@ struct ConsumedNonceRow {
 }
 
 async fn authenticate_operator_command(
-    identity: &dyn AgentIdentity,
+    identity: &dyn NodeIdentity,
     command: &EnrollmentOperatorDecisionCommand,
     now: chrono::DateTime<Utc>,
 ) -> Result<()> {
@@ -216,7 +216,7 @@ async fn authenticate_operator_command(
 }
 
 async fn authenticate_operator_query(
-    identity: &dyn AgentIdentity,
+    identity: &dyn NodeIdentity,
     command: &EnrollmentOperatorQueryCommand,
     now: chrono::DateTime<Utc>,
 ) -> Result<()> {
@@ -239,8 +239,8 @@ async fn authenticate_operator_query(
 }
 
 #[derive(Clone)]
-pub(crate) struct EnrollmentOfferIssuer {
-    identity: Arc<dyn AgentIdentity>,
+pub struct EnrollmentOfferIssuer {
+    identity: Arc<dyn NodeIdentity>,
     p2p: Arc<dyn P2POperations>,
     network_id: String,
     owner_agent: String,
@@ -248,9 +248,9 @@ pub(crate) struct EnrollmentOfferIssuer {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct EnrollmentOfferStatus {
-    pub(crate) token: String,
-    pub(crate) offer: EnrollmentOfferRecord,
+pub struct EnrollmentOfferStatus {
+    pub token: String,
+    pub offer: EnrollmentOfferRecord,
 }
 
 #[derive(Debug, Serialize)]
@@ -266,8 +266,8 @@ pub(crate) enum EnrollmentStatus {
 }
 
 impl EnrollmentOfferIssuer {
-    pub(crate) fn new(
-        identity: Arc<dyn AgentIdentity>,
+    pub fn new(
+        identity: Arc<dyn NodeIdentity>,
         p2p: Arc<dyn P2POperations>,
         network_id: String,
         owner_agent: String,
@@ -282,7 +282,7 @@ impl EnrollmentOfferIssuer {
         }
     }
 
-    pub(crate) async fn mint(&self) -> Result<EnrollmentOfferStatus> {
+    pub async fn mint(&self) -> Result<EnrollmentOfferStatus> {
         let server_peer = self
             .p2p
             .local_peer_id()
@@ -353,7 +353,7 @@ pub(crate) fn empty_decision_service_handle() -> EnrollmentDecisionServiceHandle
 }
 
 #[derive(Deserialize)]
-struct AgentNetworkRow {
+struct NetworkRow {
     network_id: String,
     admin_did: String,
     display_name: String,
@@ -362,18 +362,18 @@ struct AgentNetworkRow {
     admin_sig: String,
 }
 
-pub(crate) async fn ensure_enrollment_network(
+pub async fn ensure_enrollment_network(
     node: &EmbeddedNode,
-    identity: &dyn AgentIdentity,
+    identity: &dyn NodeIdentity,
     display_name: &str,
 ) -> Result<NetworkRecord> {
     let response = graphql_with_transaction_retry(
         node,
-        "{ AgentNetwork { network_id admin_did display_name default_template created_at admin_sig } }",
-        "loading enrollment AgentNetwork",
+        "{ Network { network_id admin_did display_name default_template created_at admin_sig } }",
+        "loading enrollment Network",
     )
     .await?;
-    let existing = rows::<AgentNetworkRow>(&response, "AgentNetwork")?;
+    let existing = rows::<NetworkRow>(&response, "Network")?;
     match existing.as_slice() {
         [row] => {
             let record = NetworkRecord {
@@ -384,11 +384,11 @@ pub(crate) async fn ensure_enrollment_network(
                 created_at: row.created_at.clone(),
                 sig: bs58::decode(&row.admin_sig)
                     .into_vec()
-                    .context("decoding enrollment AgentNetwork signature")?,
+                    .context("decoding enrollment Network signature")?,
             };
             anyhow::ensure!(
                 record.admin_did == identity.did(),
-                "existing AgentNetwork admin {} does not match local identity {}",
+                "existing Network admin {} does not match local identity {}",
                 record.admin_did,
                 identity.did()
             );
@@ -396,7 +396,7 @@ pub(crate) async fn ensure_enrollment_network(
                 identity
                     .verify(&record.admin_did, &record.signing_payload(), &record.sig)
                     .await?,
-                "existing AgentNetwork signature is invalid"
+                "existing Network signature is invalid"
             );
             Ok(record)
         }
@@ -413,7 +413,7 @@ pub(crate) async fn ensure_enrollment_network(
             record.sig = identity
                 .sign(&record.signing_payload())
                 .await
-                .context("signing enrollment AgentNetwork")?;
+                .context("signing enrollment Network")?;
             let network_id = escape_graphql_string(&record.network_id);
             let admin_did = escape_graphql_string(&record.admin_did);
             let display_name = escape_graphql_string(&record.display_name);
@@ -422,7 +422,7 @@ pub(crate) async fn ensure_enrollment_network(
             let admin_sig = escape_graphql_string(&bs58::encode(&record.sig).into_string());
             let mutation = format!(
                 r#"mutation {{
-                    create_AgentNetwork(input: {{
+                    create_Network(input: {{
                         network_id: "{network_id}",
                         admin_did: "{admin_did}",
                         display_name: "{display_name}",
@@ -440,7 +440,7 @@ pub(crate) async fn ensure_enrollment_network(
             .await?;
             Ok(record)
         }
-        rows => anyhow::bail!("expected one enrollment AgentNetwork, found {}", rows.len()),
+        rows => anyhow::bail!("expected one enrollment Network, found {}", rows.len()),
     }
 }
 

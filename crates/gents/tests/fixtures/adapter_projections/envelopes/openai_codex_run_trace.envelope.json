@@ -58,8 +58,8 @@
     "source_projection_version": "v1"
   },
   "redaction_mode": "training_safe",
-  "source_agent_did": "did:test:planner",
-  "source_behavior_id": "planner",
+  "source_node_did": "did:test:planner",
+  "source_agent_id": "planner",
   "source_request_id": "req-codex-1",
   "source_session_id": "thread-codex-1"
 }

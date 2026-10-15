@@ -88,7 +88,7 @@ export function App() {
     void bridge
       .sessionSnapshot({
         sessionId: selectedSession.sessionId,
-        agentDid: selectedDeployment.agentDid,
+        nodeDid: selectedDeployment.nodeDid,
       })
       .then((nextSession) => {
         if (!cancelled) setSession(nextSession);
@@ -117,8 +117,8 @@ export function App() {
     setDraft("");
     void run("chat_send", () =>
       bridge.chatSend({
-        agentDid: selectedDeployment.agentDid,
-        behaviorId: selectedDeployment.agentPrincipal.defaultBehaviorId ?? null,
+        nodeDid: selectedDeployment.nodeDid,
+        agentId: selectedDeployment.node.defaultAgentId ?? null,
         sessionId: selectedSession?.sessionId ?? null,
         content,
       }),
@@ -211,14 +211,14 @@ export function App() {
               ? null
               : {
                   kind: "blocked",
-                  label: "Pair an agent",
-                  detail: "Pair an agent before sending.",
+                  label: "Pair a node",
+                  detail: "Pair a node before sending.",
                   animated: false,
                 }
           }
           approxSerializedBytes={runtime?.approxSerializedBytes ?? 0}
-          behaviorLabel={
-            selectedDeployment?.agentPrincipal.defaultBehaviorId ?? null
+          agentLabel={
+            selectedDeployment?.node.defaultAgentId ?? null
           }
           canSend={Boolean(selectedDeployment) && Boolean(draft.trim())}
           draft={draft}
@@ -254,8 +254,8 @@ export function App() {
               return request;
             })
           }
-          onOpenChat={(agentDid) => push(`open_chat: ${agentDid}`)}
-          onOpenConfig={(agentDid) => push(`open_config: ${agentDid}`)}
+          onOpenChat={(nodeDid) => push(`open_chat: ${nodeDid}`)}
+          onOpenConfig={(nodeDid) => push(`open_config: ${nodeDid}`)}
           onRemovePeer={(peerId) =>
             run("peer_remove", () => bridge.api.removePeer(peerId)).then(() =>
               store.refresh(),

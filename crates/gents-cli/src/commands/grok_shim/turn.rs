@@ -49,9 +49,9 @@
 //! `gents::graphql::escape_graphql_string`; no HTTP GraphQL helper is used
 //! except the `create_agent_request` seam, which takes the bound GraphQL
 //! endpoint. The turn streams durable `AgentMessage`/`AgentToolCall`/
-//! subagent projection live: each watch cycle runs the projection engine's
+//! agent projection live: each watch cycle runs the projection engine's
 //! request-scoped poll and sends every novel `session/update` through the
-//! sender (deterministic tools → subagents → messages order), with a final
+//! sender (deterministic tools → agents → messages order), with a final
 //! flush before the deferred response. The payload shapes are owned by the
 //! projection leaves; the turn only polls, dedupes by durable identity
 //! (advancing the request-local cursor only after a successful send), and
@@ -431,12 +431,12 @@ impl AsyncCommit for ProjectionCursorCommit<'_> {
 /// Configuration the ACP service binds into the turn manager.
 #[derive(Clone, Debug)]
 pub(super) struct TurnManagerConfig {
-    /// Authenticated server principal used as DefraDB's transaction actor.
+    /// Authenticated server node used as DefraDB's transaction actor.
     pub actor: identity::Did,
-    /// The agent did every request is submitted under.
-    pub agent_did: String,
-    /// The behavior id the serving shim is bound to.
-    pub behavior_id: String,
+    /// The node DID every request is submitted under.
+    pub node_did: String,
+    /// The agent id the serving shim is bound to.
+    pub agent_id: String,
     /// GraphQL endpoint string accepted by `create_agent_request`; the
     /// in-process embedded node is authoritative for reads.
     pub graphql: String,
@@ -684,7 +684,7 @@ impl TurnManager {
                         if let Err(error) = goal_cursor
                             .refresh(
                                 &manager.node,
-                                &manager.config.agent_did,
+                                &manager.config.node_did,
                                 &observed_session,
                                 &sender,
                                 &projections,
@@ -697,7 +697,7 @@ impl TurnManager {
                         for error in graph_cursor
                             .refresh(
                                 &manager.node,
-                                &manager.config.agent_did,
+                                &manager.config.node_did,
                                 &observed_session,
                                 &sender,
                                 &projections,
@@ -829,11 +829,11 @@ impl TurnManager {
         let attached_at = chrono::DateTime::parse_from_rfc3339(attached_at)?
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         // Session IDs are grouping keys, not authorization. Root sessions
-        // use the bound principal as requester, just like submission and
+        // use the bound node as requester, just like submission and
         // AgentSession creation; foreign rows must never become UI turns.
-        let principal = escape_graphql_string(&self.config.agent_did);
+        let node = escape_graphql_string(&self.config.node_did);
         let scope = gents::session::public_request_filter(&format!(
-            r#"session_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{principal}" }}, requester_did: {{ _eq: "{principal}" }}, created_at: {{ _gte: "{}" }}, request_id: {{ _gt: "{}" }}"#,
+            r#"session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{node}" }}, requester_did: {{ _eq: "{node}" }}, created_at: {{ _gte: "{}" }}, request_id: {{ _gt: "{}" }}"#,
             escape_graphql_string(session_id),
             escape_graphql_string(&attached_at),
             escape_graphql_string(after),
@@ -859,8 +859,8 @@ impl TurnManager {
             let request: gents_protocol::row::AgentRequestRow =
                 serde_json::from_value(row.clone())?;
             anyhow::ensure!(
-                request.agent_did.as_deref() == Some(self.config.agent_did.as_str())
-                    && request.requester_did.as_deref() == Some(self.config.agent_did.as_str())
+                request.node_did.as_deref() == Some(self.config.node_did.as_str())
+                    && request.requester_did.as_deref() == Some(self.config.node_did.as_str())
                     && request.session_id.as_deref() == Some(session_id)
                     && request.doc_id.as_deref().is_some_and(|id| !id.is_empty()),
                 "observed request query crossed physical scope"
@@ -1334,7 +1334,7 @@ impl TurnManager {
         // Deferred response: watch the durable request until it terminalizes
         // or the pending entry is drained by cancel/disconnect. Each watch
         // cycle runs the durable projection pass first, so novel
-        // tool/subagent/message updates stream live and the final pass
+        // tool/agent/message updates stream live and the final pass
         // precedes the terminal response.
         let outcome = self
             .watch_terminal(
@@ -1363,9 +1363,9 @@ impl TurnManager {
         session: &str,
         request: &str,
     ) -> Result<Option<(String, String)>> {
-        let principal = escape_graphql_string(&self.config.agent_did);
+        let node = escape_graphql_string(&self.config.node_did);
         let scope = gents::session::public_request_filter(&format!(
-            r#"request_id:{{_eq:"{}"}},session_id:{{_eq:"{}"}},agent_did:{{_eq:"{principal}"}},requester_did:{{_eq:"{principal}"}}"#,
+            r#"request_id:{{_eq:"{}"}},session_id:{{_eq:"{}"}},node_did:{{_eq:"{node}"}},requester_did:{{_eq:"{node}"}}"#,
             escape_graphql_string(request),
             escape_graphql_string(session)
         ));
@@ -1476,9 +1476,9 @@ impl TurnManager {
             let row = if observed {
                 Some(
                     self.load_projection_request(
-                        &self.config.agent_did,
+                        &self.config.node_did,
                         &notification.session_id,
-                        Some(&self.config.agent_did),
+                        Some(&self.config.node_did),
                         request_id,
                         None,
                     )
@@ -1628,8 +1628,8 @@ impl TurnManager {
             tracing::error!(request_id=%request.request_id,"submitted request has no physical identity");
             return;
         };
-        let Some(owner) = request.agent_did.as_deref() else {
-            tracing::error!(request_id=%request.request_id,"submitted request has no principal identity");
+        let Some(owner) = request.node_did.as_deref() else {
+            tracing::error!(request_id=%request.request_id,"submitted request has no node identity");
             return;
         };
         if let Err(error) = gents::interrupt_request_by_doc_id(
@@ -1668,11 +1668,11 @@ impl TurnManager {
                 &self.node,
                 self.config.actor.clone(),
                 &graphql,
-                &self.config.agent_did,
+                &self.config.node_did,
                 &objective,
                 token_budget,
                 &request.session_id,
-                &self.config.behavior_id,
+                &self.config.agent_id,
                 stable_request_id.clone(),
                 options,
             )
@@ -1680,10 +1680,10 @@ impl TurnManager {
         } else {
             let prepared = crate::request_helpers::prepare_agent_request(
                 &graphql,
-                &self.config.agent_did,
+                &self.config.node_did,
                 &content,
                 Some(&request.session_id),
-                Some(&self.config.behavior_id),
+                Some(&self.config.agent_id),
                 Some(stable_request_id.clone()),
                 options,
             )
@@ -1707,7 +1707,7 @@ impl TurnManager {
         let submitted = submitted?;
         let row = self
             .load_projection_request(
-                &submitted.agent_did,
+                &submitted.node_did,
                 &submitted.session_id,
                 submitted.requester_did.as_deref(),
                 &submitted.request_id,
@@ -1718,7 +1718,7 @@ impl TurnManager {
             if let Err(error) = gents::interrupt_request_by_doc_id(
                 &self.node,
                 &submitted.request_doc_id,
-                &submitted.agent_did,
+                &submitted.node_did,
                 submitted.requester_did.as_deref(),
             )
             .await
@@ -1761,7 +1761,7 @@ impl TurnManager {
         let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone())?;
         anyhow::ensure!(
             row.request_id == request
-                && row.agent_did.as_deref() == Some(agent)
+                && row.node_did.as_deref() == Some(agent)
                 && row.session_id.as_deref() == Some(session)
                 && row.requester_did.as_deref() == requester
                 && row.doc_id.as_deref().is_some_and(
@@ -1778,7 +1778,7 @@ impl TurnManager {
     ///
     /// Each cycle first polls the request's terminal state, then runs the
     /// durable projection pass and streams every novel event live (tools,
-    /// then subagents, then messages), and only then sleeps. When the
+    /// then agents, then messages), and only then sleeps. When the
     /// request has terminalized, the final projection pass still runs —
     /// and its sends complete — before the pending entry is removed and the
     /// terminal `stopReason` response is produced, so the pager observes
@@ -2205,7 +2205,7 @@ impl TurnManager {
                     if let Some(pinned) = &cursor.request {
                         anyhow::ensure!(
                             pinned.doc_id == row.doc_id
-                                && pinned.agent_did == row.agent_did
+                                && pinned.node_did == row.node_did
                                 && pinned.requester_did == row.requester_did,
                             "child projection cannot rebind physical request"
                         );
@@ -2243,16 +2243,16 @@ impl TurnManager {
     }
 
     /// A caused session's scope authorizes its requests, but not foreign
-    /// principal rows sharing that label. Followups must preserve the exact
-    /// agent/requester identity, including absent requester identity.
+    /// node rows sharing that label. Followups must preserve the exact
+    /// node/requester identity, including absent requester identity.
     async fn readable_child_session_requests(
         &self,
         child: &crate::caused_sessions::SessionScope,
     ) -> Result<Vec<gents_protocol::row::AgentRequestRow>> {
         let session = child.session_id.as_str();
-        let agent = child.agent_did.as_str();
+        let node = child.node_did.as_str();
         let scope = gents::session::public_request_filter(&gents::session::session_scope_filter(
-            agent,
+            node,
             session,
             child.requester_did.as_deref(),
         ));
@@ -2281,7 +2281,7 @@ impl TurnManager {
                 let row: gents_protocol::row::AgentRequestRow =
                     serde_json::from_value(value.clone())?;
                 anyhow::ensure!(
-                    row.agent_did.as_deref() == Some(agent)
+                    row.node_did.as_deref() == Some(node)
                         && row.session_id.as_deref() == Some(session)
                         && row.requester_did == child.requester_did
                         && row.doc_id.as_deref().is_some_and(|id| !id.is_empty())
@@ -2317,9 +2317,9 @@ impl TurnManager {
             );
             cursor.request = Some(
                 self.load_projection_request(
-                    &self.config.agent_did,
+                    &self.config.node_did,
                     session,
-                    Some(&self.config.agent_did),
+                    Some(&self.config.node_did),
                     request_id,
                     None,
                 )
@@ -2358,7 +2358,7 @@ impl TurnManager {
             .context("terminal projection physical request missing")?;
         let scope = gents::session::session_scope_filter(
             request
-                .agent_did
+                .node_did
                 .as_deref()
                 .context("terminal projection owner missing")?,
             request
@@ -3254,13 +3254,13 @@ mod tests {
     }
 
     /// Build an embedded node with runtime schemas and an admitted test
-    /// principal/behavior, matching the production request boundary.
+    /// node/agent, matching the production request boundary.
     async fn test_node() -> (tempfile::TempDir, Arc<EmbeddedNode>, String) {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let identity = gents::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
             .expect("test signing identity");
-        let agent_did = gents::AgentIdentity::did(&identity).to_string();
-        let behavior_id = gents::default_behavior_id_for_agent(&agent_did);
+        let node_did = gents::NodeIdentity::did(&identity).to_string();
+        let agent_id = gents::default_agent_id_for_node(&node_did);
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(tempdir.path().join("node"))
@@ -3272,23 +3272,23 @@ mod tests {
         gents::schema::ensure_runtime_schemas(&node)
             .await
             .expect("runtime schemas");
-        super::super::seed_test_behavior_configuration(
+        super::super::seed_test_agent_configuration(
             node.as_ref(),
-            &agent_did,
-            &behavior_id,
-            &behavior_id,
+            &node_did,
+            &agent_id,
+            &agent_id,
             "GLM-5.3-NVFP4",
             true,
         )
         .await;
-        (tempdir, node, agent_did)
+        (tempdir, node, node_did)
     }
 
-    fn test_config(graphql: String, agent_did: &str) -> TurnManagerConfig {
+    fn test_config(graphql: String, node_did: &str) -> TurnManagerConfig {
         TurnManagerConfig {
-            actor: ::identity::Did::new(agent_did.to_string()).expect("fixture creator DID"),
-            agent_did: agent_did.to_string(),
-            behavior_id: gents::default_behavior_id_for_agent(agent_did),
+            actor: ::identity::Did::new(node_did.to_string()).expect("fixture creator DID"),
+            node_did: node_did.to_string(),
+            agent_id: gents::default_agent_id_for_node(node_did),
             graphql,
         }
     }
@@ -3308,22 +3308,22 @@ mod tests {
 
     async fn seed_runtime_wake(
         node: &EmbeddedNode,
-        principal: &str,
+        node_did: &str,
         content: &str,
     ) -> gents_protocol::row::AgentRequestRow {
         // Source identity is immutable: seed a runtime-shaped request at
         // creation, never relabel a human submission after admission.
-        let behavior = gents::default_behavior_id_for_agent(principal);
+        let agent_id = gents::default_agent_id_for_node(node_did);
         let request = uuid::Uuid::new_v4().to_string();
         let result = node
             .execute(&format!(
                 r#"mutation {{create_AgentRequest(input:{{
-            request_id:"{request}",purpose:"normal",agent_did:"{principal}",requester_did:"{principal}",
-            behavior_id:"{behavior}",session_id:"session-1",runtime_source_kind:"local-control",lifecycle_state:"pending",
+            request_id:"{request}",purpose:"normal",node_did:"{node_did}",requester_did:"{node_did}",
+            agent_id:"{agent_id}",session_id:"session-1",runtime_source_kind:"local-control",lifecycle_state:"pending",
             content:"{}",created_at:"{}"}}) {{_docID}}}}"#,
                 escape_graphql_string(content),
                 chrono::Utc::now().to_rfc3339(),
-                principal = escape_graphql_string(principal)
+                node_did = escape_graphql_string(node_did)
             ))
             .await;
         ensure_no_errors(&result, "seed runtime wake fixture").unwrap();
@@ -3332,7 +3332,7 @@ mod tests {
             "AgentRequest",
         )
         .unwrap();
-        serde_json::from_value(json!({"_docID":doc,"request_id":request,"agent_did":principal,"requester_did":principal,"behavior_id":behavior,"session_id":"session-1","runtime_source_kind":"local-control"})).unwrap()
+        serde_json::from_value(json!({"_docID":doc,"request_id":request,"node_did":node_did,"requester_did":node_did,"agent_id":agent_id,"session_id":"session-1","runtime_source_kind":"local-control"})).unwrap()
     }
 
     fn buffer_sender() -> (Arc<Mutex<Vec<String>>>, PromptSender) {
@@ -3348,7 +3348,7 @@ mod tests {
         format!(
             "{}, _docID: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}",
             gents::session::session_scope_filter(
-                request.agent_did.as_deref().expect("fixture owner"),
+                request.node_did.as_deref().expect("fixture owner"),
                 request.session_id.as_deref().expect("fixture session"),
                 request.requester_did.as_deref()
             ),
@@ -3401,7 +3401,7 @@ mod tests {
             node,
             request,
             &gents::session::sequence_message_key(
-                request.agent_did.as_deref().expect("fixture owner"),
+                request.node_did.as_deref().expect("fixture owner"),
                 request.session_id.as_deref().expect("fixture session"),
                 request.requester_did.as_deref(),
                 sequence.try_into().expect("fixture sequence fits u32"),
@@ -3468,13 +3468,13 @@ mod tests {
             SourceClose, StreamDeclaration, StreamPayload, TranscriptMessage,
         };
 
-        let agent_did = request.agent_did.as_deref().expect("fixture owner");
+        let node_did = request.node_did.as_deref().expect("fixture owner");
         let session_id = request.session_id.as_deref().expect("fixture session");
         let request_doc_id = request.doc_id.as_deref().expect("fixture physical request");
         let execution_generation = format!("fixture:{request_doc_id}");
         let created_at = chrono::Utc::now().to_rfc3339();
         let segment = OutputSegment {
-            agent_did: agent_did.into(),
+            node_did: node_did.into(),
             requester_did: request.requester_did.clone(),
             session_id: session_id.into(),
             request_doc_id: request_doc_id.into(),
@@ -3520,7 +3520,7 @@ mod tests {
         let message = TranscriptMessage {
             message_key: message_key.into(),
             session_id: session_id.into(),
-            agent_did: agent_did.into(),
+            node_did: node_did.into(),
             requester_did: request.requester_did.clone(),
             request_doc_id: Some(request_doc_id.into()),
             publication: MessagePublication::RequestExecution {
@@ -3582,7 +3582,7 @@ mod tests {
     }
 
     /// Seed the first `AgentRequest` of a session caused by the parent
-    /// request, the durable shape the subagent projection observes.
+    /// request, the durable shape the agent projection observes.
     async fn seed_child_request(
         node: &Arc<EmbeddedNode>,
         parent: &gents_protocol::row::AgentRequestRow,
@@ -3590,11 +3590,10 @@ mod tests {
         child_request_id: &str,
         lifecycle_state: &str,
     ) -> gents_protocol::row::AgentRequestRow {
-        let owner = escape_graphql_string(parent.agent_did.as_deref().unwrap());
-        // An agent_new session's requester is the principal that started it.
+        let owner = escape_graphql_string(parent.node_did.as_deref().unwrap());
+        // An agent_new session's requester is the node that started it.
         let requester = format!("\"{owner}\"");
-        let behavior =
-            escape_graphql_string(parent.behavior_id.as_deref().expect("fixture behavior"));
+        let agent = escape_graphql_string(parent.agent_id.as_deref().expect("fixture agent"));
         let logical_parent = escape_graphql_string(&parent.request_id);
         let physical_parent = escape_graphql_string(parent.doc_id.as_deref().unwrap());
         let tool = escape_graphql_string(tool_doc_id);
@@ -3603,15 +3602,15 @@ mod tests {
         let now = chrono::Utc::now().to_rfc3339();
         crate::commands::grok_shim::test_fixtures::seed_started_session(
             node,
-            parent.agent_did.as_deref().unwrap(),
+            parent.node_did.as_deref().unwrap(),
             "session-1-child",
-            parent.agent_did.as_deref(),
-            parent.behavior_id.as_deref().expect("fixture behavior"),
+            parent.node_did.as_deref(),
+            parent.agent_id.as_deref().expect("fixture agent"),
             parent.doc_id.as_deref().unwrap(),
         )
         .await;
         let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
-            request_id: "{child}", purpose: "normal", agent_did: "{owner}", requester_did: {requester}, behavior_id: "{behavior}", session_id: "session-1-child",
+            request_id: "{child}", purpose: "normal", node_did: "{owner}", requester_did: {requester}, agent_id: "{agent}", session_id: "session-1-child",
             caused_by_parent_request_id: "{logical_parent}", caused_by_parent_request_doc_id: "{physical_parent}", caused_by_parent_tool_call_id: "call-1", caused_by_parent_tool_call_doc_id: "{tool}", content: "child work", lifecycle_state: "{state}", created_at: "{now}"
         }}) {{_docID}} }}"#)).await;
         ensure_no_errors(&response, "test seed child request").unwrap();
@@ -3620,7 +3619,7 @@ mod tests {
             "AgentRequest",
         )
         .unwrap();
-        serde_json::from_value(json!({"_docID":doc,"request_id":child_request_id,"agent_did":parent.agent_did,"requester_did":parent.agent_did,"behavior_id":parent.behavior_id,"session_id":"session-1-child", "caused_by_parent_request_id":parent.request_id,"caused_by_parent_request_doc_id":parent.doc_id,"caused_by_parent_tool_call_id":"call-1","caused_by_parent_tool_call_doc_id":tool_doc_id})).unwrap()
+        serde_json::from_value(json!({"_docID":doc,"request_id":child_request_id,"node_did":parent.node_did,"requester_did":parent.node_did,"agent_id":parent.agent_id,"session_id":"session-1-child", "caused_by_parent_request_id":parent.request_id,"caused_by_parent_request_doc_id":parent.doc_id,"caused_by_parent_tool_call_id":"call-1","caused_by_parent_tool_call_doc_id":tool_doc_id})).unwrap()
     }
 
     /// Transition a seeded tool call to its terminal completed state with a
@@ -3635,7 +3634,7 @@ mod tests {
         assert_eq!(rows.len(), 1, "tool completion owner must be exact");
         let call_id = rows[0]["tool_call_id"].as_str().unwrap().to_owned();
         let request_doc_id = escape_graphql_string(rows[0]["request_doc_id"].as_str().unwrap());
-        let response = node.execute(&format!(r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{request_doc_id}"}}}}, limit: 2) {{_docID request_id agent_did requester_did session_id}} }}"#)).await;
+        let response = node.execute(&format!(r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{request_doc_id}"}}}}, limit: 2) {{_docID request_id node_did requester_did session_id}} }}"#)).await;
         ensure_no_errors(&response, "load tool request owner").unwrap();
         let rows = response.data.as_ref().unwrap()["AgentRequest"]
             .as_array()
@@ -3653,7 +3652,7 @@ mod tests {
     }
 
     /// Transition a seeded child request to its terminal completed state,
-    /// the durable edge the subagent projection finishes on.
+    /// the durable edge the agent projection finishes on.
     async fn complete_child_request(
         node: &Arc<EmbeddedNode>,
         request: &gents_protocol::row::AgentRequestRow,
@@ -3678,13 +3677,13 @@ mod tests {
 
     #[tokio::test]
     async fn fixture_receipts_keep_colliding_requests_and_child_owners_separate() {
-        let (_dir, node, principal) = test_node().await;
-        let behavior = gents::default_behavior_id_for_agent(&principal);
+        let (_dir, node, node_did) = test_node().await;
+        let agent_id = gents::default_agent_id_for_node(&node_did);
         let mut receipts = Vec::new();
         for content in ["selected", "same-label other document"] {
             let result = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
-                request_id:"collision", purpose:"normal", agent_did:"{principal}", requester_did:"{principal}",
-                session_id:"session-1", behavior_id:"{behavior}", content:"{content}", lifecycle_state:"pending"
+                request_id:"collision", purpose:"normal", node_did:"{node_did}", requester_did:"{node_did}",
+                session_id:"session-1", agent_id:"{agent_id}", content:"{content}", lifecycle_state:"pending"
             }}) {{_docID}} }}"#)).await;
             ensure_no_errors(&result, "seed colliding requests").unwrap();
             let doc = gents_protocol::graphql::extract_mutation_doc_id(
@@ -3693,8 +3692,8 @@ mod tests {
             )
             .unwrap();
             receipts.push(serde_json::from_value::<gents_protocol::row::AgentRequestRow>(json!({
-                "_docID":doc,"request_id":"collision","agent_did":principal,"requester_did":principal,
-                "session_id":"session-1","behavior_id":behavior
+                "_docID":doc,"request_id":"collision","node_did":node_did,"requester_did":node_did,
+                "session_id":"session-1","agent_id":agent_id
             })).unwrap());
         }
         assert_ne!(receipts[0].doc_id, receipts[1].doc_id);
@@ -3702,15 +3701,15 @@ mod tests {
         seed_assistant_message(&node, selected, 1, "selected output").await;
         let tool = seed_tool_call(&node, selected, "call-1", "agent_new", "running", "").await;
         let child = seed_child_request(&node, selected, &tool, "child", "processing").await;
-        assert_eq!(child.agent_did.as_deref(), Some(principal.as_str()));
-        assert_eq!(child.requester_did.as_deref(), Some(principal.as_str()));
+        assert_eq!(child.node_did.as_deref(), Some(node_did.as_str()));
+        assert_eq!(child.requester_did.as_deref(), Some(node_did.as_str()));
         seed_assistant_message(&node, &child, 1, "child output").await;
         complete_child_request(&node, &child).await;
         complete_tool_call(&node, &tool, "done").await;
         terminalize_request(&node, selected, "completed").await;
         for (index, receipt) in receipts.iter().enumerate() {
             let query = format!(
-                "{{AgentRequest(filter: {{{}}}) {{lifecycle_state}} AgentMessage(filter: {{request_doc_id: {{_eq: \"{}\"}}}}) {{message_key agent_did requester_did request_doc_id}}}}",
+                "{{AgentRequest(filter: {{{}}}) {{lifecycle_state}} AgentMessage(filter: {{request_doc_id: {{_eq: \"{}\"}}}}) {{message_key node_did requester_did request_doc_id}}}}",
                 fixture_request_filter(receipt),
                 escape_graphql_string(receipt.doc_id.as_deref().unwrap())
             );
@@ -3749,8 +3748,8 @@ mod tests {
                     );
                 }
                 for row in rows {
-                    assert_eq!(row["agent_did"], principal);
-                    assert_eq!(row["requester_did"], principal);
+                    assert_eq!(row["node_did"], node_did);
+                    assert_eq!(row["requester_did"], node_did);
                     assert_eq!(row["request_doc_id"], receipt.doc_id.as_deref().unwrap());
                 }
             }
@@ -3785,9 +3784,9 @@ mod tests {
     /// A prompt that terminalizes normally resolves `stopReason=end_turn`.
     #[tokio::test]
     async fn prompt_resolves_end_turn_after_terminalization() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
-        let manager = TurnManager::new(node.clone(), test_config(graphql, &agent_did));
+        let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
         let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
 
@@ -3802,14 +3801,14 @@ mod tests {
         .unwrap();
 
         let node_for_terminalize = node.clone();
-        let principal_for_terminalize = agent_did.clone();
+        let did_for_terminalize = node_did.clone();
         let handle = tokio::spawn(async move {
             // Wait for the request row to exist, then terminalize it.
             loop {
                 let scope = gents::session::session_scope_filter(
-                    &principal_for_terminalize,
+                    &did_for_terminalize,
                     "session-1",
-                    Some(&principal_for_terminalize),
+                    Some(&did_for_terminalize),
                 );
                 let query = format!(
                     "{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}",
@@ -3851,9 +3850,9 @@ mod tests {
 
     #[tokio::test]
     async fn goal_prompt_atomically_submits_scoped_goal_and_signed_request() {
-        let (_dir, node, principal) = test_node().await;
+        let (_dir, node, node_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
-        let manager = TurnManager::new(node.clone(), test_config(graphql, &principal));
+        let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
         let mut prompt = parse_prompt_request(
             &json!({
                 "sessionId":"goal-submit-session",
@@ -3868,7 +3867,7 @@ mod tests {
             .await
             .unwrap();
         let id = id_receipt.request_id.clone();
-        let goal = gents::goal::load_canonical_goal(&node, &principal, &prompt.session_id)
+        let goal = gents::goal::load_canonical_goal(&node, &node_did, &prompt.session_id)
             .await
             .unwrap()
             .unwrap();
@@ -3876,13 +3875,13 @@ mod tests {
         assert_eq!(goal.status, "active");
         assert_eq!(goal.token_budget, Some(100000));
         let response = node.execute(&format!(
-            "{{AgentRequest(filter:{{request_id:{{_eq:\"{id}\"}}}}){{request_id agent_did session_id content input retry_key admission_signer_did}}}}"
+            "{{AgentRequest(filter:{{request_id:{{_eq:\"{id}\"}}}}){{request_id node_did session_id content input retry_key admission_signer_did}}}}"
         )).await;
         gents::graphql::ensure_no_errors(&response, "goal submission").unwrap();
         let row = &response.data.as_ref().unwrap()["AgentRequest"][0];
         assert_eq!(row["content"], "Explain the architecture");
-        assert_eq!(row["agent_did"], principal);
-        assert_eq!(row["admission_signer_did"], principal);
+        assert_eq!(row["node_did"], node_did);
+        assert_eq!(row["admission_signer_did"], node_did);
         assert_eq!(row["session_id"], prompt.session_id);
         assert_eq!(row["retry_key"], format!("goal-request:{id}"));
         assert!(row["input"].is_null());
@@ -3902,7 +3901,7 @@ mod tests {
             );
         }
         assert_eq!(
-            gents::goal::load_canonical_goal(&node, &principal, &prompt.session_id)
+            gents::goal::load_canonical_goal(&node, &node_did, &prompt.session_id)
                 .await
                 .unwrap()
                 .unwrap()
@@ -3911,7 +3910,7 @@ mod tests {
         );
         // Clear/recreate must admit a genuinely new request, not recover the
         // prior incarnation's request by a session-only retry key.
-        gents::goal::delete_goals_for_session(&node, &principal, &prompt.session_id)
+        gents::goal::delete_goals_for_session(&node, &node_did, &prompt.session_id)
             .await
             .unwrap();
         let next_receipt = manager
@@ -3926,9 +3925,9 @@ mod tests {
     /// later wakes wait for its terminal delivery; ordinary Esc cancels it.
     #[tokio::test]
     async fn resume_hands_off_active_and_during_replay_requests_without_repeating_history() {
-        let (_dir, node, principal) = test_node().await;
+        let (_dir, node, node_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
-        let manager = TurnManager::new(node.clone(), test_config(graphql, &principal));
+        let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
         let engine = test_engine(node.clone());
         let (buffer, sender) = buffer_sender();
         let prompt = parse_prompt_request(
@@ -3940,7 +3939,7 @@ mod tests {
         let first = first_receipt.request_id.clone();
         seed_assistant_message(&node, &first_receipt, 1, "Before reconnect.").await;
         let attached = chrono::Utc::now().to_rfc3339();
-        let rows = super::super::sessions::requests(&node, &principal, Some("session-1"))
+        let rows = super::super::sessions::requests(&node, &node_did, Some("session-1"))
             .await
             .unwrap();
         let running = manager
@@ -3994,25 +3993,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_discovery_excludes_foreign_principals_and_requesters() {
-        let (_tempdir, node, agent_did) = test_node().await;
+    async fn session_discovery_excludes_foreign_nodes_and_requesters() {
+        let (_tempdir, node, node_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
-        let manager = TurnManager::new(node.clone(), test_config(graphql, &agent_did));
+        let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
         let engine = test_engine(node.clone());
         let (_, sender) = buffer_sender();
-        for (id, agent, requester) in [
-            (
-                "foreign-agent",
-                "did:test:foreign",
-                Some(agent_did.as_str()),
-            ),
+        for (id, owner, requester) in [
+            ("foreign-agent", "did:test:foreign", Some(node_did.as_str())),
             (
                 "foreign-requester",
-                agent_did.as_str(),
+                node_did.as_str(),
                 Some("did:test:foreign"),
             ),
-            ("missing-requester", agent_did.as_str(), None),
-            ("owned", agent_did.as_str(), Some(agent_did.as_str())),
+            ("missing-requester", node_did.as_str(), None),
+            ("owned", node_did.as_str(), Some(node_did.as_str())),
         ] {
             let requester = requester
                 .map(|did| format!("\"{}\"", escape_graphql_string(did)))
@@ -4020,11 +4015,11 @@ mod tests {
             let result = node
                 .execute(&format!(
                     r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "{id}", purpose: "normal", session_id: "session-1", agent_did: "{}",
+                request_id: "{id}", purpose: "normal", session_id: "session-1", node_did: "{}",
                 requester_did: {requester}, lifecycle_state: "completed",
                 created_at: "2026-06-04T12:00:00Z"
             }}) {{ _docID }} }}"#,
-                    escape_graphql_string(agent)
+                    escape_graphql_string(owner)
                 ))
                 .await;
             ensure_no_errors(&result, "seed scoped session discovery").unwrap();
@@ -4047,9 +4042,9 @@ mod tests {
 
     #[tokio::test]
     async fn observed_human_turn_keeps_prompt_identity_echo_and_cancel_target() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
-        let manager = TurnManager::new(node.clone(), test_config(graphql, &agent_did));
+        let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
         let engine = test_engine(node.clone());
         let (buffer, sender) = buffer_sender();
         let prompt = parse_prompt_request(
@@ -4147,9 +4142,9 @@ mod tests {
 
     #[tokio::test]
     async fn autonomous_turn_defers_late_notices_and_plain_escape_cancels_its_owner() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
-        let manager = TurnManager::new(node.clone(), test_config(graphql, &agent_did));
+        let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
         let engine = test_engine(node.clone());
         let (buffer, sender) = buffer_sender();
         let prompt = parse_prompt_request(
@@ -4165,7 +4160,7 @@ mod tests {
             ("session-1".into(), root.clone()),
             Arc::new(Mutex::new(ObservedRequest::new("root".into(), 0, true))),
         );
-        let first_receipt = seed_runtime_wake(&node, &agent_did, "internal wake instruction").await;
+        let first_receipt = seed_runtime_wake(&node, &node_did, "internal wake instruction").await;
         let first = first_receipt.request_id.clone();
         seed_assistant_message(&node, &first_receipt, 1, "Wake A is working.").await;
         seed_tool_call(&node, &first_receipt, "wake-a-tool", "bash", "running", "").await;
@@ -4195,8 +4190,7 @@ mod tests {
         ] {
             seed_completion_notice(&node, request, sequence, text).await;
         }
-        let second_receipt =
-            seed_runtime_wake(&node, &agent_did, "internal wake instruction").await;
+        let second_receipt = seed_runtime_wake(&node, &node_did, "internal wake instruction").await;
         seed_assistant_message(&node, &second_receipt, 4, "Wake B response.").await;
         terminalize_request(&node, &second_receipt, "completed").await;
         seed_assistant_message(&node, &first_receipt, 5, "Wake A continues.").await;
@@ -4306,12 +4300,12 @@ mod tests {
     /// runtime.
     #[tokio::test]
     async fn opening_request_is_the_agent_new_call_not_a_same_second_message() {
-        let (_tempdir, node, agent_did) = test_node().await;
-        let behavior = gents::default_behavior_id_for_agent(&agent_did);
-        let agent = escape_graphql_string(&agent_did);
-        let behavior_literal = escape_graphql_string(&behavior);
+        let (_tempdir, node, node_did) = test_node().await;
+        let agent_id = gents::default_agent_id_for_node(&node_did);
+        let node_literal = escape_graphql_string(&node_did);
+        let agent_literal = escape_graphql_string(&agent_id);
         let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
-            request_id:"open-root", purpose:"normal", session_id:"session-1", agent_did:"{agent}", requester_did:"{agent}", behavior_id:"{behavior_literal}", lifecycle_state:"processing"
+            request_id:"open-root", purpose:"normal", session_id:"session-1", node_did:"{node_literal}", requester_did:"{node_literal}", agent_id:"{agent_literal}", lifecycle_state:"processing"
         }}) {{_docID}} }}"#)).await;
         ensure_no_errors(&response, "seed opening parent").unwrap();
         let parent_doc = gents_protocol::graphql::extract_mutation_doc_id(
@@ -4319,7 +4313,7 @@ mod tests {
             "AgentRequest",
         )
         .unwrap();
-        let parent: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({"_docID":parent_doc,"request_id":"open-root","agent_did":agent_did,"requester_did":agent_did,"behavior_id":behavior,"session_id":"session-1"})).unwrap();
+        let parent: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({"_docID":parent_doc,"request_id":"open-root","node_did":node_did,"requester_did":node_did,"agent_id":agent_id,"session_id":"session-1"})).unwrap();
         let open_call =
             seed_tool_call(&node, &parent, "call-open", "agent_new", "running", "").await;
         let message_call = seed_tool_call(
@@ -4333,10 +4327,10 @@ mod tests {
         .await;
         crate::commands::grok_shim::test_fixtures::seed_started_session(
             &node,
-            &agent_did,
+            &node_did,
             "opened",
-            Some(&agent_did),
-            &behavior,
+            Some(&node_did),
+            &agent_id,
             &parent_doc,
         )
         .await;
@@ -4350,7 +4344,7 @@ mod tests {
             let call_id = escape_graphql_string(call_id);
             let call_doc = escape_graphql_string(call_doc);
             let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
-                request_id:"{request_id}", purpose:"normal", session_id:"opened", agent_did:"{agent}", requester_did:"{agent}", behavior_id:"{behavior_literal}", lifecycle_state:"processing", created_at:"2026-09-27T00:00:00Z",
+                request_id:"{request_id}", purpose:"normal", session_id:"opened", node_did:"{node_literal}", requester_did:"{node_literal}", agent_id:"{agent_literal}", lifecycle_state:"processing", created_at:"2026-09-27T00:00:00Z",
                 caused_by_parent_request_id:"open-root", caused_by_parent_request_doc_id:"{parent}", caused_by_parent_tool_call_id:"{call_id}", caused_by_parent_tool_call_doc_id:"{call_doc}"
             }}) {{_docID}} }}"#)).await;
             ensure_no_errors(&response, "seed opened session request").unwrap();
@@ -4372,13 +4366,13 @@ mod tests {
 
     #[tokio::test]
     async fn child_pane_streams_followups_before_finish_and_excludes_foreign_requester() {
-        let (_tempdir, node, agent_did) = test_node().await;
-        let manager = TurnManager::new(node.clone(), test_config(String::new(), &agent_did));
+        let (_tempdir, node, node_did) = test_node().await;
+        let manager = TurnManager::new(node.clone(), test_config(String::new(), &node_did));
         let engine = test_engine(node.clone());
         let (buffer, sender) = buffer_sender();
-        let behavior = gents::default_behavior_id_for_agent(&agent_did);
+        let agent_id = gents::default_agent_id_for_node(&node_did);
         let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
-            request_id:"pane-root", purpose:"normal", session_id:"session-1", agent_did:"{agent_did}", requester_did:"{agent_did}", behavior_id:"{behavior}", lifecycle_state:"processing"
+            request_id:"pane-root", purpose:"normal", session_id:"session-1", node_did:"{node_did}", requester_did:"{node_did}", agent_id:"{agent_id}", lifecycle_state:"processing"
         }}) {{_docID}} }}"#)).await;
         ensure_no_errors(&response, "seed pane root").unwrap();
         let doc = gents_protocol::graphql::extract_mutation_doc_id(
@@ -4386,19 +4380,19 @@ mod tests {
             "AgentRequest",
         )
         .unwrap();
-        let parent: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({"_docID":doc,"request_id":"pane-root","agent_did":agent_did,"requester_did":agent_did,"behavior_id":behavior,"session_id":"session-1"})).unwrap();
+        let parent: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({"_docID":doc,"request_id":"pane-root","node_did":node_did,"requester_did":node_did,"agent_id":agent_id,"session_id":"session-1"})).unwrap();
         let tool = seed_tool_call(&node, &parent, "call-1", "agent_new", "running", "").await;
         let child = seed_child_request(&node, &parent, &tool, "pane-child", "processing").await;
         let mut followup = None;
         for (id, requester, text) in [
             (
                 "pane-child",
-                Some(agent_did.as_str()),
+                Some(node_did.as_str()),
                 "Original child output",
             ),
             (
                 "pane-followup",
-                Some(agent_did.as_str()),
+                Some(node_did.as_str()),
                 "Steered child output",
             ),
             ("pane-foreign", Some("did:foreign"), "MUST NOT LEAK"),
@@ -4411,10 +4405,10 @@ mod tests {
                     .unwrap_or_else(|| "null".into());
                 let created_at = chrono::Utc::now().to_rfc3339();
                 let response = node.execute(&format!(
-                    r#"mutation {{create_AgentRequest(input: {{request_id:"{}", purpose:"normal", session_id:"session-1-child", agent_did:"{}", requester_did:{requester_field}, behavior_id:"{}", lifecycle_state:"processing", created_at:"{}"}}) {{_docID}} }}"#,
+                    r#"mutation {{create_AgentRequest(input: {{request_id:"{}", purpose:"normal", session_id:"session-1-child", node_did:"{}", requester_did:{requester_field}, agent_id:"{}", lifecycle_state:"processing", created_at:"{}"}}) {{_docID}} }}"#,
                     escape_graphql_string(id),
-                    escape_graphql_string(&agent_did),
-                    escape_graphql_string(&behavior),
+                    escape_graphql_string(&node_did),
+                    escape_graphql_string(&agent_id),
                     escape_graphql_string(&created_at),
                 )).await;
                 ensure_no_errors(&response, "seed child followup").unwrap();
@@ -4423,7 +4417,7 @@ mod tests {
                     "AgentRequest",
                 )
                 .unwrap();
-                serde_json::from_value(json!({"_docID":doc,"request_id":id,"agent_did":agent_did,"requester_did":requester,"behavior_id":behavior,"session_id":"session-1-child"})).unwrap()
+                serde_json::from_value(json!({"_docID":doc,"request_id":id,"node_did":node_did,"requester_did":requester,"agent_id":agent_id,"session_id":"session-1-child"})).unwrap()
             };
             // Distinct requests in this same session share its sequence namespace.
             let sequence = if id == "pane-followup" { 2 } else { 1 };
@@ -4614,11 +4608,11 @@ mod tests {
     /// and durable wake results remain visible without replaying old output.
     #[tokio::test]
     async fn session_observer_preserves_handoff_and_delivers_late_wake() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
         let manager = Arc::new(TurnManager::new(
             node.clone(),
-            test_config(graphql, &agent_did),
+            test_config(graphql, &node_did),
         ));
         let engine = test_engine(node.clone());
         let (buffer, sender) = buffer_sender();
@@ -4636,7 +4630,7 @@ mod tests {
             let sender = sender.clone();
             tokio::spawn(async move { manager.handle_prompt(prompt, &sender, &engine).await })
         };
-        let root_receipt = wait_for_pending_request(&node, &agent_did).await;
+        let root_receipt = wait_for_pending_request(&node, &node_did).await;
         let late_tool_doc =
             seed_tool_call(&node, &root_receipt, "late-bash", "bash", "running", "").await;
         seed_assistant_message(&node, &root_receipt, 1, "Root response.").await;
@@ -4673,7 +4667,7 @@ mod tests {
             .await;
         ensure_no_errors(&update, "late tool finish").unwrap();
         let wake_receipt =
-            seed_runtime_wake(&node, &agent_did, "internal notification instruction").await;
+            seed_runtime_wake(&node, &node_did, "internal notification instruction").await;
         let wake = wake_receipt.request_id.clone();
         seed_assistant_message(&node, &wake_receipt, 2, "Background work finished.").await;
         terminalize_request(&node, &wake_receipt, "completed").await;
@@ -4857,17 +4851,17 @@ mod tests {
     }
 
     /// A live turn streams every novel durable projection update before the
-    /// deferred response: the tool call registers, the subagent lifecycle
+    /// deferred response: the tool call registers, the agent lifecycle
     /// appears, and the assistant message chunk streams — each exactly once,
-    /// in tools → subagents → messages order within a poll — with no
+    /// in tools → agents → messages order within a poll — with no
     /// duplicates even though the watch polls many times.
     #[tokio::test]
-    async fn live_turn_streams_tool_subagent_and_message_updates_once_each() {
-        let (_tempdir, node, agent_did) = test_node().await;
+    async fn live_turn_streams_tool_agent_and_message_updates_once_each() {
+        let (_tempdir, node, node_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
         let manager = Arc::new(TurnManager::new(
             node.clone(),
-            test_config(graphql, &agent_did),
+            test_config(graphql, &node_did),
         ));
         let engine = test_engine(node.clone());
         let (buffer, sender) = buffer_sender();
@@ -4887,9 +4881,9 @@ mod tests {
         // the intermediate (non-terminal) state, and finish with a
         // terminalization.
         let node_for_seed = node.clone();
-        let principal_for_seed = agent_did.clone();
+        let did_for_seed = node_did.clone();
         let seed_handle = tokio::spawn(async move {
-            let request_id = wait_for_pending_request(&node_for_seed, &principal_for_seed).await;
+            let request_id = wait_for_pending_request(&node_for_seed, &did_for_seed).await;
             // Stage 1: an in-flight tool call and a running child request —
             // observed by at least one non-terminal poll.
             // The call that opens the child session is its agent_new call.
@@ -4936,7 +4930,7 @@ mod tests {
             Some("user_message_chunk")
         );
         // Every projection family streamed: tool call (base registration,
-        // status revision, commands), subagent (spawned, progress,
+        // status revision, commands), agent (spawned, progress,
         // finished), and the assistant message chunk.
         for expected in [
             "tool_call",
@@ -5017,9 +5011,9 @@ mod tests {
     /// dedup is by durable row key, never by content.
     #[tokio::test]
     async fn identical_text_distinct_rows_both_stream() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
-        let manager = TurnManager::new(node.clone(), test_config(graphql, &agent_did));
+        let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
         let engine = test_engine(node.clone());
         let (buffer, sender) = buffer_sender();
 
@@ -5034,9 +5028,9 @@ mod tests {
         .unwrap();
 
         let node_for_seed = node.clone();
-        let principal_for_seed = agent_did.clone();
+        let did_for_seed = node_did.clone();
         let seed_handle = tokio::spawn(async move {
-            let request_id = wait_for_pending_request(&node_for_seed, &principal_for_seed).await;
+            let request_id = wait_for_pending_request(&node_for_seed, &did_for_seed).await;
             // Two distinct assistant rows carrying the same text.
             seed_assistant_message(&node_for_seed, &request_id, 1, "same text").await;
             seed_assistant_message(&node_for_seed, &request_id, 2, "same text").await;
@@ -5071,11 +5065,11 @@ mod tests {
     /// accepts the next prompt immediately.
     #[tokio::test]
     async fn outbound_close_after_submission_interrupts_and_drains() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
         let manager = Arc::new(TurnManager::new(
             node.clone(),
-            test_config(graphql, &agent_did),
+            test_config(graphql, &node_did),
         ));
         let engine = test_engine(node.clone());
         let (frames_tx, frames_rx) = tokio::sync::mpsc::unbounded_channel::<
@@ -5110,9 +5104,9 @@ mod tests {
             closed_signal.notify_one();
         });
         let node_for_seed = node.clone();
-        let principal_for_seed = agent_did.clone();
+        let did_for_seed = node_did.clone();
         let seed_handle = tokio::spawn(async move {
-            let request_id = wait_for_pending_request(&node_for_seed, &principal_for_seed).await;
+            let request_id = wait_for_pending_request(&node_for_seed, &did_for_seed).await;
             outbound_closed.notified().await;
             let _tool_doc = seed_tool_call(
                 &node_for_seed,
@@ -5168,13 +5162,13 @@ mod tests {
         )
         .unwrap();
         let node_for_terminalize = node.clone();
-        let principal_for_terminalize = agent_did.clone();
+        let did_for_terminalize = node_did.clone();
         let terminalize_handle = tokio::spawn(async move {
             loop {
                 let scope = gents::session::session_scope_filter(
-                    &principal_for_terminalize,
+                    &did_for_terminalize,
                     "session-1",
-                    Some(&principal_for_terminalize),
+                    Some(&did_for_terminalize),
                 );
                 let query = format!(
                     "{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}",
@@ -5215,9 +5209,9 @@ mod tests {
     /// Wait for the first pending `AgentRequest` row and return its id.
     async fn wait_for_pending_request(
         node: &Arc<EmbeddedNode>,
-        principal: &str,
+        node_did: &str,
     ) -> gents_protocol::row::AgentRequestRow {
-        let scope = gents::session::session_scope_filter(principal, "session-1", Some(principal));
+        let scope = gents::session::session_scope_filter(node_did, "session-1", Some(node_did));
         loop {
             let response = node.execute(&format!("{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}", gents::SIGNED_REQUEST_FIELDS)).await;
             ensure_no_errors(&response, "wait for fixture request").unwrap();
@@ -5244,7 +5238,7 @@ mod tests {
     /// lands in the before-request-id window.
     #[tokio::test]
     async fn cancel_before_request_id_resolves_cancelled_and_permits_reuse() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let submission_arrived = Arc::new(tokio::sync::Notify::new());
         let submission_release = Arc::new(tokio::sync::Notify::new());
         let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -5259,7 +5253,7 @@ mod tests {
         .await;
         let manager = Arc::new(TurnManager::new(
             node.clone(),
-            test_config(graphql, &agent_did),
+            test_config(graphql, &node_did),
         ));
         let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
@@ -5327,13 +5321,13 @@ mod tests {
         )
         .unwrap();
         let node_for_terminalize = node.clone();
-        let principal_for_terminalize = agent_did.clone();
+        let did_for_terminalize = node_did.clone();
         let terminalize_handle = tokio::spawn(async move {
             loop {
                 let scope = gents::session::session_scope_filter(
-                    &principal_for_terminalize,
+                    &did_for_terminalize,
                     "session-1",
-                    Some(&principal_for_terminalize),
+                    Some(&did_for_terminalize),
                 );
                 let query = format!(
                     "{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}",
@@ -5375,7 +5369,7 @@ mod tests {
     /// old request id on, drain, or stream through the replacement entry.
     #[tokio::test]
     async fn cancelled_submission_cannot_capture_an_exact_key_replacement() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let submission_arrived = Arc::new(tokio::sync::Notify::new());
         let submission_release = Arc::new(tokio::sync::Notify::new());
         let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -5390,7 +5384,7 @@ mod tests {
         .await;
         let manager = Arc::new(TurnManager::new(
             node.clone(),
-            test_config(graphql, &agent_did),
+            test_config(graphql, &node_did),
         ));
         let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
@@ -5491,7 +5485,7 @@ mod tests {
     /// the Arc generation mismatch and leave the replacement entry intact.
     #[tokio::test]
     async fn failed_submission_cannot_remove_an_exact_key_replacement() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let submission_arrived = Arc::new(tokio::sync::Notify::new());
         let submission_release = Arc::new(tokio::sync::Notify::new());
         let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -5508,7 +5502,7 @@ mod tests {
         .await;
         let manager = Arc::new(TurnManager::new(
             node.clone(),
-            test_config(graphql, &agent_did),
+            test_config(graphql, &node_did),
         ));
         let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
@@ -5618,10 +5612,10 @@ mod tests {
     /// replacement generation.
     #[tokio::test]
     async fn cancel_selection_cannot_drain_an_exact_key_replacement() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let manager = Arc::new(TurnManager::new(
             node,
-            test_config("http://127.0.0.1:1/".to_string(), &agent_did),
+            test_config("http://127.0.0.1:1/".to_string(), &node_did),
         ));
         let key = ("session-reuse".to_string(), "same-prompt".to_string());
         let old_generation = Arc::new(Mutex::new(CancelBeforeIdLatch::default()));
@@ -5734,7 +5728,7 @@ mod tests {
     /// deterministically lands in the before-request-id window.
     #[tokio::test]
     async fn disconnect_before_request_id_resolves_cancelled() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let submission_arrived = Arc::new(tokio::sync::Notify::new());
         let submission_release = Arc::new(tokio::sync::Notify::new());
         let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -5749,7 +5743,7 @@ mod tests {
         .await;
         let manager = Arc::new(TurnManager::new(
             node.clone(),
-            test_config(graphql, &agent_did),
+            test_config(graphql, &node_did),
         ));
         let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
@@ -5808,7 +5802,7 @@ mod tests {
     /// terminal state. Fully deterministic: no sleeps.
     #[tokio::test]
     async fn disconnect_parked_before_latch_with_finishing_submission_failure_resolves_cancelled() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let submission_arrived = Arc::new(tokio::sync::Notify::new());
         let submission_release = Arc::new(tokio::sync::Notify::new());
         let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -5825,7 +5819,7 @@ mod tests {
         .await;
         let manager = Arc::new(TurnManager::new(
             node.clone(),
-            test_config(graphql, &agent_did),
+            test_config(graphql, &node_did),
         ));
         let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
@@ -5950,7 +5944,7 @@ mod tests {
     /// `AgentRequest` rows. Fully deterministic: no sleeps.
     #[tokio::test]
     async fn cancel_parked_before_latch_with_finishing_submission_failure_resolves_cancelled() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let submission_arrived = Arc::new(tokio::sync::Notify::new());
         let submission_release = Arc::new(tokio::sync::Notify::new());
         let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -5967,7 +5961,7 @@ mod tests {
         .await;
         let manager = Arc::new(TurnManager::new(
             node.clone(),
-            test_config(graphql, &agent_did),
+            test_config(graphql, &node_did),
         ));
         let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
@@ -6097,11 +6091,11 @@ mod tests {
     /// created. A duplicate disconnect stays idempotent.
     #[tokio::test]
     async fn prompt_gated_before_insertion_is_rejected_after_disconnect() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
         let manager = Arc::new(TurnManager::new(
             node.clone(),
-            test_config(graphql, &agent_did),
+            test_config(graphql, &node_did),
         ));
         let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
@@ -6205,7 +6199,7 @@ mod tests {
     /// empty immediately, and a second duplicate disconnect is a no-op.
     #[tokio::test]
     async fn disconnect_drains_an_already_pending_entry_and_duplicate_disconnect_is_a_noop() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let submission_arrived = Arc::new(tokio::sync::Notify::new());
         let submission_release = Arc::new(tokio::sync::Notify::new());
         let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -6220,7 +6214,7 @@ mod tests {
         .await;
         let manager = Arc::new(TurnManager::new(
             node.clone(),
-            test_config(graphql, &agent_did),
+            test_config(graphql, &node_did),
         ));
         let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
@@ -6292,9 +6286,9 @@ mod tests {
     /// prompt surface the send failure.
     #[tokio::test]
     async fn send_failure_after_submission_interrupts_the_request() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
-        let manager = TurnManager::new(node.clone(), test_config(graphql, &agent_did));
+        let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
         let engine = test_engine(node.clone());
         let (frames_tx, frames_rx) = tokio::sync::mpsc::unbounded_channel::<
             crate::commands::grok_shim::protocol::ServerEnvelope,
@@ -6353,11 +6347,11 @@ mod tests {
     /// does not disturb the live turn (one pending prompt per session).
     #[tokio::test]
     async fn second_prompt_for_live_session_is_rejected() {
-        let (_tempdir, node, agent_did) = test_node().await;
+        let (_tempdir, node, node_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
         let manager = Arc::new(TurnManager::new(
             node.clone(),
-            test_config(graphql, &agent_did),
+            test_config(graphql, &node_did),
         ));
         let projections = test_engine(node.clone());
         let (buffer, sender) = buffer_sender();
@@ -6420,13 +6414,13 @@ mod tests {
         // The rejection must not have disturbed the live turn: terminalize the
         // first prompt's request and confirm it resolves normally.
         let node_for_terminalize = node.clone();
-        let principal_for_terminalize = agent_did.clone();
+        let did_for_terminalize = node_did.clone();
         let terminalize_handle = tokio::spawn(async move {
             loop {
                 let scope = gents::session::session_scope_filter(
-                    &principal_for_terminalize,
+                    &did_for_terminalize,
                     "session-1",
-                    Some(&principal_for_terminalize),
+                    Some(&did_for_terminalize),
                 );
                 let query = format!(
                     "{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}",

@@ -14,12 +14,12 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-document-{}", Uuid::new_v4().simple());
-    let init = run_init_json(&home_dir, &["--agent-name", &agent_name])?;
-    let agent_did = agent_did_from_init(&init)?;
+    let init = run_init_json(&home_dir, &["--node-name", &agent_name])?;
+    let node_did = node_did_from_init(&init)?;
     let offline_fields = serde_json::json!({
         "goal_id": "offline-goal",
         "session_id": "offline-session",
-        "agent_did": agent_did,
+        "node_did": node_did,
         "objective": "created before the server starts",
         "status": "paused",
         "created_at": "2026-07-16T00:00:00Z",
@@ -32,13 +32,13 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     assert!(offline["doc_id"].as_str().is_some(), "{offline}");
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let goal_id = format!("goal-{}", Uuid::new_v4().simple());
     let fields = serde_json::json!({
         "goal_id": goal_id,
         "session_id": "document-create-session",
-        "agent_did": agent_did,
+        "node_did": node_did,
         "objective": "created by the operator \"command\"",
         "status": "paused",
         "created_at": "2026-07-16T00:00:00Z",
@@ -140,21 +140,21 @@ async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> 
     let other_dir = tempdir.path().join("other");
     fs::create_dir_all(&home_dir)?;
     fs::create_dir_all(&other_dir)?;
-    run_init_json(&other_dir, &["--agent-name", "cli-document-other"])?;
-    let init = run_init_json(&home_dir, &["--agent-name", "cli-document-served"])?;
-    let agent_did = agent_did_from_init(&init)?;
+    run_init_json(&other_dir, &["--node-name", "cli-document-other"])?;
+    let init = run_init_json(&home_dir, &["--node-name", "cli-document-served"])?;
+    let node_did = node_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     // The other home's principal is not the served home's, so the write is refused.
     let goal_id = format!("goal-{}", Uuid::new_v4().simple());
     let fields = serde_json::json!({
         "goal_id": goal_id,
         "session_id": "document-create-foreign",
-        "agent_did": agent_did,
+        "node_did": node_did,
         "objective": "must not be written",
         "status": "paused",
         "created_at": "2026-07-16T00:00:00Z",

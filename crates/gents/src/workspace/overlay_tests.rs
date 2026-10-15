@@ -26,7 +26,7 @@ fn ready_workspace() -> IsolatedWorkspaceRecord {
         workspace_id: "ws-1".into(),
         work_unit_id: None,
         caused_by_invocation_id: None,
-        owner_agent_did: "dep-1".into(),
+        owner_node_did: "dep-1".into(),
         writer_principal: "did:key:zWriter".into(),
         integrator_principal: "did:key:zIntegrator".into(),
         lifecycle_state: "ready".into(),
@@ -38,7 +38,7 @@ fn ready_workspace() -> IsolatedWorkspaceRecord {
 fn placement(host_path: &std::path::Path) -> WorkspacePlacementRecord {
     WorkspacePlacementRecord {
         workspace_id: "ws-1".into(),
-        owner_agent_did: "dep-1".into(),
+        owner_node_did: "dep-1".into(),
         host_path: host_path.to_string_lossy().into_owned(),
         observed_tree_hash: None,
     }
@@ -54,7 +54,7 @@ fn bind_input<'a>(
         authority,
         seal_hash: None,
         request_cwd: None,
-        agent_did: "dep-1",
+        node_did: "dep-1",
         operator_tool_root,
         workspace_write_sandbox_enforced: enforced,
         live_tree_hash: None,
@@ -564,19 +564,19 @@ fn principal_and_placement_identity_mismatches_fail_closed() {
     let (_guard, operator, path) = temp_tree();
     let workspace = ready_workspace();
     let placed = placement(&path);
-    for agent_did in ["did:key:foreign", ""] {
+    for node_did in ["did:key:foreign", ""] {
         assert!(bind_workspace_overlay(
             &workspace,
             &placed,
             WorkspaceBindInput {
-                agent_did,
+                node_did,
                 ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false)
             }
         )
         .is_err());
     }
     let mut foreign = placed.clone();
-    foreign.owner_agent_did = "did:key:foreign".into();
+    foreign.owner_node_did = "did:key:foreign".into();
     assert!(bind_workspace_overlay(
         &workspace,
         &foreign,
@@ -595,7 +595,7 @@ pub(crate) struct ArtifactTestFixture {
 }
 
 pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTestFixture {
-    use crate::identity::AgentIdentity;
+    use crate::identity::NodeIdentity;
     use crate::workspace::*;
     use std::{collections::BTreeSet, sync::Arc};
     fn git(root: &std::path::Path, args: &[&str]) -> String {
@@ -654,10 +654,10 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let mut documents = MemoryWorkspaceDocuments::default();
     let mut context = HostExecutorContext {
-        owner_agent_did: workspace_owner.clone(),
+        owner_node_did: workspace_owner.clone(),
         repository: RepositoryPlacementRef {
             repository_id: "artifact-repo".into(),
-            owner_agent_did: workspace_owner.clone(),
+            owner_node_did: workspace_owner.clone(),
             host_path: repo.clone(),
             enabled: true,
         },
@@ -725,7 +725,7 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
     );
     create.workspace_id = Some("artifact-workspace".into());
-    create.workspace_owner_agent_did = Some(workspace_owner.clone());
+    create.workspace_owner_node_did = Some(workspace_owner.clone());
     create.workspace_authority = Some("readOnly".into());
     create.workspace_seal_hash = sealed.workspace.seal_hash.clone();
     crate::request_admission::sign_agent_request_create(&identity, &mut create)
@@ -743,7 +743,7 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
             .unwrap()
             .unwrap();
     let request = crate::watcher::AgentRequest::try_from(row).unwrap();
-    let mut owner = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+    let mut owner = crate::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
         &did,
@@ -786,8 +786,7 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
 #[tokio::test]
 async fn admission_workspace_validation_checks_scope_and_cwd_without_writes() {
     let fx = artifact_test_fixture(&[]).await;
-    let query =
-        "{ WorkspaceBinding { binding_id request_doc_id owner_agent_did lifecycle_state } }";
+    let query = "{ WorkspaceBinding { binding_id request_doc_id owner_node_did lifecycle_state } }";
     let before = fx.node.execute(query).await;
     assert!(!before.has_errors(), "{:?}", before.errors);
     let request = fx.owner.request().clone();
@@ -802,7 +801,7 @@ async fn admission_workspace_validation_checks_scope_and_cwd_without_writes() {
             .is_err()
     );
     let mut foreign = request;
-    foreign.workspace_owner_agent_did = Some("did:key:foreign".into());
+    foreign.workspace_owner_node_did = Some("did:key:foreign".into());
     assert!(
         super::validate_request_workspace_input(&fx.node, &foreign, false)
             .await
@@ -889,7 +888,7 @@ async fn artifact_grant_rejects_source_drift_and_allocates_disjoint_outputs() {
         fx.grant.source_root(),
         fx.owner
             .request()
-            .workspace_owner_agent_did
+            .workspace_owner_node_did
             .as_deref()
             .unwrap(),
         fx.owner.request().workspace_seal_hash.as_deref().unwrap(),
@@ -1088,7 +1087,7 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
     let root = std::fs::canonicalize(_dir.path()).unwrap();
     let repository = crate::workspace::RepositoryPlacementRef {
         repository_id: "artifact-repo".into(),
-        owner_agent_did: owner.request().workspace_owner_agent_did.clone().unwrap(),
+        owner_node_did: owner.request().workspace_owner_node_did.clone().unwrap(),
         host_path: root.join("repo"),
         enabled: true,
     };
@@ -1099,11 +1098,7 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
     assert!(!result.has_errors(), "{:?}", result.errors);
     let error = crate::workspace::cleanup_workspace(
         &node,
-        owner
-            .request()
-            .workspace_owner_agent_did
-            .as_deref()
-            .unwrap(),
+        owner.request().workspace_owner_node_did.as_deref().unwrap(),
         "artifact-workspace",
         Some(&root),
     )
@@ -1124,11 +1119,7 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
         .unwrap();
     crate::workspace::cleanup_workspace(
         &node,
-        owner
-            .request()
-            .workspace_owner_agent_did
-            .as_deref()
-            .unwrap(),
+        owner.request().workspace_owner_node_did.as_deref().unwrap(),
         "artifact-workspace",
         Some(&root),
     )
@@ -1167,7 +1158,7 @@ async fn artifact_alternate_owner(
     crate::lifecycle::RequestLifecycle,
     crate::lifecycle::ClaimOutcome,
 )> {
-    use crate::identity::AgentIdentity;
+    use crate::identity::NodeIdentity;
     let identity = crate::identity::KeyIdentity::load_or_create(
         fx._dir.path().join(if binding["owner_matches"] == false {
             "foreign.key"
@@ -1193,10 +1184,10 @@ async fn artifact_alternate_owner(
     );
     if !binding.is_null() {
         create.workspace_id = Some("artifact-workspace".into());
-        create.workspace_owner_agent_did = if binding["owner_matches"] == false {
+        create.workspace_owner_node_did = if binding["owner_matches"] == false {
             Some(did.to_owned())
         } else {
-            fx.owner.request().workspace_owner_agent_did.clone()
+            fx.owner.request().workspace_owner_node_did.clone()
         };
         create.workspace_authority = Some(binding["authority"].as_str().unwrap().into());
         create.workspace_seal_hash = if binding["seal_matches"] == false {
@@ -1221,7 +1212,7 @@ async fn artifact_alternate_owner(
             .unwrap()
             .unwrap();
     let request = crate::watcher::AgentRequest::try_from(row).unwrap();
-    let mut owner = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+    let mut owner = crate::lifecycle::RequestLifecycle::new_with_node_did(
         fx.node.clone(),
         "general",
         did,

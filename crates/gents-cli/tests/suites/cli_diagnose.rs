@@ -20,7 +20,7 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -28,7 +28,7 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
 
     let output = run_cli_json(&home_dir, &["diagnose"])?;
     assert_eq!(output.get("status").and_then(Value::as_str), Some("ok"));
@@ -37,10 +37,10 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
         .and_then(Value::as_array)
         .and_then(|checks| {
             checks.iter().find(|check| {
-                check.get("collection").and_then(Value::as_str) == Some("AgentRuntime")
+                check.get("collection").and_then(Value::as_str) == Some("NodeRuntime")
             })
         })
-        .ok_or_else(|| anyhow!("diagnose output missing AgentRuntime schema check: {output}"))?;
+        .ok_or_else(|| anyhow!("diagnose output missing NodeRuntime schema check: {output}"))?;
     assert_eq!(
         runtime_schema
             .get("required_for_config")
@@ -56,8 +56,8 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
         Some("local")
     );
     assert_eq!(
-        output.get("agent_did").and_then(Value::as_str),
-        Some(agent_did.as_str())
+        output.get("node_did").and_then(Value::as_str),
+        Some(node_did.as_str())
     );
     assert_eq!(
         output.get("graphql_reachable").and_then(Value::as_bool),
@@ -65,7 +65,7 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
     );
     assert_eq!(
         output
-            .pointer("/checks/default_behavior/ok")
+            .pointer("/checks/default_agent/ok")
             .and_then(Value::as_bool),
         Some(true)
     );
@@ -77,13 +77,13 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
     );
     assert_eq!(
         output
-            .pointer("/checks/runtime_behavior_readiness/required")
+            .pointer("/checks/runtime_node_readiness/required")
             .and_then(Value::as_bool),
         Some(false)
     );
     assert_eq!(
         output
-            .pointer("/checks/runtime_behavior_readiness/ok")
+            .pointer("/checks/runtime_node_readiness/ok")
             .and_then(Value::as_bool),
         Some(true)
     );
@@ -111,7 +111,7 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             "live-diagnose",
             "--model-name",
             &model_name,
@@ -119,12 +119,12 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let mut serve = spawn_server_with_env(&home_dir, port, &[], &[])?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     // Keep the live assertions on the live access path. Auto-discovery intentionally
     // falls back to local storage when its endpoint probe fails, but the server owns
@@ -132,13 +132,13 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
     let healthy = run_cli_json(&home_dir, &["diagnose", "--graphql", &graphql])?;
     assert_eq!(
         healthy
-            .pointer("/checks/runtime_behavior_readiness/required")
+            .pointer("/checks/runtime_node_readiness/required")
             .and_then(Value::as_bool),
         Some(true)
     );
     assert_eq!(
         healthy
-            .pointer("/checks/runtime_behavior_readiness/ok")
+            .pointer("/checks/runtime_node_readiness/ok")
             .and_then(Value::as_bool),
         Some(true)
     );
@@ -146,21 +146,21 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
     // Exercise malformed live state under an unowned identity. Mutating the
     // real row races the authoritative publisher, which may repair it before
     // the diagnose subprocess reads it.
-    let malformed_agent_did = format!("did:key:malformed-diagnose-{}", Uuid::new_v4().simple());
+    let malformed_node_did = format!("did:key:malformed-diagnose-{}", Uuid::new_v4().simple());
     graphql_query(
         &graphql,
         &format!(
             r#"mutation {{
-                create_AgentRuntime(input: {{
-                    agent_did: "{agent_did}",
+                create_NodeRuntime(input: {{
+                    node_did: "{node_did}",
                     reconcile_phase: "ready"
                 }}) {{ _docID }}
-                create_AgentBehaviorReadiness(input: {{
-                    agent_did: "{agent_did}",
+                create_NodeReadiness(input: {{
+                    node_did: "{node_did}",
                     snapshot_json: "{{}}"
                 }}) {{ _docID }}
             }}"#,
-            agent_did = escape_graphql_string(&malformed_agent_did),
+            node_did = escape_graphql_string(&malformed_node_did),
         ),
     )
     .await?;
@@ -170,8 +170,8 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
             "diagnose",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &malformed_agent_did,
+            "--node-did",
+            &malformed_node_did,
         ],
     )?;
     assert_eq!(
@@ -180,26 +180,26 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
     );
     assert_eq!(
         malformed
-            .pointer("/checks/runtime_behavior_readiness/ok")
+            .pointer("/checks/runtime_node_readiness/ok")
             .and_then(Value::as_bool),
         Some(false)
     );
     assert_eq!(
         malformed
-            .pointer("/runtime_behavior_readiness/state")
+            .pointer("/runtime_node_readiness/state")
             .and_then(Value::as_str),
         Some("unknown")
     );
 
-    let default_behavior_id = gents::default_behavior_id_for_agent(&agent_did);
+    let default_agent_id = gents::default_agent_id_for_node(&node_did);
     let stale_degraded_snapshot = serde_json::json!({
-        "format_version": 1,
+        "format_version": gents_protocol::node_readiness::NODE_READINESS_FORMAT_VERSION,
         "process_state": "ready",
         "active_generation": 1,
         "router_generation": 1,
-        "default_behavior_id": default_behavior_id,
-        "behaviors": [{
-            "behavior_id": default_behavior_id,
+        "default_agent_id": default_agent_id,
+        "agents": [{
+            "agent_id": default_agent_id,
             "state": "unavailable",
             "reason": "backend_disabled",
         }],
@@ -208,12 +208,12 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
         &graphql,
         &format!(
             r#"mutation {{
-                update_AgentBehaviorReadiness(
-                    filter: {{ agent_did: {{ _eq: "{}" }} }},
+                update_NodeReadiness(
+                    filter: {{ node_did: {{ _eq: "{}" }} }},
                     input: {{ snapshot_json: "{}" }}
                 ) {{ _docID }}
             }}"#,
-            escape_graphql_string(&agent_did),
+            escape_graphql_string(&node_did),
             escape_graphql_string(&serde_json::to_string(&stale_degraded_snapshot)?),
         ),
     )
@@ -224,19 +224,19 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
     assert_eq!(offline.get("status").and_then(Value::as_str), Some("ok"));
     assert_eq!(
         offline
-            .pointer("/checks/runtime_behavior_readiness/required")
+            .pointer("/checks/runtime_node_readiness/required")
             .and_then(Value::as_bool),
         Some(false)
     );
     assert_eq!(
         offline
-            .pointer("/checks/runtime_behavior_readiness/ok")
+            .pointer("/checks/runtime_node_readiness/ok")
             .and_then(Value::as_bool),
         Some(true)
     );
     assert_eq!(
         offline
-            .pointer("/checks/runtime_behavior_readiness/status")
+            .pointer("/checks/runtime_node_readiness/status")
             .and_then(Value::as_str),
         Some("degraded")
     );
@@ -259,7 +259,7 @@ async fn diagnose_with_explicit_graphql_does_not_reuse_unrelated_local_p2p_state
     run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,

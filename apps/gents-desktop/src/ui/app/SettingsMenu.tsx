@@ -15,6 +15,8 @@ import type { ThemePreference } from "@/theme";
 import type { NavMode } from "@/preferences";
 import { preferences, useNavMode, useTheme } from "@/preferences";
 import { useApp } from "./AppContext";
+import { inNativeShell } from "../../lib/nativeShell";
+import { isMacTauriShell } from "../../lib/shellPlatform";
 
 /** Global settings at the foot of the nav: an icon on the rail, a row in the
     panel. The theme, the side nav where there is one, and the runtime's DB
@@ -27,11 +29,11 @@ export function SettingsMenu({
   /** the side nav choices only make sense where there is a side nav */
   showNav: boolean;
 }) {
-  const { api } = useApp();
+  const { actions, lifecycle } = useApp();
   const theme = useTheme();
   const nav = useNavMode();
   const openDbExplorer = () => {
-    void api.openDbExplorer?.().catch((e: unknown) => {
+    void actions.openDbExplorer().catch((e: unknown) => {
       toast(`DB explorer failed to open: ${String(e)}`);
     });
   };
@@ -98,7 +100,15 @@ export function SettingsMenu({
             </DropdownMenuGroup>
           </>
         )}
-        {api.openDbExplorer && (
+        {lifecycle.home.canReset && (!inNativeShell() || isMacTauriShell()) && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => void lifecycle.home.previewReset()}>
+              Reset Gents on this Mac
+            </DropdownMenuItem>
+          </>
+        )}
+        {actions.canOpenDbExplorer && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>

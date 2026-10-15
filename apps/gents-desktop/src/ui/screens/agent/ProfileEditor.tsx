@@ -46,8 +46,9 @@ import {
 } from "../inference/InferenceModelControls";
 import { useApp } from "@/app/AppContext";
 import { useModelRecommendation } from "./useModelRecommendation";
+import { Disclosure } from "../../components/Disclosure";
 
-/* behaviors named in Used by before the rest are counted */
+/* agents named in Used by before the rest are counted */
 const USERS_SHOWN = 3;
 
 function settingsForDraft(
@@ -109,7 +110,7 @@ export function newProfileDocument(
       )) ||
     start;
   return {
-    agent_did: deployment.agentDid,
+    node_did: deployment.nodeDid,
     profile_id: newId("profile"),
     display_name: "",
     backend_id: backend?.backendId ?? "",
@@ -131,12 +132,11 @@ export function ProfileEditor({
   draft?: { onSaved: (profileId: string) => void; onCancel: () => void };
 }) {
   const {
-    api,
-    actions: { changeConfig },
+    actions: { changeConfig, getInferenceBackendRecommendation },
   } = useApp();
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "profiles",
   };
   const saved = profileDraftFrom(profile, deployment);
@@ -149,7 +149,7 @@ export function ProfileEditor({
       .find((backend) => backend.backendId === backendId)
       ?.advertisedModels?.find((model) => model.model_name === modelName.trim())
       ?.max_context_window ?? undefined;
-  const { accounts } = useAccounts(deployment.agentDid);
+  const { accounts } = useAccounts(deployment.nodeDid);
   const d = useDraft(
     saved,
     async (next) => {
@@ -229,7 +229,7 @@ export function ProfileEditor({
       const nextSampling: InferenceSampling | null = effectiveSamplingId
         ? {
             ...sampling,
-            agent_did: deployment.agentDid,
+            node_did: deployment.nodeDid,
             sampling_id: effectiveSamplingId,
             temperature,
             top_p: topP,
@@ -244,7 +244,7 @@ export function ProfileEditor({
       const nextExecution: InferenceExecution | null = next.executionId.trim()
         ? {
             ...execution,
-            agent_did: deployment.agentDid,
+            node_did: deployment.nodeDid,
             execution_id: next.executionId.trim(),
             max_turns: maxTurns,
             max_total_tokens: maxTotalTokens,
@@ -257,7 +257,7 @@ export function ProfileEditor({
         : null;
       await changeConfig("applyConfigComponents", {
         document: {
-          agent_principal: { agent_did: deployment.agentDid },
+          node: { node_did: deployment.nodeDid },
           inference_profiles: [nextProfile],
           ...(nextSampling ? { inference_sampling: [nextSampling] } : {}),
           ...(nextExecution ? { inference_execution: [nextExecution] } : {}),
@@ -298,7 +298,7 @@ export function ProfileEditor({
     error: recommendationError,
     choose,
   } = useModelRecommendation({
-    api,
+    recommend: getInferenceBackendRecommendation,
     backendId: d.draft.backendId,
     modelName: d.draft.modelName,
     backend: selectedBackend,
@@ -385,14 +385,14 @@ export function ProfileEditor({
       <SetupScreen
         initialStep="inference"
         purpose="add-backend"
-        agentDid={deployment.agentDid}
+        nodeDid={deployment.nodeDid}
         onCancel={() => {
           addingBackend(null);
           setAddingBackend(null);
         }}
         onDone={(snapshot) => {
           const added = (snapshot.client?.deployments ?? [])
-            .find((x) => x.agentDid === deployment.agentDid)
+            .find((x) => x.nodeDid === deployment.nodeDid)
             ?.inferenceBackends.find((b) => !before.has(b.backendId));
           addingBackend(added?.backendId ?? null);
           setAddingBackend(null);
@@ -400,7 +400,7 @@ export function ProfileEditor({
       />
     );
   }
-  const usedBy = deployment.behaviors.filter(
+  const usedBy = deployment.agents.filter(
     (b) => b.inferenceProfileId === profile.profile_id,
   );
   return (
@@ -432,10 +432,7 @@ export function ProfileEditor({
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
         />
-        <details>
-          <summary className="cursor-pointer px-4 py-3 text-sm text-muted-foreground">
-            Description
-          </summary>
+        <Disclosure summary="Description" summaryClassName="px-4 py-3">
           <AreaRow
             id={id("description")}
             label="Description"
@@ -443,7 +440,7 @@ export function ProfileEditor({
             onChange={(v) => d.set("description", v)}
             rows={2}
           />
-        </details>
+        </Disclosure>
         <RefRow
           id={id("backend")}
           label="Backend"
@@ -501,8 +498,8 @@ export function ProfileEditor({
             <span className="flex flex-wrap justify-end gap-x-3 gap-y-1">
               {usedBy.slice(0, USERS_SHOWN).map((b) => (
                 <a
-                  key={b.behaviorId}
-                  href={href({ ...base, section: "behaviors", item: b.behaviorId })}
+                  key={b.agentId}
+                  href={href({ ...base, section: "agents", item: b.agentId })}
                   className="max-w-48 truncate underline-offset-2 hover:text-foreground hover:underline"
                 >
                   {b.displayName}
@@ -513,7 +510,7 @@ export function ProfileEditor({
               )}
             </span>
           ) : (
-            "No behavior yet. Pick it under a behavior’s Model."
+            "No agent yet. Pick it under an agent’s Model."
           )}
         </FactRow>
       </Group>
@@ -714,7 +711,7 @@ export function ProfileEditor({
           onDelete={() =>
             changeConfig("deleteInferenceProfileConfig", {
               profileId: profile.profile_id,
-              agentDid: deployment.agentDid,
+              nodeDid: deployment.nodeDid,
             })
           }
         />
@@ -723,18 +720,18 @@ export function ProfileEditor({
   );
 }
 
-/* "claude-sonnet-5 · via Anthropic · 2 behaviors" */
+/* "claude-sonnet-5 · via Anthropic · 2 agents" */
 export function modelSentence(deployment: NodeView, p: InferenceProfile) {
   const backend = deployment.inferenceBackends.find(
     (b) => b.backendId === p.backend_id,
   );
-  const users = deployment.behaviors.filter(
+  const users = deployment.agents.filter(
     (b) => b.inferenceProfileId === p.profile_id,
   ).length;
   return [
     p.model_name,
     `via ${backend?.name ?? p.backend_id}`,
-    users ? `${users} ${users === 1 ? "behavior" : "behaviors"}` : null,
+    users ? `${users} ${users === 1 ? "agent" : "agents"}` : null,
   ]
     .filter(Boolean)
     .join(" · ");

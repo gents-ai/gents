@@ -9,13 +9,11 @@ import type { DesktopApp, DesktopBridge } from "../../hooks/desktopApp";
 import { nodeOf } from "../../hooks/fleetStore";
 import { fleetNodes } from "@/lib/scope";
 import { navigate, useRoute, type Route } from "@/lib/router";
-import { call } from "@/screens/agent/bridgeCall";
-import { pickDirectory } from "@/lib/pickDirectory";
-import { revealInFolder } from "../../lib/shellPlatform";
+import { pickDirectory, revealInFolder } from "../../lib/nativeShell";
 import { discoverBundledUxPlugins } from "@/contrib/bundled";
 import { emitClientUpdated } from "@/contrib/events";
 import { installUxHost, type UxHost } from "@/contrib/plugin";
-import { scanRuntimeUxPlugins } from "@/contrib/runtime-door";
+import { configureUxDoors, scanRuntimeUxPlugins } from "@/contrib/runtime-door";
 import type { DesktopClientUpdatedEvent } from "@source-inc/gents-desktop-client";
 
 /* the gate on ctx.send: a plugin posts a turn in the user's name, so it
@@ -35,7 +33,7 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
   /* the selected node, or the first while nothing is selected: the same
      rule useSelectedNode applies */
   const selectedNode = () =>
-    nodeOf(fleet(), selection().agentDid) ?? fleetNodes(fleet())[0] ?? null;
+    nodeOf(fleet(), selection().nodeDid) ?? fleetNodes(fleet())[0] ?? null;
   return {
     shell: {
       route,
@@ -52,18 +50,16 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
             "ctx.send: only from a user gesture (a click or a key press)",
           );
         }
-        await app.actions.sendMessage(content, selection().behaviorId);
+        await app.actions.sendMessage(content, selection().agentId);
       },
     },
-    /* the bridge takes its fields under `request`, as desktop_pack_install does */
+    /* through the client's adapter, which sends the fields under `request` */
     plugin: (listing, name, input) =>
-      call<{ output: unknown }>("desktop_plugin_call", {
-        request: { ux: listing, name, input },
-      }).then((r) => r.output),
+      app.actions.callPackPlugin({ ux: listing, name, input }).then((r) => r.output),
     os: {
       openExternal: async (url) => {
         try {
-          await call("desktop_open_external_url", { url });
+          await app.actions.openExternalUrl(url);
           return true;
         } catch {
           return false;
@@ -86,9 +82,13 @@ let opened = false;
 
 /* idempotent: the doors open once per webview, however often the shell
    re-renders or HMR re-evaluates the caller */
-export function openUxDoors(): void {
+export function openUxDoors(app: DesktopApp): void {
   if (opened) return;
   opened = true;
+  configureUxDoors({
+    list: () => app.actions.listUxPlugins(),
+    source: (id) => app.actions.readUxPluginSource(id),
+  });
   discoverBundledUxPlugins();
   void scanRuntimeUxPlugins();
 }
@@ -102,7 +102,7 @@ export function useUxHost(
   routeRef.current = route;
   useEffect(() => {
     installUxHost(buildUxHost(app, () => routeRef.current));
-    openUxDoors();
+    openUxDoors(app);
   }, [app]);
   useEffect(() => {
     let unlisten: (() => void) | null = null;

@@ -8,8 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::Result;
 
 use crate::config_client::ConfigAccess;
-use crate::graphql::escape_graphql_string;
-use crate::optimization::job::{derive_state, load_job, JobState, JournalEntry};
+use crate::optimization::job::{
+    derive_state, fold_jobs_for_owner, job_ids_in_txn, JobState, JournalEntry,
+};
 
 /// Every run `journal` started and every run one of its decisions read.
 pub fn journal_run_ids(journal: &[JournalEntry]) -> BTreeSet<String> {
@@ -37,36 +38,23 @@ pub fn journal_run_ids(journal: &[JournalEntry]) -> BTreeSet<String> {
 
 /// The ids of every job `owner` has, sorted.
 pub async fn job_ids(access: &ConfigAccess, owner: &str) -> Result<Vec<String>> {
-    let query = format!(
-        r#"{{ OptimizationJob(filter: {{ owner_agent_did: {{ _eq: "{owner}" }} }}) {{ job_id }} }}"#,
-        owner = escape_graphql_string(owner),
-    );
+    let owner = owner.to_owned();
     let response = access
         .transact("optimization.job_ids", |txn| {
-            let query = &query;
-            Box::pin(async move { txn.execute(query).await })
+            let owner = &owner;
+            Box::pin(async move { job_ids_in_txn(txn, owner).await })
         })
         .await?;
-    let mut ids: Vec<String> = response["data"]["OptimizationJob"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|row| row["job_id"].as_str().map(str::to_owned))
-        .collect();
-    ids.sort();
-    ids.dedup();
-    Ok(ids)
+    Ok(response)
 }
 
 /// Every run any of `owner`'s jobs names.
 pub async fn referenced_run_ids(access: &ConfigAccess, owner: &str) -> Result<BTreeSet<String>> {
-    let mut ids = BTreeSet::new();
-    for job_id in job_ids(access, owner).await? {
-        if let Some(job) = load_job(access, owner, &job_id).await? {
-            ids.extend(journal_run_ids(&job.journal));
-        }
-    }
-    Ok(ids)
+    fold_jobs_for_owner(access, owner, |ids: &mut BTreeSet<String>, job| {
+        ids.extend(journal_run_ids(&job.journal));
+        Ok(())
+    })
+    .await
 }
 
 /// Whether a job's directory, and its runs' directories, may go without
@@ -90,21 +78,22 @@ pub async fn held_runs(
     access: &ConfigAccess,
     owner: &str,
 ) -> Result<BTreeMap<String, (String, JobState)>> {
-    let mut held = BTreeMap::new();
-    for job_id in job_ids(access, owner).await? {
-        let Some(job) = load_job(access, owner, &job_id).await? else {
-            continue;
-        };
-        let state = derive_state(&job.journal);
-        if removable(&state) {
-            continue;
-        }
-        for run_id in journal_run_ids(&job.journal) {
-            held.entry(run_id)
-                .or_insert_with(|| (job.job_id.clone(), state.clone()));
-        }
-    }
-    Ok(held)
+    fold_jobs_for_owner(
+        access,
+        owner,
+        |held: &mut BTreeMap<String, (String, JobState)>, job| {
+            let state = derive_state(&job.journal);
+            if removable(&state) {
+                return Ok(());
+            }
+            for run_id in journal_run_ids(&job.journal) {
+                held.entry(run_id)
+                    .or_insert_with(|| (job.job_id.clone(), state.clone()));
+            }
+            Ok(())
+        },
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -170,6 +159,50 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn owner_jobs_are_folded_in_deterministic_order() {
+        let (harness, request) = accepting_harness("bulk-refs").await;
+        let jobs = crate::optimization::references::job_ids(harness.access(), OWNER)
+            .await
+            .unwrap();
+        let source = load_job(harness.access(), OWNER, &request.job_id)
+            .await
+            .unwrap()
+            .unwrap();
+        for index in 0..128 {
+            crate::optimization::job::create_job(
+                harness.access(),
+                &format!("bulk-{index:03}"),
+                OWNER,
+                &source.origin,
+            )
+            .await
+            .unwrap();
+        }
+
+        let all_job_ids = jobs
+            .into_iter()
+            .chain((0..128).map(|index| format!("bulk-{index:03}")))
+            .collect::<Vec<_>>();
+        let mut expected = BTreeSet::new();
+        for job_id in &all_job_ids {
+            if let Some(job) = load_job(harness.access(), OWNER, job_id).await.unwrap() {
+                expected.extend(journal_run_ids(&job.journal));
+            }
+        }
+        let (referenced, batches) = crate::optimization::job::count_owner_job_batches(
+            referenced_run_ids(harness.access(), OWNER),
+        )
+        .await;
+        assert_eq!(referenced.unwrap(), expected);
+        assert_eq!(all_job_ids.len(), 129);
+        assert_eq!(batches, 3);
+        assert_eq!(
+            held_runs(harness.access(), OWNER).await.unwrap().len(),
+            expected.len()
+        );
     }
 
     #[test]

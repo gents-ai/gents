@@ -2020,7 +2020,7 @@ fn empty_skill_catalog_contributes_no_reminders() {
     use gents::prompt::LayeredPromptBuilder;
 
     let builder =
-        LayeredPromptBuilder::for_behavior("literal preamble", "fence", &["bash"], false, &[]);
+        LayeredPromptBuilder::for_agent("literal preamble", "fence", &["bash"], false, &[]);
 
     assert!(
         builder.selected_skill_reminders(&[]).is_empty(),

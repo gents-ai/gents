@@ -1,8 +1,8 @@
 {
-  "agent_principal": {},
-  "agent_behaviors": [
+  "node": {},
+  "agents": [
     {
-      "behavior_id": "seeded",
+      "agent_id": "seeded",
       "display_name": "Eval seed subject",
       "context_id": "seeded-context",
       "inference_profile_id": "gents:inference-slot:primary"
@@ -12,7 +12,7 @@
     {
       "context_id": "seeded-context",
       "display_name": "Eval seed subject",
-      "system_prompt": "./agent_behaviors/seeded/system_prompt.md",
+      "system_prompt": "./agents/seeded/system_prompt.md",
       "tools_id": "seeded-tools"
     }
   ],
@@ -31,7 +31,7 @@
     {
       "task_id": "seed-task",
       "display_name": "Report a seeded item",
-      "behavior_id": "seeded",
+      "agent_id": "seeded",
       "prompt_template": "Seeded item: {{ doc.label }}"
     }
   ],

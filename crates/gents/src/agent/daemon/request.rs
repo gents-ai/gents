@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use tracing::Instrument;
 
-use super::{BehaviorDaemon, HandleRequestOutcome};
+use super::{AgentDaemon, HandleRequestOutcome, RequestInterruptionSource};
 use crate::admission::{self, AdmissionCallContext, CallKind};
 use crate::compaction;
 use crate::prompt::PromptBuilder;
@@ -11,7 +11,50 @@ use gents_loop::loop_stream::{provider_messages, provider_view_tagged, TaggedMes
 
 const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
 
-impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
+/// Callers must flush received auxiliary output after interruption. The future
+/// must not own a recorded host command (task hook, tool call) or a terminal
+/// transaction, whose completion has separate drain and fencing obligations;
+/// an unrecorded managed process is killed with its group when dropped.
+pub(super) async fn prepare_unless_interrupted<T>(
+    interrupt_rx: &mut tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
+    preparation: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    if interrupt_rx.borrow_and_update().is_some() {
+        return None;
+    }
+    tokio::pin!(preparation);
+    loop {
+        tokio::select! {
+            biased;
+            changed = interrupt_rx.changed() => {
+                if changed.is_err() {
+                    return Some(preparation.await);
+                }
+                if interrupt_rx.borrow_and_update().is_some() {
+                    return None;
+                }
+            }
+            result = &mut preparation => return Some(result),
+        }
+    }
+}
+
+pub(super) async fn flush_received_preparation_partial(context: &str) -> Result<()> {
+    match tokio::time::timeout(
+        crate::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+        crate::rendered_request::scope::flush_received_auxiliary_partial(),
+    ).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(error)) => Err(super::ShutdownDrainFailure {
+            reason: format!("{context} partial output persistence failed: {error:#}"),
+        }.into()),
+        Err(_) => Err(super::ShutdownDrainFailure {
+            reason: format!("{context} partial output persistence exceeded the embedded storage-step deadline; commit outcome must be recovered from durable state"),
+        }.into()),
+    }
+}
+
+impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
     /// Size the exact first-turn provider request for session-compaction
     /// admission through the owned loop's assembly owner, including its
     /// reasoning replay selection. The loop rebuilds the request at dispatch
@@ -24,12 +67,13 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
         history: &[TaggedMessage],
         skill_reminders: &[crate::llm::message::Message],
         request_context_message: Option<&crate::llm::message::Message>,
+        folded_prompts: &[crate::agent::loop_stream::FoldedPrompt],
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
         replay: &gents_loop::loop_stream::LoopReplayInput,
         resume_from_history: bool,
     ) -> Result<usize> {
         let config = crate::completion_factory::loop_config_for_request(
-            &self.behavior,
+            &self.agent_config,
             preamble,
             request,
             aggregate_token_budget,
@@ -55,16 +99,28 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
             },
             prompt,
         );
-        let provider_request = gents_loop::loop_stream::assemble_provider_request(
-            self.model.as_ref(),
-            &mut provider_history,
-            &mut new_messages,
-            self.loop_tools.as_ref(),
-            &config,
-            replay,
-        )
-        .await
-        .map_err(anyhow::Error::new)?;
+        new_messages.extend(
+            folded_prompts
+                .iter()
+                .map(|folded| TaggedMessage::unassociated(folded.message.clone())),
+        );
+        // The estimate resolves the same canonical evidence the first dispatch
+        // resolves again; record it so that dispatch serves this pass. The
+        // guard's scope ends the bracket before the token estimate so nothing
+        // later records.
+        let assembled = {
+            let _estimate_seed = replay.arm_estimate_seed();
+            gents_loop::loop_stream::assemble_provider_request(
+                self.model.as_ref(),
+                &mut provider_history,
+                &mut new_messages,
+                self.loop_tools.as_ref(),
+                &config,
+                replay,
+            )
+            .await
+        };
+        let provider_request = assembled.map_err(anyhow::Error::new)?;
         Ok(config
             .provider_input_counter
             .estimate_request(&provider_request)?)
@@ -77,31 +133,42 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
         mut shutdown: tokio::sync::watch::Receiver<bool>,
         mut interrupt_rx: tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
     ) -> Result<HandleRequestOutcome> {
-        if let Some(guard) = &self.root_execution_guard {
-            guard
-                .validate(&self.node)
-                .await
-                .context("validating current WorkspaceRoot policy for fresh request")?;
-        }
         let request_token = tokio_util::sync::CancellationToken::new();
         let request = lifecycle.request().clone();
-        let resume_from_history = session::retry_has_published_input(&self.node, &request).await?;
-        let effective_sampling = self.behavior.sampling;
+        let effective_sampling = self.agent_config.sampling;
         effective_sampling.validate_for_provider(
-            self.behavior.backend_provider_kind,
-            self.behavior.openai_wire_api,
+            self.agent_config.backend_provider_kind,
+            self.agent_config.openai_wire_api,
         )?;
         let effective_seed = effective_sampling.seed;
-        let aggregate_token_budget = crate::completion_factory::aggregate_token_budget_for_request(
-            self.node.as_ref(),
-            &request,
-        )
-        .await?;
+        let admitted = async {
+            if let Some(guard) = &self.root_execution_guard {
+                guard
+                    .validate(&self.node)
+                    .await
+                    .context("validating current WorkspaceRoot policy for fresh request")?;
+            }
+            let resume_from_history =
+                session::retry_has_published_input(&self.node, &request).await?;
+            let aggregate_token_budget =
+                crate::completion_factory::aggregate_token_budget_for_request(
+                    self.node.as_ref(),
+                    &request,
+                )
+                .await?;
+            Ok::<_, anyhow::Error>((resume_from_history, aggregate_token_budget))
+        };
+        let Some(admitted) = prepare_unless_interrupted(&mut interrupt_rx, admitted).await else {
+            return Ok(HandleRequestOutcome::Interrupted(
+                RequestInterruptionSource::Claimed,
+            ));
+        };
+        let (resume_from_history, aggregate_token_budget) = admitted?;
         let trace_attrs = RequestTraceAttrs::from_request(&request);
-        let behavior_name = self.behavior.behavior_id.clone();
+        let agent_name = self.agent_config.agent_id.clone();
         let admission_context = AdmissionCallContext::for_request(
             &request,
-            lifecycle.behavior_id(),
+            lifecycle.agent_id(),
             lifecycle.backend_id(),
         );
         // One capture scope for the whole request, installed here rather than
@@ -134,7 +201,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
         let capture_context = crate::rendered_request::context_for_claimed_request(
             &request,
             &request_commit_cid,
-            self.behavior.model_name.clone(),
+            self.agent_config.model_name.clone(),
             self.provider_family.clone(),
         );
         let mut capture_scope = crate::rendered_request::scope_from_factory(
@@ -151,63 +218,88 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                 request.clone(),
                 lifecycle.execution_generation()?.to_owned(),
                 crate::provider_input::ProviderInputProfile::resolve(
-                    self.behavior.backend_provider_kind,
-                    self.behavior.openai_wire_api,
+                    self.agent_config.backend_provider_kind,
+                    self.agent_config.openai_wire_api,
                 ),
             ));
         }
         let handled = admission::scope_request(admission_context, async {
             // Prompt preparation may call a compaction provider; its output
             // requires the same Processing fence as the main inference turn.
-            let response_behavior_id = lifecycle.behavior_id().to_string();
+            let response_agent_id = lifecycle.agent_id().to_string();
             lifecycle
                 .begin_owned_execution(stream_writer)
                 .instrument(tracing::info_span!(
                     "request.begin_response",
                     request_id = %request.request_id,
                     session_id = %request.session_id,
-                    agent_did = %request.agent_did,
-                    behavior_id = %response_behavior_id,
+                    node_did = %request.node_did,
+                    agent_id = %response_agent_id,
                     request_hop = trace_attrs.request_hop,
                 ))
                 .await?;
-            self.spawn_conversation_title_generation(&request);
-
-            let selected_skill_ids = &request.input.selected_skill_ids;
-            let skill_reminders = self
-                .prompt_builder
-                .selected_skill_reminders(selected_skill_ids);
-            let overlay = crate::workspace::resolve_request_workspace_overlay(
-                &self.node,
-                &request,
-                lifecycle.execution_generation()?,
-                self.behavior.tools.static_policy().bash.execution_mode
-                    == crate::toolset::CommandExecutionMode::ArtifactWrite,
-                self.operator_tool_root.as_deref(),
-            )
-            .await?;
-            // Some even when empty: bound requests must not fall through to a live walk.
-            let frozen_instruction_manifest =
-                crate::workspace::frozen_instruction_manifest_from_overlay(overlay.as_ref())
-                    .map(str::to_owned);
-            let request_context_message = super::inference::render_request_context_message(
-                self.node.as_ref(),
-                &self.behavior,
-                &request,
-                frozen_instruction_manifest.as_deref(),
-            )?;
-            let workspace = match overlay {
-                Some(overlay) => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
-                    workspace_cwd: Some(overlay.cwd),
-                    workspace_root: Some(overlay.root),
-                    workspace_authority: Some(overlay.authority),
-                    workspace_artifact: overlay.workspace_artifact,
-                },
-                None => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope::cwd_only(
-                    crate::workspace::request_workspace_cwd(&request),
-                ),
-            };
-            let (mut built, replay) = async {
+            let preparation = async {
+                self.spawn_conversation_title_generation(&request);
+                let selected_skill_ids = &request.input.selected_skill_ids;
+                let skill_reminders = self
+                    .prompt_builder
+                    .selected_skill_reminders(selected_skill_ids);
+                let overlay = crate::workspace::resolve_request_workspace_overlay(
+                    &self.node,
+                    &request,
+                    lifecycle.execution_generation()?,
+                    self.agent_config.tools.static_policy().bash.execution_mode
+                        == crate::toolset::CommandExecutionMode::ArtifactWrite,
+                    self.operator_tool_root.as_deref(),
+                )
+                .await?;
+                // Some even when empty: bound requests must not fall through to a live walk.
+                let frozen_instruction_manifest =
+                    crate::workspace::frozen_instruction_manifest_from_overlay(overlay.as_ref())
+                        .map(str::to_owned);
+                let request_context_message = super::inference::render_request_context_message(
+                    self.node.as_ref(),
+                    &self.agent_config,
+                    &request,
+                    frozen_instruction_manifest.as_deref(),
+                )?;
+                let prompt = |folded: crate::lifecycle::queue::FoldedInput| {
+                    crate::agent::loop_stream::FoldedPrompt {
+                        key: folded.key(),
+                        message: crate::llm::message::Message::user(folded.content),
+                    }
+                };
+                let consumed_prompts =
+                    crate::lifecycle::queue::load_consumed_folded_inputs(&self.node, &request)
+                        .await?
+                        .into_iter()
+                        .map(prompt)
+                        .collect::<Vec<_>>();
+                // A retry resuming its parent's published progress sends that
+                // history as its input and publishes nothing, so it answers no
+                // newly selected message; the selection waits for the next turn.
+                let selection = if resume_from_history {
+                    &[][..]
+                } else {
+                    lifecycle.folded_selection()
+                };
+                let folded_prompts = consumed_prompts
+                    .iter()
+                    .cloned()
+                    .chain(selection.iter().cloned().map(prompt))
+                    .collect::<Vec<_>>();
+                let workspace = match overlay {
+                    Some(overlay) => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                        workspace_cwd: Some(overlay.cwd),
+                        workspace_root: Some(overlay.root),
+                        workspace_authority: Some(overlay.authority),
+                        workspace_artifact: overlay.workspace_artifact,
+                    },
+                    None => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope::cwd_only(
+                        crate::workspace::request_workspace_cwd(&request),
+                    ),
+                };
+                let (mut built, replay) = async {
                 for assembly_attempt in 0..=1 {
                     let background_cutoff =
                         lifecycle.background_completion_input_through_sequence();
@@ -215,7 +307,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                         session::load_prompt_compaction_state(
                             &self.node,
                             &request.session_id,
-                            &request.agent_did,
+                            &request.node_did,
                             request.requester_did.as_deref(),
                             background_cutoff,
                         )
@@ -223,7 +315,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                                 "request.load_prompt_compaction_state",
                                 request_id = %request.request_id,
                                 session_id = %request.session_id,
-                                behavior_id = %behavior_name,
+                                agent_id = %agent_name,
                                 compaction_entry_count = tracing::field::Empty,
                                 compacted_message_count = tracing::field::Empty,
                                 summary_count = tracing::field::Empty,
@@ -234,8 +326,8 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                     let compaction_generation = compaction_state.generation.clone();
                     let compaction_generation_is_latest = compaction_state.is_latest_generation;
                     let provider_profile = crate::provider_input::ProviderInputProfile::resolve(
-                        self.behavior.backend_provider_kind,
-                        self.behavior.openai_wire_api,
+                        self.agent_config.backend_provider_kind,
+                        self.agent_config.openai_wire_api,
                     );
                     let sequenced_history = session::load_sequenced_history_for_request(
                         &self.node,
@@ -248,7 +340,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                         "request.load_active_history",
                         request_id = %request.request_id,
                         session_id = %request.session_id,
-                        behavior_id = %behavior_name,
+                        agent_id = %agent_name,
                         compacted_through_sequence = prior_cursor.map(i64::from),
                         compacted_provider_messages_skipped = total_compacted_messages as i64,
                         cursor_hit = prior_cursor.is_some(),
@@ -270,7 +362,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                     let file_activity = compaction::history::extract_file_activity(&durable_history);
                     if !file_activity.is_empty() {
                         tracing::debug!(
-                            behavior_id = %self.behavior.behavior_id,
+                            agent_id = %self.agent_config.agent_id,
                             session_id = %request.session_id,
                             files_read = ?file_activity.files_read,
                             files_modified = ?file_activity.files_modified,
@@ -307,7 +399,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                             "request.build_prompt",
                             request_id = %request.request_id,
                             session_id = %request.session_id,
-                            behavior_id = %behavior_name,
+                            agent_id = %agent_name,
                             history_messages = history.len(),
                             summary_count = summaries.len(),
                         ))
@@ -319,6 +411,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                             &built.messages,
                             &skill_reminders,
                             request_context_message.as_ref(),
+                            &folded_prompts,
                             aggregate_token_budget.clone(),
                             &replay,
                             resume_from_history,
@@ -326,8 +419,8 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                         .await?;
                     let reduction_admission = compaction::ReductionAdmission::for_input(
                         complete_input_tokens,
-                        self.behavior.context_window,
-                        self.behavior.compaction_threshold(),
+                        self.agent_config.context_window,
+                        self.agent_config.compaction_threshold(),
                     );
                     let over_threshold = reduction_admission.is_some();
                     let may_reduce = if over_threshold {
@@ -336,7 +429,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                             tracing::info!(
                                 request_id = %request.request_id,
                                 session_id = %request.session_id,
-                                behavior_id = %behavior_name,
+                                agent_id = %agent_name,
                                 "compaction skipped: canonical provider prefix is not a stable turn boundary"
                             );
                         }
@@ -368,7 +461,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                             1,
                             self.compactor.reduce(
                                 projected_native.clone(),
-                                self.behavior.context_window,
+                                self.agent_config.context_window,
                                 &options,
                                 admission,
                             ),
@@ -418,7 +511,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                                     &self.node,
                                     session::NewExactSessionCompaction {
                                         session_id: &request.session_id,
-                                        agent_did: &request.agent_did,
+                                        node_did: &request.node_did,
                                         requester_did: request.requester_did.as_deref(),
                                         request_id: &request.request_id,
                                         request_doc_id: &request.doc_id,
@@ -493,7 +586,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                                 "request.build_prompt",
                                 request_id = %request.request_id,
                                 session_id = %request.session_id,
-                                behavior_id = %behavior_name,
+                                agent_id = %agent_name,
                                 history_messages = history.len(),
                                 summary_count = summaries.len(),
                                 compacted = true,
@@ -509,8 +602,8 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                 "request.prepare_prompt",
                 request_id = %request.request_id,
                 session_id = %request.session_id,
-                agent_did = %request.agent_did,
-                behavior_id = %behavior_name,
+                node_did = %request.node_did,
+                agent_id = %agent_name,
                 deadline_at = %trace_attrs.deadline_at,
                 has_deadline = trace_attrs.has_deadline,
                 request_hop = trace_attrs.request_hop,
@@ -519,18 +612,43 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
             ))
             .await?;
 
-            if !skill_reminders.is_empty() {
-                let mut reminders = skill_reminders
-                    .into_iter()
-                    .map(TaggedMessage::unassociated)
-                    .collect::<Vec<_>>();
-                reminders.append(&mut built.messages);
-                built.messages = reminders;
-            }
+                if !skill_reminders.is_empty() {
+                    let mut reminders = skill_reminders
+                        .into_iter()
+                        .map(TaggedMessage::unassociated)
+                        .collect::<Vec<_>>();
+                    reminders.append(&mut built.messages);
+                    built.messages = reminders;
+                }
+
+                Ok::<_, anyhow::Error>((
+                    workspace,
+                    request_context_message,
+                    built,
+                    replay,
+                    consumed_prompts,
+                    folded_prompts,
+                ))
+            };
+            let Some(prepared) = prepare_unless_interrupted(&mut interrupt_rx, preparation).await
+            else {
+                flush_received_preparation_partial("interrupted request preparation").await?;
+                return Ok(HandleRequestOutcome::Interrupted(
+                    RequestInterruptionSource::Preparation,
+                ));
+            };
+            let (
+                workspace,
+                request_context_message,
+                built,
+                replay,
+                consumed_prompts,
+                folded_prompts,
+            ) = prepared?;
 
             let doc_id = lifecycle.request().doc_id.clone();
 
-            let inference_behavior_id = lifecycle.behavior_id().to_string();
+            let inference_agent_id = lifecycle.agent_id().to_string();
             let inference_backend_id = lifecycle.backend_id().to_string();
             let result = self
                 .run_inference(
@@ -548,13 +666,15 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                     workspace,
                     request_context_message,
                     resume_from_history,
+                    consumed_prompts,
+                    folded_prompts,
                 )
                 .instrument(tracing::info_span!(
                     "request.run_inference",
                     request_id = %request.request_id,
                     session_id = %request.session_id,
-                    agent_did = %request.agent_did,
-                    behavior_id = %inference_behavior_id,
+                    node_did = %request.node_did,
+                    agent_id = %inference_agent_id,
                     backend_id = %inference_backend_id,
                     deadline_at = %trace_attrs.deadline_at,
                     has_deadline = trace_attrs.has_deadline,
@@ -639,7 +759,9 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                 }
                 .instrument(flow_span)
                 .await?;
-                return Ok(HandleRequestOutcome::Interrupted);
+                return Ok(HandleRequestOutcome::Interrupted(
+                    RequestInterruptionSource::Inference,
+                ));
             }
 
             result

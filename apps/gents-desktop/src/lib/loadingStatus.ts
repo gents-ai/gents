@@ -69,7 +69,7 @@ export function projectStartupLoadingStatus(
       return {
         failed: false,
         title: "Bringing Gents online",
-        currentLabel: "Checking the background agent",
+        currentLabel: "Checking the background node",
         managedServerState: "active",
         connectionState: "pending",
         clientState: "pending",
@@ -96,7 +96,7 @@ export function projectStartupLoadingStatus(
       return {
         failed: true,
         title: "Startup paused",
-        currentLabel: "The background agent could not be checked",
+        currentLabel: "The background node could not be checked",
         managedServerState: "error",
         connectionState: "pending",
         clientState: "pending",
@@ -125,7 +125,7 @@ export function projectStartupLoadingStatus(
 export type SessionLoadState = {
   phase: "idle" | "loading" | "loaded" | "failed";
   sessionId: string | null;
-  agentDid: string | null;
+  nodeDid: string | null;
   found: boolean | null;
   error: string | null;
 };
@@ -146,8 +146,8 @@ export type SessionLoadingStatus = {
 
 type SessionLoadingInput = {
   selectedSessionId: string | null;
-  selectedAgentDid: string | null;
-  session: Pick<DesktopSessionSnapshot, "sessionId" | "agentDid" | "hydration"> | null;
+  selectedNodeDid: string | null;
+  session: Pick<DesktopSessionSnapshot, "sessionId" | "nodeDid" | "hydration"> | null;
   sessionLoad: SessionLoadState;
   operationalState: DeploymentOperationalState | null;
 };
@@ -155,11 +155,11 @@ type SessionLoadingInput = {
 /**
  * Sole projection for user-visible session waits. It does not invent
  * progress: every state comes from an in-flight local read, signed hydration
- * progress, the application sync owner, or runtime-authored behavior readiness.
+ * progress, the application sync owner, or runtime-authored agent readiness.
  */
 export function projectSessionLoadingStatus({
   selectedSessionId,
-  selectedAgentDid,
+  selectedNodeDid,
   session,
   sessionLoad,
   operationalState,
@@ -168,12 +168,12 @@ export function projectSessionLoadingStatus({
 
   const sessionMatches =
     session?.sessionId === selectedSessionId &&
-    (!selectedAgentDid || !session.agentDid || session.agentDid === selectedAgentDid);
+    (!selectedNodeDid || !session.nodeDid || session.nodeDid === selectedNodeDid);
   const loadMatches =
     sessionLoad.sessionId === selectedSessionId &&
-    (!selectedAgentDid ||
-      !sessionLoad.agentDid ||
-      sessionLoad.agentDid === selectedAgentDid);
+    (!selectedNodeDid ||
+      !sessionLoad.nodeDid ||
+      sessionLoad.nodeDid === selectedNodeDid);
 
   if (loadMatches && sessionLoad.phase === "loading" && sessionLoad.error) {
     return {
@@ -220,7 +220,7 @@ export function projectSessionLoadingStatus({
   const hydration = visibleSessionHydration(
     sessionMatches ? session?.hydration : null,
     selectedSessionId,
-    selectedAgentDid,
+    selectedNodeDid,
   );
   if (hydration?.phase === "unreadable") {
     return {

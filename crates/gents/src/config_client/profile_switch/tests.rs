@@ -60,7 +60,7 @@ impl Fixture {
     async fn build(did: &str, accounts: &[&'static str]) -> Self {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        crate::ensure_agent_principal(&node, did).await.unwrap();
+        crate::ensure_node(&node, did).await.unwrap();
         let access = ConfigAccess::Local(node.clone());
         for (provider, name) in [
             (CLAUDE_OAUTH_PROVIDER, "Claude"),
@@ -113,31 +113,31 @@ impl Fixture {
             .apply(vec![
                 (
                     Collection::InferenceProfile,
-                    json!({"agent_did": did, "profile_id": "p", "backend_id": a, "model_name": "model-x"}),
+                    json!({"node_did": did, "profile_id": "p", "backend_id": a, "model_name": "model-x"}),
                 ),
                 (
                     Collection::InferenceProfile,
-                    json!({"agent_did": did, "profile_id": "summ", "backend_id": a, "model_name": "model-s"}),
+                    json!({"node_did": did, "profile_id": "summ", "backend_id": a, "model_name": "model-s"}),
                 ),
                 (
                     Collection::InferenceProfile,
-                    json!({"agent_did": did, "profile_id": "q", "backend_id": a, "model_name": "model-x"}),
+                    json!({"node_did": did, "profile_id": "q", "backend_id": a, "model_name": "model-x"}),
                 ),
                 (
                     Collection::Compaction,
-                    json!({"agent_did": did, "compaction_id": "compaction-x", "inference_profile_id": "summ"}),
+                    json!({"node_did": did, "compaction_id": "compaction-x", "inference_profile_id": "summ"}),
                 ),
                 (
                     Collection::AgentContext,
-                    json!({"agent_did": did, "context_id": "context-x", "compaction_id": "compaction-x"}),
+                    json!({"node_did": did, "context_id": "context-x", "compaction_id": "compaction-x"}),
                 ),
                 (
-                    Collection::AgentBehavior,
-                    json!({"agent_did": did, "behavior_id": "x", "context_id": "context-x", "inference_profile_id": "p"}),
+                    Collection::Agent,
+                    json!({"node_did": did, "agent_id": "x", "context_id": "context-x", "inference_profile_id": "p"}),
                 ),
                 (
-                    Collection::AgentBehavior,
-                    json!({"agent_did": did, "behavior_id": "y", "inference_profile_id": "p"}),
+                    Collection::Agent,
+                    json!({"node_did": did, "agent_id": "y", "inference_profile_id": "p"}),
                 ),
             ])
             .await;
@@ -274,7 +274,7 @@ async fn candidates_list_other_enabled_accounts_with_usage() {
 
     assert_eq!(plan.profile, "p");
     assert_eq!(plan.account.label, "label-a");
-    assert_eq!(plan.behaviors, ["x", "y"]);
+    assert_eq!(plan.agents, ["x", "y"]);
     assert_eq!(plan.companions, ["summ"]);
     assert_eq!(plan.cost, SWITCH_COST);
     let listed: Vec<_> = plan
@@ -313,11 +313,11 @@ async fn switch_moves_only_the_profile() {
 
     assert_eq!(
         receipt.headline,
-        "Move profile p to label-b (used by 2 behaviors)"
+        "Move profile p to label-b (used by 2 agents)"
     );
     assert_eq!(receipt.account.label, "label-b");
     assert_eq!(receipt.backend_id, fixture.backends["b"]);
-    assert_eq!(receipt.behaviors, ["x", "y"]);
+    assert_eq!(receipt.agents, ["x", "y"]);
     assert_eq!(receipt.cost, SWITCH_COST);
     assert_eq!(receipt.companions_offered, ["summ"]);
     assert!(receipt.companions_moved.is_empty());
@@ -358,8 +358,8 @@ async fn switch_with_companions_moves_both_in_one_transaction() {
 
 #[tokio::test]
 async fn next_turns_use_the_target_credentials() {
-    use crate::agent::PendingAgentBehavior;
-    use crate::identity::{AgentIdentity as _, KeyIdentity};
+    use crate::agent::PendingAgent;
+    use crate::identity::{KeyIdentity, NodeIdentity as _};
     use crate::oauth_credential::BearerSource as _;
     let key = std::env::temp_dir().join(format!("switch-{}.key", uuid::Uuid::new_v4()));
     let did = KeyIdentity::load_or_create(&key, None)
@@ -378,16 +378,16 @@ async fn next_turns_use_the_target_credentials() {
         })
         .await
         .unwrap();
-    for behavior_id in ["x", "y"] {
-        let profile = &references.behavior_profiles(behavior_id)[0];
+    for agent_id in ["x", "y"] {
+        let profile = &references.agent_profiles(agent_id)[0];
         let (_, backend) = references.profile_with_backend(profile).unwrap().unwrap();
         let fields = backend.backend_fields();
         assert_eq!(
             fields.backend_id.as_deref(),
             Some(fixture.backends["b"].as_str()),
-            "{behavior_id}"
+            "{agent_id}"
         );
-        let mut behavior = PendingAgentBehavior::new(behavior_id)
+        let mut behavior = PendingAgent::new(agent_id)
             .build_with_identity_for_test(KeyIdentity::load_or_create(&key, None).unwrap());
         behavior.backend_id = fields.backend_id;
         behavior.backend_provider_kind = fields.backend_provider_kind;
@@ -401,11 +401,11 @@ async fn next_turns_use_the_target_credentials() {
             std::time::Duration::from_secs(5),
         )
         .await
-        .unwrap_or_else(|error| panic!("{behavior_id}: {error:#}"));
+        .unwrap_or_else(|error| panic!("{agent_id}: {error:#}"));
         let bearer = crate::oauth_credential::test_support::bound_bearer(
             &fixture.credentials["b"].credential_id,
         )
-        .unwrap_or_else(|| panic!("{behavior_id} did not bind B"));
+        .unwrap_or_else(|| panic!("{agent_id} did not bind B"));
         assert_eq!(bearer.current_bearer().await.unwrap(), "access-SECRET-b");
     }
     assert!(
@@ -427,41 +427,41 @@ async fn companions_are_the_other_profiles_of_the_same_behaviors_on_one_account(
         .apply(vec![
             (
                 Collection::InferenceProfile,
-                json!({"agent_did": did, "profile_id": "m", "backend_id": a, "model_name": "model-x"}),
+                json!({"node_did": did, "profile_id": "m", "backend_id": a, "model_name": "model-x"}),
             ),
             (
                 Collection::InferenceProfile,
-                json!({"agent_did": did, "profile_id": "o", "backend_id": b, "model_name": "model-x"}),
+                json!({"node_did": did, "profile_id": "o", "backend_id": b, "model_name": "model-x"}),
             ),
             (
                 Collection::Compaction,
-                json!({"agent_did": did, "compaction_id": "compaction-y", "inference_profile_id": "o"}),
+                json!({"node_did": did, "compaction_id": "compaction-y", "inference_profile_id": "o"}),
             ),
             (
                 Collection::AgentContext,
-                json!({"agent_did": did, "context_id": "context-y", "compaction_id": "compaction-y"}),
+                json!({"node_did": did, "context_id": "context-y", "compaction_id": "compaction-y"}),
             ),
             (
-                Collection::AgentBehavior,
-                json!({"agent_did": did, "behavior_id": "y", "context_id": "context-y", "inference_profile_id": "p"}),
+                Collection::Agent,
+                json!({"node_did": did, "agent_id": "y", "context_id": "context-y", "inference_profile_id": "p"}),
             ),
             (
                 Collection::Compaction,
-                json!({"agent_did": did, "compaction_id": "compaction-z", "inference_profile_id": "p"}),
+                json!({"node_did": did, "compaction_id": "compaction-z", "inference_profile_id": "p"}),
             ),
             (
                 Collection::AgentContext,
-                json!({"agent_did": did, "context_id": "context-z", "compaction_id": "compaction-z"}),
+                json!({"node_did": did, "context_id": "context-z", "compaction_id": "compaction-z"}),
             ),
             (
-                Collection::AgentBehavior,
-                json!({"agent_did": did, "behavior_id": "z", "context_id": "context-z", "inference_profile_id": "m"}),
+                Collection::Agent,
+                json!({"node_did": did, "agent_id": "z", "context_id": "context-z", "inference_profile_id": "m"}),
             ),
         ])
         .await;
 
     let plan = fixture.plan().await.unwrap();
-    assert_eq!(plan.behaviors, ["x", "y", "z"]);
+    assert_eq!(plan.agents, ["x", "y", "z"]);
     assert_eq!(plan.companions, ["m", "summ"], "o is on another account");
     let summ = switch_candidates(&fixture.access, did, "summ", &[], Utc::now())
         .await
@@ -578,7 +578,7 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
     let did = "did:key:z6MkTestSwitchSlot";
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::ensure_agent_principal(&node, did).await.unwrap();
+    crate::ensure_node(&node, did).await.unwrap();
     let fixture = Fixture {
         node: node.clone(),
         access: ConfigAccess::Local(node),
@@ -588,7 +588,7 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
     };
     for (id, port) in [("k1", 1), ("k2", 2)] {
         let backend: InferenceBackend = serde_json::from_value(json!({
-            "agent_did": did, "backend_id": id, "name": format!("name-{id}"),
+            "node_did": did, "backend_id": id, "name": format!("name-{id}"),
             "provider_kind": "OpenAiCompatible", "endpoint": format!("http://127.0.0.1:{port}/v1"),
             "auth": {"kind": "api_key", "key": "KEY-SENTINEL"},
         }))
@@ -601,11 +601,11 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
         .apply(vec![
             (
                 Collection::InferenceProfile,
-                json!({"agent_did": did, "profile_id": "k", "backend_id": "k1", "model_name": "model-k"}),
+                json!({"node_did": did, "profile_id": "k", "backend_id": "k1", "model_name": "model-k"}),
             ),
             (
-                Collection::AgentBehavior,
-                json!({"agent_did": did, "behavior_id": "reader", "inference_profile_id": "k"}),
+                Collection::Agent,
+                json!({"node_did": did, "agent_id": "reader", "inference_profile_id": "k"}),
             ),
         ])
         .await;
@@ -625,7 +625,7 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
                 "model_slot": "remote_ocr",
             },
             "model_binding": (!profile.is_empty())
-                .then(|| json!({"agent_did": owner, "profile_id": profile})),
+                .then(|| json!({"node_did": owner, "profile_id": profile})),
         }))
         .unwrap();
         store::write_record(home.path(), &record).unwrap();
@@ -643,7 +643,7 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
         .unwrap();
     assert_eq!(
         receipt.headline,
-        "Move profile k to name-k2 (used by 1 behavior and 1 plugin slot)"
+        "Move profile k to name-k2 (used by 1 agent and 1 plugin slot)"
     );
     assert_eq!(
         serde_json::to_value(&receipt).unwrap()["plugin_slots"],
@@ -657,7 +657,7 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
     assert_eq!(
         binding,
         ModelBinding {
-            agent_did: did.to_owned(),
+            node_did: did.to_owned(),
             profile_id: "k".to_owned(),
         },
         "the binding names the profile, so the move needs no binding write"

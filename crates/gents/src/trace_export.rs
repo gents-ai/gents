@@ -91,8 +91,8 @@ pub struct AmyToolCallTraceRecord {
     pub run_id: Option<String>,
     pub case_id: Option<String>,
     pub prompt: Option<String>,
-    pub agent_did: Option<String>,
-    pub behavior_id: Option<String>,
+    pub node_did: Option<String>,
+    pub agent_id: Option<String>,
     pub session_id: String,
     pub request_id: Option<String>,
     pub request_status: Option<String>,
@@ -192,14 +192,14 @@ pub fn raw_message_json(message: &Message) -> Result<Value> {
 /// Loads native messages through the public session history owner — exact
 /// authorized references and strict reconstruction are handled there — and
 /// renders each through `present_message`, preserving the exported sequence
-/// order and the canonical session scope (agent DID, requester DID). Callers
+/// order and the canonical session scope (node DID, requester DID). Callers
 /// passing a physical request identity exclude its in-flight input row, which
 /// is owned by the request itself, not the durable transcript.
 #[allow(clippy::too_many_arguments)]
 pub async fn load_trace_transcript(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     through_sequence: Option<u32>,
     after_sequence: Option<u32>,
@@ -208,7 +208,7 @@ pub async fn load_trace_transcript(
     let rows = crate::session::load_sequenced_history_projection(
         node,
         session_id,
-        agent_did,
+        node_did,
         requester_did,
         through_sequence,
         after_sequence,

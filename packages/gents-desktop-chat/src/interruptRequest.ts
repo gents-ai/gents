@@ -9,7 +9,7 @@ import type { InterruptRequestResult } from "@source-inc/gents-desktop-client";
 /** Interrupts exactly `requestId`; requests it caused keep running. */
 export type DesktopInterruptRequestArgs = {
   requestId: string;
-  agentDid?: string | null;
+  nodeDid?: string | null;
   cause: "userCancelled";
 };
 

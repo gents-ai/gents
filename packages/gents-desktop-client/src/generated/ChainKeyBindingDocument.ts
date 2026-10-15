@@ -3,7 +3,7 @@
 /**
  * Document-layer view of a `ChainKeyBinding` row.
  */
-export type ChainKeyBindingDocument = { binding_id: string, agent_did: string, address: string, key_backend?: string | null, attestation?: string | null, created_at?: string | null, revoked_at?: string | null,
+export type ChainKeyBindingDocument = { binding_id: string, node_did: string, address: string, key_backend?: string | null, attestation?: string | null, created_at?: string | null, revoked_at?: string | null,
 /**
  * Optional UI/discovery labels. References, never tags, determine execution.
  */

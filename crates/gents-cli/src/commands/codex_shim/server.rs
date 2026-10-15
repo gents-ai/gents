@@ -7,8 +7,8 @@ pub(crate) struct CodexShimBindArgs {
     pub(crate) node: Arc<EmbeddedNode>,
     pub(crate) background_execution_registry: gents::BackgroundExecutionRegistry,
     pub(crate) graphql: String,
-    pub(crate) agent_did: String,
-    pub(crate) behavior_id: Option<String>,
+    pub(crate) node_did: String,
+    pub(crate) agent_id: Option<String>,
     pub(crate) auth_token: Option<String>,
     pub(crate) bind_addr: std::net::IpAddr,
     pub(crate) port: u16,
@@ -22,8 +22,8 @@ pub(crate) struct BoundCodexShim {
     trace_path: PathBuf,
     listener: TcpListener,
     app: Router,
-    agent_did: String,
-    behavior_id: String,
+    node_did: String,
+    agent_id: String,
     auth_required: bool,
 }
 
@@ -40,12 +40,12 @@ impl BoundCodexShim {
         &self.trace_path
     }
 
-    pub(crate) fn agent_did(&self) -> &str {
-        &self.agent_did
+    pub(crate) fn node_did(&self) -> &str {
+        &self.node_did
     }
 
-    pub(crate) fn behavior_id(&self) -> &str {
-        &self.behavior_id
+    pub(crate) fn agent_id(&self) -> &str {
+        &self.agent_id
     }
 
     pub(crate) fn auth_required(&self) -> bool {
@@ -63,12 +63,12 @@ impl BoundCodexShim {
     }
 }
 
-pub(crate) async fn resolve_codex_shim_behavior_id(
+pub(crate) async fn resolve_codex_shim_agent_id(
     node: &EmbeddedNode,
-    override_behavior_id: Option<&str>,
-    agent_did: &str,
+    override_agent_id: Option<&str>,
+    node_did: &str,
 ) -> Result<String> {
-    bound_behavior::resolve_bound_behavior_id(node, override_behavior_id, agent_did).await
+    bound_behavior::resolve_bound_agent_id(node, override_agent_id, node_did).await
 }
 
 pub(crate) enum CodexShimBindError {
@@ -100,23 +100,23 @@ pub(crate) async fn bind_codex_shim(
         .with_context(|| format!("creating Codex UI log dir {}", codex_log_dir.display()))
         .map_err(CodexShimBindError::HostResource)?;
     let trace_path = codex_log_dir.join("codex-shim-events.jsonl");
-    let agent_did = args.agent_did.clone();
+    let node_did = args.node_did.clone();
     let auth_required = args.auth_token.is_some();
 
-    let bound_behavior_id = bound_behavior::resolve_bound_behavior_id(
+    let bound_agent_id = bound_behavior::resolve_bound_agent_id(
         args.node.as_ref(),
-        args.behavior_id.as_deref(),
-        &args.agent_did,
+        args.agent_id.as_deref(),
+        &args.node_did,
     )
     .await
     .map_err(CodexShimBindError::DependencyMissing)?;
     bound_behavior::load_bound_inference_profile_id(
         args.node.as_ref(),
-        &args.agent_did,
-        &bound_behavior_id,
+        &args.node_did,
+        &bound_agent_id,
     )
     .await
-    .with_context(|| format!("validating Codex shim bound behavior {bound_behavior_id:?}"))
+    .with_context(|| format!("validating Codex shim bound agent {bound_agent_id:?}"))
     .map_err(CodexShimBindError::DependencyMissing)?;
 
     let state = ShimState {
@@ -130,10 +130,10 @@ pub(crate) async fn bind_codex_shim(
         background_execution_registry: args.background_execution_registry,
         graphql: gents::config_client::GraphqlEndpoint::as_principal(
             args.graphql.clone(),
-            args.agent_did.clone(),
+            args.node_did.clone(),
         ),
-        agent_did: Arc::from(args.agent_did.clone()),
-        behavior_id: Arc::from(bound_behavior_id.clone()),
+        node_did: Arc::from(args.node_did.clone()),
+        agent_id: Arc::from(bound_agent_id.clone()),
         id_counter: Arc::new(AtomicU64::new(1)),
         timeout: Duration::from_secs(args.timeout_secs),
         poll_interval: Duration::from_millis(args.poll_ms.max(1)),
@@ -156,8 +156,8 @@ pub(crate) async fn bind_codex_shim(
         trace_path,
         listener,
         app,
-        agent_did,
-        behavior_id: bound_behavior_id,
+        node_did,
+        agent_id: bound_agent_id,
         auth_required,
     })
 }

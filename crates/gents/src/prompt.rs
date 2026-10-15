@@ -6,7 +6,7 @@
 //! ```text
 //! ┌─────────────────────────────────────┐
 //! │ Layer 1: Static system prompt       │  ← cached globally, never changes
-//! │ Layer 2: Behavior context           │  ← cached per-behavior, set at init
+//! │ Layer 2: Agent context              │  ← cached per-agent, set at init
 //! ├─────────────────────────────────────┤
 //! │ Layer 3: Compaction summaries       │  ← cached between compactions
 //! ├─────────────────────────────────────┤
@@ -18,7 +18,7 @@
 //! at daemon startup and locked for the session lifetime. Tool definitions
 //! live in Rig's separate `tools` field, also fixed at startup.
 //!
-//! Behavior updates flow through `<system-reminder>` tags injected into
+//! Agent updates flow through `<system-reminder>` tags injected into
 //! conversation messages — never by mutating the preamble.
 
 use crate::llm::message::Message;
@@ -27,7 +27,7 @@ use crate::llm::message::{Text, UserContent};
 use anyhow::Result;
 use gents_loop::loop_stream::TaggedMessage;
 
-use crate::config::ResolvedBehavior;
+use crate::config::ResolvedAgent;
 use crate::tool_surface::ToolSurface;
 
 const TITLE_GENERATION_SUFFIX: &str = "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.";
@@ -46,7 +46,7 @@ names, descriptions, and tool listings.
 
 2. **describe_tool** — Get a compact contract for a specific MCP data-service tool. Call this \
 before using call_tool so you know required arguments, optional arguments, \
-defaults, constraints, examples, and unknown-field behavior. Set raw_schema=true \
+defaults, constraints, examples, and unknown-field handling. Set raw_schema=true \
 only when you need the exact JSON Schema.
 
 3. **call_tool** — Invoke a tool on an MCP data service. Pass the service_id, \
@@ -89,24 +89,24 @@ pub struct LayeredPromptBuilder {
 
 impl LayeredPromptBuilder {
     pub fn new(
-        behavior: &ResolvedBehavior,
+        agent: &ResolvedAgent,
         tool_surface: &ToolSurface,
         allowed_targets: &[(String, String)],
     ) -> Self {
         let tool_names = tool_surface.tool_names();
         let tool_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
-        let mut builder = Self::for_behavior(
-            &behavior.system_prompt,
-            &behavior.behavior_id,
+        let mut builder = Self::for_agent(
+            &agent.system_prompt,
+            &agent.agent_id,
             &tool_refs,
             tool_surface.includes_meta_tools(),
             allowed_targets,
         );
-        if let Some(catalog) = crate::skills::render_skill_catalog(&behavior.skills) {
+        if let Some(catalog) = crate::skills::render_skill_catalog(&agent.skills) {
             builder.preamble.push_str("\n\n");
             builder.preamble.push_str(&catalog);
         }
-        builder.skills = behavior.skills.clone();
+        builder.skills = agent.skills.clone();
         builder.skill_ceiling = crate::skills::skill_tool_ceiling(
             tool_names.iter().cloned(),
             tool_surface.allowed_mcp_service_ids(),
@@ -131,16 +131,16 @@ impl LayeredPromptBuilder {
         reminders
     }
 
-    pub fn for_behavior(
+    pub fn for_agent(
         system_prompt: &str,
-        behavior_name: &str,
+        agent_id: &str,
         tool_names: &[&str],
         include_meta_tool_guidance: bool,
         allowed_targets: &[(String, String)],
     ) -> Self {
         let preamble = build_preamble_with_targets(
             system_prompt,
-            behavior_name,
+            agent_id,
             tool_names,
             include_meta_tool_guidance,
             allowed_targets,
@@ -191,7 +191,7 @@ pub use gents_loop::prompt::{
 
 pub(crate) fn build_preamble_with_targets(
     system_prompt: &str,
-    behavior_name: &str,
+    agent_id: &str,
     tool_names: &[&str],
     include_meta_tool_guidance: bool,
     allowed_targets: &[(String, String)],
@@ -203,8 +203,8 @@ pub(crate) fn build_preamble_with_targets(
         parts.push(system_prompt.to_string());
     }
 
-    if !behavior_name.is_empty() {
-        parts.push(format!("You are the {} agent.", behavior_name));
+    if !agent_id.is_empty() {
+        parts.push(format!("You are the {} agent.", agent_id));
     }
 
     if include_meta_tool_guidance {
@@ -232,18 +232,18 @@ pub(crate) fn build_preamble_with_targets(
     parts.join("\n\n")
 }
 
-/// Thin wrapper that builds a preamble with no subagent targets.
+/// Thin wrapper that builds a preamble with no agent targets.
 /// Kept for existing tests that exercise preamble construction without targets.
 #[cfg(test)]
 fn build_preamble(
     system_prompt: &str,
-    behavior_name: &str,
+    agent_id: &str,
     tool_names: &[&str],
     include_meta_tool_guidance: bool,
 ) -> String {
     build_preamble_with_targets(
         system_prompt,
-        behavior_name,
+        agent_id,
         tool_names,
         include_meta_tool_guidance,
         &[],

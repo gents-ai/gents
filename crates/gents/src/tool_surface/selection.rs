@@ -7,22 +7,22 @@ use super::modes::{BashMode, FileToolMode};
 
 use std::path::PathBuf;
 
-use crate::document_config::SubagentTargetDocument;
+use crate::document_config::AgentTargetDocument;
 use crate::toolset::{
     default_read_only_command_policy, CommandExecutionMode, CommandExecutionPolicy,
     CommandNetworkMode,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct SubagentToolConfig {
+pub(crate) struct AgentToolConfig {
     /// The `agent_new` allowlist, by friendly name.
-    pub targets: Vec<SubagentTargetDocument>,
+    pub targets: Vec<AgentTargetDocument>,
     pub enabled: bool,
 }
 
-impl SubagentToolConfig {
-    /// Project the canonical `Tools.subagents` group. Targets are NOT populated
-    /// here: `SubagentTools.target_ids` are references to SubagentTarget
+impl AgentToolConfig {
+    /// Project the canonical `Tools.agents` group. Targets are NOT populated
+    /// here: `AgentTools.target_ids` are references to AgentTarget
     /// documents, resolved and pushed by the runtime snapshot owner. The tools
     /// default to disabled when the group or flag is absent; selecting targets
     /// never implicitly enables them.
@@ -31,7 +31,7 @@ impl SubagentToolConfig {
         Ok(Self {
             targets: Vec::new(),
             enabled: tools
-                .subagents
+                .agents
                 .as_ref()
                 .and_then(|group| group.enabled)
                 .unwrap_or(false),
@@ -40,7 +40,7 @@ impl SubagentToolConfig {
 
     pub(crate) fn from_document_with_targets<'a>(
         tools: &crate::document_config::Tools,
-        targets: impl IntoIterator<Item = &'a crate::document_config::SubagentTargetDocument>,
+        targets: impl IntoIterator<Item = &'a crate::document_config::AgentTargetDocument>,
     ) -> Result<Self> {
         let mut resolved = Self::from_document(tools)?;
         let mut by_id = std::collections::HashMap::new();
@@ -48,33 +48,33 @@ impl SubagentToolConfig {
             anyhow::ensure!(
                 by_id
                     .insert(
-                        (target.agent_did.as_str(), target.target_id.as_str()),
+                        (target.node_did.as_str(), target.target_id.as_str()),
                         target
                     )
                     .is_none(),
-                "duplicate scoped SubagentTarget {}",
+                "duplicate scoped AgentTarget {}",
                 target.target_id
             );
         }
         let mut names = std::collections::HashSet::new();
         for id in tools
-            .subagents
+            .agents
             .as_ref()
             .into_iter()
             .flat_map(|group| &group.target_ids)
         {
             let target = by_id
-                .get(&(tools.agent_did.as_str(), id.as_str()))
-                .ok_or_else(|| anyhow::anyhow!("missing same-owner SubagentTarget {id}"))?;
+                .get(&(tools.node_did.as_str(), id.as_str()))
+                .ok_or_else(|| anyhow::anyhow!("missing same-owner AgentTarget {id}"))?;
             anyhow::ensure!(
                 !target.name.trim().is_empty()
-                    && !target.target_agent_did.trim().is_empty()
-                    && !target.behavior_id.trim().is_empty(),
-                "invalid SubagentTarget {id}"
+                    && !target.target_node_did.trim().is_empty()
+                    && !target.agent_id.trim().is_empty(),
+                "invalid AgentTarget {id}"
             );
             anyhow::ensure!(
                 names.insert(target.name.as_str()),
-                "duplicate subagent target name {}",
+                "duplicate agent target name {}",
                 target.name
             );
             resolved.targets.push((*target).clone());
@@ -82,7 +82,7 @@ impl SubagentToolConfig {
         Ok(resolved)
     }
 
-    /// The agents group follows `SubagentTools.enabled` alone (Lean
+    /// The agents group follows `AgentTools.enabled` alone (Lean
     /// `ToolPolicy.Surface.sessionMessages`): `agent_message`, `agent_list` and
     /// `agent_interrupt` address sessions on this node and need no target.
     pub(crate) fn tools_enabled(&self) -> bool {
@@ -90,12 +90,12 @@ impl SubagentToolConfig {
     }
 
     /// `agent_new` can only start an allowlisted target (Lean
-    /// `subagentTargets`), so it is presented only when one resolves.
+    /// `agentTargets`), so it is presented only when one resolves.
     pub(crate) fn agent_new_enabled(&self) -> bool {
         self.enabled && !self.targets.is_empty()
     }
 
-    pub(crate) fn target(&self, name: &str) -> Option<&SubagentTargetDocument> {
+    pub(crate) fn target(&self, name: &str) -> Option<&AgentTargetDocument> {
         self.targets.iter().find(|target| target.name == name)
     }
 
@@ -106,11 +106,11 @@ impl SubagentToolConfig {
             .collect()
     }
 
-    /// Whether a target in the allowlist runs `behavior_id` on `agent_did`.
-    pub(crate) fn allows(&self, agent_did: &str, behavior_id: &str) -> bool {
+    /// Whether a target in the allowlist runs `agent_id` on `target_node_did`.
+    pub(crate) fn allows(&self, target_node_did: &str, agent_id: &str) -> bool {
         self.targets
             .iter()
-            .any(|target| target.target_agent_did == agent_did && target.behavior_id == behavior_id)
+            .any(|target| target.target_node_did == target_node_did && target.agent_id == agent_id)
     }
 }
 

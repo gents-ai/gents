@@ -14,9 +14,9 @@ use futures::future::BoxFuture;
 pub use gents_loop::compaction::*;
 
 /// Build reduction options from canonical behavior compaction settings.
-/// Lives here (not on the gents-loop type) because `ResolvedBehavior` is native.
-pub(crate) fn reduction_options_for_behavior(
-    behavior: &crate::config::ResolvedBehavior,
+/// Lives here (not on the gents-loop type) because `ResolvedAgent` is native.
+pub(crate) fn reduction_options_for_agent(
+    behavior: &crate::config::ResolvedAgent,
 ) -> anyhow::Result<ReductionOptions> {
     let mut options = ReductionOptions {
         mode: behavior.compaction_strategy().reduction_mode(),

@@ -28,12 +28,12 @@ pub(super) fn row_matches_coalesced_source_and_key(
 pub async fn reconcile_coalesced_pending_request(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     source: QueueSource,
     key: &str,
 ) -> Result<Option<EnqueuedAgentRequest>> {
     let matching =
-        matching_coalesced_pending_requests(node, session_id, agent_did, source, key).await?;
+        matching_coalesced_pending_requests(node, session_id, node_did, source, key).await?;
     let Some(survivor) = matching.first().and_then(queue_row_to_enqueued_request) else {
         return Ok(None);
     };
@@ -44,7 +44,7 @@ pub async fn reconcile_coalesced_pending_request(
                 .doc_id
                 .as_deref()
                 .context("pending AgentRequest row is missing _docID")?,
-            agent_did,
+            node_did,
             &survivor.request_id,
             &survivor.doc_id,
             "coalesced into earlier queued request",
@@ -66,7 +66,7 @@ pub async fn reconcile_coalesced_pending_request(
                     {
                         crate::trigger_engine::durable::publish_request_outcome(
                             txn,
-                            agent_did,
+                            node_did,
                             &duplicate.request_id,
                             "superseded",
                             "coalesced into earlier queued request",
@@ -84,10 +84,10 @@ pub async fn reconcile_coalesced_pending_request(
     Ok(Some(survivor))
 }
 
-/// Supersede one still-pending request of `agent_did` by the survivor.
+/// Supersede one still-pending request of `node_did` by the survivor.
 pub(crate) fn supersede_pending_mutation(
     doc_id: &str,
-    agent_did: &str,
+    node_did: &str,
     survivor_request_id: &str,
     survivor_doc_id: &str,
     reason: &str,
@@ -98,7 +98,7 @@ pub(crate) fn supersede_pending_mutation(
                 docID: "{physical_doc_id}",
                 filter: {{
                     _docID: {{ _eq: "{}" }},
-                    agent_did: {{ _eq: "{}" }},
+                    node_did: {{ _eq: "{}" }},
                     lifecycle_state: {{ _eq: "pending" }}
                 }},
                 input: {{
@@ -112,7 +112,7 @@ pub(crate) fn supersede_pending_mutation(
             ) {{ _docID }}
         }}"#,
         escape_graphql_string(doc_id),
-        escape_graphql_string(agent_did),
+        escape_graphql_string(node_did),
         escape_graphql_string(survivor_request_id),
         escape_graphql_string(survivor_doc_id),
         escape_graphql_string(reason),
@@ -124,18 +124,18 @@ pub(crate) fn supersede_pending_mutation(
 async fn matching_coalesced_pending_requests(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     source: QueueSource,
     key: &str,
 ) -> Result<Vec<AgentRequestRow>> {
     let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
                     session_id: {{ _eq: "{escaped_session_id}" }},
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    node_did: {{ _eq: "{escaped_node_did}" }},
                     lifecycle_state: {{ _eq: "pending" }}
                 }},
                 order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
@@ -172,11 +172,11 @@ pub(super) fn queue_row_to_enqueued_request(row: &AgentRequestRow) -> Option<Enq
     })
 }
 
-pub(super) fn parent_behavior_id(parent: &AgentRequest) -> Result<String> {
+pub(super) fn parent_agent_id(parent: &AgentRequest) -> Result<String> {
     anyhow::ensure!(
-        !parent.behavior_id.trim().is_empty(),
-        "cannot enqueue same-session request: parent {} has no behavior_id",
+        !parent.agent_id.trim().is_empty(),
+        "cannot enqueue same-session request: parent {} has no agent_id",
         parent.request_id
     );
-    Ok(parent.behavior_id.clone())
+    Ok(parent.agent_id.clone())
 }

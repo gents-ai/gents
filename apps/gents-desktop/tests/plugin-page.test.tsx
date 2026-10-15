@@ -59,7 +59,7 @@ describe("the plugin page route", () => {
     renderIn(app, <PluginPageScreen pluginId="board" />);
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "half a task" } });
     act(() => {
-      publish(app, [node({ agentDid: "did:key:a" })]);
+      publish(app, [node({ nodeDid: "did:key:a" })]);
     });
     expect(screen.getByRole("textbox")).toHaveValue("half a task");
     expect(mounts).toBe(1);

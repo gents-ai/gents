@@ -7,32 +7,32 @@ export function createProviderAccountCommands(
   invokeDesktop: ReturnType<typeof createDesktopInvoker>,
 ): Partial<DesktopApiAdapter> {
   return {
-    listProviderAccounts: (agentDid) =>
+    listProviderAccounts: (nodeDid) =>
       invokeDesktop<ProviderAccountView[]>("desktop_provider_accounts_list", {
-        request: { agentDid },
+        request: { nodeDid },
       }),
-    disconnectProviderAccount: (agentDid, credentialId) =>
+    disconnectProviderAccount: (nodeDid, credentialId) =>
       invokeDesktop<void>("desktop_provider_account_disconnect", {
-        request: { agentDid, credentialId },
+        request: { nodeDid, credentialId },
       }),
-    retrySaveProviderAccount: (agentDid, provider) =>
+    retrySaveProviderAccount: (nodeDid, provider) =>
       invokeDesktop<ProviderAccountView>(
         "desktop_provider_account_retry_save",
         {
-          request: { agentDid, provider },
+          request: { nodeDid, provider },
         },
       ),
-    renameProviderAccount: (agentDid, credentialId, label) =>
+    renameProviderAccount: (nodeDid, credentialId, label) =>
       invokeDesktop<void>("desktop_provider_account_rename", {
-        request: { agentDid, credentialId, label },
+        request: { nodeDid, credentialId, label },
       }),
-    removeProviderAccount: (agentDid, credentialId) =>
+    removeProviderAccount: (nodeDid, credentialId) =>
       invokeDesktop<void>("desktop_provider_account_remove", {
-        request: { agentDid, credentialId },
+        request: { nodeDid, credentialId },
       }),
-    readProviderUsage: (agentDid, refresh, provider) =>
+    readProviderUsage: (nodeDid, refresh, provider) =>
       invokeDesktop<BackendUsageView[]>("desktop_provider_usage_read", {
-        request: { agentDid, refresh, provider: provider ?? null },
+        request: { nodeDid, refresh, provider: provider ?? null },
       }),
   };
 }

@@ -42,10 +42,12 @@ clap.workspace = true
 gents-chatgpt-login.workspace = true
 gents-claude-login.workspace = true
 gents-codex-protocol.workspace = true
+gents-desktop-core.workspace = true
 gents = { path = "../gents" }
 gents-fs-runner = { path = "../gents-fs-runner" }
 gents-protocol.workspace = true
 defra-node.workspace = true
+defra-http.workspace = true
 defra-p2p-adapter.workspace = true
 futures-util = "0.3"
 flate2 = "1"
@@ -71,6 +73,7 @@ rmcp = { version = "1.2.0", features = [
 schemars = "1"
 serde.workspace = true
 serde_json.workspace = true
+shlex = "1.3"
 sha2.workspace = true
 serde_yaml.workspace = true
 subtle.workspace = true
@@ -109,7 +112,8 @@ afterburner-cloud = { git = "https://github.com/afterburner-sh/afterburner.git",
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSURL", "NSBundle"] }
 
 # Only the native `gents` binary installs mimalloc. The iOS shell links this
 # crate as a library through the bridge and keeps the system allocator.
@@ -127,7 +131,6 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 [dev-dependencies]
 acp.workspace = true
 futures = "0.3"
-gents-desktop-core.workspace = true
 gents-lean-contract.workspace = true
 tokio-tungstenite = "0.26.2"
 

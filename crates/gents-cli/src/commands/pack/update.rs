@@ -240,7 +240,7 @@ mod tests {
         assert_eq!(is_newer("1.2.0", "1.2.0-rc.1"), Some(true));
     }
 
-    /// A minimal document pack: an agent principal placeholder and one empty
+    /// A minimal document pack: an node placeholder and one empty
     /// tools document, the same shape a real document pack ships (compare
     /// a pack's `pack_config.json`). Returns its bytes
     /// and the sha256 hex a registry advertises for them.
@@ -266,7 +266,7 @@ mod tests {
         )
         .unwrap();
         let config = json!({
-            "agent_principal": { "agent_did": "${GENTS_PACK_AGENT_DID}" },
+            "node": { "node_did": "${GENTS_PACK_NODE_DID}" },
             "tools": [{ "tools_id": "demo-tools", "display_name": "No tools" }],
         });
         std::fs::write(root.join("README.md"), "# demo_pack").unwrap();
@@ -301,7 +301,7 @@ mod tests {
             "init",
             "--store-key-custody",
             "file",
-            "--agent-name",
+            "--node-name",
             "updater",
             "--home",
             home_path.to_str().unwrap(),
@@ -317,7 +317,7 @@ mod tests {
         let scope = crate::cli::GraphScopeArgs {
             home: Some(home_path),
             graphql: None,
-            agent_did: None,
+            node_did: None,
         };
 
         let (registry_a, _state_a) = crate::commands::pack::registry::tests::serve_fake_pack(
@@ -391,7 +391,7 @@ mod tests {
         let scope = crate::cli::GraphScopeArgs {
             home: Some(home.path().to_path_buf()),
             graphql: None,
-            agent_did: None,
+            node_did: None,
         };
         let install = |preview: bool, registry: Option<String>| PackInstallArgs {
             package: "fixture/assets_fixture".to_owned(),
@@ -474,7 +474,7 @@ mod tests {
         let scope = crate::cli::GraphScopeArgs {
             home: Some(home.path().to_path_buf()),
             graphql: None,
-            agent_did: None,
+            node_did: None,
         };
         let fixture = super::super::test_support::fixture_dir("assets_fixture");
         crate::request_helpers::capture_report(super::super::install(PackInstallArgs {

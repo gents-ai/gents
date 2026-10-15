@@ -14,7 +14,7 @@ import {
   type DesktopApp,
   type DesktopBridge,
 } from "./hooks/desktopApp";
-import { useDesktopRuntime } from "./hooks/useDesktopRuntime";
+import { useClientRuntime } from "./hooks/useClientRuntime";
 import { useManagedServerTrayControls } from "./hooks/useManagedServerTrayControls";
 import { useMobileBackSwipe } from "./hooks/useMobileBackSwipe";
 import { useMobileVisualViewport } from "./hooks/useMobileVisualViewport";
@@ -35,7 +35,7 @@ import { useFleet } from "./ui/hooks/useFleet";
 import { fleetNodes } from "./ui/lib/scope";
 import { useFollowRoute } from "./ui/hooks/useFollowRoute";
 import { defaultAgentOf } from "./ui/lib/agents";
-import { isLocalAgent, nodeSetUp } from "./ui/lib/firstRun";
+import { isLocalNode, nodeSetUp } from "./ui/lib/firstRun";
 import { useUxHost } from "./ui/hooks/useUxHost";
 import { useHistoryInputs } from "./ui/lib/history-inputs";
 import {
@@ -111,13 +111,13 @@ function AppHost({ bridge: given }: { bridge?: DesktopBridge }) {
    redrawing every screen. */
 function AppReactions({ app, bridge }: { app: DesktopApp; bridge: DesktopBridge }) {
   const route = useRoute();
-  useDesktopRuntime(app, bridge.listenToUpdates);
+  useClientRuntime(app, bridge.listenToUpdates);
   useFollowRoute(route);
   useWindowTitle(route);
   useDockVisit(route);
   useMobileVisualViewport();
   usePlatformSetup();
-  useManagedServerTrayControls(bridge.api);
+  useManagedServerTrayControls(app);
   /* the UX plugin host and its doors: reads the stores, re-renders nothing */
   useUxHost(app, bridge.listenToUpdates);
   return null;
@@ -136,8 +136,8 @@ function AppBody() {
     startup.phase === "ready",
   );
   const homeDid = useHomeDid();
-  const hasLocalAgent = useFleet((state) =>
-    fleetNodes(state).some((node) => isLocalAgent(node, homeDid)),
+  const hasLocalNode = useFleet((state) =>
+    fleetNodes(state).some((node) => isLocalNode(node, homeDid)),
   );
   useNativeWindowReadiness(startup.phase === "ready" && firstRun.settled);
 
@@ -166,14 +166,14 @@ function AppBody() {
         {titlebar}
         <TooltipProvider>
           <SetupScreen
-            initialStep={hasLocalAgent ? "inference" : "welcome"}
+            initialStep={hasLocalNode ? "inference" : "welcome"}
             onDone={(done) => {
               firstRun.finish();
               const deployment = nodeSetUp(done);
               if (deployment) {
-                actions.selectAgent(deployment.agentDid);
-                const behavior = defaultAgentOf(deployment) ?? deployment.behaviors[0];
-                if (behavior) actions.selectBehavior(behavior.behaviorId);
+                actions.selectNode(deployment.nodeDid);
+                const agent = defaultAgentOf(deployment) ?? deployment.agents[0];
+                if (agent) actions.selectAgent(agent.agentId);
               }
               void actions.refreshSnapshot().then(() => {
                 navigate({ name: "session", sessionId: null });
@@ -202,7 +202,7 @@ function AppBody() {
         <RouteScreen route={route} />
       </AppShell>
       <Toaster />
-      {hasLocalAgent && <PluginAccessPrompt />}
+      {hasLocalNode && <PluginAccessPrompt />}
       <Shortcuts />
     </TooltipProvider>
   );
@@ -223,7 +223,7 @@ function RouteScreen({ route }: { route: Route }) {
     case "agent":
       return (
         <AgentScreen
-          agentDid={route.agentDid}
+          nodeDid={route.nodeDid}
           section={route.section}
           item={route.item}
         />

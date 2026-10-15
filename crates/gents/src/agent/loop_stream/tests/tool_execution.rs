@@ -169,7 +169,7 @@ impl PolicyDeniedOwner {
                         health: crate::health_checker::ServiceHealthMap::new(),
                         local_hostname: "local".into(),
                         local_subnet: None,
-                        agent_did: "did:test:test".into(),
+                        node_did: "did:test:test".into(),
                         allowed_mcp_service_ids: vec!["selected-service".into()],
                         remote_tools: crate::document_config::RemoteTools {
                             services: vec![crate::document_config::RemoteServiceTools {
@@ -578,8 +578,10 @@ fn plugin_image_tool(image_bytes: usize) -> (tempfile::TempDir, Box<dyn ToolDyn>
     let tool = crate::plugin::tool::PluginTool::resolve(
         executor,
         &crate::document_config::PluginToolRef {
+            tool_calls: false,
             plugin: "team/plugin".into(),
             digest: Some(record.digest.clone()),
+            input_fields: Vec::new(),
         },
         None,
     )
@@ -1220,7 +1222,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
     let (node, _hook, _writer, lifecycle) = owned_test_hook().await;
     let request_id = lifecycle.request().doc_id.clone();
     let template = gents_protocol::output::OutputSegment {
-        agent_did: "did:test:owner".into(),
+        node_did: "did:test:owner".into(),
         requester_did: None,
         session_id: "session".into(),
         request_doc_id: request_id.clone(),
@@ -1359,4 +1361,309 @@ async fn background_output_query_work_is_independent_of_principal_history() {
     assert!(work[0] > 0);
     drop(lifecycle);
     node.shutdown().await;
+}
+
+/// A granted plugin child: `slow` outlasts the plugin's whole guest compute
+/// budget, `late` fails on its own local timeout.
+struct ComposedChild {
+    name: &'static str,
+}
+
+impl ToolDyn for ComposedChild {
+    fn name(&self) -> String {
+        self.name.to_owned()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async move {
+            ToolDefinition {
+                name: self.name.to_owned(),
+                description: "composed child".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move {
+            if self.name == "slow" {
+                tokio::time::sleep(
+                    crate::plugin::PluginBudget::default().wall_clock + Duration::from_secs(1),
+                )
+                .await;
+                return Ok("\"slow done\"".into());
+            }
+            let local = tokio::time::timeout(
+                Duration::from_millis(50),
+                std::future::pending::<()>(),
+            )
+            .await;
+            assert!(local.is_err());
+            Err(ToolError::ReportedFailure {
+                class: crate::tool_call_lifecycle::FailureClass::External,
+                text: "late timed out after 50ms".into(),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_parent() {
+    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let request = serde_json::json!({"tool_calls": {"requests": [
+        {"id": "slow", "tool_name": "slow", "arguments": {}},
+        {"id": "late", "tool_name": "late", "arguments": {}}]}});
+    let (home, record) = crate::plugin::tests::executor::installed_plugin(
+        &crate::plugin::tests::executor::asking_plugin_wat(
+            "tool_calls",
+            "tool_results",
+            &request,
+            false,
+        ),
+        None,
+    );
+    let plugin = crate::plugin::tool::PluginTool::resolve(
+        Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+            home.path().to_owned(),
+        ))),
+        &crate::document_config::PluginToolRef {
+            tool_calls: true,
+            plugin: "team/plugin".into(),
+            digest: Some(record.digest.clone()),
+            input_fields: Vec::new(),
+        },
+        None,
+    )
+    .unwrap();
+    let tools: Vec<Box<dyn ToolDyn>> = vec![
+        Box::new(plugin),
+        Box::new(ComposedChild { name: "slow" }),
+        Box::new(ComposedChild { name: "late" }),
+    ];
+    let stream = run_loop_stream(
+        ScriptedModel::new_turns(plugin_call_then_text_turns()),
+        Some(hook.clone()),
+        TaggedMessage::unassociated(Message::user("compose")),
+        Vec::new(),
+        Arc::new(tools),
+        owned_config(4),
+    );
+    let collected = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+        Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
+        tokio_util::sync::CancellationToken::new(),
+        Box::pin(collect_owned_scripted_stream(
+            stream,
+            &hook,
+            &writer,
+            &mut lifecycle,
+            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        )),
+    )
+    .await;
+    assert!(collected.error.is_none(), "{:?}", collected.error);
+    assert_eq!(collected.final_text.as_deref(), Some("seen"));
+    let output: serde_json::Value = serde_json::from_str(&collected.tool_results[0]).unwrap();
+    assert_eq!(output["tool_results"]["slow"]["result"], "slow done");
+    assert_eq!(
+        output["tool_results"]["late"]["error"],
+        "late timed out after 50ms"
+    );
+    let rows = node
+        .execute("query { AgentToolCall { tool_name lifecycle_state } }")
+        .await;
+    let rows = rows.data.unwrap()["AgentToolCall"].clone();
+    for (name, state) in [
+        ("plugin", "completed"),
+        ("slow", "completed"),
+        ("late", "failed"),
+    ] {
+        assert!(
+            rows.as_array().unwrap().iter().any(|row| row["tool_name"] == name
+                && row["lifecycle_state"] == state),
+            "{name} {state}: {rows}"
+        );
+    }
+    node.shutdown().await;
+}
+
+/// Calls each `(ordinal, name, arguments)` through the live effect dispatcher
+/// and records whether the dispatcher completed it.
+struct ComposingParent {
+    children: Vec<(u32, &'static str, String)>,
+    completed: Arc<std::sync::Mutex<Vec<(u32, bool)>>>,
+}
+
+impl ToolDyn for ComposingParent {
+    fn name(&self) -> String {
+        "plugin".into()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async move {
+            ToolDefinition {
+                name: "plugin".into(),
+                description: "composing parent".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move {
+            let dispatcher = gents_loop::tool_effects::current().expect("live dispatcher");
+            for (ordinal, name, arguments) in &self.children {
+                let outcome = dispatcher.call(*ordinal, name, arguments).await;
+                assert!(
+                    !matches!(outcome, Err(gents_loop::tool_effects::ToolEffectError::Fatal(_))),
+                    "{name} #{ordinal} ended the parent"
+                );
+                let completed = matches!(
+                    outcome,
+                    Ok(crate::tool_call_lifecycle::ToolOutcome::Completed(_))
+                );
+                self.completed.lock().unwrap().push((*ordinal, completed));
+            }
+            Ok("\"composed\"".into())
+        })
+    }
+}
+
+/// A selected child whose own admission accepts exactly `{"admit": true}`.
+struct AdmissionChild {
+    name: &'static str,
+    invoked: Arc<std::sync::Mutex<Vec<u64>>>,
+}
+
+impl ToolDyn for AdmissionChild {
+    fn name(&self) -> String {
+        self.name.to_owned()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async move {
+            ToolDefinition {
+                name: self.name.to_owned(),
+                description: "admission child".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        })
+    }
+
+    fn admit(&self, args: &str) -> Result<(), ToolError> {
+        let args: serde_json::Value = serde_json::from_str(args).unwrap();
+        if args["admit"] == true {
+            return Ok(());
+        }
+        Err(ToolError::ReportedFailure {
+            class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+            text: "admission refused".into(),
+        })
+    }
+
+    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move {
+            let args: serde_json::Value = serde_json::from_str(&args).unwrap();
+            self.invoked
+                .lock()
+                .unwrap()
+                .push(args["ordinal"].as_u64().unwrap());
+            Ok("\"ran\"".into())
+        })
+    }
+}
+
+#[tokio::test]
+async fn generated_child_admission_cases_drive_real_dispatcher() {
+    let cases = crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases
+        ["child_admission"]
+        .as_array()
+        .unwrap();
+    let hook_owned = crate::hook::persistence::HookOwnedTool::ROUTES.map(|(name, _)| name);
+    for selected in [false, true] {
+        let mut children = Vec::new();
+        let mut expected = std::collections::BTreeMap::new();
+        for case in cases.iter().filter(|case| case["selected"] == selected) {
+            let names = match case["route"].as_str().unwrap() {
+                "ordinary" => vec!["child"],
+                "hook_owned" => hook_owned.to_vec(),
+                route => panic!("unknown route {route}"),
+            };
+            for name in names {
+                let ordinal = children.len() as u32 + 1;
+                let arguments =
+                    serde_json::json!({"admit": case["admitted"], "ordinal": ordinal});
+                children.push((ordinal, name, arguments.to_string()));
+                expected.insert(ordinal, (case.clone(), case["expected"] == true));
+            }
+        }
+        let completed = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let invoked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(ComposingParent {
+            children,
+            completed: completed.clone(),
+        })];
+        if selected {
+            for name in std::iter::once("child").chain(hook_owned) {
+                tools.push(Box::new(AdmissionChild {
+                    name,
+                    invoked: invoked.clone(),
+                }));
+            }
+        }
+        let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+        let stream = run_loop_stream(
+            ScriptedModel::new_turns(plugin_call_then_text_turns()),
+            Some(hook.clone()),
+            TaggedMessage::unassociated(Message::user("compose")),
+            Vec::new(),
+            Arc::new(tools),
+            owned_config(4),
+        );
+        let collected = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+            Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
+            tokio_util::sync::CancellationToken::new(),
+            Box::pin(collect_owned_scripted_stream(
+                stream,
+                &hook,
+                &writer,
+                &mut lifecycle,
+                gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+            )),
+        )
+        .await;
+        assert!(collected.error.is_none(), "{:?}", collected.error);
+        let completed = completed.lock().unwrap().clone();
+        let invoked = invoked.lock().unwrap().clone();
+        assert_eq!(completed.len(), expected.len());
+        let rows = crate::config_client::ConfigAccess::Local(node.clone())
+            .execute("query { AgentToolCall { plugin_effect_ordinal lifecycle_state } }")
+            .await
+            .unwrap();
+        let states: std::collections::BTreeMap<u64, String> = rows["data"]["AgentToolCall"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|row| {
+                Some((
+                    row["plugin_effect_ordinal"].as_u64()?,
+                    row["lifecycle_state"].as_str()?.to_owned(),
+                ))
+            })
+            .collect();
+        for (ordinal, observed) in completed {
+            let (case, admissible) = &expected[&ordinal];
+            assert_eq!(observed, *admissible, "dispatcher result {case}");
+            assert_eq!(
+                invoked.contains(&u64::from(ordinal)),
+                *admissible,
+                "invocation {case}"
+            );
+            assert_eq!(
+                states[&u64::from(ordinal)],
+                if *admissible { "completed" } else { "failed" },
+                "durable child {case}"
+            );
+        }
+        node.shutdown().await;
+    }
 }

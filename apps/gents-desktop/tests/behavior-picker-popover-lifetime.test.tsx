@@ -70,7 +70,7 @@ vi.mock("@gents/ui/components/popover", async () => {
 });
 
 import { SyncHealth } from "../src/ui/app/SyncHealth";
-import { BehaviorPicker } from "../src/ui/screens/BehaviorPicker";
+import { AgentPicker } from "../src/ui/screens/BehaviorPicker";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 const healthy: SyncHealthView = {
@@ -93,9 +93,9 @@ async function acknowledgeClose() {
 function Harness({ showPicker = true }: { showPicker?: boolean }) {
   return (
     <>
-      <BehaviorPicker
-        deployment={showPicker ? deployment : { ...deployment, behaviors: [] }}
-        behaviorId="default"
+      <AgentPicker
+        deployment={showPicker ? deployment : { ...deployment, agents: [] }}
+        agentId="default"
         onChange={vi.fn()}
       />
       <SyncHealth syncHealth={healthy} />
@@ -103,18 +103,16 @@ function Harness({ showPicker = true }: { showPicker?: boolean }) {
   );
 }
 
-describe("BehaviorPicker popover lifetime", () => {
+describe("AgentPicker popover lifetime", () => {
   it("releases an active picker removed while sync is pending", async () => {
     const user = userEvent.setup();
     const view = renderIn(testApp(), <Harness />);
 
-    await user.click(screen.getByRole("button", { name: "Behavior" }));
-    expect(
-      await screen.findByRole("dialog", { name: "Choose behavior" }),
-    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Agent" }));
+    expect(await screen.findByRole("dialog", { name: "Choose agent" })).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: /Show sync diagnostics/ }));
-    expect(screen.getByRole("dialog", { name: "Choose behavior" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Choose agent" })).toBeVisible();
     expect(
       screen.queryByRole("dialog", { name: "Database sync details" }),
     ).not.toBeInTheDocument();
@@ -130,20 +128,18 @@ describe("BehaviorPicker popover lifetime", () => {
     const user = userEvent.setup();
     renderIn(testApp(), <Harness />);
 
-    await user.click(screen.getByRole("button", { name: "Behavior" }));
-    await screen.findByRole("dialog", { name: "Choose behavior" });
-    await user.click(screen.getByRole("button", { name: /Create new behavior/ }));
+    await user.click(screen.getByRole("button", { name: "Agent" }));
+    await screen.findByRole("dialog", { name: "Choose agent" });
+    await user.click(screen.getByRole("button", { name: /Create new agent/ }));
 
     // The closing picker stays mounted for its exit; the sheet must wait.
-    expect(screen.getByRole("dialog", { name: "Choose behavior" })).toBeInTheDocument();
-    expect(
-      screen.queryByRole("dialog", { name: "New behavior" }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Choose agent" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "New agent" })).not.toBeInTheDocument();
 
     await acknowledgeClose();
-    expect(await screen.findByRole("dialog", { name: "New behavior" })).toBeVisible();
+    expect(await screen.findByRole("dialog", { name: "New agent" })).toBeVisible();
     expect(
-      screen.queryByRole("dialog", { name: "Choose behavior" }),
+      screen.queryByRole("dialog", { name: "Choose agent" }),
     ).not.toBeInTheDocument();
   });
 
@@ -151,18 +147,16 @@ describe("BehaviorPicker popover lifetime", () => {
     const user = userEvent.setup();
     renderIn(testApp(), <Harness />);
 
-    await user.click(screen.getByRole("button", { name: "Behavior" }));
-    await screen.findByRole("dialog", { name: "Choose behavior" });
-    await user.click(screen.getByRole("button", { name: /Create new behavior/ }));
+    await user.click(screen.getByRole("button", { name: "Agent" }));
+    await screen.findByRole("dialog", { name: "Choose agent" });
+    await user.click(screen.getByRole("button", { name: /Create new agent/ }));
     await user.click(screen.getByRole("button", { name: /Show sync diagnostics/ }));
 
     await acknowledgeClose();
     expect(
       await screen.findByRole("dialog", { name: "Database sync details" }),
     ).toBeVisible();
-    expect(
-      screen.queryByRole("dialog", { name: "New behavior" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "New agent" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
   });
 
@@ -170,22 +164,20 @@ describe("BehaviorPicker popover lifetime", () => {
     const user = userEvent.setup();
     renderIn(testApp(), <Harness />);
 
-    await user.click(screen.getByRole("button", { name: "Behavior" }));
-    await screen.findByRole("dialog", { name: "Choose behavior" });
-    await user.click(screen.getByRole("button", { name: /Create new behavior/ }));
-    await user.click(screen.getByRole("button", { name: "Behavior" }));
-    expect(screen.getByRole("dialog", { name: "Choose behavior" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Agent" }));
+    await screen.findByRole("dialog", { name: "Choose agent" });
+    await user.click(screen.getByRole("button", { name: /Create new agent/ }));
+    await user.click(screen.getByRole("button", { name: "Agent" }));
+    expect(screen.getByRole("dialog", { name: "Choose agent" })).toBeVisible();
 
     // The next ordinary close must not replay the withdrawn create.
-    await user.click(screen.getByRole("button", { name: "Behavior" }));
+    await user.click(screen.getByRole("button", { name: "Agent" }));
     await acknowledgeClose();
-    expect(
-      screen.queryByRole("dialog", { name: "New behavior" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "New agent" })).not.toBeInTheDocument();
     expect(screen.queryAllByRole("dialog")).toHaveLength(0);
   });
 
-  it("cancels a pending picker when its chosen behavior disappears", async () => {
+  it("cancels a pending picker when its chosen agent disappears", async () => {
     const user = userEvent.setup();
     const view = renderIn(testApp(), <Harness />);
 
@@ -194,13 +186,13 @@ describe("BehaviorPicker popover lifetime", () => {
       await screen.findByRole("dialog", { name: "Database sync details" }),
     ).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "Behavior" }));
+    await user.click(screen.getByRole("button", { name: "Agent" }));
     expect(
       screen.queryByRole("dialog", { name: "Database sync details" }),
     ).not.toBeInTheDocument();
     expect(screen.getByText("Database sync")).toBeVisible();
     expect(
-      screen.queryByRole("dialog", { name: "Choose behavior" }),
+      screen.queryByRole("dialog", { name: "Choose agent" }),
     ).not.toBeInTheDocument();
     view.rerender(<Harness showPicker={false} />);
 
@@ -208,7 +200,7 @@ describe("BehaviorPicker popover lifetime", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     view.rerender(<Harness />);
     expect(
-      screen.queryByRole("dialog", { name: "Choose behavior" }),
+      screen.queryByRole("dialog", { name: "Choose agent" }),
     ).not.toBeInTheDocument();
     expect(screen.queryAllByRole("dialog")).toHaveLength(0);
 

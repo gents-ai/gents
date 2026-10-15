@@ -31,7 +31,7 @@ impl EvalContext {
     pub(crate) async fn resolve(scope: &EvalScopeArgs) -> Result<Self> {
         let (access, home_dir) =
             crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
-        let owner = crate::resolve_agent_did(Some(&home_dir), None)?;
+        let owner = crate::resolve_node_did(Some(&home_dir), None)?;
         Ok(Self {
             access,
             home_dir,
@@ -76,7 +76,7 @@ pub(crate) fn usage_error(command: &EvalCommand) -> Option<String> {
 pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
     if matches!(
         command,
-        EvalCommand::Run(_) | EvalCommand::Resume(_) | EvalCommand::Init(_)
+        EvalCommand::Run(_) | EvalCommand::Batch(_) | EvalCommand::Resume(_) | EvalCommand::Init(_)
     ) {
         crate::process_resources::prepare()?;
     }
@@ -103,10 +103,15 @@ pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
     let registry = CheckRegistry::builtin();
     // Only a command that hosts a loop replaces the default interrupt: a
     // read-only command stays killable by Ctrl-C.
-    let cancel = if matches!(command, EvalCommand::Run(_) | EvalCommand::Resume(_)) {
-        cancel_on_ctrl_c(
-            "interrupt: the run stops launching; resume it to continue, or interrupt again to exit now",
-        )
+    let cancel = if matches!(
+        command,
+        EvalCommand::Run(_) | EvalCommand::Batch(_) | EvalCommand::Resume(_)
+    ) {
+        cancel_on_ctrl_c(if matches!(command, EvalCommand::Batch(_)) {
+            "interrupt: batch runs stop launching; rerun the saved plan to resume, or interrupt again to exit now"
+        } else {
+            "interrupt: the run stops launching; resume it to continue, or interrupt again to exit now"
+        })
     } else {
         CancellationToken::new()
     };
@@ -129,6 +134,7 @@ pub(crate) async fn execute(
 ) -> Result<()> {
     let result = match command {
         EvalCommand::Run(args) => run::run(ctx, &args, deps, out).await,
+        EvalCommand::Batch(args) => batch::run(ctx, &args, deps, out).await,
         EvalCommand::Resume(args) => run::resume(ctx, &args, deps, out).await,
         EvalCommand::List(args) => inspect::list(ctx, &args, out).await,
         EvalCommand::Show(args) => inspect::show(ctx, &args, out).await,
@@ -372,6 +378,7 @@ pub(crate) fn load_policy(arg: &crate::cli::PolicyArg) -> Result<gents::optimiza
     }
 }
 
+mod batch;
 mod checks;
 mod compare;
 mod frame;
@@ -609,10 +616,10 @@ mod tests {
             CellArg {
                 cell_id: "base".into(),
                 pack: "monitor".into(),
-                behavior: Some("did:key:z6M:default".into()),
+                agent: Some("did:key:z6M:default".into()),
             }
         );
-        assert_eq!(parse_cell("base=/packs/monitor").unwrap().behavior, None);
+        assert_eq!(parse_cell("base=/packs/monitor").unwrap().agent, None);
         assert!(parse_cell("no-equals").is_err());
         assert!(parse_cell("base=").is_err());
         assert!(parse_cell("base=monitor:").is_err());
@@ -651,7 +658,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(directory.directory(), fixture.pack.as_path());
-        assert_eq!(directory.default_behavior().unwrap(), "monitor");
+        assert_eq!(directory.default_agent().unwrap(), "monitor");
 
         // A name the home's store holds resolves with no network call (the
         // registry here is unroutable) into a materialized directory.
@@ -667,6 +674,6 @@ mod tests {
         .await
         .unwrap();
         assert!(named.directory().join("manifest.json").is_file());
-        assert_eq!(named.default_behavior().unwrap(), "fixture-worker");
+        assert_eq!(named.default_agent().unwrap(), "fixture-worker");
     }
 }

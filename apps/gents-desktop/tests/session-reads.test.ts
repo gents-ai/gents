@@ -5,7 +5,7 @@ import type {
   DesktopSessionSnapshot,
   SessionLiveDeltaView,
 } from "@source-inc/gents-desktop-client";
-import { setDesktopShellTimingConfigForTests } from "../src/hooks/desktopShellRuntime";
+import { setTimingForTests } from "../src/hooks/timing";
 import { createSessionReads } from "../src/hooks/sessionReads";
 import { createSelectionStore } from "../src/hooks/selectionStore";
 import { createSessionStore, readSession } from "../src/hooks/sessionStore";
@@ -17,8 +17,8 @@ function session(
   return {
     liveCursor: "cursor",
     sessionId: "session-1",
-    agentDid: "did:key:test",
-    behaviorId: "behavior-1",
+    nodeDid: "did:key:test",
+    agentId: "agent-1",
     title: "Test",
     previewText: null,
     status: "active",
@@ -28,6 +28,8 @@ function session(
     retryEligibility: { eligible: false, denialReason: "notFailed" },
     latestRequestOutcome: null,
     pendingTurn: null,
+    queuedTurns: [],
+    foldedInputs: [],
     context: {
       estimatedDurableTokens: 0,
       estimatedConversationTokens: 0,
@@ -57,7 +59,7 @@ function session(
 
 function readsFor(
   api: DesktopApiAdapter,
-  store = createSelectionStore({ agentDid: "did:key:test", sessionId: "session-1" }),
+  store = createSelectionStore({ nodeDid: "did:key:test", sessionId: "session-1" }),
   setError = vi.fn(),
 ) {
   const sessionStore = createSessionStore();
@@ -164,7 +166,7 @@ describe("createSessionReads", () => {
       oldestItemKey: null,
       newestItemKey: null,
     });
-    tip.projectionRevision = { storeVersion: 1 };
+    tip.projectionRevision = { storeVersion: 1, provenanceVersion: 1 };
     const fetchSessionSnapshot = vi.fn(async () => tip);
     const fetchSessionLiveDelta = vi.fn(async () => {
       throw new Error("operator restarted");
@@ -172,7 +174,7 @@ describe("createSessionReads", () => {
     const setError = vi.fn();
     const reads = readsFor(
       { fetchSessionSnapshot, fetchSessionLiveDelta } as unknown as DesktopApiAdapter,
-      createSelectionStore({ agentDid: "did:key:test", sessionId: "session-1" }),
+      createSelectionStore({ nodeDid: "did:key:test", sessionId: "session-1" }),
       setError,
     );
     await reads.refreshSession("session-1");
@@ -276,7 +278,7 @@ describe("createSessionReads", () => {
       .mockResolvedValueOnce(other)
       .mockResolvedValueOnce(terminal);
     const store = createSelectionStore({
-      agentDid: "did:key:test",
+      nodeDid: "did:key:test",
       sessionId: "session-1",
     });
     const reads = readsFor(
@@ -359,7 +361,7 @@ describe("createSessionReads", () => {
       oldestItemKey: "k8",
       newestItemKey: "k8",
     });
-    tip.projectionRevision = { storeVersion: 7 };
+    tip.projectionRevision = { storeVersion: 7, provenanceVersion: 1 };
     tip.timelineItems.push({
       kind: "liveAssistant",
       itemKey: "live-assistant",
@@ -394,7 +396,7 @@ describe("createSessionReads", () => {
     resolveDelta({
       outcome: "delta",
       liveCursor: "cursor",
-      revision: { storeVersion: 8 },
+      revision: { storeVersion: 8, provenanceVersion: 1 },
       requestId: "request-1",
       turnState: "running",
       status: null,
@@ -430,7 +432,7 @@ describe("createSessionReads", () => {
       oldestItemKey: null,
       newestItemKey: null,
     });
-    tip.projectionRevision = { storeVersion: 7 };
+    tip.projectionRevision = { storeVersion: 7, provenanceVersion: 1 };
     tip.timelineItems = [
       { kind: "liveAssistant", itemKey: "live", content: "hello", reasoning: null },
     ];
@@ -450,7 +452,7 @@ describe("createSessionReads", () => {
       outcome: "delta",
       liveCursor: "cursor",
       requestId: "request-1",
-      revision: { storeVersion: 8 },
+      revision: { storeVersion: 8, provenanceVersion: 1 },
       turnState: "running",
       status: null,
       content: { mode: "replace", value: "old", byteLen: 3, hash: "bd2b9bd6" },
@@ -481,7 +483,7 @@ describe("createSessionReads", () => {
         oldestItemKey: null,
         newestItemKey: null,
       });
-      tip.projectionRevision = { storeVersion: 1 };
+      tip.projectionRevision = { storeVersion: 1, provenanceVersion: 1 };
       tip.timelineItems = [
         { kind: "liveAssistant", itemKey: "live", content: "hello", reasoning: null },
       ];
@@ -489,7 +491,7 @@ describe("createSessionReads", () => {
         outcome: "unchanged",
         liveCursor: "cursor",
         requestId: "request-1",
-        revision: { storeVersion: 2 },
+        revision: { storeVersion: 2, provenanceVersion: 1 },
         turnState: "running",
         status: null,
         content: { mode: "unchanged", value: "", byteLen: 5, hash: "4f9f2cab" },
@@ -514,7 +516,7 @@ describe("createSessionReads", () => {
 
   it("keeps applying live reads when periodic reconciliation is disabled", async () => {
     const clock = vi.spyOn(performance, "now").mockReturnValue(0);
-    setDesktopShellTimingConfigForTests({ activeSessionPollMs: null });
+    setTimingForTests({ activeSessionPollMs: null });
     try {
       const tip = session([], {
         totalItems: 0,
@@ -524,7 +526,7 @@ describe("createSessionReads", () => {
         oldestItemKey: null,
         newestItemKey: null,
       });
-      tip.projectionRevision = { storeVersion: 1 };
+      tip.projectionRevision = { storeVersion: 1, provenanceVersion: 1 };
       tip.timelineItems = [
         { kind: "liveAssistant", itemKey: "live", content: "hello", reasoning: null },
       ];
@@ -532,7 +534,7 @@ describe("createSessionReads", () => {
         outcome: "unchanged",
         liveCursor: "cursor",
         requestId: "request-1",
-        revision: { storeVersion: 2 },
+        revision: { storeVersion: 2, provenanceVersion: 1 },
         turnState: "running",
         status: null,
         content: { mode: "unchanged", value: "", byteLen: 5, hash: "4f9f2cab" },
@@ -547,7 +549,7 @@ describe("createSessionReads", () => {
       expect(await reads.refreshSessionLiveDelta()).toBe(true);
       expect(fetchSessionLiveDelta).toHaveBeenCalledTimes(1);
     } finally {
-      setDesktopShellTimingConfigForTests(null);
+      setTimingForTests(null);
       clock.mockRestore();
     }
   });
@@ -572,7 +574,7 @@ describe("createSessionReads", () => {
       return Promise.resolve(other);
     });
     const store = createSelectionStore({
-      agentDid: "did:key:test",
+      nodeDid: "did:key:test",
       sessionId: "session-1",
     });
     const reads = readsFor(

@@ -32,7 +32,7 @@ fn configured_context_window(
     let Some(backend) = store
         .inference_backends
         .iter()
-        .find(|row| row.backend_id == profile.backend_id && row.agent_did == profile.agent_did)
+        .find(|row| row.backend_id == profile.backend_id && row.node_did == profile.node_did)
     else {
         return Ok(profile
             .context_window
@@ -45,10 +45,10 @@ fn configured_context_window(
         .enumerate()
         .find(|(index, observation)| {
             observation.backend_id == backend.backend_id
-                && source_matches_agent(
-                    &store.backend_observation_source_agent_dids,
+                && source_matches_node(
+                    &store.backend_observation_source_node_dids,
                     *index,
-                    &backend.agent_did,
+                    &backend.node_did,
                     true,
                 )
         })
@@ -71,28 +71,27 @@ fn configured_context_window(
 pub(super) fn build_session_context_view(
     store: &gents_desktop_core::client::ClientStore,
     context_store: &gents_desktop_core::client::ClientStore,
-    agent_did: Option<&str>,
-    behavior_id: Option<&str>,
+    node_did: Option<&str>,
+    agent_id: Option<&str>,
     session_id: &str,
     durable_messages: Vec<(Option<i64>, Message)>,
     durable_message_count: usize,
     transcript_totals_exact: bool,
 ) -> SessionContextView {
-    let behavior = behavior_id.and_then(|behavior_id| {
-        store.behaviors.iter().find(|row| {
-            row.behavior_id == behavior_id
-                && agent_did.is_none_or(|agent_did| row.agent_did == agent_did)
+    let agent = agent_id.and_then(|agent_id| {
+        store.agents.iter().find(|row| {
+            row.agent_id == agent_id && node_did.is_none_or(|node_did| row.node_did == node_did)
         })
     });
-    let inference_profile = behavior.and_then(|behavior| {
+    let inference_profile = agent.and_then(|agent| {
         store.inference_profiles.iter().find(|row| {
-            row.profile_id == behavior.inference_profile_id && row.agent_did == behavior.agent_did
+            row.profile_id == agent.inference_profile_id && row.node_did == agent.node_did
         })
     });
     let selected_provider_profile = inference_profile
         .and_then(|profile| {
             store.inference_backends.iter().find(|backend| {
-                backend.backend_id == profile.backend_id && backend.agent_did == profile.agent_did
+                backend.backend_id == profile.backend_id && backend.node_did == profile.node_did
             })
         })
         .map(|backend| {
@@ -104,20 +103,21 @@ pub(super) fn build_session_context_view(
                 ),
             )
         });
-    let context = behavior
-        .and_then(|behavior| behavior.context_id.as_deref().map(|id| (behavior, id)))
-        .and_then(|(behavior, context_id)| {
+    let context = agent
+        .and_then(|agent| agent.context_id.as_deref().map(|id| (agent, id)))
+        .and_then(|(agent, context_id)| {
             store
                 .contexts
                 .iter()
-                .find(|row| row.context_id == context_id && row.agent_did == behavior.agent_did)
+                .find(|row| row.context_id == context_id && row.node_did == agent.node_did)
         });
     let compaction = context
         .and_then(|context| context.compaction_id.as_deref().map(|id| (context, id)))
         .and_then(|(context, compaction_id)| {
-            store.compactions.iter().find(|row| {
-                row.compaction_id == compaction_id && row.agent_did == context.agent_did
-            })
+            store
+                .compactions
+                .iter()
+                .find(|row| row.compaction_id == compaction_id && row.node_did == context.node_did)
         });
     let (context_window, context_window_error) =
         match configured_context_window(store, inference_profile) {
@@ -141,11 +141,11 @@ pub(super) fn build_session_context_view(
         .enumerate()
         .filter(|(index, row)| {
             row.session_id.as_deref() == Some(session_id)
-                && agent_did.is_none_or(|agent_did| {
-                    source_matches_agent(
-                        &context_store.compaction_entry_source_agent_dids,
+                && node_did.is_none_or(|node_did| {
+                    source_matches_node(
+                        &context_store.compaction_entry_source_node_dids,
                         *index,
-                        agent_did,
+                        node_did,
                         false,
                     )
                 })
@@ -245,14 +245,14 @@ pub(super) fn build_session_context_view(
 pub(super) fn build_session_context_from_stores(
     store: &ClientStore,
     context_store: &ClientStore,
-    agent_did: Option<&str>,
-    behavior_id: Option<&str>,
+    node_did: Option<&str>,
+    agent_id: Option<&str>,
     session_id: &str,
     transcript_totals_exact: bool,
 ) -> SessionContextView {
-    let transcript = agent_did.map_or_else(
+    let transcript = node_did.map_or_else(
         || context_store.transcript(session_id),
-        |agent_did| context_store.transcript_for_agent(session_id, agent_did),
+        |node_did| context_store.transcript_for_node(session_id, node_did),
     );
     let observed_segments = transcript
         .output_segments
@@ -283,8 +283,8 @@ pub(super) fn build_session_context_from_stores(
     build_session_context_view(
         store,
         context_store,
-        agent_did,
-        behavior_id,
+        node_did,
+        agent_id,
         session_id,
         durable_messages,
         durable_message_count,
@@ -300,18 +300,18 @@ mod order_profile_tests {
 
     #[test]
     fn partial_store_display_meter_matches_configured_grouped_and_native_order() {
-        let behavior = serde_json::from_value(serde_json::json!({
-            "behavior_id": "behavior", "agent_did": "did:test:meter",
+        let agent = serde_json::from_value(serde_json::json!({
+            "agent_id": "agent", "node_did": "did:test:meter",
             "inference_profile_id": "profile"
         }))
-        .expect("behavior");
+        .expect("agent");
         let profile = serde_json::from_value(serde_json::json!({
-            "profile_id": "profile", "agent_did": "did:test:meter",
+            "profile_id": "profile", "node_did": "did:test:meter",
             "backend_id": "backend", "model_name": "model"
         }))
         .expect("profile");
         let base = ClientStoreRows {
-            behaviors: vec![behavior],
+            agents: vec![agent],
             inference_profiles: vec![profile],
             ..ClientStoreRows::default()
         };
@@ -340,7 +340,7 @@ mod order_profile_tests {
                 &store,
                 &store,
                 Some("did:test:meter"),
-                Some("behavior"),
+                Some("agent"),
                 "session",
                 messages.clone(),
                 messages.len(),
@@ -350,7 +350,7 @@ mod order_profile_tests {
         let partial = context(base.clone());
         let backend = |provider_kind: &str| {
             serde_json::from_value(serde_json::json!({
-                "backend_id": "backend", "agent_did": "did:test:meter",
+                "backend_id": "backend", "node_did": "did:test:meter",
                 "name": "Backend", "provider_kind": provider_kind,
                 "endpoint": "http://localhost:8000/v1",
                 "auth": {"kind": "unauthenticated"}

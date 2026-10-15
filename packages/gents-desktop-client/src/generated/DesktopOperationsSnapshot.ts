@@ -3,4 +3,4 @@ import type { BackgroundedToolView } from "./BackgroundedToolView.js";
 import type { RuntimeLivenessView } from "./RuntimeLivenessView.js";
 import type { StuckWorkDiagnosticView } from "./StuckWorkDiagnosticView.js";
 
-export type DesktopOperationsSnapshot = { fetchedAt: string, agentDid: string | null, liveness: RuntimeLivenessView | null, livenessUnavailableReason: string | null, backgroundedTools: Array<BackgroundedToolView>, stuckDiagnostics: Array<StuckWorkDiagnosticView>, };
+export type DesktopOperationsSnapshot = { fetchedAt: string, nodeDid: string | null, liveness: RuntimeLivenessView | null, livenessUnavailableReason: string | null, backgroundedTools: Array<BackgroundedToolView>, stuckDiagnostics: Array<StuckWorkDiagnosticView>, };

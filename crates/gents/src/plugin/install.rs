@@ -9,7 +9,6 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use sha2::{Digest, Sha256};
 
 use super::authority::describe_plugin_authority;
 use super::model_calls::ModelBinding;
@@ -72,7 +71,7 @@ pub fn install_from_pack(
             "installed pack plugin",
         );
     }
-    let digest_hex = format!("{:x}", Sha256::digest(artifact_bytes));
+    let digest_hex = store::content_digest_hex(artifact_bytes);
     // Shared against `release_unreferenced_bytes`'s exclusive lock: bytes and
     // the record that points at them are written before a concurrent
     // `gents pack remove` can decide those bytes are unreferenced (store.rs's
@@ -157,7 +156,7 @@ pub fn bind_plugin_slots(
             home,
             &coordinate,
             Some(ModelBinding {
-                agent_did: owner.to_owned(),
+                node_did: owner.to_owned(),
                 profile_id: profile_id.clone(),
             }),
         )?;

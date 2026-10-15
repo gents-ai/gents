@@ -8,7 +8,7 @@ use crate::background_tools::{
     MAX_WAIT_PROCESS_TIMEOUT_SECS,
 };
 use crate::session_message::{AgentInterruptArgs, AgentListArgs, AgentMessageArgs, AgentNewArgs};
-use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
+use crate::tool_surface::{AgentToolConfig, BackgroundToolConfig};
 
 use super::shared::ToolError;
 use super::{
@@ -21,7 +21,7 @@ const SESSION_SERVICE_ID: &str = "session";
 
 #[derive(Clone)]
 pub(super) struct AgentNewTool {
-    config: SubagentToolConfig,
+    config: AgentToolConfig,
 }
 
 #[derive(Clone, Copy)]
@@ -39,7 +39,7 @@ pub(super) struct SpawnProcessTool {
 }
 
 impl AgentNewTool {
-    pub(super) fn new(config: SubagentToolConfig) -> Self {
+    pub(super) fn new(config: AgentToolConfig) -> Self {
         Self { config }
     }
 
@@ -71,7 +71,7 @@ impl SpawnProcessTool {
                 SPAWN_PROCESS_TOOL_NAME,
                 "/tool_name",
                 tool_name,
-                format!("tool '{tool_name}' is not allowed for backgrounding by this behavior"),
+                format!("tool '{tool_name}' is not allowed for backgrounding by this agent"),
                 self.config.allowlist.clone(),
             ));
         }
@@ -123,7 +123,7 @@ impl Tool for AgentNewTool {
         properties["agent"] = serde_json::json!({
             "type": "string",
             "enum": self.allowed_target_names(),
-            "description": subagent_target_name_description(&self.config.targets)
+            "description": agent_target_name_description(&self.config.targets)
         });
         properties["title"] = serde_json::json!({
             "type": "string",
@@ -148,7 +148,7 @@ impl Tool for AgentNewTool {
                 "ok": false,
                 "failure_class": "tool_not_allowed",
                 "path": "/agent",
-                "message": format!("'{agent}' is not an allowed agent for this behavior"),
+                "message": format!("'{agent}' is not an allowed agent for this agent"),
                 "retryable": false,
                 "service_id": SESSION_SERVICE_ID,
                 "tool_name": Self::NAME,
@@ -347,7 +347,7 @@ impl Tool for ListProcessesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List background processes manageable by this session principal, including processes started on earlier turns.".to_string(),
+            description: "List background processes manageable by the current requester in this session, including processes started on earlier turns.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -472,11 +472,11 @@ impl Tool for CancelProcessTool {
     }
 }
 
-fn subagent_target_name_description(
-    targets: &[crate::document_config::SubagentTargetDocument],
+fn agent_target_name_description(
+    targets: &[crate::document_config::AgentTargetDocument],
 ) -> String {
     let mut description = String::from(
-        "Friendly name of the agent to start a session with, from this behavior's allowed targets.",
+        "Friendly name of the agent to start a session with, from this agent's allowed targets.",
     );
     let entries: Vec<String> = targets
         .iter()
@@ -581,6 +581,17 @@ fn background_not_yet_executable_error(tool_name: &str) -> ToolError {
 }
 
 fn structured_error(error: serde_json::Value) -> ToolError {
-    let message = serde_json::to_string_pretty(&error).unwrap_or_else(|_| error.to_string());
+    let message = crate::tool_output::render(
+        &error,
+        &[
+            "message",
+            "allowed_agents",
+            "ok",
+            "retryable",
+            "failure_class",
+            "path",
+        ],
+    )
+    .unwrap_or_else(|_| error.to_string());
     anyhow!(message).into()
 }

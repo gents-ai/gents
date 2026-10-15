@@ -13,7 +13,7 @@
   "kind": "documents",
   "assets": [
     "README.md",
-    "agent_behaviors/fixture_dependent/system_prompt.md",
+    "agents/fixture_dependent/system_prompt.md",
     "pack_config.json"
   ],
   "dependencies": [
@@ -24,7 +24,7 @@
     {
       "name": "worker",
       "description": "The one slot this fixture declares.",
-      "behaviors": [
+      "agents": [
         "fixture-dependent"
       ]
     }

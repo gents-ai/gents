@@ -221,6 +221,11 @@ pub fn store_bytes(home: &Path, digest_hex: &str, bytes: &[u8]) -> Result<()> {
     crate::pack_registry::stage_and_persist(&dir, &path, bytes)
 }
 
+/// The hex SHA-256 the store addresses `bytes` by.
+pub fn content_digest_hex(bytes: &[u8]) -> String {
+    format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes))
+}
+
 pub fn read_bytes(home: &Path, digest_hex: &str) -> Result<Vec<u8>> {
     let path = store_path(home, digest_hex)?;
     std::fs::read(&path)
@@ -290,13 +295,22 @@ pub fn release_unreferenced_bytes(home: &Path, digests: &BTreeSet<String>) -> Re
 /// this module's own doc for why that is deliberate, not a leak.
 pub fn write_record(home: &Path, record: &InstalledPlugin) -> Result<()> {
     let path = record_path(home, &record.namespace, &record.name)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
+    let parent = path
+        .parent()
+        .context("installed-plugin record has no parent")?;
+    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     let bytes =
         serde_json::to_vec_pretty(record).context("encoding the installed-plugin record")?;
-    std::fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))?;
+    // Readers take no lock and writers may run concurrently: each write
+    // stages its own temporary file and renames it into place, so a reader
+    // only ever observes a complete record.
+    let mut staged = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("staging a plugin record in {}", parent.display()))?;
+    std::io::Write::write_all(&mut staged, &bytes).context("writing the staged record")?;
+    staged
+        .persist(&path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 
@@ -354,14 +368,14 @@ pub fn list_records(home: &Path) -> Result<Vec<InstalledPlugin>> {
     Ok(records)
 }
 
-/// `namespace/name` of each plugin under `home` whose model slot `agent_did`
+/// `namespace/name` of each plugin under `home` whose model slot `node_did`
 /// bound to `profile_id`.
-pub fn bound_to_profile(home: &Path, agent_did: &str, profile_id: &str) -> Result<Vec<String>> {
+pub fn bound_to_profile(home: &Path, node_did: &str, profile_id: &str) -> Result<Vec<String>> {
     Ok(list_records(home)?
         .into_iter()
         .filter(|record| {
             record.model_binding.as_ref().is_some_and(|binding| {
-                binding.agent_did == agent_did && binding.profile_id == profile_id
+                binding.node_did == node_did && binding.profile_id == profile_id
             })
         })
         .map(|record| format!("{}/{}", record.namespace, record.name))

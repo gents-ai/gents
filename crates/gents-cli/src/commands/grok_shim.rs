@@ -2,7 +2,7 @@
 //!
 //! Gents is the leader server; stock Grok is its pager client. This module
 //! assembles the shim the same way the Codex shim is assembled, from the
-//! in-process [`EmbeddedNode`] plus the *bound* behavior/model/context
+//! in-process [`EmbeddedNode`] plus the *bound* agent/model/context
 //! documents:
 //!
 //! 1. [`protocol`] owns the length-prefixed wire codec and the
@@ -50,21 +50,21 @@ pub(crate) mod turn;
 mod usage;
 
 #[cfg(test)]
-async fn seed_test_behavior_configuration(
+async fn seed_test_agent_configuration(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
-    default_behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
+    default_agent_id: &str,
     model_name: &str,
     enabled: bool,
 ) {
-    gents::ensure_agent_principal(node, agent_did)
+    gents::ensure_node(node, node_did)
         .await
         .expect("seed test principal");
     gents::config_client::ConfigAccess::transact_local(
         node,
         None,
-        "grok.test_behavior_configuration",
+        "grok.test_agent_configuration",
         |txn| {
             Box::pin(async move {
                 use gents::config_client::{
@@ -73,25 +73,21 @@ async fn seed_test_behavior_configuration(
                 };
                 use gents::Collection;
 
-                let (_, mut principal) = read_desired_state_record_in_txn(
-                    txn,
-                    Collection::AgentPrincipal,
-                    agent_did,
-                    agent_did,
-                )
-                .await?
-                .expect("seeded principal");
-                principal["default_behavior_id"] = default_behavior_id.into();
-                let backend_id = format!("{behavior_id}-backend");
-                let profile_id = format!("{behavior_id}-inference");
+                let (_, mut principal) =
+                    read_desired_state_record_in_txn(txn, Collection::Node, node_did, node_did)
+                        .await?
+                        .expect("seeded principal");
+                principal["default_agent_id"] = default_agent_id.into();
+                let backend_id = format!("{agent_id}-backend");
+                let profile_id = format!("{agent_id}-inference");
                 let values = [
-                    (Collection::AgentPrincipal, principal),
+                    (Collection::Node, principal),
                     (
                         Collection::InferenceBackend,
                         serde_json::json!({
-                            "agent_did": agent_did,
+                            "node_did": node_did,
                             "backend_id": backend_id,
-                            "name": format!("{behavior_id} test backend"),
+                            "name": format!("{agent_id} test backend"),
                             "provider_kind": "OpenAiCompatible",
                             "openai_wire_api": "chat_completions",
                             "endpoint": "http://127.0.0.1:1/v1",
@@ -102,18 +98,18 @@ async fn seed_test_behavior_configuration(
                     (
                         Collection::InferenceProfile,
                         serde_json::json!({
-                            "agent_did": agent_did,
+                            "node_did": node_did,
                             "profile_id": profile_id,
                             "backend_id": backend_id,
                             "model_name": model_name
                         }),
                     ),
                     (
-                        Collection::AgentBehavior,
+                        Collection::Agent,
                         serde_json::json!({
-                            "agent_did": agent_did,
-                            "behavior_id": behavior_id,
-                            "display_name": behavior_id,
+                            "node_did": node_did,
+                            "agent_id": agent_id,
+                            "display_name": agent_id,
                             "inference_profile_id": profile_id,
                             "enabled": enabled
                         }),
@@ -134,7 +130,7 @@ async fn seed_test_behavior_configuration(
         },
     )
     .await
-    .expect("seed canonical test behavior configuration");
+    .expect("seed canonical test agent configuration");
 }
 
 use crate::commands::grok_shim::projection::resolve_bound_model_context;
@@ -145,7 +141,7 @@ use crate::commands::grok_shim::server::{
 /// Everything the shim needs to bind, in one place.
 ///
 /// Model and context-window configuration is *bound*: it is resolved once from
-/// the bound behavior's `AgentBehavior`/`InferenceProfile` documents before
+/// the bound agent's `Agent`/`InferenceProfile` documents before
 /// the leader accepts a client, so the pager's model catalog and every
 /// `_meta.totalTokens` bound come from real configuration rather than a
 /// synthetic catalog entry.
@@ -154,26 +150,26 @@ pub(crate) struct GrokShimBindArgs {
     pub(crate) background_executions: gents::hook::BackgroundExecutionRegistry,
     /// In-process node every request, interrupt, and projection query uses.
     pub(crate) node: Arc<EmbeddedNode>,
-    /// Authenticated server principal used as DefraDB's transaction actor.
+    /// Authenticated server node used as DefraDB's transaction actor.
     pub(crate) actor: identity::Did,
     /// GraphQL endpoint string accepted by `create_agent_request`; the
     /// in-process embedded node is authoritative for reads.
     pub(crate) graphql: String,
-    /// Bound behavior id; `None` resolves the agent principal's default.
-    pub(crate) behavior_id: Option<String>,
-    /// Agent DID requests are submitted for.
-    pub(crate) agent_did: String,
+    /// Bound agent id; `None` resolves the node's default.
+    pub(crate) agent_id: Option<String>,
+    /// Node DID requests are submitted for.
+    pub(crate) node_did: String,
     /// Display name used in shim diagnostics.
-    pub(crate) agent_name: String,
+    pub(crate) node_name: String,
     /// Unix socket path the leader binds and the pager connects to.
     pub(crate) socket_path: std::path::PathBuf,
 }
 
 /// Bind and spawn the Grok shim leader.
 ///
-/// Resolution order mirrors the Codex shim's bound-behavior resolution: an
-/// explicit `--grok-shim-behavior-id` override wins, then the agent
-/// principal's configured `default_behavior_id`. The behavior must exist and select a model and
+/// Resolution order mirrors the Codex shim's bound-agent resolution: an
+/// explicit `--grok-shim-agent-id` override wins, then the
+/// node's configured `default_agent_id`. The agent must exist and select a model and
 /// backend before the socket is published, so a misconfigured home fails fast
 /// instead of serving a fabricated model catalog.
 ///
@@ -183,27 +179,26 @@ pub(crate) struct GrokShimBindArgs {
 /// exclusive leader lock.
 pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandle> {
     let node = args.node.clone();
-    let behavior_id =
-        resolve_grok_shim_behavior_id(node.as_ref(), args.behavior_id.as_deref(), &args.agent_did)
-            .await?;
-    let bound = resolve_bound_model_context(node.as_ref(), &args.agent_did, &behavior_id)
+    let agent_id =
+        resolve_grok_shim_agent_id(node.as_ref(), args.agent_id.as_deref(), &args.node_did).await?;
+    let bound = resolve_bound_model_context(node.as_ref(), &args.node_did, &agent_id)
         .await
         .with_context(|| {
             format!(
-                "binding the Grok shim to behavior {behavior_id:?}; fix the behavior with \
-                 `gents config behavior set --behavior-id {behavior_id} ...`"
+                "binding the Grok shim to agent {agent_id:?}; fix the agent with \
+                 `gents config agent set --agent-id {agent_id} ...`"
             )
         })?;
     tracing::info!(
-        agent_name = %args.agent_name,
-        behavior_id = %behavior_id,
+        node_name = %args.node_name,
+        agent_id = %agent_id,
         model_id = %bound.model_id,
         total_context_tokens = bound.total_context_tokens,
         socket = %args.socket_path.display(),
         "grok shim leader binding"
     );
     // These are the default binding and shared construction inputs. Each
-    // connection can select a different same-principal behavior via stock
+    // connection can select a different same-node agent via stock
     // --agent metadata before creating/loading its first session. Mutable
     // service/turn/projection state remains connection-local.
     let factory_inputs = AcpDelegateFactoryInputs {
@@ -211,8 +206,8 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
         node: args.node.clone(),
         actor: args.actor.clone(),
         graphql: args.graphql.clone(),
-        agent_did: args.agent_did.clone(),
-        behavior_id: behavior_id.clone(),
+        node_did: args.node_did.clone(),
+        agent_id: agent_id.clone(),
         bound: bound.clone(),
     };
     let leader = spawn_leader(
@@ -235,7 +230,7 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
 /// Immutable inputs a per-connection delegate factory clones from.
 ///
 /// The default is resolved at listener bind time. A connection selecting
-/// another behavior resolves that behavior's model/context before constructing
+/// another agent resolves that agent's model/context before constructing
 /// its service. Mutable ACP state is never shared across registrations.
 #[derive(Clone)]
 struct AcpDelegateFactoryInputs {
@@ -243,8 +238,8 @@ struct AcpDelegateFactoryInputs {
     node: Arc<EmbeddedNode>,
     actor: identity::Did,
     graphql: String,
-    agent_did: String,
-    behavior_id: String,
+    node_did: String,
+    agent_id: String,
     bound: crate::commands::grok_shim::projection::BoundModelContext,
 }
 
@@ -262,7 +257,7 @@ fn production_acp_delegate_factory(
     inputs: AcpDelegateFactoryInputs,
 ) -> impl Fn(u64, &Registration) -> Result<Arc<dyn AcpDelegate>> {
     move |client_id, registration: &Registration| {
-        Ok(Arc::new(binding::BehaviorConnection::new(
+        Ok(Arc::new(binding::AgentConnection::new(
             inputs.clone(),
             client_id,
             registration.clone(),
@@ -277,8 +272,8 @@ impl AcpDelegateFactoryInputs {
             inputs.node.clone(),
             crate::commands::grok_shim::turn::TurnManagerConfig {
                 actor: inputs.actor.clone(),
-                agent_did: inputs.agent_did.clone(),
-                behavior_id: inputs.behavior_id.clone(),
+                node_did: inputs.node_did.clone(),
+                agent_id: inputs.agent_id.clone(),
                 graphql: inputs.graphql.clone(),
             },
         ));
@@ -292,8 +287,8 @@ impl AcpDelegateFactoryInputs {
         let mut service = crate::commands::grok_shim::acp::AcpService::new(
             crate::commands::grok_shim::acp::AcpServiceConfig {
                 node: inputs.node.clone(),
-                agent_did: Arc::from(inputs.agent_did.as_str()),
-                behavior_id: Arc::from(inputs.behavior_id.as_str()),
+                node_did: Arc::from(inputs.node_did.as_str()),
+                agent_id: Arc::from(inputs.agent_id.as_str()),
                 current_model: crate::commands::grok_shim::acp::BoundModel {
                     model_id: inputs.bound.model_id.clone(),
                     name: inputs.bound.model_name.clone(),
@@ -309,13 +304,13 @@ impl AcpDelegateFactoryInputs {
     }
 }
 
-pub(crate) use crate::commands::inference_binding::resolve_bound_behavior_id as resolve_grok_shim_behavior_id;
+pub(crate) use crate::commands::inference_binding::resolve_bound_agent_id as resolve_grok_shim_agent_id;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::grok_shim::server::AcpDelegateFactory;
-    use crate::commands::inference_binding::explicit_behavior_override;
+    use crate::commands::inference_binding::explicit_agent_override;
 
     /// A leader-side registration: `yolo_mode=true`, `auto_mode=false`,
     /// `terminal=false` — the exact capabilities the edge probe registers.
@@ -380,9 +375,9 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let identity = gents::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
             .expect("test signing identity");
-        let agent_did = gents::AgentIdentity::did(&identity).to_string();
-        let actor = ::identity::Did::new(agent_did.clone()).expect("fixture creator DID");
-        let behavior_id = gents::default_behavior_id_for_agent(&agent_did);
+        let node_did = gents::NodeIdentity::did(&identity).to_string();
+        let actor = ::identity::Did::new(node_did.clone()).expect("fixture creator DID");
+        let agent_id = gents::default_agent_id_for_node(&node_did);
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(tempdir.path().join("node"))
@@ -394,11 +389,11 @@ mod tests {
         gents::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .expect("runtime schemas");
-        seed_test_behavior_configuration(
+        seed_test_agent_configuration(
             node.as_ref(),
-            &agent_did,
-            &behavior_id,
-            &behavior_id,
+            &node_did,
+            &agent_id,
+            &agent_id,
             "GLM-5.3-NVFP4",
             true,
         )
@@ -409,8 +404,8 @@ mod tests {
             node: node.clone(),
             actor,
             graphql,
-            agent_did,
-            behavior_id,
+            node_did,
+            agent_id,
             bound: crate::commands::grok_shim::projection::BoundModelContext::new(
                 "GLM-5.3-NVFP4".to_string(),
                 "GLM 5.3 NVFP4".to_string(),
@@ -421,7 +416,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stock_agent_profile_selects_one_behavior_and_scopes_history() {
+    async fn stock_agent_profile_selects_one_agent_and_scopes_history() {
         use serde_json::{json, Value};
         async fn send(delegate: &Arc<dyn AcpDelegate>, request: Value) -> Value {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -432,26 +427,26 @@ mod tests {
             split_response(drain_outbound(&mut rx).await).1
         }
         let (_dir, node, inputs) = factory_fixture().await;
-        let did = &inputs.agent_did;
-        seed_test_behavior_configuration(
+        let did = &inputs.node_did;
+        seed_test_agent_configuration(
             node.as_ref(),
             did,
             "reviewer",
-            &inputs.behavior_id,
+            &inputs.agent_id,
             "review-model",
             true,
         )
         .await;
-        seed_test_behavior_configuration(
+        seed_test_agent_configuration(
             node.as_ref(),
             did,
             "disabled",
-            &inputs.behavior_id,
+            &inputs.agent_id,
             "disabled-model",
             false,
         )
         .await;
-        seed_test_behavior_configuration(
+        seed_test_agent_configuration(
             node.as_ref(),
             "did:key:foreign",
             "foreign",
@@ -471,7 +466,7 @@ mod tests {
         .await;
         assert_eq!(early["result"]["sessions"], json!([]));
         assert_eq!(
-            early["result"]["_meta"]["gents/behaviorSelectionRequired"],
+            early["result"]["_meta"]["gents/agentSelectionRequired"],
             true
         );
         for invalid in [
@@ -506,16 +501,16 @@ mod tests {
         )
         .await;
         assert!(main.get("error").is_none(), "{main}");
-        for (session, behavior) in [
+        for (session, agent) in [
             ("review-history", "reviewer"),
-            ("default-history", inputs.behavior_id.as_str()),
+            ("default-history", inputs.agent_id.as_str()),
         ] {
             crate::create_agent_request(
                 &gents::config_client::GraphqlEndpoint::anonymous(inputs.graphql.clone()),
                 did,
                 "A history entry",
                 Some(session),
-                Some(behavior),
+                Some(agent),
                 crate::RequestSubmitOptions::default(),
             )
             .await
@@ -571,17 +566,17 @@ mod tests {
 
     /// Stock Grok sends its built-in agents' own `agent_type` family
     /// (`grok-build`, `grok-build-*`) as `_meta.agentProfile` even without
-    /// `--agent`. Those names are Grok's, not Gents behavior ids: they must
-    /// resolve to the shim's bound default behavior, on a fresh connection
+    /// `--agent`. Those names are Grok's, not Gents agent ids: they must
+    /// resolve to the shim's bound default agent, on a fresh connection
     /// and on one already bound to that default, both when selected on
     /// `session/new` and when stock Grok re-sends the profile on
     /// `session/load`, while every name outside
     /// the family stays strictly validated against a registered, enabled,
-    /// same-principal behavior and cannot switch an already-bound
+    /// same-node agent and cannot switch an already-bound
     /// connection.
     #[tokio::test]
-    async fn built_in_grok_agent_profiles_select_the_default_behavior_and_other_names_stay_validated(
-    ) {
+    async fn built_in_grok_agent_profiles_select_the_default_agent_and_other_names_stay_validated()
+    {
         use serde_json::{json, Value};
         async fn send(delegate: &Arc<dyn AcpDelegate>, request: Value) -> Value {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -592,11 +587,11 @@ mod tests {
             split_response(drain_outbound(&mut rx).await).1
         }
         let (_dir, node, inputs) = factory_fixture().await;
-        seed_test_behavior_configuration(
+        seed_test_agent_configuration(
             node.as_ref(),
-            &inputs.agent_did,
+            &inputs.node_did,
             "reviewer",
-            &inputs.behavior_id,
+            &inputs.agent_id,
             "review-model",
             true,
         )
@@ -613,11 +608,11 @@ mod tests {
             .await;
             assert!(
                 opened.get("error").is_none(),
-                "built-in profile {built_in} must open a session on the default behavior: {opened}"
+                "built-in profile {built_in} must open a session on the default agent: {opened}"
             );
             assert_eq!(
                 opened["result"]["models"]["currentModelId"], "GLM-5.3-NVFP4",
-                "built-in profile {built_in} must serve the default behavior's bound model"
+                "built-in profile {built_in} must serve the default agent's bound model"
             );
             let reopened = send(
                 &delegate,
@@ -628,7 +623,7 @@ mod tests {
             assert!(
                 reopened.get("error").is_none(),
                 "re-selecting built-in profile {built_in} on a connection already bound to the \
-                 default behavior must keep serving it: {reopened}"
+                 default agent must keep serving it: {reopened}"
             );
             let resuming = factory(index as u64 + 4, &registration).unwrap();
             let resumed = send(
@@ -640,11 +635,11 @@ mod tests {
             assert!(
                 resumed.get("error").is_none(),
                 "stock Grok re-sends the built-in profile {built_in} on session/load; the \
-                 alias must select the default behavior there too: {resumed}"
+                 alias must select the default agent there too: {resumed}"
             );
             assert_eq!(
                 resumed["result"]["models"]["currentModelId"], "GLM-5.3-NVFP4",
-                "the resumed built-in session must serve the default behavior's bound model"
+                "the resumed built-in session must serve the default agent's bound model"
             );
             resuming.on_disconnect().await;
             delegate.on_disconnect().await;
@@ -658,13 +653,13 @@ mod tests {
         .await;
         assert!(
             denied.get("error").is_some(),
-            "a name outside the grok-build family must stay a literal behavior id: {denied}"
+            "a name outside the grok-build family must stay a literal agent id: {denied}"
         );
         assert!(
             denied["error"]["message"]
                 .as_str()
                 .is_some_and(|message| message.contains("grok-builder")),
-            "the rejection must come from behavior validation, not the family predicate: {denied}"
+            "the rejection must come from agent validation, not the family predicate: {denied}"
         );
         rejecting.on_disconnect().await;
         let bound = factory(3, &registration).unwrap();
@@ -683,8 +678,8 @@ mod tests {
         .await;
         assert!(
             switched.get("error").is_some(),
-            "a built-in profile on a connection bound to another behavior must not silently \
-             serve the bound behavior: {switched}"
+            "a built-in profile on a connection bound to another agent must not silently \
+             serve the bound agent: {switched}"
         );
         bound.on_disconnect().await;
     }
@@ -821,7 +816,7 @@ mod tests {
 
     /// The exact production factory must derive `session/new`'s mode
     /// capabilities from the *registered* capabilities — and the wire-facing
-    /// model ids from the bound behavior's model name, never from the
+    /// model ids from the bound agent's model name, never from the
     /// backend id — when the request itself carries none of the mode keys.
     ///
     /// The request is driven through the returned `Arc<dyn AcpDelegate>`
@@ -877,14 +872,14 @@ mod tests {
             "clientTerminal must derive from the registered capability"
         );
 
-        // The wire-facing model id is the bound behavior's `model_name`
+        // The wire-facing model id is the bound agent's `model_name`
         // exactly; the backend id never leaks into any of the three
         // model-id reads.
-        let behavior_model_name = "GLM-5.3-NVFP4";
+        let agent_model_name = "GLM-5.3-NVFP4";
         assert_eq!(
             result["models"]["currentModelId"],
-            serde_json::json!(behavior_model_name),
-            "models.currentModelId must be the behavior model name"
+            serde_json::json!(agent_model_name),
+            "models.currentModelId must be the agent model name"
         );
         let available = result["models"]["availableModels"]
             .as_array()
@@ -892,13 +887,13 @@ mod tests {
         assert_eq!(available.len(), 1, "the bound catalog serves one model");
         assert_eq!(
             available[0]["modelId"],
-            serde_json::json!(behavior_model_name),
-            "the catalog modelId must be the behavior model name"
+            serde_json::json!(agent_model_name),
+            "the catalog modelId must be the agent model name"
         );
         assert_eq!(
             result["_meta"]["modelId"],
-            serde_json::json!(behavior_model_name),
-            "_meta.modelId must be the behavior model name"
+            serde_json::json!(agent_model_name),
+            "_meta.modelId must be the agent model name"
         );
         for value in [
             &result["models"]["currentModelId"],
@@ -1083,14 +1078,14 @@ mod tests {
     }
 
     #[test]
-    fn explicit_behavior_overrides_win_and_are_trimmed() {
+    fn explicit_agent_overrides_win_and_are_trimmed() {
         assert_eq!(
-            explicit_behavior_override(Some("  custom-behavior  ")).as_deref(),
-            Some("custom-behavior")
+            explicit_agent_override(Some("  custom-agent  ")).as_deref(),
+            Some("custom-agent")
         );
         assert_eq!(
-            explicit_behavior_override(Some("behavior-a")).as_deref(),
-            Some("behavior-a")
+            explicit_agent_override(Some("agent-a")).as_deref(),
+            Some("agent-a")
         );
     }
 
@@ -1107,22 +1102,22 @@ mod tests {
         for outside in ["grok-builder", "default", "grok", ""] {
             assert!(
                 !super::binding::grok_built_in_agent_profile(outside),
-                "{outside:?} shares no delimiter with the family and must stay a literal behavior id"
+                "{outside:?} shares no delimiter with the family and must stay a literal agent id"
             );
         }
     }
 
     #[test]
-    fn blank_behavior_overrides_are_treated_as_absent() {
-        assert_eq!(explicit_behavior_override(Some("   ")), None);
-        assert_eq!(explicit_behavior_override(Some("")), None);
-        assert_eq!(explicit_behavior_override(None), None);
+    fn blank_agent_overrides_are_treated_as_absent() {
+        assert_eq!(explicit_agent_override(Some("   ")), None);
+        assert_eq!(explicit_agent_override(Some("")), None);
+        assert_eq!(explicit_agent_override(None), None);
     }
 
     #[test]
-    fn the_default_behavior_fallback_is_the_agent_scoped_form() {
+    fn the_default_agent_fallback_is_the_node_scoped_form() {
         assert_eq!(
-            gents::default_behavior_id_for_agent("did:test:agent"),
+            gents::default_agent_id_for_node("did:test:agent"),
             "did:test:agent:default"
         );
     }
@@ -1191,11 +1186,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bind_args_carry_socket_behavior_and_identity() {
+    async fn bind_args_carry_socket_agent_and_identity() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let identity = gents::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
             .expect("test signing identity");
-        let actor = ::identity::Did::new(gents::AgentIdentity::did(&identity).to_owned())
+        let actor = ::identity::Did::new(gents::NodeIdentity::did(&identity).to_owned())
             .expect("fixture creator DID");
         let node = Arc::new(
             EmbeddedNode::builder()
@@ -1210,20 +1205,20 @@ mod tests {
             node,
             actor: actor.clone(),
             graphql: "http://127.0.0.1:8000/api/v0/graphql".to_string(),
-            behavior_id: Some("behavior-a".to_string()),
-            agent_did: "did:test:agent".to_string(),
-            agent_name: "grok-shim".to_string(),
+            agent_id: Some("agent-a".to_string()),
+            node_did: "did:test:agent".to_string(),
+            node_name: "grok-shim".to_string(),
             socket_path: std::path::PathBuf::from("/tmp/gents-grok.sock"),
         };
-        assert_eq!(args.behavior_id.as_deref(), Some("behavior-a"));
-        assert_eq!(args.agent_did, "did:test:agent");
+        assert_eq!(args.agent_id.as_deref(), Some("agent-a"));
+        assert_eq!(args.node_did, "did:test:agent");
         assert_eq!(args.actor, actor);
         assert_eq!(
             args.socket_path,
             std::path::PathBuf::from("/tmp/gents-grok.sock")
         );
         let cloned = args.clone();
-        assert_eq!(cloned.agent_did, args.agent_did);
+        assert_eq!(cloned.node_did, args.node_did);
         assert_eq!(cloned.socket_path, args.socket_path);
         assert!(
             Arc::ptr_eq(&cloned.node, &args.node),

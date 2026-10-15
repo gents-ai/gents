@@ -303,12 +303,12 @@ mod tests {
     #[test]
     fn a_verdict_detail_names_what_was_observed_against_what_was_expected() {
         let counted = json!({
-            "reason_code": "below_min", "capture": "behaviors", "observed": 7,
+            "reason_code": "below_min", "capture": "agents", "observed": 7,
             "expected": {"min": 9, "max": null}, "count": 7
         });
         assert_eq!(
             verdict_detail(&counted).as_deref(),
-            Some("behaviors observed 7 expected ≥9")
+            Some("agents observed 7 expected ≥9")
         );
         let graded = json!({"reason_code": "unmet", "satisfied": 2, "total": 3});
         assert_eq!(

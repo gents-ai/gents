@@ -56,6 +56,9 @@ impl ToolCallLifecycle {
             );
         }
         self.ensure_state(&[ToolCallState::Pending], "start_running")?;
+        if self.plugin_effect.is_some() {
+            return self.start_running_plugin_effect().await;
+        }
         if self.is_spawned_background() {
             return self.start_running_spawned_with_time(fixture_now).await;
         }

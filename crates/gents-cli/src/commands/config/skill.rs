@@ -35,7 +35,7 @@ async fn upsert_skill(access: &ConfigAccess, skill: &SkillDocument) -> Result<St
         format!("tool_refs: {}", gql_string_list(&skill.tool_refs))
     };
     let fields = vec![
-        gql_opt_string("agent_did", Some(&skill.agent_did)),
+        gql_opt_string("node_did", Some(&skill.node_did)),
         gql_opt_string("name", skill.name.as_deref()),
         gql_opt_string("description", skill.description.as_deref()),
         gql_opt_string("instructions", skill.instructions.as_deref()),
@@ -75,7 +75,7 @@ pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let skill = SkillDocument {
         skill_id: args.skill_id.clone(),
-        agent_did: args.agent_did.clone(),
+        node_did: args.node_did.clone(),
         name: args.name.clone(),
         description: args.description.clone(),
         instructions,
@@ -91,7 +91,7 @@ pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
     print_json(&json!({
         "doc_id": doc_id,
         "skill_id": args.skill_id,
-        "agent_did": args.agent_did,
+        "node_did": args.node_did,
         "enabled": args.enabled,
     }))?;
     Ok(())
@@ -108,9 +108,9 @@ fn skill_rows(response: &Value) -> Vec<Value> {
 
 pub(super) async fn skill_list(args: SkillListArgs) -> Result<()> {
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    let agent_did = escape_graphql_string(&args.agent_did);
+    let node_did = escape_graphql_string(&args.node_did);
     let query = format!(
-        r#"{{ Skill(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {EXPORT_SKILL_FIELDS} }} }}"#
+        r#"{{ Skill(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{ {EXPORT_SKILL_FIELDS} }} }}"#
     );
     let response = access.execute(&query).await?;
     let mut skills = skill_rows(&response);
@@ -124,7 +124,7 @@ pub(super) async fn skill_list(args: SkillListArgs) -> Result<()> {
                     .unwrap_or_default(),
             )
     });
-    print_json(&json!({ "agent_did": args.agent_did, "count": skills.len(), "skills": skills }))?;
+    print_json(&json!({ "node_did": args.node_did, "count": skills.len(), "skills": skills }))?;
     Ok(())
 }
 
@@ -264,7 +264,7 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
             }));
             continue;
         };
-        let loaded = match load_skill_source(&dir, &skill_id, &args.agent_did, |path| {
+        let loaded = match load_skill_source(&dir, &skill_id, &args.node_did, |path| {
             std::fs::canonicalize(path).with_context(|| format!("resolving {}", path.display()))
         }) {
             Ok(skill) => skill,
@@ -297,7 +297,7 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
     }
 
     print_json(&json!({
-        "agent_did": args.agent_did,
+        "node_did": args.node_did,
         "dry_run": args.dry_run,
         "imported_count": imported.len(),
         "imported": imported,
@@ -398,9 +398,9 @@ fn render_openai_yaml(skill: &Value) -> Result<Option<String>> {
 
 pub(super) async fn skill_export(args: SkillExportArgs) -> Result<()> {
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    let agent_did = escape_graphql_string(&args.agent_did);
+    let node_did = escape_graphql_string(&args.node_did);
     let query = format!(
-        r#"{{ Skill(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {EXPORT_SKILL_FIELDS} }} }}"#
+        r#"{{ Skill(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{ {EXPORT_SKILL_FIELDS} }} }}"#
     );
     let response = access.execute(&query).await?;
     let skills = skill_rows(&response);
@@ -432,7 +432,7 @@ pub(super) async fn skill_export(args: SkillExportArgs) -> Result<()> {
     }
 
     print_json(&json!({
-        "agent_did": args.agent_did,
+        "node_did": args.node_did,
         "dir": args.dir.display().to_string(),
         "exported_count": exported.len(),
         "exported": exported,

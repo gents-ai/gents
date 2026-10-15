@@ -21,7 +21,7 @@ fn request_lifecycle_is_the_only_turn_state_owner() {
         requests: vec![AgentRequestRow {
             doc_id: Some("request-doc".into()),
             request_id: "request".into(),
-            agent_did: Some("did:test:amy".into()),
+            node_did: Some("did:test:amy".into()),
             session_id: Some("session".into()),
             lifecycle_state: Some(RequestLifecycleState::Completed),
             purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
@@ -48,7 +48,7 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
         .execute(
             r#"mutation {
         request: create_AgentRequest(input: {
-            purpose: "normal", request_id: "request-1", agent_did: "did:test:amy", behavior_id: "default",
+            purpose: "normal", request_id: "request-1", node_did: "did:test:amy", agent_id: "default",
             session_id: "session-1", content: "run it", lifecycle_state: "processing",
             created_at: "2026-08-21T18:07:35Z"
         }) { _docID }
@@ -68,7 +68,7 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
     let request_doc_id = gents::graphql::escape_graphql_string(request_doc_id);
     let output = core.node().execute(&format!(r#"mutation {{
         segment: create_AgentOutputSegment(input: {{
-            agent_did: "did:test:amy", session_id: "session-1",
+            node_did: "did:test:amy", session_id: "session-1",
             request_doc_id: "{request_doc_id}",
             source: {{kind: "authored", key: "answer"}},
             ordinal: 0,
@@ -92,7 +92,7 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
     let close_doc_id = gents::graphql::escape_graphql_string(close_doc_id);
     let header = core.node().execute(&format!(r#"mutation {{
         create_AgentMessage(input: {{
-            message_key: "session-1:2", session_id: "session-1", agent_did: "did:test:amy",
+            message_key: "session-1:2", session_id: "session-1", node_did: "did:test:amy",
             request_doc_id: "{request_doc_id}",
             publication: {{kind: "request_execution", execution_generation: "generation"}},
             outcome: "complete", sequence: 2, role: "assistant", native_id: "assistant-2",
@@ -136,16 +136,16 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         .node()
         .execute(
             r#"mutation {
-                create_AgentPrincipal(input: {
-                    agent_did: "did:test:amy"
+                create_Node(input: {
+                    node_did: "did:test:amy"
                     display_name: "Amy"
-                    default_behavior_id: "did:test:amy:default"
+                    default_agent_id: "did:test:amy:default"
                     enabled: true
                 }) { _docID }
                 create_AgentRequest(input: {
                     purpose: "normal", request_id: "request-terminal-config"
-                    agent_did: "did:test:amy"
-                    behavior_id: "did:test:amy:default"
+                    node_did: "did:test:amy"
+                    agent_id: "did:test:amy:default"
                     session_id: "session-terminal-config"
                     content: "make research the default"
                     lifecycle_state: "processing"
@@ -157,9 +157,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     assert!(!response.has_errors(), "seed rows: {:?}", response.errors);
     core.refresh_store().await?;
     assert_eq!(
-        core.store().snapshot().agent_principals[0]
-            .default_behavior_id
-            .as_deref(),
+        core.store().snapshot().nodes[0].default_agent_id.as_deref(),
         Some("did:test:amy:default")
     );
 
@@ -167,9 +165,9 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         .node()
         .execute(
             r#"mutation {
-                update_AgentPrincipal(
-                    filter: { agent_did: { _eq: "did:test:amy" } }
-                    input: { default_behavior_id: "did:test:amy:research" }
+                update_Node(
+                    filter: { node_did: { _eq: "did:test:amy" } }
+                    input: { default_agent_id: "did:test:amy:research" }
                 ) { _docID }
                 update_AgentRequest(
                     filter: { request_id: { _eq: "request-terminal-config" } }
@@ -189,9 +187,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         .await?
         .is_some());
     assert_eq!(
-        core.store().snapshot().agent_principals[0]
-            .default_behavior_id
-            .as_deref(),
+        core.store().snapshot().nodes[0].default_agent_id.as_deref(),
         Some("did:test:amy:research")
     );
 
@@ -208,25 +204,22 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
     let store = core.store();
     let mut updates = core.store_updates();
 
-    assert_eq!(store.snapshot().agent_principals.len(), 0);
+    assert_eq!(store.snapshot().nodes.len(), 0);
     let baseline = *updates.borrow_and_update();
 
     let response = core
         .node()
         .execute(
             r#"mutation {
-                add_AgentPrincipal(input: {
-                    agent_did: "did:test:test-agent"
+                add_Node(input: {
+                    node_did: "did:test:test-agent"
                     display_name: "Test Agent"
                     enabled: true
-                }) { agent_did }
+                }) { node_did }
             }"#,
         )
         .await;
-    assert!(
-        !response.has_errors(),
-        "agent principal mutation should succeed"
-    );
+    assert!(!response.has_errors(), "node mutation should succeed");
 
     timeout(Duration::from_secs(5), async {
         loop {
@@ -241,7 +234,7 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
 
     timeout(Duration::from_secs(5), async {
         loop {
-            if store.snapshot().agent_principals.len() == 1 {
+            if store.snapshot().nodes.len() == 1 {
                 return Ok::<(), anyhow::Error>(());
             }
             sleep(Duration::from_millis(50)).await;
@@ -250,10 +243,7 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
     .await
     .context("timed out waiting for refreshed snapshot")??;
 
-    assert_eq!(
-        store.snapshot().agent_principals[0].agent_did,
-        "did:test:test-agent"
-    );
+    assert_eq!(store.snapshot().nodes[0].node_did, "did:test:test-agent");
     core.shutdown().await?;
     Ok(())
 }
@@ -269,11 +259,11 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
     for i in 0..20usize {
         let mutation = format!(
             r#"mutation {{
-                add_AgentPrincipal(input: {{
-                    agent_did: "did:race-{i}",
+                add_Node(input: {{
+                    node_did: "did:race-{i}",
                     display_name: "race-{i}",
                     enabled: true
-                }}) {{ agent_did }}
+                }}) {{ node_did }}
             }}"#
         );
         let response = core.node().execute(&mutation).await;
@@ -286,21 +276,18 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
 
     timeout(Duration::from_secs(5), async {
         loop {
-            if core.store().snapshot().agent_principals.len() >= 20 {
+            if core.store().snapshot().nodes.len() >= 20 {
                 return Ok::<(), anyhow::Error>(());
             }
             sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .context("timed out waiting for all 20 principals to appear in store")??;
+    .context("timed out waiting for all 20 nodes to appear in store")??;
 
     let snap = core.store().snapshot();
-    let dids: std::collections::HashSet<&str> = snap
-        .agent_principals
-        .iter()
-        .map(|p| p.agent_did.as_str())
-        .collect();
+    let dids: std::collections::HashSet<&str> =
+        snap.nodes.iter().map(|p| p.node_did.as_str()).collect();
     for i in 0..20usize {
         let want = format!("did:race-{i}");
         assert!(dids.contains(want.as_str()), "missing {want}");
@@ -322,7 +309,7 @@ async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Resul
         let mutation = format!(
             r#"mutation {{
             create_AgentMessage(input: {{
-                message_key: "long:{i}", session_id: "long", agent_did: "did:long",
+                message_key: "long:{i}", session_id: "long", node_did: "did:long",
                 publication: {{kind: "fork", origin_message_doc_id: "origin"}},
                 outcome: "complete", sequence: {i}, role: "user",
                 native_id: "native-{i}", blocks: [],
@@ -371,13 +358,13 @@ async fn conflicting_immutable_transcript_facts_are_not_silently_selected() -> R
         .execute(
             r#"mutation {
             first: create_AgentMessage(input: {
-                message_key: "conflict:1", session_id: "conflict", agent_did: "did:conflict",
+                message_key: "conflict:1", session_id: "conflict", node_did: "did:conflict",
                 publication: {kind: "fork", origin_message_doc_id: "origin-a"},
                 outcome: "complete", sequence: 1, role: "user", native_id: "first",
                 blocks: [], created_at: "2026-05-07T00:00:00Z"
             }) { _docID }
             second: create_AgentMessage(input: {
-                message_key: "conflict:1", session_id: "conflict", agent_did: "did:conflict",
+                message_key: "conflict:1", session_id: "conflict", node_did: "did:conflict",
                 publication: {kind: "fork", origin_message_doc_id: "origin-b"},
                 outcome: "complete", sequence: 1, role: "user", native_id: "second",
                 blocks: [], created_at: "2026-05-07T00:00:01Z"
@@ -417,10 +404,10 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
     for did in &["did:alpha", "did:beta"] {
         let mutation = format!(
             r#"mutation {{
-                create_AgentPrincipal(input: {{
-                    agent_did: "{did}",
+                create_Node(input: {{
+                    node_did: "{did}",
                     display_name: "{did}",
-                    default_behavior_id: "default",
+                    default_agent_id: "default",
                     enabled: true,
                     created_at: "2026-05-07T00:00:00Z",
                     created_by: "test"
@@ -435,13 +422,13 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
         .execute(
             r#"mutation {
             alpha: create_AgentMessage(input: {
-                message_key: "shared:alpha", session_id: "shared", agent_did: "did:alpha",
+                message_key: "shared:alpha", session_id: "shared", node_did: "did:alpha",
                 publication: {kind: "fork", origin_message_doc_id: "origin-alpha"},
                 outcome: "complete", sequence: 1, role: "user", native_id: "alpha",
                 blocks: [], created_at: "2026-05-07T00:00:00Z"
             }) { _docID }
             beta: create_AgentMessage(input: {
-                message_key: "shared:beta", session_id: "shared", agent_did: "did:beta",
+                message_key: "shared:beta", session_id: "shared", node_did: "did:beta",
                 publication: {kind: "fork", origin_message_doc_id: "origin-beta"},
                 outcome: "complete", sequence: 1, role: "user", native_id: "beta",
                 blocks: [], created_at: "2026-05-07T00:00:00Z"
@@ -455,16 +442,12 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
         transcript.errors
     );
 
-    core.set_selected_agent_did(Some("did:alpha".to_string()));
+    core.set_selected_node_did(Some("did:alpha".to_string()));
 
     let observed = timeout(Duration::from_secs(5), async {
         loop {
             let snap = core.store().snapshot();
-            let dids: Vec<&str> = snap
-                .agent_principals
-                .iter()
-                .map(|p| p.agent_did.as_str())
-                .collect();
+            let dids: Vec<&str> = snap.nodes.iter().map(|p| p.node_did.as_str()).collect();
             if dids.contains(&"did:alpha") && dids.contains(&"did:beta") {
                 return Ok::<(), anyhow::Error>(());
             }
@@ -475,13 +458,13 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
     if observed.is_err() {
         let durable = gents::graphql::graphql_with_transaction_retry(
             core.node(),
-            "{ AgentPrincipal { agent_did } }",
+            "{ Node { node_did } }",
             "test.scope_timeout",
         )
         .await?;
         anyhow::bail!(
-            "timed out waiting for both agents in store: snapshot={:?}, metrics={:?}, durable={:?}",
-            core.store().snapshot().agent_principals,
+            "timed out waiting for both nodes in store: snapshot={:?}, metrics={:?}, durable={:?}",
+            core.store().snapshot().nodes,
             core.observer_metrics().await,
             durable.data,
         );
@@ -489,11 +472,7 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
     observed??;
 
     let snap = core.store().snapshot();
-    let dids: Vec<&str> = snap
-        .agent_principals
-        .iter()
-        .map(|p| p.agent_did.as_str())
-        .collect();
+    let dids: Vec<&str> = snap.nodes.iter().map(|p| p.node_did.as_str()).collect();
     assert!(dids.contains(&"did:alpha"), "did:alpha missing");
     assert!(dids.contains(&"did:beta"), "did:beta missing");
     let alpha_page = load_session_transcript_page(
@@ -507,7 +486,7 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
     .await?;
     assert_eq!(alpha_page.store.transcript_messages.len(), 1);
     assert_eq!(
-        alpha_page.store.transcript_messages[0].message.agent_did,
+        alpha_page.store.transcript_messages[0].message.node_did,
         "did:alpha"
     );
 
@@ -516,13 +495,13 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
 }
 
 #[test]
-fn default_behavior_id_does_not_require_a_gossiped_agent_principal() {
-    let agent_did = "did:key:z6MkAmy";
-    let behavior_id = gents::default_behavior_id_for_agent(agent_did);
+fn default_agent_id_does_not_require_a_gossiped_node() {
+    let node_did = "did:key:z6MkAmy";
+    let agent_id = gents::default_agent_id_for_node(node_did);
     let store = ClientStore::from_rows(ClientStoreRows {
-        behaviors: vec![gents::document_config::AgentBehavior {
-            behavior_id: behavior_id.clone(),
-            agent_did: agent_did.to_string(),
+        agents: vec![gents::document_config::Agent {
+            agent_id: agent_id.clone(),
+            node_did: node_did.to_string(),
             display_name: Some("Amy".to_string()),
             description: None,
             context_id: None,
@@ -534,9 +513,9 @@ fn default_behavior_id_does_not_require_a_gossiped_agent_principal() {
         ..ClientStoreRows::default()
     });
 
-    assert!(store.agent_principals.is_empty());
+    assert!(store.nodes.is_empty());
     assert_eq!(
-        store.default_behavior_id_for_agent(agent_did),
-        Some(behavior_id.as_str())
+        store.default_agent_id_for_node(node_did),
+        Some(agent_id.as_str())
     );
 }

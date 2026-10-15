@@ -19,7 +19,7 @@ description = "Client start/shutdown, selected-agent, and application quit"
 permissions = [
   "allow-desktop-client-start",
   "allow-desktop-client-shutdown",
-  "allow-desktop-set-selected-agent",
+  "allow-desktop-set-selected-node",
   "allow-desktop-app-quit",
 ]
 
@@ -51,6 +51,7 @@ identifier = "chat-write"
 description = "Chat send and rename"
 permissions = [
   "allow-desktop-chat-send",
+  "allow-desktop-pending-queue-edit",
   "allow-desktop-session-rename",
 ]
 
@@ -179,11 +180,11 @@ permissions = [
 identifier = "config-write"
 description = "Config save/delete/test mutations"
 permissions = [
-  "allow-desktop-agent-config-save",
-  "allow-desktop-default-behavior-set",
+  "allow-desktop-node-config-save",
+  "allow-desktop-default-agent-set",
   "allow-desktop-config-components-apply",
   "allow-desktop-config-components-patch",
-  "allow-desktop-behavior-save",
+  "allow-desktop-agent-save",
   "allow-desktop-skill-save",
   "allow-desktop-skill-delete",
   "allow-desktop-task-delete",
@@ -194,7 +195,7 @@ permissions = [
   "allow-desktop-inference-profile-delete",
   "allow-desktop-tools-delete",
   "allow-desktop-tool-service-delete",
-  "allow-desktop-behavior-delete",
+  "allow-desktop-agent-delete",
   "allow-desktop-context-delete",
   "allow-desktop-backend-save",
   "allow-desktop-inference-profile-save",

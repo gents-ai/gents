@@ -9,12 +9,12 @@ import type {
 
 import { useParentWork } from "../src/ui/screens/parentWork";
 
-const AGENT = "did:key:parent";
+const NODE = "did:key:parent";
 
 const session = (overrides: Partial<SessionSummary>): SessionSummary =>
   ({
     sessionId: "session",
-    agentDid: AGENT,
+    nodeDid: NODE,
     requesterDid: null,
     latestRequestDocId: null,
     closedAt: null,
@@ -23,7 +23,7 @@ const session = (overrides: Partial<SessionSummary>): SessionSummary =>
     title: null,
     previewText: null,
     status: null,
-    behaviorId: null,
+    agentId: null,
     latestRequestId: null,
     taskId: null,
     taskName: null,
@@ -38,7 +38,7 @@ const session = (overrides: Partial<SessionSummary>): SessionSummary =>
 const parent = session({
   sessionId: "session-parent",
   title: "Lead",
-  behaviorId: "default",
+  agentId: "default",
   turnState: "completed",
 });
 const other = session({ sessionId: "session-other", title: "Reviewer" });
@@ -48,7 +48,7 @@ const link = (
   sessionId: string,
   requesterDid: string | null = null,
 ): LinkedSessionView => ({
-  agentDid: AGENT,
+  nodeDid: NODE,
   sessionId,
   requesterDid,
   causeRequestDocId: `doc-${sessionId}`,
@@ -67,11 +67,11 @@ const view = (
   calls: [],
 });
 
-/* the parent work of the child session, selected on the agent's node */
+/* the parent work of the child session, selected on its node */
 function parentWorkOf(provenance: SessionProvenanceView | null) {
   const app = testApp({
-    deployments: [node({ agentDid: AGENT, sessions: [parent, other, child] })],
-    selection: { agentDid: AGENT, sessionId: "session-child" },
+    deployments: [node({ nodeDid: NODE, sessions: [parent, other, child] })],
+    selection: { nodeDid: NODE, sessionId: "session-child" },
   });
   return renderHook(() => useParentWork(provenance), { wrapper: withApp(app) });
 }
@@ -113,7 +113,7 @@ describe("the sessions that sent work into this one", () => {
     expect(result.current.parent).toEqual({
       sessionId: "session-parent",
       summary: null,
-      behaviorName: null,
+      agentName: null,
     });
   });
 

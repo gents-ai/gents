@@ -21,23 +21,23 @@ use crate::types::{
 };
 
 /// `desktop_session_provenance`: the requested session scope, under the
-/// selected agent when the request names none.
+/// selected node when the request names none.
 pub async fn session_provenance_request(
     core: &Arc<ClientCore>,
     request: DesktopSessionProvenanceRequest,
 ) -> Result<SessionProvenanceView, String> {
-    let agent_did = request
-        .agent_did
+    let node_did = request
+        .node_did
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-        .or_else(|| core.selected_agent_did())
-        .ok_or("no agent selected; pass agentDid explicitly")?;
+        .or_else(|| core.selected_node_did())
+        .ok_or("no node selected; pass nodeDid explicitly")?;
     session_provenance(
         core,
         SessionScope {
-            agent_did,
+            node_did,
             session_id: request.session_id,
             requester_did: request.requester_did,
         },
@@ -55,7 +55,7 @@ pub async fn session_provenance(
     let calls = caused_calls(&access, &scope).await.map_err(fail)?;
     let senders = turn_senders(core, &scope, &lineage);
     let link = |link: &SessionLink| LinkedSessionView {
-        agent_did: link.scope.agent_did.clone(),
+        node_did: link.scope.node_did.clone(),
         session_id: link.scope.session_id.clone(),
         requester_did: link.scope.requester_did.clone(),
         cause_request_doc_id: link.cause_request_doc_id.clone(),
@@ -101,7 +101,7 @@ async fn caused_calls(
     scope: &SessionScope,
 ) -> anyhow::Result<Vec<CausedCallView>> {
     let own = session_scope_filter(
-        &scope.agent_did,
+        &scope.node_did,
         &scope.session_id,
         scope.requester_did.as_deref(),
     );
@@ -127,7 +127,7 @@ async fn caused_calls(
     let states = rows(
         access,
         &format!(
-            "{{AgentRequest(filter: {{{}}}) {{request_id agent_did session_id requester_did lifecycle_state created_at caused_by_parent_tool_call_doc_id}}}}",
+            "{{AgentRequest(filter: {{{}}}) {{request_id node_did session_id requester_did lifecycle_state created_at caused_by_parent_tool_call_doc_id}}}}",
             public_request_filter(&format!(
                 "request_id: {{_in: {}}}, caused_by_parent_tool_call_doc_id: {{_in: {}}}",
                 graphql_string_list_literal(caused.values().map(String::as_str)),
@@ -151,7 +151,7 @@ async fn caused_calls(
                 tool_call_id: text(call, "tool_call_id")?,
                 caused: CausedRequestView {
                     request_id: text(request, "request_id")?,
-                    agent_did: text(request, "agent_did")?,
+                    node_did: text(request, "node_did")?,
                     session_id: text(request, "session_id")?,
                     requester_did: text(request, "requester_did"),
                     lifecycle_state: text(request, "lifecycle_state"),
@@ -187,7 +187,7 @@ fn turn_senders<'a>(
             .find(|row| row.doc_id.as_deref() == Some(doc_id))
             .and_then(|row| {
                 Some(SessionScope {
-                    agent_did: row.agent_did.clone()?,
+                    node_did: row.node_did.clone()?,
                     session_id: row.session_id.clone()?,
                     requester_did: row.requester_did.clone(),
                 })
@@ -197,7 +197,7 @@ fn turn_senders<'a>(
         .requests
         .iter()
         .filter(|row| {
-            row.agent_did.as_deref() == Some(scope.agent_did.as_str())
+            row.node_did.as_deref() == Some(scope.node_did.as_str())
                 && row.session_id.as_deref() == Some(scope.session_id.as_str())
                 && row.requester_did == scope.requester_did
         })

@@ -198,7 +198,7 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
     .await;
     let _owner = own_child_fixture(
         &db.node,
-        AGENT_DID,
+        NODE_DID,
         &request_doc_id,
         request_id,
         session_id,
@@ -208,7 +208,7 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
     seed_expired_execution_tuple(&db.node, &request_doc_id).await;
     insert_inference_call(&db.node, request_id, "running").await;
 
-    let outcome = gents::startup_recovery::run_startup_recovery(&db.node, AGENT_DID).await;
+    let outcome = gents::startup_recovery::run_startup_recovery(&db.node, NODE_DID).await;
     let requests = outcome.requests.expect("startup request recovery");
     assert!(
         requests.requests_recovered >= 1,
@@ -240,7 +240,7 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
         "post-recovery rows must reconstruct zero held slots"
     );
 
-    let second = gents::startup_recovery::run_startup_recovery(&db.node, AGENT_DID).await;
+    let second = gents::startup_recovery::run_startup_recovery(&db.node, NODE_DID).await;
     assert_eq!(
         second
             .inference_calls
@@ -289,9 +289,9 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
         // Retain the fixture owner: dropping it would relinquish the lease,
         // unlike the hard process loss represented by these persisted rows.
         let _owner =
-            own_child_fixture(&db.node, AGENT_DID, &doc_id, &request_id, &session_id, true).await;
+            own_child_fixture(&db.node, NODE_DID, &doc_id, &request_id, &session_id, true).await;
         insert_inference_call(&db.node, &request_id, initial_call_state).await;
-        let startup = gents::startup_recovery::run_startup_recovery(&db.node, AGENT_DID).await;
+        let startup = gents::startup_recovery::run_startup_recovery(&db.node, NODE_DID).await;
         startup.tool_calls.expect("startup tool recovery");
         assert_eq!(
             startup
@@ -309,7 +309,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
         );
         let registry = gents::BackgroundExecutionRegistry::default();
         let live =
-            gents::periodic_recovery::run_periodic_recovery_sweeps(&db.node, AGENT_DID, &registry)
+            gents::periodic_recovery::run_periodic_recovery_sweeps(&db.node, NODE_DID, &registry)
                 .await
                 .expect("live periodic recovery");
         assert!(
@@ -342,7 +342,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             expired.errors
         );
         let repaired =
-            gents::periodic_recovery::run_periodic_recovery_sweeps(&db.node, AGENT_DID, &registry)
+            gents::periodic_recovery::run_periodic_recovery_sweeps(&db.node, NODE_DID, &registry)
                 .await
                 .expect("expired periodic recovery");
         assert!(
@@ -363,7 +363,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
         );
         assert!(!gents::call_state_holds_backend_slot(&call.call_state));
         let second =
-            gents::periodic_recovery::run_periodic_recovery_sweeps(&db.node, AGENT_DID, &registry)
+            gents::periodic_recovery::run_periodic_recovery_sweeps(&db.node, NODE_DID, &registry)
                 .await
                 .expect("second periodic recovery");
         assert!(
@@ -412,7 +412,7 @@ async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCa
         set_interrupt_requested_at(&db.node, &doc_id, "2026-07-09T00:00:00Z").await;
     }
 
-    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+    let report = RequestLifecycle::recover_all(&db.node, NODE_DID)
         .await
         .unwrap();
     assert_eq!(
@@ -453,7 +453,7 @@ async fn drive_inference_call_recovery_case(case: &lean_vocab_test::LeanRecovery
     }
     insert_inference_call(&db.node, &request_id, case.pre_state.as_str()).await;
 
-    let report = InferenceCall::recover_all(&db.node, AGENT_DID)
+    let report = InferenceCall::recover_all(&db.node, NODE_DID)
         .await
         .unwrap();
     assert_eq!(
@@ -490,8 +490,8 @@ async fn insert_inference_call(node: &EmbeddedNode, request_id: &str, call_state
                 request_id: "{request_id}",
                 call_seq: 1,
                 backend_id: "{BACKEND_ID}",
-                behavior_id: "{AGENT_NAME}",
-                agent_did: "{AGENT_DID}",
+                agent_id: "{AGENT_NAME}",
+                node_did: "{NODE_DID}",
                 call_kind: "inference",
                 attempt: 1,
                 call_state: "{call_state}",
@@ -568,7 +568,7 @@ async fn fetch_inference_recovery_row(
 
 async fn own_child_fixture(
     node: &Arc<defra_node::EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     doc_id: &str,
     request_id: &str,
     session_id: &str,
@@ -580,11 +580,11 @@ async fn own_child_fixture(
         session_id.to_owned(),
         RECOVERY_CREATED_AT.to_owned(),
     );
-    request.agent_did = agent_did.to_owned();
-    let mut owner = RequestLifecycle::new_with_agent_did(
+    request.node_did = node_did.to_owned();
+    let mut owner = RequestLifecycle::new_with_node_did(
         node.clone(),
         AGENT_NAME,
-        agent_did,
+        node_did,
         request,
         DEADLINE_SECS,
     );
@@ -653,7 +653,7 @@ async fn request_recovery_before_output_persists_canonical_terminal_selection() 
     )
     .await;
 
-    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+    let report = RequestLifecycle::recover_all(&db.node, NODE_DID)
         .await
         .unwrap();
     assert_eq!(
@@ -679,7 +679,7 @@ async fn request_recovery_before_output_persists_canonical_terminal_selection() 
     );
     assert!(row.terminalized_at.is_some());
 
-    let second = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+    let second = RequestLifecycle::recover_all(&db.node, NODE_DID)
         .await
         .unwrap();
     assert_eq!(
@@ -724,7 +724,7 @@ async fn request_recovery_before_output_persists_canonical_terminal_selection() 
     )
     .await;
 
-    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+    let report = RequestLifecycle::recover_all(&db.node, NODE_DID)
         .await
         .unwrap();
     assert_eq!(

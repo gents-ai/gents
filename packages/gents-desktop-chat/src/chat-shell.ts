@@ -38,7 +38,7 @@ export function requestProgressPresentation(
     case "dead":
       return { label: "Expired", animated: false };
     case "interrupted":
-      return { label: "Interrupted", animated: false };
+      return { label: "Stopped", animated: false };
     default:
       return null;
   }
@@ -54,28 +54,27 @@ export type TurnState =
 
 export type ChatBlockedReason =
   | "clientOffline"
-  | "agentNotSelected"
+  | "nodeNotSelected"
   | "routeNotReady"
-  | "behaviorUnavailable"
+  | "agentUnavailable"
   | "composerEmpty"
   | "submittingRequest"
   | "waitingForRequestObservation"
   | "sessionMissingFromSnapshot"
-  | "awaitingTurnTerminality"
   | "inconsistentTurnObservation";
 
 export type ChatWorkflowState =
   | { kind: "ready" }
-  | { kind: "submittingRequest"; agentDid: string; sessionId?: string | null }
+  | { kind: "submittingRequest"; nodeDid: string; sessionId?: string | null }
   | {
       kind: "awaitingObservation";
-      agentDid: string;
+      nodeDid: string;
       sessionId: string;
       requestId: string;
     }
   | {
       kind: "turnInProgress";
-      agentDid: string;
+      nodeDid: string;
       sessionId: string;
       requestId?: string | null;
       turnState: TurnState;
@@ -86,8 +85,11 @@ export type ChatWorkflowState =
       turnState?: TurnState | null;
     };
 
+/** `queue`: the session's turn is not terminal, so a message sent now waits
+    behind it and joins the turn that claims it (Lean `SendDecision.queue`). */
 export type SendStatus =
   | { kind: "ready" }
+  | { kind: "queue"; turnState: TurnState; hint: string }
   | { kind: "disabled"; reason: ChatBlockedReason; hint: string };
 
 export type ChatActivityStatus = {
@@ -99,13 +101,19 @@ export type ChatActivityStatus = {
 
 type ProjectionInput = {
   clientAvailable: boolean;
-  selectedAgentDid: string | null;
+  selectedNodeDid: string | null;
   selectedSessionId: string | null;
   sending: boolean;
   /** The workflow reads these alone; transcript content never decides it. */
   session: Pick<
     DesktopSessionSnapshot,
-    "sessionId" | "agentDid" | "turnState" | "latestRequestId" | "pendingTurn"
+    | "sessionId"
+    | "nodeDid"
+    | "turnState"
+    | "latestRequestId"
+    | "pendingTurn"
+    | "queuedTurns"
+    | "foldedInputs"
   > | null;
   selectedSessionSummary: SessionSummary | null;
   localWorkflow: ChatWorkflowState;
@@ -143,12 +151,13 @@ export function reconcileProjectedWorkflow(
     return projectedWorkflow;
   }
 
+  /* a submission observed as the turn, or queued behind the turn it then
+     tracks */
   if (
     localWorkflow.kind === "awaitingObservation" &&
     projectedWorkflow.kind === "turnInProgress" &&
-    localWorkflow.agentDid === projectedWorkflow.agentDid &&
-    localWorkflow.sessionId === projectedWorkflow.sessionId &&
-    localWorkflow.requestId === projectedWorkflow.requestId
+    localWorkflow.nodeDid === projectedWorkflow.nodeDid &&
+    localWorkflow.sessionId === projectedWorkflow.sessionId
   ) {
     return projectedWorkflow;
   }
@@ -156,7 +165,7 @@ export function reconcileProjectedWorkflow(
   if (
     localWorkflow.kind === "turnInProgress" &&
     projectedWorkflow.kind === "turnInProgress" &&
-    localWorkflow.agentDid === projectedWorkflow.agentDid &&
+    localWorkflow.nodeDid === projectedWorkflow.nodeDid &&
     localWorkflow.sessionId === projectedWorkflow.sessionId &&
     localWorkflow.requestId === projectedWorkflow.requestId &&
     localWorkflow.turnState !== projectedWorkflow.turnState
@@ -185,16 +194,22 @@ function blocked(
   return { kind: "blocked", reason, turnState };
 }
 
-function hintFor(reason: ChatBlockedReason, turnState?: TurnState | null) {
+function queueHint(turnState: TurnState) {
+  return turnState === "waitingForClaim"
+    ? "Queued behind the message waiting to start"
+    : "Queued behind the running turn";
+}
+
+function hintFor(reason: ChatBlockedReason) {
   switch (reason) {
     case "clientOffline":
       return "Secure client is not running";
-    case "agentNotSelected":
-      return "Select an agent before sending";
+    case "nodeNotSelected":
+      return "Select a node before sending";
     case "routeNotReady":
-      return "Secure route to the agent is not ready";
-    case "behaviorUnavailable":
-      return "The selected behavior is unavailable";
+      return "Secure route to the node is not ready";
+    case "agentUnavailable":
+      return "The selected agent is unavailable";
     case "composerEmpty":
       return "Type a message to send";
     case "submittingRequest":
@@ -203,14 +218,6 @@ function hintFor(reason: ChatBlockedReason, turnState?: TurnState | null) {
       return "Waiting for request observation";
     case "sessionMissingFromSnapshot":
       return "Session missing from snapshot";
-    case "awaitingTurnTerminality":
-      if (turnState === "waitingForClaim") {
-        return "Waiting for the active turn to start";
-      }
-      if (turnState === "running") {
-        return "Turn still running";
-      }
-      return "Waiting for terminal turn reconciliation";
     case "inconsistentTurnObservation":
       return "Waiting for consistent turn observation";
   }
@@ -228,18 +235,33 @@ function chatActivity(status: OperationalStatus): ChatActivityStatus | null {
 
 function activityStatusFor(
   sendStatus: SendStatus,
-  workflow: ChatWorkflowState,
   admissionStatus: OperationalStatus | null,
 ): ChatActivityStatus | null {
   if (sendStatus.kind === "ready") return null;
+  if (sendStatus.kind === "queue") {
+    return sendStatus.turnState === "waitingForClaim"
+      ? {
+          kind: "waiting",
+          label: "Waiting for the node…",
+          detail:
+            "The node has not started this request yet. Messages you send now wait behind it.",
+          animated: true,
+        }
+      : {
+          kind: "working",
+          label: "Agent is working…",
+          detail: "Messages you send now wait until this turn finishes.",
+          animated: true,
+        };
+  }
 
   switch (sendStatus.reason) {
     case "composerEmpty":
       return null;
     case "clientOffline":
-    case "agentNotSelected":
+    case "nodeNotSelected":
     case "routeNotReady":
-    case "behaviorUnavailable":
+    case "agentUnavailable":
       return admissionStatus ? chatActivity(admissionStatus) : null;
     case "submittingRequest":
       return {
@@ -264,32 +286,6 @@ function activityStatusFor(
           "Reading local session state before another message can be sent.",
         animated: true,
       };
-    case "awaitingTurnTerminality": {
-      const turnState =
-        workflow.kind === "turnInProgress" ? workflow.turnState : null;
-      if (turnState === "waitingForClaim") {
-        return {
-          kind: "waiting",
-          label: "Waiting for the agent…",
-          detail: "Your message is queued until the enrolled agent claims it.",
-          animated: true,
-        };
-      }
-      if (turnState === "running") {
-        return {
-          kind: "working",
-          label: "Agent is working…",
-          detail: "This turn must finish before another message can be sent.",
-          animated: true,
-        };
-      }
-      return {
-        kind: "syncing",
-        label: "Finishing turn sync…",
-        detail: sendStatus.hint,
-        animated: true,
-      };
-    }
     case "inconsistentTurnObservation":
       return {
         kind: "syncing",
@@ -303,9 +299,9 @@ function activityStatusFor(
 export function projectChatShell(input: ProjectionInput): ChatShellProjection {
   const clientStatus = projectClientOperationalStatus(
     input.clientAvailable,
-    Boolean(input.selectedAgentDid),
+    Boolean(input.selectedNodeDid),
   );
-  const deploymentStatus = input.selectedAgentDid
+  const deploymentStatus = input.selectedNodeDid
     ? (input.operationalState?.admissionBlocker ??
       (input.operationalState ? null : projectRouteOperationalStatus(false)))
     : null;
@@ -316,12 +312,25 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     ? rawObservedTurnState
     : null;
 
+  const queuedRequestIds = new Set(
+    (input.session?.queuedTurns ?? []).map((turn) => turn.requestId),
+  );
+  const foldedRequestIds = new Set(
+    (input.session?.foldedInputs ?? []).map((folded) => folded.requestId),
+  );
+  /* Lean `trackedRequestForFrontend`: a submission observed as queued or
+     folded is not the session's turn */
   const trackedRequestId =
     (input.localWorkflow.kind === "awaitingObservation" ||
       input.localWorkflow.kind === "turnInProgress") &&
-    input.localWorkflow.agentDid === input.selectedAgentDid &&
+    input.localWorkflow.nodeDid === input.selectedNodeDid &&
     (input.selectedSessionId === input.localWorkflow.sessionId ||
-      input.session?.sessionId === input.localWorkflow.sessionId)
+      input.session?.sessionId === input.localWorkflow.sessionId) &&
+    !(
+      input.localWorkflow.kind === "awaitingObservation" &&
+      (queuedRequestIds.has(input.localWorkflow.requestId) ||
+        foldedRequestIds.has(input.localWorkflow.requestId))
+    )
       ? (input.localWorkflow.requestId ?? null)
       : null;
 
@@ -337,13 +346,17 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
 
   if (input.localWorkflow.kind === "awaitingObservation") {
     const selectedMatches =
-      input.localWorkflow.agentDid === input.selectedAgentDid &&
+      input.localWorkflow.nodeDid === input.selectedNodeDid &&
       (input.selectedSessionId === input.localWorkflow.sessionId ||
         (input.session?.sessionId === input.localWorkflow.sessionId &&
-          input.session.agentDid === input.localWorkflow.agentDid));
+          input.session.nodeDid === input.localWorkflow.nodeDid));
+    const observedAsQueued =
+      queuedRequestIds.has(input.localWorkflow.requestId) ||
+      foldedRequestIds.has(input.localWorkflow.requestId);
     const requestObserved =
       observedLatestRequestId === input.localWorkflow.requestId ||
-      pendingRequestId === input.localWorkflow.requestId;
+      pendingRequestId === input.localWorkflow.requestId ||
+      observedAsQueued;
 
     if (selectedMatches) {
       if (!requestObserved) {
@@ -351,9 +364,11 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
       } else if (observedTurnState && !isTerminalTurnState(observedTurnState)) {
         workflow = {
           kind: "turnInProgress",
-          agentDid: input.localWorkflow.agentDid,
+          nodeDid: input.localWorkflow.nodeDid,
           sessionId: input.localWorkflow.sessionId,
-          requestId: input.localWorkflow.requestId,
+          requestId: observedAsQueued
+            ? activeRequestId
+            : input.localWorkflow.requestId,
           turnState: observedTurnState,
         };
       } else if (observedTurnState && isTerminalTurnState(observedTurnState)) {
@@ -366,10 +381,10 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     }
   } else if (input.localWorkflow.kind === "turnInProgress") {
     const selectedMatches =
-      input.localWorkflow.agentDid === input.selectedAgentDid &&
+      input.localWorkflow.nodeDid === input.selectedNodeDid &&
       (input.selectedSessionId === input.localWorkflow.sessionId ||
         (input.session?.sessionId === input.localWorkflow.sessionId &&
-          input.session.agentDid === input.localWorkflow.agentDid));
+          input.session.nodeDid === input.localWorkflow.nodeDid));
 
     if (!selectedMatches) {
       workflow = { kind: "ready" };
@@ -381,7 +396,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
         ? { kind: "ready" }
         : {
             kind: "turnInProgress",
-            agentDid: input.localWorkflow.agentDid,
+            nodeDid: input.localWorkflow.nodeDid,
             sessionId: input.localWorkflow.sessionId,
             requestId: input.localWorkflow.requestId,
             turnState: observedTurnState,
@@ -395,15 +410,15 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
   } else if (input.localWorkflow.kind !== "submittingRequest") {
     if (!input.clientAvailable) {
       workflow = blocked("clientOffline");
-    } else if (!input.selectedAgentDid) {
-      workflow = blocked("agentNotSelected");
+    } else if (!input.selectedNodeDid) {
+      workflow = blocked("nodeNotSelected");
     } else if (input.selectedSessionId) {
       if (!input.session && !input.selectedSessionSummary) {
         workflow = blocked("sessionMissingFromSnapshot");
       } else if (observedTurnState && !isTerminalTurnState(observedTurnState)) {
         workflow = {
           kind: "turnInProgress",
-          agentDid: input.selectedAgentDid,
+          nodeDid: input.selectedNodeDid,
           sessionId: input.selectedSessionId,
           requestId: activeRequestId,
           turnState: observedTurnState,
@@ -424,11 +439,11 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
         admissionStatus.layer === "client"
           ? "clientOffline"
           : admissionStatus.layer === "selection"
-            ? "agentNotSelected"
+            ? "nodeNotSelected"
             : admissionStatus.layer === "p2p" ||
                 admissionStatus.layer === "route"
               ? "routeNotReady"
-              : "behaviorUnavailable";
+              : "agentUnavailable";
       return {
         kind: "disabled",
         reason,
@@ -458,7 +473,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
       return {
         kind: "disabled",
         reason: workflow.reason,
-        hint: hintFor(workflow.reason, workflow.turnState),
+        hint: hintFor(workflow.reason),
       };
     }
     if (
@@ -466,9 +481,9 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
       !isTerminalTurnState(workflow.turnState)
     ) {
       return {
-        kind: "disabled",
-        reason: "awaitingTurnTerminality",
-        hint: hintFor("awaitingTurnTerminality", workflow.turnState),
+        kind: "queue",
+        turnState: workflow.turnState,
+        hint: queueHint(workflow.turnState),
       };
     }
     return { kind: "ready" };
@@ -481,7 +496,6 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     nonEmptyContentSendStatus,
     activityStatus: activityStatusFor(
       nonEmptyContentSendStatus,
-      workflow,
       admissionStatus,
     ),
     turnState: observedTurnState,

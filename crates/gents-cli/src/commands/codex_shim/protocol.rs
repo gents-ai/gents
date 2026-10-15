@@ -372,6 +372,16 @@ pub(super) fn codex_turn_input(
 ) -> gents_protocol::request_input::RequestInput {
     gents_protocol::request_input::RequestInput {
         cwd: Some(absolute_path(cwd)),
+        queue: Some(gents_protocol::request_input::RequestQueue {
+            source: gents_protocol::request_input::QueueSource::User,
+            policy: gents_protocol::request_input::QueuePolicy::Append,
+            delivery: gents_protocol::request_input::QueueDelivery::Steer,
+            position: None,
+            key: None,
+            queued_after_request_id: None,
+            interrupted_request_id: None,
+            background_completion_wake_version: None,
+        }),
         selected_skill_ids: selected_skill_ids.to_vec(),
         initial_title: title.filter(|title| !title.trim().is_empty()).map(|title| {
             gents_protocol::session::SessionTitle {
@@ -391,6 +401,8 @@ pub(super) fn codex_queued_user_input(
     use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestQueue};
     let mut input = codex_turn_input(cwd, selected_skill_ids, None);
     input.queue = Some(RequestQueue {
+        delivery: gents_protocol::request_input::QueueDelivery::Steer,
+        position: None,
         source: QueueSource::User,
         policy: QueuePolicy::Append,
         key: None,
@@ -694,5 +706,33 @@ mod tests {
             rate_limits_from_usage(None, Utc::now()),
             empty_rate_limits()
         );
+    }
+    #[test]
+    fn active_turn_input_uses_safe_boundary_steering_without_changing_scope() {
+        let input = codex_queued_user_input(
+            std::path::Path::new("/tmp/project"),
+            "active-request",
+            &["skill-a".into()],
+        );
+        let queue = input.queue.unwrap();
+        assert_eq!(
+            queue.delivery,
+            gents_protocol::request_input::QueueDelivery::Steer
+        );
+        assert_eq!(
+            queue.source,
+            gents_protocol::request_input::QueueSource::User
+        );
+        assert_eq!(
+            queue.policy,
+            gents_protocol::request_input::QueuePolicy::Append
+        );
+        assert_eq!(
+            queue.queued_after_request_id.as_deref(),
+            Some("active-request")
+        );
+        assert!(queue.position.is_none());
+        assert!(queue.interrupted_request_id.is_none());
+        assert_eq!(input.selected_skill_ids, vec!["skill-a"]);
     }
 }

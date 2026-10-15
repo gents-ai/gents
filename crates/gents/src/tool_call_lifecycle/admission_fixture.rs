@@ -26,7 +26,7 @@
 //!
 //! | Legacy local helper | Replacement |
 //! |---------------------|-------------|
-//! | `claimed_request(node, request_id, session_id, agent_did)` | [`claimed_request`] (same signature) |
+//! | `claimed_request(node, request_id, session_id, node_did)` | [`claimed_request`] (same signature) |
 //! | `published_spawn_parent(name)` | [`published_spawn_parent`] (same return shape; same defaults: `AwaitMode::Foreground`, `start_running()` invoked) |
 //! | `published_background_bridge(name)` | [`published_background_bridge`] (a running background `agent_new` row with a real `KeyIdentity` (`test-agent.key`)) |
 //!
@@ -39,7 +39,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use defra_node::EmbeddedNode;
 
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::streaming::DefraStreamWriter;
 use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
@@ -98,7 +98,7 @@ impl Default for PublishedAdmissionOptions {
 pub(crate) async fn publish_accepted_on_claimed_request(
     node: Arc<EmbeddedNode>,
     request: &mut RequestLifecycle,
-    agent_did: &str,
+    node_did: &str,
     turn: usize,
     tool_name: &str,
     tool_call_id: &str,
@@ -106,7 +106,7 @@ pub(crate) async fn publish_accepted_on_claimed_request(
     await_mode: AwaitMode,
     start_running: bool,
 ) -> anyhow::Result<ToolCallLifecycle> {
-    let writer = DefraStreamWriter::new(node.clone(), agent_did, Duration::from_millis(1));
+    let writer = DefraStreamWriter::new(node.clone(), node_did, Duration::from_millis(1));
     if turn == 0 {
         request.begin_owned_execution(&writer).await?;
     } else {
@@ -148,7 +148,7 @@ pub(crate) async fn publish_accepted_on_claimed_request(
         .ok_or_else(|| anyhow::anyhow!("claimed fixture request has no deadline"))?;
     let mut tool = ToolCallLifecycle::from_accepted(
         node,
-        agent_did.to_owned(),
+        node_did.to_owned(),
         request.request().requester_did.clone(),
         accepted,
         deadline,
@@ -165,7 +165,7 @@ pub(crate) async fn publish_accepted_on_claimed_request(
 pub struct PublishedAdmission {
     /// Embedded node holding the durable documents.
     pub node: Arc<EmbeddedNode>,
-    /// Tempdir backing the node (and, with `real_identity`, the agent key).
+    /// Tempdir backing the node (and, with `real_identity`, the node key).
     /// The caller owns cleanup (`std::fs::remove_dir_all(path)` after
     /// `node.shutdown().await`); the fixture retains it so tests can inspect
     /// or migrate files first.
@@ -173,15 +173,15 @@ pub struct PublishedAdmission {
     /// Tool-call lifecycle built via `from_accepted` from the canonical
     /// publication's accepted call (no hand-built state).
     pub tool: ToolCallLifecycle,
-    /// Agent DID actually used (derived from a real `KeyIdentity` when
+    /// Node DID actually used (derived from a real `KeyIdentity` when
     /// `real_identity`, else the legacy `"did:test:test"` literal).
-    pub agent_did: String,
+    pub node_did: String,
 }
 
 pub(crate) async fn complete_child(
     node: &Arc<EmbeddedNode>,
     child_id: &str,
-    agent_did: &str,
+    node_did: &str,
     text: &str,
 ) {
     let child_id_escaped = crate::graphql::escape_graphql_string(child_id);
@@ -193,15 +193,15 @@ pub(crate) async fn complete_child(
         crate::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .unwrap();
-    let mut request = RequestLifecycle::new_with_agent_did(
+    let mut request = RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
-        agent_did,
+        node_did,
         row.try_into().unwrap(),
         60,
     );
     assert_eq!(request.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let writer = DefraStreamWriter::new(node.clone(), agent_did, Duration::ZERO);
+    let writer = DefraStreamWriter::new(node.clone(), node_did, Duration::ZERO);
     request.begin_owned_execution(&writer).await.unwrap();
     writer
         .start_provider_attempt(
@@ -239,14 +239,14 @@ pub(crate) async fn complete_child(
 async fn ensure_fixture_session(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     created_at: &str,
 ) {
     let session = crate::graphql::escape_graphql_string(session_id);
     let response = node
         .execute(&format!(
-            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{session}" }} }}, limit: 2) {{ _docID agent_did requester_did }} }}"#
+            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{session}" }} }}, limit: 2) {{ _docID node_did requester_did }} }}"#
         ))
         .await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
@@ -256,17 +256,17 @@ async fn ensure_fixture_session(
         .clone();
     assert!(rows.len() <= 1, "fixture session identity must be unique");
     if let Some(row) = rows.first() {
-        assert_eq!(row["agent_did"].as_str(), Some(agent_did));
+        assert_eq!(row["node_did"].as_str(), Some(node_did));
         assert_eq!(row["requester_did"].as_str(), requester_did);
         return;
     }
-    let agent = crate::graphql::escape_graphql_string(agent_did);
+    let agent = crate::graphql::escape_graphql_string(node_did);
     let requester = requester_did.map_or_else(
         || "null".to_owned(),
         |did| format!("\"{}\"", crate::graphql::escape_graphql_string(did)),
     );
     let created = crate::graphql::escape_graphql_string(created_at);
-    let response = node.execute(&format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", agent_did: "{agent}", requester_did: {requester}, behavior_id: "general", created_at: "{created}" }}) {{ _docID }} }}"#)).await;
+    let response = node.execute(&format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{agent}", requester_did: {requester}, agent_id: "general", created_at: "{created}" }}) {{ _docID }} }}"#)).await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
 }
 
@@ -280,15 +280,15 @@ pub async fn claimed_request(
     node: &Arc<EmbeddedNode>,
     request_id: &str,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
 ) -> RequestLifecycle {
     let now = chrono::Utc::now().to_rfc3339();
-    ensure_fixture_session(node, session_id, agent_did, None, &now).await;
+    ensure_fixture_session(node, session_id, node_did, None, &now).await;
     let now = crate::graphql::escape_graphql_string(&now);
     let request_id = crate::graphql::escape_graphql_string(request_id);
     let session_id = crate::graphql::escape_graphql_string(session_id);
-    let agent_did = crate::graphql::escape_graphql_string(agent_did);
-    let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", agent_did: "{agent_did}", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "spawn", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#)).await;
+    let node_did = crate::graphql::escape_graphql_string(node_did);
+    let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "spawn", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#)).await;
     assert!(!created.has_errors(), "{:#?}", created.errors);
     let row = node
         .execute(&format!(
@@ -299,10 +299,10 @@ pub async fn claimed_request(
     let row: gents_protocol::row::AgentRequestRow = crate::graphql::first_row(&row, "AgentRequest")
         .unwrap()
         .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
-        &agent_did,
+        &node_did,
         row.try_into().unwrap(),
         60,
     );
@@ -314,7 +314,7 @@ pub(crate) async fn claimed_signed_request(
     node: &Arc<EmbeddedNode>,
     request_id: &str,
     session_id: &str,
-    identity: &dyn AgentIdentity,
+    identity: &dyn NodeIdentity,
     created_at: Option<&str>,
 ) -> RequestLifecycle {
     claimed_signed_request_with_trigger(node, request_id, session_id, identity, created_at, None)
@@ -326,7 +326,7 @@ pub(crate) async fn claimed_signed_request_with_trigger(
     node: &Arc<EmbeddedNode>,
     request_id: &str,
     session_id: &str,
-    identity: &dyn AgentIdentity,
+    identity: &dyn NodeIdentity,
     created_at: Option<&str>,
     trigger_id: Option<&str>,
 ) -> RequestLifecycle {
@@ -365,7 +365,7 @@ pub(crate) async fn claimed_signed_request_with_trigger(
     let row: gents_protocol::row::AgentRequestRow = crate::graphql::first_row(&row, "AgentRequest")
         .unwrap()
         .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
         identity.did(),
@@ -382,7 +382,7 @@ async fn claimed_paired_client_request(
     node: &Arc<EmbeddedNode>,
     request_id: &str,
     session_id: &str,
-    agent: &dyn AgentIdentity,
+    agent: &dyn NodeIdentity,
     path: &std::path::Path,
 ) -> RequestLifecycle {
     let client = crate::KeyIdentity::load_or_create(path.join("paired-client.key"), None)
@@ -423,7 +423,7 @@ async fn claimed_paired_client_request(
     let row: gents_protocol::row::AgentRequestRow = crate::graphql::first_row(&row, "AgentRequest")
         .unwrap()
         .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
         agent.did(),
@@ -477,7 +477,7 @@ pub async fn published_admission_with_owner(
     } else {
         None
     };
-    let agent_did = identity.as_ref().map_or_else(
+    let node_did = identity.as_ref().map_or_else(
         || "did:test:test".to_owned(),
         |identity| identity.did().to_owned(),
     );
@@ -507,12 +507,12 @@ pub async fn published_admission_with_owner(
                 &node,
                 &format!("request-{name}"),
                 &format!("session-{name}"),
-                &agent_did,
+                &node_did,
             )
             .await
         }
     };
-    let writer = DefraStreamWriter::new(node.clone(), &agent_did, Duration::from_millis(1));
+    let writer = DefraStreamWriter::new(node.clone(), &node_did, Duration::from_millis(1));
     request.begin_owned_execution(&writer).await?;
     writer
         .start_provider_attempt(
@@ -558,7 +558,7 @@ pub async fn published_admission_with_owner(
         .expect("claimed request deadline");
     let mut tool = ToolCallLifecycle::from_accepted(
         node.clone(),
-        agent_did.clone(),
+        node_did.clone(),
         request.request().requester_did.clone(),
         accepted,
         deadline,
@@ -572,7 +572,7 @@ pub async fn published_admission_with_owner(
             node,
             path,
             tool,
-            agent_did,
+            node_did,
         },
         request,
     ))
@@ -613,21 +613,21 @@ pub async fn published_background_bridge(
 }
 
 /// Dispatch a pending accepted `agent_new` row and materialize its
-/// request on `target_agent_did`'s `general` behavior through the
+/// request on `target_node_did`'s `general` agent through the
 /// session-message owner, publishing the row's receipt.
 pub(crate) async fn materialize_session_message(
     node: &Arc<EmbeddedNode>,
     request: &RequestLifecycle,
     tool: &mut ToolCallLifecycle,
-    target_agent_did: &str,
+    target_node_did: &str,
     prompt: &str,
 ) -> anyhow::Result<crate::session_message::SessionMessageReceipt> {
     let caller = request.request();
     let cause = crate::lifecycle::SessionMessageCause {
-        caller_agent_did: caller.agent_did.clone(),
+        caller_node_did: caller.node_did.clone(),
         caller_request_id: caller.request_id.clone(),
         caller_request_doc_id: caller.doc_id.clone(),
-        caller_hop: caller.subagent_depth,
+        caller_hop: caller.request_hop,
         tool_call_id: tool.tool_call_id().to_owned(),
         tool_call_doc_id: tool
             .doc_id()
@@ -636,8 +636,8 @@ pub(crate) async fn materialize_session_message(
         correlation: None,
     };
     let target = crate::lifecycle::SessionMessageTarget {
-        agent_did: target_agent_did.to_owned(),
-        behavior_id: "general".to_owned(),
+        node_did: target_node_did.to_owned(),
+        agent_id: "general".to_owned(),
         session_id: uuid::Uuid::new_v4().to_string(),
     };
     let plan = crate::session_message::plan(
@@ -663,8 +663,8 @@ pub struct PublishedSessionMessage {
     pub caused_request_doc_id: String,
 }
 
-/// Publish an accepted background `agent_new` call on this principal's
-/// `general` behavior and materialize its caused request, with the row's
+/// Publish an accepted background `agent_new` call on this node's
+/// `general` agent and materialize its caused request, with the row's
 /// receipt, through the session-message owner (`lifecycle::materialize`).
 pub async fn published_session_message(
     options: PublishedAdmissionOptions,
@@ -679,7 +679,7 @@ pub async fn published_session_message_with_owner(
 ) -> anyhow::Result<(PublishedSessionMessage, RequestLifecycle)> {
     anyhow::ensure!(
         options.real_identity && options.await_mode == AwaitMode::Background,
-        "a session message is signed by a real principal and runs in background"
+        "a session message is signed by a real node and runs in background"
     );
     let (mut admission, request) = published_admission_with_owner(PublishedAdmissionOptions {
         tool_name: Some(crate::toolset::AGENT_NEW_TOOL_NAME.to_owned()),
@@ -691,7 +691,7 @@ pub async fn published_session_message_with_owner(
         &admission.node,
         &request,
         &mut admission.tool,
-        &admission.agent_did.clone(),
+        &admission.node_did.clone(),
         "work",
     )
     .await?;

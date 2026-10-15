@@ -9,7 +9,7 @@ use gents::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::graphql::escape_graphql_string;
-use gents::{AgentIdentity, Collection, ConfigAccess};
+use gents::{Collection, ConfigAccess, NodeIdentity};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -98,7 +98,7 @@ async fn apply(
     let documents = documents
         .into_iter()
         .map(|(collection, mut value)| {
-            value["agent_did"] = json!(owner);
+            value["node_did"] = json!(owner);
             value["tags"] = json!(["test", "trigger-delivery-live"]);
             DesiredStateApplyDocument {
                 collection,
@@ -125,7 +125,7 @@ async fn rows(
     let owner_field = if matches!(collection, "TriggerFire" | "FireOutcome") {
         "owner_did"
     } else {
-        "agent_did"
+        "node_did"
     };
     let owner = escape_graphql_string(owner);
     let result = access.execute(&format!(
@@ -149,10 +149,10 @@ async fn configure(
     owner: &str,
     endpoints: &[String; 2],
 ) -> Result<()> {
-    let mut principal = gents::ensure_agent_principal(node, owner).await?;
-    principal.default_behavior_id = Some("delivery-lead".into());
+    let mut principal = gents::ensure_node(node, owner).await?;
+    principal.default_agent_id = Some("delivery-lead".into());
     let mut documents = vec![
-        (Collection::AgentPrincipal, serde_json::to_value(principal)?),
+        (Collection::Node, serde_json::to_value(principal)?),
         (
             Collection::InferenceExecution,
             json!({
@@ -175,12 +175,12 @@ async fn configure(
                 "context_window":1_000_000, "max_output_tokens":2048,
                 "execution_id":"delivery-execution"
             })),
-            (Collection::AgentBehavior, json!({
-                "behavior_id":format!("delivery-worker-{lane}"),
+            (Collection::Agent, json!({
+                "agent_id":format!("delivery-worker-{lane}"),
                 "inference_profile_id":format!("delivery-profile-{lane}"), "enabled":true
             })),
             (Collection::Task, json!({
-                "task_id":format!("delivery-worker-{lane}"), "behavior_id":format!("delivery-worker-{lane}"),
+                "task_id":format!("delivery-worker-{lane}"), "agent_id":format!("delivery-worker-{lane}"),
                 "emit_outcome":true,
                 "prompt_template":"Reply exactly WORK {{ doc.handoff_id }}. Do not call tools."
             })),
@@ -196,13 +196,13 @@ async fn configure(
         ]);
     }
     documents.extend([
-        (Collection::AgentBehavior, json!({"behavior_id":"delivery-lead", "inference_profile_id":"delivery-profile-0", "enabled":true})),
+        (Collection::Agent, json!({"agent_id":"delivery-lead", "inference_profile_id":"delivery-profile-0", "enabled":true})),
         (Collection::Task, json!({
-            "task_id":"delivery-start", "behavior_id":"delivery-lead", "emit_outcome":false,
+            "task_id":"delivery-start", "agent_id":"delivery-lead", "emit_outcome":false,
             "prompt_template":"Reply exactly READY {{ session.session_id }} {{ doc.handoff_id }}. Do not call tools."
         })),
         (Collection::Task, json!({
-            "task_id":"delivery-inbox", "behavior_id":"delivery-lead", "emit_outcome":false,
+            "task_id":"delivery-inbox", "agent_id":"delivery-lead", "emit_outcome":false,
             "prompt_template":"Reply exactly ACK {{ session.session_id }} {{ doc.source_handoff_id }}. Do not call tools."
         })),
         (Collection::EventSource, json!({"event_source_id":"delivery-start", "source_collection":"DeliveryRunStart", "event_kind":"created"})),
@@ -222,11 +222,11 @@ async fn configure(
     ]);
     apply(access, owner, documents).await?;
     for behavior in ["delivery-lead", "delivery-worker-0", "delivery-worker-1"] {
-        support::fixtures::configure_behavior_tools(
+        support::fixtures::configure_agent_tools(
             node, owner, behavior,
             Some("Follow the requested exact one-line response. This is a delivery qualification; never call tools.".into()),
             gents::document_config::Tools {
-                tools_id: format!("{behavior}:tools"), agent_did: owner.into(), ..Default::default()
+                tools_id: format!("{behavior}:tools"), node_did: owner.into(), ..Default::default()
             }, Vec::new(),
         ).await;
     }
@@ -256,7 +256,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         gents::eval::runner::embedded::EmbeddedHome::create_retained(&artifacts.join("home"))
             .await?;
     let db = support::test_db_from_home(home);
-    let identity: Arc<dyn AgentIdentity> = db.node_identity.clone();
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let owner = identity.did().to_owned();
     let access = ConfigAccess::Local(db.node.clone());
     access.add_schema(SCHEMA).await?;
@@ -323,7 +323,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         let requests = rows(
             &access,
             "AgentRequest",
-            "request_id session_id behavior_id content lifecycle_state failure_reason",
+            "request_id session_id agent_id content lifecycle_state failure_reason",
             &owner,
         )
         .await?;
@@ -427,7 +427,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
     )
     .await?;
     for request in &requests {
-        let expected_backend = if request["behavior_id"] == "delivery-worker-1" {
+        let expected_backend = if request["agent_id"] == "delivery-worker-1" {
             "delivery-backend-1"
         } else {
             "delivery-backend-0"
@@ -447,7 +447,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         ensure!(
             requests
                 .iter()
-                .filter(|row| row["behavior_id"] == behavior)
+                .filter(|row| row["agent_id"] == behavior)
                 .count()
                 == 32,
             "workstation {lane} did not execute 32 assignments"
@@ -470,7 +470,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
         let inboxes = requests
             .iter()
             .filter(|row| {
-                row["behavior_id"] == "delivery-lead"
+                row["agent_id"] == "delivery-lead"
                     && row["content"]
                         .as_str()
                         .is_some_and(|text| text.contains(handoff))

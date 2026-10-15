@@ -129,7 +129,7 @@ async fn seeded_node() -> Arc<defra_node::EmbeddedNode> {
                 create_AgentRequest(input: {{
                     request_id: "{request_id}",
                     purpose: "normal",
-                    agent_did: "did:key:z-test",
+                    node_did: "did:key:z-test",
                     lifecycle_state: "{lifecycle_state}",
                     content: "hello"
                 }}) {{ _docID }}
@@ -159,7 +159,7 @@ async fn oversized_field_is_truncated_json_stays_valid() {
             create_AgentRequest(input: {{
                 request_id: "req-big-content",
                 purpose: "normal",
-                agent_did: "did:key:z-test",
+                node_did: "did:key:z-test",
                 lifecycle_state: "pending",
                 content: "{big_content}"
             }}) {{ _docID }}
@@ -382,7 +382,7 @@ async fn invalid_agent_request_fields_get_suggestions() {
     .expect_err("invalid field must fail");
     let msg = err.to_string();
     assert!(msg.contains("agent_name"), "{msg}");
-    assert!(msg.contains("agent_did"), "suggestion missing: {msg}");
+    assert!(msg.contains("node_did"), "suggestion missing: {msg}");
     assert!(msg.contains("request_id"), "inventory missing: {msg}");
 
     let err = Tool::call(
@@ -624,8 +624,8 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         crate::identity::KeyIdentity::load_or_create(keys.path().join("alice.key"), None).unwrap();
     let bob =
         crate::identity::KeyIdentity::load_or_create(keys.path().join("bob.key"), None).unwrap();
-    let alice_did = crate::identity::AgentIdentity::did(&alice);
-    let bob_did = crate::identity::AgentIdentity::did(&bob);
+    let alice_did = crate::identity::NodeIdentity::did(&alice);
+    let bob_did = crate::identity::NodeIdentity::did(&bob);
     let node = Arc::new(
         crate::defra_node::EmbeddedNode::builder()
             .with_node_identity_did(alice_did.to_owned())

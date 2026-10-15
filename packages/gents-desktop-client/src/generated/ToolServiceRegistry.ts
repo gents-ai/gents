@@ -5,13 +5,13 @@
  */
 export type ToolServiceRegistry = {
 /**
- * Logical name within agent_did; clients/pools must not resolve globally.
+ * Logical name within node_did; clients/pools must not resolve globally.
  */
-service_id: string, agent_did: string, display_name?: string | null, description?: string | null, hostname?: string | null, tailscale_ip?: string | null, lan_ip?: string | null, mcp_port?: number | null,
+service_id: string, node_did: string, display_name?: string | null, description?: string | null, hostname?: string | null, tailscale_ip?: string | null, lan_ip?: string | null, mcp_port?: number | null,
 /**
  * Absent/empty uses the endpoint root (empty path).
  */
-mcp_path?: string | null, send_agent_did?: boolean | null,
+mcp_path?: string | null, send_node_did?: boolean | null,
 /**
  * Operator availability gate, distinct from observed connectivity/health.
  */

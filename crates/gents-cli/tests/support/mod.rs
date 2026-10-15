@@ -11,9 +11,9 @@ pub mod process;
 pub mod waits;
 
 pub use fs::{
-    assert_json_schema_valid, assert_manifest_agent_dids, assert_runtime_init_state, copy_dir_all,
+    assert_json_schema_valid, assert_manifest_node_dids, assert_runtime_init_state, copy_dir_all,
     manifest_contains, parse_jsonl, project_object_fields, read_captured_log, read_json_file,
-    read_runtime_state_json, read_workspace_json, rewrite_manifest_agent_dids, workspace_root,
+    read_runtime_state_json, read_workspace_json, rewrite_manifest_node_dids, workspace_root,
     write_json_file, write_manifest_root_from_export,
 };
 pub use graphql::{
@@ -34,10 +34,10 @@ pub use process::{
     ServeProcess,
 };
 pub use waits::{
-    canonical_tool_result_text, wait_for_completed_inference_behaviors,
-    wait_for_completed_tool_calls, wait_for_connected_peer, wait_for_request,
-    wait_for_request_lifecycle_state, wait_for_runtime_quiescence, wait_for_runtime_ready,
-    wait_for_runtime_state_graphql, wait_for_tool_call,
+    canonical_tool_result_text, wait_for_completed_inference_agents, wait_for_completed_tool_calls,
+    wait_for_connected_peer, wait_for_request, wait_for_request_lifecycle_state,
+    wait_for_runtime_quiescence, wait_for_runtime_ready, wait_for_runtime_state_graphql,
+    wait_for_tool_call,
 };
 
 /// A gents-crate fixture pack directory, shared by every gents-cli
@@ -56,60 +56,54 @@ pub fn fixture_pack_dir(name: &str) -> std::path::PathBuf {
 pub const DEFAULT_MODEL_ENDPOINT: &str = "http://100.73.235.38:8000/v1";
 pub const DEFAULT_MODEL_NAME: &str = "GLM-5.2";
 
-/// Initialize an agent home through `gents init --identity-only` and open its
+/// Initialize an node home through `gents init --identity-only` and open its
 /// embedded node with the registered signing identity. Homes assembled without
 /// this fail the CLI's initialized-home check, and their commits would be
 /// unsigned.
-pub async fn initialized_agent_node(
+pub async fn initialized_node(
     cwd: &std::path::Path,
-    agent_home: &std::path::Path,
-    agent_name: &str,
+    node_home: &std::path::Path,
+    node_name: &str,
 ) -> anyhow::Result<gents::defra_node::EmbeddedNode> {
     use anyhow::Context as _;
 
-    let home = agent_home.to_str().context("agent home utf8")?;
+    let home = node_home.to_str().context("node home utf8")?;
     let init = run_init_json(
         cwd,
-        &[
-            "--identity-only",
-            "--agent-name",
-            agent_name,
-            "--home",
-            home,
-        ],
+        &["--identity-only", "--node-name", node_name, "--home", home],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let key_path = init
         .get("key_path")
         .and_then(serde_json::Value::as_str)
         .context("identity-only init output missing key_path")?;
     let _identity = gents::KeyIdentity::load_or_create(key_path, None)
-        .context("loading initialized agent identity")?;
+        .context("loading initialized node identity")?;
 
-    let data = agent_home.join("data");
-    gents::store_key::open_home_store_key(agent_home, &data)
+    let data = node_home.join("data");
+    gents::store_key::open_home_store_key(node_home, &data)
         .await?
         .encrypt(
             gents::defra_node::EmbeddedNode::builder()
                 .data_path(&data)
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith),
         )
-        .with_node_identity_did(&agent_did)
+        .with_node_identity_did(&node_did)
         .build()
         .await
         .context("opening initialized embedded node")
 }
 
-pub fn agent_did_from_init(init: &serde_json::Value) -> anyhow::Result<String> {
-    let agent_did = init
-        .get("agent_did")
+pub fn node_did_from_init(init: &serde_json::Value) -> anyhow::Result<String> {
+    let node_did = init
+        .get("node_did")
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("init output missing agent_did: {init}"))?;
+        .ok_or_else(|| anyhow::anyhow!("init output missing node_did: {init}"))?;
     anyhow::ensure!(
-        !agent_did.starts_with("did:test:"),
-        "init returned a name-derived DID placeholder: {agent_did}"
+        !node_did.starts_with("did:test:"),
+        "init returned a name-derived DID placeholder: {node_did}"
     );
-    Ok(agent_did.to_string())
+    Ok(node_did.to_string())
 }
 
 /// Load the exact initialized-home identity into this test process so fixtures
@@ -122,5 +116,5 @@ pub fn identity_from_init(init: &serde_json::Value) -> anyhow::Result<gents::Key
         .get("key_path")
         .and_then(serde_json::Value::as_str)
         .context("init output missing key_path")?;
-    gents::KeyIdentity::load_or_create(key_path, None).context("loading initialized agent identity")
+    gents::KeyIdentity::load_or_create(key_path, None).context("loading initialized node identity")
 }

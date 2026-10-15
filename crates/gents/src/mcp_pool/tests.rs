@@ -91,14 +91,14 @@ async fn list_tools_transport_failure_retries_generated_safe_read_case() {
     let list_calls_for_fn = Arc::clone(&list_calls);
 
     let pool = McpPool::new_with_connector(
-        move |_service_id, endpoint, agent_did_header, trace_headers| {
+        move |_service_id, endpoint, node_did_header, trace_headers| {
             let connect_attempts = Arc::clone(&connect_attempts_for_fn);
             let list_calls = Arc::clone(&list_calls_for_fn);
             async move {
                 let attempt = connect_attempts.fetch_add(1, Ordering::SeqCst) + 1;
                 Ok(McpConnection {
                     endpoint,
-                    agent_did_header,
+                    node_did_header,
                     trace_context_headers: trace_headers,
                     last_used: super::fresh_last_used(),
                     resume_policy: SessionResumePolicy::detached("read-service"),
@@ -147,7 +147,7 @@ async fn call_tool_transport_failure_obeys_generated_no_retry_cases_without_idem
             super::ParkKey::new(&service_id, endpoint, None),
             Arc::new(McpConnection {
                 endpoint: endpoint.to_string(),
-                agent_did_header: None,
+                node_did_header: None,
                 trace_context_headers: HashMap::new(),
                 last_used: super::fresh_last_used(),
                 resume_policy: SessionResumePolicy::detached(&service_id),
@@ -190,7 +190,7 @@ async fn call_tool_transport_failure_obeys_generated_no_retry_cases_without_idem
 }
 
 #[tokio::test]
-async fn streamable_http_default_does_not_send_agent_did_header() {
+async fn streamable_http_default_does_not_send_node_did_header() {
     let (endpoint, requests) = spawn_header_capture_mcp_server().await;
     let pool = McpPool::new();
 
@@ -208,18 +208,18 @@ async fn streamable_http_default_does_not_send_agent_did_header() {
     assert!(
         requests
             .iter()
-            .all(|request| request.agent_did_header.is_none()),
-        "default MCP calls must not send {AGENT_DID_HEADER}: {requests:?}"
+            .all(|request| request.node_did_header.is_none()),
+        "default MCP calls must not send {NODE_DID_HEADER}: {requests:?}"
     );
 }
 
 #[tokio::test]
-async fn streamable_http_opt_in_sends_agent_did_header() {
+async fn streamable_http_opt_in_sends_node_did_header() {
     let (endpoint, requests) = spawn_header_capture_mcp_server().await;
     let pool = McpPool::new();
-    let agent_did = "did:key:zIdentityAwareAgent";
+    let node_did = "did:key:zIdentityAwareAgent";
 
-    pool.list_tools_with_agent_did("identity-service", &endpoint, Some(agent_did))
+    pool.list_tools_with_node_did("identity-service", &endpoint, Some(node_did))
         .await
         .expect("mock MCP server should list tools");
 
@@ -233,8 +233,8 @@ async fn streamable_http_opt_in_sends_agent_did_header() {
     assert!(
         requests
             .iter()
-            .all(|request| request.agent_did_header.as_deref() == Some(agent_did)),
-        "opt-in MCP calls must send {AGENT_DID_HEADER}: {requests:?}"
+            .all(|request| request.node_did_header.as_deref() == Some(node_did)),
+        "opt-in MCP calls must send {NODE_DID_HEADER}: {requests:?}"
     );
 }
 
@@ -424,7 +424,7 @@ async fn connection_within_idle_ttl_is_reused() {
 #[derive(Debug)]
 struct CapturedMcpHttpRequest {
     method: String,
-    agent_did_header: Option<String>,
+    node_did_header: Option<String>,
     traceparent_header: Option<String>,
 }
 
@@ -452,7 +452,7 @@ async fn spawn_header_capture_mcp_server() -> (String, Arc<Mutex<Vec<CapturedMcp
                     .expect("captures lock")
                     .push(CapturedMcpHttpRequest {
                         method: request.method,
-                        agent_did_header: request.agent_did_header,
+                        node_did_header: request.node_did_header,
                         traceparent_header: request.traceparent_header,
                     });
                 let _ = stream.write_all(response.as_bytes()).await;
@@ -549,7 +549,7 @@ fn mcp_http_response_with_session(
 struct ParsedMcpHttpRequest {
     method: String,
     id: Option<serde_json::Value>,
-    agent_did_header: Option<String>,
+    node_did_header: Option<String>,
     traceparent_header: Option<String>,
     http_method: String,
     session_id_header: Option<String>,
@@ -590,9 +590,9 @@ async fn read_mcp_http_request(stream: &mut TcpStream) -> std::io::Result<Parsed
                 .flatten()
         })
         .unwrap_or(0);
-    let agent_did_header = headers.lines().find_map(|line| {
+    let node_did_header = headers.lines().find_map(|line| {
         let (name, value) = line.split_once(':')?;
-        name.eq_ignore_ascii_case(AGENT_DID_HEADER)
+        name.eq_ignore_ascii_case(NODE_DID_HEADER)
             .then(|| value.trim().to_string())
     });
     let traceparent_header = headers.lines().find_map(|line| {
@@ -622,7 +622,7 @@ async fn read_mcp_http_request(stream: &mut TcpStream) -> std::io::Result<Parsed
     Ok(ParsedMcpHttpRequest {
         method,
         id,
-        agent_did_header,
+        node_did_header,
         traceparent_header,
         http_method,
         session_id_header,
@@ -674,7 +674,7 @@ fn mcp_http_response(method: &str, id: Option<serde_json::Value>) -> String {
 // paused runtime auto-advances straight to the outer guard and the test fails.
 
 fn pending_connect_pool() -> McpPool {
-    McpPool::new_with_connector(|_service_id, _endpoint, _agent_did, _trace_headers| async {
+    McpPool::new_with_connector(|_service_id, _endpoint, _node_did, _trace_headers| async {
         std::future::pending::<anyhow::Result<McpConnection>>().await
     })
 }
@@ -717,14 +717,14 @@ async fn hung_list_call_is_internally_bounded() {
 
 #[tokio::test(start_paused = true)]
 async fn hung_connect_does_not_wedge_other_services() {
-    let pool = McpPool::new_with_connector(
-        |service_id, endpoint, agent_did, trace_headers| async move {
+    let pool =
+        McpPool::new_with_connector(|service_id, endpoint, node_did, trace_headers| async move {
             if service_id == "hf-data" {
                 std::future::pending::<()>().await;
             }
             Ok(McpConnection {
                 endpoint,
-                agent_did_header: agent_did,
+                node_did_header: node_did,
                 trace_context_headers: trace_headers,
                 list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
                 call_tool_fn: Box::new(|_params| {
@@ -733,8 +733,7 @@ async fn hung_connect_does_not_wedge_other_services() {
                 last_used: super::fresh_last_used(),
                 resume_policy: SessionResumePolicy::detached(&service_id),
             })
-        },
-    );
+        });
 
     let hung_pool = pool.clone();
     let hung = tokio::spawn(async move {
@@ -774,7 +773,7 @@ fn counting_pool(
     policies: Arc<Mutex<Vec<Arc<SessionResumePolicy>>>>,
     poison_at_creation: bool,
 ) -> McpPool {
-    McpPool::new_with_connector(move |service_id, endpoint, agent_did, trace_headers| {
+    McpPool::new_with_connector(move |service_id, endpoint, node_did, trace_headers| {
         let connect_attempts = Arc::clone(&connect_attempts);
         let policies = Arc::clone(&policies);
         async move {
@@ -789,7 +788,7 @@ fn counting_pool(
                 .push(Arc::clone(&resume_policy));
             Ok(McpConnection {
                 endpoint,
-                agent_did_header: agent_did,
+                node_did_header: node_did,
                 trace_context_headers: trace_headers,
                 last_used: super::fresh_last_used(),
                 resume_policy,
@@ -852,7 +851,7 @@ async fn repeated_connect_failures_park_the_service() {
     let connect_attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_fn = Arc::clone(&connect_attempts);
     let pool =
-        McpPool::new_with_connector(move |_service_id, _endpoint, _agent_did, _trace_headers| {
+        McpPool::new_with_connector(move |_service_id, _endpoint, _node_did, _trace_headers| {
             let attempts = Arc::clone(&attempts_for_fn);
             async move {
                 attempts.fetch_add(1, Ordering::SeqCst);
@@ -926,7 +925,7 @@ async fn concurrent_callers_to_struck_service_share_one_dial() {
     let connect_attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_fn = Arc::clone(&connect_attempts);
     let pool =
-        McpPool::new_with_connector(move |_service_id, _endpoint, _agent_did, _trace_headers| {
+        McpPool::new_with_connector(move |_service_id, _endpoint, _node_did, _trace_headers| {
             let attempts = Arc::clone(&attempts_for_fn);
             async move {
                 attempts.fetch_add(1, Ordering::SeqCst);
@@ -984,25 +983,24 @@ async fn concurrent_callers_to_struck_service_share_one_dial() {
 async fn healthy_service_concurrent_cold_connects_stay_benign() {
     let connect_attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_fn = Arc::clone(&connect_attempts);
-    let pool =
-        McpPool::new_with_connector(move |service_id, endpoint, agent_did, trace_headers| {
-            let attempts = Arc::clone(&attempts_for_fn);
-            async move {
-                attempts.fetch_add(1, Ordering::SeqCst);
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                Ok(McpConnection {
-                    endpoint,
-                    agent_did_header: agent_did,
-                    trace_context_headers: trace_headers,
-                    last_used: super::fresh_last_used(),
-                    resume_policy: SessionResumePolicy::detached(&service_id),
-                    list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
-                    call_tool_fn: Box::new(|_params| {
-                        Box::pin(async { anyhow::bail!("call_tool was not expected") })
-                    }),
-                })
-            }
-        });
+    let pool = McpPool::new_with_connector(move |service_id, endpoint, node_did, trace_headers| {
+        let attempts = Arc::clone(&attempts_for_fn);
+        async move {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            Ok(McpConnection {
+                endpoint,
+                node_did_header: node_did,
+                trace_context_headers: trace_headers,
+                last_used: super::fresh_last_used(),
+                resume_policy: SessionResumePolicy::detached(&service_id),
+                list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
+                call_tool_fn: Box::new(|_params| {
+                    Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                }),
+            })
+        }
+    });
 
     let mut handles = Vec::new();
     for _ in 0..4 {
@@ -1033,37 +1031,36 @@ async fn poison_recovery_preserves_list_tools_safe_read_retry() {
     let attempts_for_fn = Arc::clone(&connect_attempts);
     let policies = Arc::new(Mutex::new(Vec::new()));
     let policies_for_fn = Arc::clone(&policies);
-    let pool =
-        McpPool::new_with_connector(move |service_id, endpoint, agent_did, trace_headers| {
-            let attempts = Arc::clone(&attempts_for_fn);
-            let policies = Arc::clone(&policies_for_fn);
-            async move {
-                let attempt = attempts.fetch_add(1, Ordering::SeqCst) + 1;
-                let resume_policy = SessionResumePolicy::detached(&service_id);
-                policies
-                    .lock()
-                    .expect("policies lock")
-                    .push(Arc::clone(&resume_policy));
-                Ok(McpConnection {
-                    endpoint,
-                    agent_did_header: agent_did,
-                    trace_context_headers: trace_headers,
-                    last_used: super::fresh_last_used(),
-                    resume_policy,
-                    list_tools_fn: Box::new(move || {
-                        Box::pin(async move {
-                            if attempt == 2 {
-                                anyhow::bail!("transport dropped after poison recovery")
-                            }
-                            Ok(ListToolsResult::default())
-                        })
-                    }),
-                    call_tool_fn: Box::new(|_params| {
-                        Box::pin(async { anyhow::bail!("call_tool was not expected") })
-                    }),
-                })
-            }
-        });
+    let pool = McpPool::new_with_connector(move |service_id, endpoint, node_did, trace_headers| {
+        let attempts = Arc::clone(&attempts_for_fn);
+        let policies = Arc::clone(&policies_for_fn);
+        async move {
+            let attempt = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            let resume_policy = SessionResumePolicy::detached(&service_id);
+            policies
+                .lock()
+                .expect("policies lock")
+                .push(Arc::clone(&resume_policy));
+            Ok(McpConnection {
+                endpoint,
+                node_did_header: node_did,
+                trace_context_headers: trace_headers,
+                last_used: super::fresh_last_used(),
+                resume_policy,
+                list_tools_fn: Box::new(move || {
+                    Box::pin(async move {
+                        if attempt == 2 {
+                            anyhow::bail!("transport dropped after poison recovery")
+                        }
+                        Ok(ListToolsResult::default())
+                    })
+                }),
+                call_tool_fn: Box::new(|_params| {
+                    Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                }),
+            })
+        }
+    });
 
     pool.list_tools("retry-service", "http://mcp.test/mcp")
         .await
@@ -1089,7 +1086,7 @@ async fn parked_endpoint_does_not_block_different_endpoint_for_same_service() {
     let connect_attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_fn = Arc::clone(&connect_attempts);
     let pool =
-        McpPool::new_with_connector(move |_service_id, _endpoint, _agent_did, _trace_headers| {
+        McpPool::new_with_connector(move |_service_id, _endpoint, _node_did, _trace_headers| {
             let attempts = Arc::clone(&attempts_for_fn);
             async move {
                 attempts.fetch_add(1, Ordering::SeqCst);
@@ -1118,15 +1115,15 @@ async fn parked_endpoint_does_not_block_different_endpoint_for_same_service() {
     );
 }
 
-/// Parking is also principal-scoped: a shared pool may legitimately connect to
-/// the same service and endpoint with different bound agent DIDs, and a failure
-/// for one principal must not park the other.
+/// Parking is also node-scoped: a shared pool may legitimately connect to
+/// the same service and endpoint with different bound node DIDs, and a failure
+/// for one node must not park the other.
 #[tokio::test(start_paused = true)]
-async fn parked_agent_did_does_not_block_different_agent_did_for_same_service_endpoint() {
+async fn parked_node_did_does_not_block_different_node_did_for_same_service_endpoint() {
     let connect_attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_fn = Arc::clone(&connect_attempts);
     let pool =
-        McpPool::new_with_connector(move |_service_id, _endpoint, _agent_did, _trace_headers| {
+        McpPool::new_with_connector(move |_service_id, _endpoint, _node_did, _trace_headers| {
             let attempts = Arc::clone(&attempts_for_fn);
             async move {
                 attempts.fetch_add(1, Ordering::SeqCst);
@@ -1135,7 +1132,7 @@ async fn parked_agent_did_does_not_block_different_agent_did_for_same_service_en
         });
 
     let _ = pool
-        .list_tools_with_agent_did(
+        .list_tools_with_node_did(
             "multi-principal-service",
             "http://mcp.test/mcp",
             Some("did:key:agent-a"),
@@ -1144,22 +1141,22 @@ async fn parked_agent_did_does_not_block_different_agent_did_for_same_service_en
     assert_eq!(connect_attempts.load(Ordering::SeqCst), 1);
 
     let error = pool
-        .list_tools_with_agent_did(
+        .list_tools_with_node_did(
             "multi-principal-service",
             "http://mcp.test/mcp",
             Some("did:key:agent-b"),
         )
         .await
-        .expect_err("second principal still fails in this test connector");
+        .expect_err("second node still fails in this test connector");
 
     assert!(
         format!("{error:#}").contains("connection refused"),
-        "different agent DID should dial and surface connector error, not inherit principal-a park: {error:#}"
+        "different node DID should dial and surface connector error, not inherit the first node's park: {error:#}"
     );
     assert_eq!(
         connect_attempts.load(Ordering::SeqCst),
         2,
-        "parking one bound agent DID must not block a different bound agent DID"
+        "parking one bound node DID must not block a different bound node DID"
     );
 }
 
@@ -1170,7 +1167,7 @@ async fn park_strikes_decay_after_quiet_period() {
     let connect_attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_fn = Arc::clone(&connect_attempts);
     let pool =
-        McpPool::new_with_connector(move |_service_id, _endpoint, _agent_did, _trace_headers| {
+        McpPool::new_with_connector(move |_service_id, _endpoint, _node_did, _trace_headers| {
             let attempts = Arc::clone(&attempts_for_fn);
             async move {
                 attempts.fetch_add(1, Ordering::SeqCst);
@@ -1372,13 +1369,13 @@ async fn principal_cache_scope_does_not_depend_on_outbound_header() {
     second.list_tools("shared", "http://remote").await.unwrap();
     let guard = pool.inner.read().await;
     assert_eq!(guard.len(), 2);
-    assert!(guard.keys().all(|key| key.agent_did_header.is_none()));
+    assert!(guard.keys().all(|key| key.node_did_header.is_none()));
     assert!(guard
         .keys()
-        .any(|key| key.owner_agent_did.as_deref() == Some("did:test:first")));
+        .any(|key| key.owner_node_did.as_deref() == Some("did:test:first")));
     assert!(guard
         .keys()
-        .any(|key| key.owner_agent_did.as_deref() == Some("did:test:second")));
+        .any(|key| key.owner_node_did.as_deref() == Some("did:test:second")));
 }
 
 #[tokio::test]
@@ -1387,7 +1384,7 @@ async fn pinned_connection_cannot_be_rebound_between_admission_and_dispatch() {
         let result = header.clone().unwrap_or_default();
         Ok(McpConnection {
             endpoint,
-            agent_did_header: header,
+            node_did_header: header,
             trace_context_headers: trace,
             last_used: fresh_last_used(),
             resume_policy: SessionResumePolicy::detached(&service),

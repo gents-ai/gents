@@ -19,7 +19,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, request_id: &str, session_id: &str) -
     let request_id = crate::graphql::escape_graphql_string(request_id);
     let session_id = crate::graphql::escape_graphql_string(session_id);
     let now = crate::graphql::escape_graphql_string(&now);
-    let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", agent_did: "did:test:test", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#)).await;
+    let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "did:test:test", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#)).await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
     let response = node
         .execute(&format!(
@@ -31,7 +31,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, request_id: &str, session_id: &str) -
         crate::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
         "did:test:test",
@@ -113,7 +113,7 @@ async fn selected_history_missing_later_payload_never_returns_a_shortened_prefix
     let header = TranscriptMessage {
         message_key: "later-input".into(),
         session_id: "incomplete-session".into(),
-        agent_did: "did:test:test".into(),
+        node_did: "did:test:test".into(),
         requester_did: None,
         request_doc_id: Some(lifecycle.request().doc_id.clone()),
         publication: MessagePublication::RequestExecution {
@@ -161,7 +161,6 @@ async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_o
     let request_doc_id = lifecycle.request().doc_id.clone();
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
-        "general",
         "did:test:test",
         crate::hook::FailurePolicy::default(),
     );
@@ -186,6 +185,8 @@ async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_o
                 .process_item(Ok(LoopStreamItem::AuthoredInputReady {
                     context: Some(context.clone()),
                     prompt: prompt.clone(),
+                    folded: Vec::new(),
+                    reply: tokio::sync::oneshot::channel().0,
                 }))
                 .await
                 .unwrap();
@@ -291,7 +292,7 @@ fn provider_segment_for_message(
     let request = lifecycle.request();
     (
         OutputSegment {
-            agent_did: request.agent_did.clone(),
+            node_did: request.node_did.clone(),
             requester_did: request.requester_did.clone(),
             session_id: request.session_id.clone(),
             request_doc_id: request.doc_id.clone(),
@@ -314,6 +315,101 @@ fn provider_segment_for_message(
 }
 
 #[tokio::test]
+#[ignore = "manual persistent provider publication benchmark"]
+async fn provider_publication_request_size_benchmark() {
+    use crate::config_client::ConfigAccess;
+    use crate::session::canonical_rows::{
+        output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::output::{OutputSource, SourceClose};
+    let mut measurements = Vec::new();
+    for sources in [1_usize, 32, 128] {
+        let (node, path, lifecycle, _) = fixture(&format!("publication-benchmark-{sources}")).await;
+        let message = gents_protocol::message::Message::assistant("x".repeat(64 * 1024));
+        let (mut noise, _) =
+            provider_segment_for_message(&lifecycle, &message, chrono::Utc::now().to_rfc3339());
+        noise.close = Some(SourceClose::Closed {
+            outcome: gents_protocol::output::OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![noise.payload.len().try_into().unwrap()],
+        });
+        ConfigAccess::transact_local(&node, None, "test.publication_benchmark_seed", |txn| {
+            let mut noise = noise.clone();
+            Box::pin(async move {
+                for index in 0..sources {
+                    noise.source = OutputSource::Authored {
+                        key: format!("noise-{index}"),
+                    };
+                    txn.execute_with_variables(
+                        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                        &output_segment_create_variables(&noise)?,
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        let mut fresh = Vec::new();
+        let mut replay = Vec::new();
+        let mut fresh_scans = Vec::new();
+        let mut replay_scans = Vec::new();
+        for iteration in 0..6_u32 {
+            let (mut segment, encoded) =
+                provider_segment_for_message(&lifecycle, &message, chrono::Utc::now().to_rfc3339());
+            if let OutputSource::ProviderTurn { turn_index, .. } = &mut segment.source {
+                *turn_index = iteration;
+            }
+            let publish = || {
+                super::canonical::publish_provider_turn(
+                    &node,
+                    lifecycle.execution_generation().unwrap(),
+                    super::canonical::ProviderPublicationPlan {
+                        final_flush: Some(segment.clone()),
+                        message_key: format!("benchmark-turn-{iteration}"),
+                        encoded: encoded.clone(),
+                        expected: Arc::new(message.clone()),
+                        tool_deadline_at: lifecycle.claimed_deadline_at().unwrap().to_rfc3339(),
+                        background_calls: Vec::new(),
+                        consumes_folded: None,
+                    },
+                )
+            };
+            let start = std::time::Instant::now();
+            let (published, scans) = crate::session::count_request_output_scans(publish()).await;
+            let published = published.unwrap();
+            fresh_scans.push(scans);
+            let fresh_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let start = std::time::Instant::now();
+            let (replayed, scans) = crate::session::count_request_output_scans(publish()).await;
+            let replayed = replayed.unwrap();
+            replay_scans.push(scans);
+            let replay_ms = start.elapsed().as_secs_f64() * 1000.0;
+            assert_eq!(published.message_doc_id, replayed.message_doc_id);
+            if iteration > 0 {
+                fresh.push(fresh_ms);
+                replay.push(replay_ms);
+            }
+        }
+        fresh.sort_by(f64::total_cmp);
+        replay.sort_by(f64::total_cmp);
+        measurements.push(serde_json::json!({
+            "prior_sources": sources, "bytes_per_source": 64 * 1024,
+            "fresh_publication_median_ms": fresh[2], "replay_median_ms": replay[2],
+            "fresh_request_scans": fresh_scans, "replay_request_scans": replay_scans,
+        }));
+        node.shutdown().await;
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    let result = serde_json::json!({"measurements": measurements, "persistent_node": true});
+    if let Some(path) = std::env::var_os("GENTS_PUBLICATION_BENCHMARK_OUTPUT") {
+        std::fs::write(path, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
+    }
+    tracing::info!(%result, "provider publication benchmark");
+}
+
+#[tokio::test]
 async fn first_publication_rejects_native_message_that_differs_from_reconstruction() {
     let (node, path, lifecycle, _writer) = fixture("first-native-mismatch").await;
     let actual = gents_protocol::message::Message::assistant("persisted bytes");
@@ -330,6 +426,7 @@ async fn first_publication_rejects_native_message_that_differs_from_reconstructi
             expected: Arc::new(expected),
             tool_deadline_at: lifecycle.claimed_deadline_at().unwrap().to_rfc3339(),
             background_calls: Vec::new(),
+            consumes_folded: None,
         },
     )
     .await
@@ -368,10 +465,51 @@ async fn publish_tool_turn_for_rollback_test(
         expected: Arc::new(message.clone()),
         tool_deadline_at: lifecycle.claimed_deadline_at().unwrap().to_rfc3339(),
         background_calls: Vec::new(),
+        consumes_folded: None,
     };
     // Exercise the canonical publication owner, not a test-side write script.
     super::canonical::publish_provider_turn(node, lifecycle.execution_generation().unwrap(), plan)
         .await
+}
+
+#[tokio::test]
+async fn publication_and_replay_read_a_multi_source_request_once() {
+    let (node, path, lifecycle, writer) = fixture("publication-single-scan").await;
+    for index in 0..3 {
+        writer
+            .publish_authored_message(
+                &lifecycle,
+                &format!("authored-{index}"),
+                &gents_protocol::message::Message::user(format!("earlier-{index}")),
+            )
+            .await
+            .unwrap();
+    }
+    let message = gents_protocol::message::Message::assistant("selected source");
+    let (published, scans) = crate::session::count_request_output_scans(
+        publish_tool_turn_for_rollback_test(&node, &lifecycle, &message),
+    )
+    .await;
+    let published = published.unwrap();
+    assert_eq!(scans, 1);
+    let (replayed, scans) = crate::session::count_request_output_scans(
+        publish_tool_turn_for_rollback_test(&node, &lifecycle, &message),
+    )
+    .await;
+    assert_eq!(scans, 1);
+    assert_eq!(published.message_doc_id, replayed.unwrap().message_doc_id);
+    let history = crate::session::load_history(
+        &node,
+        &lifecycle.request().session_id,
+        "did:test:test",
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(history.len(), 4);
+    assert_eq!(history.last(), Some(&message));
+    node.shutdown().await;
+    std::fs::remove_dir_all(path).unwrap();
 }
 
 #[tokio::test]
@@ -440,8 +578,8 @@ async fn recovery_receipt_fixture(
                 crate::session::ensure_session_in_txn(
                     &txn,
                     &request.session_id,
-                    &request.agent_did,
-                    &request.behavior_id,
+                    &request.node_did,
+                    &request.agent_id,
                     request.requester_did.as_deref(),
                     None,
                     None,
@@ -450,7 +588,7 @@ async fn recovery_receipt_fixture(
                 .await?;
                 let session = crate::session::load_agent_session_row_in_txn(
                     &txn,
-                    &request.agent_did,
+                    &request.node_did,
                     &request.session_id,
                     request.requester_did.as_deref(),
                 )
@@ -748,6 +886,7 @@ async fn provider_closure_cannot_precede_committed_source_timestamp() {
             expected: Arc::new(message),
             tool_deadline_at: lifecycle.claimed_deadline_at().unwrap().to_rfc3339(),
             background_calls: Vec::new(),
+            consumes_folded: None,
         },
         now,
     )
@@ -1040,7 +1179,7 @@ async fn publication_timestamp_follows_a_flush_that_already_owns_the_tail() {
     let tail = tails.get_mut(&request.doc_id).unwrap();
     let delta = provider_flush_delta(&tail.streams, &encoded).unwrap();
     let segment = OutputSegment {
-        agent_did: request.agent_did.clone(),
+        node_did: request.node_did.clone(),
         requester_did: request.requester_did.clone(),
         session_id: request.session_id.clone(),
         request_doc_id: request.doc_id.clone(),
@@ -1071,7 +1210,7 @@ async fn publication_timestamp_follows_a_flush_that_already_owns_the_tail() {
     let (_, observed) = crate::session::load_canonical_message(
         &crate::config_client::ConfigAccess::Local(node.clone()),
         &published.message_doc_id,
-        &request.agent_did,
+        &request.node_did,
         request.requester_did.as_deref(),
     )
     .await
@@ -1437,7 +1576,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     let deadline = lifecycle.claimed_deadline_at().unwrap();
     let mut first_dispatch = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
         node.clone(),
-        lifecycle.request().agent_did.clone(),
+        lifecycle.request().node_did.clone(),
         lifecycle.request().requester_did.clone(),
         a.clone(),
         deadline,
@@ -1446,7 +1585,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     .unwrap();
     let mut replay_dispatch = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
         node.clone(),
-        lifecycle.request().agent_did.clone(),
+        lifecycle.request().node_did.clone(),
         lifecycle.request().requester_did.clone(),
         b.clone(),
         deadline,
@@ -1512,7 +1651,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         &a.tool_call_doc_id,
         &lifecycle.request().doc_id,
         &lifecycle.request().session_id,
-        &lifecycle.request().agent_did,
+        &lifecycle.request().node_did,
         lifecycle.request().requester_did.as_deref(),
     )
     .await

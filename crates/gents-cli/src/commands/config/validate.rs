@@ -8,7 +8,7 @@ pub(super) async fn config_validate(args: ConfigValidateArgs) -> Result<()> {
         root: &args.root,
         home: args.home.as_deref(),
         graphql: args.graphql.as_deref(),
-        bind_agent_did: args.bind_agent_did,
+        bind_node_did: args.bind_node_did,
         force_rebind_concrete_did: args.force_rebind_concrete_did,
         access: None,
     })

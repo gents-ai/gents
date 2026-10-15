@@ -61,7 +61,7 @@ pub(in crate::commands::codex_shim) fn codex_thread_json_with_turns(
     if let Some(git_info) = record.git_info.clone() {
         object.insert("gitInfo".to_string(), git_info);
     }
-    if let Some(link) = record.subagent.as_ref() {
+    if let Some(link) = record.caused.as_ref() {
         object.insert(
             "sessionId".to_string(),
             Value::String(link.root_session_id.clone()),
@@ -74,7 +74,7 @@ pub(in crate::commands::codex_shim) fn codex_thread_json_with_turns(
                         "parent_thread_id": link.parent_session_id,
                         "depth": link.depth,
                         "agent_nickname": link.nickname,
-                        "agent_role": link.behavior_id
+                        "agent_role": link.agent_id
                     }
                 }
             }),
@@ -89,7 +89,7 @@ pub(in crate::commands::codex_shim) fn codex_thread_json_with_turns(
         );
         object.insert(
             "agentRole".to_string(),
-            Value::String(link.behavior_id.clone()),
+            Value::String(link.agent_id.clone()),
         );
     }
     thread
@@ -98,7 +98,7 @@ pub(in crate::commands::codex_shim) fn codex_thread_json_with_turns(
 pub(in crate::commands::codex_shim) fn codex_thread_status(
     record: &CodexThreadRecord,
 ) -> codex::ThreadStatus {
-    if let Some(link) = record.subagent.as_ref() {
+    if let Some(link) = record.caused.as_ref() {
         return projected_thread_status(link.client_projection);
     }
     projected_thread_status(
@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn canonical_session_supplies_title_fork_and_dates_but_not_execution_authority() {
         let session: gents_protocol::session::AgentSession = serde_json::from_value(json!({
-            "session_id":"child", "agent_did":"did:agent", "behavior_id":"configured",
+            "session_id":"child", "node_did":"did:agent", "agent_id":"configured",
             "created_at":"2026-01-01T00:00:00Z",
             "title":{"text":"Reviewed title", "source":"user"},
             "provenance":{"fork":{"source_session_id":"source", "at_user_turn":2}},
@@ -221,7 +221,7 @@ mod tests {
             projection_started:Some("2026-02-01T00:00:00Z".into()), session:Some(session),
             latest_request:Some(serde_json::from_value(json!({"request":{
                 "_docID":"new-doc", "request_id":"new", "lifecycle_state":"pending"}, "response":null})).unwrap()),
-            subagent:None,
+            caused:None,
         };
         let thread = codex_thread_json(&record, false);
         assert_eq!(thread["name"], "Reviewed title");
@@ -259,7 +259,7 @@ mod tests {
             projection_started: None,
             session: None,
             latest_request: None,
-            subagent: Some(CausedThread {
+            caused: Some(CausedThread {
                 latest_request_doc_id: "test-request-doc".into(),
                 requester_did: Some("did:parent".into()),
                 latest_request_id: "child-request".to_string(),
@@ -269,8 +269,8 @@ mod tests {
                 parent_session_id: parent_session_id.clone(),
                 root_session_id: root_session_id.clone(),
                 depth: 1,
-                agent_did: "did:child".to_string(),
-                behavior_id: "code-review".to_string(),
+                node_did: "did:child".to_string(),
+                agent_id: "code-review".to_string(),
                 model: Some("child-model".to_string()),
                 nickname: "reviewer".to_string(),
                 client_projection: gents_protocol::client_protocol::project_persisted_attempt(

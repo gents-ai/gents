@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct GraphDefinition {
     pub graph_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(
         default = "super::serde_helpers::default_enabled",
         deserialize_with = "super::serde_helpers::deserialize_enabled",
@@ -33,7 +33,7 @@ pub struct GraphDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GraphDefinitionObservation {
     pub graph_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub active_revision_digest: Option<String>,
     pub generation: Option<i64>,
 }

@@ -69,7 +69,7 @@ def explicitMatches (context : Context) (explicit : Explicit) (identity : Option
 
 /-- Bootstrap may add an owner-verified sealHash when omitted by the CLI, but
 cannot introduce a workspace ID absent from the controller's stored input.
-The principal owner comes from the verified workspace, never caller input. -/
+The node owner comes from the verified workspace, never caller input. -/
 def controllerMatches (context : Context) (input : Explicit) (stamped : Option Identity) : Bool :=
   input.workspaceId == stamped.map Identity.workspaceId &&
   explicitMatches context input stamped

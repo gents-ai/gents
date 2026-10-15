@@ -4,7 +4,7 @@
 import { Folder, X } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import { toastFailure } from "../lib/failure";
-import { canPickDirectory, pickDirectory } from "../lib/pickDirectory";
+import { canPickDirectory, pickDirectory } from "../../lib/nativeShell";
 
 export const folderLabel = (path: string) =>
   path.split(/[\\/]/).filter(Boolean).pop() ?? path;

@@ -79,28 +79,28 @@ fn gents_model_selection_id(backend_id: &str, model_name: &str) -> String {
     format!("{backend_id}::{model_name}")
 }
 
-fn default_backend_id(agent_did: &str) -> String {
-    format!("{agent_did}:backend")
+fn default_backend_id(node_did: &str) -> String {
+    format!("{node_did}:backend")
 }
 
-async fn select_default_behavior_skills(
+async fn select_default_agent_skills(
     graphql: &str,
-    agent_did: &str,
+    node_did: &str,
     skill_ids: &[&str],
 ) -> Result<()> {
-    let behavior_id = escape_graphql_string(&format!("{agent_did}:default"));
-    let agent_did = escape_graphql_string(agent_did);
-    let behavior = graphql_query(
+    let agent_id = escape_graphql_string(&format!("{node_did}:default"));
+    let node_did = escape_graphql_string(node_did);
+    let agent = graphql_query(
         graphql,
         &format!(
-            r#"{{ AgentBehavior(filter: {{agent_did: {{_eq: "{agent_did}"}}, behavior_id: {{_eq: "{behavior_id}"}}}}, limit: 1) {{context_id}} }}"#
+            r#"{{ Agent(filter: {{node_did: {{_eq: "{node_did}"}}, agent_id: {{_eq: "{agent_id}"}}}}, limit: 1) {{context_id}} }}"#
         ),
     )
     .await?;
-    let context_id = behavior
-        .pointer("/data/AgentBehavior/0/context_id")
+    let context_id = agent
+        .pointer("/data/Agent/0/context_id")
         .and_then(Value::as_str)
-        .context("default behavior has no canonical AgentContext")?;
+        .context("default agent has no canonical AgentContext")?;
     let skills = skill_ids
         .iter()
         .map(|skill| format!(r#""{}""#, escape_graphql_string(skill)))
@@ -109,7 +109,7 @@ async fn select_default_behavior_skills(
     graphql_query(
         graphql,
         &format!(
-            r#"mutation {{ update_AgentContext(filter: {{agent_did: {{_eq: "{agent_did}"}}, context_id: {{_eq: "{}"}}}}, input: {{skill_ids: [{skills}]}}) {{_docID}} }}"#,
+            r#"mutation {{ update_AgentContext(filter: {{node_did: {{_eq: "{node_did}"}}, context_id: {{_eq: "{}"}}}}, input: {{skill_ids: [{skills}]}}) {{_docID}} }}"#,
             escape_graphql_string(context_id)
         ),
     )
@@ -119,18 +119,18 @@ async fn select_default_behavior_skills(
 
 async fn seed_backend_catalog(
     graphql: &str,
-    agent_did: &str,
+    node_did: &str,
     backend_id: &str,
     model_name: &str,
 ) -> Result<()> {
     let query = format!(
         r#"mutation($catalogs: JSON) {{
             update_InferenceBackend(
-                filter: {{agent_did: {{_eq: "{}"}}, backend_id: {{_eq: "{}"}}}},
+                filter: {{node_did: {{_eq: "{}"}}, backend_id: {{_eq: "{}"}}}},
                 input: {{catalogs: $catalogs, probe_status: "healthy", last_probe: "{}"}}
             ) {{_docID}}
         }}"#,
-        escape_graphql_string(agent_did),
+        escape_graphql_string(node_did),
         escape_graphql_string(backend_id),
         chrono::Utc::now().to_rfc3339(),
     );
@@ -140,7 +140,7 @@ async fn seed_backend_catalog(
             "query": query,
             "variables": {
                 "catalogs": {"entries": [{
-                    "agent_did": null,
+                    "node_did": null,
                     "observed_at": chrono::Utc::now().to_rfc3339(),
                     "models": [{"model_name": model_name}]
                 }]}
@@ -161,10 +161,10 @@ async fn seed_backend_catalog(
     Ok(())
 }
 
+#[path = "cli_codex_shim/agent_scope.rs"]
+mod agent_scope;
 #[path = "cli_codex_shim/background_continuations.rs"]
 mod background_continuations;
-#[path = "cli_codex_shim/behavior_scope.rs"]
-mod behavior_scope;
 #[path = "cli_codex_shim/host_runtime.rs"]
 mod host_runtime;
 #[path = "cli_codex_shim/live_backend.rs"]
@@ -203,7 +203,7 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -211,7 +211,7 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let server_args = [
         "--codex-shim-port",
         shim_port_string.as_str(),
@@ -225,7 +225,7 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -274,7 +274,7 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
     restarted
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -306,14 +306,14 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
                 create_Goal(input: {{
                     goal_id: "foreign-goal",
                     session_id: "{}",
-                    agent_did: "{}",
+                    node_did: "{}",
                     objective: "belongs to another surface",
                     status: "active",
                     created_at: "2026-07-16T00:00:00Z"
                 }}) {{ _docID }}
             }}"#,
                 escape_graphql_string(&foreign_thread_id),
-                escape_graphql_string(&agent_did),
+                escape_graphql_string(&node_did),
             ),
         ))
         .await?;
@@ -368,14 +368,14 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
                 create_Goal(input: {{
                     goal_id: "duplicate-goal",
                     session_id: "{}",
-                    agent_did: "{}",
+                    node_did: "{}",
                     objective: "replicated twin",
                     status: "paused",
                     created_at: "2026-07-16T00:00:01Z"
                 }}) {{ _docID }}
             }}"#,
                 escape_graphql_string(&thread_id),
-                escape_graphql_string(&agent_did),
+                escape_graphql_string(&node_did),
             ),
         ))
         .await?;

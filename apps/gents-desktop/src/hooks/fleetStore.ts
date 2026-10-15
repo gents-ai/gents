@@ -7,18 +7,15 @@ import type {
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
 
-/* Identity in the bridge's current words. The node and agent rename (gents
-   #1799) changes these field names; the keys built here are what the rest
-   of the store and its selectors use. */
 export type NodeKey = string;
 export type SessionKey = string;
-export const nodeKeyOf = (node: { agentDid: string }): NodeKey => node.agentDid;
+export const nodeKeyOf = (node: { nodeDid: string }): NodeKey => node.nodeDid;
 export const sessionKeyOf = (session: {
-  agentDid: string;
+  nodeDid: string;
   sessionId: string;
   requesterDid: string | null;
 }): SessionKey =>
-  `${session.agentDid}\u0000${session.sessionId}\u0000${session.requesterDid ?? ""}`;
+  `${session.nodeDid}\u0000${session.sessionId}\u0000${session.requesterDid ?? ""}`;
 
 /** A node as screens draw it: what a deployment says about itself, without
     the sessions and mailbox items it lists. */
@@ -31,6 +28,8 @@ export type FleetState = {
   sessions: Readonly<Record<SessionKey, SessionSummary>>;
   /** each node's sessions, in the order it lists them */
   sessionsOf: Readonly<Record<NodeKey, readonly SessionSummary[]>>;
+  /** first listed session with this id on each node, matching route selection */
+  byNodeSessionId: Readonly<Record<NodeKey, ReadonlyMap<string, SessionSummary>>>;
   /** each node's mailbox items, in the order it lists them */
   mailboxOf: Readonly<Record<NodeKey, readonly MailboxItemView[]>>;
   /** the session that handed each worker out, on whatever node lists it */
@@ -44,8 +43,8 @@ export type FleetState = {
 export type FleetStore = StoreApi<FleetState>;
 
 /** The node with this DID; null when the client cannot see it. */
-export const nodeOf = (fleet: FleetState, agentDid: string | null | undefined) =>
-  agentDid ? (fleet.nodes[nodeKeyOf({ agentDid })] ?? null) : null;
+export const nodeOf = (fleet: FleetState, nodeDid: string | null | undefined) =>
+  nodeDid ? (fleet.nodes[nodeKeyOf({ nodeDid })] ?? null) : null;
 
 /** The first node in the snapshot's order; null before there is one. */
 export const firstNode = (fleet: FleetState) => {
@@ -54,20 +53,17 @@ export const firstNode = (fleet: FleetState) => {
 };
 
 /** The node with this DID, or the first node while it is not listed. */
-export const nodeOrFirst = (fleet: FleetState, agentDid: string | null | undefined) =>
-  nodeOf(fleet, agentDid) ?? firstNode(fleet);
+export const nodeOrFirst = (fleet: FleetState, nodeDid: string | null | undefined) =>
+  nodeOf(fleet, nodeDid) ?? firstNode(fleet);
 
 /** A session as the node with this DID lists it. */
 export function listedSession(
   fleet: FleetState,
-  agentDid: string | null | undefined,
+  nodeDid: string | null | undefined,
   sessionId: string | null | undefined,
 ): SessionSummary | null {
-  if (!agentDid || !sessionId) return null;
-  return (
-    fleet.sessionsOf[nodeKeyOf({ agentDid })]?.find((s) => s.sessionId === sessionId) ??
-    null
-  );
+  if (!nodeDid || !sessionId) return null;
+  return fleet.byNodeSessionId[nodeKeyOf({ nodeDid })]?.get(sessionId) ?? null;
 }
 
 const EMPTY: FleetState = {
@@ -75,6 +71,7 @@ const EMPTY: FleetState = {
   nodes: {},
   sessions: {},
   sessionsOf: {},
+  byNodeSessionId: {},
   mailboxOf: {},
   parentOf: {},
   workersOf: {},
@@ -101,6 +98,7 @@ function reconcile(prev: FleetState, snapshot: DesktopClientSnapshot): FleetStat
   const nodes: Record<NodeKey, NodeView> = {};
   const sessions: Record<SessionKey, SessionSummary> = {};
   const sessionsOf: Record<NodeKey, readonly SessionSummary[]> = {};
+  const byNodeSessionId: Record<NodeKey, ReadonlyMap<string, SessionSummary>> = {};
   const mailboxOf: Record<NodeKey, readonly MailboxItemView[]> = {};
   for (const deployment of deployments) {
     const key = nodeKeyOf(deployment);
@@ -114,6 +112,14 @@ function reconcile(prev: FleetState, snapshot: DesktopClientSnapshot): FleetStat
       return kept;
     });
     sessionsOf[key] = keepList(prev.sessionsOf[key], own);
+    if (sessionsOf[key] === prev.sessionsOf[key]) {
+      byNodeSessionId[key] = prev.byNodeSessionId[key]!;
+    } else {
+      const byId = new Map<string, SessionSummary>();
+      for (const session of own)
+        if (!byId.has(session.sessionId)) byId.set(session.sessionId, session);
+      byNodeSessionId[key] = byId;
+    }
     const before = new Map((prev.mailboxOf[key] ?? []).map((m) => [m.itemId, m]));
     const items = mailboxItems.map((item) => keep(before.get(item.itemId), item));
     mailboxOf[key] = keepList(prev.mailboxOf[key], items);
@@ -132,6 +138,9 @@ function reconcile(prev: FleetState, snapshot: DesktopClientSnapshot): FleetStat
     nodes: sameRecord(prev.nodes, nodes) ? prev.nodes : nodes,
     sessions: sessionsChanged ? sessions : prev.sessions,
     sessionsOf: sameRecord(prev.sessionsOf, sessionsOf) ? prev.sessionsOf : sessionsOf,
+    byNodeSessionId: sameRecord(prev.byNodeSessionId, byNodeSessionId)
+      ? prev.byNodeSessionId
+      : byNodeSessionId,
     mailboxOf: sameRecord(prev.mailboxOf, mailboxOf) ? prev.mailboxOf : mailboxOf,
     ...lineage,
   };

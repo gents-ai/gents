@@ -132,7 +132,7 @@ try {
     artifactDir: options.artifactDir,
     live: resources.live
       ? {
-          agentDid: resources.live.ready.agentDid,
+          nodeDid: resources.live.ready.nodeDid,
           deploymentLabel: resources.live.ready.deploymentLabel,
           toolRoot: resources.live.ready.toolRoot,
           inference: resources.mockInference ? "local-mock" : "configured",

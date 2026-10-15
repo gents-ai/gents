@@ -26,7 +26,7 @@ pub(super) async fn bind(args: PluginBindArgs) -> Result<()> {
     );
     let (access, owner) = crate::commands::pack::resolve_scope_owner(&args.scope).await?;
     let binding = ModelBinding {
-        agent_did: owner,
+        node_did: owner,
         profile_id: args.profile,
     };
     AccessModels(access)
@@ -59,7 +59,7 @@ mod tests {
                 "language": "rust", "input_schema": {"type": "object"},
                 "model_slot": model_slot,
             },
-            "model_binding": bound.then(|| json!({"agent_did": "did:key:o", "profile_id": "chandra"})),
+            "model_binding": bound.then(|| json!({"node_did": "did:key:o", "profile_id": "chandra"})),
         }))
         .unwrap();
         store::write_record(home, &record).unwrap();
@@ -91,7 +91,7 @@ mod tests {
             scope: crate::cli::args::GraphScopeArgs {
                 home: Some(home.path().to_owned()),
                 graphql: Some("http://127.0.0.1:1/graphql".to_owned()),
-                agent_did: None,
+                node_did: None,
             },
         })
         .await
@@ -114,7 +114,7 @@ mod tests {
             scope: crate::cli::args::GraphScopeArgs {
                 home: Some(home.path().to_owned()),
                 graphql: None,
-                agent_did: None,
+                node_did: None,
             },
         })
         .await

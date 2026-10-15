@@ -6,7 +6,7 @@ use crate::types::LinkedSessionView;
 
 fn scope(session_id: &str) -> SessionScope {
     SessionScope {
-        agent_did: OPERATOR.into(),
+        node_did: OPERATOR.into(),
         session_id: session_id.into(),
         requester_did: Some(OPERATOR.into()),
     }
@@ -30,7 +30,7 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
     assert_eq!(
         sessions(&view.started),
         ["sess_child", "sess_peer"],
-        "subagents are the sessions whose stored provenance names this session"
+        "started sessions are the sessions whose stored provenance names this session"
     );
     assert_eq!(
         sessions(&view.sent),
@@ -94,7 +94,7 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
         .iter()
         .find(|call| call.tool_call_id == "tc_peer")
         .unwrap();
-    assert_eq!(peer.caused.agent_did, "did:test:other");
+    assert_eq!(peer.caused.node_did, "did:test:other");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -147,4 +147,23 @@ async fn a_root_session_has_no_provenance() {
     assert!(view.started_by.is_none());
     assert!(view.received.is_empty() && view.sent.is_empty() && view.started.is_empty());
     assert!(view.calls.is_empty() && view.senders.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replicated_session_message_keeps_the_call_that_sent_it() {
+    let (core, _tmp, parent) = seed_provenance_fixture().await;
+    core.refresh_local_request(OPERATOR, "req_child_2")
+        .await
+        .expect("refresh request");
+    let store = core.store().snapshot();
+    let row = store
+        .request_row("req_child_2")
+        .expect("replicated request");
+    assert!(row.caused_by_parent_tool_call_doc_id.is_some());
+    assert_eq!(
+        gents::lifecycle::request_origin(row),
+        gents::lifecycle::RequestOrigin::SessionMessage {
+            parent_request_doc_id: Some(parent.as_str())
+        }
+    );
 }

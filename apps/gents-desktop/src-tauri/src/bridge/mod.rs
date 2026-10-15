@@ -11,8 +11,8 @@ use gents_desktop_bridge::contract::{
     MANAGED_SERVER_TRAY_STOP_EVENT, MANAGED_SERVER_UPDATED_EVENT,
 };
 use gents_desktop_bridge::{
-    init, init_tracing as install_tracing, install_runtime, prefer_host_tools, AgentHomePolicy,
-    AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, SnapshotGrants,
+    init, init_tracing as install_tracing, install_runtime, prefer_host_tools, AppMeta,
+    BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, NodeHomePolicy, SnapshotGrants,
     TracingConfig,
 };
 #[cfg(desktop)]
@@ -48,6 +48,8 @@ pub fn run() {
     // Registered first so a second launch exits before it sets anything up.
     #[cfg(desktop)]
     let builder = builder.plugin(single_instance());
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(browser_store_lock());
     let builder = builder
         .plugin(init(platform_bridge_config()))
         .plugin(tauri_plugin_dialog::init())
@@ -160,22 +162,26 @@ fn native_local_e2e_context(mut context: tauri::Context<tauri::Wry>) -> tauri::C
     if std::env::var("GENTS_NATIVE_E2E").ok().as_deref() == Some("1")
         && std::env::var("GENTS_E2E_LOCAL_MODEL").is_ok()
     {
-        let value = std::env::var("GENTS_E2E_WEBVIEW_STORE_ID")
-            .expect("GENTS_E2E_WEBVIEW_STORE_ID is required for isolated native local E2E");
-        assert!(
-            value.len() == 32 && value.is_ascii(),
-            "WebView store ID must contain 32 hex digits"
-        );
-        let mut identifier = [0; 16];
-        for (index, byte) in identifier.iter_mut().enumerate() {
-            *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
-                .expect("WebView store ID must contain 32 hex digits");
-        }
+        let identifier = crate::browser_data::isolated_store_identifier()
+            .expect("valid isolated WebView store identifier")
+            .expect("native E2E requires an isolated WebView store");
         for window in &mut context.config_mut().app.windows {
             window.data_store_identifier = Some(identifier);
         }
     }
     context
+}
+
+/// Held for the process lifetime from before any webview opens the shared
+/// WebKit store, so no reset clears it under this desktop.
+#[cfg(target_os = "macos")]
+fn browser_store_lock<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("gents-browser-store")
+        .setup(|app, _api| {
+            app.manage(crate::browser_data::lock_store()?);
+            Ok(())
+        })
+        .build()
 }
 
 /// A second copy of the app would share this one's service label, service
@@ -219,7 +225,7 @@ fn native_local_e2e_config(config: BridgeConfig) -> BridgeConfig {
     BridgeConfig {
         home: HomePolicy::FixedRoot(path("GENTS_E2E_DESKTOP_HOME")),
         bootstrap: BootstrapPolicy::LocalRuntimeAllowed {
-            agent_home: AgentHomePolicy::Fixed(path("GENTS_E2E_AGENT_HOME")),
+            node_home: NodeHomePolicy::Fixed(path("GENTS_E2E_NODE_HOME")),
         },
         store_key_custody: if std::env::var("GENTS_E2E_FILE_STORE_KEYS").ok().as_deref()
             == Some("1")
@@ -235,7 +241,7 @@ fn native_local_e2e_config(config: BridgeConfig) -> BridgeConfig {
 #[cfg(all(desktop, any(target_os = "macos", target_os = "linux")))]
 fn platform_bootstrap_policy() -> BootstrapPolicy {
     BootstrapPolicy::LocalRuntimeAllowed {
-        agent_home: AgentHomePolicy::Default,
+        node_home: NodeHomePolicy::Default,
     }
 }
 
@@ -308,18 +314,18 @@ mod tests {
     fn tray_does_not_claim_process_readiness_while_starting() {
         assert_eq!(
             managed_agent_tooltip(Some("starting")),
-            "Gents agent service — starting"
+            "Gents node service — starting"
         );
         assert_eq!(
             managed_agent_tooltip(Some("failed")),
-            "Gents agent service — status unavailable"
+            "Gents node service — status unavailable"
         );
     }
 }
 
 #[cfg(desktop)]
 struct TrayRuntimeState {
-    // The desktop is tray-resident independently of agent process state. This
+    // The desktop is tray-resident independently of node process state. This
     // stays true so closing the main window preserves the menu-bar frontend.
     active: Arc<AtomicBool>,
     // Native non-selected tabs can also report invisible. Only a deliberate
@@ -344,9 +350,9 @@ fn tray_icon<'a>(
 #[cfg(desktop)]
 fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItem::with_id(app, "show", "Open Gents", true, None::<&str>)?;
-    let start = MenuItem::with_id(app, "start", "Start Agent", true, None::<&str>)?;
-    let stop = MenuItem::with_id(app, "stop", "Stop Agent", true, None::<&str>)?;
-    let restart = MenuItem::with_id(app, "restart", "Restart Agent", true, None::<&str>)?;
+    let start = MenuItem::with_id(app, "start", "Start Node", true, None::<&str>)?;
+    let stop = MenuItem::with_id(app, "stop", "Stop Node", true, None::<&str>)?;
+    let restart = MenuItem::with_id(app, "restart", "Restart Node", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Desktop", true, None::<&str>)?;
     let menu = if cfg!(any(target_os = "macos", target_os = "linux")) {
         Menu::with_items(app, &[&show, &start, &stop, &restart, &quit])?
@@ -359,7 +365,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     });
     let tray = TrayIconBuilder::with_id("gents-managed-server")
         .menu(&menu)
-        .tooltip("Gents agent service — independent of the desktop")
+        .tooltip("Gents node service — independent of the desktop")
         .icon(tray_icon(app)?)
         .icon_as_template(cfg!(target_os = "macos"))
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -400,12 +406,12 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(desktop)]
 fn managed_agent_tooltip(state: Option<&str>) -> &'static str {
     match state {
-        Some("running") => "Gents agent service — running",
-        Some("starting") => "Gents agent service — starting",
-        Some("stopped") | Some("disabled") => "Gents agent service — stopped",
-        Some("external") => "Gents agent — running outside the managed service",
-        Some("failed") | None => "Gents agent service — status unavailable",
-        Some(_) => "Gents agent service — status unavailable",
+        Some("running") => "Gents node service — running",
+        Some("starting") => "Gents node service — starting",
+        Some("stopped") | Some("disabled") => "Gents node service — stopped",
+        Some("external") => "Gents node — running outside the managed service",
+        Some("failed") | None => "Gents node service — status unavailable",
+        Some(_) => "Gents node service — status unavailable",
     }
 }
 

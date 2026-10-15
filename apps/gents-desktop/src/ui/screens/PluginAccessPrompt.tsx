@@ -11,48 +11,43 @@ import {
   DialogTitle,
 } from "@gents/ui/components/dialog";
 import { toast } from "sonner";
-import { call, message } from "./agent/bridgeCall";
-
-type Decision = "once" | "file" | "always" | "deny";
-
-interface Question {
-  id: string;
-  prompt: string;
-  folder: string;
-  isDir: boolean;
-}
+import { newestWins } from "../../lib/reads";
+import type {
+  PluginApprovalDecision,
+  PluginApprovalRequest,
+} from "@source-inc/gents-desktop-client";
+import { useApp } from "@/app/AppContext";
 
 const POLL_MS = 1000;
 
 export function PluginAccessPrompt() {
-  const [question, setQuestion] = useState<Question | null>(null);
+  const { actions } = useApp();
+  const [question, setQuestion] = useState<PluginApprovalRequest | null>(null);
   const answering = useRef(false);
   const failed = useRef<string | null>(null);
   /* one poll out at a time; an answer outdates the one out, which may have
      read the queue before the answer reached the host */
   const polling = useRef(false);
-  const asked = useRef(0);
+  const [asks] = useState(newestWins);
 
   const refresh = useCallback(async () => {
     if (answering.current || polling.current) return;
     polling.current = true;
-    const ask = ++asked.current;
+    const current = asks.begin();
     try {
-      const { requests } = await call<{ requests: Question[] }>(
-        "desktop_plugin_approvals_pending",
-      );
-      if (ask !== asked.current) return;
+      const { requests } = await actions.listPendingPluginApprovals();
+      if (!current()) return;
       failed.current = null;
       setQuestion(requests[0] ?? null);
     } catch (error) {
-      if (ask !== asked.current) return;
-      const text = message(error);
+      if (!current()) return;
+      const text = error instanceof Error ? error.message : String(error);
       if (failed.current !== text) toast.error(text);
       failed.current = text;
     } finally {
       polling.current = false;
     }
-  }, []);
+  }, [actions]);
 
   useEffect(() => {
     void refresh();
@@ -60,15 +55,15 @@ export function PluginAccessPrompt() {
     return () => clearInterval(timer);
   }, [refresh]);
 
-  async function answer(decision: Decision) {
+  async function answer(decision: PluginApprovalDecision) {
     if (!question) return;
     answering.current = true;
-    asked.current += 1;
+    asks.supersede();
     try {
-      await call("desktop_plugin_approval_decide", { id: question.id, decision });
+      await actions.decidePluginApproval(question.id, decision);
       setQuestion(null);
     } catch (error) {
-      toast.error(message(error));
+      toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       answering.current = false;
     }

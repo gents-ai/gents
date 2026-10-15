@@ -178,6 +178,7 @@ struct SuccessfulMutationFault {
     pause: Option<SuccessfulMutationPause>,
     write_gate_observation: Option<Arc<WriteGateObservation>>,
     read_storage_failure: Option<&'static str>,
+    read_pause: Option<(&'static str, Arc<tokio::sync::Notify>)>,
 }
 
 #[cfg(test)]
@@ -599,6 +600,7 @@ impl<'a> ConfigApplyTxn<'a> {
             pause: None,
             write_gate_observation: None,
             read_storage_failure: None,
+            read_pause: None,
         });
         let output = SUCCESSFUL_MUTATION_FAULT
             .scope(Arc::clone(&fault), future)
@@ -684,6 +686,7 @@ impl<'a> ConfigApplyTxn<'a> {
             pause: None,
             write_gate_observation: None,
             read_storage_failure: None,
+            read_pause: None,
         });
         let output = SUCCESSFUL_MUTATION_FAULT
             .scope(Arc::clone(&fault), future)
@@ -715,6 +718,7 @@ impl<'a> ConfigApplyTxn<'a> {
             }),
             write_gate_observation: None,
             read_storage_failure: None,
+            read_pause: None,
         });
         let output = SUCCESSFUL_MUTATION_FAULT
             .scope(Arc::clone(&fault), future)
@@ -751,6 +755,7 @@ impl<'a> ConfigApplyTxn<'a> {
                 queued_fired: AtomicBool::new(false),
             })),
             read_storage_failure: None,
+            read_pause: None,
         });
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
@@ -771,6 +776,29 @@ impl<'a> ConfigApplyTxn<'a> {
             pause: None,
             write_gate_observation: None,
             read_storage_failure: Some(marker),
+            read_pause: None,
+        });
+        SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
+    }
+
+    /// Park every auto-commit read whose document contains
+    /// `marker`, after notifying `reached`; only dropping the reader ends it.
+    #[cfg(test)]
+    pub(crate) async fn with_read_pause<F: Future>(
+        marker: &'static str,
+        reached: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> F::Output {
+        let fault = Arc::new(SuccessfulMutationFault {
+            fail_after: None,
+            count: AtomicUsize::new(0),
+            lose_receipt: false,
+            receipt_operation: None,
+            receipt_fired: AtomicBool::new(false),
+            pause: None,
+            write_gate_observation: None,
+            read_storage_failure: None,
+            read_pause: Some((marker, reached)),
         });
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
@@ -928,7 +956,7 @@ impl<'a> ConfigApplyTxn<'a> {
                         response.errors
                     )));
                 }
-                json!({"data": response.data.unwrap_or(Value::Null)})
+                crate::graphql::into_data_envelope(response.data)
             }
         };
         if document.trim_start().starts_with("mutation") {
@@ -1010,9 +1038,10 @@ impl<'a> ConfigApplyTxn<'a> {
             )));
         }
         if document.trim_start().starts_with("mutation") {
-            let envelope = json!({"data": response.data.as_ref().unwrap_or(&Value::Null)});
-            self.affected_documents
-                .fetch_add(graphql::affected_documents(&envelope), Ordering::Relaxed);
+            self.affected_documents.fetch_add(
+                crate::graphql::mutation_affected_documents(&response) as u64,
+                Ordering::Relaxed,
+            );
             #[cfg(test)]
             after_successful_mutation_for_test().await?;
         }
@@ -1515,6 +1544,21 @@ impl ConfigAccess {
         document: &str,
         retry_policy: ExecuteRetryPolicy,
     ) -> defra_node::QueryResponse {
+        #[cfg(test)]
+        if let Some(reached) = SUCCESSFUL_MUTATION_FAULT
+            .try_with(|fault| {
+                fault
+                    .read_pause
+                    .as_ref()
+                    .filter(|(marker, _)| document.contains(marker))
+                    .map(|(_, reached)| Arc::clone(reached))
+            })
+            .ok()
+            .flatten()
+        {
+            reached.notify_one();
+            std::future::pending::<()>().await;
+        }
         node.execute_with_retry(document, retry_policy).await
     }
 
@@ -1710,7 +1754,7 @@ impl ConfigAccess {
         mutation: &str,
     ) -> Result<Value> {
         let response = Self::write_local_response_inner(node, operation, mutation).await?;
-        Ok(json!({"data": response.data.unwrap_or(Value::Null)}))
+        Ok(crate::graphql::into_data_envelope(response.data))
     }
 
     async fn write_local_response_inner(

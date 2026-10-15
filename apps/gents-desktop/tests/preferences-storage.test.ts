@@ -25,13 +25,13 @@ describe("list views read back from storage", () => {
       sessionFilter: {
         states: ["held", "live"],
         sources: ["robot", "task"],
-        behaviors: [],
+        agents: [],
       },
     });
     expect(restored.sessionFilter).toEqual({
       states: ["live"],
       sources: ["task"],
-      behaviors: [],
+      agents: [],
     });
   });
 

@@ -24,7 +24,7 @@
                   {
                     "additionalProperties": false,
                     "properties": {
-                      "agent_did": {
+                      "node_did": {
                         "anyOf": [
                           {
                             "type": "string"
@@ -34,7 +34,7 @@
                           }
                         ]
                       },
-                      "behavior_id": {
+                      "agent_id": {
                         "anyOf": [
                           {
                             "type": "string"
@@ -497,7 +497,7 @@
       },
       "type": "array"
     },
-    "source_agent_did": {
+    "source_node_did": {
       "anyOf": [
         {
           "type": "string"
@@ -507,7 +507,7 @@
         }
       ]
     },
-    "source_behavior_id": {
+    "source_agent_id": {
       "anyOf": [
         {
           "type": "string"

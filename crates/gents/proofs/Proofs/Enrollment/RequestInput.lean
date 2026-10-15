@@ -8,6 +8,11 @@ path/workspace owner supplies cwd evidence; the authenticated origin supplies
 queue-source evidence. Neither is inferred from caller-authored input. -/
 namespace Enrollment
 
+structure QueuePosition where
+  slotRequestDocId : String
+  replacesRequestDocId : String
+  deriving DecidableEq, Repr
+
 structure RequestQueue where
   source : SessionQueue.QueueSource
   policy : SessionQueue.QueuePolicy
@@ -15,6 +20,8 @@ structure RequestQueue where
   queuedAfterRequestId : Option String := none
   interruptedRequestId : Option String := none
   backgroundCompletionWakeVersion : Option Nat := none
+  delivery : SessionQueue.QueueDelivery := .queue
+  position : Option QueuePosition := none
   deriving DecidableEq, Repr
 
 /-- Original signed facts, not the mutable current Goal state. Goal and parent
@@ -43,12 +50,21 @@ private def optionFields {α : Type} (encode : α → List String) : Option α �
 private def titleFields (title : AgentSession.Title) : List String :=
   [title.text, title.source.toWireName]
 
+/-- The extension marker cannot be confused with the following goal option's
+`none`/`some` tag. Default queue input retains its existing signed bytes; new
+fields use the same length-framed canonical encoder as every other field. -/
+def queueExtensionFields (queue : RequestQueue) : List String :=
+  if queue.delivery == .queue && queue.position.isNone then []
+  else ["queue-v2", queue.delivery.toDefraDB] ++
+    optionFields (fun p => [p.slotRequestDocId, p.replacesRequestDocId]) queue.position
+
 private def queueFields (queue : RequestQueue) : List String :=
   [queue.source.toDefraDB, queue.policy.toDefraDB] ++
   optionFields (fun s => [s]) queue.key ++
   optionFields (fun s => [s]) queue.queuedAfterRequestId ++
   optionFields (fun s => [s]) queue.interruptedRequestId ++
-  optionFields (fun n => [toString n]) queue.backgroundCompletionWakeVersion
+  optionFields (fun n => [toString n]) queue.backgroundCompletionWakeVersion ++
+  queueExtensionFields queue
 
 def requestInputFields (input : RequestInput) : CanonicalFields :=
   textFieldsToBytes <|
@@ -57,16 +73,28 @@ def requestInputFields (input : RequestInput) : CanonicalFields :=
     optionFields titleFields input.initialTitle ++ optionFields queueFields input.queue ++
     optionFields (fun goal => [toString goal.sequence, toString goal.wrapup]) input.goalContinuation
 
+theorem default_queue_has_no_encoding_extension (queue : RequestQueue) :
+    queueExtensionFields {queue with delivery := .queue, position := none} = [] := by
+  simp [queueExtensionFields]
+
+theorem queue_extension_encoding_is_injective (left right : RequestQueue)
+    (h : queueExtensionFields left = queueExtensionFields right) :
+    left.delivery = right.delivery ∧ left.position = right.position := by
+  rcases left with ⟨_, _, _, _, _, _, ld, lp⟩
+  rcases right with ⟨_, _, _, _, _, _, rd, rp⟩
+  cases ld <;> cases rd <;> rcases lp with _ | ⟨ls, lr⟩ <;> rcases rp with _ | ⟨rs, rr⟩ <;>
+    simp_all [queueExtensionFields, optionFields, SessionQueue.QueueDelivery.toDefraDB]
+
 /-- Existing context allowlist is the sole skill grant. Invalid activation is
-rejected rather than silently authorizing an extra principal-wide skill. -/
+rejected rather than silently authorizing an extra node-wide skill. -/
 def inputWithinContext (input : RequestInput) (skillIds : List String)
     (cwdAllowed : String → Bool) (queueSourceAllowed : SessionQueue.QueueSource → Bool) : Bool :=
   input.selectedSkillIds.all skillIds.contains &&
     (input.cwd.map cwdAllowed).getD true &&
     (input.queue.map (fun q => queueSourceAllowed q.source)).getD true
 
-/-- Behavior selection has one owner and is required even for new sessions. -/
-def behaviorMatchesSession (selected observed : String) : Bool :=
+/-- Agent selection has one owner and is required even for new sessions. -/
+def agentMatchesSession (selected observed : String) : Bool :=
   !selected.trim.isEmpty && selected == observed
 
 /-- Request titles are consumed only by creation. Reuse, including a currently
@@ -105,7 +133,7 @@ admission owner, not established by these caller-authored fields. -/
 structure RequestWorkspace where
   workspaceId : Option String := none
   /-- Exact owner scope retained from the authenticated source, never a host. -/
-  ownerAgentDid : Option String := none
+  ownerNodeDid : Option String := none
   authority : Option BindingAuthority := none
   sealHash : Option String := none
   deriving DecidableEq, Repr
@@ -113,7 +141,7 @@ structure RequestWorkspace where
 def requestWorkspaceFields (workspace : RequestWorkspace) : CanonicalFields :=
   textFieldsToBytes <|
     optionFields (fun s => [s]) workspace.workspaceId ++
-    optionFields (fun s => [s]) workspace.ownerAgentDid ++
+    optionFields (fun s => [s]) workspace.ownerNodeDid ++
     optionFields (fun a => [a.toDefraDB]) workspace.authority ++
     optionFields (fun s => [s]) workspace.sealHash
 
@@ -121,7 +149,7 @@ def requestWorkspaceFields (workspace : RequestWorkspace) : CanonicalFields :=
 never grants access; ACP, writer/integrator, state and seal checks remain owned
 by the existing admission and workspace adapters. -/
 def requestWorkspaceWellFormed (workspace : RequestWorkspace) : Bool :=
-  match workspace.workspaceId, workspace.ownerAgentDid, workspace.authority with
+  match workspace.workspaceId, workspace.ownerNodeDid, workspace.authority with
   | none, none, none => workspace.sealHash.isNone
   | some id, some owner, some _ =>
       !id.trim.isEmpty && id == id.trim &&
@@ -134,14 +162,14 @@ private def authorityRank : BindingAuthority → Nat
   | .readWrite => 2
 
 /-- The source is the existing authenticated exact bridge/entry observation.
-No parent replication premise: cross-principal bridges retain opaque parent IDs.
-The executing principal is deliberately not substituted for the workspace owner. -/
+No parent replication premise: cross-node bridges retain opaque parent IDs.
+The executing node is deliberately not substituted for the workspace owner. -/
 def requestWorkspaceWithinSource (request source : RequestWorkspace)
     (sourceAuthenticated : Bool) : Bool :=
   sourceAuthenticated && requestWorkspaceWellFormed request &&
     requestWorkspaceWellFormed source &&
     request.workspaceId == source.workspaceId &&
-    request.ownerAgentDid == source.ownerAgentDid &&
+    request.ownerNodeDid == source.ownerNodeDid &&
     request.sealHash == source.sealHash &&
     match request.authority, source.authority with
     | none, none => true
@@ -154,7 +182,7 @@ theorem unauthenticated_workspace_source_denied (request source : RequestWorkspa
 
 theorem workspace_source_preserves_owner (request source : RequestWorkspace)
     (h : requestWorkspaceWithinSource request source true = true) :
-    request.ownerAgentDid = source.ownerAgentDid := by
+    request.ownerNodeDid = source.ownerNodeDid := by
   simp only [requestWorkspaceWithinSource, Bool.and_eq_true, beq_iff_eq] at h
   exact h.1.1.2
 
@@ -169,7 +197,7 @@ another DID. The source adapter authenticates every edge independently. -/
 theorem nested_workspace_owner_preserved (root child grandchild : RequestWorkspace)
     (hc : requestWorkspaceWithinSource child root true = true)
     (hg : requestWorkspaceWithinSource grandchild child true = true) :
-    grandchild.ownerAgentDid = root.ownerAgentDid := by
+    grandchild.ownerNodeDid = root.ownerNodeDid := by
   exact (workspace_source_preserves_owner grandchild child hg).trans
     (workspace_source_preserves_owner child root hc)
 

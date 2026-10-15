@@ -10,36 +10,36 @@ import { TriggersPanel } from "../src/ui/screens/agent/TriggersPanel";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 const withReadiness = (
-  behaviors: DeploymentView["behaviorReadiness"]["behaviors"],
+  agents: DeploymentView["nodeReadiness"]["agents"],
 ): DeploymentView => ({
   ...deployment,
-  behaviorReadiness: { ...deployment.behaviorReadiness, behaviors },
+  nodeReadiness: { ...deployment.nodeReadiness, agents },
 });
 
 const trigger = deployment.triggers.find((t) => t.config.trigger_id === "trigger-a")!;
 
 describe("trigger readiness", () => {
-  it("defers to the bridge's behavior readiness decision", () => {
+  it("defers to the bridge's agent readiness decision", () => {
     const blocked = withReadiness([
-      { state: "unavailable", behaviorId: "default", reason: "credentials_required" },
-    ] as DeploymentView["behaviorReadiness"]["behaviors"]);
+      { state: "unavailable", agentId: "default", reason: "credentials_required" },
+    ] as DeploymentView["nodeReadiness"]["agents"]);
     expect(triggerReadiness(blocked, trigger)).toEqual({
       ok: false,
       reason: expect.stringContaining("inference credentials are required"),
     });
   });
 
-  it("is not blocked when the bridge says the behavior is ready", () => {
+  it("is not blocked when the bridge says the agent is ready", () => {
     const ready = withReadiness([
-      { state: "ready", behaviorId: "default" },
-    ] as DeploymentView["behaviorReadiness"]["behaviors"]);
+      { state: "ready", agentId: "default" },
+    ] as DeploymentView["nodeReadiness"]["agents"]);
     expect(triggerReadiness(ready, trigger).ok).toBe(true);
   });
 
   it("never promises a trigger is Ready", () => {
     const ready = withReadiness([
-      { state: "ready", behaviorId: "default" },
-    ] as DeploymentView["behaviorReadiness"]["behaviors"]);
+      { state: "ready", agentId: "default" },
+    ] as DeploymentView["nodeReadiness"]["agents"]);
     renderIn(testApp(), <TriggersPanel deployment={ready} item="trigger-a" />);
     expect(screen.queryByText("Ready")).toBeNull();
     /* nothing to say is said with nothing, not an empty line */
@@ -50,15 +50,15 @@ describe("trigger readiness", () => {
 });
 
 describe("dependents", () => {
-  it("counts subagent targets that point at a behavior", async () => {
+  it("counts agent targets that point at an agent", async () => {
     const { dependents } = await import("../src/ui/screens/agent/dependents");
     const withTarget = {
       ...deployment,
-      subagentTargets: [
-        ...deployment.subagentTargets,
-        { behavior_id: "ops" } as DeploymentView["subagentTargets"][number],
+      agentTargets: [
+        ...deployment.agentTargets,
+        { agent_id: "ops" } as DeploymentView["agentTargets"][number],
       ],
     };
-    expect(dependents(withTarget, "behavior", "ops")).toContain("1 subagent target");
+    expect(dependents(withTarget, "agent", "ops")).toContain("1 agent target");
   });
 });

@@ -8,7 +8,7 @@ use gents_protocol::request_admission::RequestPurpose;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
-use super::{BehaviorDaemon, ShutdownDrainFailure};
+use super::{AgentDaemon, ShutdownDrainFailure};
 use crate::admission::{self, AdmissionCallContext, CallKind};
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
 use crate::session;
@@ -28,27 +28,12 @@ const TITLE_VISIBLE_MAX_TOKENS: u64 = 24;
 const TITLE_GENERATION_PREAMBLE: &str = "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.";
 
 async fn flush_received_title_partial(context: &str) -> Result<()> {
-    match tokio::time::timeout(
-        crate::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-        crate::rendered_request::scope::flush_received_auxiliary_partial(),
-    )
-    .await
-    {
-        Ok(Ok(_)) => Ok(()),
-        Ok(Err(error)) => Err(ShutdownDrainFailure {
-            reason: format!("title {context} partial output persistence failed: {error:#}"),
-        }
-        .into()),
-        Err(_) => Err(ShutdownDrainFailure {
-            reason: format!("title {context} partial output persistence exceeded the embedded storage-step deadline; commit outcome must be recovered from durable state"),
-        }
-        .into()),
-    }
+    super::request::flush_received_preparation_partial(&format!("title {context}")).await
 }
 
 struct TitleTask<M: crate::llm::rig_compat::ProviderModel> {
     node: Arc<EmbeddedNode>,
-    behavior: Arc<crate::config::ResolvedBehavior>,
+    agent_config: Arc<crate::config::ResolvedAgent>,
     provider_family: Option<String>,
     model: Arc<M>,
     verifier: crate::request_admission::AgentRequestAdmissionVerifier,
@@ -64,11 +49,11 @@ enum TitleResult {
     Interrupted,
 }
 
-impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
+impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
     fn title_task(&self) -> TitleTask<M> {
         TitleTask {
             node: Arc::clone(&self.node),
-            behavior: Arc::clone(&self.behavior),
+            agent_config: Arc::clone(&self.agent_config),
             provider_family: self.provider_family.clone(),
             model: Arc::clone(&self.model),
             verifier: self.request_admission.clone(),
@@ -94,7 +79,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
             let result: Result<()> = async {
                 if !session::session_needs_generated_title(
                     node.as_ref(),
-                    &parent.agent_did,
+                    &parent.node_did,
                     parent.requester_did.as_deref(),
                     &parent.session_id,
                 )
@@ -135,7 +120,7 @@ fn title_generation_allowed(max_total_tokens: Option<i64>) -> bool {
     max_total_tokens.is_none()
 }
 
-/// Reasoning-capable titles keep the behavior's configured output budget
+/// Reasoning-capable titles keep the agent_config's configured output budget
 /// (bounded in time by `TITLE_GENERATION_TIMEOUT_SECS`), so a reasoning run
 /// is not truncated into a reasoning-only result by the visible-title cap.
 fn title_max_tokens(
@@ -166,7 +151,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
         let Some(request) = super::verify_request_at_claim_boundary(
             &self.verifier,
             Arc::clone(&self.node),
-            &self.behavior.behavior_id,
+            &self.agent_config.agent_id,
             request,
         )
         .await
@@ -178,15 +163,15 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
                 .context("admitted title request is missing execution origin")?;
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             Arc::clone(&self.node),
-            &self.behavior.behavior_id,
-            self.behavior.agent_did(),
+            &self.agent_config.agent_id,
+            self.agent_config.node_did(),
             request.clone(),
-            self.behavior.deadline_duration.as_secs(),
+            self.agent_config.deadline_duration.as_secs(),
             origin,
-            self.behavior.backend_id.clone().unwrap_or_default(),
+            self.agent_config.backend_id.clone().unwrap_or_default(),
         );
-        lifecycle.set_execution_lease_duration(self.behavior.stream_liveness_timeout);
-        lifecycle.set_configured_max_total_tokens(self.behavior.max_total_tokens);
+        lifecycle.set_execution_lease_duration(self.agent_config.stream_liveness_timeout);
+        lifecycle.set_configured_max_total_tokens(self.agent_config.max_total_tokens);
         match lifecycle.claim_with_identity().await {
             Ok(ClaimOutcome::Claimed) => {}
             Ok(ClaimOutcome::Queued | ClaimOutcome::Interrupted | ClaimOutcome::Expired) => {
@@ -200,12 +185,27 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
         }
         let writer = DefraStreamWriter::new(
             Arc::clone(&self.node),
-            self.behavior.agent_did(),
-            Duration::from_millis(self.behavior.stream_batch_ms),
+            self.agent_config.node_did(),
+            Duration::from_millis(self.agent_config.stream_batch_ms),
         );
         let title_request = lifecycle.request().clone();
+        let (interrupt_tx, interrupt_rx) = watch::channel(None);
+        let _observer = tokio_util::task::AbortOnDropHandle::new(
+            crate::interrupt::spawn_request_interrupt_observer(
+                self.node.clone(),
+                title_request.doc_id.clone(),
+                interrupt_tx,
+                shutdown.clone(),
+            ),
+        );
         let result = self
-            .execute(&mut lifecycle, &writer, title_request.clone(), shutdown)
+            .execute(
+                &mut lifecycle,
+                &writer,
+                title_request.clone(),
+                shutdown,
+                interrupt_rx,
+            )
             .await;
         if result
             .as_ref()
@@ -249,7 +249,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
             if let Some((title, parent_requester_did)) = title {
                 if let Err(error) = session::update_session_title_with_source(
                     self.node.as_ref(),
-                    &title_request.agent_did,
+                    &title_request.node_did,
                     parent_requester_did.as_deref(),
                     &title_request.session_id,
                     &title,
@@ -270,8 +270,17 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
         writer: &DefraStreamWriter,
         request: AgentRequest,
         shutdown: watch::Receiver<bool>,
+        mut interrupt_rx: watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
     ) -> Result<TitleResult> {
-        let parent = load_title_parent(&self.node, &request).await?;
+        let Some(parent) = super::request::prepare_unless_interrupted(
+            &mut interrupt_rx,
+            load_title_parent(&self.node, &request),
+        )
+        .await
+        else {
+            return Ok(TitleResult::Interrupted);
+        };
+        let parent = parent?;
         let commit_cid = lifecycle
             .request_commit_cid()
             .context("claimed title request has no exact commit CID")?;
@@ -279,7 +288,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
         let capture_context = crate::rendered_request::context_for_claimed_request(
             &request,
             commit_cid,
-            self.behavior.model_name.clone(),
+            self.agent_config.model_name.clone(),
             self.provider_family.clone(),
         );
         let mut capture_scope = crate::rendered_request::scope_from_factory(
@@ -293,62 +302,75 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
                 request.clone(),
                 generation,
                 crate::provider_input::ProviderInputProfile::resolve(
-                    self.behavior.backend_provider_kind,
-                    self.behavior.openai_wire_api,
+                    self.agent_config.backend_provider_kind,
+                    self.agent_config.openai_wire_api,
                 ),
             ));
         let admission_context = AdmissionCallContext::for_request(
             &request,
-            &self.behavior.behavior_id,
-            self.behavior.backend_id.clone().unwrap_or_default(),
+            &self.agent_config.agent_id,
+            self.agent_config.backend_id.clone().unwrap_or_default(),
         );
         admission::scope_request(
             admission_context,
             crate::rendered_request::scope::scope_request(capture_scope, async {
                 lifecycle.begin_owned_execution(writer).await?;
-                if !session::session_needs_generated_title(
-                    self.node.as_ref(),
-                    &request.agent_did,
-                    parent.requester_did.as_deref(),
-                    &request.session_id,
-                )
-                .await?
-                {
-                    return Ok(TitleResult::Skipped);
-                }
-                let recent = session::load_recent_titles_for_agent(
-                    self.node.as_ref(),
-                    &request.agent_did,
-                    &request.session_id,
-                    RECENT_TITLE_LIMIT,
-                )
-                .await
-                .unwrap_or_default();
-                let prompt = title_generation_prompt(&request.content, &recent);
-                let mut config = crate::completion_factory::loop_config(
-                    &self.behavior,
-                    title_generation_preamble(),
-                    0,
-                    crate::rendered_request::CaptureScopeKind::Title,
-                );
-                config.temperature = Some(0.0);
-                config.max_tokens =
-                    title_max_tokens(config.additional_params.as_ref(), config.max_tokens);
-                config.max_turns = 1;
-                config.retry_policy =
-                    crate::agent::completion_retry::CompletionRetryPolicy::no_retry();
-                config.aggregate_token_budget =
-                    crate::completion_factory::aggregate_token_budget_for_request(
+                let preparation = async {
+                    if !session::session_needs_generated_title(
                         self.node.as_ref(),
-                        &request,
+                        &request.node_did,
+                        parent.requester_did.as_deref(),
+                        &request.session_id,
                     )
-                    .await?;
+                    .await?
+                    {
+                        return Ok(None);
+                    }
+                    let recent = session::load_recent_titles_for_agent(
+                        self.node.as_ref(),
+                        &request.node_did,
+                        &request.session_id,
+                        RECENT_TITLE_LIMIT,
+                    )
+                    .await
+                    .unwrap_or_default();
+                    let prompt = title_generation_prompt(&request.content, &recent);
+                    let mut config = crate::completion_factory::loop_config(
+                        &self.agent_config,
+                        title_generation_preamble(),
+                        0,
+                        crate::rendered_request::CaptureScopeKind::Title,
+                    );
+                    config.temperature = Some(0.0);
+                    config.max_tokens =
+                        title_max_tokens(config.additional_params.as_ref(), config.max_tokens);
+                    config.max_turns = 1;
+                    config.retry_policy =
+                        crate::agent::completion_retry::CompletionRetryPolicy::no_retry();
+                    config.aggregate_token_budget =
+                        crate::completion_factory::aggregate_token_budget_for_request(
+                            self.node.as_ref(),
+                            &request,
+                        )
+                        .await?;
+                    Ok::<_, anyhow::Error>(Some((prompt, config)))
+                };
+                let Some(prepared) =
+                    super::request::prepare_unless_interrupted(&mut interrupt_rx, preparation)
+                        .await
+                else {
+                    return Ok(TitleResult::Interrupted);
+                };
+                let Some((prompt, config)) = prepared? else {
+                    return Ok(TitleResult::Skipped);
+                };
                 self.generate_with_fallback(
                     &request,
                     &prompt,
                     config,
                     parent.requester_did,
                     shutdown,
+                    &mut interrupt_rx,
                 )
                 .await
             }),
@@ -363,6 +385,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
         config: crate::agent::loop_stream::LoopConfig,
         parent_requester_did: Option<String>,
         mut shutdown: watch::Receiver<bool>,
+        interrupt_rx: &mut watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
     ) -> Result<TitleResult> {
         let mut last_error = None;
         for attempt in 1..=TITLE_GENERATION_MAX_ATTEMPTS {
@@ -372,13 +395,13 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
             let run = admission::scope_call(
                 CallKind::OneOff,
                 attempt,
-                crate::agent::loop_stream::run_loop_to_text::<M>(
+                Box::pin(crate::agent::loop_stream::run_loop_to_text::<M>(
                     (*self.model).clone(),
                     crate::llm::message::Message::user(prompt.to_string()),
                     Vec::new(),
                     Arc::new(Vec::new()),
                     config.clone(),
-                ),
+                )),
             );
             let result = tokio::select! {
                 biased;
@@ -388,7 +411,16 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
                     flush_received_title_partial("shutdown").await?;
                     return Ok(TitleResult::Interrupted);
                 }
-                result = tokio::time::timeout(Duration::from_secs(TITLE_GENERATION_TIMEOUT_SECS), run) => result,
+                result = super::request::prepare_unless_interrupted(
+                    interrupt_rx,
+                    tokio::time::timeout(Duration::from_secs(TITLE_GENERATION_TIMEOUT_SECS), run),
+                ) => match result {
+                    Some(result) => result,
+                    None => {
+                        flush_received_title_partial("interrupt").await?;
+                        return Ok(TitleResult::Interrupted);
+                    }
+                },
             };
             match result {
                 Ok(Ok(raw)) => {
@@ -445,9 +477,9 @@ async fn load_title_parent(node: &EmbeddedNode, title: &AgentRequest) -> Result<
         parent.purpose == RequestPurpose::Normal
             && parent.doc_id == parent_doc_id
             && title.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
-            && parent.agent_did == title.agent_did
+            && parent.node_did == title.node_did
             && parent.session_id == title.session_id
-            && parent.behavior_id == title.behavior_id,
+            && parent.agent_id == title.agent_id,
         "title parent receipt does not match signed provenance"
     );
     Ok(parent)

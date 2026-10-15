@@ -9,9 +9,9 @@ use crate::watcher::AgentRequest;
 pub(crate) struct RequestTraceAttrs {
     pub(crate) request_doc_id: String,
     pub(crate) request_id: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) session_id: String,
-    pub(crate) requested_behavior_id: String,
+    pub(crate) requested_agent_id: String,
     pub(crate) execution_origin: String,
     pub(crate) deadline_at: String,
     pub(crate) has_deadline: bool,
@@ -27,16 +27,16 @@ impl RequestTraceAttrs {
         Self {
             request_doc_id: request.doc_id.clone(),
             request_id: request.request_id.clone(),
-            agent_did: request.agent_did.clone(),
+            node_did: request.node_did.clone(),
             session_id: request.session_id.clone(),
-            requested_behavior_id: request.behavior_id.clone(),
+            requested_agent_id: request.agent_id.clone(),
             execution_origin: clean_optional(request.execution_origin.as_deref()),
             deadline_at: clean_optional(request.deadline.as_deref()),
             has_deadline: request
                 .deadline
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty()),
-            request_hop: request.subagent_depth,
+            request_hop: request.request_hop,
             parent_request_id: clean_optional(request.caused_by_parent_request_id.as_deref()),
             parent_tool_call_id: clean_optional(request.caused_by_parent_tool_call_id.as_deref()),
             selected_skill_count: request.input.selected_skill_ids.len(),
@@ -93,9 +93,9 @@ mod tests {
             purpose: gents_protocol::request_admission::RequestPurpose::Normal,
             doc_id: "doc-1".to_string(),
             request_id: "req-1".to_string(),
-            agent_did: "did:key:agent".to_string(),
+            node_did: "did:key:agent".to_string(),
             requester_did: None,
-            behavior_id: "behavior-a".to_string(),
+            agent_id: "behavior-a".to_string(),
             session_id: "session-1".to_string(),
             content: "do not put this in telemetry".to_string(),
             max_total_tokens: None,
@@ -106,7 +106,7 @@ mod tests {
             execution_generation: None,
             execution_lease_expires_at: None,
             execution_lease_secs: None,
-            subagent_depth: 1,
+            request_hop: 1,
             caused_by_parent_request_id: Some("parent-req".to_string()),
             caused_by_parent_request_doc_id: Some("parent-req-doc".to_string()),
             caused_by_parent_tool_call_id: Some("parent-tool".to_string()),
@@ -117,7 +117,7 @@ mod tests {
             caused_by_correlation: None,
             caused_by_trigger_context: None,
             workspace_id: None,
-            workspace_owner_agent_did: None,
+            workspace_owner_node_did: None,
             workspace_authority: None,
             workspace_seal_hash: None,
         }
@@ -138,7 +138,7 @@ mod tests {
 
         assert_eq!(attrs.request_doc_id, "doc-1");
         assert_eq!(attrs.request_id, "req-1");
-        assert_eq!(attrs.agent_did, "did:key:agent");
+        assert_eq!(attrs.node_did, "did:key:agent");
         assert_eq!(attrs.session_id, "session-1");
         assert_eq!(attrs.selected_skill_count, 2);
         assert!(attrs.workspace_cwd_set);

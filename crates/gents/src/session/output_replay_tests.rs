@@ -39,7 +39,7 @@ struct CapturedRequest {
     body: serde_json::Value,
 }
 
-const AGENT_DID: &str = "did:test:replay-agent";
+const NODE_DID: &str = "did:test:replay-agent";
 const SESSION_ID: &str = "replay-session";
 const REQUEST_ID: &str = "replay-request";
 
@@ -56,7 +56,7 @@ struct ReplayFixture {
 impl ReplayFixture {
     fn scope(&self) -> CanonicalReplayScope<'_> {
         CanonicalReplayScope {
-            agent_did: AGENT_DID,
+            node_did: NODE_DID,
             requester_did: None,
             session_id: SESSION_ID,
             request_id: REQUEST_ID,
@@ -80,16 +80,8 @@ impl ReplayFixture {
         source: RenderedRequestSource,
         storage: CaptureStorage,
     ) -> Option<CapturedRequest> {
-        use crate::rendered_request::{
-            build_rendered_completion_request, AssemblyBuildPath, AssemblyTrace,
-            DefraRenderedRequestSink, RenderedRequestComponents, RenderedRequestContext,
-        };
-
-        let capture_scope = format!("{}.1", self.scope_kind);
-        let (uri, family, body, wire) = match source {
+        let (body, wire) = match source {
             RenderedRequestSource::ClaudeCliSubscription => (
-                crate::claude_messages::MESSAGES_URI,
-                gents_loop::backend_provider::BackendProviderKind::ClaudeCliSubscription.as_str(),
                 serde_json::json!({
                     "model": "claude-test", "system": [{"type":"text","text":"system"}],
                     "messages": [{"role":"user","content":[{"type":"text","text":"prompt"}]}],
@@ -98,17 +90,44 @@ impl ReplayFixture {
                 Some(ReplayWire::ClaudeMessages),
             ),
             RenderedRequestSource::OpenAiChatCompletions => (
-                "https://api.openai.com/v1/chat/completions",
-                gents_loop::backend_provider::BackendProviderKind::OpenAiCompatible.as_str(),
                 serde_json::json!({"model":"test-model","messages":[{"role":"user","content":"prompt"}]}),
                 None,
             ),
             RenderedRequestSource::OpenAiResponses => (
-                "https://api.openai.com/v1/responses",
-                gents_loop::backend_provider::BackendProviderKind::OpenAiCompatible.as_str(),
                 serde_json::json!({"model":"test-model","input":[{"role":"user","content":"prompt"}]}),
                 Some(ReplayWire::Responses),
             ),
+        };
+        self.insert_capture_row(source, 0, body, storage, wire)
+            .await
+    }
+
+    async fn insert_capture_row(
+        &self,
+        source: RenderedRequestSource,
+        turn_index: u32,
+        body: serde_json::Value,
+        storage: CaptureStorage,
+        wire: Option<ReplayWire>,
+    ) -> Option<CapturedRequest> {
+        use crate::rendered_request::{
+            build_rendered_completion_request, AssemblyBuildPath, AssemblyTrace,
+            DefraRenderedRequestSink, RenderedRequestComponents, RenderedRequestContext,
+        };
+
+        let capture_scope = format!("{}.1", self.scope_kind);
+        let uri = match source {
+            RenderedRequestSource::ClaudeCliSubscription => crate::claude_messages::MESSAGES_URI,
+            RenderedRequestSource::OpenAiChatCompletions => {
+                "https://api.openai.com/v1/chat/completions"
+            }
+            RenderedRequestSource::OpenAiResponses => "https://api.openai.com/v1/responses",
+        };
+        let family = match source {
+            RenderedRequestSource::ClaudeCliSubscription => {
+                gents_loop::backend_provider::BackendProviderKind::ClaudeCliSubscription.as_str()
+            }
+            _ => gents_loop::backend_provider::BackendProviderKind::OpenAiCompatible.as_str(),
         };
         let destination: rig::http_client::Uri = uri.parse().expect("fixture destination");
         let endpoint = format!(
@@ -128,9 +147,9 @@ impl ReplayFixture {
                 request_doc_id: self.request_doc_id.clone(),
                 request_commit_cid: self.request_commit_cid.clone(),
                 request_id: REQUEST_ID.into(),
-                agent_did: AGENT_DID.into(),
+                node_did: NODE_DID.into(),
                 requester_did: String::new(),
-                behavior_id: "general".into(),
+                agent_id: "general".into(),
                 session_id: SESSION_ID.into(),
                 model_name: "test-model".into(),
                 provider_family: Some(family.into()),
@@ -139,7 +158,7 @@ impl ReplayFixture {
             source,
             Some(endpoint),
             Some(route_path_sha256),
-            0,
+            turn_index as usize,
             0,
             trace,
             RenderedRequestComponents::from_provider_body(body.clone(), source),
@@ -168,7 +187,7 @@ impl ReplayFixture {
                         doc_id: "bae-00000000-0000-5000-8000-000000000000".into(),
                         field_commit_cid: "missing-base-commit".into(),
                         depth: 0,
-                        agent_did: AGENT_DID.into(),
+                        node_did: NODE_DID.into(),
                         requester_did: String::new(),
                         session_id: SESSION_ID.into(),
                         source: serde_json::to_value(source)
@@ -194,13 +213,159 @@ impl ReplayFixture {
         wire.map(|wire| CapturedRequest { issuer, wire, body })
     }
 
+    /// Append one more accepted provider assistant turn — close, header and
+    /// its own capture coordinate — so a fixture can hold K replayable turns.
+    async fn insert_provider_turn(&mut self, turn_index: u32, body: serde_json::Value) {
+        let now = chrono::Utc::now().to_rfc3339();
+        let source = OutputSource::ProviderTurn {
+            scope: format!("{}.1", self.scope_kind).parse().unwrap(),
+            turn_index,
+            attempt: 0,
+        };
+        let reasoning = format!("think-{turn_index}");
+        let signature = format!("sig-{turn_index}");
+        let answer = format!("answer-{turn_index}");
+        let parts = [reasoning.as_str(), signature.as_str(), answer.as_str()];
+        let segment = OutputSegment {
+            node_did: NODE_DID.into(),
+            requester_did: None,
+            session_id: SESSION_ID.into(),
+            request_doc_id: self.request_doc_id.clone(),
+            source: source.clone(),
+            writer: OutputWriter::RequestExecution {
+                execution_generation: "generation".into(),
+            },
+            ordinal: Some(0),
+            runs: vec![
+                SegmentRun {
+                    stream: 0,
+                    bytes: parts[0].len() as u32,
+                    declaration: Some(StreamDeclaration {
+                        block_index: 0,
+                        part_index: 0,
+                        payload: StreamPayload::Reasoning,
+                    }),
+                },
+                SegmentRun {
+                    stream: 1,
+                    bytes: parts[1].len() as u32,
+                    declaration: Some(StreamDeclaration {
+                        block_index: 0,
+                        part_index: 0,
+                        payload: StreamPayload::ReasoningSignature,
+                    }),
+                },
+                SegmentRun {
+                    stream: 2,
+                    bytes: parts[2].len() as u32,
+                    declaration: Some(StreamDeclaration {
+                        block_index: 1,
+                        part_index: 0,
+                        payload: StreamPayload::Text,
+                    }),
+                },
+            ],
+            payload: parts.concat(),
+            close: Some(SourceClose::Closed {
+                outcome: OutputOutcome::Complete,
+                segments: 1,
+                stream_bytes: parts.iter().map(|part| part.len() as u64).collect(),
+            }),
+            created_at: now.clone(),
+        };
+        let created = self
+            .node
+            .execute_request_with_retry(
+                defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
+                    .with_variables(output_segment_create_variables(&segment).unwrap()),
+                defra_node::ExecuteRetryPolicy::default(),
+            )
+            .await;
+        assert!(!created.has_errors(), "{:?}", created.errors);
+        let close_doc_id =
+            crate::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
+                .unwrap()
+                .unwrap()["_docID"]
+                .as_str()
+                .unwrap()
+                .to_string();
+        let header = TranscriptMessage {
+            message_key: format!(
+                "provider:{}:{}",
+                self.request_doc_id,
+                serde_json::to_string(&source).unwrap()
+            ),
+            session_id: SESSION_ID.into(),
+            node_did: NODE_DID.into(),
+            requester_did: None,
+            request_doc_id: Some(self.request_doc_id.clone()),
+            publication: MessagePublication::RequestExecution {
+                execution_generation: "generation".into(),
+            },
+            outcome: OutputOutcome::Complete,
+            sequence: turn_index + 1,
+            role: MessageRole::Assistant,
+            native_id: Some(format!("provider-{turn_index}")),
+            blocks: vec![
+                MessageBlock::Reasoning {
+                    id: None,
+                    parts: vec![ReasoningPart::Text {
+                        text: PayloadRef {
+                            close_doc_id: close_doc_id.clone(),
+                            stream: 0,
+                        },
+                        signature: Some(signature),
+                    }],
+                },
+                MessageBlock::Text {
+                    text: PresentedPayload {
+                        output: PayloadRef {
+                            close_doc_id,
+                            stream: 2,
+                        },
+                        presentation: PayloadPresentation::Full,
+                    },
+                },
+            ],
+            created_at: now,
+        };
+        let created = self
+            .node
+            .execute_request_with_retry(
+                defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
+                    .with_variables(transcript_message_create_variables(&header).unwrap()),
+                defra_node::ExecuteRetryPolicy::default(),
+            )
+            .await;
+        assert!(!created.has_errors(), "{:?}", created.errors);
+        self.insert_capture_row(
+            RenderedRequestSource::ClaudeCliSubscription,
+            turn_index,
+            body,
+            CaptureStorage::Exact,
+            Some(ReplayWire::ClaudeMessages),
+        )
+        .await
+        .expect("turn capture");
+        self.boundary = capture_source_boundary(
+            &self.node,
+            SESSION_ID,
+            NODE_DID,
+            None,
+            &self.request_doc_id,
+            &self.request_commit_cid,
+        )
+        .await
+        .unwrap();
+    }
+
     async fn insert_authored_assistant(&mut self) {
         let now = chrono::Utc::now().to_rfc3339();
         let source = OutputSource::Authored {
             key: "assistant-note".into(),
         };
         let segment = OutputSegment {
-            agent_did: AGENT_DID.into(),
+            node_did: NODE_DID.into(),
             requester_did: None,
             session_id: SESSION_ID.into(),
             request_doc_id: self.request_doc_id.clone(),
@@ -248,7 +413,7 @@ impl ReplayFixture {
                 "assistant-note",
             ),
             session_id: SESSION_ID.into(),
-            agent_did: AGENT_DID.into(),
+            node_did: NODE_DID.into(),
             requester_did: None,
             request_doc_id: Some(self.request_doc_id.clone()),
             publication: MessagePublication::RequestExecution {
@@ -281,7 +446,7 @@ impl ReplayFixture {
         self.boundary = capture_source_boundary(
             &self.node,
             SESSION_ID,
-            AGENT_DID,
+            NODE_DID,
             None,
             &self.request_doc_id,
             &self.request_commit_cid,
@@ -401,13 +566,13 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
     let created = node
         .execute(&format!(
             r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "{}", purpose: "normal", agent_did: "{}",
-                behavior_id: "general", session_id: "{}", content: "prompt",
+                request_id: "{}", purpose: "normal", node_did: "{}",
+                agent_id: "general", session_id: "{}", content: "prompt",
                 lifecycle_state: "pending", execution_origin: "interactive",
-                created_at: "{}", retry_count: 0, max_retries: 3, subagent_depth: 0
+                created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
             }}) {{ _docID }} }}"#,
             crate::graphql::escape_graphql_string(REQUEST_ID),
-            crate::graphql::escape_graphql_string(AGENT_DID),
+            crate::graphql::escape_graphql_string(NODE_DID),
             crate::graphql::escape_graphql_string(SESSION_ID),
             crate::graphql::escape_graphql_string(&now),
         ))
@@ -521,7 +686,7 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         )
     };
     let segment = OutputSegment {
-        agent_did: AGENT_DID.into(),
+        node_did: NODE_DID.into(),
         requester_did: None,
         session_id: SESSION_ID.into(),
         request_doc_id: request_doc_id.clone(),
@@ -561,7 +726,7 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
             serde_json::to_string(&source).unwrap()
         ),
         session_id: SESSION_ID.into(),
-        agent_did: AGENT_DID.into(),
+        node_did: NODE_DID.into(),
         requester_did: None,
         request_doc_id: Some(request_doc_id.clone()),
         publication: MessagePublication::RequestExecution {
@@ -640,7 +805,7 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
     let boundary = capture_source_boundary(
         &node,
         SESSION_ID,
-        AGENT_DID,
+        NODE_DID,
         None,
         &request_doc_id,
         &request_commit_cid,
@@ -893,7 +1058,7 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
     let history = super::output::load_sequenced_messages(
         &fixture.node,
         SESSION_ID,
-        AGENT_DID,
+        NODE_DID,
         None,
         None,
         None,
@@ -1112,7 +1277,7 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
     fixture.boundary = capture_source_boundary(
         &fixture.node,
         SESSION_ID,
-        AGENT_DID,
+        NODE_DID,
         None,
         &fixture.request_doc_id,
         &fixture.request_commit_cid,
@@ -1125,15 +1290,21 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
         commits: std::sync::atomic::AtomicUsize::new(0),
     };
     for resolution in 1..=2 {
-        let candidates = super::output::load_canonical_assistant_candidates_with(
-            &fixture.node,
-            &requests,
-            fixture.scope(),
-            &fixture.boundary,
-            None,
+        let (candidates, segment_scans) = crate::session::count_request_output_scans(
+            super::output::load_canonical_assistant_candidates_with(
+                &fixture.node,
+                &requests,
+                fixture.scope(),
+                &fixture.boundary,
+                None,
+            ),
         )
-        .await
-        .unwrap();
+        .await;
+        let candidates = candidates.unwrap();
+        assert_eq!(
+            segment_scans, 1,
+            "one pass scans a shared request's output once"
+        );
         assert_eq!(candidates.len(), 2);
         assert_ne!(candidates[0].header_doc_id, candidates[1].header_doc_id);
         assert!(candidates.iter().all(|candidate| candidate.has_capture()));
@@ -1233,12 +1404,12 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
         .node
         .execute(&format!(
             r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "replay-request-next", purpose: "normal", agent_did: "{}",
-                behavior_id: "general", session_id: "{}", content: "next",
+                request_id: "replay-request-next", purpose: "normal", node_did: "{}",
+                agent_id: "general", session_id: "{}", content: "next",
                 lifecycle_state: "pending", execution_origin: "interactive",
-                created_at: "{}", retry_count: 0, max_retries: 3, subagent_depth: 0
+                created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
             }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(AGENT_DID),
+            crate::graphql::escape_graphql_string(NODE_DID),
             crate::graphql::escape_graphql_string(SESSION_ID),
             crate::graphql::escape_graphql_string(&now),
         ))
@@ -1262,7 +1433,7 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
     let boundary = capture_source_boundary(
         &fixture.node,
         SESSION_ID,
-        AGENT_DID,
+        NODE_DID,
         None,
         &current_doc_id,
         &current_commit_cid,
@@ -1358,5 +1529,557 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
                 .is_none(),
             "{fault:?} is not a replay violation: {error:#}"
         );
+    }
+}
+
+async fn stored_agent_request(fixture: &ReplayFixture) -> crate::watcher::AgentRequest {
+    let response = fixture
+        .node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+            crate::graphql::escape_graphql_string(&fixture.request_doc_id),
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let row = response.data.unwrap()["AgentRequest"][0].clone();
+    crate::watcher::AgentRequest::try_from(
+        serde_json::from_value::<gents_protocol::row::AgentRequestRow>(row).unwrap(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn replay_resolution_observes_capture_arriving_for_existing_header() {
+    let fixture = signed_fixture().await;
+    let candidate = fixture.candidates().await.unwrap().remove(0);
+    let tag = ReplayTag {
+        request_doc_id: candidate.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let replay = crate::provider_input::replay::owned_replay_input(
+        fixture.node.clone(),
+        stored_agent_request(&fixture).await,
+        fixture.request_commit_cid.clone(),
+        fixture.scope_kind,
+        None,
+        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+    );
+    let resolve = replay.resolve.expect("canonical resolver");
+    assert!(resolve(vec![tag.clone()]).await.unwrap().is_empty());
+    fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    assert_eq!(
+        resolve(vec![tag]).await.unwrap().len(),
+        1,
+        "a capture arriving for the same physical header must become replay evidence"
+    );
+}
+
+#[tokio::test]
+async fn replay_resolution_observes_a_header_replicated_before_dispatch() {
+    let fixture = signed_fixture().await;
+    fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    let candidate = fixture.candidates().await.unwrap().remove(0);
+    let tag = ReplayTag {
+        request_doc_id: candidate.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let replay = crate::provider_input::replay::owned_replay_input(
+        fixture.node.clone(),
+        stored_agent_request(&fixture).await,
+        fixture.request_commit_cid.clone(),
+        fixture.scope_kind,
+        None,
+        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+    );
+    let resolve = replay.resolve.expect("canonical resolver");
+    let estimate = resolve(vec![tag.clone()]).await.unwrap();
+    assert_eq!(estimate.len(), 1);
+    let (unchanged, scans) =
+        crate::session::count_request_output_scans(resolve(vec![tag.clone()])).await;
+    assert_eq!(
+        unchanged.unwrap().len(),
+        1,
+        "an unchanged view resolves the same evidence"
+    );
+    assert_eq!(
+        scans, 1,
+        "each dispatch lookup revalidates canonical evidence"
+    );
+    assert_eq!(resolve(vec![tag.clone()]).await.unwrap().len(), 1);
+
+    let mut duplicate = fixture.header.clone();
+    duplicate.sequence += 1;
+    duplicate.message_key.push_str("-replicated-twin");
+    let created = fixture
+        .node
+        .execute_request_with_retry(
+            defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
+                .with_variables(transcript_message_create_variables(&duplicate).unwrap()),
+            defra_node::ExecuteRetryPolicy::default(),
+        )
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+
+    let dispatch = resolve(vec![tag]).await.unwrap();
+    assert_eq!(
+        dispatch.len(),
+        2,
+        "the dispatch lookup sees the replicated physical twin"
+    );
+    assert_ne!(
+        dispatch[0].evidence.physical_header,
+        dispatch[1].evidence.physical_header
+    );
+}
+
+/// The admission estimate and the first dispatch resolve the same tags
+/// back-to-back; the estimate's recorded pass serves that dispatch, and every
+/// later lookup revalidates the canonical evidence exactly as before.
+#[tokio::test]
+async fn the_dispatch_after_an_admission_estimate_serves_its_resolution_without_rereading() {
+    let fixture = signed_fixture().await;
+    fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    let candidate = fixture.candidates().await.unwrap().remove(0);
+    let tag = ReplayTag {
+        request_doc_id: candidate.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let replay = crate::provider_input::replay::owned_replay_input(
+        fixture.node.clone(),
+        stored_agent_request(&fixture).await,
+        fixture.request_commit_cid.clone(),
+        fixture.scope_kind,
+        None,
+        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+    );
+    let resolve = replay.resolve.clone().expect("canonical resolver");
+    let (estimate, estimate_scans) = crate::session::count_request_output_scans(async {
+        let _estimate_seed = replay.arm_estimate_seed();
+        resolve(vec![tag.clone()]).await.unwrap()
+    })
+    .await;
+    assert_eq!(estimate.len(), 1);
+    assert_eq!(
+        estimate_scans, 1,
+        "the admission estimate performs its own canonical pass"
+    );
+
+    let (dispatch, dispatch_scans) = crate::session::count_request_output_scans(
+        gents_loop::loop_stream::resolve_replay_evidence(&replay, &[tag.clone()]),
+    )
+    .await;
+    assert_eq!(
+        dispatch.as_ref().unwrap(),
+        &estimate,
+        "the immediate dispatch serves the estimate's resolution unchanged"
+    );
+    assert_eq!(
+        dispatch_scans, 0,
+        "the immediately following dispatch rereads no canonical evidence"
+    );
+
+    let (next, next_scans) = crate::session::count_request_output_scans(
+        gents_loop::loop_stream::resolve_replay_evidence(&replay, &[tag.clone()]),
+    )
+    .await;
+    assert_eq!(next.unwrap(), estimate);
+    assert_eq!(
+        next_scans, 1,
+        "every lookup after the seeded dispatch revalidates the store"
+    );
+}
+
+/// Binds the documented seed window: a header twin replicating between the
+/// admission estimate and its first dispatch is served per the estimate, and
+/// observed by the next resolution. A tag the estimate resolved empty is not
+/// seeded, so its dispatch lookup still revalidates and observes a capture
+/// that arrived in the window.
+#[tokio::test]
+async fn a_header_twin_arriving_between_the_admission_estimate_and_dispatch_waits_for_the_next_lookup(
+) {
+    let fixture = signed_fixture().await;
+    fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    let candidate = fixture.candidates().await.unwrap().remove(0);
+    let tag = ReplayTag {
+        request_doc_id: candidate.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let replay = crate::provider_input::replay::owned_replay_input(
+        fixture.node.clone(),
+        stored_agent_request(&fixture).await,
+        fixture.request_commit_cid.clone(),
+        fixture.scope_kind,
+        None,
+        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+    );
+    let resolve = replay.resolve.clone().expect("canonical resolver");
+    let estimate = {
+        let _estimate_seed = replay.arm_estimate_seed();
+        resolve(vec![tag.clone()]).await.unwrap()
+    };
+    assert_eq!(estimate.len(), 1);
+
+    let mut duplicate = fixture.header.clone();
+    duplicate.sequence += 1;
+    duplicate.message_key.push_str("-estimate-twin");
+    let created = fixture
+        .node
+        .execute_request_with_retry(
+            defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
+                .with_variables(transcript_message_create_variables(&duplicate).unwrap()),
+            defra_node::ExecuteRetryPolicy::default(),
+        )
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+
+    let dispatch = gents_loop::loop_stream::resolve_replay_evidence(&replay, &[tag.clone()])
+        .await
+        .unwrap();
+    assert_eq!(
+        dispatch, estimate,
+        "the seeded dispatch answers the estimate's window, not the replicated twin"
+    );
+    let observed = gents_loop::loop_stream::resolve_replay_evidence(&replay, &[tag.clone()])
+        .await
+        .unwrap();
+    assert_eq!(
+        observed.len(),
+        2,
+        "the next resolution observes the replicated physical twin"
+    );
+}
+
+/// One pass over many selected turns reads the capture rows in one chunked
+/// statement and the blocks' field-commit witnesses in batches spanning every
+/// manifest, instead of one statement set per turn, and answers exactly what
+/// the per-tag singleton owner answers.
+#[tokio::test]
+async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits() {
+    let turns = 4;
+    let mut fixture = signed_fixture().await;
+    fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    for turn in 1..turns {
+        let body = serde_json::json!({
+            "model": "claude-test",
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "prompt"}]},
+                {"role": "assistant", "content": [
+                    {"type": "thinking", "thinking": format!("think-{turn}"), "signature": format!("sig-{turn}")},
+                    {"type": "text", "text": format!("answer-{turn}")}
+                ]},
+                {"role": "user", "content": [{"type": "text", "text": "x".repeat(16 * 1024)}]}
+            ]
+        });
+        fixture.insert_provider_turn(turn, body).await;
+    }
+    let candidates = fixture.candidates().await.unwrap();
+    assert_eq!(candidates.len() as u32, turns);
+    let tag_for = |candidate: &super::output::CanonicalAssistantCandidate| ReplayTag {
+        request_doc_id: candidate.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let tags = candidates.iter().map(tag_for).collect::<Vec<_>>();
+
+    // The expected statement count derives from the stored rows through the
+    // same decode owner the preload uses, not from a fixture constant.
+    let capture_keys = candidates
+        .iter()
+        .map(|candidate| {
+            gents_loop::rendered_request::capture_key(
+                NODE_DID,
+                SESSION_ID,
+                &candidate.request_doc_id,
+                &candidate.coordinate.scope.to_string(),
+                usize::try_from(candidate.coordinate.turn_index).unwrap(),
+                candidate.coordinate.attempt,
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let filter = capture_keys
+        .iter()
+        .map(|key| format!("\"{}\"", crate::graphql::escape_graphql_string(key)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let response = fixture
+        .node
+        .execute(&format!(
+            r#"{{ RenderedRequest(filter: {{ capture_key: {{ _in: [{filter}] }} }}) {{ capture_version request_json }} }}"#
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let mut block_docs = std::collections::BTreeSet::new();
+    for row in response.data.unwrap()["RenderedRequest"]
+        .as_array()
+        .unwrap()
+    {
+        let version = row["capture_version"].as_u64().unwrap() as u32;
+        if let crate::rendered_request::encoding::DecodedRecord::Manifest { blocks } =
+            crate::rendered_request::encoding::decode_capture_record(
+                version,
+                row["request_json"].as_str().unwrap(),
+                crate::rendered_request::CapturePayloadKind::RequestBody,
+            )
+            .unwrap()
+        {
+            for entry in blocks {
+                block_docs.insert(entry.doc_id);
+            }
+        }
+    }
+    assert!(
+        block_docs.len() >= turns as usize,
+        "every fixture capture stores its own manifest blocks, so the pass has real witnesses to batch"
+    );
+    let expected_commit_statements = block_docs
+        .len()
+        .div_ceil(crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH);
+
+    let ((batched, commit_statements), capture_queries) =
+        crate::session::count_capture_row_queries(
+            crate::rendered_request::commits::count_field_commit_statements(
+                super::output::resolve_canonical_replay_tags(
+                    &fixture.node,
+                    fixture.scope(),
+                    &fixture.boundary,
+                    &tags,
+                ),
+            ),
+        )
+        .await;
+    let batched = batched.unwrap();
+    assert_eq!(
+        batched.len(),
+        tags.len(),
+        "every requested tag answers once, in order"
+    );
+    assert_eq!(
+        capture_queries, 1,
+        "one chunked capture-row statement covers every selected turn"
+    );
+    assert_eq!(
+        commit_statements, expected_commit_statements,
+        "field-commit witnesses batch across every manifest of the pass"
+    );
+    for (index, tag) in tags.iter().enumerate() {
+        let singleton = super::output::resolve_canonical_replay_tag(
+            &fixture.node,
+            fixture.scope(),
+            &fixture.boundary,
+            tag,
+        )
+        .await
+        .unwrap();
+        assert_eq!(batched[index].0, *tag);
+        assert_eq!(
+            batched[index].1, singleton,
+            "the batched pass answers exactly the per-tag singleton owner"
+        );
+    }
+}
+
+/// A capture whose manifest pins a block whose stored payload does not hash to
+/// the pinned key is a verification failure of that capture alone. The pass's
+/// shared block preload must isolate it per manifest — skipping only that
+/// capture's blocks — so the pass completes and every healthy turn stays
+/// replayable, exactly as the per-capture reader always classified it.
+#[tokio::test]
+async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() {
+    let turns = 3u32;
+    let corrupt_turn = turns - 1;
+    let marker = "corrupt-block-payload-marker";
+    let mut fixture = signed_fixture().await;
+    fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    fixture
+        .insert_provider_turn(
+            1,
+            serde_json::json!({
+                "model": "claude-test",
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "prompt"}]},
+                    {"role": "assistant", "content": [
+                        {"type": "thinking", "thinking": "think-0", "signature": "sig-0"},
+                        {"type": "text", "text": "answer-0"}
+                    ]},
+                    {"role": "user", "content": [{"type": "text", "text": "x".repeat(16 * 1024)}]}
+                ]
+            }),
+        )
+        .await;
+    // The corrupt turn's body carries bytes no healthy capture shares, so the
+    // block poisoned below is pinned by its manifest alone.
+    let body = serde_json::json!({
+        "model": "claude-test",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "prompt"}]},
+            {"role": "user", "content": [
+                {"type": "text", "text": format!("{marker}{}", "z".repeat(16 * 1024))}
+            ]}
+        ]
+    });
+    // The exact bytes the sink will chunk for this body, so the poisoned block
+    // lands under the content key the sink's manifest will pin.
+    let canonical = gents_loop::rendered_request::canonical_json_string(&body).unwrap();
+    let chunks = crate::rendered_request::encoding::chunk_capture_body(&canonical);
+    let index = chunks
+        .iter()
+        .position(|chunk| {
+            std::str::from_utf8(&chunk.bytes)
+                .expect("canonical block bytes are UTF-8")
+                .contains(marker)
+        })
+        .expect("the marker lands in a block");
+    // Same length, different bytes: byte_len still pins, the content key does not.
+    let mut poisoned = chunks[index].bytes.clone();
+    let at = std::str::from_utf8(&poisoned)
+        .expect("canonical block bytes are UTF-8")
+        .find(marker)
+        .expect("the marker is in this block");
+    poisoned[at] = b'k';
+    assert_ne!(
+        crate::rendered_request::encoding::block_content_key(&poisoned),
+        chunks[index].content_key
+    );
+    let created = fixture
+        .node
+        .execute_request_with_retry(
+            defra_node::QueryRequest::new(
+                "mutation($input: RenderedRequestBlockMutationInputArg!) { \
+                 create_RenderedRequestBlock(input: $input) { _docID } }",
+            )
+            .with_variables(serde_json::json!({ "input": {
+                "content_key": chunks[index].content_key,
+                "payload": String::from_utf8(poisoned.clone()).unwrap(),
+                "byte_len": chunks[index].bytes.len(),
+                "created_at": chrono::Utc::now().to_rfc3339(),
+            }})),
+            defra_node::ExecuteRetryPolicy::default(),
+        )
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let poisoned_doc =
+        crate::graphql::single_mutation_document(&created, "create_RenderedRequestBlock")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+    fixture.insert_provider_turn(corrupt_turn, body).await;
+
+    // Fixture guarantee: the poisoned document is pinned by the corrupt turn's
+    // manifest only, so a degraded turn is the corrupt turn and nothing else.
+    let response = fixture
+        .node
+        .execute(r#"{ RenderedRequest { capture_version request_json } }"#)
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let mut referencing = 0usize;
+    for row in response.data.unwrap()["RenderedRequest"]
+        .as_array()
+        .unwrap()
+    {
+        let version = row["capture_version"].as_u64().unwrap() as u32;
+        let stored = row["request_json"].as_str().unwrap();
+        let pins_poison = [
+            crate::rendered_request::CapturePayloadKind::RequestBody,
+            crate::rendered_request::CapturePayloadKind::ProvenancePayload,
+        ]
+        .into_iter()
+        .any(|kind| {
+            matches!(
+                crate::rendered_request::encoding::decode_capture_record(version, stored, kind),
+                Ok(crate::rendered_request::encoding::DecodedRecord::Manifest { blocks })
+                    if blocks.iter().any(|entry| entry.doc_id == poisoned_doc)
+            )
+        });
+        referencing += pins_poison as usize;
+    }
+    assert_eq!(
+        referencing, 1,
+        "only the corrupt turn pins the poisoned block"
+    );
+
+    let candidates = fixture
+        .candidates()
+        .await
+        .expect("a corrupt capture must degrade only its own turn");
+    assert_eq!(candidates.len() as u32, turns);
+    let tags = candidates
+        .iter()
+        .map(|candidate| ReplayTag {
+            request_doc_id: candidate.request_doc_id.clone(),
+            source: OutputSource::ProviderTurn {
+                scope: candidate.coordinate.scope,
+                turn_index: candidate.coordinate.turn_index,
+                attempt: candidate.coordinate.attempt,
+            },
+        })
+        .collect::<Vec<_>>();
+    let resolved = super::output::resolve_canonical_replay_tags(
+        &fixture.node,
+        fixture.scope(),
+        &fixture.boundary,
+        &tags,
+    )
+    .await
+    .expect("a corrupt capture must degrade only its own turn");
+    assert_eq!(resolved.len(), tags.len());
+    for (tag, evidence) in &resolved {
+        let OutputSource::ProviderTurn { turn_index, .. } = tag.source else {
+            unreachable!("tags are provider turns");
+        };
+        if turn_index == corrupt_turn {
+            assert!(evidence.is_empty(), "the corrupt turn is non-replayable");
+        } else {
+            assert_eq!(
+                evidence.len(),
+                1,
+                "the healthy turn {turn_index} keeps its evidence"
+            );
+            assert!(
+                evidence[0].captured.is_some(),
+                "the healthy turn {turn_index} still replays its captured body"
+            );
+        }
     }
 }

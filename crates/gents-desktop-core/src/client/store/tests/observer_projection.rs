@@ -8,7 +8,7 @@ fn header(id: &str) -> TranscriptMessageRow {
         message: TranscriptMessage {
             message_key: id.into(),
             session_id: "session-1".into(),
-            agent_did: "did:agent:1".into(),
+            node_did: "did:node:1".into(),
             requester_did: None,
             request_doc_id: None,
             publication: MessagePublication::RequestExecution {

@@ -35,7 +35,7 @@ async fn seed_sign_in(node: &EmbeddedNode) {
         .execute(
             r#"mutation { create_OAuthCredential(input: {
                 credential_id: "chatgpt-codex:did:key:z6MkUsageA"
-                agent_did: "did:key:z6MkUsageA"
+                node_did: "did:key:z6MkUsageA"
                 provider: "chatgpt-codex"
                 access_token: "access-TEST"
                 refresh_token: "refresh-TEST"
@@ -51,7 +51,7 @@ async fn seed_sign_in(node: &EmbeddedNode) {
 
 async fn sign_ins(node: &EmbeddedNode) -> Value {
     let response = node
-        .execute("{ OAuthCredential { credential_id agent_did access_token enabled } }")
+        .execute("{ OAuthCredential { credential_id node_did access_token enabled } }")
         .await;
     assert!(!response.has_errors(), "read: {:?}", response.errors);
     response.data.expect("data")[OAUTH_CREDENTIAL_NAME].clone()

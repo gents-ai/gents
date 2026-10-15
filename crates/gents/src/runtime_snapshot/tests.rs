@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use super::*;
 use crate::tool_surface::{
-    BehaviorToolConfig, FileToolMode, ResolvedToolSelection, RuntimeToolAvailability,
-    SubagentToolConfig, ToolCeiling,
+    AgentToolConfig, AgentToolSurfaceConfig, FileToolMode, ResolvedToolSelection,
+    RuntimeToolAvailability, ToolCeiling,
 };
 
 fn fingerprint_tool_surface(lsp_config: Option<String>) -> Arc<ToolSurface> {
@@ -15,7 +15,7 @@ fn fingerprint_tool_surface(lsp_config: Option<String>) -> Arc<ToolSurface> {
         FileToolMode::Off
     };
     Arc::new(
-        BehaviorToolConfig::from_selection(
+        AgentToolSurfaceConfig::from_selection(
             "fingerprint",
             ResolvedToolSelection {
                 file_tools,
@@ -27,9 +27,9 @@ fn fingerprint_tool_surface(lsp_config: Option<String>) -> Arc<ToolSurface> {
             Vec::new(),
         )
         .unwrap()
-        .resolve_with_subagent_tools_for_runtime_availability(
+        .resolve_with_agent_tools_for_runtime_availability(
             RuntimeToolAvailability::all(),
-            SubagentToolConfig::default(),
+            AgentToolConfig::default(),
         ),
     )
 }
@@ -37,16 +37,16 @@ fn fingerprint_tool_surface(lsp_config: Option<String>) -> Arc<ToolSurface> {
 #[test]
 fn readiness_source_validation_rejects_noncanonical_or_unassigned_defaults() {
     let mut resolved = ResolvedRuntimeSnapshot {
-        principal: None,
+        node: None,
         local_did: String::new(),
-        default_behavior_id: "missing".to_string(),
-        behaviors: HashMap::new(),
+        default_agent_id: "missing".to_string(),
+        agents: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::from([(
+        unavailable_agents: HashMap::from([(
             "general".to_string(),
-            UnavailableBehavior::new(
-                BehaviorReadinessUnavailableReason::BackendNotConfigured,
+            UnavailableAgent::new(
+                AgentReadinessUnavailableReason::BackendNotConfigured,
                 "missing backend",
             ),
         )]),
@@ -56,25 +56,25 @@ fn readiness_source_validation_rejects_noncanonical_or_unassigned_defaults() {
         unavailable_event_triggers: HashSet::new(),
         active_tasks: HashMap::new(),
     };
-    assert!(resolved.validate_behavior_readiness_source().is_err());
+    assert!(resolved.validate_node_readiness_source().is_err());
 
-    resolved.default_behavior_id = " general".to_string();
-    assert!(resolved.validate_behavior_readiness_source().is_err());
+    resolved.default_agent_id = " general".to_string();
+    assert!(resolved.validate_node_readiness_source().is_err());
 
-    resolved.default_behavior_id = "general".to_string();
-    assert!(resolved.validate_behavior_readiness_source().is_ok());
+    resolved.default_agent_id = "general".to_string();
+    assert!(resolved.validate_node_readiness_source().is_ok());
 }
 
 #[test]
 fn configuration_fingerprint_reflects_schedule_set() {
     let base = ResolvedRuntimeSnapshot {
-        principal: None,
+        node: None,
         local_did: String::new(),
-        default_behavior_id: "general".to_string(),
-        behaviors: HashMap::new(),
+        default_agent_id: "general".to_string(),
+        agents: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::new(),
+        unavailable_agents: HashMap::new(),
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
@@ -87,7 +87,7 @@ fn configuration_fingerprint_reflects_schedule_set() {
         emit_outcome: false,
         task_id: "t1".to_string(),
         name: None,
-        behavior_id: "general".to_string(),
+        agent_id: "general".to_string(),
         prompt_template: "do the thing".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -122,16 +122,16 @@ fn configuration_fingerprint_reflects_schedule_set() {
 #[test]
 fn configuration_fingerprint_reflects_lsp_configuration() {
     let base = ResolvedRuntimeSnapshot {
-        principal: None,
+        node: None,
         local_did: String::new(),
-        default_behavior_id: "general".to_string(),
-        behaviors: HashMap::new(),
+        default_agent_id: "general".to_string(),
+        agents: HashMap::new(),
         tool_surfaces: HashMap::from([(
             "general".to_string(),
             fingerprint_tool_surface(Some("{}".to_string())),
         )]),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::new(),
+        unavailable_agents: HashMap::new(),
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),

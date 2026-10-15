@@ -48,7 +48,7 @@ open ToolExecution
 
 /-- Parent request as observed by the startup classifier. `missing` covers
     rows whose exact physical request document cannot be resolved in the
-    recovering principal's scope. Replication may supply that owner later;
+    recovering node's scope. Replication may supply that owner later;
     absent owner facts are never grounds for a local write. -/
 inductive ParentObservation where
   | live

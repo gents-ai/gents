@@ -2,7 +2,7 @@ use super::*;
 use futures::{future::BoxFuture, StreamExt};
 use serde_json::Value;
 
-const AGENT_DID: &str = "did:test:inference-recovery-cas";
+const NODE_DID: &str = "did:test:inference-recovery-cas";
 
 async fn fixture(initial_state: &str) -> (EmbeddedNode, StaleInferenceCallRow) {
     let node = EmbeddedNode::builder().build().await.unwrap();
@@ -13,7 +13,7 @@ async fn fixture(initial_state: &str) -> (EmbeddedNode, StaleInferenceCallRow) {
             r#"mutation {{ add_InferenceCall(input: {{
             call_id: "recovery-cas-call", runtime_instance_id: "recovery-cas-runtime",
             request_id: "recovery-cas-request", request_doc_id: "recovery-cas-request-doc", call_seq: 1,
-            backend_id: "recovery-cas-backend", behavior_id: "test", agent_did: "{AGENT_DID}",
+            backend_id: "recovery-cas-backend", agent_id: "test", node_did: "{NODE_DID}",
             call_kind: "inference", attempt: 1, call_state: "{state}",
             queued_at: "2026-09-01T00:00:00Z", priority: 0,
             queue_depth_at_enqueue: 0, controller_generation: 0,
@@ -22,7 +22,7 @@ async fn fixture(initial_state: &str) -> (EmbeddedNode, StaleInferenceCallRow) {
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let mut snapshots = load_stale_inference_calls(&node, AGENT_DID).await.unwrap();
+    let mut snapshots = load_stale_inference_calls(&node, NODE_DID).await.unwrap();
     assert_eq!(snapshots.len(), 1);
     (node, snapshots.remove(0))
 }
@@ -108,8 +108,8 @@ fn pending_call(call_id: &str) -> super::super::controller::PendingCallMetadata 
         request_doc_id: "recovery-cas-request-doc".into(),
         call_seq: 1,
         backend_id: "recovery-cas-backend".into(),
-        behavior_id: "test".into(),
-        agent_did: AGENT_DID.into(),
+        agent_id: "test".into(),
+        node_did: NODE_DID.into(),
         call_kind: super::super::CallKind::Inference,
         attempt: 1,
     }
@@ -183,7 +183,7 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
     });
     let queued = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            if let Some(row) = load_stale_inference_calls(&node, AGENT_DID)
+            if let Some(row) = load_stale_inference_calls(&node, NODE_DID)
                 .await
                 .unwrap()
                 .into_iter()

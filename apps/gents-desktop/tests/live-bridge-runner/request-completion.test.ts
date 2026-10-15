@@ -11,7 +11,7 @@ import {
 import type { RequestDiagnosticsBundle } from "./types";
 
 const target: RequestCompletionTarget = {
-  agentDid: "did:key:agent",
+  nodeDid: "did:key:agent",
   sessionId: "session-1",
   requestId: "follow-up",
 };
@@ -39,8 +39,8 @@ function diagnostics(state: string, requestPresent = true): RequestDiagnosticsBu
 function session(state: string, requestId = target.requestId): DesktopSessionSnapshot {
   return {
     sessionId: target.sessionId,
-    agentDid: target.agentDid,
-    behaviorId: "general",
+    nodeDid: target.nodeDid,
+    agentId: "general",
     title: null,
     previewText: null,
     status: "active",
@@ -49,6 +49,8 @@ function session(state: string, requestId = target.requestId): DesktopSessionSna
     latestRequestId: requestId,
     retryEligibility: { eligible: false, denialReason: "notFailed" },
     latestRequestOutcome: state === "running" ? null : { failureReason: null },
+    queuedTurns: [],
+    foldedInputs: [],
     pendingTurn:
       state === "running"
         ? {
@@ -56,6 +58,8 @@ function session(state: string, requestId = target.requestId): DesktopSessionSna
             content: "follow-up prompt",
             selectedSkillIds: [],
             lifecycleState: "claimed",
+            foldedIntoRequestId: null,
+            origin: null,
             createdAt: "2026-09-28T02:49:28Z",
           }
         : null,
@@ -137,7 +141,7 @@ describe("request completion wait", () => {
     await expect(wait.completion).resolves.toEqual(completed);
     expect(wait.fetchSessionSnapshot).toHaveBeenCalledWith(
       target.sessionId,
-      target.agentDid,
+      target.nodeDid,
       target.requestId,
     );
   });

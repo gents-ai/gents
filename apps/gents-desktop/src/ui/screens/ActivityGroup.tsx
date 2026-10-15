@@ -17,8 +17,8 @@ import { KEEP_DRAWN } from "@/lib/transcriptWindow";
 import { ToolIcon } from "./tool-icon";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { Spinner } from "@gents/ui/components/spinner";
-import { behaviorName } from "./behavior";
-import { BehaviorAvatar } from "./parts";
+import { agentName } from "./behavior";
+import { AgentInitials } from "./parts";
 import { Markdown } from "./Markdown";
 import { ToolBody } from "./tool-views";
 import { gatherWorkers, workerStory, type GatheredWorker } from "./worker-gathering";
@@ -120,23 +120,23 @@ function WorkerRunStep({
   const p = first.presentation;
   const reached = workers.byToolCall(first);
   const name =
-    reached?.summary?.title ?? (p.kind === "subagent" ? p.name : null) ?? "a session";
+    reached?.summary?.title ?? (p.kind === "agent" ? p.name : null) ?? "a session";
   const last = tools[tools.length - 1]!;
   const failed = tools.some(
     (t) => t.statusKind === "error" || t.statusKind === "failed",
   );
   /* the row is about one agent, so it wears that agent's mark: the same
      avatar the session list and the parent's turns use. A worker with
-     no session summary has no behavior to wear, and falls back to the
+     no session summary has no agent to wear, and falls back to the
      kind's glyph. */
-  const behaviorId = reached?.summary?.behaviorId ?? null;
+  const agentId = reached?.summary?.agentId ?? null;
   return (
     <ToolStep
       label={name}
       icon={
-        behaviorId ? (
-          <BehaviorAvatar
-            name={behaviorName(behaviorId, deployment)}
+        agentId ? (
+          <AgentInitials
+            name={agentName(agentId, deployment)}
             className="size-4 text-[8px]"
           />
         ) : (

@@ -20,7 +20,7 @@ fn request() -> HydrationRequest {
     HydrationRequest::from_row(
         "peer-1:session-1".into(),
         "did:key:requester-1".into(),
-        "did:key:agent-1".into(),
+        "did:key:node-1".into(),
         "session-1".into(),
     )
     .expect("valid hydration key")
@@ -64,7 +64,7 @@ fn generated_session_hydration_durable_cases_match_storage_projection() {
             request,
         );
         assert_eq!(progress.session_id, "session-exact", "{}", case.name);
-        assert_eq!(progress.agent_did, "agent-exact", "{}", case.name);
+        assert_eq!(progress.node_did, "agent-exact", "{}", case.name);
         assert_eq!(
             progress.phase.as_str(),
             case.expected_phase,
@@ -84,14 +84,14 @@ fn document(
     collection: SessionHydrationCollection,
     id: &str,
     requester: &str,
-    agent: &str,
+    node: &str,
     session: &str,
 ) -> HydrationDocument {
     HydrationDocument {
         collection,
         doc_id: id.into(),
         requester_did: requester.into(),
-        agent_did: agent.into(),
+        node_did: node.into(),
         session_id: session.into(),
     }
 }
@@ -101,7 +101,7 @@ fn admitted_catalog() -> HydrationCatalog {
         applied_pairing_routes: BTreeSet::from([AppliedPairingRoute {
             peer_id: "peer-1".into(),
             requester_did: "did:key:requester-1".into(),
-            agent_did: "did:key:agent-1".into(),
+            node_did: "did:key:node-1".into(),
         }]),
         selected_network_id: "network-1".into(),
         verified_active_memberships: BTreeSet::from([VerifiedActiveMembership {
@@ -111,7 +111,7 @@ fn admitted_catalog() -> HydrationCatalog {
         sessions: BTreeSet::from([SessionOwner {
             session_id: "session-1".into(),
             requester_did: "did:key:requester-1".into(),
-            agent_did: "did:key:agent-1".into(),
+            node_did: "did:key:node-1".into(),
         }]),
         // Cross-session dependencies are never inferred from an origin scan:
         // the base catalog grants no reference closure, so only the request's
@@ -122,28 +122,28 @@ fn admitted_catalog() -> HydrationCatalog {
                 SessionHydrationCollection::AgentMessage,
                 "owned",
                 "did:key:requester-1",
-                "did:key:agent-1",
+                "did:key:node-1",
                 "session-1",
             ),
             document(
                 SessionHydrationCollection::AgentMessage,
                 "foreign-requester",
                 "did:key:requester-2",
-                "did:key:agent-1",
+                "did:key:node-1",
                 "session-1",
             ),
             document(
                 SessionHydrationCollection::AgentMessage,
                 "foreign-session",
                 "did:key:requester-1",
-                "did:key:agent-1",
+                "did:key:node-1",
                 "session-2",
             ),
             document(
                 SessionHydrationCollection::AgentMessage,
                 "foreign-agent",
                 "did:key:requester-1",
-                "did:key:agent-2",
+                "did:key:node-2",
                 "session-1",
             ),
         ]),
@@ -175,7 +175,7 @@ fn generated_session_hydration_apply_cases_match_terminal_delivery_core() {
                             collection,
                             &key.id.to_string(),
                             &case.request.requester,
-                            &case.request.agent,
+                            &case.request.node,
                             &case.request.session,
                         )
                     })
@@ -267,7 +267,7 @@ fn admitted_selection_is_exactly_requester_agent_session_scoped() {
             SessionHydrationCollection::AgentMessage,
             "owned",
             "did:key:requester-1",
-            "did:key:agent-1",
+            "did:key:node-1",
             "session-1",
         )])
     );
@@ -278,7 +278,7 @@ fn request_key_binds_peer_and_session() {
     assert!(HydrationRequest::from_row(
         "peer-1:other-session".into(),
         "did:key:requester-1".into(),
-        "did:key:agent-1".into(),
+        "did:key:node-1".into(),
         "session-1".into(),
     )
     .is_err());
@@ -297,7 +297,7 @@ fn generated_session_hydration_progress_cases_match_observe() {
     for case in cases {
         let prev = ClientHydrationProgress {
             session_id: case.prev_session.clone(),
-            agent_did: case.prev_agent.clone(),
+            node_did: case.prev_node.clone(),
             phase: ClientHydrationPhase::parse(&case.prev_phase),
             merged_count: case.prev_merged,
             covered_count: case.prev_merged,
@@ -308,20 +308,20 @@ fn generated_session_hydration_progress_cases_match_observe() {
         let observed = observe_hydration_progress(
             &prev,
             &case.session,
-            &case.agent,
+            &case.node,
             hydration_keys(case.merged, true),
             case.served
                 .map(|count| hydration_keys(count, case.served_matches)),
             case.failed,
         );
         assert_eq!(
-            can_retry_hydration(&observed, &case.session, &case.agent),
+            can_retry_hydration(&observed, &case.session, &case.node),
             case.expected_retry_admit,
             "{} retry admission after observation",
             case.name
         );
         let next = if case.begin_request {
-            begin_hydration_request(&case.session, &case.agent)
+            begin_hydration_request(&case.session, &case.node)
         } else {
             observed
         };
@@ -345,8 +345,7 @@ fn generated_session_hydration_progress_cases_match_observe() {
             "{}",
             case.name
         );
-        if !case.begin_request && case.prev_session == case.session && case.prev_agent == case.agent
-        {
+        if !case.begin_request && case.prev_session == case.session && case.prev_node == case.node {
             assert!(
                 next.merged_count >= prev.merged_count,
                 "{} merged count must be monotone within one target",
@@ -354,7 +353,7 @@ fn generated_session_hydration_progress_cases_match_observe() {
             );
         } else {
             assert_eq!(next.session_id, case.session, "{}", case.name);
-            assert_eq!(next.agent_did, case.agent, "{}", case.name);
+            assert_eq!(next.node_did, case.node, "{}", case.name);
         }
         if case.expected_complete {
             assert!(
@@ -386,7 +385,7 @@ fn hydration_coverage_distinguishes_same_doc_id_in_different_collections() {
     let served = BTreeSet::from([message.clone()]);
     let incomplete = project_durable_hydration_progress(
         "session",
-        "agent",
+        "did:key:node-1",
         BTreeSet::from([segment.clone()]),
         ClientHydrationRequestState::Served(served.clone()),
     );
@@ -394,7 +393,7 @@ fn hydration_coverage_distinguishes_same_doc_id_in_different_collections() {
     assert_eq!(incomplete.covered_count, 0);
     let complete = project_durable_hydration_progress(
         "session",
-        "agent",
+        "did:key:node-1",
         BTreeSet::from([segment, message]),
         ClientHydrationRequestState::Served(served),
     );

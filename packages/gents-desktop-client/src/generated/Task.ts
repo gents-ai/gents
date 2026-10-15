@@ -8,7 +8,7 @@ import type { TaskHook } from "./TaskHook.js";
  * owned request loop executes it. Manual invocation uses the same definition.
  * All fields are desired configuration; execution state belongs to requests.
  */
-export type Task = { agent_did: string, task_id: string, display_name?: string | null, description?: string | null, behavior_id: string, prompt_template: string,
+export type Task = { node_did: string, task_id: string, display_name?: string | null, description?: string | null, agent_id: string, prompt_template: string,
 /**
  * Emit one durable FireOutcome at the request or Goal terminal boundary.
  * Outcome consumers must leave this disabled.

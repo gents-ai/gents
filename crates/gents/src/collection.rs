@@ -11,8 +11,8 @@ use std::fmt;
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
 pub enum Collection {
-    AgentPrincipal,
-    AgentBehavior,
+    Node,
+    Agent,
     AgentContext,
     Compaction,
     Skill,
@@ -20,7 +20,7 @@ pub enum Collection {
     ChainKeyBinding,
     EthTool,
     Tools,
-    SubagentTarget,
+    AgentTarget,
     InferenceBackend,
     InferenceProfile,
     InferenceSampling,
@@ -47,8 +47,8 @@ pub const DESIRED_STATE_APPLY_ORDER: [Collection; 27] = Collection::ALL;
 
 impl Collection {
     pub const ALL: [Collection; 27] = [
-        Self::AgentPrincipal,
-        Self::AgentBehavior,
+        Self::Node,
+        Self::Agent,
         Self::AgentContext,
         Self::Compaction,
         Self::Skill,
@@ -56,7 +56,7 @@ impl Collection {
         Self::ChainKeyBinding,
         Self::EthTool,
         Self::Tools,
-        Self::SubagentTarget,
+        Self::AgentTarget,
         Self::InferenceBackend,
         Self::InferenceProfile,
         Self::InferenceSampling,
@@ -78,15 +78,15 @@ impl Collection {
 
     pub fn file_name(self) -> Option<&'static str> {
         match self {
-            Self::AgentPrincipal => Some("agent_principal.json"),
+            Self::Node => Some("node.json"),
             _ => None,
         }
     }
 
     pub fn dir_name(self) -> Option<&'static str> {
         match self {
-            Self::AgentPrincipal => None,
-            Self::AgentBehavior => Some("agent_behaviors"),
+            Self::Node => None,
+            Self::Agent => Some("agents"),
             Self::AgentContext => Some("contexts"),
             Self::Compaction => Some("compactions"),
             Self::Skill => Some("skills"),
@@ -94,7 +94,7 @@ impl Collection {
             Self::ChainKeyBinding => Some("chain_key_bindings"),
             Self::EthTool => Some("eth_tools"),
             Self::Tools => Some("tools"),
-            Self::SubagentTarget => Some("subagent_targets"),
+            Self::AgentTarget => Some("agent_targets"),
             Self::InferenceBackend => Some("inference_backends"),
             Self::InferenceProfile => Some("inference_profiles"),
             Self::InferenceSampling => Some("inference_sampling"),
@@ -117,8 +117,8 @@ impl Collection {
 
     pub fn graphql_type(self) -> &'static str {
         match self {
-            Self::AgentPrincipal => "AgentPrincipal",
-            Self::AgentBehavior => "AgentBehavior",
+            Self::Node => "Node",
+            Self::Agent => "Agent",
             Self::AgentContext => "AgentContext",
             Self::Compaction => "CompactionConfig",
             Self::Skill => "Skill",
@@ -126,7 +126,7 @@ impl Collection {
             Self::ChainKeyBinding => "ChainKeyBinding",
             Self::EthTool => "EthTool",
             Self::Tools => "Tools",
-            Self::SubagentTarget => "SubagentTarget",
+            Self::AgentTarget => "AgentTarget",
             Self::InferenceBackend => "InferenceBackend",
             Self::InferenceProfile => "InferenceProfile",
             Self::InferenceSampling => "InferenceSampling",
@@ -147,11 +147,11 @@ impl Collection {
         }
     }
 
-    /// Logical document key within agent_did, never global uniqueness.
+    /// Logical document key within node_did, never global uniqueness.
     pub fn unique_field(self) -> &'static str {
         match self {
-            Self::AgentPrincipal => "agent_did",
-            Self::AgentBehavior => "behavior_id",
+            Self::Node => "node_did",
+            Self::Agent => "agent_id",
             Self::AgentContext => "context_id",
             Self::Compaction => "compaction_id",
             Self::Skill => "skill_id",
@@ -159,7 +159,7 @@ impl Collection {
             Self::ChainKeyBinding => "binding_id",
             Self::EthTool => "tool_id",
             Self::Tools => "tools_id",
-            Self::SubagentTarget => "target_id",
+            Self::AgentTarget => "target_id",
             Self::InferenceBackend => "backend_id",
             Self::InferenceProfile => "profile_id",
             Self::InferenceSampling => "sampling_id",
@@ -183,7 +183,7 @@ impl Collection {
 
 impl fmt::Display for Collection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.dir_name().unwrap_or("agent_principal"))
+        f.write_str(self.dir_name().unwrap_or("node"))
     }
 }
 

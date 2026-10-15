@@ -183,6 +183,9 @@ class GentsAgent(BaseAgent):
         init_contract = init.get("init") or {}
         if not isinstance(init_contract, dict):
             init_contract = {}
+        terminal_request = response.get("request") or {}
+        if not isinstance(terminal_request, dict):
+            terminal_request = {}
         failure_origin = None
         if diagnostic.get("reason") == "server_lost_during_request":
             failure_origin = "gents_server"
@@ -220,7 +223,7 @@ class GentsAgent(BaseAgent):
                 "outcome": outcome.get("outcome"),
                 "budget_exhausted": outcome.get("outcome")
                 in {"max_turns_exhausted", "token_budget_exhausted"},
-                "terminal_error": response.get("error_message"),
+                "terminal_error": terminal_request.get("failure_reason"),
                 "failure_origin": failure_origin,
                 "diagnostic_reason": diagnostic.get("reason"),
                 "diagnostic_graphql_available": diagnostic.get("graphql_available"),

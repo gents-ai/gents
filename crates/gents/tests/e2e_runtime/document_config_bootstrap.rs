@@ -2,7 +2,7 @@ use gents::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyPlan,
 };
 use gents::document_config::PackConfig;
-use gents::{ensure_agent_principal, Collection};
+use gents::{ensure_node, Collection};
 use serde_json::json;
 
 use crate::support::test_db;
@@ -17,41 +17,41 @@ async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_de
         ("did:test:other", "model-b"),
     ] {
         let config: PackConfig = serde_json::from_value(json!({
-            "agent_principal": {
-                "agent_did": owner, "display_name": "Explicit configuration",
-                "default_behavior_id": "general", "tags": ["authored"]
+            "node": {
+                "node_did": owner, "display_name": "Explicit configuration",
+                "default_agent_id": "general", "tags": ["authored"]
             },
-            "agent_behaviors": [{
-                "agent_did": owner, "behavior_id": "general",
+            "agents": [{
+                "node_did": owner, "agent_id": "general",
                 "context_id": "context", "inference_profile_id": "balanced"
             }],
             "contexts": [{
-                "agent_did": owner, "context_id": "context",
+                "node_did": owner, "context_id": "context",
                 "system_prompt": "Be precise. {{literal}}", "compaction_id": "compact"
             }],
             "compactions": [{
-                "agent_did": owner, "compaction_id": "compact",
+                "node_did": owner, "compaction_id": "compact",
                 "strategy": "StripThenSummarize", "threshold": 0.6
             }],
             "inference_backends": [{
-                "agent_did": owner, "backend_id": "local", "name": "Local",
+                "node_did": owner, "backend_id": "local", "name": "Local",
                 "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
                 "auth": {"kind": "unauthenticated"}, "max_concurrent": 1, "max_queue_depth": 0
             }],
             "inference_profiles": [{
-                "agent_did": owner, "profile_id": "balanced", "display_name": "Balanced",
+                "node_did": owner, "profile_id": "balanced", "display_name": "Balanced",
                 "backend_id": "local", "model_name": model,
                 "context_window": 32768, "max_output_tokens": 4096,
                 "reasoning_effort": "max", "sampling_id": "sampling", "execution_id": "execution"
             }],
             "inference_sampling": [{
-                "agent_did": owner, "sampling_id": "sampling",
+                "node_did": owner, "sampling_id": "sampling",
                 "temperature": 0.2, "top_p": 0.95, "top_k": 40, "seed": 1234,
                 "min_p": 0.05, "frequency_penalty": 0.5,
                 "presence_penalty": -0.25, "repetition_penalty": 1.1
             }],
             "inference_execution": [{
-                "agent_did": owner, "execution_id": "execution", "max_turns": 8,
+                "node_did": owner, "execution_id": "execution", "max_turns": 8,
                 "stream_batch_ms": 500, "stream_liveness_timeout_secs": 45,
                 "deadline_duration_secs": 120
             }]
@@ -72,14 +72,14 @@ async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_de
                 Box::pin(async move {
                     for (collection, id, value) in [
                         (
-                            Collection::AgentPrincipal,
+                            Collection::Node,
                             owner,
-                            serde_json::to_value(&expected.agent_principal)?,
+                            serde_json::to_value(&expected.node)?,
                         ),
                         (
-                            Collection::AgentBehavior,
+                            Collection::Agent,
                             "general",
-                            serde_json::to_value(&expected.agent_behaviors[0])?,
+                            serde_json::to_value(&expected.agents[0])?,
                         ),
                         (
                             Collection::AgentContext,
@@ -136,16 +136,17 @@ async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_de
             })
             .await
             .unwrap();
-        let principal = ensure_agent_principal(db.node.as_ref(), owner)
-            .await
-            .unwrap();
+        let principal = ensure_node(db.node.as_ref(), owner).await.unwrap();
         assert_eq!(
-            principal, config.agent_principal,
+            principal, config.node,
             "identity bootstrap must preserve authored configuration"
         );
     }
-    let rows = access.execute("{ AgentPrincipal { agent_did } AgentBehavior { behavior_id } InferenceProfile { model_name } }").await.unwrap();
-    for collection in ["AgentPrincipal", "AgentBehavior", "InferenceProfile"] {
+    let rows = access
+        .execute("{ Node { node_did } Agent { agent_id } InferenceProfile { model_name } }")
+        .await
+        .unwrap();
+    for collection in ["Node", "Agent", "InferenceProfile"] {
         assert_eq!(rows["data"][collection].as_array().unwrap().len(), 2);
     }
     let mut models = rows["data"]["InferenceProfile"]
@@ -165,7 +166,7 @@ async fn session_create_returns_its_physical_receipt() {
         Box::pin(async move {
             let response = txn.execute_with_variables(
                 "mutation($input:AgentSessionMutationInputArg!){create_AgentSession(input:$input){_docID}}",
-                &json!({"input":{"session_id":"receipt-session","agent_did":"did:test:receipt","requester_did":null,"behavior_id":"general","created_at":"2026-01-01T00:00:00Z","title":null,"provenance":{"fork":{"source_session_id":"parent","at_user_turn":0}}}}),
+                &json!({"input":{"session_id":"receipt-session","node_did":"did:test:receipt","requester_did":null,"agent_id":"general","created_at":"2026-01-01T00:00:00Z","title":null,"provenance":{"fork":{"source_session_id":"parent","at_user_turn":0}}}}),
             ).await?;
             let response = gents::defra_node::QueryResponse::success(response["data"].clone());
             let created = gents::graphql::single_mutation_document(&response, "create_AgentSession")?.expect("create must return a physical document");

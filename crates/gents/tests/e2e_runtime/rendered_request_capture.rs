@@ -20,15 +20,15 @@ use gents::graphql::escape_graphql_string;
 use gents::llm::message::Message;
 use gents::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::rendered_request::RenderedCompletionRequest;
-use gents::{AgentIdentity, BehaviorBuilder, CompactionStrategy, Gents, ToolCeiling};
+use gents::{AgentBuilder, CompactionStrategy, Gents, NodeIdentity, ToolCeiling};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
 
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::{
-    create_runtime_request, wait_for_request_lifecycle_state, wait_for_runtime_ready, BootedAgent,
+    create_runtime_request, wait_for_request_lifecycle_state, wait_for_request_terminal_state,
+    wait_for_runtime_ready, BootedAgent,
 };
-use crate::support::snapshots::fetch_request_snapshot;
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
@@ -36,7 +36,7 @@ use crate::support::test_db;
 
 const CAPTURE_MODEL: &str = "capture-model";
 const CAPTURE_BACKEND_ID: &str = "capture-backend";
-const CAPTURE_BEHAVIOR_ID: &str = "capture-behavior";
+const CAPTURE_AGENT_ID: &str = "capture-behavior";
 const CAPTURE_TOOL: &str = "capture_probe";
 
 /// The production parse-400 body that classifies as `ParseBadRequest` and so
@@ -64,8 +64,8 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
 
     let doc_id = create_runtime_request(
         db.node.as_ref(),
-        &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
         "req-capture-1",
         "session-capture-1",
         "please capture-me",
@@ -93,7 +93,7 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
     assert_eq!(row["attempt"], 0);
     assert_eq!(row["source"], "openai_chat_completions");
     assert_eq!(row["session_id"], "session-capture-1");
-    assert_eq!(row["agent_did"].as_str(), Some(agent.agent_did.as_str()));
+    assert_eq!(row["node_did"].as_str(), Some(agent.node_did.as_str()));
     assert_eq!(
         row["model_name"], CAPTURE_MODEL,
         "the model column must name the model the provider was asked for"
@@ -183,8 +183,8 @@ async fn a_failing_capture_sink_issues_no_provider_request() {
 
     let doc_id = create_runtime_request(
         db.node.as_ref(),
-        &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
         "req-capture-fault-1",
         "session-capture-fault-1",
         "please must-not-send",
@@ -194,7 +194,8 @@ async fn a_failing_capture_sink_issues_no_provider_request() {
     // zero-request assertion only ran after `lifecycle_state == "failed"`, a
     // fail-open sink would fail this test on a timeout instead of on the claim
     // under test, and the diagnostic would point at the wrong thing.
-    let terminal = wait_for_request_terminal_state(db.node.as_ref(), &doc_id).await;
+    let terminal =
+        wait_for_request_terminal_state(db.node.as_ref(), &doc_id, Duration::from_secs(20)).await;
 
     assert_eq!(
         backend.observed_completion_requests(),
@@ -400,7 +401,7 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
             .unwrap();
         rendered.turn_index = turn;
         rendered.capture_key = gents::rendered_request::capture_key(
-            &rendered.agent_did,
+            &rendered.node_did,
             &rendered.session_id,
             &rendered.request_doc_id,
             &rendered.capture_scope,
@@ -423,7 +424,7 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
         let stored = row["request_json"].as_str().unwrap();
         let container: Value = serde_json::from_str(stored).unwrap();
         for payload in ["request_body", "provenance_payload"] {
-            let (record, _) = stored_payload_record(&container, payload);
+            let record = stored_payload_record(&container, payload);
             assert_eq!(record["kind"], "manifest", "payload {payload}");
             referenced_blocks += record["blocks"].as_array().unwrap().len();
         }
@@ -581,11 +582,9 @@ async fn stored_capture_request_json(node: &EmbeddedNode, capture_key: &str) -> 
 }
 
 /// One stored container payload as its capture record, unwrapping the zlib
-/// envelope the writer applies above its size threshold. Returns whether the
-/// payload was stored compressed, so a fixture that crosses the threshold can
-/// pin the manifest-under-compression composition end to end.
-fn stored_payload_record(container: &Value, payload: &str) -> (Value, bool) {
-    let mut record = container[payload].clone();
+/// envelope the writer selects when its size and savings thresholds hold.
+fn stored_payload_record(container: &Value, payload: &str) -> Value {
+    let record = container[payload].clone();
     if record["kind"] == "zlib" {
         use base64::Engine;
         use std::io::Read;
@@ -597,18 +596,15 @@ fn stored_payload_record(container: &Value, payload: &str) -> (Value, bool) {
         flate2::read::ZlibDecoder::new(compressed.as_slice())
             .read_to_string(&mut decoded)
             .expect("zlib envelope decodes");
-        return (
-            serde_json::from_str(&decoded).expect("zlib envelope holds a record"),
-            true,
-        );
+        return serde_json::from_str(&decoded).expect("zlib envelope holds a record");
     }
-    (record, false)
+    record
 }
 
 /// The ordered content keys one manifest payload references; also asserts the
 /// payload is a manifest, so a full-record fallback fails at the call site.
 fn manifest_payload_keys(container: &Value, payload: &str) -> Vec<String> {
-    let (record, _) = stored_payload_record(container, payload);
+    let record = stored_payload_record(container, payload);
     assert_eq!(
         record["kind"], "manifest",
         "payload {payload} must stay a block manifest"
@@ -669,7 +665,7 @@ fn manifest_turn_fixture(body: Value, turn: usize) -> RenderedCompletionRequest 
         ))
         .unwrap();
     rendered.capture_key = gents::rendered_request::capture_key(
-        &rendered.agent_did,
+        &rendered.node_did,
         &rendered.session_id,
         &rendered.request_doc_id,
         &rendered.capture_scope,
@@ -725,18 +721,6 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
         "the pre-edit body must span many blocks for tail reuse to mean anything: {}",
         pre_edit_body.len()
     );
-    // The same manifest is big enough that the writer stores it through the
-    // zlib envelope: pin that composition here, where the row is genuinely
-    // above the compression threshold, so a capture that stopped wrapping —
-    // or wrapped something the reader cannot unwrap — fails this fence.
-    let (pre_edit_record, pre_edit_compressed) =
-        stored_payload_record(&pre_edit_container, "request_body");
-    assert!(
-        pre_edit_compressed,
-        "a {}-block manifest must be stored through the zlib envelope",
-        pre_edit_body.len()
-    );
-    assert_eq!(pre_edit_record["kind"], "manifest");
     let blocks_before = stored_block_keys(db.node.as_ref()).await;
 
     // The edit: the first `KEPT_FROM` messages become one short summary, the
@@ -854,7 +838,7 @@ async fn stored_v2_delta_rows_still_decode_through_their_own_arm() {
                 "doc_id": base_doc_id,
                 "field_commit_cid": base_cid,
                 "depth": 0,
-                "agent_did": base.agent_did,
+                "node_did": base.node_did,
                 "requester_did": base.requester_did,
                 "session_id": base.session_id,
                 "source": "openai_chat_completions",
@@ -871,7 +855,7 @@ async fn stored_v2_delta_rows_still_decode_through_their_own_arm() {
     delta.turn_index = 1;
     delta.request_id = "req-stored-v2-delta".to_string();
     delta.capture_key = gents::rendered_request::capture_key(
-        &delta.agent_did,
+        &delta.node_did,
         &delta.session_id,
         &delta.request_doc_id,
         &delta.capture_scope,
@@ -917,7 +901,7 @@ async fn insert_stored_capture(
     let mutation = format!(
         r#"mutation {{ create_RenderedRequest(input: {{
             capture_key:"{}", request_doc_id:"{}", request_commit_cid:"{}", request_id:"{}",
-            session_id:"{}", agent_did:"{}", requester_did:"{}", behavior_id:"{}",
+            session_id:"{}", node_did:"{}", requester_did:"{}", agent_id:"{}",
             capture_scope:"{}", turn_index:{}, attempt:{}, capture_version:{},
             model_name:"{}", source:"{}", request_json:"{}", provenance_json:"{}",
             created_at:"2026-10-07T00:00:00Z"
@@ -927,9 +911,9 @@ async fn insert_stored_capture(
         escape_graphql_string(&rendered.request_commit_cid),
         escape_graphql_string(&rendered.request_id),
         escape_graphql_string(&rendered.session_id),
-        escape_graphql_string(&rendered.agent_did),
+        escape_graphql_string(&rendered.node_did),
         escape_graphql_string(&rendered.requester_did),
-        escape_graphql_string(&rendered.behavior_id),
+        escape_graphql_string(&rendered.agent_id),
         escape_graphql_string(&rendered.capture_scope),
         rendered.turn_index,
         rendered.attempt,
@@ -1008,9 +992,9 @@ async fn legacy_capture_remains_readable_and_idempotent_after_format_upgrade() {
         ("request_commit_cid", rendered.request_commit_cid.as_str()),
         ("request_id", rendered.request_id.as_str()),
         ("session_id", rendered.session_id.as_str()),
-        ("agent_did", rendered.agent_did.as_str()),
+        ("node_did", rendered.node_did.as_str()),
         ("requester_did", rendered.requester_did.as_str()),
-        ("behavior_id", rendered.behavior_id.as_str()),
+        ("agent_id", rendered.agent_id.as_str()),
         ("capture_scope", rendered.capture_scope.as_str()),
         ("model_name", rendered.model_name.as_str()),
         ("source", source.as_str().unwrap()),
@@ -1139,8 +1123,8 @@ async fn a_retried_attempt_is_its_own_durable_fact() {
 
     let doc_id = create_runtime_request(
         db.node.as_ref(),
-        &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
         "req-capture-attempts",
         "session-capture-attempts",
         &format!("please recover {marker}"),
@@ -1260,30 +1244,28 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
     let content = format!("please use the tool {marker}");
     let parent = create_runtime_request(
         db.node.as_ref(),
-        &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
         "retry-parent",
         marker,
         &content,
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal_state(db.node.as_ref(), &parent).await,
+        wait_for_request_terminal_state(db.node.as_ref(), &parent, Duration::from_secs(20)).await,
         RequestLifecycleState::Failed
     );
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "retry-successor",
-        &agent.agent_did,
-        &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &agent.node_did,
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
         marker,
         &content,
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-            &agent.agent_did,
-        ),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent.node_did),
     );
     create.retry_parent_request = Some("retry-parent".into());
     create.retry_parent_request_doc_id = Some(parent.clone());
@@ -1305,7 +1287,7 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
         .unwrap()
         .to_owned();
     assert_eq!(
-        wait_for_request_terminal_state(db.node.as_ref(), &doc_id).await,
+        wait_for_request_terminal_state(db.node.as_ref(), &doc_id, Duration::from_secs(20)).await,
         RequestLifecycleState::Completed
     );
     let observed = backend.observed_completion_bodies();
@@ -1397,8 +1379,8 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
 
     let doc_id = create_runtime_request(
         db.node.as_ref(),
-        &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
         "req-capture-multi-turn",
         "session-capture-multi-turn",
         &format!("please use the tool {marker}"),
@@ -1574,8 +1556,8 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
 
     let doc_id = create_runtime_request(
         db.node.as_ref(),
-        &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
         "req-capture-repair",
         "session-capture-repair",
         &format!("please use the tool {marker}"),
@@ -1586,7 +1568,8 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
     // as `failed` — the sink rejecting the rebinding, correctly — and waiting
     // for "completed" would report that as a lifecycle timeout instead of as
     // the coordinate claim this test is about.
-    let terminal = wait_for_request_terminal_state(db.node.as_ref(), &doc_id).await;
+    let terminal =
+        wait_for_request_terminal_state(db.node.as_ref(), &doc_id, Duration::from_secs(20)).await;
     assert_eq!(
         terminal,
         RequestLifecycleState::Completed,
@@ -1756,8 +1739,8 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
 
     let doc_id = create_runtime_request(
         db.node.as_ref(),
-        &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
         "req-capture-compaction",
         "session-capture-compaction",
         &format!("please use both tools {marker}"),
@@ -1864,7 +1847,7 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
 /// The summarizer is a provider call too, and it runs *before* the request's
 /// own completion loop exists.
 ///
-/// `BehaviorDaemon::handle_request` compacts while it is assembling the prompt,
+/// `AgentDaemon::handle_request` compacts while it is assembling the prompt,
 /// roughly ninety lines before `run_inference`. `StripThenSummarize` is the
 /// default strategy, so for any session over its threshold that pre-request
 /// compaction issues a real, model-backed provider call whose input is the
@@ -1958,8 +1941,8 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     let session_id = "session-capture-summarizer";
     let seed_doc = create_runtime_request(
         db.node.as_ref(),
-        &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
         "req-capture-seed",
         session_id,
         &format!("seed the transcript {SEED_MARKER}"),
@@ -1987,7 +1970,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     let boundary = gents::provider_context_reduction::capture_source_boundary(
         db.node.as_ref(),
         session_id,
-        &agent.agent_did,
+        &agent.node_did,
         None,
         &seed_doc,
         &seed_commit.cid,
@@ -1999,7 +1982,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     // public scalar writer: all new request-local reductions must consume the
     // shared exact reduction artifact.
     let reduction_key = gents::provider_context_reduction::reduction_key(
-        &agent.agent_did,
+        &agent.node_did,
         session_id,
         &seed_doc,
         0,
@@ -2018,7 +2001,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     let fixture = format!(
         r#"mutation {{ create_ProviderContextReduction(input: {{
             reduction_key: "{reduction_key}"
-            agent_did: "{agent_did}"
+            node_did: "{node_did}"
             requester_did: null
             session_id: "{session_id}"
             request_id: "req-capture-seed"
@@ -2042,7 +2025,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
             created_at: "2026-09-02T00:00:00Z"
         }}) {{ _docID }} }}"#,
         reduction_key = gents::graphql::escape_graphql_string(&reduction_key),
-        agent_did = gents::graphql::escape_graphql_string(&agent.agent_did),
+        node_did = gents::graphql::escape_graphql_string(&agent.node_did),
         session_id = gents::graphql::escape_graphql_string(session_id),
         request_doc_id = gents::graphql::escape_graphql_string(&seed_doc),
         request_commit_cid = gents::graphql::escape_graphql_string(&seed_commit.cid),
@@ -2060,8 +2043,8 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
 
     let follow_up_doc = create_runtime_request(
         db.node.as_ref(),
-        &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
         "req-capture-summarized",
         session_id,
         "and now a short follow-up",
@@ -2222,8 +2205,8 @@ async fn run_serialized_threshold_probe(name: &str, threshold: f64) -> Threshold
     let seed_request_id = "request-threshold-seed";
     let seed_doc = create_runtime_request(
         db.node.as_ref(),
-        &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
         seed_request_id,
         session_id,
         SEED_MARKER,
@@ -2238,8 +2221,8 @@ async fn run_serialized_threshold_probe(name: &str, threshold: f64) -> Threshold
     let seed_history = gents::load_history(
         db.node.as_ref(),
         session_id,
-        &agent.agent_did,
-        Some(&agent.agent_did),
+        &agent.node_did,
+        Some(&agent.node_did),
     )
     .await
     .expect("load actual canonical seed history");
@@ -2248,8 +2231,8 @@ async fn run_serialized_threshold_probe(name: &str, threshold: f64) -> Threshold
     let follow_up_request_id = "request-threshold-follow-up";
     let follow_up_doc = create_runtime_request(
         db.node.as_ref(),
-        &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
         follow_up_request_id,
         session_id,
         FOLLOW_UP_MARKER,
@@ -2497,8 +2480,8 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     let session_id = "session-rolling-atomic-retry";
     let seed_doc = create_runtime_request(
         db.node.as_ref(),
-        &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
         "req-rolling-seed",
         session_id,
         "ROLLING_SEED_REQUEST",
@@ -2509,20 +2492,17 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     let receipt = db
         .node
         .execute(&format!(
-            "{{AgentRequest(filter:{{_docID:{{_eq:\"{}\"}}}}){{agent_did requester_did}}}}",
+            "{{AgentRequest(filter:{{_docID:{{_eq:\"{}\"}}}}){{node_did requester_did}}}}",
             escape_graphql_string(&seed_doc)
         ))
         .await;
     assert!(!receipt.has_errors(), "{:?}", receipt.errors);
     let receipt_data = receipt.data.unwrap();
     let receipt = &receipt_data["AgentRequest"][0];
-    assert_eq!(
-        receipt["agent_did"].as_str(),
-        Some(agent.agent_did.as_str())
-    );
+    assert_eq!(receipt["node_did"].as_str(), Some(agent.node_did.as_str()));
     assert_eq!(
         receipt["requester_did"].as_str(),
-        Some(agent.agent_did.as_str()),
+        Some(agent.node_did.as_str()),
         "the signed LocalSelf receipt owns this history"
     );
     let history_requester = receipt["requester_did"].as_str();
@@ -2530,7 +2510,7 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     for index in 0..24_u32 {
         crate::support::create_agent_message_in_scope(
             db.node.as_ref(),
-            &agent.agent_did,
+            &agent.node_did,
             history_requester,
             session_id,
             100 + index,
@@ -2543,15 +2523,16 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
 
     let failed_doc = create_runtime_request(
         db.node.as_ref(),
-        &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
         "req-rolling-failure",
         session_id,
         FAILURE_MARKER,
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal_state(db.node.as_ref(), &failed_doc).await,
+        wait_for_request_terminal_state(db.node.as_ref(), &failed_doc, Duration::from_secs(20))
+            .await,
         RequestLifecycleState::Failed
     );
     assert!(
@@ -2568,8 +2549,8 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
 
     let retry_doc = create_runtime_request(
         db.node.as_ref(),
-        &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &agent.node_did,
+        CAPTURE_AGENT_ID,
         "req-rolling-retry",
         session_id,
         RETRY_MARKER,
@@ -2728,7 +2709,7 @@ fn parse_json(value: &Value) -> Value {
 }
 
 fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
-    let agent_did = "did:key:z6MkCaptureIdempotency".to_string();
+    let node_did = "did:key:z6MkCaptureIdempotency".to_string();
     let session_id = "session-idem".to_string();
     // This direct sink test exercises the explicit document-less one-shot
     // path. Runtime-backed tests cover AgentRequest version pinning.
@@ -2741,7 +2722,7 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
     );
     RenderedCompletionRequest {
         capture_key: gents::rendered_request::capture_key(
-            &agent_did,
+            &node_did,
             &session_id,
             &request_doc_id,
             &capture_scope,
@@ -2756,9 +2737,9 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
         capture_scope: capture_scope.clone(),
         turn_index: 0,
         attempt: 0,
-        agent_did,
+        node_did,
         requester_did: String::new(),
-        behavior_id: "behavior".to_string(),
+        agent_id: "behavior".to_string(),
         session_id,
         model_name: "m".to_string(),
         source: gents::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
@@ -2821,9 +2802,9 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> 
                 request_commit_cid
                 request_id
                 session_id
-                agent_did
+                node_did
                 requester_did
-                behavior_id
+                agent_id
                 capture_scope
                 turn_index
                 attempt
@@ -2991,26 +2972,6 @@ async fn commit_set(node: &EmbeddedNode, capture_key: &str) -> Vec<(String, Stri
     commits
 }
 
-/// Wait for any terminal lifecycle state and report which one it reached.
-async fn wait_for_request_terminal_state(
-    node: &EmbeddedNode,
-    request_doc_id: &str,
-) -> RequestLifecycleState {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let snapshot = fetch_request_snapshot(node, request_doc_id).await;
-        if snapshot.lifecycle_state.is_terminal() {
-            return snapshot.lifecycle_state;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "request {request_doc_id} never reached a terminal state; last={}",
-            snapshot.lifecycle_state
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
 async fn wait_for_rendered_requests(
     node: &EmbeddedNode,
     request_id: &str,
@@ -3050,20 +3011,20 @@ async fn boot_capture_agent_with(
     test_name: &str,
     endpoint: &str,
     capture_failure: Option<&str>,
-    customize: impl FnOnce(BehaviorBuilder) -> BehaviorBuilder,
+    customize: impl FnOnce(AgentBuilder) -> AgentBuilder,
 ) -> BootedAgent {
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
+    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity(test_name));
     upsert_capture_backend(db.node.as_ref(), identity.did(), endpoint).await;
     let mut builder = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
-        .default_behavior_id(CAPTURE_BEHAVIOR_ID)
+        .default_agent_id(CAPTURE_AGENT_ID)
         .tool_ceiling(ToolCeiling::meta_only());
     if let Some(message) = capture_failure {
         builder = builder.fail_rendered_request_capture_for_test(message);
     }
     let behavior = builder
-        .behavior(CAPTURE_BEHAVIOR_ID)
+        .agent(CAPTURE_AGENT_ID)
         .backend_id(CAPTURE_BACKEND_ID)
         .model_name(CAPTURE_MODEL)
         .stream_batch_ms(0)
@@ -3073,25 +3034,25 @@ async fn boot_capture_agent_with(
         .build()
         .await
         .expect("build rendered-request capture agent");
-    let agent_did = agent.agent_did().to_string();
+    let node_did = agent.node_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
-    BootedAgent::new(shutdown_tx, handle, agent_did)
+    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
+    BootedAgent::new(shutdown_tx, handle, node_did)
 }
 
 async fn upsert_capture_backend(node: &EmbeddedNode, owner: &str, endpoint: &str) {
     use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-    gents::ensure_agent_principal(node, owner).await.unwrap();
-    let value = serde_json::json!({"agent_did":owner,"backend_id":CAPTURE_BACKEND_ID,"name":CAPTURE_BACKEND_ID,"provider_kind":"OpenAiCompatible","openai_wire_api":"chat_completions","endpoint":endpoint,"auth":{"kind":"unauthenticated"},"max_concurrent":4,"max_queue_depth":100});
-    let profile_id = format!("{CAPTURE_BEHAVIOR_ID}:inference");
-    let profile = serde_json::json!({"agent_did":owner,"profile_id":profile_id,"backend_id":CAPTURE_BACKEND_ID,"model_name":CAPTURE_MODEL});
-    let behavior = serde_json::json!({"agent_did":owner,"behavior_id":CAPTURE_BEHAVIOR_ID,"inference_profile_id":profile_id});
+    gents::ensure_node(node, owner).await.unwrap();
+    let value = serde_json::json!({"node_did":owner,"backend_id":CAPTURE_BACKEND_ID,"name":CAPTURE_BACKEND_ID,"provider_kind":"OpenAiCompatible","openai_wire_api":"chat_completions","endpoint":endpoint,"auth":{"kind":"unauthenticated"},"max_concurrent":4,"max_queue_depth":100});
+    let profile_id = format!("{CAPTURE_AGENT_ID}:inference");
+    let profile = serde_json::json!({"node_did":owner,"profile_id":profile_id,"backend_id":CAPTURE_BACKEND_ID,"model_name":CAPTURE_MODEL});
+    let behavior = serde_json::json!({"node_did":owner,"agent_id":CAPTURE_AGENT_ID,"inference_profile_id":profile_id});
     let plan = DesiredStateApplyPlan::new(
         [
             (gents::Collection::InferenceBackend, value),
             (gents::Collection::InferenceProfile, profile),
-            (gents::Collection::AgentBehavior, behavior),
+            (gents::Collection::Agent, behavior),
         ]
         .into_iter()
         .map(|(collection, value)| DesiredStateApplyDocument {

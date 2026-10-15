@@ -5,7 +5,8 @@ import { useState } from "react";
 import { Button } from "@gents/ui/components/button";
 import { Switch } from "@gents/ui/components/switch";
 import { toast } from "sonner";
-import { revealInFolder, revealInFolderLabel } from "../../../lib/shellPlatform";
+import { revealInFolder } from "../../../lib/nativeShell";
+import { revealInFolderLabel } from "../../../lib/shellPlatform";
 import { reloadRuntimeUxPlugins } from "@/contrib/runtime-door";
 import {
   setUxPluginEnabled,

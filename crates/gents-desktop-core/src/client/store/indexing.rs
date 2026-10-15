@@ -9,7 +9,7 @@ impl ClientStore {
         });
         sort_rows_with_sources(
             &mut rows.sessions,
-            &mut rows.session_source_agent_dids,
+            &mut rows.session_source_node_dids,
             |left, right| {
                 cmp_opt_str_desc(
                     left.observation
@@ -21,7 +21,7 @@ impl ClientStore {
                         .map(|observation| observation.last_activity_at.as_str()),
                 )
                 .then_with(|| right.created_at.cmp(&left.created_at))
-                .then_with(|| left.agent_did.cmp(&right.agent_did))
+                .then_with(|| left.node_did.cmp(&right.node_did))
                 .then_with(|| left.session_id.cmp(&right.session_id))
             },
         );
@@ -62,8 +62,8 @@ impl ClientStore {
                 .then_with(|| left.doc_id.cmp(&right.doc_id))
         });
         rows.goals.sort_by(|left, right| {
-            left.agent_did
-                .cmp(&right.agent_did)
+            left.node_did
+                .cmp(&right.node_did)
                 .then_with(|| left.session_id.cmp(&right.session_id))
                 .then_with(|| {
                     cmp_opt_str_asc(left.created_at.as_deref(), right.created_at.as_deref())
@@ -71,11 +71,11 @@ impl ClientStore {
                 .then_with(|| left.goal_id.cmp(&right.goal_id))
         });
         rows.goals.dedup_by(|right, left| {
-            right.agent_did == left.agent_did && right.session_id == left.session_id
+            right.node_did == left.node_did && right.session_id == left.session_id
         });
         sort_rows_with_sources(
             &mut rows.tool_calls,
-            &mut rows.tool_call_source_agent_dids,
+            &mut rows.tool_call_source_node_dids,
             |left, right| {
                 left.session_id
                     .cmp(&right.session_id)
@@ -91,66 +91,66 @@ impl ClientStore {
             },
         );
 
-        normalize_source_agent_dids(
-            &mut rows.compaction_entry_source_agent_dids,
+        normalize_source_node_dids(
+            &mut rows.compaction_entry_source_node_dids,
             rows.compaction_entries.len(),
         );
-        normalize_source_agent_dids(&mut rows.task_source_agent_dids, rows.tasks.len());
-        normalize_source_agent_dids(&mut rows.schedule_source_agent_dids, rows.schedules.len());
-        normalize_source_agent_dids(
-            &mut rows.schedule_observation_source_agent_dids,
+        normalize_source_node_dids(&mut rows.task_source_node_dids, rows.tasks.len());
+        normalize_source_node_dids(&mut rows.schedule_source_node_dids, rows.schedules.len());
+        normalize_source_node_dids(
+            &mut rows.schedule_observation_source_node_dids,
             rows.schedule_observations.len(),
         );
-        normalize_source_agent_dids(&mut rows.trigger_source_agent_dids, rows.triggers.len());
-        normalize_source_agent_dids(
-            &mut rows.trigger_observation_source_agent_dids,
+        normalize_source_node_dids(&mut rows.trigger_source_node_dids, rows.triggers.len());
+        normalize_source_node_dids(
+            &mut rows.trigger_observation_source_node_dids,
             rows.trigger_observations.len(),
         );
-        normalize_source_agent_dids(&mut rows.skill_source_agent_dids, rows.skills.len());
-        normalize_source_agent_dids(&mut rows.tools_source_agent_dids, rows.tools.len());
-        normalize_source_agent_dids(&mut rows.context_source_agent_dids, rows.contexts.len());
-        normalize_source_agent_dids(
-            &mut rows.compaction_source_agent_dids,
+        normalize_source_node_dids(&mut rows.skill_source_node_dids, rows.skills.len());
+        normalize_source_node_dids(&mut rows.tools_source_node_dids, rows.tools.len());
+        normalize_source_node_dids(&mut rows.context_source_node_dids, rows.contexts.len());
+        normalize_source_node_dids(
+            &mut rows.compaction_source_node_dids,
             rows.compactions.len(),
         );
-        normalize_source_agent_dids(
-            &mut rows.inference_backend_source_agent_dids,
+        normalize_source_node_dids(
+            &mut rows.inference_backend_source_node_dids,
             rows.inference_backends.len(),
         );
-        normalize_source_agent_dids(
-            &mut rows.backend_observation_source_agent_dids,
+        normalize_source_node_dids(
+            &mut rows.backend_observation_source_node_dids,
             rows.backend_observations.len(),
         );
-        normalize_source_agent_dids(
-            &mut rows.inference_profile_source_agent_dids,
+        normalize_source_node_dids(
+            &mut rows.inference_profile_source_node_dids,
             rows.inference_profiles.len(),
         );
-        normalize_source_agent_dids(
-            &mut rows.inference_sampling_source_agent_dids,
+        normalize_source_node_dids(
+            &mut rows.inference_sampling_source_node_dids,
             rows.inference_sampling.len(),
         );
-        normalize_source_agent_dids(
-            &mut rows.inference_execution_source_agent_dids,
+        normalize_source_node_dids(
+            &mut rows.inference_execution_source_node_dids,
             rows.inference_execution.len(),
         );
-        normalize_source_agent_dids(
-            &mut rows.tool_service_registry_source_agent_dids,
+        normalize_source_node_dids(
+            &mut rows.tool_service_registry_source_node_dids,
             rows.tool_service_registries.len(),
         );
-        normalize_source_agent_dids(
-            &mut rows.event_source_source_agent_dids,
+        normalize_source_node_dids(
+            &mut rows.event_source_source_node_dids,
             rows.event_sources.len(),
         );
-        normalize_source_agent_dids(
-            &mut rows.subagent_target_source_agent_dids,
-            rows.subagent_targets.len(),
+        normalize_source_node_dids(
+            &mut rows.agent_target_source_node_dids,
+            rows.agent_targets.len(),
         );
-        normalize_source_agent_dids(
-            &mut rows.datastore_tool_surface_source_agent_dids,
+        normalize_source_node_dids(
+            &mut rows.datastore_tool_surface_source_node_dids,
             rows.datastore_tool_surfaces.len(),
         );
-        normalize_source_agent_dids(
-            &mut rows.chain_key_binding_source_agent_dids,
+        normalize_source_node_dids(
+            &mut rows.chain_key_binding_source_node_dids,
             rows.chain_key_bindings.len(),
         );
 
@@ -165,13 +165,13 @@ impl ClientStore {
         let tool_calls_by_session_id =
             build_vec_index(&rows.tool_calls, |row| row.session_id.as_deref());
 
-        let mut runtimes_by_agent_did = HashMap::new();
+        let mut runtimes_by_node_did = HashMap::new();
         for (index, row) in rows.runtimes.iter().enumerate() {
-            runtimes_by_agent_did.insert(row.agent_did.clone(), index);
+            runtimes_by_node_did.insert(row.node_did.clone(), index);
         }
-        let mut behavior_readiness_by_agent_did = HashMap::new();
-        for (index, row) in rows.behavior_readiness.iter().enumerate() {
-            behavior_readiness_by_agent_did.insert(row.agent_did.clone(), index);
+        let mut node_readiness_by_node_did = HashMap::new();
+        for (index, row) in rows.node_readiness.iter().enumerate() {
+            node_readiness_by_node_did.insert(row.node_did.clone(), index);
         }
 
         let mut request_index_by_id = HashMap::new();
@@ -180,10 +180,10 @@ impl ClientStore {
         }
 
         Self {
-            agent_principals: rows.agent_principals,
-            behaviors: rows.behaviors,
+            nodes: rows.nodes,
+            agents: rows.agents,
             runtimes: rows.runtimes,
-            behavior_readiness: rows.behavior_readiness,
+            node_readiness: rows.node_readiness,
             requests: rows.requests,
             mailbox_items: rows.mailbox_items,
             transcript_messages: rows.transcript_messages,
@@ -192,27 +192,27 @@ impl ClientStore {
             goals: rows.goals,
             tool_calls: rows.tool_calls,
             compaction_entries: rows.compaction_entries,
-            session_source_agent_dids: rows.session_source_agent_dids,
-            tool_call_source_agent_dids: rows.tool_call_source_agent_dids,
-            compaction_entry_source_agent_dids: rows.compaction_entry_source_agent_dids,
+            session_source_node_dids: rows.session_source_node_dids,
+            tool_call_source_node_dids: rows.tool_call_source_node_dids,
+            compaction_entry_source_node_dids: rows.compaction_entry_source_node_dids,
             tasks: rows.tasks,
             schedules: rows.schedules,
             schedule_observations: rows.schedule_observations,
             triggers: rows.triggers,
             trigger_observations: rows.trigger_observations,
-            task_source_agent_dids: rows.task_source_agent_dids,
-            schedule_source_agent_dids: rows.schedule_source_agent_dids,
-            schedule_observation_source_agent_dids: rows.schedule_observation_source_agent_dids,
-            trigger_source_agent_dids: rows.trigger_source_agent_dids,
-            trigger_observation_source_agent_dids: rows.trigger_observation_source_agent_dids,
+            task_source_node_dids: rows.task_source_node_dids,
+            schedule_source_node_dids: rows.schedule_source_node_dids,
+            schedule_observation_source_node_dids: rows.schedule_observation_source_node_dids,
+            trigger_source_node_dids: rows.trigger_source_node_dids,
+            trigger_observation_source_node_dids: rows.trigger_observation_source_node_dids,
             skills: rows.skills,
-            skill_source_agent_dids: rows.skill_source_agent_dids,
+            skill_source_node_dids: rows.skill_source_node_dids,
             tools: rows.tools,
-            tools_source_agent_dids: rows.tools_source_agent_dids,
+            tools_source_node_dids: rows.tools_source_node_dids,
             contexts: rows.contexts,
-            context_source_agent_dids: rows.context_source_agent_dids,
+            context_source_node_dids: rows.context_source_node_dids,
             compactions: rows.compactions,
-            compaction_source_agent_dids: rows.compaction_source_agent_dids,
+            compaction_source_node_dids: rows.compaction_source_node_dids,
             inference_backends: rows.inference_backends,
             backend_observations: rows.backend_observations,
             inference_profiles: rows.inference_profiles,
@@ -220,31 +220,31 @@ impl ClientStore {
             inference_execution: rows.inference_execution,
             tool_service_registries: rows.tool_service_registries,
             event_sources: rows.event_sources,
-            subagent_targets: rows.subagent_targets,
+            agent_targets: rows.agent_targets,
             datastore_tool_surfaces: rows.datastore_tool_surfaces,
             chain_key_bindings: rows.chain_key_bindings,
-            inference_backend_source_agent_dids: rows.inference_backend_source_agent_dids,
-            backend_observation_source_agent_dids: rows.backend_observation_source_agent_dids,
-            inference_profile_source_agent_dids: rows.inference_profile_source_agent_dids,
-            inference_sampling_source_agent_dids: rows.inference_sampling_source_agent_dids,
-            inference_execution_source_agent_dids: rows.inference_execution_source_agent_dids,
-            tool_service_registry_source_agent_dids: rows.tool_service_registry_source_agent_dids,
-            event_source_source_agent_dids: rows.event_source_source_agent_dids,
-            subagent_target_source_agent_dids: rows.subagent_target_source_agent_dids,
-            datastore_tool_surface_source_agent_dids: rows.datastore_tool_surface_source_agent_dids,
-            chain_key_binding_source_agent_dids: rows.chain_key_binding_source_agent_dids,
+            inference_backend_source_node_dids: rows.inference_backend_source_node_dids,
+            backend_observation_source_node_dids: rows.backend_observation_source_node_dids,
+            inference_profile_source_node_dids: rows.inference_profile_source_node_dids,
+            inference_sampling_source_node_dids: rows.inference_sampling_source_node_dids,
+            inference_execution_source_node_dids: rows.inference_execution_source_node_dids,
+            tool_service_registry_source_node_dids: rows.tool_service_registry_source_node_dids,
+            event_source_source_node_dids: rows.event_source_source_node_dids,
+            agent_target_source_node_dids: rows.agent_target_source_node_dids,
+            datastore_tool_surface_source_node_dids: rows.datastore_tool_surface_source_node_dids,
+            chain_key_binding_source_node_dids: rows.chain_key_binding_source_node_dids,
             transcript_messages_by_session_id,
             output_segments_by_request_doc_id,
             requests_by_session_id,
             tool_calls_by_session_id,
-            runtimes_by_agent_did,
-            behavior_readiness_by_agent_did,
+            runtimes_by_node_did,
+            node_readiness_by_node_did,
             request_index_by_id,
         }
     }
 }
 
-fn normalize_source_agent_dids(sources: &mut Vec<Option<String>>, row_count: usize) {
+fn normalize_source_node_dids(sources: &mut Vec<Option<String>>, row_count: usize) {
     sources.truncate(row_count);
     sources.resize_with(row_count, || None);
 }
@@ -254,7 +254,7 @@ fn sort_rows_with_sources<T>(
     sources: &mut Vec<Option<String>>,
     compare: impl Fn(&T, &T) -> std::cmp::Ordering,
 ) {
-    normalize_source_agent_dids(sources, rows.len());
+    normalize_source_node_dids(sources, rows.len());
     let mut paired = rows
         .drain(..)
         .zip(sources.drain(..))

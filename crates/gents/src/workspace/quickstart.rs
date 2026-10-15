@@ -36,7 +36,7 @@ async fn upsert_repository_placement(
 ) -> Result<()> {
     let placement = RepositoryPlacementRef {
         repository_id: repository_id.to_owned(),
-        owner_agent_did: principal_did.to_owned(),
+        owner_node_did: principal_did.to_owned(),
         host_path: path.to_owned(),
         enabled: true,
     };
@@ -116,10 +116,10 @@ pub async fn provision_read_only_workspace(
     .collect::<BTreeSet<_>>();
     let outcome = {
         let mut context = HostExecutorContext {
-            owner_agent_did: principal_did.to_owned(),
+            owner_node_did: principal_did.to_owned(),
             repository: RepositoryPlacementRef {
                 repository_id,
-                owner_agent_did: principal_did.to_owned(),
+                owner_node_did: principal_did.to_owned(),
                 host_path: repository_path.clone(),
                 enabled: true,
             },

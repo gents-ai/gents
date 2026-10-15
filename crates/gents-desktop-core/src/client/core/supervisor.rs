@@ -357,7 +357,7 @@ fn status_for_record(record: &PeerRecord) -> ClientPeerStatus {
     ClientPeerStatus {
         peer_id: record.peer_id.clone(),
         label: record.label.clone(),
-        agent_did: record.agent_did.clone(),
+        node_did: record.node_did.clone(),
         addr: record.addr.clone(),
         dial_succeeded: false,
         last_error: None,
@@ -512,7 +512,7 @@ pub(super) async fn repair_saved_peer(
     let mut status = current_status.unwrap_or_else(|| ClientPeerStatus {
         peer_id: record.peer_id.clone(),
         label: record.label.clone(),
-        agent_did: record.agent_did.clone(),
+        node_did: record.node_did.clone(),
         addr: record.addr.clone(),
         dial_succeeded: false,
         last_error: None,

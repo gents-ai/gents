@@ -34,24 +34,24 @@ describe("FleetRow", () => {
     expect(screen.queryByTestId("fleet-repair-peer-1")).not.toBeInTheDocument();
   });
 
-  it("calls onOpenChat with the agent DID when the chat button is clicked", () => {
+  it("calls onOpenChat with the node DID when the chat button is clicked", () => {
     const props = renderRow();
     fireEvent.click(screen.getByTestId("fleet-chat-peer-1"));
-    expect(props.onOpenChat).toHaveBeenCalledWith(deployment.agentDid);
+    expect(props.onOpenChat).toHaveBeenCalledWith(deployment.nodeDid);
   });
 
-  it("opens agent details from the whole card and summarizes its documents", () => {
+  it("opens node details from the whole card and summarizes its documents", () => {
     const props = renderRow();
 
     expect(screen.getByTestId("fleet-summary-peer-1")).toHaveTextContent(
-      `${deployment.behaviors.length} behaviors`,
+      `${deployment.agents.length} agents`,
     );
     expect(screen.getByTestId("fleet-summary-peer-1")).toHaveTextContent(
       `${deployment.sessions.length} sessions`,
     );
     fireEvent.click(screen.getByTestId("fleet-row-peer-1"));
 
-    expect(props.onOpenChat).toHaveBeenCalledWith(deployment.agentDid);
+    expect(props.onOpenChat).toHaveBeenCalledWith(deployment.nodeDid);
   });
 
   it("keeps chat disabled while authenticated enrollment is pending", () => {
@@ -72,10 +72,10 @@ describe("FleetRow", () => {
     expect(props.onOpenChat).not.toHaveBeenCalled();
   });
 
-  it("calls onOpenConfig with the agent DID when the config button is clicked", () => {
+  it("calls onOpenConfig with the node DID when the config button is clicked", () => {
     const props = renderRow();
     fireEvent.click(screen.getByTestId("fleet-config-peer-1"));
-    expect(props.onOpenConfig).toHaveBeenCalledWith(deployment.agentDid);
+    expect(props.onOpenConfig).toHaveBeenCalledWith(deployment.nodeDid);
     expect(props.onOpenChat).not.toHaveBeenCalled();
   });
 
@@ -118,15 +118,15 @@ describe("FleetRow", () => {
     const missingInference: DeploymentView = {
       ...deployment,
       inferenceBackends: [],
-      behaviorReadiness: {
-        ...deployment.behaviorReadiness,
-        behaviors: [
+      nodeReadiness: {
+        ...deployment.nodeReadiness,
+        agents: [
           {
             state: "unavailable",
-            behaviorId: "default",
+            agentId: "default",
             reason: "backend_not_configured",
           },
-          { state: "ready", behaviorId: "ops" },
+          { state: "ready", agentId: "ops" },
         ],
       },
     };
@@ -136,18 +136,18 @@ describe("FleetRow", () => {
     expect(onSetupInference).toHaveBeenCalledWith(missingInference);
   });
 
-  it("does not infer missing backend setup from redacted enrolled-agent config", () => {
+  it("does not infer missing backend setup from redacted enrolled-node config", () => {
     const onSetupInference = vi.fn();
     const hostManagedMissingCredentials: DeploymentView = {
       ...deployment,
       source: "enrollment",
       inferenceBackends: [],
-      behaviorReadiness: {
-        ...deployment.behaviorReadiness,
-        behaviors: [
+      nodeReadiness: {
+        ...deployment.nodeReadiness,
+        agents: [
           {
             state: "unavailable",
-            behaviorId: "default",
+            agentId: "default",
             reason: "credentials_required",
           },
         ],

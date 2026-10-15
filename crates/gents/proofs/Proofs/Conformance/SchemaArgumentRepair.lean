@@ -21,7 +21,7 @@ private def configSchema := json
   "{\"type\":\"object\",\"properties\":{\"argv\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"set\":{\"type\":\"object\",\"additionalProperties\":true},\"options\":{\"type\":\"object\",\"additionalProperties\":true}}}"
 
 private def configInput := json
-  "{\"argv\":[\"behavior\",\"update\"],\"set\":\"{\\\"description\\\":\\\"{\\\\\\\"keep\\\\\\\":true}\\\"}\",\"options\":\"{\\\"enabled\\\":true}\"}"
+  "{\"argv\":[\"agent\",\"update\"],\"set\":\"{\\\"description\\\":\\\"{\\\\\\\"keep\\\\\\\":true}\\\"}\",\"options\":\"{\\\"enabled\\\":true}\"}"
 
 private def nestedSchema := json
   "{\"type\":\"object\",\"properties\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"values\":{\"type\":\"array\",\"items\":{\"type\":\"object\"}}}}}}}"

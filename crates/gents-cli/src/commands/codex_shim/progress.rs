@@ -11,7 +11,7 @@ use super::projection_state::ProjectionStatus;
 #[derive(Debug, Clone, Default)]
 pub(super) struct GentsToolCallProgress {
     pub(super) doc_id: Option<String>,
-    pub(super) agent_did: Option<String>,
+    pub(super) node_did: Option<String>,
     pub(super) requester_did: Option<String>,
     pub(super) request_doc_id: Option<String>,
     pub(super) tool_call_key: String,
@@ -41,7 +41,7 @@ pub(super) fn gents_turn_progress_query(request_doc_id: &str, session_id: &str) 
                 limit: 2
             ) {{
                 _docID
-                agent_did
+                node_did
                 requester_did
                 session_id
                 request_id
@@ -64,7 +64,7 @@ pub(super) fn gents_turn_progress_query(request_doc_id: &str, session_id: &str) 
                 order: {{ started_at: ASC }}
             ) {{
                 _docID
-                agent_did
+                node_did
                 requester_did
                 session_id
                 request_doc_id
@@ -115,7 +115,7 @@ pub(super) fn gents_tool_progress_query(request_doc_id: &str, session_id: &str) 
                 order: {{ started_at: ASC }}
             ) {{
                 _docID
-                agent_did
+                node_did
                 requester_did
                 session_id
                 request_doc_id
@@ -141,7 +141,7 @@ pub(super) fn gents_tool_progress_query(request_doc_id: &str, session_id: &str) 
 pub(super) fn decode_gents_tool_call_progress(row: &Value) -> Option<GentsToolCallProgress> {
     Some(GentsToolCallProgress {
         doc_id: optional_nonempty_string(row, "_docID"),
-        agent_did: optional_nonempty_string(row, "agent_did"),
+        node_did: optional_nonempty_string(row, "node_did"),
         requester_did: optional_nonempty_string(row, "requester_did"),
         request_doc_id: optional_nonempty_string(row, "request_doc_id"),
         tool_call_key: row.get("tool_call_key")?.as_str()?.to_string(),
@@ -175,7 +175,7 @@ pub(super) fn decode_gents_tool_call_progress(row: &Value) -> Option<GentsToolCa
 pub(super) async fn hydrate_gents_tool_call_progress(
     access: &ConfigAccess,
     row: &Value,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
     request_doc_id: &str,
@@ -183,7 +183,7 @@ pub(super) async fn hydrate_gents_tool_call_progress(
     let mut tool = decode_gents_tool_call_progress(row)
         .context("decoding exact AgentToolCall progress row")?;
     anyhow::ensure!(
-        tool.agent_did.as_deref() == Some(agent_did)
+        tool.node_did.as_deref() == Some(node_did)
             && tool.requester_did.as_deref() == requester_did
             && row.get("session_id").and_then(Value::as_str) == Some(session_id)
             && row.get("request_doc_id").and_then(Value::as_str) == Some(request_doc_id),
@@ -196,7 +196,7 @@ pub(super) async fn hydrate_gents_tool_call_progress(
     let presentation = gents::tool_call_lifecycle::load_tool_call_presentation(
         access,
         doc_id,
-        agent_did,
+        node_did,
         session_id,
         requester_did,
     )
@@ -435,15 +435,15 @@ mod tests {
         let temp = tempfile::tempdir().expect("progress directory");
         let state =
             super::super::turn_projection::tests::notification_test_state(temp.path()).await;
-        let agent_did = escape_graphql_string(state.agent_did.as_ref());
-        let behavior_id = escape_graphql_string(state.behavior_id.as_ref());
+        let node_did = escape_graphql_string(state.node_did.as_ref());
+        let agent_id = escape_graphql_string(state.agent_id.as_ref());
         for (id, purpose, created_at) in [
             ("turn", "normal", "2026-09-25T00:00:00Z"),
             ("title", "title-audit", "2026-09-25T00:00:01Z"),
             ("steer", "normal", "2026-09-25T00:00:02Z"),
         ] {
             let mutation = format!(
-                r#"mutation {{ create_AgentRequest(input: {{request_id: "{id}", purpose: "{purpose}", session_id: "thread", agent_did: "{agent_did}", requester_did: "{agent_did}", behavior_id: "{behavior_id}", content: "prompt", lifecycle_state: "processing", created_at: "{created_at}"}}) {{_docID}} }}"#,
+                r#"mutation {{ create_AgentRequest(input: {{request_id: "{id}", purpose: "{purpose}", session_id: "thread", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "{agent_id}", content: "prompt", lifecycle_state: "processing", created_at: "{created_at}"}}) {{_docID}} }}"#,
                 id = escape_graphql_string(id),
                 purpose = escape_graphql_string(purpose),
                 created_at = escape_graphql_string(created_at),
@@ -630,7 +630,7 @@ mod tests {
         ] {
             for field in [
                 "_docID",
-                "agent_did",
+                "node_did",
                 "requester_did",
                 "selected_service_id",
                 "selected_tool_name",

@@ -17,13 +17,13 @@ use super::turn_projection::TurnProjection;
 use super::{ConnectionState, ShimState};
 use crate::SubmittedRequest;
 
-pub(super) async fn ensure_loaded_subagent_stream(
+pub(super) async fn ensure_loaded_caused_stream(
     connection: &ConnectionState,
     state: &ShimState,
     record: &CodexThreadRecord,
     baseline_turn: Option<codex::Turn>,
 ) {
-    let Some(link) = record.subagent.clone() else {
+    let Some(link) = record.caused.clone() else {
         return;
     };
     let watcher_id = state.next_id("gents-child-stream");
@@ -33,7 +33,7 @@ pub(super) async fn ensure_loaded_subagent_stream(
     let thread_id = link.session_id.clone();
     let task = tokio::spawn(async move {
         let result =
-            watch_loaded_subagent_thread(&task_connection, &task_state, link, baseline_turn).await;
+            watch_loaded_caused_thread(&task_connection, &task_state, link, baseline_turn).await;
         if let Err(error) = result {
             tracing::warn!(
                 %error,
@@ -50,7 +50,7 @@ pub(super) async fn ensure_loaded_subagent_stream(
         .await;
 }
 
-async fn watch_loaded_subagent_thread(
+async fn watch_loaded_caused_thread(
     connection: &ConnectionState,
     state: &ShimState,
     mut link: CausedThread,
@@ -61,8 +61,8 @@ async fn watch_loaded_subagent_thread(
     if link.client_projection.is_some_and(|head| head.is_active()) {
         let announce_turn = baseline_turn.is_none();
         let options = baseline_turn.map_or_else(
-            || TurnStreamOptions::fresh_subagent(),
-            |turn| TurnStreamOptions::resumed_subagent(turn),
+            || TurnStreamOptions::fresh_caused(),
+            |turn| TurnStreamOptions::resumed_caused(turn),
         );
         project_child_request(connection, state, &link, options, announce_turn).await?;
     }
@@ -115,7 +115,7 @@ async fn watch_loaded_subagent_thread(
             connection,
             state,
             &link,
-            TurnStreamOptions::fresh_subagent(),
+            TurnStreamOptions::fresh_caused(),
             true,
         )
         .await?;
@@ -132,8 +132,8 @@ async fn project_child_request(
     let submitted = SubmittedRequest {
         request_id: link.latest_request_id.clone(),
         session_id: link.session_id.clone(),
-        agent_did: link.agent_did.clone(),
-        behavior_id: Some(link.behavior_id.clone()),
+        node_did: link.node_did.clone(),
+        agent_id: Some(link.agent_id.clone()),
         request_doc_id: link.latest_request_doc_id.clone(),
         requester_did: link.requester_did.clone(),
         input: None,

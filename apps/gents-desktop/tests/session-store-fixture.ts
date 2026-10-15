@@ -8,6 +8,6 @@ export function selectedSessionFields(session: DesktopSessionSnapshot | null) {
   return {
     sessionStore: createSessionStore(session),
     selectedSessionId: session?.sessionId ?? null,
-    selectedAgentDid: session?.agentDid ?? null,
+    selectedNodeDid: session?.nodeDid ?? null,
   };
 }

@@ -1,7 +1,0 @@
-{
-  "enable_self_config": true,
-  "self_config_categories": ["behavior", "tools", "profile", "persona", "backend", "mcp_service", "automation"],
-  "self_config_no_lockout": true,
-  "self_config_preview": true,
-  "enable_pack_install": true
-}

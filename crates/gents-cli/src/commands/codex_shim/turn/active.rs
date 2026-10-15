@@ -131,13 +131,13 @@ pub(super) fn cancel_abandoned_steering_request(
 ) {
     let node = state.node.clone();
     let request = request.clone();
-    let agent_did = state.agent_did.clone();
+    let node_did = state.node_did.clone();
     tokio::spawn(async move {
         if let Err(error) = gents::interrupt_request_by_doc_id(
             &node,
             &request.doc_id,
-            agent_did.as_ref(),
-            Some(agent_did.as_ref()),
+            node_did.as_ref(),
+            Some(node_did.as_ref()),
         )
         .await
         {
@@ -152,7 +152,7 @@ pub(super) async fn load_active_codex_turn(
 ) -> Result<Option<ActiveCodexTurn>> {
     let rows = load_thread_request_rows(
         state,
-        &state.agent_did,
+        &state.node_did,
         Some(state.local_requester_did()),
         thread_id,
     )
@@ -167,37 +167,85 @@ pub(super) async fn next_steering_request_after(
 ) -> Result<Option<NextSteeringRequest>> {
     let rows = load_thread_request_rows(
         state,
-        &state.agent_did,
+        &state.node_did,
         Some(state.local_requester_did()),
         thread_id,
     )
     .await?;
-    Ok(next_steering_request_after_from_rows(
-        &rows,
-        queued_after_request_id,
-    ))
+    let candidates = steering_successor_candidates(&rows, queued_after_request_id);
+    if candidates.len() < 2 {
+        return Ok(candidates.first().map(|row| next_steering_request(row)));
+    }
+    let ids = candidates
+        .iter()
+        .map(|row| row.doc_id.clone().expect("decoded physical identity"))
+        .collect::<Vec<_>>();
+    let order = gents::config_client::ConfigAccess::transact_local(
+        &state.node,
+        None,
+        "codex.active.steering_order",
+        |txn| {
+            let ids = &ids;
+            Box::pin(async move { gents::lifecycle::request_arrival_order(txn, ids).await })
+        },
+    )
+    .await?;
+    Ok(order.first().and_then(|first| {
+        candidates
+            .iter()
+            .find(|row| row.doc_id.as_deref() == Some(first.as_str()))
+            .map(|row| next_steering_request(row))
+    }))
 }
 
-fn next_steering_request_after_from_rows(
-    rows: &[AgentRequestRow],
+/// Non-transparent steering children of `queued_after_request_id`, looking
+/// through folded and replaced inputs, in `rows` order.
+fn steering_successor_candidates<'a>(
+    rows: &'a [AgentRequestRow],
     queued_after_request_id: &str,
-) -> Option<NextSteeringRequest> {
+) -> Vec<&'a AgentRequestRow> {
+    let mut transparent_parents = BTreeSet::from([queued_after_request_id]);
+    loop {
+        let added = rows
+            .iter()
+            .filter(|row| steering_request_is_transparent(row))
+            .filter(|row| {
+                steering_parent_id(row)
+                    .as_deref()
+                    .is_some_and(|parent| transparent_parents.contains(parent))
+            })
+            .map(|row| row.request_id.as_str())
+            .filter(|id| !transparent_parents.contains(id))
+            .collect::<Vec<_>>();
+        if added.is_empty() {
+            break;
+        }
+        transparent_parents.extend(added);
+    }
     rows.iter()
-        .filter(|row| steering_parent_id(row).as_deref() == Some(queued_after_request_id))
-        .min_by(|left, right| {
-            left.created_at
-                .cmp(&right.created_at)
-                .then_with(|| left.request_id.cmp(&right.request_id))
+        .filter(|row| !steering_request_is_transparent(row))
+        .filter(|row| {
+            steering_parent_id(row)
+                .as_deref()
+                .is_some_and(|parent| transparent_parents.contains(parent))
         })
-        .map(|row| NextSteeringRequest {
-            request_id: row.request_id.clone(),
-            request_doc_id: row.doc_id.clone().expect("validated physical request"),
-            created_at: row
-                .created_at
-                .clone()
-                .expect("request row decoder requires created_at"),
-            lifecycle_state: row.lifecycle_state.clone(),
-        })
+        .collect()
+}
+
+fn next_steering_request(row: &AgentRequestRow) -> NextSteeringRequest {
+    NextSteeringRequest {
+        request_id: row.request_id.clone(),
+        request_doc_id: row.doc_id.clone().expect("validated physical request"),
+        created_at: row
+            .created_at
+            .clone()
+            .expect("request row decoder requires created_at"),
+        lifecycle_state: row.lifecycle_state,
+    }
+}
+
+fn steering_request_is_transparent(row: &AgentRequestRow) -> bool {
+    gents::lifecycle::folded_into(row).is_some() || gents::lifecycle::replaced_by(row).is_some()
 }
 
 pub(super) async fn steering_request_ids_for_turn_interrupt_cleanup(
@@ -208,7 +256,7 @@ pub(super) async fn steering_request_ids_for_turn_interrupt_cleanup(
 ) -> Result<Vec<(String, String)>> {
     let rows = load_thread_request_rows(
         state,
-        &state.agent_did,
+        &state.node_did,
         Some(state.local_requester_did()),
         thread_id,
     )
@@ -292,7 +340,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
     if let Err(error) = gents::interrupt_request_by_doc_id(
         state.node.as_ref(),
         &active.interrupt_request_doc_id,
-        &state.agent_did,
+        &state.node_did,
         Some(state.local_requester_did()),
     )
     .await
@@ -340,7 +388,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
         if let Err(error) = gents::interrupt_request_by_doc_id(
             state.node.as_ref(),
             &request_doc_id,
-            &state.agent_did,
+            &state.node_did,
             Some(state.local_requester_did()),
         )
         .await
@@ -423,12 +471,12 @@ fn stream_key(thread_id: &str, turn_id: &str) -> String {
 
 async fn load_thread_request_rows(
     state: &ShimState,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     thread_id: &str,
 ) -> Result<Vec<AgentRequestRow>> {
     let scope = gents::session::public_request_filter(&gents::session::session_scope_filter(
-        agent_did,
+        node_did,
         thread_id,
         requester_did,
     ));
@@ -437,7 +485,7 @@ async fn load_thread_request_rows(
         Box::pin(async move {
             let response=txn.execute(&format!(r#"{{
                 AgentRequest(filter:{{{scope}}},order:[{{created_at:ASC}},{{request_id:ASC}}]){{
-                    _docID request_id agent_did requester_did session_id behavior_id lifecycle_state superseded_by_request input created_at
+                    _docID request_id node_did requester_did session_id agent_id lifecycle_state superseded_by_request failure_reason input created_at
                 }}
             }}"#)).await?;
             let values=response.pointer("/data/AgentRequest").and_then(Value::as_array).context("active request query omitted rows")?;
@@ -619,8 +667,8 @@ mod tests {
         let state =
             super::super::super::turn_projection::tests::notification_test_state(temp.path()).await;
         let node = state.node.clone();
-        let agent_did = gents::graphql::escape_graphql_string(state.agent_did.as_ref());
-        let behavior_id = gents::graphql::escape_graphql_string(state.behavior_id.as_ref());
+        let node_did = gents::graphql::escape_graphql_string(state.node_did.as_ref());
+        let agent_id = gents::graphql::escape_graphql_string(state.agent_id.as_ref());
         for (id, purpose, created_at) in [
             ("normal-turn", "normal", "2026-09-25T00:00:00Z"),
             ("title-audit", "title-audit", "2026-09-25T00:00:01Z"),
@@ -629,7 +677,7 @@ mod tests {
             let purpose = gents::graphql::escape_graphql_string(purpose);
             let created_at = gents::graphql::escape_graphql_string(created_at);
             let mutation = format!(
-                r#"mutation {{ create_AgentRequest(input: {{request_id: "{id}", purpose: "{purpose}", session_id: "thread", agent_did: "{agent_did}", requester_did: "{agent_did}", behavior_id: "{behavior_id}", content: "prompt", lifecycle_state: "processing", created_at: "{created_at}"}}) {{_docID}} }}"#
+                r#"mutation {{ create_AgentRequest(input: {{request_id: "{id}", purpose: "{purpose}", session_id: "thread", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "{agent_id}", content: "prompt", lifecycle_state: "processing", created_at: "{created_at}"}}) {{_docID}} }}"#
             );
             gents::config_client::ConfigAccess::write_local(
                 &node,
@@ -650,8 +698,8 @@ mod tests {
         gents::interrupt_request_by_doc_id(
             &node,
             &active.interrupt_request_doc_id,
-            state.agent_did.as_ref(),
-            Some(state.agent_did.as_ref()),
+            state.node_did.as_ref(),
+            Some(state.node_did.as_ref()),
         )
         .await
         .expect("interrupt selected normal turn");
@@ -671,7 +719,81 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn steering_successor_survives_threads_longer_than_one_arrival_page() {
+        let temp = tempfile::tempdir().expect("active turn directory");
+        let state =
+            super::super::super::turn_projection::tests::notification_test_state(temp.path()).await;
+        let node_did = state.node_did.to_string();
+        let agent_id = state.agent_id.to_string();
+        let request = |request_id: String, created_at: String, input: Value| {
+            json!({
+                "request_id": request_id, "purpose": "normal", "session_id": "thread",
+                "node_did": node_did, "requester_did": node_did, "agent_id": agent_id,
+                "content": "prompt", "lifecycle_state": "completed",
+                "created_at": created_at, "input": input,
+            })
+        };
+        let history = (0..1100)
+            .map(|index| {
+                request(
+                    format!("history-{index:04}"),
+                    format!("2026-09-25T00:{:02}:{:02}Z", index / 60, index % 60),
+                    Value::Null,
+                )
+            })
+            .collect::<Vec<_>>();
+        let steering = json!({"queue": {"source": "steering", "policy": "append", "key": null,
+            "queued_after_request_id": "history-1099"}});
+        for batch in [
+            history,
+            vec![request(
+                "steer-b".into(),
+                "2026-09-26T00:00:01Z".into(),
+                steering.clone(),
+            )],
+            vec![request(
+                "steer-a".into(),
+                "2026-09-26T00:00:00Z".into(),
+                steering,
+            )],
+        ] {
+            gents::config_client::ConfigAccess::transact_local(
+                &state.node,
+                None,
+                "codex.active.test_history",
+                |txn| {
+                    let batch = &batch;
+                    Box::pin(async move {
+                        txn.execute_with_variables(
+                            "mutation($rows: [AgentRequestMutationInputArg!]) { create_AgentRequest(input: $rows) { _docID } }",
+                            &json!({ "rows": batch }),
+                        )
+                        .await
+                    })
+                },
+            )
+            .await
+            .expect("create requests");
+        }
+
+        let next = next_steering_request_after(&state, "thread", "history-1099")
+            .await
+            .expect("steering order beyond one arrival page")
+            .expect("queued steering successor");
+        assert_eq!(next.request_id, "steer-b", "arrival order, not created_at");
+    }
+
     use super::*;
+
+    fn next_steering_request_after_from_rows(
+        rows: &[AgentRequestRow],
+        queued_after_request_id: &str,
+    ) -> Option<NextSteeringRequest> {
+        steering_successor_candidates(rows, queued_after_request_id)
+            .first()
+            .map(|row| next_steering_request(row))
+    }
 
     fn row(request_id: &str, lifecycle_state: &str, queued_after: Option<&str>) -> AgentRequestRow {
         let input = queued_after.map(|parent| {
@@ -790,7 +912,61 @@ mod tests {
 
         let next = next_steering_request_after_from_rows(&rows, "turn-1").unwrap();
 
-        assert_eq!(next.request_id, "steer-1");
-        assert_eq!(next.lifecycle_state, Some(RequestLifecycleState::Failed));
+        // The caller supplies native arrival order, even when timestamp/UUID
+        // lexical order would put steer-1 first.
+        assert_eq!(next.request_id, "steer-2");
+        assert_eq!(next.lifecycle_state, Some(RequestLifecycleState::Completed));
+    }
+    #[test]
+    fn replaced_input_is_transparent_to_its_successor_and_children() {
+        let mut replaced = row("old-input", "superseded", Some("turn-1"));
+        replaced.failure_reason = Some(gents::lifecycle::REPLACED_REASON.into());
+        replaced.superseded_by_request = Some("edited-input".into());
+        replaced.superseded_by_request_doc_id = Some("edited-input-doc".into());
+        let rows = vec![
+            row("turn-1", "completed", None),
+            replaced,
+            row("edited-input", "pending", Some("turn-1")),
+            row("later-input", "pending", Some("old-input")),
+        ];
+        assert_eq!(
+            next_steering_request_after_from_rows(&rows, "turn-1")
+                .unwrap()
+                .request_id,
+            "edited-input"
+        );
+        assert_eq!(
+            next_steering_request_after_from_rows(
+                &rows[..2]
+                    .iter()
+                    .chain(rows[3..].iter())
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                "turn-1"
+            )
+            .unwrap()
+            .request_id,
+            "later-input"
+        );
+        let mut unrelated = rows[1].clone();
+        unrelated.failure_reason = Some("another supersession reason".into());
+        assert!(!steering_request_is_transparent(&unrelated));
+    }
+
+    #[test]
+    fn consumed_steering_does_not_become_a_second_provider_turn() {
+        let mut consumed = row("steer-1", "superseded", Some("turn-1"));
+        consumed.failure_reason = Some(gents::lifecycle::FOLDED_REASON.into());
+        consumed.superseded_by_request = Some("turn-1".into());
+        consumed.superseded_by_request_doc_id = Some("turn-1-doc".into());
+        let mut rows = vec![row("turn-1", "completed", None), consumed];
+        assert!(next_steering_request_after_from_rows(&rows, "turn-1").is_none());
+        rows.push(row("steer-2", "pending", Some("steer-1")));
+        assert_eq!(
+            next_steering_request_after_from_rows(&rows, "turn-1")
+                .unwrap()
+                .request_id,
+            "steer-2"
+        );
     }
 }

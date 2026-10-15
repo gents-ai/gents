@@ -19,7 +19,7 @@ export interface NavContext {
   mailboxCount: number;
   /** the selected node's agent, or the first while nothing is selected;
       null before there is one */
-  selectedAgentDid: string | null;
+  selectedNodeDid: string | null;
 }
 
 export interface NavItem {
@@ -56,7 +56,7 @@ function isRoute(value: unknown): value is Route {
     case "session":
       return route.sessionId === null || typeof route.sessionId === "string";
     case "agent":
-      return typeof route.agentDid === "string" && typeof route.section === "string";
+      return typeof route.nodeDid === "string" && typeof route.section === "string";
     case "plugin":
       return typeof route.pluginId === "string";
     default:
