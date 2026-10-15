@@ -1263,7 +1263,11 @@ impl PackInstaller {
         // records or plugins through a binding the graph path would refuse.
         self.fence_bindings(&prepared.inference.bindings).await?;
         for dependency in &prepared.dependencies {
-            self.fence_bindings(&dependency.1.inference_slots).await?;
+            let bindings = match dependency {
+                crate::pack::PreparedDependency::Graph(_, bindings) => &bindings.inference_slots,
+                crate::pack::PreparedDependency::Documents { inference, .. } => &inference.bindings,
+            };
+            self.fence_bindings(bindings).await?;
         }
         let mut schemas = Vec::new();
         for path in crate::pack::document_pack_schema_paths(distribution.manifest())? {

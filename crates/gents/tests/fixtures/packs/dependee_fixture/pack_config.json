@@ -1,0 +1,31 @@
+{
+  "node": {},
+  "agents": [
+    {
+      "agent_id": "fixture-dependee",
+      "display_name": "Fixture dependee",
+      "description": "A tool-less agent bound to the worker slot.",
+      "context_id": "fixture-dependee-context",
+      "inference_profile_id": "gents:inference-slot:worker"
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "fixture-dependee-context",
+      "display_name": "Fixture dependee",
+      "system_prompt": "./agents/fixture_dependee/system_prompt.md",
+      "tools_id": "fixture-dependee-tools"
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "fixture-dependee-tools",
+      "display_name": "Fixture dependee: no tools",
+      "host": {
+        "bash": {
+          "mode": "Off"
+        }
+      }
+    }
+  ]
+}

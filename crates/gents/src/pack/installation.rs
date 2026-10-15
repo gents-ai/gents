@@ -18,7 +18,7 @@ mod dependencies;
 mod documents;
 pub use documents::{
     document_pack_schema_paths, install_prepared_document_pack, prepare_document_pack_install,
-    PreparedDocumentPackInstall,
+    PreparedDependency, PreparedDocumentPackInstall,
 };
 mod graph;
 

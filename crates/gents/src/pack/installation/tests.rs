@@ -871,3 +871,144 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
         .unwrap();
     assert_eq!(response["data"]["PackInstallation"], json!([]));
 }
+
+// --- Documents dependencies ---------------------------------------------
+
+/// `dependent_fixture` rewired to depend on `dependee_fixture`, and
+/// `dependee_fixture` with the plugin `echo` when `dependee_plugin`; both
+/// packed the way an install reads them.
+fn documents_dependency_pair(
+    dependee_plugin: bool,
+) -> (
+    [tempfile::TempDir; 2],
+    crate::pack_archive::PackArchive,
+    crate::pack_archive::PackArchive,
+) {
+    let archive = |dir: &std::path::Path| {
+        let (bytes, _) = crate::pack_archive::pack_dir(dir).unwrap();
+        crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+    };
+    let edit = |dir: &std::path::Path, change: &dyn Fn(&mut Value)| {
+        let path = dir.join("manifest.json");
+        let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        change(&mut manifest);
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    };
+    let (dependee_guard, dependee_dir) =
+        crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    if dependee_plugin {
+        std::fs::create_dir_all(dependee_dir.join("plugins")).unwrap();
+        let wat = crate::plugin::tests::constant_output_wat(b"{}");
+        std::fs::write(
+            dependee_dir.join("plugins/echo.afb"),
+            crate::plugin::tests::build_plugin_afb(&wat),
+        )
+        .unwrap();
+        edit(&dependee_dir, &|manifest| {
+            manifest["assets"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("plugins/echo.afb"));
+            manifest["plugins"] = json!([{
+                "name": "echo",
+                "description": "Echoes nothing.",
+                "artifact": "plugins/echo.afb",
+                "language": "rust",
+                "input_schema": {"type": "object"},
+            }]);
+        });
+    }
+    let (dependent_guard, dependent_dir) =
+        crate::test_support::fixture_pack_copy("dependent_fixture", &json!({}));
+    edit(&dependent_dir, &|manifest| {
+        manifest["dependencies"] = json!(["fixture/dependee_fixture"]);
+    });
+    (
+        [dependee_guard, dependent_guard],
+        archive(&dependee_dir),
+        archive(&dependent_dir),
+    )
+}
+
+async fn install_dependent_with_dependee(
+    access: &ConfigAccess,
+    dependee: &crate::pack_archive::PackArchive,
+    dependent: &crate::pack_archive::PackArchive,
+    plugin_home: Option<&std::path::Path>,
+) {
+    let authored = crate::pack::load_pack_config(
+        dependent.manifest(),
+        &crate::pack::PackInstallOptions {
+            node_did: OWNER.into(),
+        },
+        &|path| Ok(dependent.asset(path)?.to_vec()),
+        &|_| None,
+    )
+    .unwrap();
+    let requested = BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]);
+    let prepared = prepare_document_pack_install(
+        access,
+        OWNER,
+        dependent.manifest(),
+        &authored,
+        &requested,
+        &[dependee],
+        &|_| None,
+    )
+    .await
+    .unwrap();
+    install_prepared_document_pack(
+        access,
+        OWNER,
+        dependent,
+        &prepared,
+        plugin_home,
+        false,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_documents_dependency_installs_non_explicitly_before_its_dependent() {
+    let (_node, access, _) = dependency_fixture().await;
+    let (_guards, dependee, dependent) = documents_dependency_pair(false);
+    install_dependent_with_dependee(&access, &dependee, &dependent, None).await;
+
+    let rows = access
+        .execute("{ PackInstallation { coordinate explicit required_by } }")
+        .await
+        .unwrap();
+    let rows = rows["data"]["PackInstallation"].as_array().unwrap();
+    let row = |coordinate: &str| {
+        rows.iter()
+            .find(|row| row["coordinate"] == coordinate)
+            .unwrap_or_else(|| panic!("no record for {coordinate}: {rows:?}"))
+    };
+    let dependency = row("fixture/dependee_fixture");
+    assert_eq!(dependency["explicit"], false, "{rows:?}");
+    assert_eq!(
+        dependency["required_by"],
+        json!(["fixture/dependent_fixture"])
+    );
+    assert_eq!(row("fixture/dependent_fixture")["explicit"], true);
+}
+
+#[tokio::test]
+async fn a_documents_dependency_plugin_installs_before_the_dependent_documents() {
+    let (_node, access, _) = dependency_fixture().await;
+    let (_guards, dependee, dependent) = documents_dependency_pair(true);
+    let home = tempfile::tempdir().unwrap();
+    install_dependent_with_dependee(&access, &dependee, &dependent, Some(home.path())).await;
+
+    let record = crate::plugin::store::read_record(home.path(), "fixture", "echo").unwrap();
+    assert_eq!(
+        record.owner_pack_coordinate.as_deref(),
+        Some("fixture/dependee_fixture")
+    );
+    let installed = read_installed_pack(&access, OWNER, "fixture/dependee_fixture")
+        .await
+        .unwrap();
+    assert_eq!(installed.unwrap().digest, dependee.digest());
+}
