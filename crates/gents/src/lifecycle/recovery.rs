@@ -47,10 +47,10 @@ impl RequestLifecycle {
     /// re-request it. This re-drive is the owner side of the fix — periodically
     /// re-asserting the current terminal value of recently-terminalized routed
     /// requests. Local-only requests, whose requester is absent or the owner
-    /// itself, are excluded: no peer acts on their request state (#683). A same-value re-write is a genuine
-    /// higher-priority CRDT delta (it does not no-op), so it flows through the
-    /// normal PushLog path and a lagging requester accepts it (LWW, higher
-    /// priority ⇒ applied).
+    /// itself, are excluded: no peer acts on their request state (#683). A
+    /// same-value re-write is a genuine higher-priority CRDT delta (it does not
+    /// no-op), so it flows through the normal PushLog path and a lagging
+    /// requester accepts it (LWW, higher priority ⇒ applied).
     ///
     /// BOUNDED, NOT CONVERGENCE-OBSERVING. The owner has no back-channel telling
     /// it whether a peer caught up. Each successful re-assert atomically advances
