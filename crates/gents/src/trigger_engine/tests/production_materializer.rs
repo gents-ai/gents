@@ -1210,3 +1210,81 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
         "processing"
     );
 }
+
+#[tokio::test]
+async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let snapshot =
+        snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
+    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot.clone());
+    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
+    let identity = gents_protocol::trigger_delivery::FireIdentity {
+        owner_did: snapshot.local_did.clone(),
+        trigger_id: "replay-trigger".into(),
+        source_collection: "Schedule".into(),
+        source_doc_id: "persisted-due-occurrence".into(),
+    };
+    let key = crate::trigger_engine::durable::fire_key(&identity);
+    let fire = gents_protocol::trigger_delivery::TriggerFire {
+        fire_key: key.clone(),
+        request_id: identity.request_id(),
+        identity,
+        task_id: "replay-task".into(),
+        session_id: "original-session".into(),
+        goal_id: None,
+        goal_objective: None,
+        goal_token_budget: None,
+        goal_assignment_applied: false,
+        emit_outcome: false,
+        queued_serial: false,
+        source_handoff_id: None,
+        reply_session_id: None,
+        shard_id: None,
+        attempt: None,
+        created_at: "2030-01-01T00:00:00Z".into(),
+    };
+    crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_committed_replay", |txn| {
+        let fire = fire.clone();
+        Box::pin(async move {
+            assert!(crate::trigger_engine::durable::stage_fire_receipt(txn, &fire).await?);
+            txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) {create_AgentRequest(input: $input) {_docID}}", &serde_json::json!({"input": {
+                "request_id": fire.request_id, "node_did": fire.identity.owner_did,
+                "session_id": fire.session_id, "agent_id": "general", "purpose": "normal",
+                "lifecycle_state": "processing", "caused_by_trigger_id": "replay-trigger",
+                "created_at": fire.created_at
+            }})).await?;
+            Ok(())
+        })
+    }).await.unwrap();
+    let (_, rx) = watch::channel(snapshot);
+    let engine = TriggerEngine::new(rx, Arc::new(materializer));
+    let mut task = resolved_task("{{ doc.field_added_after_admission }}");
+    task.task_id = "replay-task".into();
+    task.agent_id = "general".into();
+    let result = engine.dispatch(FireIntent {
+        trigger_id: Some("replay-trigger".into()), trigger_kind: TriggerKind::Schedule,
+        task, concurrency: ConcurrencyMode::LatestOnly,
+        event_vars: serde_json::json!({"source_collection":"ReplayWork", "source_doc_id":"physical-source"}),
+        doc_vars: None, correlation: None, group_vars: None, trigger_context: None, args_vars: None,
+        durable_fire_key: "persisted-due-occurrence".into(), pre_materialized_request_id: None,
+        on_result: Box::new(|_| {}),
+    }).await;
+    assert!(
+        matches!(result, FireResult::Duplicate { request_id } if request_id == fire.request_id)
+    );
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node.as_ref(),
+        &format!(
+            "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{lifecycle_state}} }}",
+            escape_graphql_string(&fire.request_id)
+        ),
+        "check replay did not supersede",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        response.data.unwrap()["AgentRequest"][0]["lifecycle_state"],
+        "processing"
+    );
+}

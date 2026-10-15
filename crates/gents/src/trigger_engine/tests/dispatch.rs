@@ -719,3 +719,37 @@ async fn dispatch_scopes_concurrency_by_the_agents_node_did() {
     ));
     assert_eq!(materializer.supersede_dids(), vec![expected_did]);
 }
+
+#[tokio::test]
+async fn scheduled_target_uses_stable_receipt_and_actual_session_template_scope() {
+    let task = resolved_task("session={{ session.id }} request={{ request.id }}");
+    let mut schedule = resolved_schedule("wake", task.clone());
+    schedule.session_id_template = Some("captain-session".into());
+    schedule.concurrency = ConcurrencyMode::QueuedSerial;
+    let snapshot = snapshot_with_schedules(HashMap::from([("wake".into(), schedule)]));
+    let identity = gents_protocol::trigger_delivery::FireIdentity {
+        owner_did: snapshot.agent("general").unwrap().node_did().to_string(),
+        trigger_id: "wake".into(), source_collection: "Schedule".into(),
+        source_doc_id: "persisted-due-occurrence".into(),
+    };
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    let engine = TriggerEngine::new(rx, materializer.clone());
+    for fired_at in ["2030-01-01T00:00:00Z", "2030-01-02T00:00:00Z"] {
+        let result = engine.dispatch(FireIntent {
+            trigger_id: Some("wake".into()), trigger_kind: TriggerKind::Schedule,
+            task: task.clone(), concurrency: ConcurrencyMode::QueuedSerial,
+            event_vars: serde_json::json!({"fired_at":fired_at}),
+            doc_vars: None, correlation: None, group_vars: None, trigger_context: None,
+            args_vars: None, durable_fire_key: "persisted-due-occurrence".into(),
+            pre_materialized_request_id: None, on_result: Box::new(|_| {}),
+        }).await;
+        assert!(matches!(result, FireResult::Fired { .. }), "{result:?}");
+    }
+    let calls = materializer.calls();
+    assert_eq!(calls.len(), 2);
+    for (_, kind, prompt) in calls {
+        assert_eq!(kind, TriggerKind::Schedule);
+        assert_eq!(prompt, format!("session=captain-session request={}", identity.request_id()));
+    }
+}
