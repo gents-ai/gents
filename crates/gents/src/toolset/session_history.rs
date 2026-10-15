@@ -407,6 +407,12 @@ struct SessionRequestAggregateRow {
 }
 
 #[derive(Debug, Deserialize)]
+struct SessionRequestTimestampsEnvelope {
+    #[serde(rename = "AgentRequest", default)]
+    requests: Vec<SessionRequestTimestampRow>,
+}
+
+#[derive(Debug, Deserialize)]
 struct SessionRequestTimestampRow {
     #[serde(default, rename = "_docID")]
     doc_id: Option<String>,
@@ -757,9 +763,10 @@ async fn load_session_history_in_txn(
                     &request_doc_ids,
                 ))
                 .await?;
-            let request_rows: Vec<SessionRequestTimestampRow> =
+            let envelope: SessionRequestTimestampsEnvelope =
                 decode(response.get("data"), "session request timestamps")?;
-            request_rows
+            envelope
+                .requests
                 .into_iter()
                 .filter_map(|row| clean(row.doc_id.as_ref()).map(|doc_id| (doc_id, row.created_at)))
                 .collect()
