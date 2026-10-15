@@ -432,6 +432,37 @@ impl ObservedStore {
             .accepts(captured, &state.snapshot.merge_scope(incoming))
     }
 
+    /// Checks the publication fence and cached request evidence against the
+    /// physical rows while holding the same store read lock. A cache hit is
+    /// useful only if every request document it would return is still present
+    /// with the exact row that was originally published.
+    pub(crate) fn current_request_patch_read_status(
+        &self,
+        captured: &StoreReadFence,
+        incoming: &ClientStore,
+    ) -> (bool, bool) {
+        let state = self.state.read().expect("store snapshot lock poisoned");
+        let scope = state.snapshot.merge_scope(incoming);
+        let fence_accepted = state.fences.accepts(captured, &scope);
+        let rows_current = !incoming.requests.is_empty()
+            && incoming.requests.iter().all(|expected| {
+                let Some(doc_id) = expected.doc_id.as_deref() else {
+                    return false;
+                };
+                let mut matches = state
+                    .snapshot
+                    .requests
+                    .iter()
+                    .filter(|current| current.doc_id.as_deref() == Some(doc_id));
+                let Some(current) = matches.next() else {
+                    return false;
+                };
+                matches.next().is_none()
+                    && serde_json::to_value(current).ok() == serde_json::to_value(expected).ok()
+            });
+        (fence_accepted, rows_current)
+    }
+
     fn update_if(&self, captured: Option<&StoreReadFence>, mutation: StoreMutation) -> Option<u64> {
         let notice = {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
@@ -526,10 +557,9 @@ mod reload_tests {
 
     #[test]
     fn generated_notice_delivery_never_regresses_watchers() {
-        let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../gents/tests/fixtures/client_data_publication.json"
-        ))
-        .expect("generated publication fixture");
+        let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>()
+            .expect("executed Lean publication contract");
+        let fixture = &contract["client_data_publication_cases"];
         let case = &fixture["notice_delivery"];
         let decode = |value: &serde_json::Value| StoreUpdateNotice {
             revision: StoreProjectionRevision {

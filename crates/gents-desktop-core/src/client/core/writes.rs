@@ -35,6 +35,88 @@ use crate::client::peer_directory::RemovalCause;
 
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
 
+fn request_patch_cache_reusable(
+    memoized: bool,
+    same_signature: bool,
+    fence_accepted: bool,
+    rows_current: bool,
+) -> bool {
+    memoized && same_signature && fence_accepted && rows_current
+}
+
+#[cfg(test)]
+mod request_patch_publication_tests {
+    use super::request_patch_cache_reusable;
+    use crate::client::observe::ObservedStore;
+    use crate::client::store::{ClientStore, ClientStoreRows};
+    use gents_protocol::row::AgentRequestRow;
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
+
+    fn request_row(state: &str) -> AgentRequestRow {
+        AgentRequestRow {
+            doc_id: Some("request-doc".to_owned()),
+            request_id: "request".to_owned(),
+            node_did: Some("did:test:node".to_owned()),
+            lifecycle_state: Some(match state {
+                "pending" => RequestLifecycleState::Pending,
+                "processing" => RequestLifecycleState::Processing,
+                other => panic!("unknown test state {other}"),
+            }),
+            ..AgentRequestRow::default()
+        }
+    }
+
+    fn request_patch(row: AgentRequestRow) -> ClientStore {
+        ClientStore::from_rows(ClientStoreRows {
+            requests: vec![row],
+            ..ClientStoreRows::default()
+        })
+    }
+
+    #[test]
+    fn cached_rows_must_match_physical_rows_at_the_current_fence() {
+        let (store, _) = ObservedStore::new(request_patch(request_row("pending")));
+        let patch = request_patch(request_row("pending"));
+        let captured = store.capture_read();
+        assert_eq!(
+            store.current_request_patch_read_status(&captured, &patch),
+            (true, true)
+        );
+
+        store.merge_chat_patch(request_patch(request_row("processing")));
+        let captured = store.capture_read();
+        assert_eq!(
+            store.current_request_patch_read_status(&captured, &patch),
+            (true, false),
+            "a current fence does not make an old physical request row current"
+        );
+    }
+
+    #[test]
+    fn generated_publication_cases_drive_request_patch_cache_admission() {
+        let snapshot: serde_json::Value =
+            gents_lean_contract::load_contract_snapshot().expect("Lean contract snapshot");
+        let fixture = &snapshot["client_request_patch_publication_cases"];
+        for case in fixture["reuse"].as_array().expect("reuse cases") {
+            assert_eq!(
+                request_patch_cache_reusable(
+                    case["memoized"].as_bool().expect("memoized state"),
+                    case["same_signature"]
+                        .as_bool()
+                        .expect("signature comparison"),
+                    case["fence_accepted"]
+                        .as_bool()
+                        .expect("publication fence"),
+                    case["rows_current"].as_bool().expect("physical row comparison"),
+                ),
+                case["expected_reuse"].as_bool().expect("Lean result"),
+                "{}",
+                case["name"].as_str().expect("case name")
+            );
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RefreshedRequestProjection {
     pub requests: Vec<AgentRequestRow>,
@@ -683,20 +765,28 @@ impl ClientCore {
             format!("{source}\0{node_did}\0{session_id}\0{requester_key}\0{request_key}");
         {
             let mut signatures = self.request_patch_signatures.lock().await;
-            if signatures.get(&cache_key) == Some(&signature)
-                && self.store.accepts_chat_patch_read(&captured, &patch)
-            {
-                return Ok(Some(RefreshedRequestProjection {
-                    requests: request_projection,
-                    requester_did,
-                    selected_request_id: resolved_request_id,
-                    published_version: None,
-                }));
+            let cached_signature = signatures.get(&cache_key) == Some(&signature);
+            if cached_signature {
+                let (fence_accepted, rows_current) = self
+                    .store
+                    .current_request_patch_read_status(&captured, &patch);
+                if request_patch_cache_reusable(
+                    cached_signature,
+                    true,
+                    fence_accepted,
+                    rows_current,
+                ) {
+                    return Ok(Some(RefreshedRequestProjection {
+                        requests: request_projection,
+                        requester_did,
+                        selected_request_id: resolved_request_id,
+                        published_version: None,
+                    }));
+                }
+                signatures.remove(&cache_key);
+                self.store.request_resync(Some(node_did));
+                return Ok(None);
             }
-            if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
-                signatures.clear();
-            }
-            signatures.insert(cache_key, signature);
         }
 
         let (_rows, bytes, _hash) = signature;
@@ -708,6 +798,15 @@ impl ClientCore {
             self.store.request_resync(Some(node_did));
             return Ok(None);
         };
+        // A rejected patch must never become evidence for a later cache hit.
+        // Record the signature only after the StoreReadFence owner accepted
+        // this publication.
+        let mut signatures = self.request_patch_signatures.lock().await;
+        if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
+            signatures.clear();
+        }
+        signatures.insert(cache_key, signature);
+        drop(signatures);
         // A completed agent turn may have used self-configuration tools. Most
         // of that control plane is intentionally absent from the client P2P
         // route (the Node document and inference credentials in particular),
