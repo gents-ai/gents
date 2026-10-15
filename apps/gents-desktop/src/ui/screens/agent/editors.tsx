@@ -1,7 +1,7 @@
 /* Shared configuration editor rows plus explicit Save/Cancel actions.
    Fields only update their local draft; persistence is user-controlled. */
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { ExternalLink, FolderOpen, Plus, XIcon } from "lucide-react";
 import { canPickDirectory, pickDirectory } from "../../../lib/nativeShell";
 import { Input } from "@gents/ui/components/input";
@@ -178,6 +178,25 @@ export function NumberRow({
   );
 }
 
+function useOverflowing(
+  ref: RefObject<HTMLElement | null>,
+  watching: boolean,
+  content: unknown,
+  expanded: boolean,
+) {
+  const [overflowing, setOverflowing] = useState(false);
+  useEffect(() => {
+    const element = ref.current;
+    if (!watching || !element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() =>
+      setOverflowing(element.scrollHeight > element.clientHeight + 1),
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref, watching, content, expanded]);
+  return overflowing;
+}
+
 export function AreaRow({
   id,
   label,
@@ -203,17 +222,7 @@ export function AreaRow({
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [expanded, setExpanded] = useState(expandedByDefault);
-  const [overflowing, setOverflowing] = useState(false);
-  useEffect(() => {
-    const element = ref.current;
-    if (!stacked || !element) return;
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() =>
-      setOverflowing(element.scrollHeight > element.clientHeight + 1),
-    );
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [stacked, value, expanded]);
+  const overflowing = useOverflowing(ref, stacked === true, value, expanded);
   const clipped = stacked && !expanded;
   const Wrap = stacked ? StackedRow : Row;
   return (
@@ -553,12 +562,14 @@ export function ChipsRow({
           }
           onValueChange={(v) => onChange(v ?? [])}
         >
-          <ComboboxChips className="min-w-0 flex-1">
+          <ComboboxChips className="max-h-24 min-w-0 flex-1 overflow-y-auto">
             <ComboboxValue>
               {(values: string[]) =>
                 values.map((selected) => (
-                  <ComboboxChip key={selected} showRemove={false}>
-                    {name(selected)}
+                  <ComboboxChip key={selected} showRemove={false} className="max-w-48">
+                    <span className="min-w-0 truncate" title={name(selected)}>
+                      {name(selected)}
+                    </span>
                     <Button
                       variant="ghost"
                       size="icon-xs"
@@ -639,7 +650,7 @@ export function TagsRow({
   return (
     <Row label={label} description={description} htmlFor={id}>
       <div
-        className="flex min-h-8 w-96 flex-wrap items-center gap-1 rounded-2xl border border-transparent bg-input/50 bg-clip-padding px-2.5 py-1 text-sm focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30 max-md:w-full"
+        className="flex max-h-24 min-h-8 w-96 flex-wrap items-center gap-1 overflow-y-auto rounded-2xl border border-transparent bg-input/50 bg-clip-padding px-2.5 py-1 text-sm focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30 max-md:w-full"
         onClick={(event) =>
           (
             event.currentTarget.querySelector("input") as HTMLInputElement | null
@@ -649,9 +660,11 @@ export function TagsRow({
         {value.map((tag) => (
           <span
             key={tag}
-            className="flex h-[calc(--spacing(5.25))] items-center gap-1 rounded-2xl bg-input px-1.5 pr-0.5 text-xs font-medium whitespace-nowrap dark:bg-input/60"
+            className="flex h-[calc(--spacing(5.25))] max-w-48 items-center gap-1 rounded-2xl bg-input px-1.5 pr-0.5 text-xs font-medium whitespace-nowrap dark:bg-input/60"
           >
-            {tag}
+            <span className="min-w-0 truncate" title={tag}>
+              {tag}
+            </span>
             <Button
               variant="ghost"
               size="icon-xs"
@@ -712,5 +725,35 @@ export function FactRow({
     <Row label={label} description={description}>
       <Fact mono={mono}>{children}</Fact>
     </Row>
+  );
+}
+
+export function LongFactRow({
+  label,
+  description,
+  children,
+}: Omit<Common, "id"> & { children: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const overflowing = useOverflowing(ref, true, children, expanded);
+  return (
+    <StackedRow label={label} description={description}>
+      <p
+        ref={ref}
+        className={`text-sm wrap-break-word whitespace-pre-wrap text-muted-foreground ${expanded ? "" : "line-clamp-3"}`}
+      >
+        {children}
+      </p>
+      {(overflowing || expanded) && (
+        <Button
+          variant="quiet"
+          size="sm"
+          className="-mt-1 -ml-3 self-start"
+          onClick={() => setExpanded((open) => !open)}
+        >
+          {expanded ? "Show less" : "Show all"}
+        </Button>
+      )}
+    </StackedRow>
   );
 }

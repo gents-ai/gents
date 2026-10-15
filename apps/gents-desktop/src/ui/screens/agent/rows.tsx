@@ -86,10 +86,8 @@ export function StackedRow({
   );
 }
 
-/* a read-only value, in mono when it is an identifier. Beside a row's
-   description it keeps its own width, as far as half the row: a short value
-   is never cut short for a long description, which wraps instead, and only
-   a long one truncates. Stacked below md it takes the row's width. */
+/* beside a row's description a value keeps its own width, up to half the
+   row: a short value is never cut short for a long description */
 export function Fact({
   children,
   mono = false,
@@ -101,7 +99,7 @@ export function Fact({
 }) {
   return (
     <span
-      title={title}
+      title={title ?? (typeof children === "string" ? children : undefined)}
       className={`max-w-[28rem] truncate text-sm text-muted-foreground max-md:max-w-full max-md:break-all max-md:whitespace-normal md:[[data-slot=field-row]>&]:max-w-[min(28rem,50%)] md:[[data-slot=field-row]>&]:shrink-0 ${mono ? "font-mono text-xs" : ""}`}
     >
       {children ?? "—"}

@@ -11,6 +11,7 @@ import {
   ChoiceRow,
   DraftActions,
   FactRow,
+  LongFactRow,
   RefRow,
   SwitchRow,
   TextRow,
@@ -391,7 +392,9 @@ export function TriggerEditor({
         <FactRow label="Fired">{trigger.fireCount ?? 0} times</FactRow>
         <FactRow label="Last attempt">{when(trigger.lastAttemptAt)}</FactRow>
         <FactRow label="Last status">{trigger.lastStatus ?? "—"}</FactRow>
-        {trigger.lastError && <FactRow label="Last error">{trigger.lastError}</FactRow>}
+        {trigger.lastError && (
+          <LongFactRow label="Last error">{trigger.lastError}</LongFactRow>
+        )}
         <FactRow label="Next run">{when(trigger.nextRunAt)}</FactRow>
       </Group>
       <Group title="Metadata">

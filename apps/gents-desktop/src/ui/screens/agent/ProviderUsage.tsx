@@ -4,7 +4,7 @@ import type {
   BackendUsageView,
   UsageWindowView,
 } from "@source-inc/gents-desktop-client";
-import { FactRow } from "./editors";
+import { FactRow, LongFactRow } from "./editors";
 
 /* "2h13m", "3m", "<1m": the CLI's short durations */
 function shortDuration(ms: number) {
@@ -79,7 +79,7 @@ export function UsageRows({ view }: { view?: BackendUsageView }) {
       ) : (
         <FactRow label="Reported">{view?.note ?? "unknown"}</FactRow>
       )}
-      {read && <FactRow label="Last read">{read}</FactRow>}
+      {read && <LongFactRow label="Last read">{read}</LongFactRow>}
     </>
   );
 }
