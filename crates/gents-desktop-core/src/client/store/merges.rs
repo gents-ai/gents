@@ -1,3 +1,4 @@
+use super::indexing::normalize_rows;
 use super::*;
 
 fn replace_node_rows<T>(
@@ -485,9 +486,10 @@ impl ClientStore {
     }
 
     pub fn merge_snapshot(&self, snapshot: ClientStore) -> Self {
-        let mut rows = self.to_rows();
-        let incoming = snapshot.to_rows();
+        Self::merge_snapshot_rows(self.to_rows(), snapshot.to_rows())
+    }
 
+    fn merge_snapshot_rows(mut rows: ClientStoreRows, incoming: ClientStoreRows) -> Self {
         upsert_rows_by_key(&mut rows.nodes, incoming.nodes, |row| row.node_did.clone());
         upsert_rows_by_key(&mut rows.agents, incoming.agents, agent_merge_key);
         upsert_rows_by_key(&mut rows.runtimes, incoming.runtimes, |row| {
@@ -683,7 +685,8 @@ impl ClientStore {
                 .cloned(),
         );
 
-        ClientStore::from_rows(rows).merge_snapshot(snapshot)
+        normalize_rows(&mut rows);
+        Self::merge_snapshot_rows(rows, snapshot.to_rows())
     }
 
     pub fn merge_chat_patch(&self, patch: ClientStore) -> Self {
