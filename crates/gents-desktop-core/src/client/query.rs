@@ -143,13 +143,13 @@ pub async fn load_chat_patch(
     fallback_request_id: Option<&str>,
     page_request_doc_ids: &[String],
 ) -> Result<ClientStore> {
-    let node_did = node_did.to_owned();
-    let session_id = session_id.to_owned();
-    let request_id = request_id.map(str::to_owned);
-    let fallback_request_id = fallback_request_id.map(str::to_owned);
-    let page_request_doc_ids = page_request_doc_ids.to_vec();
     access
         .transact_readonly("desktop.selected_request_refresh", |txn| {
+            let node_did = node_did.to_owned();
+            let session_id = session_id.to_owned();
+            let request_id = request_id.map(str::to_owned);
+            let fallback_request_id = fallback_request_id.map(str::to_owned);
+            let page_request_doc_ids = page_request_doc_ids.to_vec();
             Box::pin(async move {
                 let mut execute = |query: String, operation: &'static str| {
                     Box::pin(async move {
