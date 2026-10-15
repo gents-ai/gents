@@ -1300,10 +1300,8 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
         ("wrong-agent", "other", false),
         ("closed", "general", true),
     ] {
-        node.execute(&crate::defra::mutation::build_create_mutation("Session", &serde_json::json!({
-            "session_id":target, "node_did":owner, "agent_id":agent,
-            "purpose":"normal", "closed":closed, "created_at":"2025-01-01T00:00:00Z"
-        })).unwrap()).await.into_result().unwrap();
+        let response = node.execute(&format!(r#"mutation {{ create_Session(input: {{session_id: "{target}", node_did: "{owner}", agent_id: "{agent}", purpose: "normal", closed: {closed}, created_at: "2025-01-01T00:00:00Z"}}) {{ _docID }} }}"#)).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
     }
     let task = resolved_task("wake {{ session.id }}");
     for target in ["captain", "wrong-agent", "closed", "missing"] {
