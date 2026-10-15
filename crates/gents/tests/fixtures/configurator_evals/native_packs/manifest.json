@@ -11,9 +11,7 @@
     "README.md",
     "pack_config.json",
     "cases/local_sealed_install.json",
-    "artifacts/native_echo.pack",
     "cases/authority_refusal.json",
-    "artifacts/native_authority.pack",
     "cases/scaffold_check.json"
   ],
   "config": "pack_config.json"

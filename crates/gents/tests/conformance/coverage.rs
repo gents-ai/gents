@@ -1901,6 +1901,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     ));
     for (family, domain) in [
         ("invocation", "PluginInvocationCases"),
+        ("publication", "ToolPolicy.PluginPublication"),
         ("receipt", "PluginReceiptCases"),
         ("child_admission", "PluginChildAdmissionCases"),
         ("tool_effects", "PluginEffectCases"),

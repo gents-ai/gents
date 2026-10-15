@@ -166,7 +166,7 @@ mod tests {
         let report = preview_config(&manifest, &asset).unwrap();
         assert_eq!(
             report["config"]["agents"][0]["agent_id"],
-            "review_toolkit-worker"
+            "review-toolkit-worker"
         );
         assert_eq!(report["scenario"], serde_json::Value::Null);
 

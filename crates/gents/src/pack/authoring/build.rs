@@ -679,6 +679,15 @@ mod tests {
             .as_bytes(),
         )
         .unwrap();
+        let plugin = &manifest.metadata.plugins[0];
+        let manifold = plugin.manifold.clone().unwrap_or_else(|| {
+            json!({"fs": "None", "net": "None", "env": "None", "crypto": false, "child_process": false})
+        });
+        write_if_changed(
+            &staged.join("manifold.json"),
+            &serde_json::to_vec(&manifold).unwrap(),
+        )
+        .unwrap();
         let source_digest = format!("{BUILDER_ID} {}", tree_digest(&staged).unwrap());
         let artifact = std::fs::read(root.join("plugins/format_check.afb")).unwrap();
         std::fs::create_dir_all(staged.join("target")).unwrap();

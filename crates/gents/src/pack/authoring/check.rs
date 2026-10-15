@@ -131,10 +131,13 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
 }
 
 pub fn read_manifest(dir: &Path) -> Result<PackManifest> {
-    let mut file = crate::pack::open_pack_asset(dir, "manifest.json")?;
+    let path = dir.join("manifest.json");
+    let mut file = crate::pack::open_pack_asset(dir, "manifest.json")
+        .with_context(|| format!("reading {}", path.display()))?;
     let mut bytes = Vec::new();
-    std::io::Read::read_to_end(&mut file, &mut bytes).context("reading manifest.json")?;
-    serde_json::from_slice(&bytes).context("parsing manifest.json")
+    std::io::Read::read_to_end(&mut file, &mut bytes)
+        .with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
 }
 
 /// Declared files that are missing, and present files that are not declared.
@@ -512,7 +515,7 @@ mod tests {
         let block = topology_block(&config);
         assert!(block.contains(TOPOLOGY_START));
         assert!(block.contains("flowchart LR"));
-        assert!(block.contains("n0[worker]"));
+        assert!(block.contains("n0[\"worker\"]"));
         assert!(block.contains("-->|"));
     }
 

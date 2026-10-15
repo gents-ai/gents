@@ -46,8 +46,8 @@
                 "equals": false
               },
               {
-                "field": "apply_with",
-                "equals": null
+                "field": "operator_action",
+                "contains": "model input cannot grant it"
               },
               {
                 "field": "manifest.name",

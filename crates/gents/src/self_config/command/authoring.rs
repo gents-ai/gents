@@ -160,11 +160,11 @@ fn admit_scaffold_dir(context: &crate::toolset::ToolContext, name: &str) -> Resu
 fn check_outcome_fields(report: &CheckReport) -> (bool, String) {
     let validated = report.problems.is_empty() && report.unverified.is_empty();
     let note = if !report.problems.is_empty() {
-        "Fix each named problem and check again."
+        "Fix each named problem before installing; this call made no change."
     } else if !report.unverified.is_empty() {
-        "unverified names the checks this call could not run (event-source filter queries against a node; experiment.json scenario validation). An empty problems list is not full validation; run `gents pack check` from the operator CLI for those, or fold their results in before reporting success."
+        "unverified lists checks this call could not run. An empty problems list is not full validation; run `gents pack check` before reporting success."
     } else {
-        "The pack passed every check available in this call."
+        "Every validation available in this call passed."
     };
     (validated, note.to_owned())
 }

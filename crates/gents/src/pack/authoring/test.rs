@@ -176,13 +176,23 @@ mod tests {
                 "authors": ["gents-ai contributors"],
                 "kind": "plugins",
                 "assets": ["README.md", "plugins/prebuilt.afb"],
-                "plugins": [{
-                    "name": "prebuilt",
-                    "description": "Ships only its artifact",
-                    "artifact": "plugins/prebuilt.afb",
-                    "language": "rust",
-                    "input_schema": {"type": "object", "properties": {}},
-                }],
+                "plugins": [
+                    {
+                        "name": "prebuilt",
+                        "description": "Ships only its artifact",
+                        "artifact": "plugins/prebuilt.afb",
+                        "language": "rust",
+                        "input_schema": {"type": "object", "properties": {}},
+                    },
+                    {
+                        "name": "built",
+                        "description": "Has source but no built artifact",
+                        "artifact": "plugins/built.afb",
+                        "source": "plugin_src",
+                        "language": "rust",
+                        "input_schema": {"type": "object", "properties": {}},
+                    }
+                ],
             }))
             .unwrap(),
         )
@@ -191,7 +201,7 @@ mod tests {
         // declared path.
         let error = run_plugin_cases(&root).await.unwrap_err();
         assert!(
-            format!("{error:#}").contains("plugins/prebuilt.afb"),
+            format!("{error:#}").contains("plugins/built.afb"),
             "{error:#}"
         );
     }

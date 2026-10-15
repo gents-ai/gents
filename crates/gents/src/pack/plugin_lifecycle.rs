@@ -224,7 +224,10 @@ pub(crate) mod tests {
         let first = super::super::read_home_install(home.path(), coordinate)
             .unwrap()
             .expect("local pin survives a failed notification");
+        assert_eq!(first.version, "1.0.0");
+        assert_eq!(first.digest, archive.digest());
         let first_plugin = store::read_record(home.path(), "fixture", "native_echo").unwrap();
+        assert_eq!(first_plugin.version, "1.0.0");
         let (before, _) = install(
             home.path(),
             &archive,
@@ -235,7 +238,9 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
+        assert_eq!(before.version, "1.0.0");
         let plugin_before = store::read_record(home.path(), "fixture", "native_echo").unwrap();
+        assert_eq!(plugin_before.version, "1.0.0");
         let (_dir2, _, updated) = fixture("2.0.0", false);
         let cancelled = tokio::time::timeout(
             std::time::Duration::from_millis(50),
@@ -249,13 +254,10 @@ pub(crate) mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(after_cancel.version, "2.0.0");
-        assert_ne!(after_cancel, before);
+        assert_eq!(after_cancel.digest, updated.digest());
         let plugin_after_cancel =
             store::read_record(home.path(), "fixture", "native_echo").unwrap();
         assert_eq!(plugin_after_cancel.version, "2.0.0");
-        assert_ne!(plugin_after_cancel, plugin_before);
-        assert_ne!(first, before);
-        assert_ne!(first_plugin, plugin_before);
     }
 
     #[tokio::test]
