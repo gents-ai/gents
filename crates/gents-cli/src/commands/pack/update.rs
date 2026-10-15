@@ -6,7 +6,7 @@ use crate::cli::{PackInstallArgs, PackOutdatedArgs, PackUpdateArgs};
 use crate::output_format::OutputFormat;
 
 async fn outdated_packs(
-    scope: &crate::cli::GraphScopeArgs,
+    scope: &crate::cli::ScopeArgs,
     registry: Option<&str>,
 ) -> Result<Vec<Value>> {
     let home = crate::home_state::resolve_home_dir(scope.home.as_deref());
@@ -214,7 +214,7 @@ mod tests {
             .await
             .expect("identity-only init");
 
-        let scope = crate::cli::GraphScopeArgs {
+        let scope = crate::cli::ScopeArgs {
             home: Some(home_path),
             graphql: None,
             node_did: None,
@@ -342,7 +342,7 @@ mod tests {
     #[tokio::test]
     async fn outdated_lists_home_recorded_installs_without_opening_a_node() {
         let home = tempfile::tempdir().unwrap();
-        let scope = crate::cli::GraphScopeArgs {
+        let scope = crate::cli::ScopeArgs {
             home: Some(home.path().to_path_buf()),
             graphql: None,
             node_did: None,
