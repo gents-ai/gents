@@ -964,7 +964,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         )
         .await
         .unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let response = access
         .execute(&format!(
             "{{ AgentRequest(filter: {{ session_id: {{ _eq: \"{}\" }} }}) {{ retry_key }} }}",

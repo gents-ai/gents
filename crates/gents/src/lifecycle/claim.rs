@@ -1804,7 +1804,7 @@ mod tests {
             None,
         )
         .await;
-        let access = crate::config_client::ConfigAccess::Local(node.clone());
+        let access = crate::config_client::ConfigAccess::local(node.clone());
         let response = access
             .execute(&format!(
                 "{{ AgentMessage(filter: {{ message_key: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
@@ -1825,7 +1825,7 @@ mod tests {
         };
         imported.sequence = 2;
         access
-            .transact("test.claim.import", |txn| {
+            .transact_write("test.claim.import", |txn| {
                 let imported = imported.clone();
                 Box::pin(async move {
                     txn.execute_with_variables(
