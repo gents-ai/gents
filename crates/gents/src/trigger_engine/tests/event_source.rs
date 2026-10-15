@@ -1626,6 +1626,43 @@ async fn create_event_trigger_doc(
     .unwrap();
 }
 
+#[tokio::test]
+async fn concurrent_trigger_fire_count_updates_are_not_lost() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let trigger_id = "trigger-concurrent-fire-count";
+    create_event_trigger_doc(&node, trigger_id, "task-webhook", "WebhookEvent").await;
+    let node_did = event_test_behavior().node_did().to_owned();
+
+    let updates = (0..12)
+        .map(|index| {
+            let node = node.clone();
+            let node_did = node_did.clone();
+            tokio::spawn(async move {
+                crate::document_config::update_trigger_runtime_fields(
+                    &node,
+                    &node_did,
+                    trigger_id,
+                    crate::document_config::TriggerRuntimeUpdate {
+                        last_attempt_at: Some(format!("2026-01-01T00:00:{index:02}Z")),
+                        last_status: Some("fired".to_owned()),
+                        fire_count_delta: Some(1),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            })
+        })
+        .collect::<Vec<_>>();
+    for update in updates {
+        update.await.unwrap();
+    }
+
+    let trigger = observed_trigger(node.as_ref(), trigger_id).await;
+    assert_eq!(trigger["fire_count"].as_i64(), Some(12));
+}
+
 async fn observed_trigger(node: &defra_node::EmbeddedNode, id: &str) -> serde_json::Value {
     let query = format!(
         "{{Trigger(filter:{{node_did:{{_eq:\"{}\"}},trigger_id:{{_eq:\"{}\"}}}},limit:2){{task_id source enabled concurrency last_status last_error last_attempt_at last_fired_source_doc_id fire_count}}}}",
