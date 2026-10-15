@@ -455,6 +455,27 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_reasoning_projection_cases_drive_turn_projection_notifications",
         },
         ConformanceConsumer::RustTest {
+            id: "commands::codex_shim::turn_projection::tests::generated_tool_metadata_cases_drive_the_tool_item_owner",
+            package: "gents-cli",
+            source_path: "crates/gents-cli/src/commands/codex_shim/turn_projection.rs",
+            module_path: "commands::codex_shim::turn_projection::tests",
+            function: "generated_tool_metadata_cases_drive_the_tool_item_owner",
+        },
+        ConformanceConsumer::RustTest {
+            id: "commands::codex_shim::thread_projection::conformance::generated_thread_status_cases_drive_thread_projection",
+            package: "gents-cli",
+            source_path: "crates/gents-cli/src/commands/codex_shim/thread_projection/conformance.rs",
+            module_path: "commands::codex_shim::thread_projection::conformance",
+            function: "generated_thread_status_cases_drive_thread_projection",
+        },
+        ConformanceConsumer::RustTest {
+            id: "commands::codex_shim::thread_projection::conformance::generated_agent_selection_cases_drive_scoped_model_binding",
+            package: "gents-cli",
+            source_path: "crates/gents-cli/src/commands/codex_shim/thread_projection/conformance.rs",
+            module_path: "commands::codex_shim::thread_projection::conformance",
+            function: "generated_agent_selection_cases_drive_scoped_model_binding",
+        },
+        ConformanceConsumer::RustTest {
             id: "gents_desktop_core::client::mutations::chat::request::tests::generated_session_recovery_cases_drive_desktop_retry_request",
             package: "gents-desktop-core",
             source_path: "crates/gents-desktop-core/src/client/mutations/chat/request/tests.rs",
