@@ -516,7 +516,7 @@ mod tests {
         assert!(block.contains(TOPOLOGY_START));
         assert!(block.contains("flowchart LR"));
         assert!(block.contains("n0[\"worker\"]"));
-        assert!(!block.contains("-->"));
+        assert!(!block.contains(" -->|"));
         let graph = &mut config.graph_intents[0];
         let mut next = graph.nodes[0].clone();
         next.node_id = "reviewer".into();

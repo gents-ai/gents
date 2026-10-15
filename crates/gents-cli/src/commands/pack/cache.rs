@@ -271,9 +271,7 @@ mod tests {
         for (namespace, version) in [("acme", "1.0.0"), ("acme", "2.0.0"), ("zeta", "1.0.0")] {
             let dir = assets_pack_dir(namespace, "tools", version);
             let pack = local_pack_source(dir.path(), home.path());
-            let root = super::super::asset_cache_root(home.path(), &pack).unwrap();
-            super::super::materialize(&pack, &root).unwrap();
-            write_cache_marker(&root).unwrap();
+            let (root, _lease) = super::super::materialize_cached_pack(home.path(), &pack).unwrap();
             sources.push((pack, root));
         }
         let unscoped = home.path().join("packs/tools").join("a".repeat(64));
