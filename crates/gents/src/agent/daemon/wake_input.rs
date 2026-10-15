@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
@@ -66,7 +67,7 @@ fn receipt_keys(row: &Value) -> Result<Vec<String>> {
 }
 
 pub(super) async fn load(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     request: &crate::AgentRequest,
     cutoff: Option<u32>,
 ) -> Result<Vec<TaggedMessage>> {
