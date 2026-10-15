@@ -388,16 +388,6 @@ pub(crate) async fn close_provider_attempt_at(
             ).await?;
             let close_doc_id = created_doc_id(&response, "AgentOutputSegment")?;
             let closing = OutputSegmentRow { doc_id: close_doc_id, segment: closure };
-            let request_id = escape_graphql_string(&prepared.request_doc_id);
-            let escaped_generation = escape_graphql_string(generation);
-            let expiry = escape_graphql_string(expiry);
-            let state = escape_graphql_string(state.as_str());
-            let response = txn.execute_local_response(&format!(r#"mutation {{ update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{request_id}" }}, lifecycle_state: {{ _eq: "{state}" }},
-                    execution_generation: {{ _eq: "{escaped_generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
-                input: {{ execution_generation: "{escaped_generation}" }}) {{ _docID }} }}"#)).await?;
-            anyhow::ensure!(response.data.as_ref().and_then(|data| data.get("update_AgentRequest"))
-                .is_some_and(crate::graphql::response_has_documents), "provider close lost request CAS");
             partial_header_in_txn(txn, prepared, generation, &closing, &records, close, candidate.as_ref().and_then(|value| value.header.as_ref()), now, false).await
         })},
     ).await
@@ -864,18 +854,6 @@ pub(super) async fn publish_provider_turn_with_time(
                 "first publication native message changed"
             );
 
-            // The matching-generation write is the ordering point against
-            // cancellation/recovery. It changes no lease deadline.
-            let request_id = escape_graphql_string(&prepared.request_doc_id);
-            let escaped_generation = escape_graphql_string(generation);
-            let expiry = escape_graphql_string(expiry);
-            let state = escape_graphql_string(state.as_str());
-            let response = txn.execute_local_response(&format!(r#"mutation {{ update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{request_id}" }}, lifecycle_state: {{ _eq: "{state}" }},
-                    execution_generation: {{ _eq: "{escaped_generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
-                input: {{ execution_generation: "{escaped_generation}" }}) {{ _docID }} }}"#)).await?;
-            anyhow::ensure!(response.data.as_ref().and_then(|data| data.get("update_AgentRequest"))
-                .is_some_and(crate::graphql::response_has_documents), "provider publication lost request CAS");
             if let Some(consumption) = plan.consumes_folded.as_ref() {
                 anyhow::ensure!(
                     crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
@@ -1193,6 +1171,11 @@ async fn append_in_txn_with_time(
 }
 
 /// Read the existing authorized request owner, not a parallel principal check.
+///
+/// This in-transaction `_docID` point read is the publication's fence against
+/// recovery and cancellation: native OCC validates point-read keys at commit
+/// (`RequestExecutionLease/ObservedTransaction.lean`). Keep it a point read,
+/// and do not add a same-value request write: that only replicates a commit.
 async fn load_request_in_txn(
     txn: &ConfigApplyTxn<'_>,
     prepared: &OutputSegment,
