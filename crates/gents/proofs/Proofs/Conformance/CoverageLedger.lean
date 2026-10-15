@@ -1080,7 +1080,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "client_request_patch_publication_cases"
       "ClientRequestPatchPublicationCases"
-      "gents_desktop_core::client::core::writes::request_patch_publication_tests::generated_publication_cases_drive_request_patch_cache_admission")
+      "client::core::writes::request_patch_publication_tests::generated_publication_cases_drive_request_patch_cache_admission")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "client_request_closure_cases"
