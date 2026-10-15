@@ -503,20 +503,34 @@ mod tests {
         assert!(report.problems.is_empty(), "{:#?}", report.problems);
     }
 
-    /// The topology block names every node of the scaffolded one-stage
-    /// graph and one port edge.
+    /// The scaffold has one node and no internal edges. Declared edges retain
+    /// both endpoint ports in the rendered diagram.
     #[test]
     fn the_topology_block_renders_the_scaffolded_graph() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("review_toolkit");
         scaffold_graph(&dir, "review_toolkit");
         let (bytes, _) = pack_dir(&dir).unwrap();
-        let config = load_config(&PackArchive::from_bytes(&bytes).unwrap()).unwrap();
+        let mut config = load_config(&PackArchive::from_bytes(&bytes).unwrap()).unwrap();
         let block = topology_block(&config);
         assert!(block.contains(TOPOLOGY_START));
         assert!(block.contains("flowchart LR"));
         assert!(block.contains("n0[\"worker\"]"));
-        assert!(block.contains("-->|"));
+        assert!(!block.contains("-->"));
+        let graph = &mut config.graph_intents[0];
+        let mut next = graph.nodes[0].clone();
+        next.node_id = "reviewer".into();
+        graph.nodes.push(next);
+        graph.edges.push(
+            serde_json::from_value(json!({
+                "from": {"node_id": "worker", "port": "result"},
+                "to": {"node_id": "reviewer", "port": "job"},
+            }))
+            .unwrap(),
+        );
+        let block = topology_block(&config);
+        assert!(block.contains("n1[\"reviewer\"]"));
+        assert!(block.contains("n0 -->|\"result → job\"| n1"));
     }
 
     #[tokio::test]
