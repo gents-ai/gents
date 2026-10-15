@@ -11,7 +11,12 @@ import type {
 
 vi.mock("@/lib/router", () => ({ href: () => "#", navigate: vi.fn() }));
 
-import { WorkerList, WorkerStep, workerNow } from "../src/ui/screens/WorkerStep";
+import {
+  WorkerList,
+  WorkerStep,
+  failureLine,
+  workerNow,
+} from "../src/ui/screens/WorkerStep";
 import {
   NO_WORKERS,
   type Reached,
@@ -293,5 +298,21 @@ describe("agent list", () => {
   it("renders nothing for a session that started no other session", () => {
     const view = render(<WorkerList workers={NO_WORKERS} />);
     expect(view.container).toBeEmptyDOMElement();
+  });
+});
+
+describe("a failed call's reason", () => {
+  it("reads a JSON error's message rather than its opening brace", () => {
+    expect(
+      failureLine(
+        '{\n  "error": "session is neither this agent\'s own nor one it started"\n}',
+      ),
+    ).toBe("session is neither this agent's own nor one it started");
+    expect(failureLine('{"error": {"message": "allowed_agents: [worker]"}}')).toBe(
+      "allowed_agents: [worker]",
+    );
+    expect(failureLine('{\n  "code": 7\n}')).toBeNull();
+    expect(failureLine("plain reason\nmore")).toBe("plain reason");
+    expect(failureLine("")).toBeNull();
   });
 });
