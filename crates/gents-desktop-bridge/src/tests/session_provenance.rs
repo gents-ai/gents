@@ -218,7 +218,23 @@ async fn a_non_session_message_call_lists_each_caused_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn session_message_calls_keep_one_view_each() {
-    let (core, _tmp, _) = seed_provenance_fixture().await;
+    let (core, _tmp, parent) = seed_provenance_fixture().await;
+    let call_doc = create_tool_call(&core, "tc_dup", "agent_new").await;
+    for (request_id, session_id, created_at) in [
+        ("req_dup_a", "sess_dup_a", "2026-05-20T00:07:00Z"),
+        ("req_dup_b", "sess_dup_b", "2026-05-20T00:07:30Z"),
+    ] {
+        create_request(
+            &core,
+            request_id,
+            OPERATOR,
+            session_id,
+            "processing",
+            created_at,
+            Some((&parent, "tc_dup", &call_doc)),
+        )
+        .await;
+    }
     let view = session_provenance(&core, scope("sess_parent"))
         .await
         .expect("provenance");
@@ -232,4 +248,8 @@ async fn session_message_calls_keep_one_view_each() {
             "{call}"
         );
     }
+    assert!(
+        view.calls.iter().all(|view| view.tool_call_id != "tc_dup"),
+        "a session-message call that caused several requests is ambiguous and shows none"
+    );
 }
