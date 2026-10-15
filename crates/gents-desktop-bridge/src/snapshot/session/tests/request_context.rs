@@ -1,5 +1,5 @@
 use super::*;
-use crate::tests::support::refresh_request_and_wait_for_projection;
+use crate::tests::support::refresh_request_and_assert_fresh_projection;
 use gents_protocol::rendered_request::{
     ContextAccounting, ContextCompactionReason, ContextInputComponents, CONTEXT_ACCOUNTING_VERSION,
 };
@@ -147,7 +147,7 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
     .await
     .expect("session projection arrives");
     for request_id in ["request-accounted", "request-pending"] {
-        refresh_request_and_wait_for_projection(
+        refresh_request_and_assert_fresh_projection(
             &core,
             node_did,
             session_id,

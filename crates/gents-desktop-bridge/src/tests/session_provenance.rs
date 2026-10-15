@@ -2,7 +2,7 @@ use gents::session_origin::SessionScope;
 
 use crate::provenance::session_provenance;
 use crate::tests::support::{
-    refresh_request_and_wait_for_projection, seed_provenance_fixture, OPERATOR,
+    refresh_request_and_assert_fresh_projection, seed_provenance_fixture, OPERATOR,
 };
 use crate::types::LinkedSessionView;
 
@@ -107,7 +107,7 @@ async fn a_started_session_names_its_starter_and_the_sender_of_each_turn() {
         ("sess_child", "req_child"),
         ("sess_child", "req_child_2"),
     ] {
-        refresh_request_and_wait_for_projection(
+        refresh_request_and_assert_fresh_projection(
             &core,
             OPERATOR,
             session_id,
@@ -116,6 +116,15 @@ async fn a_started_session_names_its_starter_and_the_sender_of_each_turn() {
         )
         .await;
     }
+    assert!(
+        !core
+            .store()
+            .snapshot()
+            .requests
+            .iter()
+            .any(|row| row.request_id == "req_child"),
+        "terminal history can be absent from the bounded global cache"
+    );
     let view = session_provenance(&core, scope("sess_child"))
         .await
         .expect("provenance");
@@ -163,7 +172,7 @@ async fn a_root_session_has_no_provenance() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_replicated_session_message_keeps_the_call_that_sent_it() {
     let (core, _tmp, parent) = seed_provenance_fixture().await;
-    refresh_request_and_wait_for_projection(
+    refresh_request_and_assert_fresh_projection(
         &core,
         OPERATOR,
         "sess_child",
