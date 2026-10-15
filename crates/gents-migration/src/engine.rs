@@ -45,6 +45,7 @@ pub async fn ensure_migrations_with_registry(
     apply_steps(node, registry, &mut report).await?;
     let steps_ready = Instant::now();
     verify_managed_lineages(node, registry, &mut report).await?;
+    crate::indexes::ensure_indexes(node, registry).await?;
     let lineages_ready = Instant::now();
 
     // A chain-free registry has no older document version to advance. DefraDB

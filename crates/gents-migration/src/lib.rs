@@ -18,6 +18,7 @@
 mod engine;
 mod error;
 mod expectation;
+mod indexes;
 mod lens;
 mod materialize;
 mod registry;

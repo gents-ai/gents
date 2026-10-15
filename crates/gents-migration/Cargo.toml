@@ -11,6 +11,8 @@ build = "build.rs"
 anyhow.workspace = true
 defra-node = { workspace = true, features = ["native", "wasmtime-runtime"] }
 gents-protocol.workspace = true
+query.workspace = true
+schema.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
