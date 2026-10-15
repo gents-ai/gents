@@ -106,10 +106,8 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
     core.refresh_store().await?;
     assert!(core.store().snapshot().transcript_messages.is_empty());
     assert!(core.store().snapshot().output_segments.is_empty());
-    assert!(core
-        .refresh_local_request("did:test:amy", "request-1")
-        .await?
-        .is_some());
+    core.refresh_local_request("did:test:amy", "request-1")
+        .await?;
     let page = load_session_transcript_page(
         core.node(),
         "session-1",
@@ -183,14 +181,22 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         response.errors
     );
 
-    assert!(core
-        .refresh_local_request("did:test:amy", "request-terminal-config")
-        .await?
-        .is_some());
-    assert_eq!(
-        core.store().snapshot().nodes[0].default_agent_id.as_deref(),
-        Some("did:test:amy:research")
-    );
+    let mut updates = core.store_updates();
+    core.refresh_local_request("did:test:amy", "request-terminal-config")
+        .await?;
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if core.store().snapshot().nodes.iter().any(|node| {
+                node.node_did == "did:test:amy"
+                    && node.default_agent_id.as_deref() == Some("did:test:amy:research")
+            }) {
+                break;
+            }
+            updates.changed().await.expect("store observer is running");
+        }
+    })
+    .await
+    .context("terminal request must refresh the node configuration")?;
 
     Arc::new(core).shutdown().await?;
     Ok(())
