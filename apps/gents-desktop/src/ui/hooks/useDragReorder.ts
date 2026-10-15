@@ -19,6 +19,22 @@ const SETTLE = `transform 180ms ${EASE}`;
 const LIFT = "scale 150ms ease-out, box-shadow 150ms ease-out, opacity 150ms ease-out";
 const THRESHOLD = 4;
 
+type Pressed = {
+  from: number;
+  /** the held item, by key: indexes name items only in one order */
+  key: string;
+  /** the order the press measured */
+  order: string;
+  /** where the pointer went down, moved along with the held item's slot */
+  start: number;
+  /** where the pointer is */
+  last: number;
+  starts: number[];
+  step: number;
+  lo: number;
+  hi: number;
+};
+
 type Drag = { kind: "drag"; from: number; to: number; delta: number; step: number };
 type Held = {
   kind: "held";
@@ -53,14 +69,7 @@ export function useDragReorder<E extends HTMLElement = HTMLElement>({
 }) {
   const container = useRef<E | null>(null);
   const order = keys.join("\n");
-  const pressed = useRef<{
-    from: number;
-    start: number;
-    starts: number[];
-    step: number;
-    lo: number;
-    hi: number;
-  } | null>(null);
+  const pressed = useRef<Pressed | null>(null);
   const [phase, setPhase] = useState<Drag | Held | null>(null);
 
   /* a held move whose order has arrived is drawn settled at once: the new
@@ -86,6 +95,62 @@ export function useDragReorder<E extends HTMLElement = HTMLElement>({
   const startOf = (el: HTMLElement) => {
     const r = el.getBoundingClientRect();
     return axis === "x" ? r.left : r.top;
+  };
+
+  /* where the items rest, in this order, ignoring how far a drag has
+     moved them: their own transforms are lifted while they are read */
+  const measure = (from: number) => {
+    const els = items();
+    const kept = els.map((el) => [
+      el.style.transition,
+      el.style.transform,
+      el.style.scale,
+    ]);
+    for (const el of els) {
+      el.style.transition = "none";
+      el.style.transform = "none";
+      el.style.scale = "none";
+    }
+    const starts = els.map(startOf);
+    const size =
+      els[from]?.getBoundingClientRect()[axis === "x" ? "width" : "height"] ?? 0;
+    els.forEach((el, i) => {
+      [el.style.transition, el.style.transform, el.style.scale] = kept[i]!;
+    });
+    let lo = from;
+    while (lo > 0 && canMove(from, lo - 1)) lo--;
+    let hi = from;
+    while (hi < starts.length - 1 && canMove(from, hi + 1)) hi++;
+    return {
+      from,
+      starts,
+      /* items share one size; a neighbour steps by it plus any gap */
+      step:
+        starts.length > 1
+          ? (starts[starts.length - 1]! - starts[0]!) / (starts.length - 1)
+          : size,
+      lo,
+      hi,
+    };
+  };
+
+  /* the drag where the pointer last was: the slot it is nearest, within
+     the slots a move may reach */
+  const dragAt = (p: Pressed): Drag => {
+    const at = Math.max(
+      p.starts[p.lo]!,
+      Math.min(p.starts[p.hi]!, p.starts[p.from]! + (p.last - p.start)),
+    );
+    let to = p.lo;
+    for (let i = p.lo; i <= p.hi; i++)
+      if (Math.abs(p.starts[i]! - at) < Math.abs(p.starts[to]! - at)) to = i;
+    return {
+      kind: "drag",
+      from: p.from,
+      to,
+      delta: at - p.starts[p.from]!,
+      step: p.step,
+    };
   };
 
   const seen = useRef(new Map<string, number>());
@@ -126,12 +191,41 @@ export function useDragReorder<E extends HTMLElement = HTMLElement>({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order]);
 
+  /* the order changed under a held press (another item closed or arrived
+     meanwhile): the press's indexes and geometry no longer name the same
+     items. The held item is found again by its key and the strip measured
+     afresh, the pointer's origin moved by as much as its slot moved, so it
+     stays under the pointer and the drag goes on. If it is gone, the drag
+     ends with nothing moved. */
+  useLayoutEffect(() => {
+    const p = pressed.current;
+    if (!p || p.order === order) return;
+    const from = keys.indexOf(p.key);
+    if (from < 0) {
+      pressed.current = null;
+      delete document.documentElement.dataset.dragging;
+      setPhase((now) => (now?.kind === "drag" ? null : now));
+      return;
+    }
+    const measured = measure(from);
+    const next: Pressed = {
+      ...p,
+      ...measured,
+      order,
+      start: p.start + (measured.starts[from]! - p.starts[p.from]!),
+    };
+    pressed.current = next;
+    setPhase((now) => (now?.kind === "drag" ? dragAt(next) : now));
+    // the press is what changes here; the rest is read as it stands
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order]);
+
   const release = () => {
     const p = pressed.current;
     if (!p) return;
     pressed.current = null;
     delete document.documentElement.dataset.dragging;
-    if (phase?.kind !== "drag" || phase.to === phase.from) {
+    if (phase?.kind !== "drag" || phase.to === phase.from || p.order !== order) {
       setPhase(null);
       return;
     }
@@ -156,25 +250,13 @@ export function useDragReorder<E extends HTMLElement = HTMLElement>({
       /* no text selection rides along with the drag (WebKit) */
       e.preventDefault();
       getSelection()?.removeAllRanges();
-      const els = items();
-      const starts = els.map(startOf);
-      let lo = from;
-      while (lo > 0 && canMove(from, lo - 1)) lo--;
-      let hi = from;
-      while (hi < starts.length - 1 && canMove(from, hi + 1)) hi++;
-      const size =
-        els[from]?.getBoundingClientRect()[axis === "x" ? "width" : "height"] ?? 0;
+      const at = axis === "x" ? e.clientX : e.clientY;
       pressed.current = {
-        from,
-        start: axis === "x" ? e.clientX : e.clientY,
-        starts,
-        /* items share one size; a neighbour steps by it plus any gap */
-        step:
-          starts.length > 1
-            ? (starts[starts.length - 1]! - starts[0]!) / (starts.length - 1)
-            : size,
-        lo,
-        hi,
+        ...measure(from),
+        key: keys[from] ?? "",
+        order,
+        start: at,
+        last: at,
       };
       document.documentElement.dataset.dragging = "reorder";
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -182,22 +264,9 @@ export function useDragReorder<E extends HTMLElement = HTMLElement>({
     onPointerMove: (e: PointerEvent<HTMLElement>) => {
       const p = pressed.current;
       if (!p) return;
-      const moved = (axis === "x" ? e.clientX : e.clientY) - p.start;
-      if (phase?.kind !== "drag" && Math.abs(moved) < THRESHOLD) return;
-      const at = Math.max(
-        p.starts[p.lo]!,
-        Math.min(p.starts[p.hi]!, p.starts[p.from]! + moved),
-      );
-      let to = p.lo;
-      for (let i = p.lo; i <= p.hi; i++)
-        if (Math.abs(p.starts[i]! - at) < Math.abs(p.starts[to]! - at)) to = i;
-      setPhase({
-        kind: "drag",
-        from: p.from,
-        to,
-        delta: at - p.starts[p.from]!,
-        step: p.step,
-      });
+      p.last = axis === "x" ? e.clientX : e.clientY;
+      if (phase?.kind !== "drag" && Math.abs(p.last - p.start) < THRESHOLD) return;
+      setPhase(dragAt(p));
     },
     onPointerUp: release,
     onPointerCancel: release,
