@@ -70,7 +70,9 @@ struct Initial {
 struct Observation {
     gate_held: bool,
     native_outstanding: usize,
+    registry_abandoned: bool,
     rollback_returned: bool,
+    retry_started: bool,
 }
 
 #[derive(Deserialize)]
@@ -235,18 +237,14 @@ async fn wait_for_native_count(tracker: &NativeOperationTracker, expected: usize
 }
 
 #[tokio::test]
-async fn lean_timed_out_transaction_drains_every_native_operation_before_rollback() {
+async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drains() {
     let cases: Vec<Case> =
         serde_json::from_str(include_str!("../../tests/fixtures/native_completion.json")).unwrap();
     let concurrent = cases
         .iter()
-        .find(|case| case.name == "concurrent_operations_drain_individually")
+        .find(|case| case.name == "registry_abandonment_retains_gate_until_all_native_returns")
         .unwrap();
-    let completion = cases
-        .iter()
-        .find(|case| case.name == "drain_then_rollback_then_release")
-        .unwrap();
-    let expected = concurrent.observations.last().unwrap();
+    let expected = &concurrent.observations[6]; // partial drain after gate-release request
     let operation_count = concurrent
         .events
         .iter()
@@ -254,6 +252,11 @@ async fn lean_timed_out_transaction_drains_every_native_operation_before_rollbac
         .count();
     let (node, _signer, _release_on_panic) = signed_node().await;
     let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+    txn.execute(
+        r#"mutation { create_NativeCompletionProbe(input: { value: "uncommitted" }) { _docID } }"#,
+    )
+    .await
+    .unwrap();
     let (tracker, handle) = match &txn.backend {
         TxnBackend::Embedded {
             native_operations,
@@ -282,6 +285,27 @@ async fn lean_timed_out_transaction_drains_every_native_operation_before_rollbac
     tokio::time::resume();
     assert!(results.iter().all(Result::is_err));
 
+    // Registry ownership is gone immediately, even though both native permits
+    // still hold the gate/store claim. This is not rollback/drain completion.
+    let abandoned = &concurrent.observations[4];
+    assert!(abandoned.registry_abandoned);
+    assert!(!abandoned.rollback_returned);
+    assert_eq!(
+        tracker.state.lock().unwrap().in_flight,
+        abandoned.native_outstanding
+    );
+    assert_eq!(
+        gate.lock.clone().try_lock_owned().is_err(),
+        abandoned.gate_held
+    );
+    let response = node
+        .execute_request_in_txn(
+            defra_node::QueryRequest::new("{ NativeCompletionProbe { value } }"),
+            &handle,
+        )
+        .await;
+    assert_eq!(response.has_errors(), abandoned.registry_abandoned);
+
     release.notify_one();
     wait_for_native_count(&tracker, expected.native_outstanding).await;
     assert_eq!(
@@ -294,7 +318,7 @@ async fn lean_timed_out_transaction_drains_every_native_operation_before_rollbac
             &handle,
         )
         .await;
-    assert_eq!(response.has_errors(), expected.rollback_returned);
+    assert_eq!(response.has_errors(), expected.registry_abandoned);
 
     release.notify_one();
     let acquired = tokio::time::timeout(
@@ -307,7 +331,26 @@ async fn lean_timed_out_transaction_drains_every_native_operation_before_rollbac
     drop(acquired);
     assert_eq!(
         gate.lock.clone().try_lock_owned().is_err(),
-        completion.observations.last().unwrap().gate_held
+        concurrent.observations.last().unwrap().gate_held
+    );
+    let drained = concurrent.observations.last().unwrap();
+    assert_eq!(
+        tracker.state.lock().unwrap().in_flight,
+        drained.native_outstanding
+    );
+    assert!(drained.registry_abandoned);
+    assert!(!drained.rollback_returned);
+    assert!(!drained.retry_started);
+    let response = ConfigAccess::local(node.clone())
+        .execute("{ NativeCompletionProbe { value } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        response["data"]["NativeCompletionProbe"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
     );
     node.shutdown().await;
 }

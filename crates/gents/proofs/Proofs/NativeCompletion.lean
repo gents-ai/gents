@@ -5,9 +5,11 @@ This model states obligations for Gents' owner tasks around DefraDB operations.
 `nativeReturned` is an observation supplied by the adapter; a caller timeout or
 cancellation does not imply it. The model does not establish that native work
 eventually returns. If it never returns, retaining the mutation gate is the
-safe modeled outcome. Transaction rollback is allowed only after all abandoned
-native statements have actually returned; auto-commit retains its gate until
-its native operation returns.
+safe modeled outcome. Explicit rollback completion is allowed only after all
+abandoned native statements return. Native owner abandonment instead removes the
+registry entry synchronously, without implying that already-acquired contexts
+have returned. Both paths retain the gate until every native operation drains.
+This model observes registry ownership and gate ownership, not storage internals.
 -/
 namespace NativeCompletion
 
@@ -20,6 +22,7 @@ structure State where
   nativeOutstanding : Nat
   poisoned : Bool
   cleanupRequired : Bool
+  registryAbandoned : Bool
   rollbackReturned : Bool
   gateHeld : Bool
   retryStarted : Bool
@@ -30,7 +33,7 @@ structure State where
 
 inductive Event where
   | nativeStarted | nativeReturned | callerReturned | callerTimedOut | callerCancelled
-  | rollbackReturned | retryRequested | gateReleaseRequested
+  | registryAbandoned | rollbackReturned | retryRequested | gateReleaseRequested
   | renewalAttemptReturned | renewalRequested
   deriving DecidableEq, Repr
 
@@ -53,6 +56,9 @@ def step (s : State) (event : Event) : State :=
   | .callerReturned => { s with caller := .returned }
   | .callerTimedOut => { s with caller := .timedOut, poisoned := true }
   | .callerCancelled => { s with caller := .cancelled, poisoned := true }
+  | .registryAbandoned =>
+      if s.cleanupRequired then { s with registryAbandoned := true, poisoned := true }
+      else s
   | .rollbackReturned =>
       if nativeWorkDrained s.nativeOutstanding && s.cleanupRequired then
         { s with rollbackReturned := true }
@@ -64,7 +70,7 @@ def step (s : State) (event : Event) : State :=
       else s
   | .gateReleaseRequested =>
       if nativeWorkDrained s.nativeOutstanding &&
-          (!s.cleanupRequired || s.rollbackReturned) then
+          (!s.cleanupRequired || s.rollbackReturned || s.registryAbandoned) then
         { s with gateHeld := false }
       else s
   | .renewalAttemptReturned =>
@@ -79,8 +85,8 @@ def step (s : State) (event : Event) : State :=
 
 def run (s : State) (events : List Event) : State := events.foldl step s
 
-def transaction : State := ⟨.waiting, 0, false, true, false, true, false, false, false, false⟩
-def autoCommit : State := ⟨.waiting, 0, false, false, false, true, false, false, false, false⟩
+def transaction : State := ⟨.waiting, 0, false, true, false, false, true, false, false, false, false⟩
+def autoCommit : State := ⟨.waiting, 0, false, false, false, false, true, false, false, false, false⟩
 
 theorem timeout_is_not_native_completion :
     (step (step transaction .nativeStarted) .callerTimedOut).nativeOutstanding = 1 ∧
@@ -154,6 +160,22 @@ theorem periodic_renewal_resumes_after_native_return :
         .renewalRequested]
     s.nativeOutstanding = 0 ∧ s.renewalAttemptReturned = true ∧
       s.nextRenewalStarted = true := by
+  decide
+
+theorem registry_abandonment_does_not_imply_drain_or_gate_release :
+    let s := run transaction
+      [.nativeStarted, .nativeStarted, .callerTimedOut, .registryAbandoned,
+        .nativeReturned, .gateReleaseRequested, .retryRequested]
+    s.registryAbandoned = true ∧ s.nativeOutstanding = 1 ∧
+      s.rollbackReturned = false ∧ s.gateHeld = true ∧ s.retryStarted = false := by
+  decide
+
+theorem abandoned_registry_releases_gate_only_after_full_drain :
+    let s := run transaction
+      [.nativeStarted, .nativeStarted, .callerTimedOut, .registryAbandoned,
+        .nativeReturned, .gateReleaseRequested, .nativeReturned, .gateReleaseRequested]
+    s.registryAbandoned = true ∧ s.nativeOutstanding = 0 ∧
+      s.rollbackReturned = false ∧ s.gateHeld = false := by
   decide
 
 end NativeCompletion

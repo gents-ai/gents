@@ -27,6 +27,10 @@ def cases : List Case :=
   , ⟨"concurrent_operations_drain_individually", true, false,
       [.nativeStarted, .nativeStarted, .callerTimedOut, .nativeReturned,
         .rollbackReturned]⟩
+  , ⟨"registry_abandonment_retains_gate_until_all_native_returns", true, false,
+      [.nativeStarted, .nativeStarted, .callerTimedOut, .registryAbandoned,
+        .gateReleaseRequested, .nativeReturned, .gateReleaseRequested,
+        .nativeReturned, .gateReleaseRequested, .retryRequested]⟩
   , ⟨"renewal_waits_for_abandoned_native_work", true, true,
       [.nativeStarted, .callerTimedOut, .renewalAttemptReturned, .renewalRequested]⟩
   , ⟨"renewal_resumes_after_native_return", true, true,
@@ -50,6 +54,7 @@ def eventName : Event → String
   | .callerReturned => "caller_returned"
   | .callerTimedOut => "caller_timed_out"
   | .callerCancelled => "caller_cancelled"
+  | .registryAbandoned => "registry_abandoned"
   | .rollbackReturned => "rollback_returned"
   | .retryRequested => "retry_requested"
   | .gateReleaseRequested => "gate_release_requested"
@@ -79,6 +84,7 @@ where
     "{\"caller\":" ++ jsonString (callerName state.caller) ++
     ",\"native_outstanding\":" ++ toString state.nativeOutstanding ++
     ",\"poisoned\":" ++ boolJson state.poisoned ++
+    ",\"registry_abandoned\":" ++ boolJson state.registryAbandoned ++
     ",\"rollback_returned\":" ++ boolJson state.rollbackReturned ++
     ",\"gate_held\":" ++ boolJson state.gateHeld ++
     ",\"retry_started\":" ++ boolJson state.retryStarted ++
