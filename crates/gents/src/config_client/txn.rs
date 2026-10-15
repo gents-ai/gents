@@ -2226,7 +2226,12 @@ where
                     return Err(error);
                 }
             };
-            telemetry.cancelled_rollback = RollbackStatus::Scheduled;
+            // Embedded cancellation abandons the native owner synchronously;
+            // only HTTP cleanup schedules a detached rollback request.
+            telemetry.cancelled_rollback = match backend {
+                WriteBackend::Embedded => RollbackStatus::NotNeeded,
+                WriteBackend::Http => RollbackStatus::Scheduled,
+            };
             let callback_result = match backend {
                 WriteBackend::Embedded => ACTIVE_EMBEDDED_TRANSACTION
                     .scope(

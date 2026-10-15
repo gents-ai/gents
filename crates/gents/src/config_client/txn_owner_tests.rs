@@ -1994,13 +1994,18 @@ async fn aborting_embedded_callback_discards_writes_and_releases_the_gate() {
         .add_schema("type AbortedTransactionProbe { value: String }")
         .await
         .unwrap();
+    let telemetry = EventCapture::default();
+    let events = Arc::clone(&telemetry.events);
+    let subscriber = tracing::Dispatch::new(Registry::default().with(telemetry));
+    let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
     let registered = Arc::new(Mutex::new(None));
     let registered_for_callback = Arc::clone(&registered);
     let reached = Arc::new(Notify::new());
     let reached_for_callback = Arc::clone(&reached);
     let task_node = Arc::clone(&node);
-    let task = tokio::spawn(async move {
-        ConfigAccess::transact_local_write(&task_node, None, "test.abort_embedded_callback", |txn| {
+    let task = tokio::spawn(tracing::instrument::WithSubscriber::with_subscriber(
+        async move {
+            ConfigAccess::transact_local_write(&task_node, None, "test.abort_embedded_callback", |txn| {
             let registered = Arc::clone(&registered_for_callback);
             let reached = Arc::clone(&reached_for_callback);
             Box::pin(async move {
@@ -2011,7 +2016,9 @@ async fn aborting_embedded_callback_discards_writes_and_releases_the_gate() {
             })
         })
         .await
-    });
+        },
+        subscriber.clone(),
+    ));
     tokio::time::timeout(Duration::from_secs(5), reached.notified())
         .await
         .expect("callback staged its write");
@@ -2019,6 +2026,17 @@ async fn aborting_embedded_callback_discards_writes_and_releases_the_gate() {
     let gate = super::mutation_write_gate(&node);
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
+    {
+        let events = lock(&events);
+        let event = events
+            .iter()
+            .find(|event| event.get("outcome").map(String::as_str) == Some("cancelled"))
+            .expect("cancelled callback emits transaction telemetry");
+        assert_eq!(
+            event.get("rollback").map(String::as_str),
+            Some("not_needed")
+        );
+    }
     assert!(gate.lock.try_lock().is_ok());
     assert_native_transaction_abandoned(&node, &handle).await;
     let response = ConfigAccess::local(Arc::clone(&node))
