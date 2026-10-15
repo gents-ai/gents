@@ -133,8 +133,9 @@ pub struct ProviderContextReduction {
 
 impl ProviderContextReduction {
     pub fn checkpoint_messages(&self) -> Result<Vec<Message>> {
-        serde_json::from_str(&self.checkpoint_messages_json)
-            .context("decoding ProviderContextReduction checkpoint_messages_json")
+        let suffix: Vec<Message> = serde_json::from_str(&self.retained_suffix_json)
+            .context("decoding ProviderContextReduction retained_suffix_json")?;
+        decode_checkpoint(&self.checkpoint_messages_json, &suffix, &self.summary)
     }
 
     pub(crate) fn replay_associations(&self) -> Result<ReplayAssociations> {
@@ -151,11 +152,7 @@ impl ProviderContextReduction {
             .context("decoding ProviderContextReduction retained_suffix_json")?;
         let associations = self.replay_associations()?;
         validate_replay_associations(&associations, &prefix, &suffix, &self.request_doc_id)?;
-        let checkpoint = self.checkpoint_messages()?;
-        anyhow::ensure!(
-            checkpoint_matches_stored_projection(&checkpoint, &suffix, &self.summary),
-            "ProviderContextReduction checkpoint has invalid stored projection structure"
-        );
+        let checkpoint = decode_checkpoint(&self.checkpoint_messages_json, &suffix, &self.summary)?;
         let mut tagged = Vec::with_capacity(checkpoint.len());
         if !self.summary.trim().is_empty() {
             tagged.push(TaggedMessage::unassociated(checkpoint[0].clone()));
@@ -695,9 +692,7 @@ impl IntendedReduction {
             retained_suffix_json: crate::rendered_request::canonical_json_string(
                 &serde_json::to_value(input.retained_suffix)?,
             )?,
-            checkpoint_messages_json: crate::rendered_request::canonical_json_string(
-                &serde_json::to_value(input.checkpoint_messages)?,
-            )?,
+            checkpoint_messages_json: encode_checkpoint(input.checkpoint_messages, input.summary)?,
             replay_associations_json: crate::rendered_request::canonical_json_string(
                 &serde_json::to_value(input.replay_associations)?,
             )?,
@@ -731,7 +726,12 @@ impl IntendedReduction {
             && row.compacted_prefix_json == self.compacted_prefix_json
             && row.retained_suffix_json == self.retained_suffix_json
             && row.pair_closed
-            && row.checkpoint_messages_json == self.checkpoint_messages_json
+            && row.checkpoint_messages()?
+                == decode_checkpoint(
+                    &self.checkpoint_messages_json,
+                    &serde_json::from_str::<Vec<Message>>(&self.retained_suffix_json)?,
+                    &self.summary,
+                )?
             && row.replay_associations_json == self.replay_associations_json
             && row.summary == self.summary
             && row.messages_compacted == self.messages_compacted
@@ -844,13 +844,9 @@ fn validate_recoverable_rows(rows: &[ProviderContextReduction]) -> Result<()> {
                 row.reduction_key
             );
         }
-        let checkpoint = row.checkpoint_messages()?;
-        if !checkpoint_matches_stored_projection(&checkpoint, &suffix, &row.summary) {
-            anyhow::bail!(
-                "ProviderContextReduction {} checkpoint has invalid stored projection structure",
-                row.reduction_key
-            );
-        }
+        decode_checkpoint(&row.checkpoint_messages_json, &suffix, &row.summary).with_context(
+            || format!("validating ProviderContextReduction {}", row.reduction_key),
+        )?;
         validate_replay_associations(
             &row.replay_associations()?,
             &prefix,
@@ -917,6 +913,57 @@ pub(crate) fn validate_replay_associations(
     )
     .context("validating ProviderContextReduction canonical replay associations")?;
     Ok(())
+}
+
+/// The rendered summary is immutable provider input: rebuilding it using a
+/// newer prompt renderer can change recovery. The suffix already has its own
+/// immutable field. Version 1 stores only the exact rendered prefix; the array
+/// representation remains readable for facts written before this codec.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckpointPrefix {
+    version: u32,
+    prefix: Vec<Message>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredCheckpoint {
+    Prefix(CheckpointPrefix),
+    Full(Vec<Message>),
+}
+
+fn encode_checkpoint(checkpoint: &[Message], summary: &str) -> Result<String> {
+    let prefix_len = usize::from(!summary.trim().is_empty());
+    crate::rendered_request::canonical_json_string(&serde_json::to_value(CheckpointPrefix {
+        version: 1,
+        prefix: checkpoint
+            .get(..prefix_len)
+            .context("checkpoint is missing its rendered summary")?
+            .to_vec(),
+    })?)
+}
+
+fn decode_checkpoint(encoded: &str, suffix: &[Message], summary: &str) -> Result<Vec<Message>> {
+    let stored: StoredCheckpoint = serde_json::from_str(encoded)
+        .context("decoding ProviderContextReduction checkpoint_messages_json")?;
+    let checkpoint = match stored {
+        StoredCheckpoint::Full(messages) => messages,
+        StoredCheckpoint::Prefix(mut stored) => {
+            anyhow::ensure!(stored.version == 1, "unsupported checkpoint prefix version");
+            anyhow::ensure!(
+                stored.prefix.len() == usize::from(!summary.trim().is_empty()),
+                "checkpoint prefix disagrees with its summary"
+            );
+            stored.prefix.extend_from_slice(suffix);
+            stored.prefix
+        }
+    };
+    anyhow::ensure!(
+        checkpoint_matches_stored_projection(&checkpoint, suffix, summary),
+        "ProviderContextReduction checkpoint has invalid stored projection structure"
+    );
+    Ok(checkpoint)
 }
 
 fn checkpoint_from_suffix(suffix: &[Message], summary: &str) -> Vec<Message> {
@@ -1557,6 +1604,54 @@ mod tests {
             &suffix,
             "durable summary"
         ));
+        let encoded = encode_checkpoint(&checkpoint, "durable summary").unwrap();
+        assert_eq!(
+            decode_checkpoint(&encoded, &suffix, "durable summary").unwrap(),
+            checkpoint
+        );
+        let full = serde_json::to_string(&checkpoint).unwrap();
+        assert_eq!(
+            decode_checkpoint(&full, &suffix, "durable summary").unwrap(),
+            checkpoint
+        );
+    }
+
+    #[test]
+    fn checkpoint_storage_omits_the_retained_tool_payload() {
+        let suffix = vec![Message::User {
+            content: vec![UserContent::ToolResult(ToolResult {
+                id: "tool-call".into(),
+                call_id: Some("provider-call".into()),
+                content: vec![ToolResultContent::Text(Text {
+                    text: "large-tool-result".repeat(50_000),
+                })],
+            })],
+        }];
+        for summary in ["", "durable summary"] {
+            let checkpoint = checkpoint_from_suffix(&suffix, summary);
+            let encoded = encode_checkpoint(&checkpoint, summary).unwrap();
+            assert!(!encoded.contains("large-tool-result"));
+            assert!(encoded.len() < 1_000);
+            assert_eq!(
+                decode_checkpoint(&encoded, &suffix, summary).unwrap(),
+                checkpoint
+            );
+        }
+    }
+
+    #[test]
+    fn checkpoint_storage_rejects_unknown_versions_and_invalid_splits() {
+        let suffix = vec![Message::user("retained")];
+        for encoded in [
+            r#"{"version":2,"prefix":[]}"#,
+            r#"{"version":1,"prefix":[],"extra":true}"#,
+            r#"{"version":1,"prefix":[]}"#,
+        ] {
+            assert!(decode_checkpoint(encoded, &suffix, "summary").is_err());
+        }
+        assert!(decode_checkpoint(r#"{"version":1,"prefix":[]}"#, &[], "").is_err());
+        let mismatched = serde_json::to_string(&vec![Message::user("different")]).unwrap();
+        assert!(decode_checkpoint(&mismatched, &suffix, "").is_err());
     }
 
     #[tokio::test]

@@ -9,7 +9,8 @@ It replaces only one request's sticky provider projection, can happen several
 times in that request, and must never participate in session-prefix dropping.
 
 This model gives that entity its own immutable store.  The checkpoint is opaque
-but exact; production persists the native post-reduction message list.  The
+but exact; production persists the rendered prefix and exact retained suffix,
+then concatenates them without re-rendering the summary on recovery. The
 source boundary is opaque too; production binds it to the exact request version
 and a bounded canonical AgentMessage high-water identity while the stored split
 contains the exact source projection. Pair closure is a creation precondition
