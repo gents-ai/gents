@@ -227,6 +227,206 @@ theorem accepted_publication_advances_data_epoch (s : State) :
     (publish s (beginRead s)).dataEpoch = s.dataEpoch + 1 := by
   simp [publish, beginRead, accepts]
 
+/-- A configuration row carries its canonical owner independently of where the
+desktop observed it. Scoped replacement removes only rows owned by the target;
+an unscoped local-replica row for another owner remains valid. -/
+structure ScopedConfigRow where
+  owner : Nat
+  key : String
+  value : String
+  source : Option Nat
+  deriving DecidableEq, Repr
+
+/-- Companion observations do not carry their own canonical owner. Their
+`source` is taken from the parent document that supplied them. A scoped reload
+replaces only observations with known target provenance and keeps unknown rows
+for a future full reconciliation. -/
+structure ScopedObservationRow where
+  key : String
+  value : String
+  source : Option Nat
+  deriving DecidableEq, Repr
+
+def upsertConfigRow (rows : List ScopedConfigRow) (incoming : ScopedConfigRow) :
+    List ScopedConfigRow :=
+  match rows with
+  | [] => [incoming]
+  | row :: rest =>
+    if row.owner = incoming.owner ∧ row.key = incoming.key then
+      incoming :: rest
+    else
+      row :: upsertConfigRow rest incoming
+
+def upsertConfigRows (rows : List ScopedConfigRow) : List ScopedConfigRow →
+    List ScopedConfigRow
+  | [] => rows
+  | incoming :: rest => upsertConfigRows (upsertConfigRow rows incoming) rest
+
+def upsertObservationRow (rows : List ScopedObservationRow)
+    (incoming : ScopedObservationRow) : List ScopedObservationRow :=
+  match rows with
+  | [] => [incoming]
+  | row :: rest =>
+    if row.source = incoming.source ∧ row.key = incoming.key then
+      incoming :: rest
+    else
+      row :: upsertObservationRow rest incoming
+
+def upsertObservationRows (rows : List ScopedObservationRow) :
+    List ScopedObservationRow → List ScopedObservationRow
+  | [] => rows
+  | incoming :: rest => upsertObservationRows (upsertObservationRow rows incoming) rest
+
+/-- The native scoped replacement removes every existing target-owned row before
+upserting incoming rows, and filters incoming rows to the target owner. Thus
+existing duplicate keys cannot reach the upsert stage; duplicate incoming keys
+are resolved in input order by the upsert fold. -/
+def replaceConfigScope (scope : Nat) (current incoming : List ScopedConfigRow) :
+    List ScopedConfigRow :=
+  upsertConfigRows (current.filter (fun row => row.owner != scope))
+    (incoming.filter (fun row => row.owner == scope))
+
+/-- The native scoped replacement removes every existing target-sourced row
+before upserting incoming rows, and filters incoming rows to the target source.
+Thus existing duplicate keys cannot reach the upsert stage; duplicate incoming
+keys are resolved in input order by the upsert fold. -/
+def replaceObservationScope (scope : Nat)
+    (current incoming : List ScopedObservationRow) : List ScopedObservationRow :=
+  upsertObservationRows (current.filter (fun row => row.source != some scope))
+    (incoming.filter (fun row => row.source == some scope))
+
+/-- Unknown provenance is retained in the store but cannot satisfy a
+node-scoped observation lookup. -/
+def scopedObservationFor (scope : Nat) (key : String)
+    (rows : List ScopedObservationRow) : Option ScopedObservationRow :=
+  rows.find? (fun row => row.key == key && row.source == some scope)
+
+theorem upsert_config_row_preserves_foreign
+    (row : ScopedConfigRow) (scope : Nat) (rows : List ScopedConfigRow)
+    (incoming : ScopedConfigRow) (hincoming : incoming.owner = scope)
+    (hrow : row.owner ≠ scope) :
+    row ∈ upsertConfigRow rows incoming ↔ row ∈ rows := by
+  induction rows with
+  | nil =>
+    have hne : row ≠ incoming := by
+      intro heq
+      apply hrow
+      rw [heq]
+      exact hincoming
+    simp [upsertConfigRow, hne]
+  | cons head tail ih =>
+    by_cases hmatch : head.owner = incoming.owner ∧ head.key = incoming.key
+    · have hneIncoming : row ≠ incoming := by
+        intro heq
+        apply hrow
+        rw [heq]
+        exact hincoming
+      have hneHead : row ≠ head := by
+        intro heq
+        apply hrow
+        rw [heq, hmatch.1, hincoming]
+      simp [upsertConfigRow, hmatch, hneIncoming, hneHead]
+    · simp [upsertConfigRow, hmatch, ih]
+
+theorem upsert_config_rows_preserves_foreign
+    (row : ScopedConfigRow) (scope : Nat) (rows incoming : List ScopedConfigRow)
+    (hincoming : ∀ item ∈ incoming, item.owner = scope)
+    (hrow : row.owner ≠ scope) :
+    row ∈ upsertConfigRows rows incoming ↔ row ∈ rows := by
+  induction incoming generalizing rows with
+  | nil => simp [upsertConfigRows]
+  | cons item rest ih =>
+    have howner := hincoming item (by simp)
+    simp only [upsertConfigRows]
+    have hrest : ∀ next ∈ rest, next.owner = scope := by
+      intro next hnext
+      exact hincoming next (by simp [hnext])
+    exact (ih (upsertConfigRow rows item) hrest).trans
+      (upsert_config_row_preserves_foreign row scope rows item howner hrow)
+
+
+theorem scoped_config_replacement_preserves_other_owner
+    (scope : Nat) (current incoming : List ScopedConfigRow) (row : ScopedConfigRow)
+    (h : row.owner ≠ scope) :
+    row ∈ replaceConfigScope scope current incoming ↔ row ∈ current := by
+  unfold replaceConfigScope
+  have hIncoming : ∀ item ∈ incoming.filter (fun item => item.owner == scope),
+      item.owner = scope := by
+    intro item hitem
+    simp at hitem
+    exact hitem.2
+  rw [upsert_config_rows_preserves_foreign row scope _ _ hIncoming h]
+  simp [h]
+
+
+theorem upsert_observation_row_preserves_foreign
+    (row : ScopedObservationRow) (scope : Nat) (rows : List ScopedObservationRow)
+    (incoming : ScopedObservationRow) (hincoming : incoming.source = some scope)
+    (hrow : row.source ≠ some scope) :
+    row ∈ upsertObservationRow rows incoming ↔ row ∈ rows := by
+  induction rows with
+  | nil =>
+    have hne : row ≠ incoming := by
+      intro heq
+      apply hrow
+      rw [heq]
+      exact hincoming
+    simp [upsertObservationRow, hne]
+  | cons head tail ih =>
+    by_cases hmatch : head.source = incoming.source ∧ head.key = incoming.key
+    · have hneIncoming : row ≠ incoming := by
+        intro heq
+        apply hrow
+        rw [heq]
+        exact hincoming
+      have hneHead : row ≠ head := by
+        intro heq
+        apply hrow
+        rw [heq, hmatch.1, hincoming]
+      simp [upsertObservationRow, hmatch, hneIncoming, hneHead]
+    · simp [upsertObservationRow, hmatch, ih]
+
+theorem upsert_observation_rows_preserves_foreign
+    (row : ScopedObservationRow) (scope : Nat) (rows incoming : List ScopedObservationRow)
+    (hincoming : ∀ item ∈ incoming, item.source = some scope)
+    (hrow : row.source ≠ some scope) :
+    row ∈ upsertObservationRows rows incoming ↔ row ∈ rows := by
+  induction incoming generalizing rows with
+  | nil => simp [upsertObservationRows]
+  | cons item rest ih =>
+    have howner := hincoming item (by simp)
+    simp only [upsertObservationRows]
+    have hrest : ∀ next ∈ rest, next.source = some scope := by
+      intro next hnext
+      exact hincoming next (by simp [hnext])
+    exact (ih (upsertObservationRow rows item) hrest).trans
+      (upsert_observation_row_preserves_foreign row scope rows item howner hrow)
+
+
+theorem scoped_observation_replacement_preserves_other_source
+    (scope : Nat) (current incoming : List ScopedObservationRow)
+    (row : ScopedObservationRow) (h : row.source ≠ some scope) :
+    row ∈ replaceObservationScope scope current incoming ↔ row ∈ current := by
+  unfold replaceObservationScope
+  -- Exact-source observations are keyed by both parent owner and logical ID.
+  have hIncoming : ∀ item ∈ incoming.filter (fun item => item.source == some scope),
+      item.source = some scope := by
+    intro item hitem
+    simp at hitem
+    exact hitem.2
+  rw [upsert_observation_rows_preserves_foreign row scope _ _ hIncoming h]
+  simp [h]
+
+
+theorem unknown_observation_is_not_node_scoped
+    (scope : Nat) (key : String) (rows : List ScopedObservationRow)
+    (h : ∀ row ∈ rows, row.source ≠ some scope) :
+    scopedObservationFor scope key rows = none := by
+  unfold scopedObservationFor
+  apply List.find?_eq_none.mpr
+  intro row hrow
+  simp [h row hrow]
+
 structure Recovery where
   full : Bool
   pendingScopes : List Nat

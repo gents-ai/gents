@@ -4,15 +4,12 @@ pub(super) fn row_node_matches(row_node_did: Option<&str>, node_did: &str) -> bo
     row_node_did.map_or(true, |row_node_did| row_node_did == node_did)
 }
 
-pub(super) fn source_node_matches(
-    sources: &[Option<String>],
-    row_index: usize,
+pub(super) fn row_is_in_node_scope(
+    row_node_did: Option<&str>,
+    source_node_did: Option<&str>,
     node_did: &str,
 ) -> bool {
-    sources
-        .get(row_index)
-        .and_then(|source| source.as_deref())
-        .map_or(true, |source_node_did| source_node_did == node_did)
+    row_node_did.or(source_node_did) == Some(node_did)
 }
 
 pub(super) fn upsert_rows_by_key<T>(

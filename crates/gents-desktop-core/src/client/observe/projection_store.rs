@@ -658,6 +658,198 @@ mod reload_tests {
         }
     }
 
+    #[test]
+    fn generated_scoped_replacement_case_matches_client_store_ownership() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../gents/tests/fixtures/client_data_publication.json"
+        ))
+        .expect("generated ClientDataPublication cases");
+        for case in fixture["scoped_replacement"]
+            .as_array()
+            .expect("modeled scoped replacement cases")
+        {
+            let did = |owner: u64| format!("did:scope:{owner}");
+            let configs = |rows: &[serde_json::Value]| {
+                rows.iter()
+                    .map(|row| {
+                        let owner = row["owner"].as_u64().expect("config owner");
+                        serde_json::from_value(serde_json::json!({
+                            "session_id": row["key"],
+                            "node_did": did(owner),
+                            "requester_did": null,
+                            "agent_id": "agent",
+                            "created_at": "2026-01-01T00:00:00Z",
+                            "title": {"text": row["value"], "source": "user"}
+                        }))
+                        .expect("modeled session row")
+                    })
+                    .collect::<Vec<gents_protocol::session::AgentSession>>()
+            };
+            let observations = |rows: &[serde_json::Value]| {
+                rows.iter()
+                    .map(|row| {
+                        serde_json::from_value(serde_json::json!({
+                            "trigger_id": row["key"],
+                            "last_attempt_at": "2026-01-01T00:00:00Z",
+                            "last_fired_source_doc_id": null,
+                            "last_status": row["value"],
+                            "last_error": null,
+                            "fire_count": 1
+                        }))
+                        .expect("modeled trigger observation")
+                    })
+                    .collect::<Vec<gents::document_config::TriggerObservation>>()
+            };
+            let observation_sources = |rows: &[serde_json::Value]| {
+                rows.iter()
+                    .map(|row| row["source"].as_u64().map(did))
+                    .collect::<Vec<_>>()
+            };
+            let mut initial = ClientStore::from_rows(crate::client::store::ClientStoreRows {
+                sessions: configs(
+                    case["current_configs"]
+                        .as_array()
+                        .expect("modeled current configs"),
+                ),
+                session_source_node_dids: case["current_configs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|row| row["source"].as_u64().map(did))
+                    .collect(),
+                triggers: (1..=3)
+                    .map(|owner| {
+                        serde_json::from_value(serde_json::json!({
+                            "node_did": did(owner),
+                            "trigger_id": "shared-trigger",
+                            "task_id": format!("task-{owner}"),
+                            "source": {"kind": "event", "event_source_id": "source"},
+                            "enabled": true,
+                            "tags": []
+                        }))
+                        .expect("modeled trigger")
+                    })
+                    .collect(),
+                trigger_observations: observations(
+                    case["current_observations"]
+                        .as_array()
+                        .expect("modeled current observations"),
+                ),
+                trigger_observation_source_node_dids: observation_sources(
+                    case["current_observations"]
+                        .as_array()
+                        .expect("modeled current observations"),
+                ),
+                ..Default::default()
+            });
+            let incoming = ClientStore::from_rows(crate::client::store::ClientStoreRows {
+                operator_config_authoritative_node_dids: case["incoming_authoritative_owners"]
+                    .as_array()
+                    .expect("modeled incoming authoritative owners")
+                    .iter()
+                    .map(|owner| did(owner.as_u64().expect("authority owner")))
+                    .collect(),
+                sessions: configs(
+                    case["incoming_configs"]
+                        .as_array()
+                        .expect("modeled incoming configs"),
+                ),
+                session_source_node_dids: case["incoming_configs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|row| row["source"].as_u64().map(did))
+                    .collect(),
+                triggers: case["incoming_trigger_owners"]
+                    .as_array()
+                    .expect("modeled incoming trigger owners")
+                    .iter()
+                    .map(|owner| {
+                        let owner = owner.as_u64().expect("trigger owner");
+                        serde_json::from_value(serde_json::json!({
+                            "node_did": did(owner),
+                            "trigger_id": "shared-trigger",
+                            "task_id": format!("task-{owner}"),
+                            "source": {"kind": "event", "event_source_id": "source"},
+                            "enabled": true,
+                            "tags": []
+                        }))
+                        .expect("modeled incoming trigger")
+                    })
+                    .collect(),
+                trigger_source_node_dids: case["incoming_trigger_owners"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|owner| Some(did(owner.as_u64().unwrap())))
+                    .collect(),
+                trigger_observations: observations(
+                    case["incoming_observations"]
+                        .as_array()
+                        .expect("modeled incoming observations"),
+                ),
+                trigger_observation_source_node_dids: observation_sources(
+                    case["incoming_observations"]
+                        .as_array()
+                        .expect("modeled incoming observations"),
+                ),
+                ..Default::default()
+            });
+            let merged =
+                initial.replace_node_scope(&did(case["scope"].as_u64().unwrap()), incoming);
+            let expected_authority = case["expected_authoritative_owners"]
+                .as_array()
+                .expect("modeled expected authoritative owners")
+                .iter()
+                .map(|owner| did(owner.as_u64().expect("authority owner")))
+                .collect::<std::collections::HashSet<_>>();
+            assert_eq!(
+                merged.operator_config_authoritative_node_dids,
+                expected_authority
+            );
+            let expected_configs = case["expected_configs"].as_array().unwrap();
+            for expected in expected_configs {
+                let owner_did = did(expected["owner"].as_u64().unwrap());
+                assert!(merged.sessions.iter().any(|row| {
+                    row.node_did == owner_did
+                        && row.session_id == expected["key"].as_str().unwrap()
+                        && row.title.as_ref().map(|title| title.text.as_str())
+                            == Some(expected["value"].as_str().unwrap())
+                }));
+            }
+            assert_eq!(merged.sessions.len(), expected_configs.len());
+
+            for expected in case["expected_observations"].as_array().unwrap() {
+                let source = expected["source"].as_u64().map(did);
+                assert!(merged
+                    .trigger_observations
+                    .iter()
+                    .enumerate()
+                    .any(|(index, row)| {
+                        row.trigger_id == expected["key"].as_str().unwrap()
+                            && row.last_status.as_deref() == expected["value"].as_str()
+                            && merged.trigger_observation_source_node_dids.get(index)
+                                == Some(&source)
+                    }));
+            }
+            assert_eq!(
+                merged.trigger_observations.len(),
+                case["expected_observations"].as_array().unwrap().len()
+            );
+            for lookup in case["lookups"].as_array().unwrap() {
+                let owner = lookup["owner"].as_u64().unwrap();
+                let observed = merged
+                    .recent_runs_for_task(&format!("task-{owner}"))
+                    .last_status;
+                assert_eq!(
+                    observed.as_deref(),
+                    lookup["value"].as_str(),
+                    "modeled scoped lookup for owner {owner}"
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     async fn generated_recovery_cases_preserve_scopes_without_self_waking() {
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
