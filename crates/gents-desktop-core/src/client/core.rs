@@ -573,7 +573,7 @@ impl ClientCore {
 
     pub async fn refresh_store(&self) -> Result<u64> {
         let scoped = self.selected_node_did();
-        let (captured, captured_revision) = self.store.snapshot_with_revision();
+        let captured = self.store.capture_read();
         let records = self.sync_state.records();
         let snapshot = match scoped.as_deref() {
             Some(did) => {
@@ -595,12 +595,9 @@ impl ClientCore {
             }
         };
         let rows = snapshot.row_count();
-        let published = self.store.replace_reloaded_snapshot_at_snapshot(
-            &captured,
-            captured_revision.request_event_version,
-            scoped.as_deref(),
-            snapshot,
-        );
+        let published =
+            self.store
+                .replace_reloaded_snapshot_at_read(&captured, scoped.as_deref(), snapshot);
         if !published {
             self.store.request_resync(scoped.as_deref());
         }
@@ -621,7 +618,7 @@ impl ClientCore {
         if node_did.is_empty() {
             return Ok(None);
         }
-        let (captured, captured_revision) = self.store.snapshot_with_revision();
+        let captured = self.store.capture_read();
         let records = self.sync_state.records();
         let snapshot = match load_node_scoped_snapshot_with_peer_records(
             self.node.as_ref(),
@@ -638,12 +635,9 @@ impl ClientCore {
             }
         };
         let rows = snapshot.row_count();
-        let published = self.store.replace_reloaded_snapshot_at_snapshot(
-            &captured,
-            captured_revision.request_event_version,
-            Some(node_did),
-            snapshot,
-        );
+        let published =
+            self.store
+                .replace_reloaded_snapshot_at_read(&captured, Some(node_did), snapshot);
         if !published {
             self.store.request_resync(Some(node_did));
             return Ok(None);

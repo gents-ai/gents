@@ -55,7 +55,7 @@ async fn merge_accepted_edit_projection(
         if doc_ids.is_empty() {
             return anyhow::Result::<()>::Ok(());
         }
-        let (captured, captured_revision) = store.snapshot_with_revision();
+        let captured = store.capture_read();
         let rows = crate::client::load_request_documents_on(access, &doc_ids).await?;
         for row in &rows {
             anyhow::ensure!(
@@ -69,10 +69,7 @@ async fn merge_accepted_edit_projection(
             requests: rows,
             ..ClientStoreRows::default()
         });
-        if store
-            .merge_chat_patch_at_snapshot(&captured, captured_revision.request_event_version, patch)
-            .is_none()
-        {
+        if store.merge_chat_patch_at_read(&captured, patch).is_none() {
             store.request_resync(Some(node_did));
             anyhow::bail!("accepted edit projection read became stale before publication");
         }
@@ -610,7 +607,7 @@ impl ClientCore {
             return Ok(None);
         }
 
-        let (captured, captured_revision) = self.store.snapshot_with_revision();
+        let captured = self.store.capture_read();
         let (patch, source) = match self.operator_graphql(node_did) {
             Some(graphql) => {
                 let access = ConfigAccess::Graphql(graphql);
@@ -652,11 +649,7 @@ impl ClientCore {
         let terminal = patch
             .request_row(request_id)
             .is_some_and(|row| row.is_terminal());
-        let Some(version) = self.store.merge_chat_patch_at_snapshot(
-            &captured,
-            captured_revision.request_event_version,
-            patch,
-        ) else {
+        let Some(version) = self.store.merge_chat_patch_at_read(&captured, patch) else {
             self.store.request_resync(Some(node_did));
             return Ok(None);
         };

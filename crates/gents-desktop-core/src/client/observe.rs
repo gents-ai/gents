@@ -147,7 +147,7 @@ pub fn spawn_observer_with_selection(
                         .fetch_add(1, Ordering::Relaxed);
                     // Overflow may have omitted an AgentRequest event from
                     // this batch, so fence in-flight request reads conservatively.
-                    store.observe_request_event();
+                    store.observe_request_event(None);
                     store.enqueue_resync_request(None);
                     resync_pending = true;
                 }
@@ -169,7 +169,7 @@ pub fn spawn_observer_with_selection(
                 }
                 resync_pending = false;
                 for (scope_index, scope) in scopes.iter().enumerate() {
-                    let (captured, captured_revision) = store.snapshot_with_revision();
+                    let captured = store.capture_read();
                     let result = match scope.as_deref() {
                         Some(did) => {
                             load_node_scoped_snapshot_with_peer_records(
@@ -191,9 +191,8 @@ pub fn spawn_observer_with_selection(
                     };
                     match result {
                         Ok(snapshot) => {
-                            if !store.replace_reloaded_snapshot_at_snapshot(
+                            if !store.replace_reloaded_snapshot_at_read(
                                 &captured,
-                                captured_revision.request_event_version,
                                 scope.as_deref(),
                                 snapshot,
                             ) {
@@ -277,7 +276,7 @@ pub fn spawn_observer_with_selection(
                     continue;
                 }
                 let id_refs: Vec<&str> = doc_ids.iter().map(|s| s.as_str()).collect();
-                let (captured_snapshot, captured_revision) = store.snapshot_with_revision();
+                let captured_snapshot = store.capture_read();
                 match fetch_doc_patch(node.as_ref(), collection_name, &id_refs).await {
                     Ok(patch) => {
                         let row_count = patch.observed_documents;
@@ -285,11 +284,7 @@ pub fn spawn_observer_with_selection(
                         // for other nodes in this same update batch.
                         if patch.store.row_count() > 0 {
                             if store
-                                .merge_observer_patch_at_snapshot(
-                                    &captured_snapshot,
-                                    captured_revision.request_event_version,
-                                    patch.store,
-                                )
+                                .merge_observer_patch_at_read(&captured_snapshot, patch.store)
                                 .is_none()
                             {
                                 store.enqueue_resync_request(None);
@@ -408,7 +403,7 @@ async fn accumulate_dirty(
             // Fence prior request reads as soon as collection identity is known,
             // before this event can be delayed behind the observer's retry timer.
             if name == AGENT_REQUEST_NAME {
-                store.observe_request_event();
+                store.observe_request_event(Some(doc_id));
             }
             if !is_relay && supports_doc_patch_collection(name) {
                 metrics

@@ -172,36 +172,68 @@ theorem client_observation_does_not_clear_managed_error (running autostartDeclin
 
 end ClientSnapshotObservation
 
-/-! A data-read publication fence is separate from the shell's UI-intent epoch
-and lineage provenance. The native projection owner compares retained snapshot
-identity and a request-event generation. Transcript-only invalidations do not
-replace the snapshot or alter either read-fence component; an observed request
-event advances its own generation even when no row is cached. -/
+/-! Publication tracks the scopes a read may replace independently of UI intent
+and lineage provenance. Unclassified changes invalidate every scope. Classified
+changes invalidate their canonical node owners; publication rebases onto the
+current store so an unrelated update is retained rather than overwritten. -/
 namespace ClientDataPublication
+
+inductive Scope where
+  | all
+  | nodes (owners : List Nat)
+  deriving DecidableEq, Repr
 
 structure State where
   dataEpoch : Nat
   provenanceEpoch : Nat
   requestEventEpoch : Nat
   transcriptEpoch : Nat
-  deriving DecidableEq, Repr
+  sharedEpoch : Nat := 0
+  nodeEpoch : Nat → Nat := fun _ => 0
 
 structure Read where
   dataEpoch : Nat
   requestEventEpoch : Nat
-  deriving DecidableEq, Repr
+  sharedEpoch : Nat := 0
+  nodeEpoch : Nat → Nat := fun _ => 0
 
 def beginRead (s : State) : Read :=
-  { dataEpoch := s.dataEpoch, requestEventEpoch := s.requestEventEpoch }
+  { dataEpoch := s.dataEpoch, requestEventEpoch := s.requestEventEpoch,
+    sharedEpoch := s.sharedEpoch, nodeEpoch := s.nodeEpoch }
+
+/-- The footprint includes every owner whose cached facts may change. Missing
+ownership, dropped notifications, and unretained lineage require `all`; an
+empty footprint has no node-local effect. -/
+def touch (s : State) (scope : Scope) : State :=
+  match scope with
+  | .all => { s with sharedEpoch := s.sharedEpoch + 1 }
+  | .nodes owners =>
+      { s with nodeEpoch := fun node => s.nodeEpoch node + if node ∈ owners then 1 else 0 }
+
+def acceptsFor (s : State) (read : Read) (scope : Scope) : Bool :=
+  match scope with
+  | .all => decide (s.dataEpoch = read.dataEpoch ∧ s.requestEventEpoch = read.requestEventEpoch)
+  | .nodes owners =>
+      decide (s.sharedEpoch = read.sharedEpoch) &&
+        owners.all (fun node => s.nodeEpoch node == read.nodeEpoch node)
 
 def accepts (s : State) (read : Read) : Bool :=
-  decide (s.dataEpoch = read.dataEpoch ∧ s.requestEventEpoch = read.requestEventEpoch)
+  acceptsFor s read .all
+
+def dataChange (s : State) (scope : Scope) : State :=
+  { touch s scope with dataEpoch := s.dataEpoch + 1 }
+
+def publishFor (s : State) (read : Read) (scope : Scope) : State :=
+  if acceptsFor s read scope then dataChange s scope else s
 
 def publish (s : State) (read : Read) : State :=
-  if accepts s read then { s with dataEpoch := s.dataEpoch + 1 } else s
+  publishFor s read .all
+
+def requestEventFor (s : State) (scope : Scope) : State :=
+  { touch s scope with requestEventEpoch := s.requestEventEpoch + 1 }
 
 def requestEvent (s : State) : State :=
-  { s with requestEventEpoch := s.requestEventEpoch + 1 }
+  requestEventFor s .all
 
 def transcriptInvalidation (s : State) : State :=
   { s with transcriptEpoch := s.transcriptEpoch + 1 }
@@ -209,11 +241,11 @@ def transcriptInvalidation (s : State) : State :=
 theorem newer_data_rejects_old_read (s : State) (read : Read)
     (h : read.dataEpoch < s.dataEpoch) : publish s read = s := by
   have hne : s.dataEpoch ≠ read.dataEpoch := by omega
-  simp [publish, accepts, hne]
+  simp [publish, publishFor, acceptsFor, hne]
 
 theorem uncached_request_event_rejects_old_read (s : State) :
     publish (requestEvent s) (beginRead s) = requestEvent s := by
-  simp [publish, requestEvent, beginRead, accepts]
+  simp [publish, publishFor, requestEvent, requestEventFor, beginRead, acceptsFor]
 
 theorem request_event_does_not_invalidate_lineage_cache (s : State) :
     (requestEvent s).provenanceEpoch = s.provenanceEpoch := by
@@ -221,11 +253,59 @@ theorem request_event_does_not_invalidate_lineage_cache (s : State) :
 
 theorem transcript_invalidation_preserves_read (s : State) :
     accepts (transcriptInvalidation s) (beginRead s) = true := by
-  simp [transcriptInvalidation, beginRead, accepts]
+  simp [transcriptInvalidation, beginRead, accepts, acceptsFor]
 
 theorem accepted_publication_advances_data_epoch (s : State) :
     (publish s (beginRead s)).dataEpoch = s.dataEpoch + 1 := by
-  simp [publish, beginRead, accepts]
+  simp [publish, publishFor, beginRead, acceptsFor, dataChange]
+
+theorem same_owner_data_rejects_scoped_read (s : State) (node : Nat) :
+    acceptsFor (dataChange s (.nodes [node])) (beginRead s) (.nodes [node]) = false := by
+  simp [acceptsFor, dataChange, touch, beginRead]
+
+theorem same_owner_request_event_rejects_scoped_read (s : State) (node : Nat) :
+    acceptsFor (requestEventFor s (.nodes [node])) (beginRead s) (.nodes [node]) = false := by
+  simp [acceptsFor, requestEventFor, touch, beginRead]
+
+theorem unclassified_request_event_rejects_scoped_read (s : State) (node : Nat) :
+    acceptsFor (requestEvent s) (beginRead s) (.nodes [node]) = false := by
+  simp [acceptsFor, requestEvent, requestEventFor, touch, beginRead]
+
+theorem unrelated_data_preserves_scoped_read (s : State) (node other : Nat)
+    (h : node ≠ other) :
+    acceptsFor (dataChange s (.nodes [other])) (beginRead s) (.nodes [node]) = true := by
+  simp [acceptsFor, dataChange, touch, beginRead, h]
+
+theorem unrelated_request_event_preserves_scoped_read (s : State) (node other : Nat)
+    (h : node ≠ other) :
+    acceptsFor (requestEventFor s (.nodes [other])) (beginRead s) (.nodes [node]) = true := by
+  simp [acceptsFor, requestEventFor, touch, beginRead, h]
+
+def unrelatedTraffic (s : State) (other : Nat) : Nat → State
+  | 0 => s
+  | n + 1 => dataChange (unrelatedTraffic s other n) (.nodes [other])
+
+/-- A classified stream outside the target cannot require global quiescence.
+Unknown/global events remain an explicit shared dependency. -/
+theorem arbitrarily_many_unrelated_changes_preserve_scoped_read
+    (s : State) (node other count : Nat) (h : node ≠ other) :
+    acceptsFor (unrelatedTraffic s other count) (beginRead s) (.nodes [node]) = true := by
+  have shared : (unrelatedTraffic s other count).sharedEpoch = s.sharedEpoch := by
+    induction count with
+    | zero => rfl
+    | succ n ih => simpa [unrelatedTraffic, dataChange, touch] using ih
+  have owned : (unrelatedTraffic s other count).nodeEpoch node = s.nodeEpoch node := by
+    clear shared
+    induction count with
+    | zero => rfl
+    | succ n ih => simpa [unrelatedTraffic, dataChange, touch, h] using ih
+  simp [acceptsFor, beginRead, shared, owned]
+
+theorem scoped_publication_preserves_other_owner (s : State) (read : Read) (node other : Nat)
+    (h : other ≠ node) :
+    (publishFor s read (.nodes [node])).nodeEpoch other = s.nodeEpoch other := by
+  simp only [publishFor]
+  split <;> simp [dataChange, touch, h]
 
 /-- A configuration row carries its canonical owner independently of where the
 desktop observed it. Scoped replacement removes only rows owned by the target;
