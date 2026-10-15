@@ -24,7 +24,9 @@ pub(crate) const RESTRICTED_FIELDS: &[(&str, &str)] = &[
     ("OAuthCredential", "id_token"),
 ];
 
-pub(crate) fn is_restricted_field(collection: &str, field: &str) -> bool {
+/// Whether the canonical query owner treats a collection field as sensitive.
+/// Other read adapters use the same pairs when retaining selected document data.
+pub fn is_restricted_field(collection: &str, field: &str) -> bool {
     RESTRICTED_FIELDS
         .iter()
         .any(|(c, f)| *c == collection && *f == field)

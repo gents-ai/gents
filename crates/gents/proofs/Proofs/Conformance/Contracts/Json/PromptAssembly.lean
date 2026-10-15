@@ -59,6 +59,19 @@ def currentInputCaseJson (witness : CurrentInputCase) : String :=
 
 def currentInputCasesJson : String := jsonArray (currentInputCases.map currentInputCaseJson)
 
+def wakeInputCasesJson : String := jsonArray (wakeInputCases.map fun witness =>
+  "{\"name\":" ++ jsonString witness.name ++
+  ",\"claimed\":" ++ jsonArray (witness.claimed.map jsonString) ++
+  ",\"acknowledged\":" ++ jsonArray (witness.acknowledged.map jsonString) ++
+  ",\"rows\":" ++ jsonArray (witness.history.map fun row =>
+    "{\"header\":" ++ jsonString row.header ++
+    ",\"notification_key\":" ++ jsonOptionalString row.notificationKey ++ "}") ++
+  ",\"notifications\":" ++ jsonArray (witness.notifications.map fun row =>
+    "{\"header\":" ++ jsonString row.header ++
+    ",\"notification_key\":" ++ jsonOptionalString row.notificationKey ++ "}") ++
+  ",\"current_keys\":" ++ jsonArray (witness.currentKeys.map jsonString) ++
+  ",\"expected_order\":" ++ jsonArray (witness.expectedOrder.map jsonString) ++ "}")
+
 def jsonNatArray (values : List Nat) : String :=
   jsonArray (values.map toString)
 

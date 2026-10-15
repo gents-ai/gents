@@ -66,17 +66,26 @@ async fn claim_request_with_projection<F>(
 where
     F: Fn(&str) -> String + Sync,
 {
-    let session_id = escape_graphql_string(session_id);
+    anyhow::ensure!(
+        session_id == request.session_id,
+        "claim snapshot session differs from request"
+    );
+    let scope = crate::session::session_scope_filter(
+        &request.node_did,
+        session_id,
+        request.requester_did.as_deref(),
+    );
     let snapshot_query = format!(
         r#"{{
             all_messages: AgentMessage(
-                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                filter: {{ {scope} }},
                 order: {{ sequence: DESC }},
                 limit: 1
             ) {{ sequence }}
             notifications: AgentMessage(
                 filter: {{
-                    session_id: {{ _eq: "{session_id}" }},
+                    {scope},
+                    request_doc_id: {{ _ne: null }},
                     message_key: {{ _like: "background-completion-notification:%" }}
                 }},
                 order: {{ sequence: ASC }}
@@ -1776,6 +1785,111 @@ mod tests {
             2,
             "successor input must stay out of this attempt"
         );
+    }
+
+    #[tokio::test]
+    async fn background_claim_keeps_fork_imports_out_of_notification_input() {
+        let node = test_node().await;
+        let session_id = "background-import-snapshot";
+        let origin_key = "background-completion-notification:owned:tool";
+        session::import_history_observation(
+            &node,
+            "origin-request-doc",
+            session_id,
+            TEST_NODE_DID,
+            None,
+            "notification",
+            origin_key,
+            1,
+            None,
+        )
+        .await;
+        let access = crate::config_client::ConfigAccess::local(node.clone());
+        let response = access
+            .execute(&format!(
+                "{{ AgentMessage(filter: {{ message_key: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
+                escape_graphql_string(origin_key),
+                crate::session::canonical_rows::AGENT_MESSAGE_FIELDS
+            ))
+            .await
+            .unwrap();
+        let origin = crate::session::canonical_rows::decode_transcript_message_row(
+            &response["data"]["AgentMessage"][0],
+        )
+        .unwrap();
+        let mut imported = origin.message;
+        imported.message_key = "background-completion-notification:imported:tool".to_owned();
+        imported.request_doc_id = None;
+        imported.publication = gents_protocol::output::MessagePublication::Fork {
+            origin_message_doc_id: origin.doc_id,
+        };
+        imported.sequence = 2;
+        access
+            .transact_write("test.claim.import", |txn| {
+                let imported = imported.clone();
+                Box::pin(async move {
+                    txn.execute_with_variables(
+                        crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
+                        &crate::session::canonical_rows::transcript_message_create_variables(
+                            &imported,
+                        )?,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        let input: gents_protocol::request_input::RequestInput = serde_json::from_value(serde_json::json!({"queue": {"source": "background_completion", "policy": "coalesce", "key": format!("background_completion:{session_id}"), "background_completion_wake_version": 1}})).unwrap();
+        let request = insert_pending_request(
+            &node,
+            "import-wake",
+            session_id,
+            "2026-10-14T00:00:00Z",
+            Some(&input),
+            "scheduled",
+        )
+        .await;
+        let doc_id = request.doc_id.clone();
+        let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+            node.clone(),
+            TEST_AGENT_ID,
+            TEST_NODE_DID,
+            request,
+            60,
+            ExecutionOrigin::Scheduled,
+            TEST_BACKEND_ID,
+        );
+        assert_eq!(
+            lifecycle.claim_with_identity().await.unwrap(),
+            ClaimOutcome::Claimed
+        );
+        let response = access.execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ background_completion_notification_keys_json }} }}", escape_graphql_string(&doc_id))).await.unwrap();
+        let keys: Vec<String> = serde_json::from_str(
+            response["data"]["AgentRequest"][0]["background_completion_notification_keys_json"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        let contract = crate::lean_vocab_test::lean_contract_snapshot()
+            .wake_input_cases
+            .iter()
+            .find(|case| case.name == "imported_notification_stays_in_history")
+            .unwrap();
+        let expected = contract
+            .current_keys
+            .iter()
+            .map(|key| {
+                assert_eq!(key, "a");
+                origin_key.to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(keys, expected);
+        assert_eq!(
+            lifecycle.background_completion_input_through_sequence(),
+            Some(2)
+        );
+        drop(lifecycle);
+        node.shutdown().await;
     }
     #[tokio::test]
     async fn claim_pins_configured_budget_and_reclaim_preserves_unlimited_or_zero() {

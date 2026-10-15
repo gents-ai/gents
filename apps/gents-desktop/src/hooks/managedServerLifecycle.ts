@@ -7,6 +7,7 @@ import {
   unsettledManagedServerError,
   type ManagedServerWait,
 } from "../lib/managedServerStartup";
+import { errorText } from "../lib/errorText";
 
 type RestoreOptions = {
   onWait?: (wait: ManagedServerWait | null) => void;
@@ -85,10 +86,7 @@ async function restoreManagedServerOnce(
       );
       return started.state === "running" || started.state === "external";
     } catch (cause) {
-      throw new ManagedServerStartupError(
-        cause instanceof Error ? cause.message : String(cause),
-        status,
-      );
+      throw new ManagedServerStartupError(errorText(cause), status);
     }
   }
   // Native launchd/systemd ownership is intentionally independent of the GUI.

@@ -256,7 +256,7 @@ impl MutationWriteGate {
 
     async fn acquire(self: &Arc<Self>, operation: WriteOperation) -> Result<MutationWriteGuard> {
         ensure_not_reentrant_embedded_write(operation)?;
-        let mut lock = Arc::clone(&self.lock).lock_owned();
+        let lock = Arc::clone(&self.lock).lock_owned();
         tokio::pin!(lock);
         let mut registration = None;
         #[cfg(test)]
@@ -1572,10 +1572,6 @@ impl<'a> ConfigApplyTxn<'a> {
     /// nillable list fields remain the caller's responsibility.
     pub async fn execute_with_variables(&self, document: &str, variables: &Value) -> Result<Value> {
         anyhow::ensure!(variables.is_object(), "GraphQL variables must be an object");
-        let (expanded_document, expanded_variables) =
-            gents_protocol::graphql::expand_mutation_input_variables(document, variables)?;
-        let document = expanded_document.as_str();
-        let variables = &expanded_variables;
         #[cfg(test)]
         if !document.trim_start().starts_with("mutation")
             && SUCCESSFUL_MUTATION_FAULT

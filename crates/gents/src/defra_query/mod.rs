@@ -64,8 +64,9 @@ pub(crate) mod schema;
 
 pub use bounded::BoundedQueryTool;
 pub use query::{
-    build_query, expand_collection_scope_aliases, CollectionScope, DefraQueryParams,
-    AGENT_CONFIG_QUERY_COLLECTIONS, AGENT_CONFIG_SCOPE_ALIAS, DEFAULT_LIMIT, MAX_LIMIT,
+    build_query, expand_collection_scope_aliases, is_restricted_field, CollectionScope,
+    DefraQueryParams, AGENT_CONFIG_QUERY_COLLECTIONS, AGENT_CONFIG_SCOPE_ALIAS, DEFAULT_LIMIT,
+    MAX_LIMIT,
 };
 pub use schema::{
     diagnose_failed_query, discovery_payload, introspection_query, parse_collection_schema,

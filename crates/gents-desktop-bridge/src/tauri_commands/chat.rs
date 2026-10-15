@@ -45,21 +45,31 @@ pub(crate) async fn session_snapshot(
     timeline_before_item_key: Option<String>,
 ) -> Result<Option<DesktopSessionSnapshot>, BridgeError> {
     let started = std::time::Instant::now();
-    let node_did = node_did.or_else(|| {
-        core.store()
-            .snapshot()
-            .sessions
-            .iter()
-            .find(|session| session.session_id == session_id)
-            .map(|session| session.node_did.clone())
-    });
-    let request_id = request_id.or_else(|| {
-        let store = core.store().snapshot();
-        node_did.as_deref().map_or_else(
-            || store.latest_request_id_for_session(&session_id),
-            |node_did| store.latest_request_id_for_session_for_node(&session_id, node_did),
-        )
-    });
+    let node_did = match node_did {
+        Some(node_did) => Some(node_did),
+        None => {
+            let node_dids = core
+                .store()
+                .snapshot()
+                .sessions
+                .iter()
+                .filter(|session| session.session_id == session_id)
+                .map(|session| session.node_did.clone())
+                .collect::<std::collections::BTreeSet<_>>();
+            if node_dids.len() > 1 {
+                return Err(BridgeError::untyped(format!(
+                    "session {session_id} is ambiguous across multiple node owners"
+                )));
+            }
+            node_dids.into_iter().next()
+        }
+    };
+    if node_did.is_none() {
+        return Err(BridgeError::untyped(format!(
+            "session {session_id} has no resolved node owner"
+        )));
+    }
+    let mut request_id = request_id;
 
     let hydrate_started = std::time::Instant::now();
     let mut hydration_observation = None;
@@ -82,6 +92,7 @@ pub(crate) async fn session_snapshot(
                 None,
                 false,
                 false,
+                None,
             )
             .await);
         }
@@ -102,19 +113,6 @@ pub(crate) async fn session_snapshot(
         }
     }
     let hydrate_start_ms = hydrate_started.elapsed().as_millis() as u64;
-    let refresh_started = std::time::Instant::now();
-    if let (Some(node_did), Some(request_id)) = (node_did.as_deref(), request_id.as_deref()) {
-        if let Err(error) = core.refresh_local_request(node_did, request_id).await {
-            tracing::warn!(
-                target: "gents_desktop::chat",
-                node_did,
-                request_id,
-                error = %error,
-                "selected local request refresh failed; returning the last observed session"
-            );
-        }
-    }
-    let request_refresh_ms = refresh_started.elapsed().as_millis() as u64;
     let transcript_started = std::time::Instant::now();
     let node_scope = node_did
         .as_deref()
@@ -164,8 +162,73 @@ pub(crate) async fn session_snapshot(
             }
         }
     };
+    let transcript_page = page_read
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    let page_request_doc_ids = transcript_page
+        .store
+        .transcript_messages
+        .iter()
+        .filter_map(|row| row.message.request_doc_id.clone())
+        .collect::<Vec<_>>();
+    let fallback_request_id = match (request_id.is_none(), node_did.as_deref()) {
+        (true, Some(node_did)) => core
+            .store()
+            .snapshot()
+            .latest_request_id_for_session_for_node(&session_id, node_did),
+        _ => None,
+    };
+    let refresh_started = std::time::Instant::now();
+    let refreshed_projection = if let Some(node_did) = node_did.as_deref() {
+        match core
+            .refresh_local_request(
+                node_did,
+                &session_id,
+                request_id.as_deref(),
+                fallback_request_id.as_deref(),
+                &page_request_doc_ids,
+            )
+            .await
+        {
+            Ok(Some(projection)) => Some(projection),
+            Ok(None) => {
+                return Err(BridgeError::untyped(
+                    "selected request projection became stale; refresh is pending",
+                ));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop::chat",
+                    node_did,
+                    request_id,
+                    error = %error,
+                    "selected request projection unavailable"
+                );
+                return Err(BridgeError::untyped(format!(
+                    "selected request projection unavailable: {error}"
+                )));
+            }
+        }
+    } else {
+        None
+    };
+    let request_refresh_ms = refresh_started.elapsed().as_millis() as u64;
+    if request_id.is_none() {
+        request_id = refreshed_projection
+            .as_ref()
+            .and_then(|projection| projection.selected_request_id.clone());
+    }
+    let fresh_requests = refreshed_projection
+        .as_ref()
+        .map(|projection| projection.requests.clone());
+    let selected_requester_scope = refreshed_projection
+        .as_ref()
+        .map(|projection| projection.requester_did.clone())
+        .unwrap_or_else(|| requester_scope.clone());
     let ownership_read = async {
-        let requests = {
+        let requests = if let Some(requests) = fresh_requests.as_ref() {
+            requests.clone()
+        } else {
             let store = core.store().snapshot();
             store
                 .requests
@@ -174,7 +237,7 @@ pub(crate) async fn session_snapshot(
                     row.doc_id.is_some()
                         && row.session_id.as_deref() == Some(session_id.as_str())
                         && row.node_did.as_deref() == node_did.as_deref()
-                        && row.requester_did.as_deref() == requester_scope.as_deref()
+                        && row.requester_did.as_deref() == selected_requester_scope.as_deref()
                 })
                 .cloned()
                 .collect::<Vec<_>>()
@@ -190,60 +253,53 @@ pub(crate) async fn session_snapshot(
             }
         }
     };
-    let page_and_tip = async {
-        let result = if timeline_before_item_key.is_none() {
-            let context_read = async {
-                let request = request_id.as_deref().and_then(|request_id| {
-                    core.store().snapshot().session_tip_request(
-                        &session_id,
-                        node_did.as_deref(),
-                        requester_scope.as_deref(),
-                        request_id,
-                    )
-                });
-                let Some(request) = request else {
-                    return Ok(None);
-                };
-                match operator_access.as_ref() {
-                    Some(access) => {
-                        gents_desktop_core::client::load_session_tip_store_on(access, &request)
-                            .await
-                            .map(Some)
-                    }
-                    None => {
-                        gents_desktop_core::client::load_session_tip_store(core.node(), &request)
-                            .await
-                            .map(Some)
-                    }
-                }
-            };
-            let (page, context) = tokio::join!(page_read, context_read);
-            let page = page.map_err(|error| BridgeError::untyped(error.to_string()))?;
-            let context = match context {
-                Ok(store) => store,
-                Err(error) => {
-                    tracing::warn!(
-                        target: "gents_desktop::chat",
-                        session_id,
-                        error = %error,
-                        "session tip query failed; returning the bounded transcript without live ownership evidence"
-                    );
-                    None
-                }
-            };
-            (page, context)
-        } else {
-            (
-                page_read
-                    .await
-                    .map_err(|error| BridgeError::untyped(error.to_string()))?,
-                None,
-            )
+    let context_read = async {
+        if timeline_before_item_key.is_some() {
+            return Ok(None);
+        }
+        let request = request_id.as_deref().and_then(|request_id| {
+            if let Some(requests) = fresh_requests.as_ref() {
+                gents_desktop_core::client::ClientStore::session_tip_request_from_rows(
+                    requests,
+                    &session_id,
+                    node_did.as_deref(),
+                    selected_requester_scope.as_deref(),
+                    request_id,
+                )
+            } else {
+                core.store().snapshot().session_tip_request(
+                    &session_id,
+                    node_did.as_deref(),
+                    selected_requester_scope.as_deref(),
+                    request_id,
+                )
+            }
+        });
+        let Some(request) = request else {
+            return Ok(None);
         };
-        Ok::<_, BridgeError>(result)
+        match operator_access.as_ref() {
+            Some(access) => gents_desktop_core::client::load_session_tip_store_on(access, &request)
+                .await
+                .map(Some),
+            None => gents_desktop_core::client::load_session_tip_store(core.node(), &request)
+                .await
+                .map(Some),
+        }
     };
-    let (page_and_tip, ownership) = tokio::join!(page_and_tip, ownership_read);
-    let (transcript_page, context_store) = page_and_tip?;
+    let (context, ownership) = tokio::join!(context_read, ownership_read);
+    let context_store = match context {
+        Ok(store) => store,
+        Err(error) => {
+            tracing::warn!(
+                target: "gents_desktop::chat",
+                session_id,
+                error = %error,
+                "session tip query failed; returning the bounded transcript without live ownership evidence"
+            );
+            None
+        }
+    };
     let prompt_ownership = match ownership {
         Ok(facts) => Some(facts),
         Err(error) => {
@@ -266,6 +322,7 @@ pub(crate) async fn session_snapshot(
         hydration_observation,
         false,
         timeline_before_item_key.is_none(),
+        fresh_requests.as_deref(),
     )
     .await;
     if let Some(snapshot) = snapshot.as_mut() {
@@ -448,7 +505,7 @@ pub async fn desktop_request_timeline(
     node_did: String,
     request_id: String,
     state: State<'_, DesktopAppState>,
-) -> Result<serde_json::Value, BridgeError> {
+) -> Result<crate::types::RequestTimelineView, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -457,7 +514,9 @@ pub async fn desktop_request_timeline(
         .request_timeline(&node_did, &request_id)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    serde_json::to_value(&timeline).map_err(|error| BridgeError::untyped(error.to_string()))
+    let value =
+        serde_json::to_value(&timeline).map_err(|error| BridgeError::untyped(error.to_string()))?;
+    serde_json::from_value(value).map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[tauri::command]

@@ -48,6 +48,10 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
         .node()
         .execute(
             r#"mutation {
+        session: create_AgentSession(input: {
+            session_id: "session-1", node_did: "did:test:amy", requester_did: null,
+            agent_id: "default", created_at: "2026-08-21T18:07:35Z"
+        }) { _docID }
         request: create_AgentRequest(input: {
             purpose: "normal", request_id: "request-1", node_did: "did:test:amy", agent_id: "default",
             session_id: "session-1", content: "run it", lifecycle_state: "processing",
@@ -106,7 +110,7 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
     core.refresh_store().await?;
     assert!(core.store().snapshot().transcript_messages.is_empty());
     assert!(core.store().snapshot().output_segments.is_empty());
-    core.refresh_local_request("did:test:amy", "request-1")
+    core.refresh_local_request("did:test:amy", "session-1", Some("request-1"), None, &[])
         .await?;
     let refreshed = core.store().snapshot();
     assert!(refreshed.transcript_messages.is_empty());
@@ -132,7 +136,7 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Result<()> {
-    use wiremock::matchers::{body_string_contains, method};
+    use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const NODE_DID: &str = "did:test:hosted-amy";
@@ -187,36 +191,6 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         "content": "make research the default",
         "lifecycle_state": "completed"
     });
-    Mock::given(method("POST"))
-        .and(body_string_contains("DesktopLocalRequestLookup"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "data": {"AgentRequest": [completed_request.clone()]}
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let store = Arc::clone(core.store());
-    let chat_patch_response = serde_json::json!({
-        "data": {
-            "AgentRequest": [completed_request],
-            "AgentSession": [],
-            "Goal": []
-        }
-    });
-    Mock::given(method("POST"))
-        .and(body_string_contains("DesktopRemoteChatPatch"))
-        .respond_with(move |_request: &wiremock::Request| {
-            // The request patch was read from the captured store revision.
-            // Invalidate it before this network await returns so publication
-            // must lose and schedule the canonical observer resync.
-            store.invalidate_projection(true);
-            ResponseTemplate::new(200).set_body_json(chat_patch_response.clone())
-        })
-        .expect(1)
-        .mount(&server)
-        .await;
-
     let mut operator_data = serde_json::json!({
         "nodes": [{
             "node_did": NODE_DID,
@@ -250,11 +224,52 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     ] {
         operator_data[key] = serde_json::json!([]);
     }
+    let store = Arc::clone(core.store());
+    let response_request = completed_request.clone();
+    let response_session = serde_json::json!({
+        "session_id": "session-terminal-config",
+        "node_did": NODE_DID,
+        "requester_did": NODE_DID,
+        "agent_id": "did:test:hosted-amy:default",
+        "created_at": "2026-07-24T00:00:00Z"
+    });
+    let response_operator_data = operator_data.clone();
     Mock::given(method("POST"))
-        .and(body_string_contains("DesktopOperatorConfig"))
+        .and(path("/api/v0/tx"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "data": operator_data
+            "id": "selected-request-refresh"
         })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/tx/selected-request-refresh"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/graphql"))
+        .respond_with(move |request: &wiremock::Request| {
+            let body = String::from_utf8_lossy(&request.body);
+            let data = if body.contains("DesktopSelectedSession") {
+                serde_json::json!({"AgentSession": [response_session.clone()]})
+            } else if body.contains("DesktopSelectedRequest") {
+                serde_json::json!({"AgentRequest": [response_request.clone()]})
+            } else if body.contains("DesktopSessionRequestSeeds") {
+                // Invalidate the captured read while a later owner query is in
+                // flight so the selected patch must be rejected at publication.
+                store.invalidate_projection(true);
+                serde_json::json!({"seeds_0": []})
+            } else if body.contains("RequestDependencies") {
+                serde_json::json!({"r0": []})
+            } else if body.contains("DesktopRequestSessionContext") {
+                serde_json::json!({"goals_0": []})
+            } else if body.contains("DesktopOperatorConfig") {
+                response_operator_data.clone()
+            } else {
+                serde_json::json!({})
+            };
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": data}))
+        })
         .mount(&server)
         .await;
     core.persist_local_standard_peer(
@@ -267,9 +282,16 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     .await?;
 
     let mut updates = core.store_updates();
-    assert_eq!(
-        core.refresh_local_request(NODE_DID, REQUEST_ID).await?,
-        None,
+    assert!(
+        core.refresh_local_request(
+            NODE_DID,
+            "session-terminal-config",
+            Some(REQUEST_ID),
+            None,
+            &[],
+        )
+        .await?
+        .is_none(),
         "the in-flight request-event fence must reject direct publication"
     );
     timeout(Duration::from_secs(5), async {

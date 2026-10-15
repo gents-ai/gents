@@ -14,7 +14,6 @@ import {
 import { Composer } from "@gents/ui/conversation";
 import { useApp, useView } from "@/app/AppContext";
 import {
-  useChatFolder,
   useHomeDid,
   useMailboxCause,
   useNodeCount,
@@ -30,12 +29,16 @@ import { useFleet } from "../../hooks/useFleet";
 import { NodeAvatar } from "../AgentAvatar";
 import { AgentPicker } from "../BehaviorPicker";
 import { agentName } from "../behavior";
-import { ChatFolderPicker } from "../ChatFolderPicker";
+import { SelectedChatFolder } from "../ChatFolderPicker";
 import { AccessSentence } from "../parts";
 import { ReplyingTo } from "../ReplyingTo";
 import { SlashSkillMenu } from "../SlashSkillMenu";
 import { useSlashSkills } from "../useSlashSkills";
-import { SessionSubmissionStatus, presentedComposerSendStatus } from "./composerParts";
+import {
+  ComposerFooter,
+  SessionSubmissionStatus,
+  presentedComposerSendStatus,
+} from "./composerParts";
 import { useAgentChoice, useComposerSend } from "./useComposerSend";
 
 export function NewSession() {
@@ -103,11 +106,7 @@ export function NewSession() {
 }
 
 function NewSessionComposer() {
-  const {
-    stores,
-    actions: { setChatFolder },
-  } = useApp();
-  const chatFolder = useChatFolder();
+  const { stores } = useApp();
   const activityStatus = useView((view) => view.shellProjection.activityStatus);
   const sendStatus = useView((view) => view.shellProjection.nonEmptyContentSendStatus);
   const sending = stores.chat.use.sending();
@@ -141,14 +140,11 @@ function NewSessionComposer() {
         }
         onKeyDown={slash.onKeyDown}
         leading={
-          <>
-            <AgentPicker
-              deployment={deployment}
-              agentId={choice.agentId}
-              onChange={choice.setPicked}
-            />
-            <ChatFolderPicker folder={chatFolder} onChange={setChatFolder} />
-          </>
+          <AgentPicker
+            deployment={deployment}
+            agentId={choice.agentId}
+            onChange={choice.setPicked}
+          />
         }
         sending={sending}
         placeholder={placeholderFor(
@@ -157,8 +153,11 @@ function NewSessionComposer() {
         )}
       />
       {/* inside the composer's row, so the grid's gap is not paid twice
-          around a line that is usually empty */}
-      <SessionSubmissionStatus activityStatus={activityStatus} reserve={false} />
+          around the line under it */}
+      <ComposerFooter
+        folder={<SelectedChatFolder />}
+        status={<SessionSubmissionStatus activityStatus={activityStatus} />}
+      />
     </div>
   );
 }

@@ -74,6 +74,12 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) mailbox_notification_cases: Vec<serde_json::Value>,
     pub(crate) mailbox_reply_cases: Vec<serde_json::Value>,
     pub(crate) mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
+    pub(crate) mailbox_sweep_cases: Vec<serde_json::Value>,
+    pub(crate) client_data_publication_cases: serde_json::Value,
+    pub(crate) client_request_patch_publication_cases: serde_json::Value,
+    pub(crate) client_request_closure_cases: Vec<serde_json::Value>,
+    pub(crate) client_request_cache_identity_cases: Vec<serde_json::Value>,
+    pub(crate) client_session_queue_order_cases: Vec<serde_json::Value>,
     pub(crate) graph_invocation_publication_cases: Vec<serde_json::Value>,
     pub(crate) graph_failure_attribution_traces: Vec<serde_json::Value>,
     pub(crate) request_transition_cases: Vec<LeanLifecycleTransitionCase>,
@@ -249,6 +255,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) retry_frontier_cases: Vec<serde_json::Value>,
     pub(crate) retry_entry_cases: Vec<serde_json::Value>,
     pub(crate) current_input_cases: Vec<LeanCurrentInputCase>,
+    pub(crate) wake_input_cases: Vec<LeanWakeInputCase>,
     pub(crate) prompt_assembly_layer_cases: Vec<LeanPromptAssemblyLayerCase>,
     pub(crate) prompt_assembly_repair_cases: Vec<LeanPromptAssemblyRepairCase>,
     pub(crate) prompt_assembly_budget_cases: Vec<LeanPromptAssemblyBudgetCase>,
@@ -1152,6 +1159,36 @@ pub(crate) struct LeanCausalHopContract {
     pub(crate) call_cases: Vec<LeanCausalHopCallCase>,
     pub(crate) interrupt_cases: Vec<LeanAgentInterruptCase>,
     pub(crate) write_cases: Vec<LeanSessionMessageWriteCase>,
+    pub(crate) session_target_cases: Vec<LeanSessionTargetCase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionTargetCase {
+    pub(crate) same_requester: bool,
+    pub(crate) same_node: bool,
+    pub(crate) caused: bool,
+    pub(crate) allowed_target: bool,
+    pub(crate) expected_allowed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanWakeInputCase {
+    pub(crate) name: String,
+    pub(crate) claimed: Vec<String>,
+    pub(crate) acknowledged: Vec<String>,
+    pub(crate) rows: Vec<LeanWakeInputRow>,
+    pub(crate) notifications: Vec<LeanWakeInputRow>,
+    pub(crate) current_keys: Vec<String>,
+    pub(crate) expected_order: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanWakeInputRow {
+    pub(crate) header: String,
+    pub(crate) notification_key: Option<String>,
 }
 
 /// One delivered session message (`DurableLineage.sessionMessageWrite`).
@@ -1538,6 +1575,10 @@ pub(crate) fn lean_desktop_client_shell_cases() -> &'static [LeanClientShellCase
 
 pub(crate) fn lean_client_session_turn_cases() -> &'static [LeanSessionTurnCase] {
     &lean_contract_snapshot().client_session_turn_cases
+}
+
+pub(crate) fn lean_client_session_queue_order_cases() -> &'static [serde_json::Value] {
+    &lean_contract_snapshot().client_session_queue_order_cases
 }
 
 pub(crate) fn lean_request_lifecycle_operator_ui_cases() -> &'static [LeanClientShellCase] {

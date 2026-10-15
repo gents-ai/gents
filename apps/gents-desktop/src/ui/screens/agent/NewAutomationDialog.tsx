@@ -51,6 +51,7 @@ import { newId, validateCronSchedule } from "./draft";
 import { defaultAgentOf } from "@/lib/agents";
 import { agentOf } from "@/lib/agents";
 import { useApp } from "@/app/AppContext";
+import { errorText } from "../../../lib/errorText";
 
 const NEW = "new:";
 export const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -296,7 +297,7 @@ export function NewAutomationDialog({
               },
         );
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(false);
     }

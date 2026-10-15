@@ -16,15 +16,27 @@ import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
 import { agentReadiness } from "@/lib/agent-readiness";
 import { access, agentName, bashAccess, fileAccess, network } from "./behavior";
-import { agentOf } from "@/lib/agents";
-import { useHomeDid, useToolAuthority } from "@/hooks/useClient";
-import { isWorkingNode } from "@/lib/nodes";
+import { agentOf, backendOf } from "@/lib/agents";
+import { ProviderLogo } from "./ProviderLogo";
+import { useNodeReach } from "@/hooks/useClient";
+import { useHomeFolder } from "@/hooks/useHomeFolder";
+import { shortPath } from "@/lib/paths";
 
-function Line({ label, children }: { label: string; children: React.ReactNode }) {
+function Line({
+  label,
+  title,
+  children,
+}: {
+  label: string;
+  title?: string;
+  children: React.ReactNode;
+}) {
   return (
     <>
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 truncate text-foreground">{children}</dd>
+      <dd title={title} className="min-w-0 truncate text-foreground">
+        {children}
+      </dd>
     </>
   );
 }
@@ -36,17 +48,13 @@ const shortDid = (did: string) =>
    with are its own node's; any other node says it through its default
    agent's environment. */
 function NodeReach({ deployment }: { deployment: NodeView }) {
-  const homeDid = useHomeDid();
-  const own = useToolAuthority();
-  const { root, ceiling } = isWorkingNode(deployment, homeDid)
-    ? own
-    : { root: null, ceiling: null };
-  const env =
-    deployment.agentEnvironments.find((e) => e.isDefault) ??
-    deployment.agentEnvironments[0];
+  const { local, root, ceiling, env } = useNodeReach(deployment);
+  const home = useHomeFolder();
   return (
     <>
-      <Line label="Can touch">{root ?? env?.workspaceRoot ?? "—"}</Line>
+      <Line label="Can touch" title={root ?? undefined}>
+        {root ? shortPath(root, { home: local ? home : null, max: 40 }) : "—"}
+      </Line>
       <Line label="At most">
         {ceiling ? access(ceiling) : env ? access(env.fileAccess) : "—"}
         {env ? `, ${network(env.networkAccess)}` : ""}
@@ -72,7 +80,7 @@ export function NodeHoverCard({
       <HoverCardTrigger delay={500} render={children} />
       <HoverCardContent side={side} align="start" className="w-80">
         <div className="flex items-baseline justify-between gap-3">
-          <span className="font-heading text-lg font-medium text-heading">
+          <span className="font-heading text-base font-medium text-heading">
             {deployment.node.displayName ?? deployment.label}
           </span>
           <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -85,7 +93,7 @@ export function NodeHoverCard({
             {online ? "Online" : "Offline"}
           </span>
         </div>
-        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
           <NodeReach deployment={deployment} />
           <Line label="Agents">{deployment.agents.length}</Line>
           <Line label="Tasks">{deployment.tasks.length}</Line>
@@ -119,6 +127,7 @@ export function AgentHoverCard({
   const b = agentOf(deployment, agentId);
   const env = deployment?.agentEnvironments.find((e) => e.agentId === agentId);
   if (!deployment || !b) return children;
+  const backend = backendOf(deployment, b);
   const readiness = agentReadiness(deployment, b.agentId);
   const hasInstructions = Boolean(
     b.contextId &&
@@ -140,7 +149,7 @@ export function AgentHoverCard({
         data-testid="agent-hover-card"
       >
         <div className="flex items-baseline justify-between gap-3">
-          <span className="font-heading text-lg font-medium text-heading">
+          <span className="font-heading text-base font-medium text-heading">
             {agentName(agentId, deployment)}
           </span>
           {b.isDefault && (
@@ -148,7 +157,7 @@ export function AgentHoverCard({
           )}
         </div>
         {summary && <p className="mt-1.5 text-sm text-muted-foreground">{summary}</p>}
-        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
           <Line label="Status">
             {!b.enabled
               ? "Disabled"
@@ -156,7 +165,23 @@ export function AgentHoverCard({
                 ? "Enabled"
                 : `Enabled, can’t run: ${readiness.reason}`}
           </Line>
-          <Line label="Runs on">{env?.modelName ?? "no backend"}</Line>
+          <Line label="Runs on">
+            {env?.modelName ? (
+              /* the provider's mark, by the rule the inference settings use */
+              <span className="flex min-w-0 items-center gap-1.5">
+                {backend && (
+                  <ProviderLogo
+                    kind={backend.providerKind}
+                    endpoint={backend.endpoint}
+                    className="size-3"
+                  />
+                )}
+                <span className="truncate">{env.modelName}</span>
+              </span>
+            ) : (
+              "no backend"
+            )}
+          </Line>
           <Line label="Files">{fileAccess(env?.fileAccess ?? "off")}</Line>
           <Line label="Commands">{bashAccess(env?.bashAccess ?? "off")}</Line>
           <Line label="Network">{network(env?.networkAccess)}</Line>
@@ -180,9 +205,9 @@ export function AgentHoverCard({
             section: "agents",
             item: b.agentId,
           })}
-          className="mt-3 inline-flex items-center gap-1 text-sm text-foreground underline-offset-2 hover:underline"
+          className="mt-3 inline-flex items-center gap-1 text-xs text-foreground underline-offset-2 hover:underline"
         >
-          Settings <ArrowUpRight className="size-3.5" />
+          Settings <ArrowUpRight className="size-3" />
         </a>
       </HoverCardContent>
     </HoverCard>

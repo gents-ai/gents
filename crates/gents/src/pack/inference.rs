@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{
     inference_slot_reference, PackInferenceBindings, PackInferenceSlot, PackManifest,
@@ -11,7 +11,8 @@ use crate::config_client::ConfigAccess;
 use crate::document_config::{InferenceBackend, InferenceProfile, PackConfig};
 use crate::Collection;
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct PackInferenceProfileOption {
     pub profile_id: String,
     pub display_name: Option<String>,

@@ -8,20 +8,13 @@ import type {
   ToolPresentationView,
 } from "@source-inc/gents-desktop-client";
 import type { ToolStepStatus } from "@gents/ui/conversation";
+import { shortPath } from "../lib/paths";
 
 /* An absolute path inside a checkout is mostly the checkout: every row in a
    real session began with the same forty characters of home directory and
    repo. Keep the tail, which is what tells two rows apart, and let the
-   title carry the rest. */
-export const shortPath = (path: string, keep = 3): string => {
-  /* a machine that separates with a backslash has the same long prefix to
-     lose, and a drive letter is as absolute as a leading slash */
-  const sep = path.includes("\\") && !path.includes("/") ? "\\" : "/";
-  const absolute = path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
-  const segments = path.split(/[\\/]/).filter(Boolean);
-  if (!absolute || segments.length <= keep) return path;
-  return `…${sep}${segments.slice(-keep).join(sep)}`;
-};
+   title carry the rest. The path is on the agent's host, so no `~`. */
+const toolPath = (path: string) => shortPath(path, { keep: 3 });
 
 /* leading VAR=value assignments before a command; the command is what reads */
 const ASSIGNMENTS = /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)(?:\s+|$))+/;
@@ -84,6 +77,8 @@ const readCount = (p: Extract<ToolPresentationView, { kind: "fileRead" }>) => {
 export function toolSummary(t: RenderedToolCallView): {
   kind: string;
   primary: string;
+  /** the whole of what `primary` shortens, for its title */
+  full?: string;
   secondary?: string | null;
   mono?: boolean;
 } {
@@ -101,7 +96,8 @@ export function toolSummary(t: RenderedToolCallView): {
     case "fileRead":
       return {
         kind: p.operation.replace("_file", ""),
-        primary: p.target ? shortPath(p.target) : t.toolName,
+        primary: p.target ? toolPath(p.target) : t.toolName,
+        full: p.target ?? undefined,
         secondary: readCount(p),
         mono: true,
       };
@@ -118,7 +114,8 @@ export function toolSummary(t: RenderedToolCallView): {
               : "edited";
       return {
         kind: verb,
-        primary: p.path ? shortPath(p.path) : t.toolName,
+        primary: p.path ? toolPath(p.path) : t.toolName,
+        full: p.path ?? undefined,
         secondary:
           p.replacementsApplied != null && p.replacementsApplied > 1
             ? `×${p.replacementsApplied}`
@@ -129,7 +126,12 @@ export function toolSummary(t: RenderedToolCallView): {
     case "agent":
       return {
         kind: `agent · ${p.action}`,
-        primary: p.action === "list" ? "agents" : (p.name ?? p.sessionId ?? "agent"),
+        primary:
+          p.action === "list"
+            ? "agents"
+            : p.action === "sessions"
+              ? "sessions"
+              : (p.name ?? p.sessionId ?? "agent"),
         secondary: compact(p.description),
       };
     case "process":

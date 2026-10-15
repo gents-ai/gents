@@ -6,6 +6,8 @@ mod scope;
 mod session_lookups;
 mod turns;
 
+pub(crate) use indexing::sort_request_rows;
+
 pub use turns::{folded_requests, queued_behind_turn, session_turn_request};
 
 use std::collections::{HashMap, HashSet};
@@ -180,7 +182,7 @@ pub struct ClientStore {
     node_readiness_by_node_did: HashMap<String, usize>,
     request_index_by_id: HashMap<String, usize>,
     request_index_by_doc_id: HashMap<String, Option<usize>>,
-    unscoped_request_ids: HashSet<String>,
+    unscoped_placeholder_request_ids: HashSet<String>,
     mailbox_index_by_doc_id: HashMap<String, Option<usize>>,
 }
 
@@ -219,23 +221,36 @@ impl Default for ClientStore {
 pub type SharedClientStore = Arc<ClientStore>;
 
 impl ClientStore {
-    pub(crate) fn merge_scope(
-        &self,
-        incoming: &ClientStore,
-        remove_unscoped_requests: bool,
-    ) -> StoreScope {
+    pub(crate) fn merge_scope(&self, incoming: &ClientStore) -> StoreScope {
         let mut scope = StoreScope::default();
         scope.extend_rows(incoming);
 
-        if remove_unscoped_requests {
-            for row in incoming
-                .requests
-                .iter()
-                .filter(|row| row.node_did.is_some())
+        for row in &incoming.requests {
+            if row.node_did.is_some()
+                && self
+                    .unscoped_placeholder_request_ids
+                    .contains(&row.request_id)
             {
-                if self.unscoped_request_ids.contains(&row.request_id) {
-                    return StoreScope::All;
+                return StoreScope::All;
+            }
+            let Some(doc_id) = row.doc_id.as_deref() else {
+                continue;
+            };
+            match self.request_index_by_doc_id.get(doc_id) {
+                Some(Some(index)) => {
+                    let Some(previous) = self.requests.get(*index) else {
+                        return StoreScope::All;
+                    };
+                    if previous.doc_id.as_deref() != Some(doc_id) {
+                        return StoreScope::All;
+                    }
+                    let Some(owner) = previous.node_did.as_deref() else {
+                        return StoreScope::All;
+                    };
+                    scope.insert_node(owner);
                 }
+                Some(None) => return StoreScope::All,
+                None => {}
             }
         }
 
@@ -265,7 +280,7 @@ impl ClientStore {
         let Some(node_did) = nonblank(Some(node_did)) else {
             return StoreScope::All;
         };
-        let mut scope = self.merge_scope(incoming, false);
+        let mut scope = self.merge_scope(incoming);
         scope.insert_node(&node_did);
         scope
     }

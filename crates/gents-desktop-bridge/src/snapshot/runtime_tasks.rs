@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use gents_desktop_core::client::{ClientStore, TaskRecentRuns};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -90,19 +92,37 @@ pub(super) fn session_summaries(
     tasks: &[TaskView],
     triggers: &[TriggerView],
 ) -> Vec<SessionSummary> {
+    let mut requests_by_session: HashMap<(&str, Option<&str>), Vec<&AgentRequestRow>> =
+        HashMap::new();
+    for request in requests {
+        if request.node_did.as_deref() != Some(node_did) {
+            continue;
+        }
+        if let Some(session_id) = request.session_id.as_deref() {
+            requests_by_session
+                .entry((session_id, request.requester_did.as_deref()))
+                .or_default()
+                .push(request);
+        }
+    }
     let mut summaries = sessions
         .iter()
         .filter(|session| session.node_did == node_did)
         .map(|session| {
             let observation = session.observation.as_ref();
             let indexed = observation.and_then(|value| value.latest_request.as_ref());
-            let mut exact_requests = requests.iter().filter(|request| {
+            let session_requests = requests_by_session
+                .get(&(
+                    session.session_id.as_str(),
+                    session.requester_did.as_deref(),
+                ))
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let mut exact_requests = session_requests.iter().copied().filter(|request| {
                 indexed.is_some_and(|indexed| {
                     request.doc_id.as_deref() == Some(indexed.request_doc_id.as_str())
                         && request.request_id == indexed.request_id
-                }) && request.node_did.as_deref() == Some(session.node_did.as_str())
-                    && request.session_id.as_deref() == Some(session.session_id.as_str())
-                    && request.requester_did == session.requester_did
+                })
             });
             let candidate = exact_requests.next();
             let request = if exact_requests.next().is_none() {
@@ -122,15 +142,7 @@ pub(super) fn session_summaries(
                 if !may_wait_or_fold {
                     return request;
                 }
-                let session_requests = requests
-                    .iter()
-                    .filter(|row| {
-                        row.node_did.as_deref() == Some(session.node_did.as_str())
-                            && row.session_id.as_deref() == Some(session.session_id.as_str())
-                            && row.requester_did == session.requester_did
-                    })
-                    .collect::<Vec<_>>();
-                gents_desktop_core::client::session_turn_request(&session_requests, request)
+                gents_desktop_core::client::session_turn_request(session_requests, request)
             });
             let lifecycle = request
                 .and_then(|request| request.lifecycle_state)
@@ -205,55 +217,74 @@ pub(super) fn session_summaries(
     summaries
 }
 
-pub(super) fn task_run_history(
+pub(super) fn task_run_histories(
     store: &ClientStore,
     node_did: &str,
-    task_id: &str,
     triggers: &[TriggerView],
-) -> Vec<TaskRunSummaryView> {
-    let trigger_ids = triggers
+) -> HashMap<String, Vec<TaskRunSummaryView>> {
+    let mut trigger_tasks: HashMap<&str, Vec<&str>> = HashMap::new();
+    for trigger in triggers
         .iter()
-        .filter(|trigger| trigger.config.node_did == node_did && trigger.config.task_id == task_id)
-        .map(|trigger| trigger.config.trigger_id.as_str())
-        .collect::<Vec<_>>();
-
-    let mut runs = store
-        .requests
-        .iter()
-        .filter(|request| {
-            if !request_matches_node(request, node_did) {
-                return false;
-            }
-            request
-                .caused_by_trigger_id
-                .as_deref()
-                .is_some_and(|trigger_id| trigger_ids.contains(&trigger_id))
+        .filter(|trigger| trigger.config.node_did == node_did)
+    {
+        let tasks = trigger_tasks.entry(&trigger.config.trigger_id).or_default();
+        let task_id = trigger.config.task_id.as_str();
+        if !tasks.contains(&task_id) {
+            tasks.push(task_id);
+        }
+    }
+    let mut latest: HashMap<&str, Vec<&AgentRequestRow>> = HashMap::new();
+    for request in &store.requests {
+        if !request_matches_node(request, node_did) {
+            continue;
+        }
+        let Some(tasks) = request
+            .caused_by_trigger_id
+            .as_deref()
+            .and_then(|id| trigger_tasks.get(id))
+        else {
+            continue;
+        };
+        for task in tasks {
+            let rows = latest.entry(task).or_default();
+            rows.push(request);
+            rows.sort_by(|left, right| {
+                right
+                    .created_at
+                    .cmp(&left.created_at)
+                    .then_with(|| right.request_id.cmp(&left.request_id))
+            });
+            rows.truncate(8);
+        }
+    }
+    latest
+        .into_iter()
+        .map(|(task, requests)| {
+            let runs = requests
+                .into_iter()
+                .map(|request| TaskRunSummaryView {
+                    request_id: request.request_id.clone(),
+                    request_doc_id: request.doc_id.clone(),
+                    node_did: node_did.to_owned(),
+                    requester_did: request.requester_did.clone(),
+                    session_id: normalize_optional(request.session_id.as_deref()),
+                    agent_id: request.agent_id.clone(),
+                    lifecycle_state: request
+                        .lifecycle_state
+                        .map(|state| state.as_str().to_string()),
+                    execution_origin: normalize_optional(request.execution_origin.as_deref()),
+                    caused_by_trigger_id: normalize_optional(
+                        request.caused_by_trigger_id.as_deref(),
+                    ),
+                    caused_by_trigger_kind: normalize_optional(
+                        request.caused_by_trigger_kind.as_deref(),
+                    ),
+                    created_at: normalize_optional(request.created_at.as_deref()),
+                })
+                .collect();
+            (task.to_owned(), runs)
         })
-        .map(|request| TaskRunSummaryView {
-            request_id: request.request_id.clone(),
-            request_doc_id: request.doc_id.clone(),
-            node_did: node_did.to_owned(),
-            requester_did: request.requester_did.clone(),
-            session_id: normalize_optional(request.session_id.as_deref()),
-            agent_id: request.agent_id.clone(),
-            lifecycle_state: request
-                .lifecycle_state
-                .map(|state| state.as_str().to_string()),
-            execution_origin: normalize_optional(request.execution_origin.as_deref()),
-            caused_by_trigger_id: normalize_optional(request.caused_by_trigger_id.as_deref()),
-            caused_by_trigger_kind: normalize_optional(request.caused_by_trigger_kind.as_deref()),
-            created_at: normalize_optional(request.created_at.as_deref()),
-        })
-        .collect::<Vec<_>>();
-
-    runs.sort_by(|left, right| {
-        right
-            .created_at
-            .cmp(&left.created_at)
-            .then_with(|| right.request_id.cmp(&left.request_id))
-    });
-    runs.truncate(8);
-    runs
+        .collect()
 }
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ use super::{AgentToolSurfaceConfig, RuntimeToolAvailability, ToolPolicySurface, 
 
 const MEMORY_TOOL_NAME: &str = "memory";
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ToolSurfaceExplanation {
     pub tool_names: Vec<String>,
@@ -22,12 +23,14 @@ pub struct ToolSurfaceExplanation {
     pub warnings: Vec<ToolSurfaceWarning>,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ToolSurfaceWarning {
     pub code: String,
     pub message: String,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
 pub struct ToolSurfacePolicyTrace {
     pub requested: BTreeMap<String, Vec<String>>,

@@ -59,6 +59,15 @@ pub struct SessionLink {
     pub cause_request_doc_id: String,
 }
 
+/// A request in the viewed session and the exact scope of its causing
+/// request, when that cause is outside this session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionRequestCause {
+    pub request_id: String,
+    pub cause_request_doc_id: String,
+    pub cause_scope: Option<SessionScope>,
+}
+
 /// Every agent-message link of one session.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionLineage {
@@ -70,6 +79,10 @@ pub struct SessionLineage {
     pub sent: Vec<SessionLink>,
     /// Other sessions, besides its starter, that sent this session a request.
     pub received: Vec<SessionLink>,
+    /// Exact-scope request causes used to attribute individual turns. These
+    /// facts come from the same canonical lineage read, independent of the
+    /// desktop's bounded global request cache.
+    pub request_causes: Vec<SessionRequestCause>,
 }
 
 const SCOPE_FIELDS: &str = "_docID node_did session_id requester_did";
@@ -251,7 +264,7 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
     let own_requests = collection(
         access,
         &format!(
-            "{{AgentRequest(filter: {{{}}}) {{{SCOPE_FIELDS} caused_by_parent_request_doc_id}}}}",
+            "{{AgentRequest(filter: {{{}}}) {{{SCOPE_FIELDS} request_id caused_by_parent_request_doc_id}}}}",
             public_request_filter(&own_filter)
         ),
         "AgentRequest",
@@ -266,8 +279,28 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
         .filter_map(|row| row.get("caused_by_parent_request_doc_id")?.as_str())
         .filter(|doc_id| !own_doc_ids.contains(*doc_id))
         .collect::<BTreeSet<_>>();
+    let cause_scopes = request_scopes(access, causes).await?;
+    let cause_scopes_by_doc = cause_scopes
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let request_causes = own_requests
+        .iter()
+        .filter_map(|row| {
+            Some(SessionRequestCause {
+                request_id: row.get("request_id")?.as_str()?.to_owned(),
+                cause_request_doc_id: row
+                    .get("caused_by_parent_request_doc_id")?
+                    .as_str()?
+                    .to_owned(),
+                cause_scope: cause_scopes_by_doc
+                    .get(row.get("caused_by_parent_request_doc_id")?.as_str()?)
+                    .cloned(),
+            })
+        })
+        .collect::<Vec<_>>();
     let mut received = Vec::new();
-    for (cause, cause_scope) in request_scopes(access, causes).await? {
+    for (cause, cause_scope) in cause_scopes {
         if cause_scope == *scope
             || started_by
                 .as_ref()
@@ -287,6 +320,7 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
         return Ok(SessionLineage {
             started_by,
             received,
+            request_causes,
             ..Default::default()
         });
     }
@@ -347,6 +381,7 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
         started,
         sent,
         received,
+        request_causes,
     })
 }
 

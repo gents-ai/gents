@@ -143,6 +143,8 @@ mod tests {
         for name in [
             gents::toolset::AGENT_INTERRUPT_TOOL_NAME,
             gents::toolset::AGENT_LIST_TOOL_NAME,
+            gents::toolset::AGENT_SESSION_LIST_TOOL_NAME,
+            gents::toolset::AGENT_SESSION_READ_TOOL_NAME,
         ] {
             assert!(agent_projection(&tool(name, "completed", "{}", "")).is_none());
         }

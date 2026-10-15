@@ -8,6 +8,7 @@ import { createProjectionController } from "./projectionController";
 import { logShellEvent } from "./clientLifecycle";
 import { desktopUpdateRefreshScope } from "./projectionController";
 import { timingConfig } from "./timing";
+import { errorText } from "../lib/errorText";
 
 /**
  * How the desktop follows the client while it runs, as reactions to the
@@ -34,8 +35,7 @@ export function startClientObservation(
     let unlisten: (() => void) | undefined;
     const reportListenerError = (listenerError: unknown) => {
       if (stopped) return;
-      const message =
-        listenerError instanceof Error ? listenerError.message : String(listenerError);
+      const message = errorText(listenerError);
       logShellEvent(`desktop update listener failed: ${message}`);
       lifecycle.setError(message);
     };

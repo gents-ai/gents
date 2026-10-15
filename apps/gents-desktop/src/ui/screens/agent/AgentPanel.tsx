@@ -3,15 +3,16 @@ import type { NodeView } from "../../../hooks/fleetStore";
 import { isLocalNode } from "@/lib/firstRun";
 import { DraftActions, RefRow, SwitchRow, TagsRow, TextRow } from "./editors";
 import { useDraft } from "./draft";
-import { Fact, Group, Row } from "./rows";
+import { Fact, Group, PathFact, Row } from "./rows";
 import { LocalServer } from "./LocalServer";
 import { AgentCard } from "./AgentCard";
 import { saveDefault } from "./BehaviorsPanel";
 import { useApp } from "@/app/AppContext";
-import { useBootstrap } from "@/hooks/useClient";
+import { useBootstrap, useNodeReach } from "@/hooks/useClient";
 
 export function AgentPanel({ deployment }: { deployment: NodeView }) {
   const bootstrap = useBootstrap();
+  const reach = useNodeReach(deployment);
   const { changeConfig } = useApp().actions;
   const agent = deployment.node;
   const agents = deployment.agents.map((b) => ({
@@ -107,14 +108,22 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
         >
           <Fact mono>{agent.nodeDid}</Fact>
         </Row>
-        <Row label="Install name">
-          <Fact>{bootstrap?.initNodeName}</Fact>
-        </Row>
-        <Row label="Tool ceiling" description="The most any agent on this node may do.">
-          <Fact>{bootstrap?.initToolCeiling ?? "not configured"}</Fact>
-        </Row>
+        {/* this machine's install describes only its own node */}
+        {reach.local && (
+          <>
+            <Row label="Install name">
+              <Fact>{bootstrap?.initNodeName}</Fact>
+            </Row>
+            <Row
+              label="Tool ceiling"
+              description="The most any agent on this node may do."
+            >
+              <Fact>{reach.ceiling ?? "not configured"}</Fact>
+            </Row>
+          </>
+        )}
         <Row label="Tool root" description="The directory tools are confined to.">
-          <Fact mono>{bootstrap?.initToolRoot ?? "not configured"}</Fact>
+          <PathFact path={reach.root} local={reach.local} />
         </Row>
         <Row label="Peer" description="Where the node's runtime runs.">
           <Fact mono>{deployment.peerId}</Fact>

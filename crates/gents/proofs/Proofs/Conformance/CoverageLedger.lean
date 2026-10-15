@@ -807,6 +807,11 @@ def caseCoverage : List CoverageEntry :=
       "CausalHopContract"
       "conformance::enrollment::generated_causal_hop_cases_match_native_materializer")
       "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "causal_hop_contract"
+      "SessionTargetAuthorityCases"
+      "session_message::agent_tools_tests::session_target_authority_matches_lean_owner")
+      "request-lifecycle" [Surface.agentFacing]
   , tagged (followUpCoverage
       "title_request_admission_cases"
       "TitleRequestAdmissionCases"
@@ -1073,6 +1078,26 @@ def caseCoverage : List CoverageEntry :=
       "conformance::pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "client_data_publication_cases"
+      "ClientDataNoticeDeliveryCases"
+      "client::observe::projection_store::reload_tests::generated_notice_delivery_never_regresses_watchers")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_request_patch_publication_cases"
+      "ClientRequestPatchPublicationCases"
+      "client::core::writes::request_patch_publication_tests::generated_publication_cases_drive_request_patch_cache_admission")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_request_closure_cases"
+      "ClientRequestClosureCases"
+      "client::query::request_closure::tests::generated_request_closures_use_exact_database_dependencies")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_request_cache_identity_cases"
+      "ClientRequestCacheIdentityCases"
+      "client::store::merges::overlay_tests::generated_request_identity_cases_preserve_physical_twins_and_fold_owners")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "frontend_client_shell_cases"
       "FrontendClientShellCases"
       "packages/gents-desktop-chat/src/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts")
@@ -1086,6 +1111,11 @@ def caseCoverage : List CoverageEntry :=
       "client_session_turn_cases"
       "ClientSessionTurnCases"
       "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_binds_generated_session_turn_cases")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_session_queue_order_cases"
+      "ClientSessionQueueOrderCases"
+      "gents_desktop_bridge::snapshot::tests::session_state::session_queue_order_matches_native_arrival_model_after_claim")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
       "client_agent_readiness_cases"
@@ -1772,6 +1802,11 @@ def caseCoverage : List CoverageEntry :=
       "CurrentInputCases"
       "session::output::tests::current_input_selection_matches_lean_owner"
       "Binds canonical header classification and selection to CurrentInput. Full reconstructed-history regression additionally covers retaining a current-request tool result; arbitrary imported-seed reachability is not claimed.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "wake_input_cases"
+      "WakeInputCases"
+      "agent::daemon::wake_input::tests::current_wake_input_matches_lean_owner")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "prompt_assembly_cases"

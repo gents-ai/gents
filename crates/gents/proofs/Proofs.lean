@@ -46,6 +46,8 @@ import Proofs.GoalAutomation.ReadinessGate
 import Proofs.Mailbox
 import Proofs.Client
 import Proofs.ClientShell
+import Proofs.ClientShell.FreshPromptCompletion
+import Proofs.ClientShell.RequestPatchPublication
 import Proofs.CommandPolicy
 import Proofs.ToolPolicy
 import Proofs.Lsp

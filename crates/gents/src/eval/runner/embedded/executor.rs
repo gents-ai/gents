@@ -1842,7 +1842,25 @@ pub(super) fn documents_capture_query(
     trial_did: &str,
 ) -> Result<String> {
     validate_collection_identifier(collection)?;
+    anyhow::ensure!(
+        !gents_protocol::schemas::is_credential_collection(collection),
+        "credential collection {collection:?} cannot be retained as eval capture evidence"
+    );
     validate_filter_names(filter)?;
+    for field in fields {
+        anyhow::ensure!(
+            !crate::defra_query::is_restricted_field(collection, field),
+            "field {field:?} on {collection:?} is restricted and cannot be captured"
+        );
+    }
+    let mut filter_fields = Vec::new();
+    crate::defra_query::query::collect_filter_field_keys(filter, &mut filter_fields);
+    for field in &filter_fields {
+        anyhow::ensure!(
+            !crate::defra_query::is_restricted_field(collection, field),
+            "field {field:?} on {collection:?} is restricted and cannot be used in a capture filter"
+        );
+    }
     let mut selected = vec!["_docID".to_string()];
     let filter_fields = filter
         .as_object()
@@ -2341,6 +2359,46 @@ mod tests {
             query.contains("{ _docID content requester_did }"),
             "{query}"
         );
+    }
+
+    #[test]
+    fn document_captures_reject_credential_bearing_collections() {
+        let error = documents_capture_query(
+            "InferenceBackend",
+            &json!({"node_did": {"_eq": "did:test"}}),
+            &["backend_id".into(), "auth".into()],
+            "did:test",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("InferenceBackend"));
+        assert!(error.to_string().contains("credential collection"));
+
+        let error = documents_capture_query(
+            "InferenceBackend",
+            &json!({"_or": [{"auth": {"_eq": {"kind": "api_key"}}}]}),
+            &["backend_id".into()],
+            "did:test",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("credential collection"));
+
+        let error = documents_capture_query(
+            "OAuthCredential",
+            &json!({}),
+            &["credential_id".into()],
+            "did:test",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("credential collection"));
+
+        let safe = documents_capture_query(
+            "Task",
+            &json!({"node_did": {"_eq": "did:test"}}),
+            &["task_id".into(), "display_name".into()],
+            "did:test",
+        )
+        .unwrap();
+        assert!(safe.contains("task_id display_name"));
     }
 
     /// The matched files and the matches that were refused, for a glob that ran.

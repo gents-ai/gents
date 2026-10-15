@@ -125,11 +125,45 @@ pub(super) fn agent_merge_key(row: &Agent) -> String {
 }
 
 pub(super) fn request_merge_key(row: &AgentRequestRow) -> String {
-    format!(
-        "{}\0{}",
-        row.node_did.as_deref().unwrap_or_default(),
-        row.request_id
-    )
+    if let Some(doc_id) = row.doc_id.as_deref() {
+        format!("document\0{doc_id}")
+    } else {
+        format!(
+            "optimistic\0{}\0{}\0{}",
+            row.node_did.as_deref().unwrap_or_default(),
+            row.requester_did.as_deref().unwrap_or_default(),
+            row.request_id
+        )
+    }
+}
+
+pub(super) fn retire_request_placeholders(
+    existing: &mut Vec<AgentRequestRow>,
+    incoming: &[AgentRequestRow],
+) {
+    let mut replacements = HashSet::with_capacity(incoming.len().saturating_mul(4));
+    for replacement in incoming
+        .iter()
+        .filter(|row| row.doc_id.is_some() || row.node_did.is_some())
+    {
+        let request_id = replacement.request_id.as_str();
+        let node_did = replacement.node_did.as_deref();
+        let requester_did = replacement.requester_did.as_deref();
+        for current_node in [None, node_did] {
+            for current_requester in [None, requester_did] {
+                replacements.insert((request_id, current_node, current_requester));
+            }
+        }
+    }
+
+    existing.retain(|row| {
+        row.doc_id.is_some()
+            || !replacements.contains(&(
+                row.request_id.as_str(),
+                row.node_did.as_deref(),
+                row.requester_did.as_deref(),
+            ))
+    });
 }
 
 /// Immutable canonical facts are set-unioned. A duplicated physical identity

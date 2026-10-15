@@ -220,7 +220,7 @@ pub(crate) fn build_preamble_with_targets(
              (pass its name as the `agent` argument); its result arrives later as a \
              message in this conversation. `agent_message` sends a message to an agent \
              session you can reach, `agent_interrupt` stops the current turn of a session \
-             you started, and `agent_list` shows the sessions you can reach:"
+             you started, and `agent_session_list` finds the sessions you can reach:"
                 .to_string(),
         );
         for (name, description) in allowed_targets {

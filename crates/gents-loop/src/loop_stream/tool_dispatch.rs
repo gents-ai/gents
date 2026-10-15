@@ -183,6 +183,17 @@ pub async fn dispatch_tool(
     live_output: Option<crate::live_output::LiveToolOutputWriter>,
     session_id: Option<String>,
 ) -> ToolOutcome {
+    dispatch_provider_tool(tools, name, args, live_output, session_id, false).await
+}
+
+pub(super) async fn dispatch_provider_tool(
+    tools: &[Box<dyn ToolDyn>],
+    name: &str,
+    args: String,
+    live_output: Option<crate::live_output::LiveToolOutputWriter>,
+    session_id: Option<String>,
+    token_limit: bool,
+) -> ToolOutcome {
     let Some(tool) = tools.iter().find(|tool| tool.name() == name) else {
         // An unresolved name is a typed dispatch failure, not completed output.
         return ToolOutcome::from_dispatch(
@@ -194,9 +205,15 @@ pub async fn dispatch_tool(
         );
     };
 
-    let Some(scope) = current_tool_runtime_context() else {
-        return ToolOutcome::from_dispatch(
+    let outcome = |result: Result<String, crate::tool::ToolError>| {
+        ToolOutcome::from_dispatch(
             name,
+            result.map_err(|error| crate::tool::with_provider_token_limit(error, token_limit)),
+        )
+    };
+
+    let Some(scope) = current_tool_runtime_context() else {
+        return outcome(
             crate::tool_call_lifecycle::runtime::dispatch_with_receipt(
                 tool.as_ref(),
                 args,
@@ -238,7 +255,7 @@ pub async fn dispatch_tool(
             if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
                 ToolOutcome::TimedOut { deadline_at: scope.deadline_at }
             } else {
-                ToolOutcome::from_dispatch(name, result)
+                outcome(result)
             }
         },
     }
@@ -253,6 +270,125 @@ mod tests {
         atomic::{AtomicBool, Ordering},
         Arc,
     };
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ArgumentFixture {
+        #[allow(dead_code)]
+        text: String,
+        #[allow(dead_code)]
+        mode: Option<ArgumentMode>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    enum ArgumentMode {
+        Normal,
+    }
+
+    struct ParseOnlyTool;
+
+    impl crate::tool::Tool for ParseOnlyTool {
+        const NAME: &'static str = "parse";
+        type Error = ToolError;
+        type Args = ArgumentFixture;
+        type Output = String;
+
+        async fn definition(&self, _: String) -> ToolDefinition {
+            ToolDefinition {
+                name: "parse".into(),
+                description: String::new(),
+                parameters: serde_json::json!({"type":"object"}),
+            }
+        }
+
+        async fn call(&self, _: Self::Args) -> Result<String, Self::Error> {
+            panic!("invalid arguments must never execute")
+        }
+    }
+
+    #[tokio::test]
+    async fn generated_argument_failures_follow_streamed_provider_reason() {
+        use crate::provider_stream::{guard_response, ProviderStreamProtocol};
+        use bytes::Bytes;
+        use futures::StreamExt;
+
+        #[derive(serde::Deserialize)]
+        struct Case {
+            termination: String,
+            arguments: String,
+            kind: String,
+        }
+        let cases: Vec<Case> = serde_json::from_str(include_str!(
+            "../../../gents/tests/fixtures/tool_argument_failure.json"
+        ))
+        .unwrap();
+        let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(ParseOnlyTool)];
+        for case in cases {
+            let payload = match case.termination.as_str() {
+                "token_limit" => {
+                    "data: {\"choices\":[{\"finish_reason\":\"length\"}]}\r\n\r\ndata: [DONE]\r\n\r\n"
+                }
+                "completed" => {
+                    "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\r\n\r\ndata: [DONE]\r\n\r\n"
+                }
+                "unreported" => "data: [DONE]\r\n\r\n",
+                other => panic!("unrecognized generated termination {other}"),
+            };
+            for split in 0..=payload.len() {
+                let activity = Arc::new(crate::provider_activity::ProviderActivity::default());
+                let body: rig::http_client::sse::BoxedStream = Box::pin(futures::stream::iter([
+                    Ok(Bytes::copy_from_slice(&payload.as_bytes()[..split])),
+                    Ok(Bytes::copy_from_slice(&payload.as_bytes()[split..])),
+                ]));
+                let response = rig::http_client::Response::builder()
+                    .status(200)
+                    .body(body)
+                    .unwrap();
+                let chunks = guard_response(
+                    response,
+                    Some(ProviderStreamProtocol::ChatCompletions),
+                    Some(activity.clone()),
+                )
+                .into_body()
+                .collect::<Vec<_>>()
+                .await;
+                let actual: Vec<u8> = chunks.into_iter().flat_map(Result::unwrap).collect();
+                assert_eq!(actual, payload.as_bytes());
+                for scoped in [false, true] {
+                    let call = dispatch_provider_tool(
+                        &tools,
+                        "parse",
+                        case.arguments.clone(),
+                        None,
+                        None,
+                        activity.token_limit_reached(),
+                    );
+                    let outcome = if scoped {
+                        scope_request_tool_execution(
+                            None,
+                            tokio_util::sync::CancellationToken::new(),
+                            call,
+                        )
+                        .await
+                    } else {
+                        call.await
+                    };
+                    let ToolOutcome::Failed { class, text, .. } = outcome else {
+                        panic!("invalid arguments executed")
+                    };
+                    assert_eq!(
+                        class,
+                        crate::tool_call_lifecycle::FailureClass::ArgumentInvalid
+                    );
+                    assert!(
+                        text.contains(&format!("({})", case.kind)),
+                        "{} split {split}: {text}",
+                        case.termination
+                    );
+                }
+            }
+        }
+    }
 
     struct EffectHook {
         invoked: AtomicBool,

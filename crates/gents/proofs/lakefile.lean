@@ -14,11 +14,15 @@ def proofRoots : Array Lean.Name := #[
   `Proofs,
   `Proofs.Conformance.ClientObservationOrdering,
   `Proofs.Conformance.ClientDataPublication,
+  `Proofs.Conformance.ClientRequestCacheIdentity,
+  `Proofs.Conformance.ClientRequestClosure,
+  `Proofs.Conformance.SessionQueueOrder,
   `Proofs.Conformance.ClientPresentationAgreement,
   `Proofs.Conformance.StorageWriteGate,
   `Proofs.Conformance.NativeCompletion,
   `Proofs.Conformance.NativeClaimLifetime,
   `Proofs.Conformance.EvalRequestOutcome,
+  `Proofs.Conformance.ToolArgumentFailure,
   `Proofs.Conformance.StorageWriteGateStreamWaiter]
 
 -- Always check the source inventory, even when compiled artifacts are cached.

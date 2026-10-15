@@ -131,11 +131,15 @@ impl ToolCallKind {
     /// Map a durable Gents tool name onto the pager kind vocabulary.
     pub(super) fn from_tool_name(tool_name: &str) -> Self {
         match tool_name {
-            "read_file" => ToolCallKind::Read,
+            "read_file" | gents::toolset::AGENT_SESSION_READ_TOOL_NAME => ToolCallKind::Read,
             "edit_file" | "write_file" | "apply_patch" | "create_file" => ToolCallKind::Edit,
             "delete_file" | "remove_file" => ToolCallKind::Delete,
             "move_file" | "rename_file" => ToolCallKind::Move,
-            "grep" | "glob" | "list_files" | "search" => ToolCallKind::Search,
+            "grep"
+            | "glob"
+            | "list_files"
+            | "search"
+            | gents::toolset::AGENT_SESSION_LIST_TOOL_NAME => ToolCallKind::Search,
             "bash"
             | "bash_unrestricted"
             | "shell"
@@ -1317,6 +1321,14 @@ mod tests {
             );
         }
         assert_eq!(ToolCallKind::from_tool_name("grep"), ToolCallKind::Search);
+        assert_eq!(
+            ToolCallKind::from_tool_name(gents::toolset::AGENT_SESSION_LIST_TOOL_NAME),
+            ToolCallKind::Search
+        );
+        assert_eq!(
+            ToolCallKind::from_tool_name(gents::toolset::AGENT_SESSION_READ_TOOL_NAME),
+            ToolCallKind::Read
+        );
         assert_eq!(
             ToolCallKind::from_tool_name("unknown_tool"),
             ToolCallKind::Other

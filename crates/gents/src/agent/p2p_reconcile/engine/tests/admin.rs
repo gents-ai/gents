@@ -7,6 +7,7 @@ struct MockAdmin {
     /// Filters recorded per `add_replicator` call: (addresses, filters).
     recorded_filters: Mutex<Vec<(Vec<String>, PairingFilters)>>,
     deleted_replicator_collections: Mutex<Vec<Vec<String>>>,
+    delete_replicator_not_found: Mutex<bool>,
     /// Entries returned by `active_peers` (bare peer ids or dial addresses,
     /// like the real adapters).
     active: Mutex<Vec<String>>,
@@ -126,6 +127,9 @@ impl RemoteP2pAdmin for MockAdmin {
             .lock()
             .unwrap()
             .push(collections.to_vec());
+        if std::mem::take(&mut *self.delete_replicator_not_found.lock().unwrap()) {
+            return Err(RemoteP2pAdminError::RemoteNotFound(id.to_string()));
+        }
         let key = self
             .replicators
             .lock()

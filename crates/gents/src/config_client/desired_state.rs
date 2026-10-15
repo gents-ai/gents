@@ -165,6 +165,31 @@ fn reference_filter(collection: Collection, owner: &str, id: &str) -> Result<Str
 /// never scales with the plan being read.
 const READ_RECORDS_PAGE_SIZE: usize = 256;
 
+type DesiredStateRecordKey = (Collection, String, String);
+type DesiredStateRecord = (String, Value);
+
+#[cfg(test)]
+tokio::task_local! {
+    static DESIRED_STATE_READ_PAGE_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+}
+
+#[cfg(test)]
+fn record_desired_state_read_page_query() {
+    let _ = DESIRED_STATE_READ_PAGE_QUERIES
+        .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+}
+
+#[cfg(test)]
+pub(crate) async fn count_desired_state_read_page_queries<F: std::future::Future>(
+    future: F,
+) -> (F::Output, usize) {
+    let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let output = DESIRED_STATE_READ_PAGE_QUERIES
+        .scope(queries.clone(), future)
+        .await;
+    (output, queries.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 pub async fn read_record(
     txn: &ConfigApplyTxn<'_>,
     collection: Collection,
@@ -251,6 +276,8 @@ async fn read_records_paged(
                 fields.join(" ")
             ))
             .await?;
+        #[cfg(test)]
+        record_desired_state_read_page_query();
         let mut by_id: BTreeMap<String, Vec<Value>> = BTreeMap::new();
         for row in graphql_rows_from_response(&response, name) {
             let id = row
@@ -279,6 +306,29 @@ async fn read_records_paged(
     Ok(out)
 }
 
+async fn read_identity_records(
+    txn: &ConfigApplyTxn<'_>,
+    identities: &[(Collection, String, String)],
+) -> Result<BTreeMap<DesiredStateRecordKey, DesiredStateRecord>> {
+    let mut requested: BTreeMap<(Collection, String), BTreeSet<String>> = BTreeMap::new();
+    for (collection, owner, id) in identities {
+        requested
+            .entry((*collection, owner.clone()))
+            .or_default()
+            .insert(id.clone());
+    }
+
+    let mut records = BTreeMap::new();
+    for ((collection, owner), ids) in requested {
+        let ids = ids.into_iter().collect::<Vec<_>>();
+        let id_refs = ids.iter().map(String::as_str).collect::<Vec<_>>();
+        for (id, record) in read_records(txn, collection, &owner, &id_refs).await? {
+            records.insert((collection, owner.clone(), id), record);
+        }
+    }
+    Ok(records)
+}
+
 pub(crate) async fn read_desired_state_document_in_txn(
     txn: &ConfigApplyTxn<'_>,
     collection: Collection,
@@ -297,13 +347,19 @@ pub(crate) async fn expect_existing_documents_unchanged(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
 ) -> Result<()> {
+    let identities = plan
+        .documents()
+        .iter()
+        .map(|document| {
+            let (owner, id) = document_identity(document.collection, &document.add)?;
+            Ok((document.collection, owner.to_owned(), id.to_owned()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let records = read_identity_records(txn, &identities).await?;
     let mut expected = Vec::new();
     for document in plan.documents() {
         let (owner, id) = document_identity(document.collection, &document.add)?;
-        if read_desired_state_document_in_txn(txn, document.collection, owner, id)
-            .await?
-            .is_some()
-        {
+        if records.contains_key(&(document.collection, owner.to_owned(), id.to_owned())) {
             expected.push(DesiredStateExpectation {
                 collection: document.collection,
                 owner: owner.to_owned(),
@@ -1207,17 +1263,36 @@ async fn ensure_expectations_hold(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
 ) -> Result<()> {
+    let identities = plan
+        .expected()
+        .iter()
+        .map(|expectation| {
+            (
+                expectation.collection,
+                expectation.owner.clone(),
+                expectation.id.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let records = read_identity_records(txn, &identities).await?;
+    ensure_expectations_match(plan, &records)
+}
+
+fn ensure_expectations_match(
+    plan: &DesiredStateApplyPlan,
+    records: &BTreeMap<DesiredStateRecordKey, DesiredStateRecord>,
+) -> Result<()> {
     let mut drifted = Vec::new();
     for expectation in plan.expected() {
-        let found = read_desired_state_document_in_txn(
-            txn,
-            expectation.collection,
-            &expectation.owner,
-            &expectation.id,
-        )
-        .await?
-        .map(|live| desired_state_document_digest(&live))
-        .transpose()?;
+        let found = records
+            .get(&(
+                expectation.collection,
+                expectation.owner.clone(),
+                expectation.id.clone(),
+            ))
+            .map(|(_, live)| live)
+            .map(desired_state_document_digest)
+            .transpose()?;
         if found != expectation.digest {
             drifted.push(DriftedDocument {
                 collection: expectation.collection,
@@ -1260,10 +1335,20 @@ pub async fn apply_desired_state_plan(
     ensure_expectations_hold(txn, plan).await?;
     let mut introspected = IntrospectedFields::new();
     prefetch_declared_fields(txn, plan, &mut introspected).await?;
+    let document_identities = plan
+        .documents()
+        .iter()
+        .map(|document| {
+            let (owner, id) = document_identity(document.collection, &document.add)?;
+            Ok((document.collection, owner.to_owned(), id.to_owned()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut existing_documents = read_identity_records(txn, &document_identities).await?;
     let mut counts = DesiredStateApplyCounts::default();
     for document in plan.documents() {
         let (owner, id) = document_identity(document.collection, &document.add)?;
-        let existing = read_record(txn, document.collection, owner, id).await?;
+        let existing =
+            existing_documents.remove(&(document.collection, owner.to_owned(), id.to_owned()));
         // Only configuration changes are diagnostic events. Keeping this at
         // the common desired-state owner covers packs, self-config, and
         // direct writers without making runtime resolution log on every
@@ -1324,8 +1409,16 @@ pub async fn apply_desired_state_plan(
             }
         }
     }
+    let removal_identities = plan
+        .removals()
+        .iter()
+        .map(|(collection, owner, id)| (*collection, owner.clone(), id.clone()))
+        .collect::<Vec<_>>();
+    let mut existing_removals = read_identity_records(txn, &removal_identities).await?;
     for (collection, owner, id) in plan.removals() {
-        if let Some((doc_id, _)) = read_record(txn, *collection, owner, id).await? {
+        if let Some((doc_id, _)) =
+            existing_removals.remove(&(*collection, owner.clone(), id.clone()))
+        {
             let name = collection.graphql_type();
             txn.execute(&format!(
                 r#"mutation {{ delete_{name}(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,

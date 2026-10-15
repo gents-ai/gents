@@ -23,16 +23,8 @@ export type { ToolPresentationView } from "../generated/ToolPresentationView.js"
 
 export type { RequestResendResultView as RequestResendResult } from "../generated/RequestResendResultView.js";
 
-export type RunTimelineEventView = { kind: string } & Record<string, unknown>;
-
-export type RequestTimelineView = {
-  request_id: string;
-  session_id?: string | null;
-  node_did?: string | null;
-  agent_id?: string | null;
-  child_request_ids?: string[];
-  events: RunTimelineEventView[];
-};
+export type { RunTimelineEventView } from "../generated/RunTimelineEventView.js";
+export type { RequestTimelineView } from "../generated/RequestTimelineView.js";
 
 export type { PendingQueueEditRequest } from "../generated/PendingQueueEditRequest.js";
 export type { PendingQueueEditResult } from "../generated/PendingQueueEditResult.js";

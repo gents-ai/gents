@@ -61,6 +61,11 @@ pub fn guard_response(
                     }
                     if let Some(events) = events.as_mut() {
                         events.feed(&bytes);
+                        if events.token_limit_reached {
+                            if let Some(activity) = &activity {
+                                activity.observe_token_limit();
+                            }
+                        }
                         if events.terminal {
                             settle(&activity);
                         }
@@ -102,6 +107,7 @@ pub struct TerminalEvents {
     oversized: bool,
     previous_cr: bool,
     pub terminal: bool,
+    token_limit_reached: bool,
 }
 
 impl TerminalEvents {
@@ -114,6 +120,7 @@ impl TerminalEvents {
             oversized: false,
             previous_cr: false,
             terminal: false,
+            token_limit_reached: false,
         }
     }
 
@@ -180,6 +187,26 @@ impl TerminalEvents {
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(&self.data) else {
             return;
         };
+        self.token_limit_reached |= match self.protocol {
+            ProviderStreamProtocol::ChatCompletions => {
+                value
+                    .get("choices")
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|choices| choices.first())
+                    .and_then(|choice| choice.get("finish_reason"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("length")
+            }
+            ProviderStreamProtocol::Anthropic => {
+                value.get("type").and_then(serde_json::Value::as_str) == Some("message_delta")
+                    && value
+                        .get("delta")
+                        .and_then(|delta| delta.get("stop_reason"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("max_tokens")
+            }
+            ProviderStreamProtocol::Responses => false,
+        };
         self.terminal = match self.protocol {
             ProviderStreamProtocol::ChatCompletions => value
                 .get("choices")
@@ -199,5 +226,43 @@ impl TerminalEvents {
                 value.get("type").and_then(serde_json::Value::as_str) == Some("message_stop")
             }
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+
+    #[tokio::test]
+    async fn token_limit_observation_uses_the_selected_protocol_event() {
+        for (protocol, payload, expected) in [
+            (ProviderStreamProtocol::Anthropic,
+                "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", true),
+            (ProviderStreamProtocol::Anthropic,
+                "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", false),
+            (ProviderStreamProtocol::Anthropic,
+                "data: {\"type\":\"content_block_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", false),
+            (ProviderStreamProtocol::ChatCompletions,
+                "data: {\"choices\":[{\"finish_reason\":\"stop\"},{\"finish_reason\":\"length\"}]}\n\n", false),
+            (ProviderStreamProtocol::ChatCompletions,
+                "data: {\"choices\":[{\"delta\":{\"content\":\"length\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n", false),
+            (ProviderStreamProtocol::Responses,
+                "data: {\"type\":\"response.completed\",\"finish_reason\":\"length\"}\n\n", false),
+        ] {
+            for split in 0..=payload.len() {
+                let activity = Arc::new(ProviderActivity::default());
+                let body: http_client::sse::BoxedStream = Box::pin(futures::stream::iter([
+                    Ok(Bytes::copy_from_slice(&payload.as_bytes()[..split])),
+                    Ok(Bytes::copy_from_slice(&payload.as_bytes()[split..])),
+                ]));
+                let response = http_client::Response::builder().status(200).body(body).unwrap();
+                let received = guard_response(response, Some(protocol), Some(activity.clone()))
+                    .into_body().collect::<Vec<_>>().await;
+                let bytes: Vec<u8> = received.into_iter().flat_map(Result::unwrap).collect();
+                assert_eq!(bytes, payload.as_bytes());
+                assert_eq!(activity.token_limit_reached(), expected, "{protocol:?} split {split}");
+            }
+        }
     }
 }

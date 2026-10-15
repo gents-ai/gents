@@ -299,6 +299,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
+    request_projection: Option<&[AgentRequestRow]>,
 ) -> Option<DesktopSessionSnapshot> {
     let session_row = store
         .sessions
@@ -317,9 +318,21 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 })
         })
         .map(|(_index, row)| row);
-    let requests = node_did.map_or_else(
-        || store.requests_for_session(session_id),
-        |node_did| store.requests_for_session_for_node(session_id, node_did),
+    let requests = request_projection.map_or_else(
+        || {
+            node_did.map_or_else(
+                || store.requests_for_session(session_id),
+                |node_did| store.requests_for_session_for_node(session_id, node_did),
+            )
+        },
+        |rows| {
+            rows.iter()
+                .filter(|row| {
+                    row.session_id.as_deref() == Some(session_id)
+                        && node_did.is_none_or(|node_did| row.node_did.as_deref() == Some(node_did))
+                })
+                .collect()
+        },
     );
     let goal = store
         .goals
@@ -1395,6 +1408,7 @@ mod tests {
                 Some("did:test:amy"),
                 "session-1",
                 None,
+                None,
             )
             .unwrap()
         };
@@ -1467,6 +1481,10 @@ mod tests {
             "answer",
         );
         let full = ClientStore::from_rows(rows.clone());
+        let bounded = ClientStore::from_rows(ClientStoreRows {
+            requests: vec![full.requests[0].clone()],
+            ..ClientStoreRows::default()
+        });
         let mut tip_rows = ClientStoreRows::default();
         push_canonical_text_message(
             &mut tip_rows,
@@ -1500,7 +1518,7 @@ mod tests {
             let page = ClientStore::from_rows(page_rows);
             let context = page.merge_snapshot(tip.clone());
             let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
-                &full,
+                &bounded,
                 &page,
                 &context,
                 None,
@@ -1512,6 +1530,7 @@ mod tests {
                 Some("did:test:amy"),
                 "session-1",
                 None,
+                Some(&full.requests),
             )
             .unwrap();
             assert!(
@@ -1570,6 +1589,7 @@ mod tests {
             Some("did:test:amy"),
             "session-1",
             None,
+            None,
         )
         .unwrap();
         assert!(snapshot.timeline_items.iter().any(|item| matches!(item,
@@ -1599,6 +1619,7 @@ mod tests {
             true,
             Some("did:test:amy"),
             "session-1",
+            None,
             None,
         )
         .unwrap();

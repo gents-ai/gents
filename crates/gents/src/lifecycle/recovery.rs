@@ -99,10 +99,12 @@ impl RequestLifecycle {
             cap = TERMINAL_REDRIVE_CAP,
         );
 
-        let resp = node.execute(&query).await;
-        if resp.has_errors() {
-            anyhow::bail!("querying terminal requests to re-drive: {:?}", resp.errors);
-        }
+        let resp = crate::graphql::graphql_with_transaction_retry(
+            node,
+            &query,
+            "querying terminal requests to re-drive",
+        )
+        .await?;
 
         let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
 
@@ -230,13 +232,12 @@ async fn recover_active_requests(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "querying active requests for recovery: {:?}",
-            response.errors
-        );
-    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "querying active requests for recovery",
+    )
+    .await?;
     let rows: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
     let now = chrono::Utc::now();
     let mut report = ActiveRequestRecoveryReport {

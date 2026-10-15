@@ -13,16 +13,14 @@ import App from "../src/App";
 import { StartupScreen } from "../src/components/StartupScreen";
 import { renderIn, testApp } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
+import { deferred } from "./deferred";
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
+/* the step card on screen; a later step is paced in after the one before
+   has had its time, so it is waited for */
+const shownStep = (text: string) =>
+  waitFor(() => expect(screen.getByTestId("startup-step")).toHaveTextContent(text), {
+    timeout: 2_000,
   });
-  return { promise, reject, resolve };
-}
 
 const savedPeer = {
   peerId: deployment.peerId,
@@ -142,11 +140,12 @@ describe("desktop startup screen", () => {
       />,
     );
 
-    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "Checking the background node",
+    expect(screen.getByTestId("startup-step")).toHaveTextContent(
+      "Starting your local node",
     );
-    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "Check local nodeWorking",
+    expect(screen.getByText("Starting your local node")).toHaveAttribute(
+      "data-state",
+      "active",
     );
     expect(base.api.fetchDesktopSnapshot).not.toHaveBeenCalled();
 
@@ -240,9 +239,7 @@ describe("desktop startup screen", () => {
 
     initial.resolve(snapshot(true, false));
     await waitFor(() => expect(startDesktopClient).toHaveBeenCalledTimes(1));
-    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "Starting the secure client",
-    );
+    await shownStep("Starting the secure client");
     expect(screen.queryByTestId("setup-screen")).not.toBeInTheDocument();
 
     started.resolve(snapshot(true, true));
@@ -384,9 +381,7 @@ describe("desktop startup screen", () => {
     );
 
     await waitFor(() => expect(startDesktopClient).toHaveBeenCalledTimes(1));
-    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "Starting the secure client",
-    );
+    await shownStep("Starting the secure client");
     started.resolve(snapshot(true, true));
     await waitFor(() => {
       expect(screen.queryByTestId("startup-screen")).not.toBeInTheDocument();

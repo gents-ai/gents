@@ -354,6 +354,60 @@ async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()>
 }
 
 #[tokio::test]
+async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() -> Result<()> {
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    register_config_schemas(&node).await?;
+    let access = ConfigAccess::local(node.clone());
+    let owner = "did:key:owner";
+    let docs = ["backend-a", "backend-b", "backend-c"]
+        .into_iter()
+        .map(|id| document(backend(owner, id)))
+        .collect::<Vec<_>>();
+    apply(&access, docs.clone()).await?;
+    let expected_backend_writes = docs.len();
+
+    let plan = DesiredStateApplyPlan::new(docs)?;
+    let expected = plan
+        .documents()
+        .iter()
+        .map(|doc| {
+            let (owner, id) = document_identity(doc.collection, &doc.add)?;
+            Ok(DesiredStateExpectation {
+                collection: doc.collection,
+                owner: owner.to_owned(),
+                id: id.to_owned(),
+                digest: Some(desired_state_document_digest(&doc.add)?),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let plan = plan.with_expected(expected)?;
+    let (result, read_queries) = count_desired_state_read_page_queries(access.transact_write(
+        "test.desired.apply.batched_reads",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        },
+    ))
+    .await;
+    let counts = result?;
+
+    // Counts describe documents staged by this apply, including canonical
+    // replacements that preserve the current configuration. This plan still
+    // submits all three backend documents; the assertions below measure that
+    // its reads were batched independently of those write counts.
+    assert_eq!(
+        counts.get(Collection::InferenceBackend),
+        expected_backend_writes
+    );
+    assert_eq!(
+        read_queries, 2,
+        "one page reads all expectations and one reads all planned documents"
+    );
+    node.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
@@ -675,16 +729,26 @@ async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Resu
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
-    apply(&access, vec![document(backend(owner, "packaged"))]).await?;
+    let packaged = ["packaged", "packaged-two", "packaged-three"]
+        .into_iter()
+        .map(|id| document(backend(owner, id)))
+        .collect::<Vec<_>>();
+    apply(&access, packaged.clone()).await?;
 
     // The matching plan (authored digest == live projection) verifies clean.
-    let matching = DesiredStateApplyPlan::new(vec![document(backend(owner, "packaged"))])?;
-    access
-        .transact_write("test.verify.matching", |txn| {
+    let matching = DesiredStateApplyPlan::new(packaged)?;
+    let (matching_result, read_queries) = count_desired_state_read_page_queries(
+        access.transact_write("test.verify.matching", |txn| {
             let plan = &matching;
             Box::pin(async move { expect_existing_documents_unchanged(txn, plan).await })
-        })
-        .await?;
+        }),
+    )
+    .await;
+    matching_result?;
+    assert_eq!(
+        read_queries, 2,
+        "capture and validation each read all three identities in one page"
+    );
 
     // Mutate a non-committed live field out of band; the same plan now drifts.
     access.write("test.drift", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:owner"},backend_id:{_eq:"packaged"}},input:{name:"out-of-band"}){_docID} }"#).await?;

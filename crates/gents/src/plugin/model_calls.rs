@@ -62,6 +62,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The profile an installation bound a plugin's model slot to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct ModelBinding {
     pub node_did: String,
     pub profile_id: String,

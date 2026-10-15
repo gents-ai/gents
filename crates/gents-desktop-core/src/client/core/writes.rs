@@ -24,7 +24,7 @@ use serde::Deserialize;
 use super::super::mutations::{self, PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 use super::super::observe::ObservedStore;
 use super::super::peer_directory::PeerRecord;
-use super::super::query::{load_chat_patch, load_chat_patch_on};
+use super::super::query::load_chat_patch;
 use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::normalize_required;
 use super::p2p_ops;
@@ -34,6 +34,125 @@ use super::ClientPeerStatus;
 use crate::client::peer_directory::RemovalCause;
 
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
+
+fn request_patch_cache_reusable(
+    memoized: bool,
+    same_signature: bool,
+    fence_accepted: bool,
+    rows_current: bool,
+) -> bool {
+    memoized && same_signature && fence_accepted && rows_current
+}
+
+#[cfg(test)]
+mod request_patch_publication_tests {
+    use super::request_patch_cache_reusable;
+    use crate::client::observe::ObservedStore;
+    use crate::client::store::{ClientStore, ClientStoreRows};
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
+    use gents_protocol::row::AgentRequestRow;
+
+    fn request_row(state: &str) -> AgentRequestRow {
+        AgentRequestRow {
+            doc_id: Some("request-doc".to_owned()),
+            request_id: "request".to_owned(),
+            node_did: Some("did:test:node".to_owned()),
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+            lifecycle_state: Some(match state {
+                "pending" => RequestLifecycleState::Pending,
+                "processing" => RequestLifecycleState::Processing,
+                other => panic!("unknown test state {other}"),
+            }),
+            ..AgentRequestRow::default()
+        }
+    }
+
+    fn request_patch(row: AgentRequestRow) -> ClientStore {
+        ClientStore::from_rows(ClientStoreRows {
+            requests: vec![row],
+            ..ClientStoreRows::default()
+        })
+    }
+
+    #[test]
+    fn cached_rows_must_match_physical_rows_at_the_current_fence() {
+        let (store, _) = ObservedStore::new(request_patch(request_row("pending")));
+        let patch = request_patch(request_row("pending"));
+        let captured = store.capture_read();
+        assert_eq!(
+            store.current_request_patch_read_status(&captured, &patch),
+            (true, true)
+        );
+
+        store.merge_chat_patch(request_patch(request_row("processing")));
+        let captured = store.capture_read();
+        assert_eq!(
+            store.current_request_patch_read_status(&captured, &patch),
+            (true, false),
+            "a current fence does not make an old physical request row current"
+        );
+    }
+
+    #[test]
+    fn generated_publication_cases_drive_request_patch_cache_admission() {
+        let snapshot: serde_json::Value =
+            gents_lean_contract::load_contract_snapshot().expect("Lean contract snapshot");
+        let fixture = &snapshot["client_request_patch_publication_cases"];
+        for case in fixture["reuse"].as_array().expect("reuse cases") {
+            assert_eq!(
+                request_patch_cache_reusable(
+                    case["memoized"].as_bool().expect("memoized state"),
+                    case["same_signature"]
+                        .as_bool()
+                        .expect("signature comparison"),
+                    case["fence_accepted"].as_bool().expect("publication fence"),
+                    case["rows_current"]
+                        .as_bool()
+                        .expect("physical row comparison"),
+                ),
+                case["expected_reuse"].as_bool().expect("Lean result"),
+                "{}",
+                case["name"].as_str().expect("case name")
+            );
+        }
+        for case in fixture["fresh_read"].as_array().expect("fresh-read cases") {
+            let (store, _) = ObservedStore::new(ClientStore::from_rows(ClientStoreRows::default()));
+            let captured = store.capture_read();
+            let fence_accepted = case["fence_accepted"].as_bool().expect("fence expectation");
+            if !fence_accepted {
+                store.merge_chat_patch(request_patch(request_row("processing")));
+            }
+            let published = case["patch_available"]
+                .as_bool()
+                .expect("fresh patch availability")
+                .then(|| {
+                    store.merge_chat_patch_at_read(&captured, request_patch(request_row("pending")))
+                })
+                .flatten()
+                .is_some();
+            let action = match (case["patch_available"].as_bool().unwrap(), published) {
+                (false, false) => "no_patch",
+                (true, true) => "merge_fresh",
+                (true, false) => "reject_candidate",
+                (false, true) => panic!("missing patch was published"),
+            };
+            assert_eq!(
+                action,
+                case["expected_action"].as_str().expect("Lean action"),
+                "{}",
+                case["name"].as_str().expect("case name")
+            );
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RefreshedRequestProjection {
+    pub requests: Vec<AgentRequestRow>,
+    pub requester_did: Option<String>,
+    pub selected_request_id: Option<String>,
+    pub published_version: Option<u64>,
+}
 
 /// A validated applied receipt is the command result. The local projection is
 /// a separate replica observation; if it is unavailable, the selected-session
@@ -178,22 +297,6 @@ fn chat_patch_signature(patch: &ClientStore) -> (usize, usize, u64) {
         }
         Err(_) => (rows, 0, 0),
     }
-}
-
-fn request_patch_is_current(
-    current: &ClientStore,
-    patch: &ClientStore,
-    node_did: &str,
-    request_id: &str,
-) -> bool {
-    let request_value = |store: &ClientStore| {
-        store
-            .requests
-            .iter()
-            .find(|row| row.request_id == request_id && row.node_did.as_deref() == Some(node_did))
-            .and_then(|row| serde_json::to_value(row).ok())
-    };
-    request_value(current).is_some_and(|current| request_value(patch) == Some(current))
 }
 
 fn agent_id_for_write(requested_agent_id: Option<&str>) -> Option<String> {
@@ -378,17 +481,30 @@ impl ClientCore {
         node_did: &str,
         session_id: &str,
     ) -> Result<gents::lifecycle::PendingQueueSnapshot> {
+        Ok(self
+            .pending_user_queue_projection(node_did, session_id, &[])
+            .await?
+            .pending)
+    }
+
+    pub async fn pending_user_queue_projection(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        observed_doc_ids: &[String],
+    ) -> Result<gents::lifecycle::PendingQueueProjection> {
         let record = self
             .sync_state
             .records()
             .into_iter()
             .find(|record| record.node_did == node_did)
             .context("no saved deployment route owns this node")?;
-        gents::lifecycle::pending_user_queue(
+        gents::lifecycle::pending_user_queue_projection(
             &self.session_queue_access(node_did),
             node_did,
             session_id,
             &self.requester_did(&record),
+            observed_doc_ids,
         )
         .await
     }
@@ -599,25 +715,43 @@ impl ClientCore {
     pub async fn refresh_local_request(
         &self,
         node_did: &str,
-        request_id: &str,
-    ) -> Result<Option<u64>> {
+        session_id: &str,
+        request_id: Option<&str>,
+        fallback_request_id: Option<&str>,
+        page_request_doc_ids: &[String],
+    ) -> Result<Option<RefreshedRequestProjection>> {
         let node_did = node_did.trim();
-        let request_id = request_id.trim();
-        if node_did.is_empty() || request_id.is_empty() {
+        let session_id = session_id.trim();
+        let request_id = request_id.map(str::trim).filter(|id| !id.is_empty());
+        let fallback_request_id = fallback_request_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty());
+        if node_did.is_empty() || session_id.is_empty() {
             return Ok(None);
         }
 
         let captured = self.store.capture_read();
-        let (patch, source) = match self.operator_graphql(node_did) {
-            Some(graphql) => {
-                let access = ConfigAccess::Graphql(graphql);
-                (load_chat_patch_on(&access, request_id).await?, "operator")
-            }
+        let (access, source) = match self.operator_graphql(node_did) {
+            Some(graphql) => (ConfigAccess::Graphql(graphql), "operator"),
             None => (
-                load_chat_patch(self.node.as_ref(), request_id).await?,
+                self.store_access
+                    .lock()
+                    .await
+                    .as_ref()
+                    .context("local store access is unavailable")?
+                    .clone(),
                 "local",
             ),
         };
+        let patch = load_chat_patch(
+            &access,
+            node_did,
+            session_id,
+            request_id,
+            fallback_request_id,
+            page_request_doc_ids,
+        )
+        .await?;
         let rows = patch.row_count();
         if rows == 0 {
             return Ok(None);
@@ -626,33 +760,80 @@ impl ClientCore {
         // it untagged so the local observer and operator GraphQL path converge
         // on the same in-memory rows.
         let signature = chat_patch_signature(&patch);
-        let cache_key = format!("{source}\0{node_did}\0{request_id}");
+        let request_projection = patch.requests.clone();
+        let requester_did = patch
+            .sessions
+            .first()
+            .and_then(|session| session.requester_did.clone());
+        let latest_request_id = patch
+            .sessions
+            .first()
+            .and_then(|session| session.observation.as_ref())
+            .and_then(|observation| observation.latest_request.as_ref())
+            .map(|latest| latest.request_id.clone());
+        let legacy_fallback_request_id = patch
+            .sessions
+            .first()
+            .filter(|session| session.observation.is_none())
+            .and_then(|_| fallback_request_id.map(str::to_owned));
+        let resolved_request_id = request_id
+            .map(str::to_owned)
+            .or_else(|| latest_request_id.clone())
+            .or(legacy_fallback_request_id);
+        let requester_key = requester_did.as_deref().unwrap_or("<null>");
+        let request_key = resolved_request_id.as_deref().unwrap_or("<none>");
+        let cache_key =
+            format!("{source}\0{node_did}\0{session_id}\0{requester_key}\0{request_key}");
         {
             let mut signatures = self.request_patch_signatures.lock().await;
-            if signatures.get(&cache_key) == Some(&signature)
-                && request_patch_is_current(
-                    self.store.snapshot().as_ref(),
-                    &patch,
-                    node_did,
-                    request_id,
-                )
-            {
-                return Ok(None);
+            let cached_signature = signatures.get(&cache_key) == Some(&signature);
+            if cached_signature {
+                let (fence_accepted, rows_current) = self
+                    .store
+                    .current_request_patch_read_status(&captured, &patch);
+                if request_patch_cache_reusable(
+                    cached_signature,
+                    true,
+                    fence_accepted,
+                    rows_current,
+                ) {
+                    return Ok(Some(RefreshedRequestProjection {
+                        requests: request_projection,
+                        requester_did,
+                        selected_request_id: resolved_request_id,
+                        published_version: None,
+                    }));
+                }
+                signatures.remove(&cache_key);
+                if !fence_accepted {
+                    self.store.request_resync(Some(node_did));
+                    return Ok(None);
+                }
+                // The query above already produced a fresh patch. A bounded
+                // snapshot may have evicted its rows since the prior identical
+                // read, so publish this result through the current fence below
+                // instead of treating cache absence as a stale read.
             }
-            if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
-                signatures.clear();
-            }
-            signatures.insert(cache_key, signature);
         }
 
         let (_rows, bytes, _hash) = signature;
-        let terminal = patch
-            .request_row(request_id)
+        let terminal = resolved_request_id
+            .as_deref()
+            .and_then(|request_id| patch.request_row(request_id))
             .is_some_and(|row| row.is_terminal());
         let Some(version) = self.store.merge_chat_patch_at_read(&captured, patch) else {
             self.store.request_resync(Some(node_did));
             return Ok(None);
         };
+        // A rejected patch must never become evidence for a later cache hit.
+        // Record the signature only after the StoreReadFence owner accepted
+        // this publication.
+        let mut signatures = self.request_patch_signatures.lock().await;
+        if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
+            signatures.clear();
+        }
+        signatures.insert(cache_key, signature);
+        drop(signatures);
         // A completed agent turn may have used self-configuration tools. Most
         // of that control plane is intentionally absent from the client P2P
         // route (the Node document and inference credentials in particular),
@@ -666,7 +847,7 @@ impl ClientCore {
         };
         tracing::debug!(
             target: "gents_desktop_core::replication",
-            request_id,
+            request_id = resolved_request_id.as_deref().unwrap_or_default(),
             node_did,
             version,
             rows,
@@ -675,7 +856,12 @@ impl ClientCore {
             source,
             "desktop selected request patch merged"
         );
-        Ok(Some(version))
+        Ok(Some(RefreshedRequestProjection {
+            requests: request_projection,
+            requester_did,
+            selected_request_id: resolved_request_id,
+            published_version: Some(version),
+        }))
     }
 
     pub async fn rename_session(

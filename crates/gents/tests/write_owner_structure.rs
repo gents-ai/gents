@@ -43,7 +43,6 @@ const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/lifecycle/claim.rs", 1),
     ("crates/gents/src/lifecycle/materialize.rs", 1),
     ("crates/gents/src/lifecycle/queue/coalescing.rs", 1),
-    ("crates/gents/src/lifecycle/recovery.rs", 2),
     ("crates/gents/src/oauth_credential.rs", 3),
     ("crates/gents/src/registry.rs", 1),
     ("crates/gents/src/session/observations.rs", 1),
