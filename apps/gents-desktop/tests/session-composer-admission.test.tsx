@@ -387,7 +387,7 @@ describe("SessionScreen messages queued behind a running turn", () => {
     );
   });
 
-  it("shows queued messages after the running turn, in queue order, as queued", () => {
+  it("stacks queued messages on the composer, after the running turn, in queue order", () => {
     const { app } = screenApp({
       session: heldSession({
         turnState: "running",
@@ -402,12 +402,15 @@ describe("SessionScreen messages queued behind a running turn", () => {
     });
     renderScreen(app);
     expect(screen.getAllByTestId("queued-input").map((row) => row.textContent)).toEqual(
-      ["we should move fasterPending", "and check the testsPending"],
+      ["we should move faster", "and check the tests"],
     );
-    const text = screen.getByTestId("transcript-panel").textContent ?? "";
-    expect(text.indexOf("how are we looking")).toBeLessThan(
-      text.indexOf("we should move faster"),
-    );
+    /* waiting input is the composer's, not the transcript's */
+    const transcript = screen.getByTestId("transcript-panel");
+    const tray = screen.getByTestId("queued-inputs");
+    expect(transcript.contains(tray)).toBe(false);
+    expect(
+      transcript.compareDocumentPosition(tray) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("renders folded messages once, as the claimed turn's own input", () => {

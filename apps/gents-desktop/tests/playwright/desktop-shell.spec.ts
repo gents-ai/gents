@@ -334,11 +334,14 @@ test.describe("kit shell", () => {
     await expect(sendButton(page)).toBeEnabled();
     await composer(page).press("Enter");
 
-    const queued = page.getByTestId("queued-input");
+    /* waiting input sits in the tray on the composer, not in the transcript */
+    const queued = page.getByTestId("queued-inputs").getByTestId("queued-input");
     await expect(queued).toHaveCount(2);
     await expect(queued.nth(0)).toContainText("first queued thought");
-    await expect(queued.nth(0)).toContainText("Pending");
     await expect(queued.nth(1)).toContainText("second queued thought");
+    await expect(
+      page.getByTestId("transcript-panel").getByTestId("queued-input"),
+    ).toHaveCount(0);
     await expect(composer(page)).toBeEnabled();
   });
 

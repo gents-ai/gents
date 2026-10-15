@@ -29,16 +29,21 @@ export function useComposerSend(agentId: string | null | undefined) {
   const [draft, setDraft] = useDraft(drafts, draftKey);
   const selectedSessionId = stores.selection.use.sessionId();
 
+  /** sends the text; true once it is accepted */
   const send = async (text: string) => {
     const pending = sendMessage(text, agentId);
     const intentGeneration = captureComposeIntent();
     const result = await pending;
     if (result) setDraft((current) => (current === text ? "" : current));
-    if (!acceptsComposeIntent(intentGeneration)) return;
-    if (result && result.sessionId !== selectedSessionId) {
+    if (
+      acceptsComposeIntent(intentGeneration) &&
+      result &&
+      result.sessionId !== selectedSessionId
+    ) {
       if (!selectedSessionId) workspace.adoptNewSessionDock(result.sessionId);
       navigate({ name: "session", sessionId: result.sessionId });
     }
+    return Boolean(result);
   };
 
   return { draft, setDraft, send };
