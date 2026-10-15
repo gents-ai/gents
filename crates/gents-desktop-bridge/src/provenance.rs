@@ -130,15 +130,22 @@ async fn caused_calls(
         .iter()
         .filter_map(|row| Some((text(row, "_docID")?, row)))
         .collect::<BTreeMap<_, _>>();
-    let calls = rows(
-        access,
-        &format!(
-            "{{AgentToolCall(filter: {{_docID: {{_in: {}}}}}) {{_docID request_id tool_call_id tool_name}}}}",
-            graphql_string_list_literal(caused.keys().map(String::as_str))
-        ),
-        "AgentToolCall",
-    )
-    .await?;
+    let call_doc_ids = caused.keys().map(String::as_str).collect::<Vec<_>>();
+    let mut calls = Vec::new();
+    // Bounded lookups, never an empty list literal in a database operation.
+    for batch in call_doc_ids.chunks(128) {
+        calls.extend(
+            rows(
+                access,
+                &format!(
+                    "{{AgentToolCall(docIDs: {}) {{_docID request_id tool_call_id tool_name}}}}",
+                    graphql_string_list_literal(batch.iter().copied())
+                ),
+                "AgentToolCall",
+            )
+            .await?,
+        );
+    }
     Ok(calls
         .iter()
         .filter_map(|call| {
