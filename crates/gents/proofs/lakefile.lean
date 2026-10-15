@@ -22,6 +22,7 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.NativeCompletion,
   `Proofs.Conformance.NativeClaimLifetime,
   `Proofs.Conformance.EvalRequestOutcome,
+  `Proofs.Conformance.ToolArgumentFailure,
   `Proofs.Conformance.StorageWriteGateStreamWaiter]
 
 -- Always check the source inventory, even when compiled artifacts are cached.
