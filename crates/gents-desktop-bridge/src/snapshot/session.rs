@@ -260,19 +260,17 @@ pub async fn build_session_snapshot_for_node_with_transcript(
         },
         None => None,
     };
-    let observed_queue_ids = store
-        .requests
-        .iter()
+    let observed_queue_ids = node_did
+        .map(|node| store.live_requests_for_session_for_node(session_id, node))
+        .unwrap_or_default()
+        .into_iter()
         .filter(|row| {
-            row.node_did.as_deref() == node_did
-                && row.session_id.as_deref() == Some(session_id)
-                && matches!(
-                    row.lifecycle_state,
-                    Some(
-                        RequestLifecycleState::Pending
-                            | RequestLifecycleState::WorkspaceBindingPending
-                    )
+            matches!(
+                row.lifecycle_state,
+                Some(
+                    RequestLifecycleState::Pending | RequestLifecycleState::WorkspaceBindingPending
                 )
+            )
         })
         .filter_map(|row| row.doc_id.clone())
         .collect::<Vec<_>>();

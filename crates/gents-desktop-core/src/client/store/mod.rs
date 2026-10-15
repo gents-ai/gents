@@ -177,6 +177,8 @@ pub struct ClientStore {
     runtimes_by_node_did: HashMap<String, usize>,
     node_readiness_by_node_did: HashMap<String, usize>,
     request_index_by_id: HashMap<String, usize>,
+    request_index_by_doc_id: HashMap<String, usize>,
+    live_requests_by_scope: HashMap<(String, String), Vec<usize>>,
 }
 
 #[derive(Debug)]

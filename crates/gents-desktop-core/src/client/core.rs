@@ -5,6 +5,7 @@ mod route_manager;
 mod supervisor;
 pub(super) mod sync_state;
 mod writes;
+pub use writes::RequestRefresh;
 
 #[cfg(test)]
 mod tests;

@@ -103,15 +103,22 @@ pub(crate) async fn session_snapshot(
     }
     let hydrate_start_ms = hydrate_started.elapsed().as_millis() as u64;
     let refresh_started = std::time::Instant::now();
+    let mut refreshed_requests = None;
     if let (Some(node_did), Some(request_id)) = (node_did.as_deref(), request_id.as_deref()) {
-        if let Err(error) = core.refresh_local_request(node_did, request_id).await {
-            tracing::warn!(
-                target: "gents_desktop::chat",
-                node_did,
-                request_id,
-                error = %error,
-                "selected local request refresh failed; returning the last observed session"
-            );
+        match core
+            .refresh_local_request_projection(node_did, request_id)
+            .await
+        {
+            Ok(refresh) => refreshed_requests = Some(refresh.requests),
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop::chat",
+                    node_did,
+                    request_id,
+                    error = %error,
+                    "selected local request refresh failed; returning the last observed session"
+                );
+            }
         }
     }
     let request_refresh_ms = refresh_started.elapsed().as_millis() as u64;
@@ -161,32 +168,6 @@ pub(crate) async fn session_snapshot(
                     timeline_limit,
                 )
                 .await
-            }
-        }
-    };
-    let ownership_read = async {
-        let requests = {
-            let store = core.store().snapshot();
-            store
-                .requests
-                .iter()
-                .filter(|row| {
-                    row.doc_id.is_some()
-                        && row.session_id.as_deref() == Some(session_id.as_str())
-                        && row.node_did.as_deref() == node_did.as_deref()
-                        && row.requester_did.as_deref() == requester_scope.as_deref()
-                })
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        match operator_access.as_ref() {
-            Some(access) => {
-                gents_desktop_core::client::load_request_prompt_ownership_on(access, &requests)
-                    .await
-            }
-            None => {
-                gents_desktop_core::client::load_request_prompt_ownership(core.node(), &requests)
-                    .await
             }
         }
     };
@@ -242,8 +223,59 @@ pub(crate) async fn session_snapshot(
         };
         Ok::<_, BridgeError>(result)
     };
-    let (page_and_tip, ownership) = tokio::join!(page_and_tip, ownership_read);
-    let (transcript_page, context_store) = page_and_tip?;
+    let (transcript_page, context_store) = page_and_tip.await?;
+    let request_docs = transcript_page
+        .store
+        .transcript_messages
+        .iter()
+        .filter_map(|row| row.message.request_doc_id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let ownership_read = async {
+        let requests = {
+            let store = core.store().snapshot();
+            let mut requests = refreshed_requests.clone().unwrap_or_else(|| {
+                node_did
+                    .as_deref()
+                    .map(|node| {
+                        store
+                            .live_requests_for_session_for_node(&session_id, node)
+                            .into_iter()
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            });
+            let mut seen = requests
+                .iter()
+                .filter_map(|row| row.doc_id.clone())
+                .collect::<std::collections::HashSet<_>>();
+            for doc in &request_docs {
+                if seen.insert(doc.clone()) {
+                    if let Some(row) = store.request_row_by_doc_id(doc) {
+                        requests.push(row.clone());
+                    }
+                }
+            }
+            requests.retain(|row| {
+                row.doc_id.is_some()
+                    && row.session_id.as_deref() == Some(session_id.as_str())
+                    && row.node_did.as_deref() == node_did.as_deref()
+                    && row.requester_did.as_deref() == requester_scope.as_deref()
+            });
+            requests
+        };
+        match operator_access.as_ref() {
+            Some(access) => {
+                gents_desktop_core::client::load_request_prompt_ownership_on(access, &requests)
+                    .await
+            }
+            None => {
+                gents_desktop_core::client::load_request_prompt_ownership(core.node(), &requests)
+                    .await
+            }
+        }
+    };
+    let ownership = ownership_read.await;
     let prompt_ownership = match ownership {
         Ok(facts) => Some(facts),
         Err(error) => {

@@ -65,10 +65,18 @@ async fn existing_request_indexes_reconcile_without_rewriting_documents_or_linea
     );
     let plan = node.execute(&format!("query @explain {query}")).await;
     assert!(!plan.has_errors(), "{:?}", plan.errors);
-    assert!(plan
-        .data
-        .unwrap()
-        .to_string()
-        .contains("AgentRequest_node_session"));
+    let plan = plan.data.unwrap().to_string();
+    assert!(
+        after.indexes.iter().any(|index| {
+            index
+                .fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .take(2)
+                .eq(["node_did", "session_id"])
+                && plan.contains(&index.name)
+        }),
+        "{plan}"
+    );
     node.shutdown().await;
 }

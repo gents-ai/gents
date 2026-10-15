@@ -88,6 +88,7 @@ struct ObservedState {
     node_epochs: HashMap<String, u64>,
 }
 
+#[derive(Clone)]
 pub(crate) struct ReloadRead {
     snapshot: SharedClientStore,
     request_event_version: u64,
@@ -96,7 +97,30 @@ pub(crate) struct ReloadRead {
     node_epoch: u64,
 }
 
+impl ReloadRead {
+    pub(crate) fn snapshot(&self) -> &SharedClientStore {
+        &self.snapshot
+    }
+
+    pub(crate) fn request_event_version(&self) -> u64 {
+        self.request_event_version
+    }
+}
+
 impl ObservedState {
+    fn accepts_reload(&self, read: &ReloadRead) -> bool {
+        match read.node_did.as_deref() {
+            Some(node) => {
+                self.global_epoch == read.global_epoch
+                    && self.node_epochs.get(node).copied().unwrap_or_default() == read.node_epoch
+            }
+            None => {
+                Arc::ptr_eq(&read.snapshot, &self.snapshot)
+                    && read.request_event_version == self.revision.request_event_version
+            }
+        }
+    }
+
     fn invalidate_scopes(&mut self, owners: Option<HashSet<String>>) {
         match owners {
             Some(owners) => {
@@ -183,6 +207,13 @@ impl ObservedStore {
             .read()
             .expect("store snapshot lock poisoned")
             .revision
+    }
+
+    pub(crate) fn reload_read_is_current(&self, read: &ReloadRead) -> bool {
+        self.state
+            .read()
+            .expect("store snapshot lock poisoned")
+            .accepts_reload(read)
     }
 
     pub fn subscribe(&self) -> watch::Receiver<u64> {
@@ -330,17 +361,7 @@ impl ObservedStore {
     pub(crate) fn publish_reload(&self, read: &ReloadRead, incoming: ClientStore) -> bool {
         let incoming = incoming.into_observer_projection();
         self.update_if(
-            |state| match read.node_did.as_deref() {
-                Some(node_did) => {
-                    state.global_epoch == read.global_epoch
-                        && state.node_epochs.get(node_did).copied().unwrap_or_default()
-                            == read.node_epoch
-                }
-                None => {
-                    Arc::ptr_eq(&read.snapshot, &state.snapshot)
-                        && read.request_event_version == state.revision.request_event_version
-                }
-            },
+            |state| state.accepts_reload(read),
             read.node_did
                 .as_ref()
                 .map(|node| HashSet::from([node.clone()])),
@@ -396,9 +417,7 @@ impl ObservedStore {
         let mut state = self.state.write().expect("store snapshot lock poisoned");
         let owner = state
             .snapshot
-            .requests
-            .iter()
-            .find(|row| row.doc_id.as_deref() == Some(doc_id))
+            .request_row_by_doc_id(doc_id)
             .and_then(|row| row.node_did.as_deref())
             .filter(|owner| !owner.is_empty())
             .map(|owner| HashSet::from([owner.to_owned()]));
@@ -738,6 +757,7 @@ mod reload_tests {
                 let initial = rows(Some(1), "original").merge_snapshot(rows(Some(2), "original"));
                 let (store, _) = ObservedStore::new(initial);
                 let read = store.begin_reload(Some(&node));
+                let evidence_read = read.clone();
                 let (release, loaded) = tokio::sync::oneshot::channel();
                 let publishing = Arc::clone(&store);
                 let publication = tokio::spawn(async move {
@@ -788,6 +808,10 @@ mod reload_tests {
                     }
                     tokio::task::yield_now().await;
                 }
+                assert_eq!(
+                    store.reload_read_is_current(&evidence_read),
+                    case["accepted"].as_bool().unwrap()
+                );
                 let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
                 let traffic = if case["accepted"].as_bool().unwrap() {
                     let running = Arc::clone(&running);

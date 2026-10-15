@@ -10,6 +10,38 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use tokio::time::{sleep, timeout};
 
+async fn request_projection_transactions(server: &wiremock::MockServer) {
+    use wiremock::matchers::{body_string_contains, method, path, query_param};
+    use wiremock::{Mock, ResponseTemplate};
+    Mock::given(method("POST"))
+        .and(path("/api/v0/tx"))
+        .and(query_param("read_only", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": 17})))
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/tx/17"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(body_string_contains("DesktopRequestDependencies"))
+        .respond_with(|request: &wiremock::Request| {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            let data = body["query"]
+                .as_str()
+                .unwrap()
+                .split_whitespace()
+                .filter_map(|word| word.strip_suffix(':'))
+                .filter(|word| word.starts_with("edge"))
+                .map(|alias| (alias.to_owned(), serde_json::json!([])))
+                .collect::<serde_json::Map<_, _>>();
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": data}))
+        })
+        .mount(server)
+        .await;
+}
+
 #[test]
 fn focused_request_id_defaults_to_none() {
     let (store, _) = gents_desktop_core::client::ObservedStore::new(ClientStore::default());
@@ -176,6 +208,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     );
 
     let server = MockServer::start().await;
+    request_projection_transactions(&server).await;
     let completed_request = serde_json::json!({
         "_docID": "remote-terminal-request-doc",
         "request_id": REQUEST_ID,
@@ -199,7 +232,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     let store = Arc::clone(core.store());
     let chat_patch_response = serde_json::json!({
         "data": {
-            "AgentRequest": [completed_request],
+            "AgentRequest": [],
             "AgentSession": [],
             "Goal": []
         }
@@ -638,4 +671,147 @@ fn default_agent_id_does_not_require_a_gossiped_node() {
         store.default_agent_id_for_node(node_did),
         Some(agent_id.as_str())
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cached_request_refresh_recovers_dependencies_and_rejects_stale_evidence() -> Result<()> {
+    use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use wiremock::matchers::{body_string_contains, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const NODE: &str = "did:test:cached-request";
+    let tempdir = tempfile::tempdir()?;
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        ClientCoreOptions::local_only(),
+    )
+    .await?;
+    let server = MockServer::start().await;
+    request_projection_transactions(&server).await;
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../gents/tests/fixtures/session_request_refresh.json"
+    ))?;
+    let case = cases
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "queued_behind_running_turn")
+        .unwrap();
+    let request_id = |id: u64| format!("cached-request-{id}");
+    let rows = case["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            let input = row["queued_after"].as_u64().map(|after| RequestInput {
+                queue: Some(RequestQueue {
+                    queued_after_request_id: Some(request_id(after)),
+                    source: QueueSource::User,
+                    policy: QueuePolicy::Append,
+                    delivery: Default::default(),
+                    position: None,
+                    key: None,
+                    interrupted_request_id: None,
+                    background_completion_wake_version: None,
+                }),
+                ..Default::default()
+            });
+            serde_json::json!({
+                "_docID": format!("physical-{}", row["doc"]),
+                "request_id": request_id(row["request"].as_u64().unwrap()),
+                "purpose": "normal", "node_did": NODE, "requester_did": NODE,
+                "agent_id": "agent", "session_id": "session", "input": input,
+                "lifecycle_state": match row["state"].as_str().unwrap() {
+                    "active" => "processing",
+                    "unclaimed" => "pending",
+                    other => panic!("unexpected modeled state {other}"),
+                },
+                "created_at": format!("2026-10-15T00:00:{:02}Z", row["doc"].as_u64().unwrap()),
+            })
+        })
+        .collect::<Vec<_>>();
+    let selected = rows.last().unwrap().clone();
+    let request_id = selected["request_id"].as_str().unwrap();
+    Mock::given(method("POST"))
+        .and(body_string_contains("DesktopLocalRequestLookup"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"data": {"AgentRequest": [selected.clone()]}})),
+        )
+        .mount(&server)
+        .await;
+    let reads = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&reads);
+    let store = Arc::clone(core.store());
+    let response_rows = rows.clone();
+    Mock::given(method("POST"))
+        .and(body_string_contains("DesktopRemoteChatPatch"))
+        .respond_with(move |_: &wiremock::Request| {
+            if seen.fetch_add(1, Ordering::SeqCst) >= 2 {
+                store.invalidate_projection(true);
+            }
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": {
+                "AgentRequest": response_rows, "AgentSession": [], "Goal": []
+            }}))
+        })
+        .mount(&server)
+        .await;
+    core.persist_local_standard_peer(
+        "Cached request",
+        "endpoint:cached-request",
+        NODE,
+        &format!("{}/api/v0/graphql", server.uri()),
+        "/tmp/cached-request-home",
+    )
+    .await?;
+    core.store()
+        .merge_chat_patch(ClientStore::from_rows(ClientStoreRows {
+            requests: serde_json::from_value(serde_json::json!(rows))?,
+            ..Default::default()
+        }));
+    core.refresh_local_request_projection(NODE, request_id)
+        .await?;
+    core.store()
+        .replace_snapshot(ClientStore::from_rows(ClientStoreRows {
+            requests: vec![serde_json::from_value(selected.clone())?],
+            ..Default::default()
+        }));
+    let recovered = core
+        .refresh_local_request_projection(NODE, request_id)
+        .await?;
+    assert!(recovered.store_version.is_some());
+    let snapshot = core.store().snapshot();
+    let requests = snapshot.requests_for_session_for_node("session", NODE);
+    let turn = gents_desktop_core::client::session_turn_request(
+        &requests,
+        snapshot.request_row(request_id).unwrap(),
+    );
+    assert_eq!(
+        turn.doc_id.as_deref(),
+        Some(format!("physical-{}", case["expected_turn_doc"]).as_str())
+    );
+    let refresh = core
+        .refresh_local_request_projection(NODE, request_id)
+        .await?;
+    assert_eq!(reads.load(Ordering::SeqCst), 3);
+    let model: serde_json::Value = serde_json::from_str(include_str!(
+        "../../gents/tests/fixtures/client_data_publication.json"
+    ))?;
+    let accepted = model["scoped_publication"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "unknown_patch_rejects_scoped_reload")
+        .unwrap()["accepted"]
+        .as_bool()
+        .unwrap();
+    assert_eq!(
+        !refresh.requests.is_empty(),
+        accepted,
+        "stale cached reads cannot establish prompt absence"
+    );
+    assert_eq!(refresh.store_version, None);
+    Arc::new(core).shutdown().await?;
+    Ok(())
 }

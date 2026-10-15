@@ -33,6 +33,14 @@ use super::ClientCore;
 use super::ClientPeerStatus;
 use crate::client::peer_directory::RemovalCause;
 
+#[derive(Default)]
+pub struct RequestRefresh {
+    pub store_version: Option<u64>,
+    /// Fresh dependency rows accepted by the publication fence. Stale reads
+    /// return no rows, so callers cannot use rejected facts as prompt evidence.
+    pub requests: Vec<AgentRequestRow>,
+}
+
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
 
 /// A validated applied receipt is the command result. The local projection is
@@ -189,14 +197,21 @@ fn request_patch_is_current(
     node_did: &str,
     request_id: &str,
 ) -> bool {
-    let request_value = |store: &ClientStore| {
-        store
-            .requests
-            .iter()
-            .find(|row| row.request_id == request_id && row.node_did.as_deref() == Some(node_did))
+    if patch
+        .request_row(request_id)
+        .filter(|row| row.node_did.as_deref() == Some(node_did))
+        .is_none()
+    {
+        return false;
+    }
+    patch.requests.iter().all(|expected| {
+        expected
+            .doc_id
+            .as_deref()
+            .and_then(|doc| current.request_row_by_doc_id(doc))
             .and_then(|row| serde_json::to_value(row).ok())
-    };
-    request_value(current).is_some_and(|current| request_value(patch) == Some(current))
+            .is_some_and(|current| serde_json::to_value(expected).ok() == Some(current))
+    })
 }
 
 fn agent_id_for_write(requested_agent_id: Option<&str>) -> Option<String> {
@@ -617,34 +632,49 @@ impl ClientCore {
         node_did: &str,
         request_id: &str,
     ) -> Result<Option<u64>> {
+        Ok(self
+            .refresh_local_request_projection(node_did, request_id)
+            .await?
+            .store_version)
+    }
+
+    pub async fn refresh_local_request_projection(
+        &self,
+        node_did: &str,
+        request_id: &str,
+    ) -> Result<RequestRefresh> {
         let node_did = node_did.trim();
         let request_id = request_id.trim();
         if node_did.is_empty() || request_id.is_empty() {
-            return Ok(None);
+            return Ok(RequestRefresh::default());
         }
 
-        let (captured, captured_revision) = self.store.snapshot_with_revision();
+        let read = self.store.begin_reload(Some(node_did));
         let (patch, source) = match self.operator_graphql(node_did) {
             Some(graphql) => {
                 let access = ConfigAccess::Graphql(graphql);
-                (load_chat_patch_on(&access, request_id).await?, "operator")
+                (
+                    load_chat_patch_on(&access, request_id, Some(node_did)).await?,
+                    "operator",
+                )
             }
             None => (
-                load_chat_patch(self.node.as_ref(), request_id).await?,
+                load_chat_patch(&self.node, request_id, Some(node_did)).await?,
                 "local",
             ),
         };
         let rows = patch.row_count();
         if rows == 0 {
-            return Ok(None);
+            return Ok(RequestRefresh::default());
         }
         // The patch addresses durable documents by their canonical keys. Keep
         // it untagged so the local observer and operator GraphQL path converge
         // on the same in-memory rows.
+        let requests = patch.requests.clone();
         let signature = chat_patch_signature(&patch);
         let cache_key = format!("{source}\0{node_did}\0{request_id}");
         {
-            let mut signatures = self.request_patch_signatures.lock().await;
+            let signatures = self.request_patch_signatures.lock().await;
             if signatures.get(&cache_key) == Some(&signature)
                 && request_patch_is_current(
                     self.store.snapshot().as_ref(),
@@ -653,12 +683,15 @@ impl ClientCore {
                     request_id,
                 )
             {
-                return Ok(None);
+                if !self.store.reload_read_is_current(&read) {
+                    self.store.request_resync(Some(node_did));
+                    return Ok(RequestRefresh::default());
+                }
+                return Ok(RequestRefresh {
+                    store_version: None,
+                    requests,
+                });
             }
-            if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
-                signatures.clear();
-            }
-            signatures.insert(cache_key, signature);
         }
 
         let (_rows, bytes, _hash) = signature;
@@ -666,13 +699,20 @@ impl ClientCore {
             .request_row(request_id)
             .is_some_and(|row| row.is_terminal());
         let Some(version) = self.store.merge_chat_patch_at_snapshot(
-            &captured,
-            captured_revision.request_event_version,
+            read.snapshot(),
+            read.request_event_version(),
             patch,
         ) else {
             self.store.request_resync(Some(node_did));
-            return Ok(None);
+            return Ok(RequestRefresh::default());
         };
+        {
+            let mut signatures = self.request_patch_signatures.lock().await;
+            if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
+                signatures.clear();
+            }
+            signatures.insert(cache_key, signature);
+        }
         // A completed agent turn may have used self-configuration tools. Most
         // of that control plane is intentionally absent from the client P2P
         // route (the Node document and inference credentials in particular),
@@ -695,7 +735,10 @@ impl ClientCore {
             source,
             "desktop selected request patch merged"
         );
-        Ok(Some(version))
+        Ok(RequestRefresh {
+            store_version: Some(version),
+            requests,
+        })
     }
 
     pub async fn rename_session(

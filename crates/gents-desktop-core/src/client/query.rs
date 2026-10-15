@@ -29,6 +29,7 @@ use super::store::{ClientStore, ClientStoreRows};
 
 mod agent_scope;
 mod document_patches;
+mod request_graph;
 mod session_tip;
 mod session_transcript;
 pub use session_tip::{
@@ -128,65 +129,22 @@ pub(super) const CHAIN_KEY_BINDING_FIELDS: &str =
     "binding_id node_did address key_backend attestation created_at revoked_at tags";
 pub(super) const MAILBOX_ITEM_FIELDS: &str = "_docID item_key requester_did node_did status kind action title summary payload source_kind source_id session_id request_id graph_run_id cause_doc_id target_node_did target_agent_id expected_collection parent_item_id deadline_at created_at updated_at resolved_at resolved_doc_id";
 
-/// Load only the selected request's session transcript slice from the embedded
-/// replica. This is the bounded polling fallback for a dropped/coalesced
-/// observer event; it does not reload every session for the agent.
-pub async fn load_chat_patch(node: &EmbeddedNode, request_id: &str) -> Result<ClientStore> {
-    let request_id = request_id.trim();
-    if request_id.is_empty() {
-        return Ok(ClientStore::default());
-    }
-
-    let lookup_query = local_request_lookup_query(request_id);
-    let lookup_data =
-        execute_local_graphql_query(node, &lookup_query, "local request lookup").await?;
-    let request_rows: Vec<AgentRequestRow> = parse_query_rows(&lookup_data, "AgentRequest")?;
-    let Some(session_id) = request_rows
-        .first()
-        .and_then(|row| row.session_id.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-    else {
-        return Ok(ClientStore::from_rows(ClientStoreRows {
-            requests: request_rows,
-            ..ClientStoreRows::default()
-        }));
-    };
-
-    let patch_query = remote_chat_patch_query(&session_id);
-    let data = execute_local_graphql_query(node, &patch_query, "local chat patch").await?;
-    chat_patch_from_data(&data)
+/// Recover the selected request and its live session dependencies after a
+/// dropped or coalesced observer event.
+pub async fn load_chat_patch(
+    node: &std::sync::Arc<EmbeddedNode>,
+    request_id: &str,
+    node_did: Option<&str>,
+) -> Result<ClientStore> {
+    request_graph::load_local(node, request_id, node_did).await
 }
 
 pub async fn load_chat_patch_on(
     access: &gents::config_client::ConfigAccess,
     request_id: &str,
+    node_did: Option<&str>,
 ) -> Result<ClientStore> {
-    let request_id = request_id.trim();
-    if request_id.is_empty() {
-        return Ok(ClientStore::default());
-    }
-
-    let lookup_query = local_request_lookup_query(request_id);
-    let lookup_data = execute_access_graphql_query(access, &lookup_query, "request lookup").await?;
-    let request_rows: Vec<AgentRequestRow> = parse_query_rows(&lookup_data, "AgentRequest")?;
-    let Some(session_id) = request_rows
-        .first()
-        .and_then(|row| row.session_id.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-    else {
-        return Ok(ClientStore::from_rows(ClientStoreRows {
-            requests: request_rows,
-            ..ClientStoreRows::default()
-        }));
-    };
-
-    let patch_query = remote_chat_patch_query(&session_id);
-    let data = execute_access_graphql_query(access, &patch_query, "chat patch").await?;
-    chat_patch_from_data(&data)
+    request_graph::load_on(access, request_id, node_did).await
 }
 
 pub(crate) async fn load_request_documents_on(
@@ -234,15 +192,6 @@ pub(crate) async fn load_request_documents_on(
         "pending edit request patch is incomplete"
     );
     Ok(rows)
-}
-
-fn chat_patch_from_data(data: &Value) -> Result<ClientStore> {
-    Ok(ClientStore::from_rows(ClientStoreRows {
-        requests: parse_query_rows(&data, "AgentRequest")?,
-        sessions: parse_query_rows(&data, "AgentSession")?,
-        goals: parse_query_rows(&data, "Goal")?,
-        ..ClientStoreRows::default()
-    }))
 }
 
 pub(super) async fn execute_local_graphql_query(
@@ -344,32 +293,10 @@ where
     }
 }
 
-fn local_request_lookup_query(request_id: &str) -> String {
-    let request_id = escape_graphql_string(request_id);
-    format!(
-        r#"
-query DesktopLocalRequestLookup {{
-  AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ {AGENT_REQUEST_FIELDS} }}
-}}
-"#
-    )
-}
-
-fn remote_chat_patch_query(session_id: &str) -> String {
-    let session_id = escape_graphql_string(session_id);
-    format!(
-        r#"
-query DesktopRemoteChatPatch {{
-  AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_REQUEST_FIELDS} }}
-  AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_SESSION_FIELDS} }}
-  Goal(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {GOAL_FIELDS} }}
-}}
-"#
-    )
-}
 #[cfg(test)]
 mod tests {
     mod projection_and_patches;
     mod query_edges;
+    mod request_graph;
     mod transcript_pagination;
 }

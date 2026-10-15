@@ -174,8 +174,24 @@ impl ClientStore {
         }
 
         let mut request_index_by_id = HashMap::new();
+        let mut request_index_by_doc_id = HashMap::new();
+        let mut live_requests_by_scope: HashMap<(String, String), Vec<usize>> = HashMap::new();
         for (index, row) in rows.requests.iter().enumerate() {
             request_index_by_id.insert(row.request_id.clone(), index);
+            if let Some(doc) = &row.doc_id {
+                request_index_by_doc_id.entry(doc.clone()).or_insert(index);
+            }
+            if row
+                .lifecycle_state
+                .is_some_and(|state| !state.is_terminal())
+            {
+                if let (Some(node), Some(session)) = (&row.node_did, &row.session_id) {
+                    live_requests_by_scope
+                        .entry((node.clone(), session.clone()))
+                        .or_default()
+                        .push(index);
+                }
+            }
         }
 
         Self {
@@ -240,6 +256,8 @@ impl ClientStore {
             runtimes_by_node_did,
             node_readiness_by_node_did,
             request_index_by_id,
+            request_index_by_doc_id,
+            live_requests_by_scope,
         }
     }
 }

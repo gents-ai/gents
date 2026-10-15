@@ -339,7 +339,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
     let response = node.execute(mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let patch = load_chat_patch(node.as_ref(), "req-selected")
+    let patch = load_chat_patch(&node, "req-selected", Some("did:test:agent"))
         .await
         .expect("selected local chat patch");
     assert_eq!(patch.requests.len(), 1);
@@ -374,7 +374,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let terminal_patch = load_chat_patch(node.as_ref(), "req-selected")
+    let terminal_patch = load_chat_patch(&node, "req-selected", Some("did:test:agent"))
         .await
         .expect("terminal selected chat patch");
     assert_eq!(terminal_patch.requests[0].terminal_output, Some(terminal));

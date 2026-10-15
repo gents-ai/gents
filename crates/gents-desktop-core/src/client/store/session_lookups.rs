@@ -63,6 +63,24 @@ impl ClientStore {
         }
     }
 
+    pub fn request_row_by_doc_id(&self, doc_id: &str) -> Option<&AgentRequestRow> {
+        self.request_index_by_doc_id
+            .get(doc_id)
+            .map(|index| &self.requests[*index])
+    }
+
+    pub fn live_requests_for_session_for_node(
+        &self,
+        session_id: &str,
+        node_did: &str,
+    ) -> Vec<&AgentRequestRow> {
+        indexes_to_refs(
+            &self.requests,
+            self.live_requests_by_scope
+                .get(&(node_did.to_owned(), session_id.to_owned())),
+        )
+    }
+
     pub fn requests_for_session(&self, session_id: &str) -> Vec<&AgentRequestRow> {
         indexes_to_refs(&self.requests, self.requests_by_session_id.get(session_id))
     }

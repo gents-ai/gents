@@ -10,7 +10,7 @@
 # The workspace owner resolves from IsolatedWorkspace.owner_node_did.
 # Workspace-bound requests keep the signed
 # workspace_id / workspace_authority / workspace_seal_hash triple.
-type AgentRequest @branchable @index(name: "AgentRequest_node_session", fields: ["node_did", "session_id"]) {
+type AgentRequest @branchable @index(name: "AgentRequest_node_session", fields: ["node_did", "session_id"]) @index(name: "AgentRequest_session_frontier", fields: ["node_did", "session_id", "requester_did", "lifecycle_state"]) {
     request_id: String @index @immutable
     purpose: String @index @immutable
     node_did: String @index @immutable
@@ -28,7 +28,7 @@ type AgentRequest @branchable @index(name: "AgentRequest_node_session", fields: 
     runtime_source_kind: String @index @immutable
     agent_id: String @index @immutable
     session_id: String @index @immutable
-    retry_parent_request: String @immutable
+    retry_parent_request: String @index @immutable
     retry_parent_request_doc_id: String @index @immutable
     retry_root_request: String @immutable
     retry_key: String @index(unique: true) @immutable
