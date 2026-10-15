@@ -381,17 +381,30 @@ impl ClientCore {
         node_did: &str,
         session_id: &str,
     ) -> Result<gents::lifecycle::PendingQueueSnapshot> {
+        Ok(self
+            .pending_user_queue_projection(node_did, session_id, &[])
+            .await?
+            .pending)
+    }
+
+    pub async fn pending_user_queue_projection(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        observed_doc_ids: &[String],
+    ) -> Result<gents::lifecycle::PendingQueueProjection> {
         let record = self
             .sync_state
             .records()
             .into_iter()
             .find(|record| record.node_did == node_did)
             .context("no saved deployment route owns this node")?;
-        gents::lifecycle::pending_user_queue(
+        gents::lifecycle::pending_user_queue_projection(
             &self.session_queue_access(node_did),
             node_did,
             session_id,
             &self.requester_did(&record),
+            observed_doc_ids,
         )
         .await
     }

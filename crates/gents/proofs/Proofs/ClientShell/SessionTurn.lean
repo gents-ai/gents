@@ -78,6 +78,24 @@ def queuedBehind (rows : List Row) (turn : Row) : List Row :=
   rows.filter (fun r =>
     r.state == .unclaimed && r.doc != turn.doc && (turnOf rows r).doc == turn.doc)
 
+/-- The runtime supplies physical requests in receipt-validated native arrival
+order, including requests already taken from its pending listing. The client
+does not infer a replacement's position from timestamps or unsigned slots.
+Missing arrivals provide no ordering evidence and are not projected. -/
+def orderedQueued (queued : List Row) (arrivals : List Nat) : List Row :=
+  arrivals.filterMap (fun doc => queued.find? (fun r => r.doc == doc))
+
+theorem unqueued_arrival_is_ignored (queued : List Row) (doc : Nat) (rest : List Nat)
+    (h : queued.find? (fun r => r.doc == doc) = none) :
+    orderedQueued queued (doc :: rest) = orderedQueued queued rest := by
+  simp [orderedQueued, h]
+
+theorem available_arrival_keeps_its_place (queued : List Row) (doc : Nat)
+    (rest : List Nat) (row : Row)
+    (h : queued.find? (fun r => r.doc == doc) = some row) :
+    orderedQueued queued (doc :: rest) = row :: orderedQueued queued rest := by
+  simp [orderedQueued, h]
+
 def foldedIn (rows : List Row) (requester : Nat) : List Row :=
   rows.filter (fun r => r.foldedInto.isSome && r.requester == requester)
 

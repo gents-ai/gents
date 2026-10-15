@@ -243,23 +243,14 @@ export function QueuedInputs({
   onEdit?: (edit: QueueEdit) => Promise<void>;
 }) {
   if (queued.length === 0) return null;
-  // Runtime-managed entries take their queue order, which is the order the
-  // controls move them in; other queued inputs keep their place.
   const entries = new Map(queue?.map((entry) => [entry.requestId, entry]));
-  const byQueue = (queue ?? []).flatMap(
-    (entry) => queued.find((turn) => turn.requestId === entry.requestId) ?? [],
-  );
-  let next = 0;
-  const ordered = queued.map((turn) =>
-    entries.has(turn.requestId) ? byQueue[next++] : turn,
-  );
   return (
     <div
       className="grid gap-3"
       data-testid="queued-inputs"
       aria-label="Pending messages"
     >
-      {ordered.map((turn) => (
+      {queued.map((turn) => (
         <div key={turn.requestId} data-testid="queued-input">
           {turn.origin ? (
             <AutomatedInput
