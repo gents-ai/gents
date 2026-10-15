@@ -4,7 +4,7 @@ use std::sync::Arc;
 use gents::config_client::ConfigAccess;
 use gents::graphql::graphql_string_list_literal;
 use gents::session::{public_request_filter, session_scope_filter};
-use gents::session_origin::{group_caused, lineage, SessionLink, SessionScope};
+use gents::session_origin::{group_caused, lineage, single_caused, SessionLink, SessionScope};
 use gents::toolset::is_session_message_tool;
 use gents_desktop_core::client::ClientCore;
 use serde_json::Value;
@@ -144,27 +144,27 @@ async fn caused_calls(
         .filter_map(|call| {
             let requests = caused.get(&text(call, "_docID")?)?;
             let session_message = is_session_message_tool(&text(call, "tool_name")?);
-            let shown = if session_message && requests.len() != 1 {
-                &[][..]
+            let shown = if session_message {
+                single_caused(requests.clone()).into_iter().collect()
             } else {
-                requests.as_slice()
+                requests.clone()
             };
             Some((call, shown))
         })
         .flat_map(|(call, shown)| {
             let state_of = &state_of;
-            shown.iter().filter_map(move |request| {
+            shown.into_iter().filter_map(move |request| {
                 let state = state_of.get(&request.request_doc_id)?;
                 Some(CausedCallView {
                     request_id: text(call, "request_id")?,
                     tool_call_id: text(call, "tool_call_id")?,
                     caused: CausedRequestView {
-                        request_id: request.request_id.clone(),
-                        node_did: request.scope.node_did.clone(),
-                        session_id: request.scope.session_id.clone(),
-                        requester_did: request.scope.requester_did.clone(),
+                        request_id: request.request_id,
+                        node_did: request.scope.node_did,
+                        session_id: request.scope.session_id,
+                        requester_did: request.scope.requester_did,
                         lifecycle_state: text(state, "lifecycle_state"),
-                        created_at: Some(request.created_at.clone()),
+                        created_at: Some(request.created_at),
                     },
                 })
             })

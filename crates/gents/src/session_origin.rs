@@ -246,7 +246,14 @@ pub async fn requests_caused_by_calls<'a>(
 /// The single-request projection, for session-message calls (`agent_new`,
 /// `agent_message`); one call may cause many requests
 /// ([`requests_caused_by_calls`]). A call named by more than one request has
-/// no single caused request and is omitted.
+/// no single caused request.
+pub fn single_caused(requests: Vec<CausedRequest>) -> Option<CausedRequest> {
+    <[CausedRequest; 1]>::try_from(requests)
+        .ok()
+        .map(|[only]| only)
+}
+
+/// [`single_caused`] over every call's requests; a call without one is omitted.
 pub async fn caused_requests<'a>(
     access: &ConfigAccess,
     tool_call_doc_ids: impl IntoIterator<Item = &'a str>,
@@ -254,12 +261,7 @@ pub async fn caused_requests<'a>(
     Ok(requests_caused_by_calls(access, tool_call_doc_ids)
         .await?
         .into_iter()
-        .filter_map(
-            |(call, requests)| match <[CausedRequest; 1]>::try_from(requests) {
-                Ok([only]) => Some((call, only.request_id)),
-                Err(_) => None,
-            },
-        )
+        .filter_map(|(call, requests)| Some((call, single_caused(requests)?.request_id)))
         .collect())
 }
 
