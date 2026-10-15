@@ -128,12 +128,80 @@ async fn recovery_winner_rejects_late_running_persistence() {
     let call = super::super::controller::InferenceCallRecord::without_controller(pending_call(
         "recovery-cas-call",
     ));
+    assert!(super::super::persistence::persist_existing_call_running(
+        node.clone(),
+        &call,
+        &snapshot.doc_id,
+    )
+    .await
+    .is_err());
+    assert_eq!(stored_call(&node).await, terminal);
+}
+
+#[tokio::test]
+async fn physical_call_updates_preserve_identity_and_state_predicates() {
+    use super::super::controller::InferenceCallRecord;
+    use super::super::persistence::{
+        persist_call_queued, persist_existing_call_running, persist_existing_call_terminal,
+    };
+    use gents_loop::rig_compat::CachedInputTokensObservation;
+
+    let (node, snapshot) = fixture("queued").await;
+    let call = InferenceCallRecord::without_controller(pending_call("recovery-cas-call"));
+    let other = InferenceCallRecord::without_controller(pending_call("other-call"));
+    let other_doc = persist_call_queued(node.clone(), &other).await.unwrap();
     assert!(
-        super::super::persistence::persist_existing_call_running(node.clone(), &call)
+        persist_existing_call_running(node.clone(), &call, &other_doc)
             .await
             .is_err()
     );
-    assert_eq!(stored_call(&node).await, terminal);
+    assert!(persist_existing_call_terminal(
+        node.clone(),
+        &call,
+        &other_doc,
+        "cancelled",
+        None,
+        None,
+        CachedInputTokensObservation::NotAvailable,
+    )
+    .await
+    .is_err());
+
+    persist_existing_call_running(node.clone(), &call, &snapshot.doc_id)
+        .await
+        .unwrap();
+    persist_existing_call_terminal(
+        node.clone(),
+        &call,
+        &snapshot.doc_id,
+        "completed",
+        None,
+        None,
+        CachedInputTokensObservation::NotAvailable,
+    )
+    .await
+    .unwrap();
+    assert!(
+        persist_existing_call_running(node.clone(), &call, &snapshot.doc_id)
+            .await
+            .is_err()
+    );
+    let response = crate::config_client::ConfigAccess::local(node)
+        .execute("{ InferenceCall { call_id call_state } }")
+        .await
+        .unwrap();
+    let rows = response["data"]["InferenceCall"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(
+            row["call_state"],
+            if row["call_id"] == "recovery-cas-call" {
+                "completed"
+            } else {
+                "queued"
+            },
+        );
+    }
 }
 
 /// Exercise the real queued acquisition path: losing the durable start must
@@ -403,6 +471,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     super::super::persistence::persist_existing_call_terminal(
         node.clone(),
         &call,
+        &snapshot.doc_id,
         "completed",
         None,
         Some(usage),
@@ -435,6 +504,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     super::super::persistence::persist_existing_call_terminal(
         node.clone(),
         &call,
+        &snapshot.doc_id,
         "completed",
         None,
         Some(usage),

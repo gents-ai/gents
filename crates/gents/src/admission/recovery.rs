@@ -173,6 +173,7 @@ async fn recover_inference_call_row(
     let mutation = format!(
         r#"mutation {{
             update_InferenceCall(
+                docID: "{escaped_doc_id}",
                 filter: {{
                     _docID: {{ _eq: "{escaped_doc_id}" }},
                     call_state: {{ _eq: "{observed_call_state}" }}

@@ -14,7 +14,7 @@ pub(crate) struct AdmissionPermit {
     node: Arc<EmbeddedNode>,
     permit: Option<PoolPermit>,
     call: InferenceCallRecord,
-    _doc_id: String,
+    doc_id: String,
     terminal: Option<PermitTerminal>,
     finished: bool,
     cancel_observer: Option<CancellationToken>,
@@ -43,7 +43,7 @@ impl AdmissionPermit {
             node,
             permit: Some(permit),
             call,
-            _doc_id: doc_id,
+            doc_id,
             terminal: None,
             finished: false,
             cancel_observer,
@@ -135,6 +135,7 @@ impl AdmissionPermit {
         if let Err(error) = persist_existing_call_terminal(
             self.node.clone(),
             &self.call,
+            &self.doc_id,
             terminal.call_state,
             terminal.failure_reason.as_deref(),
             terminal.usage,
@@ -246,6 +247,7 @@ impl Drop for AdmissionPermit {
         let node = self.node.clone();
         let call_id = self.call.call_id.clone();
         let call = self.call.clone();
+        let doc_id = self.doc_id.clone();
         let charged_usage = terminal.usage;
         // Explicit stream finalization awaits charged usage before exposing the
         // provider's terminal item. Drop remains the abort/cancellation repair
@@ -254,6 +256,7 @@ impl Drop for AdmissionPermit {
             if let Err(error) = persist_existing_call_terminal(
                 node,
                 &call,
+                &doc_id,
                 terminal.call_state,
                 terminal.failure_reason.as_deref(),
                 terminal.usage,
