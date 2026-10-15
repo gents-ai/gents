@@ -191,17 +191,6 @@ where
         .map(|(rows, _)| rows)
 }
 
-pub(crate) fn parse_observation_query_rows<T>(
-    data: &Value,
-    root: &str,
-    fields: &str,
-) -> Result<Vec<T>>
-where
-    T: DeserializeOwned,
-{
-    parse_rows_with_source(data, root, fields, "", None, true).map(|(rows, _)| rows)
-}
-
 pub(crate) fn parse_projected_query_rows_with_source<T>(
     data: &Value,
     root: &str,

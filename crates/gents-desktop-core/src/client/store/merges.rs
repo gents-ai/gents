@@ -29,6 +29,218 @@ fn replace_node_rows_with_sources<T>(
     dest.extend(incoming);
 }
 
+// Both the incoming store and retained rows use this policy in place, avoiding
+// a full snapshot clone just to share the scope filter.
+macro_rules! retain_node_scope {
+    ($store:expr, $node_did:expr, $keep_target:expr) => {{
+        let rows = $store;
+        let node_did = $node_did;
+        let keep_target = $keep_target;
+        let node_session_ids = if keep_target {
+            HashSet::new()
+        } else {
+            let mut session_ids = rows
+                .sessions
+                .iter()
+                .filter(|row| row.node_did == node_did)
+                .map(|row| row.session_id.clone())
+                .collect::<HashSet<_>>();
+            session_ids.extend(
+                rows.requests
+                    .iter()
+                    .filter(|row| row.node_did.as_deref() == Some(node_did))
+                    .filter_map(|row| row.session_id.clone()),
+            );
+            session_ids
+        };
+
+        rows.operator_config_authoritative_node_dids
+            .retain(|owner| (owner == node_did) == keep_target);
+        rows.nodes
+            .retain(|row| (row.node_did == node_did) == keep_target);
+        rows.agents
+            .retain(|row| (row.node_did == node_did) == keep_target);
+        rows.runtimes
+            .retain(|row| (row.node_did == node_did) == keep_target);
+        rows.node_readiness
+            .retain(|row| (row.node_did == node_did) == keep_target);
+        rows.requests
+            .retain(|row| (row.node_did.as_deref() == Some(node_did)) == keep_target);
+        rows.mailbox_items
+            .retain(|row| (row.node_did == node_did) == keep_target);
+        rows.goals
+            .retain(|row| (row.node_did == node_did) == keep_target);
+        rows.transcript_messages
+            .retain(|row| (row.message.node_did == node_did) == keep_target);
+        rows.output_segments
+            .retain(|row| (row.segment.node_did == node_did) == keep_target);
+        retain_rows_and_sources(
+            &mut rows.sessions,
+            &mut rows.session_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.tool_calls,
+            &mut rows.tool_call_source_node_dids,
+            |row, source| {
+                let ownerless_target_session = !keep_target
+                    && row.node_did.is_none()
+                    && source.is_none()
+                    && row
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|session_id| node_session_ids.contains(session_id));
+                (row_is_in_node_scope(row.node_did.as_deref(), source, node_did)
+                    || ownerless_target_session)
+                    == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.compaction_entries,
+            &mut rows.compaction_entry_source_node_dids,
+            |row, source| {
+                let ownerless_target_session = !keep_target
+                    && source.is_none()
+                    && row
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|session_id| node_session_ids.contains(session_id));
+                (row_is_in_node_scope(None, source, node_did) || ownerless_target_session)
+                    == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.tasks,
+            &mut rows.task_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.schedules,
+            &mut rows.schedule_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.schedule_observations,
+            &mut rows.schedule_observation_source_node_dids,
+            |_row, source| row_is_in_node_scope(None, source, node_did) == keep_target,
+        );
+        retain_rows_and_sources(
+            &mut rows.triggers,
+            &mut rows.trigger_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.trigger_observations,
+            &mut rows.trigger_observation_source_node_dids,
+            |_row, source| row_is_in_node_scope(None, source, node_did) == keep_target,
+        );
+        retain_rows_and_sources(
+            &mut rows.skills,
+            &mut rows.skill_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.tools,
+            &mut rows.tools_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.contexts,
+            &mut rows.context_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.compactions,
+            &mut rows.compaction_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.inference_backends,
+            &mut rows.inference_backend_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.backend_observations,
+            &mut rows.backend_observation_source_node_dids,
+            |_row, source| row_is_in_node_scope(None, source, node_did) == keep_target,
+        );
+        retain_rows_and_sources(
+            &mut rows.inference_profiles,
+            &mut rows.inference_profile_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.inference_sampling,
+            &mut rows.inference_sampling_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.inference_execution,
+            &mut rows.inference_execution_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.tool_service_registries,
+            &mut rows.tool_service_registry_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.event_sources,
+            &mut rows.event_source_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.agent_targets,
+            &mut rows.agent_target_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.datastore_tool_surfaces,
+            &mut rows.datastore_tool_surface_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.chain_key_bindings,
+            &mut rows.chain_key_binding_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+    }};
+}
+
 impl ClientStore {
     /// Replace this agent's operator-owned config and runtime readiness with
     /// rows loaded from the runtime GraphQL endpoint. Local-only leftovers
@@ -460,300 +672,15 @@ impl ClientStore {
     /// absent from the database snapshot cannot survive indefinitely in memory.
     pub fn replace_node_scope(&self, node_did: &str, snapshot: ClientStore) -> Self {
         let mut snapshot = snapshot;
-        snapshot
-            .operator_config_authoritative_node_dids
-            .retain(|owner| owner == node_did);
-        snapshot.nodes.retain(|row| row.node_did == node_did);
-        snapshot.agents.retain(|row| row.node_did == node_did);
-        snapshot.runtimes.retain(|row| row.node_did == node_did);
-        snapshot
-            .node_readiness
-            .retain(|row| row.node_did == node_did);
-        snapshot
-            .requests
-            .retain(|row| row.node_did.as_deref() == Some(node_did));
-        snapshot
-            .mailbox_items
-            .retain(|row| row.node_did == node_did);
-        snapshot.goals.retain(|row| row.node_did == node_did);
-        snapshot
-            .transcript_messages
-            .retain(|row| row.message.node_did == node_did);
-        snapshot
-            .output_segments
-            .retain(|row| row.segment.node_did == node_did);
-        retain_rows_and_sources(
-            &mut snapshot.sessions,
-            &mut snapshot.session_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.tool_calls,
-            &mut snapshot.tool_call_source_node_dids,
-            |row, source| row_is_in_node_scope(row.node_did.as_deref(), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.compaction_entries,
-            &mut snapshot.compaction_entry_source_node_dids,
-            |_row, source| row_is_in_node_scope(None, source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.tasks,
-            &mut snapshot.task_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.schedules,
-            &mut snapshot.schedule_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.schedule_observations,
-            &mut snapshot.schedule_observation_source_node_dids,
-            |_row, source| row_is_in_node_scope(None, source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.triggers,
-            &mut snapshot.trigger_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.trigger_observations,
-            &mut snapshot.trigger_observation_source_node_dids,
-            |_row, source| row_is_in_node_scope(None, source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.skills,
-            &mut snapshot.skill_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.tools,
-            &mut snapshot.tools_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.contexts,
-            &mut snapshot.context_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.compactions,
-            &mut snapshot.compaction_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.inference_backends,
-            &mut snapshot.inference_backend_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.backend_observations,
-            &mut snapshot.backend_observation_source_node_dids,
-            |_row, source| row_is_in_node_scope(None, source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.inference_profiles,
-            &mut snapshot.inference_profile_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.inference_sampling,
-            &mut snapshot.inference_sampling_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.inference_execution,
-            &mut snapshot.inference_execution_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.tool_service_registries,
-            &mut snapshot.tool_service_registry_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.event_sources,
-            &mut snapshot.event_source_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.agent_targets,
-            &mut snapshot.agent_target_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.datastore_tool_surfaces,
-            &mut snapshot.datastore_tool_surface_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut snapshot.chain_key_bindings,
-            &mut snapshot.chain_key_binding_source_node_dids,
-            |row, source| row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
+        retain_node_scope!(&mut snapshot, node_did, true);
 
         let mut rows = self.to_rows();
-        let mut node_session_ids = rows
-            .sessions
-            .iter()
-            .filter(|row| row.node_did == node_did)
-            .map(|row| row.session_id.clone())
-            .collect::<HashSet<_>>();
-        node_session_ids.extend(
-            rows.requests
+        retain_node_scope!(&mut rows, node_did, false);
+        rows.operator_config_authoritative_node_dids.extend(
+            snapshot
+                .operator_config_authoritative_node_dids
                 .iter()
-                .filter(|row| row.node_did.as_deref() == Some(node_did))
-                .filter_map(|row| row.session_id.clone()),
-        );
-        rows.operator_config_authoritative_node_dids
-            .remove(node_did);
-        if snapshot
-            .operator_config_authoritative_node_dids
-            .contains(node_did)
-        {
-            rows.operator_config_authoritative_node_dids
-                .insert(node_did.to_owned());
-        }
-        rows.nodes.retain(|row| row.node_did != node_did);
-        rows.agents.retain(|row| row.node_did != node_did);
-        rows.runtimes.retain(|row| row.node_did != node_did);
-        rows.node_readiness.retain(|row| row.node_did != node_did);
-        rows.requests
-            .retain(|row| row.node_did.as_deref() != Some(node_did));
-        rows.mailbox_items.retain(|row| row.node_did != node_did);
-        rows.goals.retain(|row| row.node_did != node_did);
-        rows.transcript_messages
-            .retain(|row| row.message.node_did != node_did);
-        rows.output_segments
-            .retain(|row| row.segment.node_did != node_did);
-        retain_rows_and_sources(
-            &mut rows.sessions,
-            &mut rows.session_source_node_dids,
-            |row, _source| !row_is_in_node_scope(Some(&row.node_did), None, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.tool_calls,
-            &mut rows.tool_call_source_node_dids,
-            |row, source| {
-                !row_is_in_node_scope(row.node_did.as_deref(), source, node_did)
-                    && (row.node_did.is_some()
-                        || source.is_some()
-                        || !row
-                            .session_id
-                            .as_deref()
-                            .is_some_and(|session_id| node_session_ids.contains(session_id)))
-            },
-        );
-        retain_rows_and_sources(
-            &mut rows.compaction_entries,
-            &mut rows.compaction_entry_source_node_dids,
-            |row, source| {
-                !row_is_in_node_scope(None, source, node_did)
-                    && !(source.is_none()
-                        && row
-                            .session_id
-                            .as_deref()
-                            .is_some_and(|session_id| node_session_ids.contains(session_id)))
-            },
-        );
-
-        // These rows carry their owner directly. Their observation provenance
-        // does not override an explicit foreign node identity.
-        retain_rows_and_sources(
-            &mut rows.tasks,
-            &mut rows.task_source_node_dids,
-            |row, source| !row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.schedules,
-            &mut rows.schedule_source_node_dids,
-            |row, source| !row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.schedule_observations,
-            &mut rows.schedule_observation_source_node_dids,
-            |_row, source| !row_is_in_node_scope(None, source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.triggers,
-            &mut rows.trigger_source_node_dids,
-            |row, source| !row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.trigger_observations,
-            &mut rows.trigger_observation_source_node_dids,
-            |_row, source| !row_is_in_node_scope(None, source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.skills,
-            &mut rows.skill_source_node_dids,
-            |row, source| !row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.tools,
-            &mut rows.tools_source_node_dids,
-            |row, source| !row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.contexts,
-            &mut rows.context_source_node_dids,
-            |row, source| !row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.compactions,
-            &mut rows.compaction_source_node_dids,
-            |row, source| !row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.inference_backends,
-            &mut rows.inference_backend_source_node_dids,
-            |row, source| !row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.backend_observations,
-            &mut rows.backend_observation_source_node_dids,
-            |_row, source| !row_is_in_node_scope(None, source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.inference_profiles,
-            &mut rows.inference_profile_source_node_dids,
-            |row, source| !row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.inference_sampling,
-            &mut rows.inference_sampling_source_node_dids,
-            |row, source| !row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.inference_execution,
-            &mut rows.inference_execution_source_node_dids,
-            |row, source| !row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.tool_service_registries,
-            &mut rows.tool_service_registry_source_node_dids,
-            |row, source| !row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.event_sources,
-            &mut rows.event_source_source_node_dids,
-            |row, source| !row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.agent_targets,
-            &mut rows.agent_target_source_node_dids,
-            |row, source| !row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.datastore_tool_surfaces,
-            &mut rows.datastore_tool_surface_source_node_dids,
-            |row, source| !row_is_in_node_scope(Some(&row.node_did), source, node_did),
-        );
-        retain_rows_and_sources(
-            &mut rows.chain_key_bindings,
-            &mut rows.chain_key_binding_source_node_dids,
-            |row, _source| row.node_did != node_did,
+                .cloned(),
         );
 
         ClientStore::from_rows(rows).merge_snapshot(snapshot)

@@ -60,12 +60,22 @@ fn snapshot_coalesces_shared_roots_and_splits_strict_projections() {
         &format!("{TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS}"),
     )
     .expect("strict config projection");
-    let observation: Vec<TriggerObservation> =
-        parse_observation_query_rows(&data, "triggers", TRIGGER_OBSERVATION_FIELDS)
-            .expect("independent observation projection");
-    let schedule_observation: Vec<ScheduleObservation> =
-        parse_observation_query_rows(&data, "triggers", SCHEDULE_OBSERVATION_FIELDS)
-            .expect("independent schedule observation projection");
+    let observation: Vec<TriggerObservation> = parse_observation_query_rows_with_source(
+        &data,
+        "triggers",
+        TRIGGER_OBSERVATION_FIELDS,
+        None,
+    )
+    .expect("independent observation projection")
+    .0;
+    let schedule_observation: Vec<ScheduleObservation> = parse_observation_query_rows_with_source(
+        &data,
+        "triggers",
+        SCHEDULE_OBSERVATION_FIELDS,
+        None,
+    )
+    .expect("independent schedule observation projection")
+    .0;
     assert_eq!(trigger.len(), 1);
     assert_eq!(observation.len(), 2);
     assert_eq!(observation[1].last_status.as_deref(), Some("ok"));
@@ -97,9 +107,14 @@ fn combined_snapshot_keeps_unknown_config_fields_rejected_and_observations_indep
         &format!("{TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS}"),
     )
     .expect("row-level malformed config is skipped");
-    let trigger_observations: Vec<TriggerObservation> =
-        parse_observation_query_rows(&data, "triggers", TRIGGER_OBSERVATION_FIELDS)
-            .expect("trigger observation remains independently decodable");
+    let trigger_observations: Vec<TriggerObservation> = parse_observation_query_rows_with_source(
+        &data,
+        "triggers",
+        TRIGGER_OBSERVATION_FIELDS,
+        None,
+    )
+    .expect("trigger observation remains independently decodable")
+    .0;
     let backends: Vec<InferenceBackend> = parse_projected_query_rows(
         &data,
         "inference_backends",
@@ -119,12 +134,15 @@ fn combined_snapshot_keeps_unknown_config_fields_rejected_and_observations_indep
         INFERENCE_BACKEND_OBSERVATION_FIELDS,
     )
     .expect("canonical backend fixture");
-    let backend_observations: Vec<InferenceBackendObservation> = parse_observation_query_rows(
-        &data,
-        "inference_backends",
-        INFERENCE_BACKEND_OBSERVATION_FIELDS,
-    )
-    .expect("backend observation remains independently decodable");
+    let backend_observations: Vec<InferenceBackendObservation> =
+        parse_observation_query_rows_with_source(
+            &data,
+            "inference_backends",
+            INFERENCE_BACKEND_OBSERVATION_FIELDS,
+            None,
+        )
+        .expect("backend observation remains independently decodable")
+        .0;
 
     assert!(
         triggers.is_empty(),
