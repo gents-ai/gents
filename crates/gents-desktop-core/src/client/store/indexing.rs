@@ -152,6 +152,8 @@ pub(super) fn normalize_rows(rows: &mut ClientStoreRows) {
 impl ClientStore {
     pub fn from_rows(mut rows: ClientStoreRows) -> Self {
         normalize_rows(&mut rows);
+        let (request_index_by_doc_id, unscoped_request_ids, mailbox_index_by_doc_id) =
+            Self::build_scope_indexes(&rows);
 
         let transcript_messages_by_session_id = build_vec_index(&rows.transcript_messages, |row| {
             Some(row.message.session_id.as_str())
@@ -240,6 +242,9 @@ impl ClientStore {
             runtimes_by_node_did,
             node_readiness_by_node_did,
             request_index_by_id,
+            request_index_by_doc_id,
+            unscoped_request_ids,
+            mailbox_index_by_doc_id,
         }
     }
 }
