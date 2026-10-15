@@ -6,4 +6,5 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+base64.workspace = true
 tiny_http = "0.12"
