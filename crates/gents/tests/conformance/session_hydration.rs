@@ -449,7 +449,11 @@ fn generated_session_hydration_admission_cases_match_receiver_owner() {
     use HydrationAdmissionAction as Action;
 
     let cases = lean_session_hydration_admission_cases();
-    assert_eq!(cases.len(), 640, "admission actions and guards are modeled");
+    assert_eq!(
+        cases.len(),
+        1280,
+        "admission actions and guards are modeled"
+    );
     for case in cases {
         let action = match case.action.as_str() {
             "passive_start" => Action::PassiveStart,
@@ -464,13 +468,13 @@ fn generated_session_hydration_admission_cases_match_receiver_owner() {
             other => panic!("unknown hydration request state {other:?}"),
         };
         let prev = ClientHydrationProgress {
-            session_id: if case.target_matches {
+            session_id: if case.session_matches {
                 "session"
             } else {
                 "other-session"
             }
             .into(),
-            node_did: if case.target_matches {
+            node_did: if case.node_matches {
                 "node"
             } else {
                 "other-node"
