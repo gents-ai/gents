@@ -1601,29 +1601,17 @@ async fn abandoned_assigned_waiter_cannot_admit_over_capacity() {
         .unwrap();
     let pool = registry.pool_for_test(backend).unwrap();
 
-    // Park a waiter and never let its task resume, so a released permit is
-    // assigned to it without being registered.
-    let parked_registry = registry.clone();
-    let mut parked =
-        Box::pin(async move { acquire_on(&parked_registry, "req-abandon-parked", backend).await });
-    let waker = futures::task::noop_waker();
-    let mut cx = std::task::Context::from_waker(&waker);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        assert!(parked.as_mut().poll(&mut cx).is_pending());
-        let rows = call_rows(node.as_ref()).await;
-        if call_state_for_request(&rows, "req-abandon-parked").as_deref() == Some("queued") {
-            break;
-        }
-        assert!(tokio::time::Instant::now() < deadline);
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    for _ in 0..20 {
-        assert!(parked.as_mut().poll(&mut cx).is_pending());
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
     first.finish_success(None).await.unwrap();
     drop(first);
+    // Occupy the newly released semaphore permit, then queue a real Tokio
+    // waiter. Releasing the held permit assigns it to that waiter without
+    // involving database polling or the admission ledger.
+    let parked = pool.take_unregistered_for_test();
+    let mut waiting = Box::pin(parked.0.clone().acquire_owned());
+    let waker = futures::task::noop_waker();
+    let mut cx = std::task::Context::from_waker(&waker);
+    assert!(waiting.as_mut().poll(&mut cx).is_pending());
+    drop(parked);
     assert_eq!(
         pool.in_transit_for_test(),
         1,
@@ -1637,7 +1625,7 @@ async fn abandoned_assigned_waiter_cannot_admit_over_capacity() {
         &HashMap::from([(backend.to_string(), config(backend, 1, 2))]),
     );
     assert_eq!(pool.owed_for_test(), 1);
-    drop(parked);
+    drop(waiting);
     assert_eq!(
         pool.available_permits_for_test(),
         1,
