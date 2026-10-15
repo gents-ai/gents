@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use gents::ConfigAccess;
 use serde_json::Value;
 
 use crate::cli::args::{PluginBindArgs, PluginCommand, PluginUnbindArgs};
@@ -254,6 +255,30 @@ pub async fn plugin_call(home: PathBuf, ux: String, name: String, input: Value) 
     .await
 }
 
+/* ---- UX plugins: a page's data path ---- */
+
+/// Runs one datastore tool the UX plugin listed as `request.ux` declares
+/// (`ux[].data`) on the agent `request.node_did`, through `access`: the
+/// operator's access to that agent's node (see `gents::ux_data`).
+pub async fn ux_data_call(
+    home: PathBuf,
+    access: ConfigAccess,
+    request: gents::ux_data::UxDataCall,
+) -> Result<Value> {
+    gents::ux_data::call(&home, &access, request).await
+}
+
+/// The surfaces and tools the UX plugin listed as `ux` may call on the
+/// agent `node_did`, as the node has them.
+pub async fn ux_data_surfaces(
+    home: PathBuf,
+    access: ConfigAccess,
+    ux: String,
+    node_did: String,
+) -> Result<Value> {
+    gents::ux_data::surfaces(&home, &access, &ux, &node_did).await
+}
+
 /* ---- registries: the index the Packs panel's picker reads ---- */
 
 pub fn registry_list(home: &std::path::Path) -> Result<Value> {
@@ -340,6 +365,7 @@ mod tests {
                         directives: vec![],
                     },
                     default_enabled: None,
+                    data: vec![],
                 }],
                 registry: None,
             },

@@ -22,6 +22,7 @@ fn ux(name: &str, entry: Option<&str>, plugin: Option<&str>) -> PackUxPlugin {
             directives: vec![],
         },
         default_enabled: None,
+        data: vec![],
     }
 }
 
@@ -101,6 +102,32 @@ fn lists_pack_plugins_with_their_declaration_and_namespaced_id() {
     assert_eq!(l.pack.as_deref(), Some("acme/board"));
     assert_eq!(l.contributes.as_ref().unwrap().areas, vec!["nav"]);
     assert!(l.file.ends_with("ux/board/plugin.js"));
+    assert!(l.data.is_empty(), "nothing declared, nothing listed");
+}
+
+#[test]
+fn a_pack_plugin_lists_its_declared_data_surfaces_and_a_dev_plugin_none() {
+    let home = tempfile::tempdir().unwrap();
+    let mut plugin = ux("board", Some("ux/board/plugin.js"), None);
+    plugin.data = vec![UxDataSurface {
+        surface: "board".into(),
+        tools: vec!["list_tasks".into(), "add_task".into()],
+    }];
+    install_record(home.path(), "acme/board", vec![plugin.clone()], vec![]);
+    dev_plugin(home.path(), "loose", "export default {}", None);
+
+    let listed = list(home.path()).unwrap();
+    let loose = listed.iter().find(|l| l.id == "loose").unwrap();
+    assert!(loose.data.is_empty());
+    let board = find(home.path(), "acme/board/board").unwrap();
+    assert_eq!(board.data, plugin.data);
+    let json = serde_json::to_value(&board).unwrap();
+    assert_eq!(
+        json["data"],
+        serde_json::json!([{ "surface": "board", "tools": ["list_tasks", "add_task"] }])
+    );
+    let json = serde_json::to_value(loose).unwrap();
+    assert_eq!(json["data"], serde_json::json!([]));
 }
 
 #[test]

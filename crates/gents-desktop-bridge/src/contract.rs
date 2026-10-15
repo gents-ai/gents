@@ -83,6 +83,8 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_ux_plugins_list", "ux-plugins-read"),
         ("desktop_ux_plugin_source", "ux-plugins-read"),
         ("desktop_plugin_call", "ux-plugins-call"),
+        ("desktop_ux_data_surfaces", "ux-plugins-read"),
+        ("desktop_ux_data_call", "ux-plugins-call"),
         // registries-read / registries-admin
         ("desktop_registry_list", "registries-read"),
         ("desktop_registry_refresh", "registries-admin"),
@@ -500,6 +502,9 @@ mod tests {
             ("desktop_ux_plugins_list", "read"),
             ("desktop_ux_plugin_source", "read"),
             ("desktop_plugin_call", "mutate"),
+            // the surfaces read lists declarations; the data call may create
+            ("desktop_ux_data_surfaces", "read"),
+            ("desktop_ux_data_call", "mutate"),
             ("desktop_registry_list", "read"),
             ("desktop_registry_refresh", "mutate"),
             ("desktop_registry_add", "mutate"),

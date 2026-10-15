@@ -927,7 +927,10 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
         )
         .await
         .unwrap();
-    let tool = BoundedWriteTool::new(fx.node.clone(), write_area.unwrap());
+    let tool = BoundedWriteTool::new(
+        crate::config_client::ConfigAccess::Local(fx.node.clone()),
+        write_area.unwrap(),
+    );
     crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
         None,
         CancellationToken::new(),

@@ -707,7 +707,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         assert_eq!(result["ranking"], "bm25");
 
         let bounded = BoundedQueryTool::new(
-            node.clone(),
+            crate::config_client::ConfigAccess::Local(node.clone()),
             crate::document_config::QueryToolDecl {
                 tool_name: "private_records".into(),
                 collection: "PrivateRecord".into(),

@@ -1627,6 +1627,30 @@
           "markdownDescription": "Denies the desktop_trigger_save command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_ux_data_call command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-ux-data-call",
+          "markdownDescription": "Enables the desktop_ux_data_call command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_ux_data_call command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-ux-data-call",
+          "markdownDescription": "Denies the desktop_ux_data_call command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_ux_data_surfaces command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-ux-data-surfaces",
+          "markdownDescription": "Enables the desktop_ux_data_surfaces command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_ux_data_surfaces command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-ux-data-surfaces",
+          "markdownDescription": "Denies the desktop_ux_data_surfaces command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_ux_plugin_source command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-ux-plugin-source",
@@ -1753,16 +1777,16 @@
           "markdownDescription": "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`\n- `allow-desktop-pack-plugin-slots`"
         },
         {
-          "description": "The ux plugins on disk and each one's module, for the desktop loader\n#### This permission set includes:\n\n- `allow-desktop-ux-plugins-list`\n- `allow-desktop-ux-plugin-source`",
+          "description": "The ux plugins on disk and each one's module, for the desktop loader\n#### This permission set includes:\n\n- `allow-desktop-ux-plugins-list`\n- `allow-desktop-ux-plugin-source`\n- `allow-desktop-ux-data-surfaces`",
           "type": "string",
           "const": "ux-plugins-read",
-          "markdownDescription": "The ux plugins on disk and each one's module, for the desktop loader\n#### This permission set includes:\n\n- `allow-desktop-ux-plugins-list`\n- `allow-desktop-ux-plugin-source`"
+          "markdownDescription": "The ux plugins on disk and each one's module, for the desktop loader\n#### This permission set includes:\n\n- `allow-desktop-ux-plugins-list`\n- `allow-desktop-ux-plugin-source`\n- `allow-desktop-ux-data-surfaces`"
         },
         {
-          "description": "A ux plugin calling one of its own pack's .afb plugins\n#### This permission set includes:\n\n- `allow-desktop-plugin-call`",
+          "description": "A ux plugin calling one of its own pack's .afb plugins, or a datastore tool its manifest declares\n#### This permission set includes:\n\n- `allow-desktop-plugin-call`\n- `allow-desktop-ux-data-call`",
           "type": "string",
           "const": "ux-plugins-call",
-          "markdownDescription": "A ux plugin calling one of its own pack's .afb plugins\n#### This permission set includes:\n\n- `allow-desktop-plugin-call`"
+          "markdownDescription": "A ux plugin calling one of its own pack's .afb plugins, or a datastore tool its manifest declares\n#### This permission set includes:\n\n- `allow-desktop-plugin-call`\n- `allow-desktop-ux-data-call`"
         },
         {
           "description": "The cached registry index: the master, the vertical registries it lists, and any added by hand\n#### This permission set includes:\n\n- `allow-desktop-registry-list`",

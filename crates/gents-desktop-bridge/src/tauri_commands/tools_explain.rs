@@ -39,13 +39,16 @@ pub async fn desktop_tool_surface_explain(
         .filter(|row| row.node_did == node_did && row.enabled)
         .map(|row| row.agent_id.clone())
         .collect::<HashSet<_>>();
-    let datastore_tool_surfaces = gents::list_datastore_tool_surfaces(core.node(), &node_did)
-        .await
-        .map_err(|error| {
-            BridgeError::untyped(format!(
-                "loading DatastoreToolSurface documents for {node_did}: {error}"
-            ))
-        })?;
+    let datastore_tool_surfaces = gents::list_datastore_tool_surfaces(
+        &gents::ConfigAccess::Local(core.node_arc()),
+        &node_did,
+    )
+    .await
+    .map_err(|error| {
+        BridgeError::untyped(format!(
+            "loading DatastoreToolSurface documents for {node_did}: {error}"
+        ))
+    })?;
     let eth_tools = gents::list_eth_tools(core.node(), &node_did)
         .await
         .map_err(|error| {

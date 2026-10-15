@@ -5,6 +5,7 @@ use defra_node::EmbeddedNode;
 use serde_json::json;
 
 use super::BoundedWriteTool;
+use crate::config_client::ConfigAccess;
 use crate::document_config::{WriteToolDecl, WriteToolField, WriteToolFieldFill};
 
 #[test]
@@ -89,7 +90,10 @@ fn decl() -> WriteToolDecl {
 #[tokio::test]
 async fn rejects_raw_mailbox_writer_even_when_declaration_is_canonical() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    let tool = BoundedWriteTool::new(node, crate::mailbox::canonical_mailbox_write_decl());
+    let tool = BoundedWriteTool::new(
+        ConfigAccess::Local(node),
+        crate::mailbox::canonical_mailbox_write_decl(),
+    );
     assert!(!tool.is_well_formed());
 }
 
@@ -98,7 +102,7 @@ async fn rejects_a_persisted_protected_collection_at_execution() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     let mut protected = decl();
     protected.collection = gents_protocol::schemas::EVAL_VERDICT_NAME.into();
-    let tool = BoundedWriteTool::new(node, protected);
+    let tool = BoundedWriteTool::new(ConfigAccess::Local(node), protected);
     assert!(!tool.is_well_formed());
     let err = Tool::call(
         &tool,
@@ -115,7 +119,7 @@ async fn rejects_a_persisted_protected_collection_at_execution() {
 #[tokio::test]
 async fn writes_one_bounded_doc() {
     let node = node_with_actionrequest().await;
-    let tool = BoundedWriteTool::new(Arc::clone(&node), decl());
+    let tool = BoundedWriteTool::new(ConfigAccess::Local(Arc::clone(&node)), decl());
     let out = Tool::call(
         &tool,
         serde_json::from_value(json!({
@@ -161,7 +165,7 @@ async fn writes_native_measurements_without_string_coercion() {
             .collect(),
         output_obligation: None,
     };
-    let tool = BoundedWriteTool::new(node.clone(), declaration);
+    let tool = BoundedWriteTool::new(ConfigAccess::Local(node.clone()), declaration);
     Tool::call(
         &tool,
         serde_json::from_value(json!({"disk":86,"healthy":false})).unwrap(),
@@ -179,7 +183,7 @@ async fn writes_native_measurements_without_string_coercion() {
 #[tokio::test]
 async fn rejects_missing_required_and_undeclared_fields() {
     let node = node_with_actionrequest().await;
-    let tool = BoundedWriteTool::new(node, decl());
+    let tool = BoundedWriteTool::new(ConfigAccess::Local(node), decl());
     assert!(Tool::call(
         &tool,
         serde_json::from_value(json!({ "summary": "x" })).unwrap()
@@ -202,8 +206,8 @@ async fn empty_field_declaration_reports_the_surface_contract_without_writing() 
     let node = node_with_actionrequest().await;
     let mut declaration = decl();
     declaration.fields.clear();
-    let tool =
-        BoundedWriteTool::new(Arc::clone(&node), declaration).declared_by(Some("ingest".into()));
+    let tool = BoundedWriteTool::new(ConfigAccess::Local(Arc::clone(&node)), declaration)
+        .declared_by(Some("ingest".into()));
     let definition = Tool::definition(&tool, String::new()).await;
     assert_eq!(definition.parameters["properties"], json!({}));
     let error = Tool::call(
@@ -233,7 +237,7 @@ async fn empty_field_declaration_reports_the_surface_contract_without_writing() 
 #[tokio::test]
 async fn advertised_name_and_required_array_come_from_decl() {
     let node = node_with_actionrequest().await;
-    let tool = BoundedWriteTool::new(node, decl());
+    let tool = BoundedWriteTool::new(ConfigAccess::Local(node), decl());
 
     assert_eq!(Tool::name(&tool), "request_action");
 
@@ -264,7 +268,7 @@ async fn runtime_backstop_rejects_invalid_graphql_identifiers() {
 
     for declaration in [empty_collection, bad_collection, bad_field] {
         let result = Tool::call(
-            &BoundedWriteTool::new(Arc::clone(&node), declaration),
+            &BoundedWriteTool::new(ConfigAccess::Local(Arc::clone(&node)), declaration),
             serde_json::from_value(json!({ "drift_sig": "a", "summary": "b" })).unwrap(),
         )
         .await;
@@ -291,7 +295,7 @@ async fn rejects_decl_with_non_identifier_field_name() {
         }],
         output_obligation: None,
     };
-    let tool = BoundedWriteTool::new(node, bad);
+    let tool = BoundedWriteTool::new(ConfigAccess::Local(node), bad);
     assert!(
         Tool::call(&tool, serde_json::from_value(json!({})).unwrap())
             .await
@@ -303,7 +307,7 @@ async fn rejects_decl_with_non_identifier_field_name() {
 async fn runtime_fills_are_hidden_rejected_from_model_input_and_stamped_at_call_time() {
     let node = node_with_actionrequest().await;
     let tool = BoundedWriteTool::new(
-        Arc::clone(&node),
+        ConfigAccess::Local(Arc::clone(&node)),
         WriteToolDecl {
             notification: None,
             tool_name: "write_result".into(),
@@ -401,7 +405,7 @@ async fn native_schema_and_receipts_preserve_lists_json_and_null() {
     .await
     .unwrap();
     let tool = BoundedWriteTool::new(
-        node.clone(),
+        ConfigAccess::Local(node.clone()),
         WriteToolDecl {
             notification: None,
             tool_name: "record_typed".into(),
@@ -478,7 +482,7 @@ async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
 
     let tool_for = |collection: &str, field: &str| {
         BoundedWriteTool::new(
-            Arc::clone(&node),
+            ConfigAccess::Local(Arc::clone(&node)),
             WriteToolDecl {
                 notification: None,
                 tool_name: "record_tally".into(),
@@ -579,7 +583,7 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
             }],
             output_obligation: None,
         };
-        let tool = BoundedWriteTool::new(node.clone(), declaration);
+        let tool = BoundedWriteTool::new(ConfigAccess::Local(node.clone()), declaration);
         let input = if admitted {
             &case["witness"]
         } else {

@@ -30,7 +30,9 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::pack::{list_readable_home_installs, HomePackInstall, PackUxPlugin, UxContributions};
+use crate::pack::{
+    list_readable_home_installs, HomePackInstall, PackUxPlugin, UxContributions, UxDataSurface,
+};
 
 pub mod lint;
 
@@ -83,6 +85,10 @@ pub struct UxListing {
     pub contributes: Option<UxContributions>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_enabled: Option<bool>,
+    /// The datastore surfaces and tools the manifest lets its pages call
+    /// (`crate::ux_data`); empty for a dev plugin, which declares nothing.
+    #[serde(default)]
+    pub data: Vec<UxDataSurface>,
 }
 
 /// A produced module, as `desktop_ux_plugin_source` answers it.
@@ -149,6 +155,7 @@ pub fn list(home: &Path) -> Result<Vec<UxListing>> {
                 description: None,
                 contributes: None,
                 default_enabled: None,
+                data: Vec::new(),
             });
         }
     }
@@ -203,6 +210,7 @@ fn pack_listing(home: &Path, record: &HomePackInstall, ux: &PackUxPlugin) -> Res
         description: Some(ux.description.clone()),
         contributes: Some(ux.contributes.clone()),
         default_enabled: ux.default_enabled,
+        data: ux.data.clone(),
     })
 }
 

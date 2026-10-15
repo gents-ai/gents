@@ -1,10 +1,10 @@
 //! Apply-owned `DatastoreToolSurface` documents.
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::config_client::ConfigAccess;
+use crate::graphql::escape_graphql_string;
 
 use super::surface_tool::{
     deserialize_optional_surface_tools, serialize_optional_surface_tools, SurfaceToolDecl,
@@ -49,9 +49,10 @@ pub struct DatastoreToolSurfaceDocument {
     pub tags: Vec<String>,
 }
 
-/// List canonical surface configurations owned by the selected principal.
+/// List canonical surface configurations owned by the selected principal,
+/// through the embedded node or a served node's GraphQL endpoint.
 pub async fn list_datastore_tool_surfaces(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     node_did: &str,
 ) -> Result<Vec<DatastoreToolSurfaceDocument>> {
     anyhow::ensure!(!node_did.trim().is_empty(), "surface owner is required");
@@ -62,11 +63,9 @@ pub async fn list_datastore_tool_surfaces(
         "{{ DatastoreToolSurface(filter: {{ node_did: {{ _eq: \"{owner}\" }} }}) {{ {} }} }}",
         fields.join(" "),
     );
-    let response =
-        graphql_with_transaction_retry(node, &query, "list DatastoreToolSurface").await?;
+    let response = access.execute(&query).await?;
     let rows = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("DatastoreToolSurface"))
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| anyhow::anyhow!("surface query returned no row array"))?;

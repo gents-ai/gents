@@ -102,12 +102,16 @@ permissions = ["allow-desktop-pack-installed", "allow-desktop-pack-search", "all
 [[set]]
 identifier = "ux-plugins-read"
 description = "The ux plugins on disk and each one's module, for the desktop loader"
-permissions = ["allow-desktop-ux-plugins-list", "allow-desktop-ux-plugin-source"]
+permissions = [
+  "allow-desktop-ux-plugins-list",
+  "allow-desktop-ux-plugin-source",
+  "allow-desktop-ux-data-surfaces",
+]
 
 [[set]]
 identifier = "ux-plugins-call"
-description = "A ux plugin calling one of its own pack's .afb plugins"
-permissions = ["allow-desktop-plugin-call"]
+description = "A ux plugin calling one of its own pack's .afb plugins, or a datastore tool its manifest declares"
+permissions = ["allow-desktop-plugin-call", "allow-desktop-ux-data-call"]
 
 [[set]]
 identifier = "registries-read"

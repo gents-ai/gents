@@ -73,6 +73,7 @@ pub mod pack_store;
 pub mod plugin;
 pub mod provider_http;
 pub(crate) mod provider_input;
+pub mod ux_data;
 pub mod ux_plugin;
 pub use gents_loop::provider_input::ProviderInputProfile;
 /// Exact provider context-window budget policy shared by compaction,

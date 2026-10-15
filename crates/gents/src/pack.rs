@@ -366,6 +366,28 @@ pub struct PackUxPlugin {
     /// Absent means yes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_enabled: Option<bool>,
+    /// The datastore tools its pages may run, by surface: the host refuses
+    /// any (surface, tool) pair not named here (`crate::ux_data`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data: Vec<UxDataSurface>,
+}
+
+/// One `DatastoreToolSurface` a UX plugin's pages may call into, by the
+/// surface's id on the agent's node, narrowed to the named tools.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UxDataSurface {
+    pub surface: String,
+    pub tools: Vec<String>,
+}
+
+/// Longest surface id a manifest may name.
+pub const MAX_UX_DATA_SURFACE_ID_LEN: usize = 128;
+
+/// A tool name a manifest may name: `[a-z][a-z0-9_]{0,63}`, the shape a
+/// `DatastoreToolSurface` entry's `tool_name` takes.
+pub fn is_valid_ux_data_tool_name(name: &str) -> bool {
+    name.len() <= 64 && is_valid_pack_name(name)
 }
 
 /// What a UX plugin declares it contributes: the gate the desktop's
@@ -480,6 +502,44 @@ impl PackUxPlugin {
             "ux plugin {:?} declares directives but not the transcript.directives area",
             self.name
         );
+        let mut surfaces = BTreeSet::new();
+        for declared in &self.data {
+            let surface = declared.surface.as_str();
+            anyhow::ensure!(
+                !surface.is_empty()
+                    && !surface.chars().any(char::is_whitespace)
+                    && surface.len() <= MAX_UX_DATA_SURFACE_ID_LEN,
+                "ux plugin {:?} declares the data surface {surface:?}; a surface id is non-empty, \
+                 has no whitespace and is at most {MAX_UX_DATA_SURFACE_ID_LEN} characters",
+                self.name
+            );
+            anyhow::ensure!(
+                surfaces.insert(surface),
+                "ux plugin {:?} declares the data surface {surface:?} twice",
+                self.name
+            );
+            anyhow::ensure!(
+                !declared.tools.is_empty(),
+                "ux plugin {:?} declares the data surface {surface:?} with no tools; name the \
+                 tools its pages may run",
+                self.name
+            );
+            let mut tools = BTreeSet::new();
+            for tool in &declared.tools {
+                anyhow::ensure!(
+                    is_valid_ux_data_tool_name(tool),
+                    "ux plugin {:?} declares the tool {tool:?} on data surface {surface:?}; a tool \
+                     name is lowercase letters, digits and underscores, starting with a letter, \
+                     at most 64 characters",
+                    self.name
+                );
+                anyhow::ensure!(
+                    tools.insert(tool.as_str()),
+                    "ux plugin {:?} declares the tool {tool:?} on data surface {surface:?} twice",
+                    self.name
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -1568,11 +1628,124 @@ mod tests {
                 directives: vec![],
             },
             default_enabled: None,
+            data: vec![],
         }
     }
 
     fn no_plugins() -> BTreeSet<&'static str> {
         BTreeSet::new()
+    }
+
+    fn with_data(data: Vec<UxDataSurface>) -> PackUxPlugin {
+        PackUxPlugin { data, ..valid_ux() }
+    }
+
+    fn surface(surface: &str, tools: &[&str]) -> UxDataSurface {
+        UxDataSurface {
+            surface: surface.to_owned(),
+            tools: tools.iter().map(|tool| (*tool).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_ux_data_declaration_round_trips_and_an_absent_one_is_not_written() {
+        let plugin = with_data(vec![
+            surface("board", &["list_tasks", "add_task"]),
+            surface("notes", &["list_notes"]),
+        ]);
+        plugin.validate(&no_plugins()).expect("declared surfaces");
+        let json = serde_json::to_value(&plugin).unwrap();
+        assert_eq!(
+            json["data"],
+            serde_json::json!([
+                { "surface": "board", "tools": ["list_tasks", "add_task"] },
+                { "surface": "notes", "tools": ["list_notes"] },
+            ])
+        );
+        let back: PackUxPlugin = serde_json::from_value(json).unwrap();
+        assert_eq!(back, plugin);
+
+        let bare = serde_json::to_value(valid_ux()).unwrap();
+        assert!(
+            bare.get("data").is_none(),
+            "an empty data list is not written out"
+        );
+        let back: PackUxPlugin = serde_json::from_value(bare).unwrap();
+        assert!(back.data.is_empty());
+
+        let unknown: Result<UxDataSurface> = serde_json::from_value(serde_json::json!({
+            "surface": "board", "tools": ["list_tasks"], "collection": "Task"
+        }))
+        .map_err(Into::into);
+        assert!(
+            unknown.is_err(),
+            "a data surface takes surface and tools only"
+        );
+    }
+
+    #[test]
+    fn ux_data_surfaces_and_tools_are_checked_by_name() {
+        let error = with_data(vec![surface("board", &["List-Tasks"])])
+            .validate(&no_plugins())
+            .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(error.contains("\"List-Tasks\""), "{error}");
+        assert!(error.contains("\"board\""), "{error}");
+        assert!(error.contains("starting with a letter"), "{error}");
+        for bad in ["", "9tasks", "a b", &"a".repeat(65)] {
+            assert!(
+                with_data(vec![surface("board", &[bad])])
+                    .validate(&no_plugins())
+                    .is_err(),
+                "{bad:?} must be refused"
+            );
+        }
+        with_data(vec![surface(
+            "board",
+            &["a", "list_tasks_2", &"a".repeat(64)],
+        )])
+        .validate(&no_plugins())
+        .expect("snake_case tool names up to 64 characters");
+
+        let error = with_data(vec![
+            surface("board", &["list_tasks"]),
+            surface("board", &["add_task"]),
+        ])
+        .validate(&no_plugins())
+        .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("data surface \"board\" twice"),
+            "{error:#}"
+        );
+
+        let error = with_data(vec![surface("board", &["list_tasks", "list_tasks"])])
+            .validate(&no_plugins())
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("tool \"list_tasks\" on data surface \"board\" twice"),
+            "{error:#}"
+        );
+
+        let error = with_data(vec![surface("board", &[])])
+            .validate(&no_plugins())
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("data surface \"board\" with no tools"),
+            "{error:#}"
+        );
+
+        for bad in ["", "my board", "board\n", &"s".repeat(129)] {
+            let error = with_data(vec![surface(bad, &["list_tasks"])])
+                .validate(&no_plugins())
+                .unwrap_err();
+            assert!(
+                format!("{error:#}").contains("a surface id is non-empty"),
+                "{bad:?}: {error:#}"
+            );
+        }
+        with_data(vec![surface(&"s".repeat(128), &["list_tasks"])])
+            .validate(&no_plugins())
+            .expect("128 characters is the ceiling");
     }
 
     #[test]

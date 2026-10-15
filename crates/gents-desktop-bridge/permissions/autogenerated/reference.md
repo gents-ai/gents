@@ -2910,6 +2910,58 @@ Denies the desktop_trigger_save command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-ux-data-call`
+
+</td>
+<td>
+
+Enables the desktop_ux_data_call command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-ux-data-call`
+
+</td>
+<td>
+
+Denies the desktop_ux_data_call command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-ux-data-surfaces`
+
+</td>
+<td>
+
+Enables the desktop_ux_data_surfaces command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-ux-data-surfaces`
+
+</td>
+<td>
+
+Denies the desktop_ux_data_surfaces command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-ux-plugin-source`
 
 </td>
@@ -3188,7 +3240,7 @@ The ux plugins on disk and each one's module, for the desktop loader
 </td>
 <td>
 
-A ux plugin calling one of its own pack's .afb plugins
+A ux plugin calling one of its own pack's .afb plugins, or a datastore tool its manifest declares
 
 </td>
 </tr>

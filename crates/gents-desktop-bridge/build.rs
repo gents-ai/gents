@@ -30,6 +30,8 @@ const COMMANDS: &[&str] = &[
     "desktop_ux_plugins_list",
     "desktop_ux_plugin_source",
     "desktop_plugin_call",
+    "desktop_ux_data_call",
+    "desktop_ux_data_surfaces",
     "desktop_registry_list",
     "desktop_registry_refresh",
     "desktop_registry_add",

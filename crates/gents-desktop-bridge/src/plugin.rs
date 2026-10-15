@@ -65,6 +65,8 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::ux_plugins::desktop_ux_plugins_list,
             tauri_commands::ux_plugins::desktop_ux_plugin_source,
             tauri_commands::ux_plugins::desktop_plugin_call,
+            tauri_commands::ux_plugins::desktop_ux_data_call,
+            tauri_commands::ux_plugins::desktop_ux_data_surfaces,
             tauri_commands::registries::desktop_registry_list,
             tauri_commands::registries::desktop_registry_refresh,
             tauri_commands::registries::desktop_registry_add,
