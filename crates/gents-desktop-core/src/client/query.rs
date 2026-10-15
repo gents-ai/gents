@@ -39,7 +39,7 @@ pub use session_tip::{
 mod snapshot_loaders;
 
 pub use agent_scope::load_node_scoped_snapshot;
-pub use document_patches::{fetch_doc_patch, DocumentPatch};
+pub use document_patches::fetch_doc_patch;
 pub(crate) use document_patches::{
     is_transcript_content_collection, supports_doc_patch_collection,
 };
