@@ -334,7 +334,7 @@ async fn read_then_insert_unique(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<
 
 /// Premise for read-then-insert with a unique index as the backstop, on the
 /// DefraDB rev pinned in the workspace `Cargo.toml`
-/// (`980190cb3d0e8298e038a07c34dff94fd710893a`): a duplicate insert of a
+/// (`9b4e647d1cbb0b37c94e0b4423953bea2708fae6`): a duplicate insert of a
 /// unique-indexed key errors with "violates unique index", and the error,
 /// propagated out of `transact_local_write`, rolls back the whole transaction, so
 /// neither the duplicate nor an earlier write in it persists. DefraDB rejects
