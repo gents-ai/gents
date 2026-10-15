@@ -42,4 +42,3 @@ def casesJson : String :=
   "[" ++ String.intercalate "," (identityCases.map caseJson) ++ "]"
 
 end Conformance.ClientRequestCacheIdentity
-

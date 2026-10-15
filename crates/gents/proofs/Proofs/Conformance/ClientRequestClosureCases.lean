@@ -18,4 +18,3 @@ def casesJson : String :=
   "[" ++ String.intercalate "," (scenarios.map caseJson) ++ "]"
 
 end Conformance.ClientRequestClosure
-

@@ -241,4 +241,3 @@ def casesJson : String := Id.run do
     ",\"notice_delivery\":" ++ noticeCasesJson ++ "}"
 
 end Conformance.ClientDataPublication
-

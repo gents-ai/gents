@@ -340,4 +340,3 @@ async fn reconnect_replay_reinstalls_when_delete_reports_remote_not_found() {
     );
     assert!(admin.replicators.lock().unwrap().contains_key("addr1"));
 }
-

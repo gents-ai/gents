@@ -49,8 +49,8 @@ mod request_patch_publication_tests {
     use super::request_patch_cache_reusable;
     use crate::client::observe::ObservedStore;
     use crate::client::store::{ClientStore, ClientStoreRows};
-    use gents_protocol::row::AgentRequestRow;
     use gents_protocol::request_lifecycle::RequestLifecycleState;
+    use gents_protocol::row::AgentRequestRow;
 
     fn request_row(state: &str) -> AgentRequestRow {
         AgentRequestRow {
@@ -104,10 +104,10 @@ mod request_patch_publication_tests {
                     case["same_signature"]
                         .as_bool()
                         .expect("signature comparison"),
-                    case["fence_accepted"]
+                    case["fence_accepted"].as_bool().expect("publication fence"),
+                    case["rows_current"]
                         .as_bool()
-                        .expect("publication fence"),
-                    case["rows_current"].as_bool().expect("physical row comparison"),
+                        .expect("physical row comparison"),
                 ),
                 case["expected_reuse"].as_bool().expect("Lean result"),
                 "{}",
