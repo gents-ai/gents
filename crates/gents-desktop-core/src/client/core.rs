@@ -363,7 +363,6 @@ pub struct ClientCore {
     observer: Mutex<Option<ObserverHandle>>,
     sync_state: sync_state::ClientSyncStateOwner,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
-    hydration_transition: Mutex<()>,
     selected_node_did: watch::Sender<Option<String>>,
     last_loaded_for: tokio::sync::Mutex<HashMap<String, std::time::Instant>>,
     request_patch_signatures: tokio::sync::Mutex<HashMap<String, (usize, usize, u64)>>,

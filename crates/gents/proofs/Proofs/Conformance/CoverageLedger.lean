@@ -701,6 +701,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::session_hydration::generated_session_hydration_start_cases_match_receiver_start")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "session_hydration_admission_cases"
+      "SessionHydrationAdmissionCases"
+      "conformance::session_hydration::generated_session_hydration_admission_cases_match_receiver_owner")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "enrollment_cases"
       "EnrollmentCases"
       "conformance::enrollment::generated_enrollment_cases_match_production_transition_core")

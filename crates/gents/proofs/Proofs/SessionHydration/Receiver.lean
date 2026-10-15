@@ -208,6 +208,67 @@ inductive DurableRequest where
   | rejected (documents : Option (Finset DocumentKey))
   deriving DecidableEq
 
+inductive AdmissionAction where
+  | passiveStart
+  | explicitRetry
+  deriving DecidableEq, Repr
+
+/-- Admission is scoped to the durable row and the observation for the exact
+target. Passive observation may create only a missing request; retry may reset
+only a rejected request after the user explicitly asks. -/
+def canAdmitRequest (action : AdmissionAction) (request : DurableRequest)
+    (prev : ClientProgress) (session node : String)
+    (foreignHeader ownedSession hasDocuments nonterminalRequest : Bool) : Bool :=
+  match action, request with
+  | .passiveStart, .missing =>
+      decide (prev.session = session ∧ prev.node = node ∧ prev.phase = .idle) &&
+        canStart foreignHeader ownedSession hasDocuments nonterminalRequest
+  | .explicitRetry, .rejected _ =>
+      !foreignHeader && canRetry prev session node
+  | _, _ => false
+
+/-- The only admission transition starts a fresh durable attempt. A denied
+action retains the observation unchanged. -/
+def admitRequest (action : AdmissionAction) (request : DurableRequest)
+    (prev : ClientProgress) (session node : String)
+    (foreignHeader ownedSession hasDocuments nonterminalRequest : Bool) : ClientProgress :=
+  if canAdmitRequest action request prev session node foreignHeader ownedSession
+      hasDocuments nonterminalRequest then
+    beginRequest session node
+  else prev
+
+theorem passive_start_preserves_current_or_terminal_request
+    (request : DurableRequest) (prev : ClientProgress) (session node : String)
+    (foreignHeader ownedSession hasDocuments nonterminalRequest : Bool)
+    (hrequest : request ≠ .missing) :
+    admitRequest .passiveStart request prev session node foreignHeader ownedSession
+      hasDocuments nonterminalRequest = prev := by
+  cases request <;> simp [admitRequest, canAdmitRequest] at *
+
+theorem passive_start_preserves_non_idle_progress
+    (request : DurableRequest) (prev : ClientProgress) (session node : String)
+    (foreignHeader ownedSession hasDocuments nonterminalRequest : Bool)
+    (hphase : prev.phase ≠ .idle) :
+    admitRequest .passiveStart request prev session node foreignHeader ownedSession
+      hasDocuments nonterminalRequest = prev := by
+  cases request <;> simp [admitRequest, canAdmitRequest, hphase]
+
+theorem explicit_retry_requires_rejected_request
+    (request : DurableRequest) (prev : ClientProgress) (session node : String)
+    (foreignHeader ownedSession hasDocuments nonterminalRequest : Bool)
+    (hrequest : ∀ documents, request ≠ .rejected documents) :
+    admitRequest .explicitRetry request prev session node foreignHeader ownedSession
+      hasDocuments nonterminalRequest = prev := by
+  cases request <;> simp [admitRequest, canAdmitRequest] at *
+
+theorem explicit_retry_requires_exact_failed_target
+    (documents : Option (Finset DocumentKey)) (prev : ClientProgress)
+    (session node : String) (foreignHeader ownedSession hasDocuments nonterminalRequest : Bool)
+    (hretry : canRetry prev session node = false) :
+    admitRequest .explicitRetry (.rejected documents) prev session node foreignHeader
+      ownedSession hasDocuments nonterminalRequest = prev := by
+  simp [admitRequest, canAdmitRequest, hretry]
+
 /-- Projecting a snapshot is a pure query over one durable control row plus
 the locally merged set. It retains no process-wide receiver state. -/
 def projectDurable (request : DurableRequest) (mergedDocuments : Finset DocumentKey)
