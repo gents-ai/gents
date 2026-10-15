@@ -20,7 +20,10 @@ struct ActiveRequestRecoveryReport {
 }
 
 impl RequestLifecycle {
-    pub async fn recover_all(node: &EmbeddedNode, node_did: &str) -> Result<RecoveryReport> {
+    pub async fn recover_all(
+        node: &std::sync::Arc<EmbeddedNode>,
+        node_did: &str,
+    ) -> Result<RecoveryReport> {
         let active = recover_active_requests(node, node_did).await?;
         crate::trigger_engine::durable::recover_outcomes(node, node_did).await?;
         let background_wakes_redriven = Self::redrive_failed_background_wakeups(node, node_did)
@@ -66,7 +69,7 @@ impl RequestLifecycle {
     /// and bounded attempt counter are written together in one document update.
     ///
     pub async fn redrive_terminal_convergence(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
     ) -> Result<TerminalRedriveReport> {
         let escaped_node_did = escape_graphql_string(node_did);
@@ -185,7 +188,7 @@ impl RequestLifecycle {
     }
 
     pub async fn repair_terminal_requests(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
     ) -> Result<TerminalRepairReport> {
         Ok(recover_active_requests(node, node_did).await?.requests)
@@ -193,7 +196,7 @@ impl RequestLifecycle {
 }
 
 async fn recover_active_requests(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
 ) -> Result<ActiveRequestRecoveryReport> {
     let active_states = RequestLifecycleState::graphql_list([

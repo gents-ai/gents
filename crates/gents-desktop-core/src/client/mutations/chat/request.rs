@@ -10,13 +10,12 @@ use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::client::store::ClientStore;
 
-use super::super::graphql::{
-    escape_graphql_string, execute_mutation, normalize_optional_string, normalize_required,
-};
+use super::super::graphql::{escape_graphql_string, normalize_optional_string, normalize_required};
 use super::binding::resolve_agent_binding;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,7 +56,7 @@ pub struct SubmitRequestOptions {
 }
 
 pub async fn submit_request(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     store: &ClientStore,
     session_id: &str,
     node_did: &str,
@@ -83,7 +82,7 @@ pub async fn submit_request(
     )
     .await?;
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-    execute_mutation(node, &mutation, "submit_request").await?;
+    ConfigAccess::write_local(node, "submit_request", &mutation).await?;
     Ok(result)
 }
 
@@ -354,7 +353,7 @@ fn prepare_prompt_submission(
 }
 
 pub async fn retry_request(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     store: &ClientStore,
     parent: &AgentRequestRow,
     requester_did: &str,
@@ -374,7 +373,7 @@ pub async fn retry_request(
 }
 
 async fn retry_request_with_request_id(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     store: &ClientStore,
     parent: &AgentRequestRow,
     requester_did: &str,
@@ -820,7 +819,7 @@ fn build_add_agent_request_field(
 /// Only `lifecycle_state=dead` with `failure_reason=Stale` is eligible — any
 /// other state would risk bypassing legitimate terminal classifications.
 pub async fn resend_request(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     store: &ClientStore,
     stale_request_id: &str,
     node_did: &str,

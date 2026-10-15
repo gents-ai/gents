@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents::goal::{GoalDocument, GoalStatus};
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 use super::projection::{ProjectionEngine, UpdateTimestamps};
 use super::turn::{PromptSender, PromptSenderLine};
@@ -82,7 +83,7 @@ impl GoalCommand {
     /// caller must authorize the exact attached session before invoking this.
     pub(super) async fn execute(
         &self,
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         principal: &str,
         session: &str,
     ) -> Result<String> {
@@ -150,7 +151,7 @@ impl GoalCursor {
     /// No refresh_goal_usage/set_goal calls: observation must not mutate goals.
     pub(super) async fn refresh(
         &mut self,
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         principal: &str,
         session: &str,
         sender: &PromptSender,

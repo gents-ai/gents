@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use gents::NodeIdentity as _;
 use gents_protocol::request_admission::AgentRequestCreate;
 use serde::Deserialize;
+use std::sync::Arc;
 
 use super::*;
 
@@ -207,7 +208,7 @@ async fn generated_session_recovery_cases_drive_desktop_retry_request() -> Resul
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    let shutdown = core.shutdown().await;
+    let shutdown = Arc::new(core).shutdown().await;
     result?;
     shutdown?;
     Ok(())
@@ -324,10 +325,10 @@ async fn seed_session_recovery_pre_state(
         observation: None,
     };
     let input = gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session)?)?;
-    execute_mutation(
-        core.node(),
-        &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
+    gents::config_client::ConfigAccess::write_local(
+        &core.node_arc(),
         "test.seed_recovery_session",
+        &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
     )
     .await?;
     let failed_is_latest = case.pre_latest_id == case.failed_id;
@@ -379,7 +380,7 @@ async fn seed_session_recovery_pre_state(
 
     if let Some(failed) = failed.as_ref() {
         force_request_state_for_test(
-            core.node(),
+            &core.node_arc(),
             &failed.request_id,
             &forced_retry_parent_state(case),
         )
@@ -388,7 +389,7 @@ async fn seed_session_recovery_pre_state(
     if let Some(existing) = existing.as_ref() {
         if !failed_is_latest {
             force_request_state_for_test(
-                core.node(),
+                &core.node_arc(),
                 &existing.request_id,
                 &forced_latest_request_state(case),
             )
@@ -474,10 +475,10 @@ async fn submit_recovery_seed_request(
     };
     create.max_retries = case.max_retries as i64;
     gents::sign_agent_request_create(core.node_identity(), &mut create).await?;
-    execute_mutation(
-        core.node(),
-        &create.graphql_mutation().map_err(anyhow::Error::msg)?,
+    gents::config_client::ConfigAccess::write_local(
+        &core.node_arc(),
         "test.seed_recovery_request",
+        &create.graphql_mutation().map_err(anyhow::Error::msg)?,
     )
     .await?;
     core.refresh_store().await?;
@@ -740,7 +741,7 @@ async fn retry_request_with_id_injection_for_test(
 ) -> Result<SubmittedRequest> {
     let snapshot = core.store().snapshot();
     let submitted = retry_request_with_request_id(
-        core.node(),
+        &core.node_arc(),
         snapshot.as_ref(),
         parent,
         core.node_identity().did(),
@@ -1022,7 +1023,7 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
     // Test the desktop mutation's caller-held enrollment identity directly;
     // local-standard routing intentionally selects the target's own signer.
     let submitted = super::submit_request(
-        core.node(),
+        &core.node_arc(),
         &snapshot,
         &session_id,
         node_did,
@@ -1114,7 +1115,7 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
             .and_then(serde_json::Value::as_str),
         Some("manual")
     );
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -1132,7 +1133,7 @@ async fn goal_backed_desktop_submission_commits_goal_claim_and_signed_request_to
 
     let session_id = Uuid::new_v4().to_string();
     let snapshot = core.store().snapshot();
-    let access = ConfigAccess::Local(core.node_arc());
+    let access = ConfigAccess::local(core.node_arc());
     let submitted = super::submit_goal_backed_request(
         core.node(),
         snapshot.as_ref(),
@@ -1187,7 +1188,7 @@ async fn goal_backed_desktop_submission_commits_goal_claim_and_signed_request_to
 }
 
 async fn force_request_state_for_test(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     request_id: &str,
     state: &ForcedRequestState,
 ) -> Result<()> {
@@ -1207,7 +1208,9 @@ async fn force_request_state_for_test(
                 ) {{ _docID }}
             }}"#
     );
-    execute_mutation(node, &mutation, "force_request_state_for_test").await
+    gents::config_client::ConfigAccess::write_local(node, "force_request_state_for_test", &mutation)
+        .await
+        .map(|_| ())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1240,8 +1243,12 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
         .context("expected submitted parent request in desktop store")?;
 
     let deadline = Utc::now() + chrono::Duration::minutes(5);
-    force_retry_parent_eligible_for_test(core.node(), &original.request_id, &deadline.to_rfc3339())
-        .await?;
+    force_retry_parent_eligible_for_test(
+        &core.node_arc(),
+        &original.request_id,
+        &deadline.to_rfc3339(),
+    )
+    .await?;
     parent.lifecycle_state = Some(RequestLifecycleState::Failed);
     parent.deadline = Some(deadline.to_rfc3339());
     parent.retry_count = Some(0);
@@ -1249,7 +1256,7 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
 
     let duplicate_request_id = "duplicate-retry-request-id";
     seed_duplicate_request_id_for_test(
-        core.node(),
+        &core.node_arc(),
         duplicate_request_id,
         &session_id,
         core.node_identity().did(),
@@ -1263,7 +1270,7 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
 
     let snapshot = core.store().snapshot();
     let err = retry_request_with_request_id(
-        core.node(),
+        &core.node_arc(),
         snapshot.as_ref(),
         &parent,
         core.node_identity().did(),
@@ -1284,7 +1291,7 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
         "failed duplicate retry must not add another row with the colliding request_id"
     );
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -1324,10 +1331,10 @@ async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() ->
     );
     create.input = original_input.clone();
     gents::sign_agent_request_create(core.node_identity(), &mut create).await?;
-    execute_mutation(
-        core.node(),
-        &create.graphql_mutation().map_err(anyhow::Error::msg)?,
+    gents::config_client::ConfigAccess::write_local(
+        &core.node_arc(),
         "test.seed_typed_retry_parent",
+        &create.graphql_mutation().map_err(anyhow::Error::msg)?,
     )
     .await?;
     let original = SubmittedRequest {
@@ -1337,8 +1344,12 @@ async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() ->
         agent_id: Some(RECOVERY_AGENT_ID.to_owned()),
     };
     let deadline = Utc::now() + chrono::Duration::minutes(5);
-    force_retry_parent_eligible_for_test(core.node(), &original.request_id, &deadline.to_rfc3339())
-        .await?;
+    force_retry_parent_eligible_for_test(
+        &core.node_arc(),
+        &original.request_id,
+        &deadline.to_rfc3339(),
+    )
+    .await?;
     core.refresh_store().await?;
 
     let parent = request_from_store_for_test(&core, &original.request_id)?;
@@ -1378,7 +1389,7 @@ async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() ->
         "next claim selects its backend"
     );
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -1403,8 +1414,12 @@ async fn concurrent_retry_claims_return_one_durable_successor() -> Result<()> {
         )
         .await?;
     let deadline = Utc::now() + chrono::Duration::minutes(5);
-    force_retry_parent_eligible_for_test(core.node(), &original.request_id, &deadline.to_rfc3339())
-        .await?;
+    force_retry_parent_eligible_for_test(
+        &core.node_arc(),
+        &original.request_id,
+        &deadline.to_rfc3339(),
+    )
+    .await?;
     core.refresh_store().await?;
     let parent = request_from_store_for_test(&core, &original.request_id)?;
 
@@ -1426,12 +1441,12 @@ async fn concurrent_retry_claims_return_one_durable_successor() -> Result<()> {
         left.request_id
     );
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
 async fn force_retry_parent_eligible_for_test(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     request_id: &str,
     deadline: &str,
 ) -> Result<()> {
@@ -1448,11 +1463,17 @@ async fn force_retry_parent_eligible_for_test(
                 ) {{ _docID }}
             }}"#
     );
-    execute_mutation(node, &mutation, "force_retry_parent_eligible_for_test").await
+    gents::config_client::ConfigAccess::write_local(
+        node,
+        "force_retry_parent_eligible_for_test",
+        &mutation,
+    )
+    .await
+    .map(|_| ())
 }
 
 async fn seed_duplicate_request_id_for_test(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     request_id: &str,
     session_id: &str,
     node_did: &str,
@@ -1478,7 +1499,13 @@ async fn seed_duplicate_request_id_for_test(
         "",
     );
     let mutation = format!("mutation {{\n{request_field}\n}}");
-    execute_mutation(node, &mutation, "seed_duplicate_request_id_for_test").await
+    gents::config_client::ConfigAccess::write_local(
+        node,
+        "seed_duplicate_request_id_for_test",
+        &mutation,
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1503,8 +1530,9 @@ async fn interactive_retry_ignores_newer_foreign_requester_row() -> Result<()> {
     let node = escape_graphql_string(core.node_identity().did());
     let session = escape_graphql_string(&pre.session_id);
     let request_id = escape_graphql_string(&format!("foreign-{}", Uuid::new_v4()));
-    execute_mutation(
-        core.node(),
+    gents::config_client::ConfigAccess::write_local(
+        &core.node_arc(),
+        "test.foreign_requester_row",
         &format!(
             r#"mutation {{ create_AgentRequest(input: {{
         request_id: "{request_id}", node_did: "{node}", requester_did: "did:test:other-requester",
@@ -1513,7 +1541,6 @@ async fn interactive_retry_ignores_newer_foreign_requester_row() -> Result<()> {
         created_at: "2099-01-01T00:00:00Z"
     }}) {{ _docID }} }}"#
         ),
-        "test.foreign_requester_row",
     )
     .await?;
     let retried = core.retry_request(&pre.parent).await?;
@@ -1532,6 +1559,6 @@ async fn interactive_retry_ignores_newer_foreign_requester_row() -> Result<()> {
         )
     );
     assert!(row.backend_id.is_none());
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }

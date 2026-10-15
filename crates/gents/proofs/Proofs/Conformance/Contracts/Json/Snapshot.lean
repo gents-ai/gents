@@ -1,5 +1,6 @@
 import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
+import Proofs.Conformance.EnrollmentPendingRequests
 import Proofs.Conformance.GraphWorkspaceLineage
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
@@ -143,6 +144,8 @@ def snapshotJson : String :=
     ++ "\"interrupt_queue_cases\":"
       ++ Conformance.InterruptQueueContracts.casesJson ++ ","
     ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
+    ++ "\"session_input_edit_client_observation_cases\":"
+      ++ FoldQueueContracts.inputEditClientObservationCasesJson ++ ","
     ++ "\"queue_management_cases\":" ++ FoldQueueContracts.managementCasesJson ++ ","
     ++ "\"steering_publication_cases\":" ++ FoldQueueContracts.steeringPublicationCasesJson ++ ","
     ++ "\"fold_queue_cases\":"
@@ -205,10 +208,14 @@ def snapshotJson : String :=
       ++ sessionHydrationDurableCasesJson ++ ","
     ++ "\"session_hydration_start_cases\":"
       ++ sessionHydrationStartCasesJson ++ ","
+    ++ "\"session_hydration_admission_cases\":"
+      ++ sessionHydrationAdmissionCasesJson ++ ","
     ++ "\"enrollment_cases\":"
       ++ enrollmentCasesJson ++ ","
     ++ "\"enrollment_durable_projection_cases\":"
       ++ enrollmentDurableProjectionCasesJson ++ ","
+    ++ "\"enrollment_pending_request_cases\":"
+      ++ Conformance.EnrollmentPendingRequests.casesJson ++ ","
     ++ "\"enrollment_encoding_cases\":"
       ++ enrollmentEncodingCasesJson ++ ","
     ++ "\"enrollment_digest_cases\":"

@@ -177,7 +177,7 @@ mod tests {
                 .unwrap(),
         );
         node.add_schema("type FilterAuthor { name: String } type FilterBook { title: String score: Int tags: [String] payload: JSON author: FilterAuthor }").await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         for filter in [
             json!({"_and":[{"score":{"_geq":0}},{"author":{"name":{"_eq":"Ada"}}}]}),
             json!({"_or":[{"title":{"_like":"A%"}},{"title":{"_neq":"B"}}]}),
@@ -230,7 +230,7 @@ mod tests {
             .await
             .unwrap();
         ConfigAccess::write_local(&node,"seed_count_filter_probe","mutation { add_CountFilterProbe(input:[{name:\"ready\",score:0},{name:\"ready\",score:1}]){_docID} }").await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let native = access
             .execute("{ COUNT(CountFilterProbe:{filter:{and:[{eq:{name:\"ready\"}}]}}) }")
             .await;

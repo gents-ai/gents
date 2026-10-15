@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
 
 use tokio::sync::watch;
 
@@ -56,8 +56,12 @@ impl ObserverMetrics {
 pub struct StoreProjectionRevision {
     pub store_version: u64,
     /// Advances for observed request, session and tool-call lineage inputs, not
-    /// transcript invalidations. It is a refresh cue, never an authority check.
+    /// transcript invalidations. This is the UI lineage-cache revision.
     pub provenance_version: u64,
+    /// Paired with snapshot identity to fence in-flight publications. Advances
+    /// for AgentRequest events and lineage-affecting invalidations without
+    /// changing the UI lineage-cache revision for request-only events.
+    pub request_event_version: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,11 +85,19 @@ struct ObservedState {
     revision: StoreProjectionRevision,
 }
 
+#[derive(Default)]
+struct PendingResync {
+    full: bool,
+    node_dids: std::collections::HashSet<String>,
+}
+
 pub struct ObservedStore {
     state: RwLock<ObservedState>,
     focused_request_id: RwLock<Option<String>>,
     version_tx: watch::Sender<u64>,
     change_tx: watch::Sender<StoreUpdateNotice>,
+    resync_tx: watch::Sender<u64>,
+    pending_resync: StdMutex<PendingResync>,
 }
 
 impl ObservedStore {
@@ -94,8 +106,10 @@ impl ObservedStore {
         let revision = StoreProjectionRevision {
             store_version: 1,
             provenance_version: 1,
+            request_event_version: 1,
         };
         let (change_tx, _change_rx) = watch::channel(StoreUpdateNotice { revision });
+        let (resync_tx, _resync_rx) = watch::channel(0_u64);
         let store = Arc::new(Self {
             state: RwLock::new(ObservedState {
                 snapshot: Arc::new(initial_snapshot.into_observer_projection()),
@@ -104,6 +118,8 @@ impl ObservedStore {
             focused_request_id: RwLock::new(None),
             version_tx,
             change_tx,
+            resync_tx,
+            pending_resync: StdMutex::new(PendingResync::default()),
         });
         (store, version_rx)
     }
@@ -136,6 +152,50 @@ impl ObservedStore {
         self.change_tx.subscribe()
     }
 
+    pub(crate) fn subscribe_resync_requests(&self) -> watch::Receiver<u64> {
+        self.resync_tx.subscribe()
+    }
+
+    /// Coalesces stale async publishers into the observer's existing bounded
+    /// authoritative reload loop; callers never start their own retry.
+    pub(crate) fn request_resync(&self, node_did: Option<&str>) {
+        self.enqueue_resync_request(node_did);
+        self.resync_tx.send_modify(|generation| {
+            *generation = generation.saturating_add(1);
+        });
+    }
+
+    pub(crate) fn enqueue_resync_request(&self, node_did: Option<&str>) {
+        const MAX_PENDING_SCOPES: usize = 16;
+        let mut pending = self
+            .pending_resync
+            .lock()
+            .expect("pending resync lock poisoned");
+        if pending.full {
+            // A full reload already subsumes this request.
+        } else if let Some(node_did) = node_did {
+            pending.node_dids.insert(node_did.to_owned());
+            if pending.node_dids.len() > MAX_PENDING_SCOPES {
+                pending.full = true;
+                pending.node_dids.clear();
+            }
+        } else {
+            pending.full = true;
+            pending.node_dids.clear();
+        }
+    }
+
+    pub(crate) fn take_resync_requests(&self) -> (bool, Vec<String>) {
+        let mut pending = self
+            .pending_resync
+            .lock()
+            .expect("pending resync lock poisoned");
+        let full = std::mem::take(&mut pending.full);
+        let mut node_dids: Vec<_> = std::mem::take(&mut pending.node_dids).into_iter().collect();
+        node_dids.sort();
+        (full, node_dids)
+    }
+
     pub fn focused_request_id(&self) -> Option<String> {
         self.focused_request_id
             .read()
@@ -162,6 +222,24 @@ impl ObservedStore {
         })
     }
 
+    /// Publishes a patch read only while the data snapshot and lineage token it
+    /// observed are still current. Transcript-only invalidations retain both,
+    /// so streaming text cannot starve ordinary request reads.
+    pub(crate) fn merge_chat_patch_at_snapshot(
+        &self,
+        captured_snapshot: &SharedClientStore,
+        captured_request_event_version: u64,
+        patch: ClientStore,
+    ) -> Option<u64> {
+        let patch = patch.into_observer_projection();
+        self.update_at_snapshot(
+            captured_snapshot,
+            captured_request_event_version,
+            provenance_update(&patch),
+            |snapshot| snapshot.merge_chat_patch(patch),
+        )
+    }
+
     pub fn merge_snapshot(&self, incoming: ClientStore) -> u64 {
         let incoming = incoming.into_observer_projection();
         self.merge_observer_patch(incoming)
@@ -184,30 +262,42 @@ impl ObservedStore {
         }
     }
 
-    pub fn replace_node_snapshot(&self, node_did: &str, incoming: ClientStore) -> u64 {
+    pub(crate) fn merge_observer_patch_at_snapshot(
+        &self,
+        captured_snapshot: &SharedClientStore,
+        captured_request_event_version: u64,
+        incoming: ClientStore,
+    ) -> Option<StorePatchMergeOutcome> {
         let incoming = incoming.into_observer_projection();
-        self.update(ProvenanceUpdate::Invalidate, |snapshot| {
-            snapshot.replace_node_scope(node_did, incoming)
-        })
+        self.update_at_snapshot(
+            captured_snapshot,
+            captured_request_event_version,
+            provenance_update(&incoming),
+            |snapshot| snapshot.merge_snapshot(incoming),
+        )
+        .map(|store_version| StorePatchMergeOutcome { store_version })
     }
 
-    /// A reload may await database reads while an explicit request refresh
-    /// publishes newer facts. Check its captured revision under the same lock
-    /// as replacement so that older reads cannot erase those facts. An accepted
-    /// reload also invalidates unretained tool-call lineage after lost events.
-    pub(crate) fn replace_reloaded_snapshot(
+    /// An awaited authoritative read publishes only while the retained data
+    /// snapshot and lineage token it observed remain current. An accepted
+    /// reload invalidates unretained tool-call lineage after lost events.
+    pub(crate) fn replace_reloaded_snapshot_at_snapshot(
         &self,
-        captured: StoreProjectionRevision,
+        captured_snapshot: &SharedClientStore,
+        captured_request_event_version: u64,
         node_did: Option<&str>,
         incoming: ClientStore,
     ) -> bool {
         let incoming = incoming.into_observer_projection();
-        self.update_at_revision(Some(captured), ProvenanceUpdate::Invalidate, |snapshot| {
-            match node_did {
+        self.update_at_snapshot(
+            captured_snapshot,
+            captured_request_event_version,
+            ProvenanceUpdate::Invalidate,
+            |snapshot| match node_did {
                 Some(node_did) => snapshot.replace_node_scope(node_did, incoming),
                 None => incoming,
-            }
-        })
+            },
+        )
         .is_some()
     }
 
@@ -224,6 +314,10 @@ impl ObservedStore {
                     .revision
                     .provenance_version
                     .saturating_add(u64::from(provenance_changed)),
+                request_event_version: state
+                    .revision
+                    .request_event_version
+                    .saturating_add(u64::from(provenance_changed)),
             };
             StoreUpdateNotice {
                 revision: state.revision,
@@ -234,24 +328,49 @@ impl ObservedStore {
         notice.revision.store_version
     }
 
+    /// Advances the request-read fence without invalidating lineage caches.
+    pub(crate) fn observe_request_event(&self) -> u64 {
+        let mut state = self.state.write().expect("store snapshot lock poisoned");
+        state.revision.request_event_version =
+            state.revision.request_event_version.saturating_add(1);
+        state.revision.request_event_version
+    }
+
     fn update(
         &self,
         provenance: ProvenanceUpdate,
         transform: impl FnOnce(&ClientStore) -> ClientStore,
     ) -> u64 {
-        self.update_at_revision(None, provenance, transform)
+        self.update_if(|_| true, provenance, transform)
             .expect("unconditional store update")
     }
 
-    fn update_at_revision(
+    fn update_at_snapshot(
         &self,
-        captured: Option<StoreProjectionRevision>,
+        captured_snapshot: &SharedClientStore,
+        captured_request_event_version: u64,
+        provenance: ProvenanceUpdate,
+        transform: impl FnOnce(&ClientStore) -> ClientStore,
+    ) -> Option<u64> {
+        self.update_if(
+            |state| {
+                Arc::ptr_eq(captured_snapshot, &state.snapshot)
+                    && captured_request_event_version == state.revision.request_event_version
+            },
+            provenance,
+            transform,
+        )
+    }
+
+    fn update_if(
+        &self,
+        accepts: impl FnOnce(&ObservedState) -> bool,
         provenance: ProvenanceUpdate,
         transform: impl FnOnce(&ClientStore) -> ClientStore,
     ) -> Option<u64> {
         let notice = {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
-            if captured.is_some_and(|revision| revision != state.revision) {
+            if !accepts(&state) {
                 return None;
             }
             let store_version = state.revision.store_version.saturating_add(1);
@@ -271,6 +390,7 @@ impl ObservedStore {
             state.revision = StoreProjectionRevision {
                 store_version,
                 provenance_version,
+                request_event_version: state.revision.request_event_version,
             };
             StoreUpdateNotice {
                 revision: state.revision,
@@ -386,12 +506,23 @@ mod reload_tests {
     #[test]
     fn accepted_reload_refreshes_unretained_lineage_but_rejected_reload_does_not() {
         let (store, _) = ObservedStore::new(requests(&["parent"]));
-        let captured = store.projection_revision();
-        store.invalidate_projection(false);
+        let (captured, captured_revision) = store.snapshot_with_revision();
+        store.invalidate_projection(true);
         let current = store.projection_revision();
-        assert!(!store.replace_reloaded_snapshot(captured, None, requests(&["parent"])));
+        assert!(!store.replace_reloaded_snapshot_at_snapshot(
+            &captured,
+            captured_revision.request_event_version,
+            None,
+            requests(&["parent"]),
+        ));
         assert_eq!(store.projection_revision(), current);
-        assert!(store.replace_reloaded_snapshot(current, None, requests(&["parent"])));
+        let (current_snapshot, current_revision) = store.snapshot_with_revision();
+        assert!(store.replace_reloaded_snapshot_at_snapshot(
+            &current_snapshot,
+            current_revision.request_event_version,
+            None,
+            requests(&["parent"]),
+        ));
         assert_eq!(
             store.projection_revision().provenance_version,
             current.provenance_version + 1
@@ -402,20 +533,229 @@ mod reload_tests {
     fn late_reload_cannot_erase_a_request_refreshed_after_capture() {
         for scope in [None, Some("did:test:reload")] {
             let (store, _) = ObservedStore::new(requests(&["accounted"]));
-            let captured = store.projection_revision();
+            let (captured, captured_revision) = store.snapshot_with_revision();
             let old_database_read = requests(&["accounted"]);
             store.merge_chat_patch(requests(&["pending"]));
             let refreshed = store.projection_revision();
-            assert!(!store.replace_reloaded_snapshot(captured, scope, old_database_read));
+            assert!(!store.replace_reloaded_snapshot_at_snapshot(
+                &captured,
+                captured_revision.request_event_version,
+                scope,
+                old_database_read,
+            ));
             assert_eq!(store.projection_revision(), refreshed);
             assert!(store
                 .snapshot()
                 .requests
                 .iter()
                 .any(|row| row.request_id == "pending"));
-            assert!(store.replace_reloaded_snapshot(refreshed, scope, requests(&["pending"])));
+            let (refreshed_snapshot, refreshed_revision) = store.snapshot_with_revision();
+            assert!(store.replace_reloaded_snapshot_at_snapshot(
+                &refreshed_snapshot,
+                refreshed_revision.request_event_version,
+                scope,
+                requests(&["pending"]),
+            ));
             assert_eq!(store.snapshot().requests.len(), 1);
             assert_eq!(store.snapshot().requests[0].request_id, "pending");
+        }
+    }
+
+    #[test]
+    fn captured_patch_rejects_newer_data_and_request_event_but_not_transcript_notice() {
+        let (store, _) = ObservedStore::new(requests(&["old"]));
+        let (captured, revision) = store.snapshot_with_revision();
+        store.invalidate_projection(false);
+        assert!(store
+            .merge_chat_patch_at_snapshot(
+                &captured,
+                revision.request_event_version,
+                requests(&["valid"])
+            )
+            .is_some());
+
+        let (stale_snapshot, stale_revision) = store.snapshot_with_revision();
+        store.replace_snapshot(requests(&[]));
+        assert!(store
+            .merge_chat_patch_at_snapshot(
+                &stale_snapshot,
+                stale_revision.request_event_version,
+                requests(&["old"]),
+            )
+            .is_none());
+        assert!(!store
+            .snapshot()
+            .requests
+            .iter()
+            .any(|row| row.request_id == "old"));
+
+        let (uncached_snapshot, uncached_revision) = store.snapshot_with_revision();
+        store.observe_request_event();
+        assert!(store
+            .merge_chat_patch_at_snapshot(
+                &uncached_snapshot,
+                uncached_revision.request_event_version,
+                requests(&["deleted-before-read"]),
+            )
+            .is_none());
+        assert!(!store
+            .snapshot()
+            .requests
+            .iter()
+            .any(|row| row.request_id == "deleted-before-read"));
+    }
+
+    #[test]
+    fn generated_data_publication_cases_match_observed_store() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../gents/tests/fixtures/client_data_publication.json"
+        ))
+        .expect("generated ClientDataPublication cases");
+        for case in fixture["publication"]
+            .as_array()
+            .expect("publication cases")
+        {
+            let name = case["name"].as_str().expect("case name");
+            let expected = case["accepted"].as_bool().expect("model decision");
+            let initial_ids: Vec<String> = case["initial_request_ids"]
+                .as_array()
+                .expect("modeled initial request IDs")
+                .iter()
+                .map(|id| id.as_str().expect("request ID").to_owned())
+                .collect();
+            let initial_refs: Vec<&str> = initial_ids.iter().map(String::as_str).collect();
+            let publish_ids: Vec<String> = case["publish_request_ids"]
+                .as_array()
+                .expect("modeled publication request IDs")
+                .iter()
+                .map(|id| id.as_str().expect("request ID").to_owned())
+                .collect();
+            let publish_refs: Vec<&str> = publish_ids.iter().map(String::as_str).collect();
+            let (store, _) = ObservedStore::new(requests(&initial_refs));
+            let (captured, revision) = store.snapshot_with_revision();
+            for action in case["actions"].as_array().expect("modeled actions") {
+                match action.as_str().expect("publication action") {
+                    "request_event" => {
+                        store.observe_request_event();
+                    }
+                    "transcript_invalidation" => {
+                        store.invalidate_projection(false);
+                    }
+                    "replace_requests" => {
+                        store.replace_snapshot(requests(&[]));
+                    }
+                    other => panic!("unrecognized modeled publication action {other}"),
+                }
+            }
+            let published = store
+                .merge_chat_patch_at_snapshot(
+                    &captured,
+                    revision.request_event_version,
+                    requests(&publish_refs),
+                )
+                .is_some();
+            assert_eq!(published, expected, "modeled case {name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn generated_recovery_cases_preserve_scopes_without_self_waking() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../gents/tests/fixtures/client_data_publication.json"
+        ))
+        .expect("generated ClientDataPublication cases");
+        for case in fixture["recovery"].as_array().expect("recovery cases") {
+            let name = case["name"].as_str().expect("case name");
+            let expected_scopes: Vec<String> = case["pending_scopes"]
+                .as_array()
+                .expect("modeled pending scopes")
+                .iter()
+                .map(|scope| format!("scope-{}", scope.as_u64().expect("scope id")))
+                .collect();
+            let expected_generation = case["generation"].as_u64().expect("model generation");
+            let expected_full = case["full"].as_bool().expect("modeled full-reload state");
+            let retry_scheduled = case["retry_scheduled"]
+                .as_bool()
+                .expect("modeled retry deadline state");
+            assert_eq!(case["initial"]["full"].as_bool(), Some(false));
+            assert!(case["initial"]["pending_scopes"]
+                .as_array()
+                .expect("modeled initial scopes")
+                .is_empty());
+            assert_eq!(case["initial"]["generation"].as_u64(), Some(0));
+            assert_eq!(case["initial"]["retry_scheduled"].as_bool(), Some(false));
+            let (store, _) = ObservedStore::new(ClientStore::default());
+            let mut wake = store.subscribe_resync_requests();
+            assert_eq!(
+                *wake.borrow(),
+                case["initial"]["generation"].as_u64().unwrap()
+            );
+            let mut in_flight = Vec::new();
+            let mut observed_generation = 0;
+            let mut batch_taken = false;
+            let mut retry_not_before = None;
+            let now = tokio::time::Instant::now();
+            for action in case["actions"]
+                .as_array()
+                .expect("modeled recovery actions")
+            {
+                match action["op"].as_str().expect("recovery action op") {
+                    "request_scope" if batch_taken => {
+                        let scope =
+                            format!("scope-{}", action["scope"].as_u64().expect("modeled scope"));
+                        store.request_resync(Some(&scope));
+                        assert!(wake.has_changed().expect("watch remains open"));
+                        observed_generation = *wake.borrow_and_update();
+                    }
+                    "request_scope" => {
+                        let scope =
+                            format!("scope-{}", action["scope"].as_u64().expect("modeled scope"));
+                        store.request_resync(Some(&scope));
+                    }
+                    "take_batch" => {
+                        wake.changed().await.expect("initial batch notification");
+                        let (full, batch) = store.take_resync_requests();
+                        assert_eq!(full, case["initial"]["full"].as_bool().unwrap());
+                        in_flight = batch;
+                        observed_generation = *wake.borrow_and_update();
+                        batch_taken = true;
+                    }
+                    "fail_batch" => {
+                        let failed_scopes =
+                            action["scopes"].as_array().expect("modeled failed scopes");
+                        for scope in failed_scopes {
+                            let scope =
+                                format!("scope-{}", scope.as_u64().expect("modeled failed scope"));
+                            assert!(in_flight.contains(&scope), "failed scope was not in flight");
+                            store.enqueue_resync_request(Some(&scope));
+                        }
+                        assert!(!wake.has_changed().expect("watch remains open"));
+                        assert_eq!(*wake.borrow(), observed_generation);
+                        retry_not_before = Some(now + std::time::Duration::from_millis(1));
+                    }
+                    "retry_timer" => {
+                        retry_not_before = None;
+                    }
+                    other => panic!("unrecognized modeled recovery action {other}"),
+                }
+            }
+            assert_eq!(
+                *wake.borrow(),
+                expected_generation,
+                "model generation {name}"
+            );
+            assert_eq!(
+                super::super::resync_retry_ready(retry_not_before, now),
+                !retry_scheduled,
+                "observer retry gate for modeled recovery actions {name}"
+            );
+            if retry_scheduled {
+                let deadline = retry_not_before.expect("failed batch has a retry deadline");
+                assert!(super::super::resync_retry_ready(Some(deadline), deadline));
+            }
+            let (full, pending) = store.take_resync_requests();
+            assert_eq!(full, expected_full);
+            assert_eq!(pending, expected_scopes, "modeled recovery case {name}");
         }
     }
 }

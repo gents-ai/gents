@@ -213,7 +213,7 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
     let identity = Arc::new(test_identity("startup-probe-discovers-model"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend_with_capacity_and_probe_status(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-startup-probe",
         mock_endpoint.endpoint(),
@@ -285,7 +285,7 @@ async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config()
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-invalid-config"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-invalid-config",
         "http://127.0.0.1:9/v1",
@@ -375,7 +375,7 @@ async fn router_generation_persistence_failure_terminates_run_agent_before_dispa
     let identity = Arc::new(test_identity("router-generation-persistence-run-agent"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-router-generation-persistence",
         mock_endpoint.endpoint(),
@@ -431,7 +431,7 @@ async fn slot_drain_failure_reaches_run_agent_after_external_shutdown() {
     let identity = Arc::new(test_identity("slot-drain-failure"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-slot-drain-failure",
         mock_endpoint.endpoint(),
@@ -490,7 +490,7 @@ async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run
     let identity = Arc::new(test_identity("startup-source-persistence-exhaustion"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-startup-source-persistence",
         mock_endpoint.endpoint(),
@@ -644,7 +644,7 @@ async fn ready_persistence_exhaustion_is_fatal_and_never_opens_runtime_readiness
     let identity = Arc::new(test_identity("ready-persistence-exhaustion"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-ready-persistence",
         mock_endpoint.endpoint(),
@@ -721,7 +721,7 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-all-unavailable"));
     bind_default_agent_backend_with_capacity_and_probe_status(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-unavailable",
         "http://127.0.0.1:9/v1",
@@ -813,7 +813,7 @@ async fn run_agent_recovers_backend_availability_without_restart() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-backend-recovers"));
     bind_default_agent_backend_with_capacity_and_probe_status(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-recovers",
         "http://127.0.0.1:9/v1",
@@ -892,7 +892,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         ("session-shutdown-waiting", "code"),
     ] {
         crate::session::ensure_session_with_agent_id_and_requester_did(
-            node.as_ref(),
+            &node,
             session_id,
             identity.did(),
             agent_id,
@@ -901,7 +901,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         .await
         .unwrap();
         crate::session::update_session_title_with_source(
-            node.as_ref(),
+            &node,
             identity.did(),
             Some(identity.did()),
             session_id,
@@ -912,7 +912,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         .unwrap();
     }
     bind_default_agent_backend_with_capacity(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-blocked",
         mock_endpoint.endpoint(),
@@ -923,8 +923,8 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
     // test constructs the executable agent slots directly. Keep that
     // authorization boundary real while isolating the capacity/shutdown
     // property below.
-    crate::test_support::install_test_agent(node.as_ref(), identity.did(), "general").await;
-    crate::test_support::install_test_agent(node.as_ref(), identity.did(), "code").await;
+    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
+    crate::test_support::install_test_agent(&node, identity.did(), "code").await;
     let agent = crate::Gents::builder()
         .node(node.clone())
         .identity(identity.clone())

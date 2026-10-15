@@ -7,9 +7,11 @@ use gents::collection::Collection;
 use gents::config_client::apply_desired_state_plan;
 use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::document_config::SkillDocument;
+#[cfg(test)]
+use std::sync::Arc;
 
 #[cfg(test)]
-pub async fn upsert_skill(node: &EmbeddedNode, document: &SkillDocument) -> Result<()> {
+pub async fn upsert_skill(node: &Arc<EmbeddedNode>, document: &SkillDocument) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: Collection::Skill,
@@ -30,7 +32,7 @@ pub async fn upsert_skill_on(access: &ConfigAccess, document: &SkillDocument) ->
 }
 
 #[cfg(test)]
-pub async fn delete_skill(node: &EmbeddedNode, node_did: &str, id: &str) -> Result<usize> {
+pub async fn delete_skill(node: &Arc<EmbeddedNode>, node_did: &str, id: &str) -> Result<usize> {
     super::delete_scoped_document_local(
         node,
         "desktop.skill.delete",
@@ -60,7 +62,7 @@ mod tests {
 
     #[tokio::test]
     async fn skill_save_roundtrip_preserves_source_directory() -> Result<()> {
-        let node = EmbeddedNode::builder().build().await?;
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         gents::ensure_node(&node, "did:test:skill-source").await?;
         let mut skill: SkillDocument = serde_json::from_value(json!({
@@ -70,7 +72,7 @@ mod tests {
         upsert_skill(&node, &skill).await?;
         skill.display_name = Some("Renamed review".into());
         upsert_skill(&node, &skill).await?;
-        ConfigAccess::transact_local(&node, None, "desktop.skill.verify_source", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "desktop.skill.verify_source", |txn| {
             Box::pin(async move {
                 let (_, saved) = read_desired_state_record_in_txn(
                     txn,
@@ -92,7 +94,7 @@ mod tests {
     #[tokio::test]
     async fn skill_delete_rejects_context_references_without_detaching_or_cross_owner_effects(
     ) -> Result<()> {
-        let node = EmbeddedNode::builder().build().await?;
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:skill-a", "did:test:skill-b"] {
             gents::ensure_node(&node, owner).await?;
@@ -108,7 +110,7 @@ mod tests {
             add: value.clone(),
             update: value,
         }])?;
-        ConfigAccess::transact_local(&node, None, "desktop.skill.context", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "desktop.skill.context", |txn| {
             let plan = &plan;
             Box::pin(async move {
                 apply_desired_state_plan(txn, plan).await?;
@@ -120,7 +122,7 @@ mod tests {
             .await
             .is_err());
         assert_eq!(delete_skill(&node, "did:test:skill-b", "skill").await?, 1);
-        ConfigAccess::transact_local(&node, None, "desktop.skill.verify", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "desktop.skill.verify", |txn| {
             Box::pin(async move {
                 let (_, context) = read_desired_state_record_in_txn(
                     txn,

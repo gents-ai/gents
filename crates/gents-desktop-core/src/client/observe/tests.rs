@@ -3,6 +3,8 @@ use crate::client::store::ClientStore;
 
 #[path = "tests/backpressure.rs"]
 mod backpressure;
+#[path = "tests/missing_agent_requests.rs"]
+mod missing_agent_requests;
 #[path = "tests/mixed_batch.rs"]
 mod mixed_batch;
 #[path = "tests/overflow.rs"]
@@ -43,6 +45,17 @@ async fn build_observer_fixture() -> (
     Arc<ObservedStore>,
     ObserverHandle,
 ) {
+    build_observer_fixture_for_selection(None).await
+}
+
+async fn build_observer_fixture_for_selection(
+    selected_node_did: Option<String>,
+) -> (
+    tempfile::TempDir,
+    Arc<EmbeddedNode>,
+    Arc<ObservedStore>,
+    ObserverHandle,
+) {
     let tempdir = tempfile::tempdir().expect("observer peer directory");
     let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
     ensure_runtime_schemas(node.as_ref())
@@ -60,7 +73,7 @@ async fn build_observer_fixture() -> (
         Vec::new(),
     );
     let subscription = node.subscribe_document_changes();
-    let (_tx, rx) = watch::channel::<Option<String>>(None);
+    let (_tx, rx) = watch::channel(selected_node_did);
     let handle = spawn_observer_with_selection(
         node.clone(),
         store.clone(),
@@ -314,7 +327,7 @@ async fn tool_call_invalidations_refresh_lineage_without_retaining_transcript() 
     let (_tempdir, node, store, handle) = build_observer_fixture().await;
     let mut changes = store.subscribe_changes();
     let before = store.projection_revision();
-    gents::ConfigAccess::Local(node.clone())
+    gents::ConfigAccess::local(node.clone())
         .write(
             "test.lineage_tool_invalidation",
             r#"mutation {

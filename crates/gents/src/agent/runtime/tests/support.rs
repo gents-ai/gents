@@ -413,7 +413,7 @@ impl crate::agent::ProcessLifecycleObserver for RecordingObserver {
 }
 
 pub(super) async fn bind_default_agent_backend(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     node_did: &str,
     backend_id: &str,
     endpoint: &str,
@@ -425,7 +425,7 @@ pub(super) async fn bind_default_agent_backend(
 }
 
 pub(super) async fn bind_default_agent_backend_with_capacity(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     node_did: &str,
     backend_id: &str,
     endpoint: &str,
@@ -443,7 +443,7 @@ pub(super) async fn bind_default_agent_backend_with_capacity(
 }
 
 pub(super) async fn bind_default_agent_backend_with_capacity_and_probe_status(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     node_did: &str,
     backend_id: &str,
     endpoint: &str,
@@ -474,7 +474,7 @@ pub(super) async fn bind_default_agent_backend_with_capacity_and_probe_status(
         collection, add:value.clone(), update:value,
     }).collect();
     let plan = DesiredStateApplyPlan::new(documents).unwrap();
-    ConfigAccess::transact_local(node, None, "test.runtime.configure", |txn| {
+    ConfigAccess::transact_local_write(node, None, "test.runtime.configure", |txn| {
         let plan = &plan;
         Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
     })

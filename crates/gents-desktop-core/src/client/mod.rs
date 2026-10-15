@@ -29,6 +29,7 @@ pub(crate) use peer_directory::load_peer_directory_snapshot;
 pub(crate) use peer_directory::PeerDirectory;
 pub use peer_directory::{initialize_local_standard_peer, load_peer_records, PeerRecord};
 pub use principal_identity::PrincipalIdentity;
+pub(crate) use query::load_request_documents_on;
 pub use query::{
     fetch_doc_patch, load_node_scoped_snapshot, load_request_prompt_ownership,
     load_request_prompt_ownership_on, load_session_context_store, load_session_context_store_on,

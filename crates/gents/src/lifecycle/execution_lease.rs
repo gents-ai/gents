@@ -288,7 +288,7 @@ impl RequestLifecycle {
 /// same atomic terminal owner. Unlike recovery, revocation may cancel a live lease.
 #[cfg(test)]
 pub(crate) async fn revoke_execution_generation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     selection: TerminalOutput,
@@ -318,7 +318,7 @@ pub(crate) async fn revoke_execution_generation(
 /// the same write gate as the generation CAS and uses immutable header metadata,
 /// exactly as `terminalSelectionMetadataValid`; corrupt bytes remain untouched.
 pub(crate) async fn revoke_execution_preserving_output(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     reason: &str,
@@ -345,7 +345,7 @@ pub(crate) async fn revoke_execution_preserving_output(
 
 #[cfg(test)]
 pub(crate) async fn revoke_execution_preserving_output_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     reason: &str,
@@ -374,7 +374,7 @@ pub(crate) async fn revoke_execution_preserving_output_at(
 }
 
 async fn terminalize_execution(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_doc_id: &str,
     authority: TerminalAuthority<'_>,
     outcome: RequestTerminalOutcome,
@@ -397,7 +397,7 @@ async fn terminalize_execution(
 
 #[cfg(test)]
 pub(crate) async fn terminalize_owned_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_doc_id: &str,
     generation: &str,
     outcome: RequestTerminalOutcome,
@@ -419,7 +419,7 @@ pub(crate) async fn terminalize_owned_at(
 }
 
 async fn terminalize_execution_with_time(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_doc_id: &str,
     authority: TerminalAuthority<'_>,
     outcome: RequestTerminalOutcome,

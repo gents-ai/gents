@@ -110,7 +110,11 @@ pub(crate) enum RenewalAttemptOutcome {
 
 /// Return false when this generation is no longer an active owner. A true
 /// result includes an early poll that performed no mutation.
-async fn renew_once(node: &EmbeddedNode, request_doc_id: &str, generation: &str) -> Result<bool> {
+async fn renew_once(
+    node: &std::sync::Arc<EmbeddedNode>,
+    request_doc_id: &str,
+    generation: &str,
+) -> Result<bool> {
     Ok(!matches!(
         renew_once_with_time(node, request_doc_id, generation, None, None).await?,
         RenewalAttemptOutcome::Lost
@@ -122,7 +126,7 @@ async fn renew_once(node: &EmbeddedNode, request_doc_id: &str, generation: &str)
 /// owned by this module and no process-global test clock can affect siblings.
 #[cfg(test)]
 pub(crate) async fn renew_once_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_doc_id: &str,
     generation: &str,
     expected_deadline: DateTime<Utc>,
@@ -145,7 +149,7 @@ tokio::task_local! {
 
 #[cfg(test)]
 pub(crate) async fn renew_with_recheck_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_doc_id: &str,
     generation: &str,
     expected_deadline: DateTime<Utc>,
@@ -175,7 +179,7 @@ fn renewal_recheck_time(fixture_now: Option<DateTime<Utc>>) -> DateTime<Utc> {
 }
 
 async fn renew_once_with_time(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_doc_id: &str,
     generation: &str,
     expected_deadline: Option<DateTime<Utc>>,

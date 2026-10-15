@@ -36,7 +36,7 @@ struct TranscriptRow {
 async fn configure_session_chain(db: &TestDb) {
     let node_did = db.node_identity.did().to_string();
     configure_child_agent(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         CHILD_AGENT_ID,
         "e2e-session-order-child-tools",
@@ -45,7 +45,7 @@ async fn configure_session_chain(db: &TestDb) {
     )
     .await;
     configure_child_agent(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         PARENT_AGENT_ID,
         "e2e-session-order-parent-tools",
@@ -172,7 +172,7 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
     )
     .expect("start resume backend");
     bind_agent_backend(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         PARENT_AGENT_ID,
         RESUME_BACKEND_ID,

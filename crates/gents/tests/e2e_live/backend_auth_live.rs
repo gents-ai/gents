@@ -24,7 +24,7 @@ async fn live_openrouter_oneshot_succeeds() -> Result<()> {
     agent.model_name = model_name;
 
     bind_agent_backend(
-        node.as_ref(),
+        &node,
         agent.node_did(),
         &agent.agent_id,
         agent.backend_id.as_deref().expect("configured backend"),

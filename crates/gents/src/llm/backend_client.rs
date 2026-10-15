@@ -463,12 +463,16 @@ mod tests {
         assert_eq!(issuer.endpoint, sign_in.endpoint);
     }
 
-    async fn seed_oauth_credential(node: &EmbeddedNode, agent: &ResolvedAgent, provider: &str) {
+    async fn seed_oauth_credential(
+        node: &std::sync::Arc<EmbeddedNode>,
+        agent: &ResolvedAgent,
+        provider: &str,
+    ) {
         seed_oauth_account(node, agent, provider, None).await;
     }
 
     async fn seed_oauth_account(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         agent: &ResolvedAgent,
         provider: &str,
         account_ref: Option<&str>,
@@ -531,8 +535,8 @@ mod tests {
             ),
         ] {
             let mut agent = test_agent(kind, wire);
-            seed_oauth_account(node.as_ref(), &agent, provider, None).await;
-            seed_oauth_account(node.as_ref(), &agent, provider, Some("acct-b")).await;
+            seed_oauth_account(&node, &agent, provider, None).await;
+            seed_oauth_account(&node, &agent, provider, Some("acct-b")).await;
             agent.backend_auth = crate::document_config::BackendAuth::NodeOAuth {
                 account_ref: Some("acct-b".into()),
             };
@@ -588,8 +592,8 @@ mod tests {
             ),
         ] {
             let on_a = test_agent(kind, wire);
-            seed_oauth_account(node.as_ref(), &on_a, provider, None).await;
-            seed_oauth_account(node.as_ref(), &on_a, provider, Some("acct-b")).await;
+            seed_oauth_account(&node, &on_a, provider, None).await;
+            seed_oauth_account(&node, &on_a, provider, Some("acct-b")).await;
             let mut on_b = on_a.clone();
             on_b.backend_auth = crate::document_config::BackendAuth::NodeOAuth {
                 account_ref: Some("acct-b".into()),
@@ -619,12 +623,7 @@ mod tests {
             BackendProviderKind::ChatGptCodex,
             crate::OpenAiWireApi::Responses,
         );
-        seed_oauth_credential(
-            node.as_ref(),
-            &codex,
-            crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
-        )
-        .await;
+        seed_oauth_credential(&node, &codex, crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER).await;
         codex.backend_auth = crate::document_config::BackendAuth::NodeOAuth {
             account_ref: Some("acct-b".into()),
         };
@@ -654,12 +653,7 @@ mod tests {
             BackendProviderKind::ChatGptCodex,
             crate::OpenAiWireApi::Responses,
         );
-        seed_oauth_credential(
-            node.as_ref(),
-            &codex,
-            crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
-        )
-        .await;
+        seed_oauth_credential(&node, &codex, crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER).await;
         let client = build_backend_client(node.clone(), &codex, "key", Duration::from_secs(5))
             .await
             .expect("Codex client builds from the seeded credential without network I/O");
@@ -673,12 +667,7 @@ mod tests {
             BackendProviderKind::XaiGrokOAuth,
             crate::OpenAiWireApi::ChatCompletions,
         );
-        seed_oauth_credential(
-            node.as_ref(),
-            &xai_chat,
-            crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
-        )
-        .await;
+        seed_oauth_credential(&node, &xai_chat, crate::xai_grok_oauth::XAI_OAUTH_PROVIDER).await;
         let client = build_backend_client(node.clone(), &xai_chat, "key", Duration::from_secs(5))
             .await
             .expect("Grok Chat Completions client builds without network I/O");
@@ -693,7 +682,7 @@ mod tests {
             crate::OpenAiWireApi::Responses,
         );
         seed_oauth_credential(
-            node.as_ref(),
+            &node,
             &xai_responses,
             crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
         )
@@ -712,12 +701,7 @@ mod tests {
             BackendProviderKind::ClaudeCliSubscription,
             crate::OpenAiWireApi::ChatCompletions,
         );
-        seed_oauth_credential(
-            node.as_ref(),
-            &claude,
-            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
-        )
-        .await;
+        seed_oauth_credential(&node, &claude, crate::claude_oauth::CLAUDE_OAUTH_PROVIDER).await;
         let client = build_backend_client(node.clone(), &claude, "key", Duration::from_secs(5))
             .await
             .expect("Claude subscription client builds without network I/O");

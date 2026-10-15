@@ -16,10 +16,8 @@
 //! source filter is by the trigger engine's filter probe — is
 //! covered by neither. See #1038.
 
-use std::time::Duration;
-
 use anyhow::{Context, Result};
-use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryResponse};
+use defra_node::{EmbeddedNode, QueryResponse};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
@@ -28,44 +26,6 @@ pub use gents_protocol::graphql::{
     escape_graphql_string, validate_collection_identifier, validate_graphql_filter_fragment,
     validate_graphql_name,
 };
-
-const GRAPHQL_READ_MAX_RETRIES: u32 = 3;
-const GRAPHQL_READ_INITIAL_BACKOFF_MS: u64 = 100;
-
-const GRAPHQL_RETRY_POLICY: ExecuteRetryPolicy = ExecuteRetryPolicy::new(
-    GRAPHQL_READ_MAX_RETRIES,
-    Duration::from_millis(GRAPHQL_READ_INITIAL_BACKOFF_MS),
-    Duration::from_millis(800),
-);
-async fn graphql_response_with_policy(
-    node: &EmbeddedNode,
-    graphql: &str,
-    operation: &str,
-    retry_policy: ExecuteRetryPolicy,
-) -> QueryResponse {
-    let started = std::time::Instant::now();
-    let response = crate::config_client::ConfigAccess::execute_local_response_with_retry(
-        node,
-        graphql,
-        retry_policy,
-    )
-    .await;
-    let elapsed = started.elapsed();
-    if elapsed > Duration::from_secs(1) {
-        tracing::warn!(
-            operation,
-            elapsed_ms = elapsed.as_millis() as u64,
-            "DefraDB GraphQL completed"
-        );
-    } else {
-        tracing::debug!(
-            operation,
-            elapsed_ms = elapsed.as_millis() as u64,
-            "DefraDB GraphQL completed"
-        );
-    }
-    response
-}
 
 /// Execute GraphQL through the node's identity-aware retry path.
 ///
@@ -87,7 +47,7 @@ pub fn graphql_string_list_literal<'a>(values: impl IntoIterator<Item = &'a str>
 
 /// Read `collection`'s arrival head so the transaction conflicts with any
 /// concurrent insert into it; predicate reads alone do not fence inserts.
-pub(crate) async fn fence_arrivals(
+pub async fn fence_arrivals(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     collection: &str,
 ) -> Result<()> {
@@ -104,8 +64,7 @@ pub async fn graphql_response_with_transaction_retry(
     graphql: &str,
     operation: &str,
 ) -> Result<QueryResponse> {
-    crate::config_client::ensure_query_document(graphql)?;
-    Ok(graphql_response_with_policy(node, graphql, operation, GRAPHQL_RETRY_POLICY).await)
+    crate::config_client::ConfigAccess::read_local_response(node, graphql, operation).await
 }
 
 /// Execute identity-aware GraphQL with transaction-conflict retry and fail on
@@ -136,6 +95,15 @@ pub(crate) fn mutation_affected_documents(response: &QueryResponse) -> usize {
                 .sum()
         })
         .unwrap_or_default()
+}
+
+/// Native payloads can contain entire transcripts. Preserve their allocations
+/// when adapting the response envelope instead of serializing a second copy.
+pub(crate) fn into_data_envelope(data: Option<Value>) -> Value {
+    Value::Object(serde_json::Map::from_iter([(
+        "data".to_owned(),
+        data.unwrap_or(Value::Null),
+    )]))
 }
 
 pub fn ensure_no_errors(response: &QueryResponse, operation: &str) -> Result<()> {
@@ -173,7 +141,7 @@ where
     let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
         return Ok(Vec::new());
     };
-    serde_json::from_value(value.clone()).with_context(|| format!("decode {field} rows"))
+    Vec::<T>::deserialize(value).with_context(|| format!("decode {field} rows"))
 }
 
 pub fn first_row<T>(response: &QueryResponse, field: &str) -> Result<Option<T>>
@@ -183,17 +151,11 @@ where
     Ok(rows(response, field)?.into_iter().next())
 }
 
-/// Return the single document selected by a create/update mutation.
-///
-/// DefraDB has returned both an object and a one-element array for mutation
-/// fields across API generations. Normalizing that shape here keeps callers
-/// from growing subtly different response parsers. More than one row is an
-/// error because none of the provenance-bearing mutations are bulk writes.
-pub fn single_mutation_document<'a>(
-    response: &'a QueryResponse,
+fn mutation_documents_in_data<'a>(
+    data: Option<&'a Value>,
     field: &str,
-) -> Result<Option<&'a Value>> {
-    let Some(data) = response.data.as_ref().and_then(Value::as_object) else {
+) -> Result<Option<&'a [Value]>> {
+    let Some(data) = data.and_then(Value::as_object) else {
         return Ok(None);
     };
     let normalized_field = field
@@ -217,16 +179,51 @@ pub fn single_mutation_document<'a>(
         (None, None) => return Ok(None),
     };
     match value {
-        Value::Object(_) => Ok(Some(value)),
-        Value::Array(rows) => match rows.as_slice() {
-            [] => Ok(None),
-            [row] => Ok(Some(row)),
-            _ => anyhow::bail!(
-                "{field} returned {} documents; expected at most one",
-                rows.len()
-            ),
-        },
+        Value::Object(_) => Ok(Some(std::slice::from_ref(value))),
+        Value::Array(rows) => Ok(Some(rows.as_slice())),
         _ => anyhow::bail!("{field} returned an unexpected mutation response shape"),
+    }
+}
+
+/// Return borrowed documents from a create/update mutation envelope.
+///
+/// DefraDB has returned both object and array mutation shapes, and may expose
+/// a `create_` request under its normalized `add_` response field. Centralize
+/// that compatibility handling so callers only interpret returned documents.
+pub fn mutation_documents<'a>(response: &'a Value, field: &str) -> Result<Option<&'a [Value]>> {
+    anyhow::ensure!(
+        response.get("errors").is_none_or(|errors| {
+            errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)
+        }),
+        "{field} returned GraphQL errors"
+    );
+    let data = response
+        .get("data")
+        .with_context(|| format!("{field} omitted response data"))?;
+    mutation_documents_in_data(Some(data), field)
+}
+
+/// Return the single document selected by a create/update mutation.
+/// More than one row is an error because provenance-bearing mutations are
+/// single-document writes.
+pub fn single_mutation_document<'a>(
+    response: &'a QueryResponse,
+    field: &str,
+) -> Result<Option<&'a Value>> {
+    single_mutation_document_in_data(response.data.as_ref(), field)
+}
+
+fn single_mutation_document_in_data<'a>(
+    data: Option<&'a Value>,
+    field: &str,
+) -> Result<Option<&'a Value>> {
+    let Some(documents) = mutation_documents_in_data(data, field)? else {
+        return Ok(None);
+    };
+    match documents.len() {
+        0 => Ok(None),
+        1 => Ok(documents.first()),
+        count => anyhow::bail!("{field} returned {count} documents; expected at most one"),
     }
 }
 
@@ -234,18 +231,17 @@ pub fn single_mutation_document<'a>(
 /// Use the same mutation normalization as other storage adapters: the pinned
 /// DefraDB accepts `create_` but returns `add_` unless explicitly aliased.
 pub fn created_doc_id(response: &Value, collection: &str) -> Result<String> {
-    anyhow::ensure!(
-        response
-            .get("errors")
-            .is_none_or(|errors| errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)),
-        "create {collection} returned GraphQL errors"
-    );
-    let data = response
-        .get("data")
-        .context("create omitted response data")?;
-    let response = QueryResponse::success(data.clone());
     let field = format!("create_{collection}");
-    single_mutation_document(&response, &field)?
+    let documents = mutation_documents(response, &field)?;
+    if let Some(documents) = documents.as_ref() {
+        anyhow::ensure!(
+            documents.len() <= 1,
+            "{field} returned {} documents; expected at most one",
+            documents.len()
+        );
+    }
+    documents
+        .and_then(|rows| rows.first())
         .and_then(|row| row.get("_docID"))
         .and_then(Value::as_str)
         .filter(|id| !id.trim().is_empty())
@@ -269,6 +265,41 @@ pub struct CommitSignature {
     pub identity: String,
     #[serde(rename = "type", default)]
     pub signature_type: String,
+}
+
+/// Decode the selected `_commits` rows and retain only DefraDB's composite
+/// document versions. `_commits` filters are evaluated in memory and can
+/// silently degrade to no filter, so every reader applies this selection here.
+pub(crate) fn decode_composite_commits(rows: &[Value]) -> Result<Vec<CompositeCommit>> {
+    let mut commits = rows
+        .iter()
+        .cloned()
+        .map(serde_json::from_value::<CompositeCommit>)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("decode composite commit rows")?
+        .into_iter()
+        .filter(|commit| commit.field_name == "_C")
+        .collect::<Vec<_>>();
+    commits.sort_by(|left, right| {
+        right
+            .height
+            .cmp(&left.height)
+            .then_with(|| left.cid.cmp(&right.cid))
+    });
+    Ok(commits)
+}
+
+fn response_composite_commits(
+    response: &QueryResponse,
+    field: &str,
+) -> Result<Vec<CompositeCommit>> {
+    let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
+        return Ok(Vec::new());
+    };
+    let rows = value
+        .as_array()
+        .with_context(|| format!("decode {field} rows"))?;
+    decode_composite_commits(rows)
 }
 
 /// Read the exact newest composite commit exposed by a mutation's `_version`
@@ -295,14 +326,7 @@ pub fn document_composite_version(
         .get("_version")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow::anyhow!("{operation} returned no _version array"))?;
-    let commits = versions
-        .iter()
-        .cloned()
-        .map(serde_json::from_value::<CompositeCommit>)
-        .collect::<std::result::Result<Vec<_>, _>>()?
-        .into_iter()
-        .filter(|commit| commit.field_name == "_C")
-        .collect::<Vec<_>>();
+    let commits = decode_composite_commits(versions)?;
     unique_newest_composite_commit(commits, operation)
 }
 
@@ -352,10 +376,7 @@ pub async fn newest_document_composite_commit(
         escape_graphql_string(doc_id),
     );
     let response = graphql_with_transaction_retry(node, &query, operation).await?;
-    let commits = rows::<CompositeCommit>(&response, "_commits")?
-        .into_iter()
-        .filter(|commit| commit.field_name == "_C")
-        .collect();
+    let commits = response_composite_commits(&response, "_commits")?;
     unique_newest_composite_commit(commits, operation)
 }
 
@@ -384,17 +405,7 @@ pub async fn composite_commits(
     // DefraDB applies this filter in memory and an invalid GraphQL filter can
     // degrade to no filter. Fetch the field name and enforce the composite
     // selection here instead of trusting that behavior.
-    let mut commits = rows::<CompositeCommit>(&response, "_commits")?
-        .into_iter()
-        .filter(|commit| commit.field_name == "_C")
-        .collect::<Vec<_>>();
-    commits.sort_by(|left, right| {
-        right
-            .height
-            .cmp(&left.height)
-            .then_with(|| left.cid.cmp(&right.cid))
-    });
-    Ok(commits)
+    response_composite_commits(&response, "_commits")
 }
 
 pub fn response_has_documents(value: &serde_json::Value) -> bool {

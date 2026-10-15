@@ -614,7 +614,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     .unwrap();
     assert!(!native.created_request);
     assert_eq!(pending_wakes(node.clone(), session_id.clone()).await, wakes);
-    crate::test_support::install_test_agent(node.as_ref(), &did, &caller.agent_id).await;
+    crate::test_support::install_test_agent(&node, &did, &caller.agent_id).await;
     let (admitted, row) = admit(wakes[0].clone()).await;
     assert!(admitted, "{row}");
     assert_eq!(row["request_hop"], caller.request_hop);
@@ -700,7 +700,7 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
         .await
         .unwrap();
 
-    crate::test_support::install_test_agent(node.as_ref(), &did, &caller.agent_id).await;
+    crate::test_support::install_test_agent(&node, &did, &caller.agent_id).await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(
         crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
             .unwrap(),

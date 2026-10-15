@@ -62,6 +62,7 @@ pub(crate) async fn session_snapshot(
     });
 
     let hydrate_started = std::time::Instant::now();
+    let mut hydration_observation = None;
     if let Some(node_did) = node_did.as_deref() {
         // Its transcript reads as empty here and a hydration request would be
         // refused, so the local header alone answers without any remote read.
@@ -78,22 +79,26 @@ pub(crate) async fn session_snapshot(
                 None,
                 None,
                 None,
+                None,
                 false,
                 false,
             )
             .await);
         }
-        if let Err(error) = core
+        match core
             .ensure_session_hydration_started(&session_id, node_did)
             .await
         {
-            tracing::warn!(
-                target: "gents_desktop::chat",
-                node_did,
-                session_id = %session_id,
-                error = %error,
-                "session hydration request failed; rendering whatever is already local"
-            );
+            Ok(observation) => hydration_observation = Some(observation),
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop::chat",
+                    node_did,
+                    session_id = %session_id,
+                    error = %error,
+                    "session hydration request failed; rendering whatever is already local"
+                );
+            }
         }
     }
     let hydrate_start_ms = hydrate_started.elapsed().as_millis() as u64;
@@ -258,6 +263,7 @@ pub(crate) async fn session_snapshot(
         Some(&transcript_page.canonical_dependencies),
         context_store.as_ref(),
         prompt_ownership.as_ref(),
+        hydration_observation,
         false,
         timeline_before_item_key.is_none(),
     )

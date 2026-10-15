@@ -66,7 +66,7 @@ async fn boot_running_recovery_bash(
     )
     .await;
     configure_agent_tools(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         AGENT_NAME,
         None,
@@ -542,7 +542,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     .await;
     prepared.backend.enable_dynamic_followups("continue");
     configure_agent_tools(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         AGENT_NAME,
         None,
@@ -772,7 +772,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     );
     assert!(!wake_rows.is_empty());
     let diagnostics = gents::load_background_completion_diagnostics(
-        &gents::config_client::ConfigAccess::Local(db.node.clone()),
+        &gents::config_client::ConfigAccess::local(db.node.clone()),
         db.node_identity.did(),
     )
     .await
@@ -851,7 +851,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     )
     .await;
     let displaced = gents::load_background_completion_diagnostics(
-        &gents::config_client::ConfigAccess::Local(db.node.clone()),
+        &gents::config_client::ConfigAccess::local(db.node.clone()),
         db.node_identity.did(),
     )
     .await
@@ -892,7 +892,7 @@ async fn background_wake_retry_rows(
 }
 
 async fn recover_interrupted_request_after_crash(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &Arc<gents::defra_node::EmbeddedNode>,
     doc_id: &str,
     expected_active_child_doc_id: Option<&str>,
 ) {
@@ -1769,7 +1769,7 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
     )
     .await;
     configure_agent_tools(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         agent_id,
         None,

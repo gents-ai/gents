@@ -51,7 +51,7 @@ mod usage;
 
 #[cfg(test)]
 async fn seed_test_agent_configuration(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
     default_agent_id: &str,
@@ -61,7 +61,7 @@ async fn seed_test_agent_configuration(
     gents::ensure_node(node, node_did)
         .await
         .expect("seed test principal");
-    gents::config_client::ConfigAccess::transact_local(
+    gents::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "grok.test_agent_configuration",
@@ -181,7 +181,7 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
     let node = args.node.clone();
     let agent_id =
         resolve_grok_shim_agent_id(node.as_ref(), args.agent_id.as_deref(), &args.node_did).await?;
-    let bound = resolve_bound_model_context(node.as_ref(), &args.node_did, &agent_id)
+    let bound = resolve_bound_model_context(&node, &args.node_did, &agent_id)
         .await
         .with_context(|| {
             format!(
@@ -390,7 +390,7 @@ mod tests {
             .await
             .expect("runtime schemas");
         seed_test_agent_configuration(
-            node.as_ref(),
+            &node,
             &node_did,
             &agent_id,
             &agent_id,
@@ -429,7 +429,7 @@ mod tests {
         let (_dir, node, inputs) = factory_fixture().await;
         let did = &inputs.node_did;
         seed_test_agent_configuration(
-            node.as_ref(),
+            &node,
             did,
             "reviewer",
             &inputs.agent_id,
@@ -438,7 +438,7 @@ mod tests {
         )
         .await;
         seed_test_agent_configuration(
-            node.as_ref(),
+            &node,
             did,
             "disabled",
             &inputs.agent_id,
@@ -447,7 +447,7 @@ mod tests {
         )
         .await;
         seed_test_agent_configuration(
-            node.as_ref(),
+            &node,
             "did:key:foreign",
             "foreign",
             "foreign",
@@ -588,7 +588,7 @@ mod tests {
         }
         let (_dir, node, inputs) = factory_fixture().await;
         seed_test_agent_configuration(
-            node.as_ref(),
+            &node,
             &inputs.node_did,
             "reviewer",
             &inputs.agent_id,

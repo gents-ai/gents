@@ -178,9 +178,9 @@ async fn run_contract_with_streaming_cadence(
     let result = server.capturing(async {
         wait_for_runtime_ready(&graphql, &node_did, ENROLL_BUDGET).await?;
         let readiness_timestamp = seed_readiness_history(&graphql, &node_did, readiness_revisions).await?;
-        let core = ClientCore::start_with_paths_and_options(
+        let core = Arc::new(ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
-        ).await?;
+        ).await?);
         core.set_selected_node_did(Some(node_did.clone()));
         let enroll_budget = if readiness_timestamp.is_some() {
             ENROLL_BUDGET + AGED_HISTORY_RECOVERY
@@ -286,9 +286,9 @@ async fn run_contract_with_streaming_cadence(
         wait_for_complete_agent_response(&graphql, &request, &session, TURN_BUDGET).await?;
 
         let reconnect_started = Instant::now();
-        let core = ClientCore::start_with_paths_and_options(
+        let core = Arc::new(ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
-        ).await?;
+        ).await?);
         let client_core_ready = reconnect_started.elapsed();
         core.set_selected_node_did(Some(node_did.clone()));
         let recovered = timeout(RECONNECT_BUDGET.saturating_sub(reconnect_started.elapsed()), async {
@@ -352,7 +352,7 @@ async fn run_contract_with_streaming_cadence(
 }
 
 async fn visible_turn(
-    core: &ClientCore,
+    core: &Arc<ClientCore>,
     graphql: &str,
     node_did: &str,
     agent_id: &str,
@@ -565,7 +565,7 @@ async fn wait_for_replicated_reply(
             let mut body = String::new();
             if let Some(row) = terminal_request_row {
                 match gents::session::observe_request_output(
-                    &gents::ConfigAccess::Local(core.node_arc()),
+                    &gents::ConfigAccess::local(core.node_arc()),
                     &row,
                 )
                 .await

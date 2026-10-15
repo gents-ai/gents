@@ -88,7 +88,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     return Ok(());
                 }
                 crate::lifecycle::materialize::write_pending_title_request(
-                    node.as_ref(),
+                    &node,
                     &parent,
                     parent.content.clone(),
                 )
@@ -248,7 +248,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
         if terminal == TerminalizeResult::Won {
             if let Some((title, parent_requester_did)) = title {
                 if let Err(error) = session::update_session_title_with_source(
-                    self.node.as_ref(),
+                    &self.node,
                     &title_request.node_did,
                     parent_requester_did.as_deref(),
                     &title_request.session_id,

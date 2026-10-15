@@ -338,7 +338,7 @@ impl RuntimeStatusHandle {
             );
         }
         *guard = next.clone();
-        if let Err(error) = upsert_runtime_status(self.node.as_ref(), &next).await {
+        if let Err(error) = upsert_runtime_status(&self.node, &next).await {
             tracing::warn!(
                 node_did = %next.node_did,
                 error = %error,
@@ -349,7 +349,7 @@ impl RuntimeStatusHandle {
 }
 
 async fn upsert_runtime_status(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     row: &RuntimeStatusRow,
 ) -> anyhow::Result<()> {
     let mutation = format!(

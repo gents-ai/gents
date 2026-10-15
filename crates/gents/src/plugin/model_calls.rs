@@ -111,7 +111,7 @@ where
             let (profile, backend) = self
                 .0
                 .borrow()
-                .transact("plugin.model_endpoint", |txn| {
+                .transact_readonly("plugin.model_endpoint", |txn| {
                     Box::pin(async move {
                         let profile: InferenceProfile =
                             crate::config_client::read_desired_state_record_in_txn(

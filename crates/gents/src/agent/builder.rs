@@ -208,7 +208,7 @@ impl GentsBuilder {
         for agent_config in self.agents {
             let factory = agent_config
                 .into_factory(
-                    node.as_ref(),
+                    &node,
                     identity.did(),
                     &self.tool_ceiling,
                     &self.backend_health,
@@ -279,7 +279,7 @@ impl GentsBuilder {
             plugins: Arc::new(crate::agent::plugin_executor(
                 self.plugin_home,
                 crate::plugin::model_calls::AccessModels(
-                    crate::config_client::ConfigAccess::Local(plugin_node),
+                    crate::config_client::ConfigAccess::local(plugin_node),
                 ),
             )),
         })
@@ -545,7 +545,7 @@ impl PendingAgent {
 
     async fn into_factory(
         self,
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         node_did: &str,
         tool_ceiling: &ToolCeiling,
         backend_health: &crate::backend_health::BackendHealthMap,

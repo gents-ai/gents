@@ -1244,8 +1244,7 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
         .build()
         .expect("runtime")
         .block_on(async {
-            let node =
-                std::sync::Arc::new(crate::oauth_credential::test_support::test_node().await);
+            let node = crate::oauth_credential::test_support::test_node().await;
             let account = crate::usage_observation::UsageAccount::Backend {
                 node_did: "did:key:z6MkUsageWireClaudeLive".into(),
                 provider: "ClaudeCliSubscription".into(),

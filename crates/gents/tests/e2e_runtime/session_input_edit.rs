@@ -28,7 +28,7 @@ impl Drop for Stop {
 }
 
 async fn rows(db: &TestDb, collection: &str, filter: &str, fields: &str) -> Vec<serde_json::Value> {
-    ConfigAccess::Local(db.node.clone())
+    ConfigAccess::local(db.node.clone())
         .execute(&format!(
             "{{ {collection}(filter: {filter}) {{ {fields} }} }}"
         ))
@@ -79,7 +79,7 @@ async fn write_command(db: &TestDb, command: &SessionInputEdit) -> String {
         .as_ref()
         .map(|p| format!("\"{}\"", escape_graphql_string(p)))
         .unwrap_or("null".into());
-    let response = ConfigAccess::Local(db.node.clone()).write("test.signed_remote_edit", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{
+    let response = ConfigAccess::local(db.node.clone()).write("test.signed_remote_edit", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{
         command_id: "{}", requester_did: "{}", requester_peer_id: {}, node_did: "{}", session_id: "{}", intent_json: "{}"
     }}) {{ _docID }} }}"#, escape_graphql_string(&command.command_id), escape_graphql_string(&command.requester_did), peer,
         escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id),
@@ -340,7 +340,7 @@ impl ModeledEdit {
         let active = in_state(&["claimed", "processing"]);
         assert!(active.len() <= 1, "one active request: {active:?}");
         let pending = gents::lifecycle::pending_user_queue(
-            &ConfigAccess::Local(runtime.node.clone()),
+            &ConfigAccess::local(runtime.node.clone()),
             runtime.node_identity.did(),
             &self.session_id,
             &self.command.requester_did,
@@ -407,7 +407,7 @@ impl RemoteEdit<'_> {
         gents::sign_agent_request_create(self.client.node_identity.as_ref(), &mut active)
             .await
             .unwrap();
-        let written = ConfigAccess::Local(self.runtime.node.clone())
+        let written = ConfigAccess::local(self.runtime.node.clone())
             .write("test.remote_active", &active.graphql_mutation().unwrap())
             .await
             .unwrap();
@@ -445,7 +445,7 @@ impl RemoteEdit<'_> {
             gents::sign_agent_request_create(self.client.node_identity.as_ref(), &mut original)
                 .await
                 .unwrap();
-            let written = ConfigAccess::Local(self.runtime.node.clone())
+            let written = ConfigAccess::local(self.runtime.node.clone())
                 .write("test.remote_pending", &original.graphql_mutation().unwrap())
                 .await
                 .unwrap();
@@ -480,6 +480,15 @@ impl RemoteEdit<'_> {
             active.claim().await.unwrap(),
             gents::lifecycle::ClaimOutcome::Claimed
         );
+        wait_row(
+            self.client,
+            "AgentRequest",
+            "_docID",
+            &active_doc,
+            "execution_generation",
+            "execution_generation",
+        )
+        .await;
         let model = &case["command"];
         let authority = &case["authority"];
         let (offset, count) = (
@@ -507,7 +516,7 @@ impl RemoteEdit<'_> {
                 .collect(),
         };
         let mut native = prepare_pending_user_edit(
-            &ConfigAccess::Local(self.client.node.clone()),
+            &ConfigAccess::local(self.client.node.clone()),
             self.client.node_identity.as_ref(),
             self.admission.clone(),
             did,
@@ -662,7 +671,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         .await
         .unwrap();
     let session = "edit-reopen-session";
-    ConfigAccess::Local(db.node.clone()).write("test.edit_reopen.session", &format!(
+    ConfigAccess::local(db.node.clone()).write("test.edit_reopen.session", &format!(
         r#"mutation {{ create_AgentSession(input: {{ session_id: "{}", node_did: "{}", requester_did: "{}", agent_id: "general", created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,
         escape_graphql_string(session), escape_graphql_string(&did), escape_graphql_string(&did)
     )).await.unwrap();
@@ -691,7 +700,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     gents::sign_agent_request_create(db.node_identity.as_ref(), &mut original)
         .await
         .unwrap();
-    let response = ConfigAccess::Local(db.node.clone())
+    let response = ConfigAccess::local(db.node.clone())
         .write(
             "test.edit_reopen.original",
             &original.graphql_mutation().unwrap(),
@@ -708,7 +717,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         }],
     };
     let replacements = prepare_pending_user_edit(
-        &ConfigAccess::Local(db.node.clone()),
+        &ConfigAccess::local(db.node.clone()),
         db.node_identity.as_ref(),
         AgentRequestAdmissionRecord::local_self(&did),
         &did,
@@ -801,7 +810,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     let mut stale = command.clone();
     stale.command_id = "edit-after-reopen-stale".into();
     stale.replacements = prepare_pending_user_edit(
-        &ConfigAccess::Local(db.node.clone()),
+        &ConfigAccess::local(db.node.clone()),
         db.node_identity.as_ref(),
         AgentRequestAdmissionRecord::local_self(&did),
         &did,
@@ -919,7 +928,7 @@ async fn local_edit_command_as(
     gents::sign_agent_request_create(identity, &mut original)
         .await
         .unwrap();
-    let response = ConfigAccess::Local(db.node.clone())
+    let response = ConfigAccess::local(db.node.clone())
         .write(
             "test.duplicate_edit.original",
             &original.graphql_mutation().unwrap(),
@@ -936,7 +945,7 @@ async fn local_edit_command_as(
         }],
     };
     let replacements = prepare_pending_user_edit(
-        &ConfigAccess::Local(db.node.clone()),
+        &ConfigAccess::local(db.node.clone()),
         identity,
         AgentRequestAdmissionRecord::local_self(did),
         did,

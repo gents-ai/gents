@@ -1,11 +1,12 @@
 use crate::client::store::ClientStore;
 use anyhow::Result;
 use defra_node::EmbeddedNode;
+use std::sync::Arc;
 
-use super::super::graphql::{escape_graphql_string, execute_mutation, normalize_required};
+use super::super::graphql::{escape_graphql_string, normalize_required};
 
 pub async fn rename_session(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     store: &ClientStore,
     node_did: &str,
     requester_did: &str,
@@ -14,7 +15,9 @@ pub async fn rename_session(
 ) -> Result<()> {
     let mutation =
         build_rename_session_mutation(store, node_did, requester_did, session_id, title)?;
-    execute_mutation(node, &mutation, "rename_session").await
+    gents::config_client::ConfigAccess::write_local(node, "rename_session", &mutation)
+        .await
+        .map(|_| ())
 }
 
 fn build_rename_session_mutation(

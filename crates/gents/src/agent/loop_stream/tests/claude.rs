@@ -171,7 +171,7 @@ async fn signed_claude_tool_round_trip_with_scope(
 
     // The delivered result reconstructs exactly through the session owner.
     let native = crate::session::load_tool_call_result(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &tool_doc_id,
         "did:test:test",
         &session_id,
@@ -566,7 +566,7 @@ async fn captured_claude_sends(
         assert_eq!(row["source"], expected_source, "Claude origin is physical");
         assert_eq!(row["request_commit_cid"].as_str(), Some(request_commit_cid));
         let (body, _) = crate::rendered_request::decode_capture_pair(
-            &crate::config_client::ConfigAccess::Local(node.clone()),
+            &crate::config_client::ConfigAccess::local(node.clone()),
             u32::try_from(row["capture_version"].as_u64().expect("capture version"))
                 .expect("version fits u32"),
             row["request_json"].as_str().expect("encoded request JSON"),

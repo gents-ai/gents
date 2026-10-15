@@ -9,6 +9,9 @@ use super::documents::{load_invocation, CallbackInvocationDoc};
 use super::run::run_owned_invocation;
 use super::CallbackEngine;
 
+#[cfg(test)]
+mod saturation_tests;
+
 pub(super) const PLUGIN_CALLBACK_CONCURRENCY: usize = 32;
 
 /// Process-local execution accounting is separate from the durable claim:

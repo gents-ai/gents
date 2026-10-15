@@ -1,7 +1,7 @@
 mod recovery;
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
 pub(crate) use recovery::recover_outcomes;
 #[cfg(test)]
@@ -271,43 +271,58 @@ pub async fn request_arrival_order(
     if doc_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let slots = crate::lifecycle::queue::effective_slots(txn, doc_ids).await?;
+    const DOC_ID_BATCH_SIZE: usize = 512;
+    let mut slots = Vec::new();
+    for batch in doc_ids.chunks(DOC_ID_BATCH_SIZE) {
+        slots.extend(crate::lifecycle::queue::effective_slots(txn, batch).await?);
+    }
     if slots.is_empty() {
         return Ok(Vec::new());
     }
+    let mut seen_slots = std::collections::HashSet::new();
     let slot_ids = slots
         .iter()
-        .map(|(_, slot)| slot.as_str())
-        .collect::<std::collections::HashSet<_>>();
-    let ids = crate::graphql::graphql_string_list_literal(slot_ids.into_iter());
-    let mut cursor = "0".to_owned();
-    let mut ordered = Vec::new();
-    loop {
-        let response = txn.execute(&format!("{{ _documentArrivals(collection: \"AgentRequest\", after: \"{}\", limit: 256, docID: {ids}) {{ head next entries {{ cursor docID }} }} }}", escape_graphql_string(&cursor))).await?;
-        let page = &response["data"]["_documentArrivals"];
-        let entries = page["entries"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("arrival query omitted entries"))?;
-        for entry in entries {
-            ordered.push(
-                entry["docID"]
+        .filter_map(|(_, slot)| seen_slots.insert(slot.as_str()).then_some(slot.as_str()))
+        .collect::<Vec<_>>();
+    let mut ordered = Vec::<(u64, String)>::new();
+    for batch in slot_ids.chunks(DOC_ID_BATCH_SIZE) {
+        let ids = crate::graphql::graphql_string_list_literal(batch.iter().copied());
+        let mut cursor = "0".to_owned();
+        loop {
+            let response = txn.execute(&format!("{{ _documentArrivals(collection: \"AgentRequest\", after: \"{}\", limit: 256, docID: {ids}) {{ head next entries {{ cursor docID }} }} }}", escape_graphql_string(&cursor))).await?;
+            let page = &response["data"]["_documentArrivals"];
+            let entries = page["entries"]
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!("arrival query omitted entries"))?;
+            for entry in entries {
+                let arrival = entry["cursor"]
                     .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("arrival entry omitted docID"))?
-                    .to_owned(),
-            );
+                    .ok_or_else(|| anyhow::anyhow!("arrival entry omitted cursor"))?
+                    .parse::<u64>()
+                    .context("arrival entry has invalid cursor")?;
+                ordered.push((
+                    arrival,
+                    entry["docID"]
+                        .as_str()
+                        .ok_or_else(|| anyhow::anyhow!("arrival entry omitted docID"))?
+                        .to_owned(),
+                ));
+            }
+            let next = page["next"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("arrival query omitted next cursor"))?;
+            let head = page["head"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("arrival query omitted snapshot head"))?;
+            if next == head || entries.is_empty() {
+                break;
+            }
+            ensure!(next != cursor, "arrival cursor did not advance");
+            cursor = next.into();
         }
-        let next = page["next"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("arrival query omitted next cursor"))?;
-        let head = page["head"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("arrival query omitted snapshot head"))?;
-        if next == head || entries.is_empty() {
-            break;
-        }
-        ensure!(next != cursor, "arrival cursor did not advance");
-        cursor = next.into();
     }
+    ordered.sort_unstable_by_key(|(cursor, _)| *cursor);
+    let ordered = ordered.into_iter().map(|(_, id)| id).collect::<Vec<_>>();
     let positions = ordered
         .iter()
         .enumerate()

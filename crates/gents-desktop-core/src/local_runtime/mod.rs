@@ -27,6 +27,18 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 const SERVE_READY_TIMEOUT: Duration = Duration::from_secs(60);
 const SERVE_READY_POLL: Duration = Duration::from_millis(500);
 
+/// Reuse Reqwest's native roots because loading macOS trust settings blocks and is costly.
+async fn runtime_http_client() -> Result<&'static reqwest::Client> {
+    static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
+    CLIENT
+        .get_or_try_init(|| async {
+            tokio::task::spawn_blocking(|| reqwest::Client::builder().timeout(HTTP_TIMEOUT).build())
+                .await?
+                .map_err(anyhow::Error::from)
+        })
+        .await
+}
+
 #[derive(Debug, Clone)]
 pub struct DesktopInitOptions {
     pub node_home: PathBuf,
@@ -330,11 +342,10 @@ pub fn augment_peer_status_payload_for_desktop(mut payload: Value, status_url: &
 }
 
 pub async fn fetch_runtime_connection_payload(endpoint: &str) -> Result<Value> {
-    let client = reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .build()
+    let client = runtime_http_client()
+        .await
         .context("building runtime discovery HTTP client")?;
-    fetch_runtime_connection_payload_with_client(&client, endpoint).await
+    fetch_runtime_connection_payload_with_client(client, endpoint).await
 }
 
 pub async fn fetch_runtime_connection_payload_with_client(
@@ -456,18 +467,17 @@ pub(crate) async fn discover_standard_runtime(
 
     validate_runtime_identity(&runtime, &init)?;
 
-    let client = reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .build()
+    let client = runtime_http_client()
+        .await
         .context("building local runtime HTTP client")?;
-    await_serving_runtime(&client, &runtime).await?;
+    await_serving_runtime(client, &runtime).await?;
     let api_base = p2p_api_base(&runtime.graphql)?;
     let shareable_address: ShareableAddressResponse =
-        http_get_json(&client, &format!("{api_base}/p2p/shareable-address")).await?;
+        http_get_json(client, &format!("{api_base}/p2p/shareable-address")).await?;
     let p2p_listen_address = normalize_optional_string(shareable_address.address.as_deref())
         .context("local runtime is reachable but did not report a shareable P2P address")?;
     let live_identity =
-        http_get_json::<NodeIdentityResponse>(&client, &format!("{api_base}/node/identity"))
+        http_get_json::<NodeIdentityResponse>(client, &format!("{api_base}/node/identity"))
             .await
             .ok();
     let p2p_peer_id = resolve_p2p_peer_id(

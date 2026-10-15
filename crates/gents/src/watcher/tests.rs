@@ -49,6 +49,82 @@ fn only_request_changes_or_resync_wake_the_durable_queue_scan() {
     ));
 }
 
+fn publish_watcher_update(bus: &events::ChannelBus, collection_id: &str, doc_id: &str) {
+    use events::Bus;
+    let block = format!("{collection_id}:{doc_id}").into_bytes();
+    let cid = defra_core::block::generate_cid_from_bytes(&block).unwrap();
+    bus.publish(events::Message::update(events::Update::new(
+        doc_id.to_owned(),
+        cid,
+        collection_id.to_owned(),
+        block,
+        false,
+        true,
+    )));
+}
+
+#[tokio::test(start_paused = true)]
+async fn unrelated_changes_do_not_wake_or_postpone_the_request_scan() {
+    use events::Bus;
+    let bus = events::ChannelBus::new();
+    let mut subscription = bus.subscribe_document_changes();
+    let wait = wait_for_request_change(&mut subscription, Some("requests"));
+    tokio::pin!(wait);
+    for _ in 0..30 {
+        publish_watcher_update(&bus, "output", "streaming-output");
+        tokio::select! {
+            biased;
+            result = &mut wait => panic!("unrelated output woke the queue scan: {result:?}"),
+            _ = tokio::task::yield_now() => {}
+        }
+        tokio::time::advance(Duration::from_secs(1)).await;
+    }
+    assert!(
+        wait.await.is_err(),
+        "output traffic must not postpone fallback polling"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn request_changes_and_overflow_wake_without_waiting_for_the_fallback() {
+    use events::Bus;
+    for overflow in [false, true] {
+        let bus = events::ChannelBus::with_config(
+            events::ChannelBusConfig::default().with_event_buffer_size(if overflow {
+                1
+            } else {
+                4096
+            }),
+        );
+        let mut subscription = bus.subscribe_document_changes();
+        publish_watcher_update(&bus, "output", "first");
+        publish_watcher_update(&bus, if overflow { "output" } else { "requests" }, "second");
+        let started = tokio::time::Instant::now();
+        let batch = wait_for_request_change(&mut subscription, Some("requests"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(tokio::time::Instant::now(), started);
+        assert!(document_change_batch_wakes_request_scan(
+            &batch,
+            Some("requests")
+        ));
+        assert_eq!(batch.resync_required, overflow);
+    }
+}
+
+#[tokio::test]
+async fn a_closed_request_change_feed_stops_the_watcher_wait() {
+    use events::Bus;
+    let bus = events::ChannelBus::new();
+    let mut subscription = bus.subscribe_document_changes();
+    bus.close();
+    assert!(wait_for_request_change(&mut subscription, Some("requests"))
+        .await
+        .unwrap()
+        .is_none());
+}
+
 #[test]
 fn automated_trigger_lineage_excludes_scheduled_control_requests() {
     let triggered = AgentRequest {

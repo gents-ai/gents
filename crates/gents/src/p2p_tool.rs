@@ -113,7 +113,7 @@ impl P2pTool {
         let arguments = filter.map_or("limit: 50".to_owned(), |filter| {
             format!("filter: {filter}, limit: 50")
         });
-        let result = ConfigAccess::Local(self.node.clone())
+        let result = ConfigAccess::local(self.node.clone())
             .execute(&format!("{{{collection}({arguments}) {{{fields}}}}}"))
             .await?;
         ensure!(
@@ -160,7 +160,7 @@ impl P2pTool {
         let identity = actor.parse()?;
         let peer = peer.to_owned();
         let collections_scope = self.collections.clone();
-        ConfigAccess::transact_local(&self.node, Some(identity), "tool.p2p.overlay", move |txn| {
+        ConfigAccess::transact_local_write(&self.node, Some(identity), "tool.p2p.overlay", move |txn| {
             let actor = actor.clone();
             let peer = peer.clone();
             let desired = desired.clone();
@@ -491,11 +491,23 @@ impl P2pTool {
                 let result = admin
                     .sync_documents(collection, &ids, Some(Duration::from_secs(10)))
                     .await;
-                let filter = format!(
-                    "{{_docID: {{_in: {}}}}}",
-                    crate::graphql::graphql_string_list_literal(ids.iter().map(String::as_str))
+                validate_collection_identifier(collection)?;
+                let doc_ids =
+                    crate::graphql::graphql_string_list_literal(ids.iter().map(String::as_str));
+                let observed = ConfigAccess::local(self.node.clone())
+                    .execute(&format!("{{{collection}(docIDs: {doc_ids}) {{_docID}}}}"))
+                    .await?;
+                ensure!(
+                    observed
+                        .get("errors")
+                        .is_none_or(|errors| errors.is_null()
+                            || errors.as_array().is_some_and(Vec::is_empty)),
+                    "P2P document observation failed: {}",
+                    observed["errors"]
                 );
-                let present = self.rows(collection, Some(&filter), "_docID").await?;
+                let present = observed["data"][collection]
+                    .as_array()
+                    .context("P2P response omitted documents")?;
                 let arrived: BTreeSet<_> = present
                     .iter()
                     .filter_map(|r| r["_docID"].as_str())

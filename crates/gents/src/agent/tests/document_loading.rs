@@ -15,7 +15,7 @@ use crate::toolset::ToolSet;
 /// node's explicit default. `ensure_node` returns the
 /// `Node` only and invents no executable configuration, so a test
 /// that needs a runnable default chooses one deliberately.
-async fn install_default_behavior_chain(node: &EmbeddedNode, did: &str, agent_id: &str) {
+async fn install_default_behavior_chain(node: &Arc<EmbeddedNode>, did: &str, agent_id: &str) {
     crate::test_support::install_test_agent(node, did, agent_id).await;
     crate::document_config::ensure_node(node, did)
         .await
@@ -50,7 +50,7 @@ async fn from_default_agent_documents_preserves_identity_only_principal() {
     let identity = Arc::new(test_identity("bootstrap-profile"));
     let did = identity.did().to_string();
     // Identity bootstrap deliberately creates no executable default.
-    crate::document_config::ensure_node(node.as_ref(), &did)
+    crate::document_config::ensure_node(&node, &did)
         .await
         .unwrap();
     let agent = Gents::from_default_agent_documents(
@@ -77,13 +77,13 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     let did = identity.did().to_string();
     let default_agent_id = default_agent_id_for_node(&did);
 
-    install_default_behavior_chain(node.as_ref(), &did, &default_agent_id).await;
+    install_default_behavior_chain(&node, &did, &default_agent_id).await;
     // The #649 sampling pins: an explicit sampling document is the only way a
     // profile can express sampling beyond temperature; the chain it must reach
     // the provider request body through is behavior.sampling.
     let sampling_id = format!("{default_agent_id}:sampling");
     write_document(
-        node.as_ref(),
+        &node,
         crate::Collection::InferenceSampling,
         &crate::document_config::InferenceSampling {
             node_did: did.clone(),
@@ -101,7 +101,7 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     .await
     .unwrap();
     let profile_id = format!("{default_agent_id}:inference");
-    let mut profile = crate::load_inference_profile(node.as_ref(), &did, &profile_id)
+    let mut profile = crate::load_inference_profile(&node, &did, &profile_id)
         .await
         .unwrap()
         .expect("installed chain profile");
@@ -109,12 +109,12 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     profile.reasoning_effort = Some(crate::config::ReasoningEffort::Max);
     profile.context_window = Some(32768);
     profile.max_output_tokens = Some(4096);
-    crate::document_config::upsert_inference_profile(node.as_ref(), &profile)
+    crate::document_config::upsert_inference_profile(&node, &profile)
         .await
         .unwrap();
     let execution_id = format!("{default_agent_id}:execution");
     write_document(
-        node.as_ref(),
+        &node,
         crate::Collection::InferenceExecution,
         &crate::document_config::InferenceExecution {
             node_did: did.clone(),
@@ -128,21 +128,21 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     )
     .await
     .unwrap();
-    let mut profile = crate::load_inference_profile(node.as_ref(), &did, &profile_id)
+    let mut profile = crate::load_inference_profile(&node, &did, &profile_id)
         .await
         .unwrap()
         .expect("installed chain profile");
     profile.execution_id = Some(execution_id);
-    crate::document_config::upsert_inference_profile(node.as_ref(), &profile)
+    crate::document_config::upsert_inference_profile(&node, &profile)
         .await
         .unwrap();
     // Context owns literal system instructions.
-    let mut context = load_installed_context(node.as_ref(), &did, &default_agent_id).await;
+    let mut context = load_installed_context(&node, &did, &default_agent_id).await;
     context.system_prompt = Some("You are precise.".to_string());
-    upsert_context(node.as_ref(), &context).await;
+    upsert_context(&node, &context).await;
 
     let backend: crate::document_config::InferenceBackend = read_document(
-        node.as_ref(),
+        &node,
         &did,
         crate::Collection::InferenceBackend,
         &format!("{default_agent_id}:backend"),
@@ -213,14 +213,14 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
 }
 
 async fn read_document<T: serde::de::DeserializeOwned>(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     owner: &str,
     collection: crate::Collection,
     id: &str,
 ) -> T {
     let owner = owner.to_owned();
     let id = id.to_owned();
-    let value = crate::config_client::ConfigAccess::transact_local(
+    let value = crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.read_configuration",
@@ -243,7 +243,7 @@ async fn read_document<T: serde::de::DeserializeOwned>(
 }
 
 async fn write_document<T: serde::Serialize>(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     collection: crate::Collection,
     document: &T,
 ) -> anyhow::Result<()> {
@@ -255,7 +255,7 @@ async fn write_document<T: serde::Serialize>(
             update: value,
         },
     ])?;
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.write_configuration",
@@ -269,7 +269,7 @@ async fn write_document<T: serde::Serialize>(
 }
 
 async fn load_installed_context(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     did: &str,
     agent_id: &str,
 ) -> crate::document_config::AgentContext {
@@ -283,7 +283,7 @@ async fn load_installed_context(
     .await
 }
 
-async fn upsert_context(node: &EmbeddedNode, context: &crate::document_config::AgentContext) {
+async fn upsert_context(node: &Arc<EmbeddedNode>, context: &crate::document_config::AgentContext) {
     write_document(node, crate::Collection::AgentContext, context)
         .await
         .unwrap();
@@ -297,12 +297,12 @@ async fn from_default_agent_documents_resolves_tool_selection_with_ceiling() {
     let did = identity.did().to_string();
     let default_agent_id = default_agent_id_for_node(&did);
 
-    install_default_behavior_chain(node.as_ref(), &did, &default_agent_id).await;
+    install_default_behavior_chain(&node, &did, &default_agent_id).await;
     // A second enabled agent the agent target can point at, plus the
     // scoped AgentTargetDocument and the Tools.agents selection.
-    crate::test_support::install_test_agent(node.as_ref(), &did, "researcher").await;
+    crate::test_support::install_test_agent(&node, &did, "researcher").await;
     write_document(
-        node.as_ref(),
+        &node,
         crate::Collection::AgentTarget,
         &AgentTargetDocument {
             target_id: format!("{default_agent_id}:researcher"),
@@ -316,7 +316,7 @@ async fn from_default_agent_documents_resolves_tool_selection_with_ceiling() {
     )
     .await
     .unwrap();
-    let mut tools = load_installed_tools(node.as_ref(), &did, &default_agent_id).await;
+    let mut tools = load_installed_tools(&node, &did, &default_agent_id).await;
     tools.host = Some(
         serde_json::from_value(
             serde_json::json!({"files":{"mode":"ReadWrite"},"bash":{"mode":"Unrestricted"}}),
@@ -327,7 +327,7 @@ async fn from_default_agent_documents_resolves_tool_selection_with_ceiling() {
         target_ids: vec![format!("{default_agent_id}:researcher")],
         enabled: Some(true),
     });
-    upsert_tools(node.as_ref(), &tools).await;
+    upsert_tools(&node, &tools).await;
 
     let agent = Gents::from_default_agent_documents(
         node,
@@ -357,12 +357,10 @@ async fn from_default_agent_documents_resolves_tool_selection_with_ceiling() {
         ["researcher".to_string()]
     );
     assert!(behavior.tools.agent_tools().enabled);
-    let snapshot = resolve_document_runtime_snapshot(
-        agent.node.as_ref(),
-        agent.document_runtime_context().unwrap(),
-    )
-    .await
-    .unwrap();
+    let snapshot =
+        resolve_document_runtime_snapshot(&agent.node, agent.document_runtime_context().unwrap())
+            .await
+            .unwrap();
     let tool_surface = snapshot
         .tool_surfaces
         .get(&default_agent_id)
@@ -372,7 +370,7 @@ async fn from_default_agent_documents_resolves_tool_selection_with_ceiling() {
     assert!(tool_names.contains(&"agent_message".to_string()));
 }
 
-async fn load_installed_tools(node: &EmbeddedNode, did: &str, agent_id: &str) -> Tools {
+async fn load_installed_tools(node: &Arc<EmbeddedNode>, did: &str, agent_id: &str) -> Tools {
     let context = load_installed_context(node, did, agent_id).await;
     read_document(
         node,
@@ -383,13 +381,13 @@ async fn load_installed_tools(node: &EmbeddedNode, did: &str, agent_id: &str) ->
     .await
 }
 
-async fn upsert_tools(node: &EmbeddedNode, tools: &Tools) {
+async fn upsert_tools(node: &Arc<EmbeddedNode>, tools: &Tools) {
     write_document(node, crate::Collection::Tools, tools)
         .await
         .unwrap();
 }
 
-async fn upsert_agent(node: &EmbeddedNode, agent: &Agent) -> anyhow::Result<()> {
+async fn upsert_agent(node: &Arc<EmbeddedNode>, agent: &Agent) -> anyhow::Result<()> {
     write_document(node, crate::Collection::Agent, agent).await
 }
 
@@ -401,22 +399,17 @@ async fn from_default_agent_documents_filters_inactive_agent_targets() {
     let did = identity.did().to_string();
     let default_agent_id = default_agent_id_for_node(&did);
 
-    install_default_behavior_chain(node.as_ref(), &did, &default_agent_id).await;
+    install_default_behavior_chain(&node, &did, &default_agent_id).await;
     // The destination agent exists but is disabled. The parent remains
     // runnable while the inactive target is omitted from its presented surface.
-    crate::test_support::install_test_agent(node.as_ref(), &did, "disabled-researcher").await;
-    let behavior: Agent = read_document(
-        node.as_ref(),
-        &did,
-        crate::Collection::Agent,
-        "disabled-researcher",
-    )
-    .await;
+    crate::test_support::install_test_agent(&node, &did, "disabled-researcher").await;
+    let behavior: Agent =
+        read_document(&node, &did, crate::Collection::Agent, "disabled-researcher").await;
     let mut disabled = behavior;
     disabled.enabled = false;
-    upsert_agent(node.as_ref(), &disabled).await.unwrap();
+    upsert_agent(&node, &disabled).await.unwrap();
     write_document(
-        node.as_ref(),
+        &node,
         crate::Collection::AgentTarget,
         &AgentTargetDocument {
             target_id: format!("{default_agent_id}:disabled-researcher"),
@@ -430,15 +423,15 @@ async fn from_default_agent_documents_filters_inactive_agent_targets() {
     )
     .await
     .unwrap();
-    let mut tools = load_installed_tools(node.as_ref(), &did, &default_agent_id).await;
+    let mut tools = load_installed_tools(&node, &did, &default_agent_id).await;
     tools.agents = Some(crate::document_config::AgentTools {
         target_ids: vec![format!("{default_agent_id}:disabled-researcher")],
         enabled: Some(true),
     });
-    upsert_tools(node.as_ref(), &tools).await;
+    upsert_tools(&node, &tools).await;
 
     let snapshot = resolve_document_runtime_snapshot(
-        node.as_ref(),
+        &node,
         &DocumentResolveContext::for_tests(
             identity,
             ToolCeiling::readonly(),
@@ -471,12 +464,12 @@ async fn from_default_agent_documents_rejects_unresolved_agent_target() {
     let did = identity.did().to_string();
     let default_agent_id = default_agent_id_for_node(&did);
 
-    install_default_behavior_chain(node.as_ref(), &did, &default_agent_id).await;
-    crate::test_support::install_test_agent(node.as_ref(), &did, "target-before-corruption").await;
+    install_default_behavior_chain(&node, &did, &default_agent_id).await;
+    crate::test_support::install_test_agent(&node, &did, "target-before-corruption").await;
     // The target names a agent_id that was never installed: scope resolution
     // must fail closed with a diagnostic naming the agent_targets entry.
     write_document(
-        node.as_ref(),
+        &node,
         crate::Collection::AgentTarget,
         &AgentTargetDocument {
             target_id: format!("{default_agent_id}:missing-behavior"),
@@ -490,12 +483,12 @@ async fn from_default_agent_documents_rejects_unresolved_agent_target() {
     )
     .await
     .unwrap();
-    let mut tools = load_installed_tools(node.as_ref(), &did, &default_agent_id).await;
+    let mut tools = load_installed_tools(&node, &did, &default_agent_id).await;
     tools.agents = Some(crate::document_config::AgentTools {
         target_ids: vec![format!("{default_agent_id}:missing-behavior")],
         enabled: Some(true),
     });
-    upsert_tools(node.as_ref(), &tools).await;
+    upsert_tools(&node, &tools).await;
 
     let owner = crate::graphql::escape_graphql_string(&did);
     let target_id =
@@ -534,20 +527,20 @@ async fn from_default_agent_documents_loads_runnable_agents_and_tracks_unavailab
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("behavior-catalog"));
     let did = identity.did().to_string();
-    crate::document_config::ensure_node(node.as_ref(), &did)
+    crate::document_config::ensure_node(&node, &did)
         .await
         .unwrap();
     for name in ["code", "broken", "disabled", "unhealthy"] {
-        crate::test_support::install_test_agent(node.as_ref(), &did, name).await;
+        crate::test_support::install_test_agent(&node, &did, name).await;
     }
     let mut disabled: Agent =
-        read_document(node.as_ref(), &did, crate::Collection::Agent, "disabled").await;
+        read_document(&node, &did, crate::Collection::Agent, "disabled").await;
     disabled.enabled = false;
-    write_document(node.as_ref(), crate::Collection::Agent, &disabled)
+    write_document(&node, crate::Collection::Agent, &disabled)
         .await
         .unwrap();
-    set_probe_status(node.as_ref(), &did, "code:backend", "healthy").await;
-    set_probe_status(node.as_ref(), &did, "unhealthy:backend", "unhealthy").await;
+    set_probe_status(&node, &did, "code:backend", "healthy").await;
+    set_probe_status(&node, &did, "unhealthy:backend", "unhealthy").await;
     // Guarded publication rejects dangling references. Corrupt one profile only
     // after installing a valid bundle to exercise the runtime's failure path.
     let owner = crate::graphql::escape_graphql_string(&did);
@@ -603,7 +596,7 @@ async fn from_default_agent_documents_loads_runnable_agents_and_tracks_unavailab
     );
 }
 
-async fn set_probe_status(node: &EmbeddedNode, did: &str, backend_id: &str, status: &str) {
+async fn set_probe_status(node: &Arc<EmbeddedNode>, did: &str, backend_id: &str, status: &str) {
     crate::backend_registry::set_backend_probe_status(node, did, backend_id, status)
         .await
         .unwrap();

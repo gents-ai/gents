@@ -362,7 +362,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn summary_starter_resolves_physical_cause_outside_latest_request_cache() {
     let (core, _tmp, parent_doc_id) = crate::tests::support::seed_provenance_fixture().await;
-    let access = gents::config_client::ConfigAccess::Local(core.node_arc());
+    let access = gents::config_client::ConfigAccess::local(core.node_arc());
     assert_ne!(parent_doc_id, "req_parent");
     let child = gents::session_origin::load_session(
         &access,
@@ -387,7 +387,7 @@ async fn summary_starter_resolves_physical_cause_outside_latest_request_cache() 
 async fn fleet_snapshot_resolves_all_starters_with_one_query_per_build() {
     let (core, _tmp, parent_a, parent_b) =
         crate::tests::support::seed_fleet_starter_fixture().await;
-    let access = gents::config_client::ConfigAccess::Local(core.node_arc());
+    let access = gents::config_client::ConfigAccess::local(core.node_arc());
     let mut sessions = Vec::new();
     for session_id in [
         "sess_fleet_parent_a",

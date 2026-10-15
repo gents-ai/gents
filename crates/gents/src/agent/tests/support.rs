@@ -66,7 +66,7 @@ impl Tool for EchoTool {
 }
 
 pub(super) async fn insert_backend(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     backend_id: &str,
     endpoint: &str,
@@ -89,10 +89,15 @@ pub(super) async fn insert_backend(
         },
     ])
     .unwrap();
-    crate::config_client::ConfigAccess::transact_local(node, None, "test.insert_backend", |txn| {
-        let plan = &plan;
-        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
-    })
+    crate::config_client::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "test.insert_backend",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        },
+    )
     .await
     .unwrap();
     crate::backend_registry::set_backend_probe_status(node, node_did, backend_id, "healthy")

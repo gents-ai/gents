@@ -117,7 +117,7 @@ async fn schema_publication_matches_executable_lean_contract() {
     for case in &crate::lean_vocab_test::lean_contract_snapshot().schema_publication_cases {
         let node = node().await;
         let tool = SchemaTool::new(node.clone());
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let grant = case["grant"].as_bool().unwrap();
         let compatible = case["compatible"].as_bool().unwrap();
         let artifact = case["artifact"].as_bool().unwrap();
@@ -175,7 +175,7 @@ async fn schema_publication_matches_executable_lean_contract() {
 async fn additive_recovery_preserves_documents_and_rejects_stale_preview() {
     let node = node().await;
     let tool = SchemaTool::new(node.clone());
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let installed = apply(
         &tool,
         json!({"argv":["collection","create"],"options":{"sdl":"type WorkItem { title: String }"}}),
@@ -311,7 +311,7 @@ async fn inline_lens_migration_transforms_existing_rows_through_native_owner() {
     );
     let node = node().await;
     let tool = SchemaTool::new(node.clone());
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     apply(&tool,json!({"argv":["collection","create"],"options":{"sdl":"type FixtureDoc { name: String }"}})).await;
     ConfigAccess::write_local(
         &node,
@@ -389,7 +389,7 @@ async fn view_creation_is_previewed_and_discoverable() {
 async fn batch_retains_prior_commit_and_does_not_attempt_later_calls() {
     let node = node().await;
     let tool = SchemaTool::new(node.clone());
-    let access = ConfigAccess::Local(node);
+    let access = ConfigAccess::local(node);
     let first=call(&tool,json!({"argv":["collection","preview","create"],"options":{"sdl":"type BatchFirst { title: String }"}})).await;
     let last=call(&tool,json!({"argv":["collection","preview","create"],"options":{"sdl":"type BatchLast { title: String }"}})).await;
     let result=tool.call(args(json!({"argv":["batch"],"options":{"operations":[first["next_call"]["args"],{"argv":["collection","get"],"target_id":"Missing"},last["next_call"]["args"]]}}))).await.unwrap_err();
@@ -417,7 +417,7 @@ async fn malformed_schema_previews_return_executable_help_without_publication() 
         json!({"argv":["collection","create"],"options":{"sdl":"type Shape { title: String }"}}),
     )
     .await;
-    let before = ConfigAccess::Local(node.clone())
+    let before = ConfigAccess::local(node.clone())
         .collection_versions()
         .await
         .unwrap();
@@ -434,7 +434,7 @@ async fn malformed_schema_previews_return_executable_help_without_publication() 
     }
     assert_eq!(
         before,
-        ConfigAccess::Local(node)
+        ConfigAccess::local(node)
             .collection_versions()
             .await
             .unwrap()
@@ -445,7 +445,7 @@ async fn malformed_schema_previews_return_executable_help_without_publication() 
 async fn config_shaped_schema_calls_preview_then_apply_without_rewriting_the_receipt() {
     let node = node().await;
     let tool = SchemaTool::new(node.clone());
-    let access = ConfigAccess::Local(node);
+    let access = ConfigAccess::local(node);
     let help = tool
         .call(args(json!({"argv":["collection","create","--help"]})))
         .await
@@ -509,13 +509,13 @@ async fn misplaced_preview_returns_the_corrected_call_without_publishing() {
         .get("preview")
         .is_none());
     let preview = call(&tool, error["recovery"]["args"].clone()).await;
-    assert!(ConfigAccess::Local(node.clone())
+    assert!(ConfigAccess::local(node.clone())
         .collection_version("RecoveryShape")
         .await
         .unwrap()
         .is_none());
     call(&tool, preview["next_call"]["args"].clone()).await;
-    assert!(ConfigAccess::Local(node)
+    assert!(ConfigAccess::local(node)
         .collection_version("RecoveryShape")
         .await
         .unwrap()
@@ -578,7 +578,7 @@ async fn schema_argument_recovery_preserves_intent_without_publishing() {
         assert!(next["options"].get("digest").is_none());
         assert!(next["options"].get("schema").is_none());
         call(&tool, next.clone()).await;
-        assert!(ConfigAccess::Local(node.clone())
+        assert!(ConfigAccess::local(node.clone())
             .collection_version("SyntaxProbe")
             .await
             .unwrap()
@@ -606,7 +606,7 @@ async fn schema_help_with_command_context_does_not_mutate() {
     tool.call(args(error["recovery"]["args"].clone()))
         .await
         .unwrap();
-    assert!(ConfigAccess::Local(node)
+    assert!(ConfigAccess::local(node)
         .collection_version("Absent")
         .await
         .unwrap()
@@ -642,7 +642,7 @@ async fn invalid_sdl_points_to_its_concept_without_rewriting_it() {
         assert!(page.contains("```graphql"));
     }
     for name in ["BadScalar", "BadText"] {
-        assert!(ConfigAccess::Local(node.clone())
+        assert!(ConfigAccess::local(node.clone())
             .collection_version(name)
             .await
             .unwrap()

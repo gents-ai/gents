@@ -129,6 +129,24 @@ inductive StartupPhase where
   | managedServerError | configurationError | clientError | ready
   deriving DecidableEq, Repr
 
+inductive FirstRunPhase where
+  | unknown | active | done
+  deriving DecidableEq, Repr
+
+/-- First-run enters setup only after the local init-config owner explicitly
+reports absence, or after a configured home has a complete operator snapshot.
+Unreadable init state and partial operator snapshots remain unresolved. Once
+setup owns the window, observations cannot restart or dismiss it. -/
+def observeFirstRun (phase : FirstRunPhase) (snapshotReady initConfigAbsent needsSetup authoritative : Bool) : FirstRunPhase :=
+  match phase with
+  | .active => .active
+  | .done => .done
+  | .unknown =>
+      if !snapshotReady then .unknown
+      else if initConfigAbsent then .active
+      else if !authoritative then .unknown
+      else if needsSetup then .active else .done
+
 /-- A client observation can recover a client error, not managed-server authority.
 
 `autostartDeclined` is true exactly when the desktop will not autostart the
@@ -153,6 +171,118 @@ theorem client_observation_does_not_clear_managed_error (running autostartDeclin
     observeStartup .managedServerError running autostartDeclined = .managedServerError := by rfl
 
 end ClientSnapshotObservation
+
+/-! A data-read publication fence is separate from the shell's UI-intent epoch
+and lineage provenance. The native projection owner compares retained snapshot
+identity and a request-event generation. Transcript-only invalidations do not
+replace the snapshot or alter either read-fence component; an observed request
+event advances its own generation even when no row is cached. -/
+namespace ClientDataPublication
+
+structure State where
+  dataEpoch : Nat
+  provenanceEpoch : Nat
+  requestEventEpoch : Nat
+  transcriptEpoch : Nat
+  deriving DecidableEq, Repr
+
+structure Read where
+  dataEpoch : Nat
+  requestEventEpoch : Nat
+  deriving DecidableEq, Repr
+
+def beginRead (s : State) : Read :=
+  { dataEpoch := s.dataEpoch, requestEventEpoch := s.requestEventEpoch }
+
+def accepts (s : State) (read : Read) : Bool :=
+  decide (s.dataEpoch = read.dataEpoch ∧ s.requestEventEpoch = read.requestEventEpoch)
+
+def publish (s : State) (read : Read) : State :=
+  if accepts s read then { s with dataEpoch := s.dataEpoch + 1 } else s
+
+def requestEvent (s : State) : State :=
+  { s with requestEventEpoch := s.requestEventEpoch + 1 }
+
+def transcriptInvalidation (s : State) : State :=
+  { s with transcriptEpoch := s.transcriptEpoch + 1 }
+
+theorem newer_data_rejects_old_read (s : State) (read : Read)
+    (h : read.dataEpoch < s.dataEpoch) : publish s read = s := by
+  have hne : s.dataEpoch ≠ read.dataEpoch := by omega
+  simp [publish, accepts, hne]
+
+theorem uncached_request_event_rejects_old_read (s : State) :
+    publish (requestEvent s) (beginRead s) = requestEvent s := by
+  simp [publish, requestEvent, beginRead, accepts]
+
+theorem request_event_does_not_invalidate_lineage_cache (s : State) :
+    (requestEvent s).provenanceEpoch = s.provenanceEpoch := by
+  rfl
+
+theorem transcript_invalidation_preserves_read (s : State) :
+    accepts (transcriptInvalidation s) (beginRead s) = true := by
+  simp [transcriptInvalidation, beginRead, accepts]
+
+theorem accepted_publication_advances_data_epoch (s : State) :
+    (publish s (beginRead s)).dataEpoch = s.dataEpoch + 1 := by
+  simp [publish, beginRead, accepts]
+
+structure Recovery where
+  full : Bool
+  pendingScopes : List Nat
+  generation : Nat
+  retryScheduled : Bool
+  deriving DecidableEq, Repr
+
+def requestScope (r : Recovery) (scope : Nat) : Recovery :=
+  if r.full then { r with generation := r.generation + 1 }
+  else if scope ∈ r.pendingScopes then { r with generation := r.generation + 1 }
+  else { r with pendingScopes := r.pendingScopes ++ [scope], generation := r.generation + 1 }
+
+def requestFull (r : Recovery) : Recovery :=
+  { r with full := true, pendingScopes := [], generation := r.generation + 1 }
+
+def takeBatch (r : Recovery) : Recovery × List Nat :=
+  ({ r with pendingScopes := [] }, r.pendingScopes)
+
+/-- A failed batch retains the failed and not-yet-processed scopes. It schedules
+the existing observer timer without publishing another wake notification. -/
+def failBatch (r : Recovery) (remainingScopes : List Nat) : Recovery :=
+  if r.full then { r with retryScheduled := true }
+  else { r with pendingScopes := r.pendingScopes ++ remainingScopes, retryScheduled := true }
+
+def retryTimer (r : Recovery) : Recovery := { r with retryScheduled := false }
+
+theorem failed_batch_retains_every_scope (r : Recovery) (scopes : List Nat)
+    (scope : Nat) (h : scope ∈ scopes) :
+    scope ∈ (failBatch r scopes).pendingScopes ∨ (failBatch r scopes).full = true := by
+  by_cases hf : r.full
+  · simp [failBatch, hf]
+  · simp [failBatch, hf, List.mem_append, h]
+
+theorem failed_batch_does_not_self_notify (r : Recovery) (scopes : List Nat) :
+    (failBatch r scopes).generation = r.generation := by
+  by_cases hf : r.full <;> simp [failBatch, hf]
+
+theorem request_during_retry_is_retained (r : Recovery) (scopes : List Nat) (scope : Nat) :
+    (scope ∈ (requestScope (failBatch r scopes) scope).pendingScopes ∨
+      (requestScope (failBatch r scopes) scope).full = true) ∧
+      (requestScope (failBatch r scopes) scope).retryScheduled := by
+  by_cases hf : r.full
+  · simp [failBatch, requestScope, hf]
+  · by_cases hmem : scope ∈ r.pendingScopes ++ scopes
+    · simp [failBatch, requestScope, hf, hmem]
+    · simp [failBatch, requestScope, hf, hmem]
+
+theorem timer_retry_keeps_pending_work (r : Recovery) :
+    (retryTimer r).pendingScopes = r.pendingScopes ∧
+      (retryTimer r).full = r.full ∧ !(retryTimer r).retryScheduled := by
+  simp [retryTimer]
+
+theorem request_event_does_not_change_lineage (s : State) :
+    (requestEvent s).provenanceEpoch = s.provenanceEpoch := by rfl
+
+end ClientDataPublication
 
 namespace ClientLiveDelta
 

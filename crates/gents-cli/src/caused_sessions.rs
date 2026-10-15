@@ -35,7 +35,7 @@ const REQUEST_FIELDS: &str = "_docID request_id node_did session_id requester_di
      caused_by_parent_tool_call_doc_id";
 
 fn access(node: &Arc<EmbeddedNode>) -> ConfigAccess {
-    ConfigAccess::Local(node.clone())
+    ConfigAccess::local(node.clone())
 }
 
 /// Sessions started by this exact physical request.
@@ -262,7 +262,7 @@ pub(crate) async fn load_session_head(
     node: &Arc<EmbeddedNode>,
     scope: &SessionScope,
 ) -> Result<Option<AgentRequestRow>> {
-    let head = ConfigAccess::transact_local(node, None, "caused_sessions.head", |txn| {
+    let head = ConfigAccess::transact_local_write(node, None, "caused_sessions.head", |txn| {
         Box::pin(async move {
             load_latest_request_in_txn(
                 txn,

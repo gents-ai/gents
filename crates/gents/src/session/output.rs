@@ -13,7 +13,8 @@ use gents_protocol::output::{
     MessagePublication, MessageRole, OutputOutcome, OutputSource, OutputWriter, PayloadRef,
     SourceClose,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 use super::canonical_rows::{
     decode_output_segment_row, decode_scoped_request_output_segments,
@@ -106,6 +107,12 @@ tokio::task_local! {
     static REQUEST_OUTPUT_SCANS: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
+#[cfg(test)]
+pub(crate) fn record_request_output_scan() {
+    let _ = REQUEST_OUTPUT_SCANS
+        .try_with(|scans| scans.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+}
+
 /// Run `future`, counting the request-wide output segment scans canonical
 /// reconstruction issues on this task.
 #[cfg(test)]
@@ -115,6 +122,22 @@ pub(crate) async fn count_request_output_scans<F: std::future::Future>(
     let scans = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let output = REQUEST_OUTPUT_SCANS.scope(scans.clone(), future).await;
     (output, scans.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static REPLAY_REQUEST_FACT_BATCHES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+}
+
+#[cfg(test)]
+pub(crate) async fn count_replay_request_fact_batches<F: std::future::Future>(
+    future: F,
+) -> (F::Output, usize) {
+    let batches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let output = REPLAY_REQUEST_FACT_BATCHES
+        .scope(batches.clone(), future)
+        .await;
+    (output, batches.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 #[cfg(test)]
@@ -146,16 +169,135 @@ enum ReadAccess<'a, 'txn> {
 #[derive(Default)]
 struct ReadCache {
     headers: BTreeMap<String, super::canonical_rows::TranscriptMessageRow>,
-    requests: BTreeMap<String, Vec<super::canonical_rows::OutputSegmentRow>>,
+    requests: BTreeMap<String, Arc<RequestOutputRows>>,
     /// Rows the caller read by an exact scoped query in the same transaction;
     /// each still passes coordinate validation before it enters `headers`.
     observed: BTreeMap<String, super::canonical_rows::TranscriptMessageRow>,
     /// Bulk readers cache scoped session headers; single-header readers query twins only.
-    sessions: Option<BTreeMap<String, Vec<serde_json::Value>>>,
+    sessions: Option<BTreeMap<String, SessionHeaderRows>>,
     /// One bounded bulk pass reconstructs every message of a request
     /// against the same scan. A reused scan that lacks a referenced close is
     /// dropped and re-read, so replication filling that gap is still observed.
     reuse_node_scans: bool,
+}
+
+/// Indexes retain every occurrence, including contradictory observations of
+/// one physical document. They must not turn canonical integrity checks into
+/// last-writer-wins selection.
+#[derive(Clone)]
+struct RequestOutputRows {
+    rows: Vec<super::canonical_rows::OutputSegmentRow>,
+    by_doc_id: HashMap<String, Vec<usize>>,
+    by_source: HashMap<OutputSource, Vec<usize>>,
+}
+
+/// Unrelated malformed headers remain undecoded. Coordinate matches retain
+/// their original order and every physical occurrence, even identical IDs.
+struct SessionHeaderRows {
+    rows: Vec<serde_json::Value>,
+    by_key: HashMap<String, Vec<usize>>,
+    by_sequence: HashMap<u64, Vec<usize>>,
+}
+
+impl From<Vec<serde_json::Value>> for SessionHeaderRows {
+    fn from(rows: Vec<serde_json::Value>) -> Self {
+        let mut by_key: HashMap<String, Vec<usize>> = HashMap::with_capacity(rows.len());
+        let mut by_sequence: HashMap<u64, Vec<usize>> = HashMap::with_capacity(rows.len());
+        for (index, row) in rows.iter().enumerate() {
+            if let Some(key) = row.get("message_key").and_then(serde_json::Value::as_str) {
+                by_key.entry(key.to_owned()).or_default().push(index);
+            }
+            if let Some(sequence) = row.get("sequence").and_then(serde_json::Value::as_u64) {
+                by_sequence.entry(sequence).or_default().push(index);
+            }
+        }
+        Self {
+            rows,
+            by_key,
+            by_sequence,
+        }
+    }
+}
+
+impl SessionHeaderRows {
+    fn coordinate_matches(
+        &self,
+        key: &str,
+        sequence: u32,
+    ) -> impl Iterator<Item = &serde_json::Value> {
+        let mut indices = self
+            .by_key
+            .get(key)
+            .into_iter()
+            .flatten()
+            .chain(
+                self.by_sequence
+                    .get(&u64::from(sequence))
+                    .into_iter()
+                    .flatten(),
+            )
+            .copied()
+            .collect::<Vec<_>>();
+        indices.sort_unstable();
+        indices.dedup();
+        indices.into_iter().map(|index| &self.rows[index])
+    }
+}
+
+impl From<Vec<super::canonical_rows::OutputSegmentRow>> for RequestOutputRows {
+    fn from(rows: Vec<super::canonical_rows::OutputSegmentRow>) -> Self {
+        let mut by_doc_id: HashMap<String, Vec<usize>> = HashMap::with_capacity(rows.len());
+        let mut by_source: HashMap<OutputSource, Vec<usize>> = HashMap::new();
+        for (index, row) in rows.iter().enumerate() {
+            by_doc_id.entry(row.doc_id.clone()).or_default().push(index);
+            by_source
+                .entry(row.segment.source.clone())
+                .or_default()
+                .push(index);
+        }
+        Self {
+            rows,
+            by_doc_id,
+            by_source,
+        }
+    }
+}
+
+impl RequestOutputRows {
+    fn push(&mut self, row: super::canonical_rows::OutputSegmentRow) {
+        let index = self.rows.len();
+        self.by_doc_id
+            .entry(row.doc_id.clone())
+            .or_default()
+            .push(index);
+        self.by_source
+            .entry(row.segment.source.clone())
+            .or_default()
+            .push(index);
+        self.rows.push(row);
+    }
+
+    fn with_doc_id(
+        &self,
+        doc_id: &str,
+    ) -> impl Iterator<Item = &super::canonical_rows::OutputSegmentRow> {
+        self.by_doc_id
+            .get(doc_id)
+            .into_iter()
+            .flatten()
+            .map(|&index| &self.rows[index])
+    }
+
+    fn for_source(
+        &self,
+        source: &OutputSource,
+    ) -> impl Iterator<Item = &super::canonical_rows::OutputSegmentRow> {
+        self.by_source
+            .get(source)
+            .into_iter()
+            .flatten()
+            .map(|&index| &self.rows[index])
+    }
 }
 
 impl ReadAccess<'_, '_> {
@@ -184,7 +326,7 @@ impl ReadAccess<'_, '_> {
             "{operation} failed: {:?}",
             response.errors
         );
-        Ok(serde_json::json!({"data": response.data}))
+        Ok(crate::graphql::into_data_envelope(response.data))
     }
 }
 
@@ -216,9 +358,10 @@ pub(crate) async fn load_canonical_message_in_txn(
 /// it validates every accepted tool reply, and a fresh read per header scans
 /// the request's whole output once per tool, starving lease renewal.
 ///
-/// Its cache is a snapshot: once the transaction creates an `AgentMessage` or
-/// `AgentOutputSegment`, the reader must not be used again. A caller that
-/// publishes canonical output constructs a new reader after publishing.
+/// Its cache is a transaction snapshot. A publication that appends exactly
+/// one segment and header may consume it through `load_created_message`,
+/// which reads the two new rows under ACP and invalidates coordinate checks.
+/// Every other canonical mutation requires a new reader. No facts survive a retry.
 pub(crate) struct TxnCanonicalReader<'a, 'txn> {
     txn: &'a ConfigApplyTxn<'txn>,
     node_did: &'a str,
@@ -227,6 +370,19 @@ pub(crate) struct TxnCanonicalReader<'a, 'txn> {
 }
 
 impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
+    pub(crate) fn new_single(
+        txn: &'a ConfigApplyTxn<'txn>,
+        node_did: &'a str,
+        requester_did: Option<&'a str>,
+    ) -> Self {
+        Self {
+            txn,
+            node_did,
+            requester_did,
+            cache: ReadCache::default(),
+        }
+    }
+
     pub(crate) fn new(
         txn: &'a ConfigApplyTxn<'txn>,
         node_did: &'a str,
@@ -243,9 +399,9 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
         }
     }
 
-    /// Resolve these headers, read by an exact scoped query in this
-    /// transaction, without a physical-ID lookup: DefraDB reads a whole
-    /// collection (or the node's part of it) to find one `_docID`.
+    /// Reuse headers from an exact scoped batch read. A separate `_docID`
+    /// equality is a point lookup, but reusing the rows avoids another read
+    /// per header in this transaction.
     pub(crate) fn observe_headers(
         &mut self,
         headers: &[super::canonical_rows::TranscriptMessageRow],
@@ -255,6 +411,101 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
                 .observed
                 .insert(header.doc_id.clone(), header.clone());
         }
+    }
+
+    pub(crate) fn clear_output_cache(&mut self) {
+        self.cache.requests.clear();
+    }
+
+    pub(crate) async fn load_source(
+        &mut self,
+        request_doc_id: &str,
+        session_id: &str,
+        source: &OutputSource,
+    ) -> Result<Vec<super::canonical_rows::OutputSegmentRow>> {
+        let rows = request_rows(
+            ReadAccess::Txn(self.txn),
+            request_doc_id,
+            self.node_did,
+            self.requester_did,
+            &self.cache,
+            &mut BTreeMap::new(),
+        )
+        .await?;
+        self.cache
+            .requests
+            .insert(request_doc_id.to_owned(), Arc::clone(&rows));
+        Ok(rows
+            .for_source(source)
+            .filter(|row| row.segment.session_id == session_id)
+            .cloned()
+            .collect())
+    }
+
+    /// DefraDB transaction reads are snapshots with read-your-writes. Only
+    /// these two creates may have changed canonical output since this reader's
+    /// last use. Read both exact rows through ACP before extending the complete
+    /// request snapshot; mutation receipts and prepared inputs are not read
+    /// authorization. Consume the reader so the extended snapshot cannot escape
+    /// this publication.
+    pub(crate) async fn load_created_message(
+        mut self,
+        header_doc_id: &str,
+        output_doc_id: &str,
+    ) -> Result<(
+        gents_protocol::output::TranscriptMessage,
+        gents_protocol::message::Message,
+    )> {
+        let requester = self
+            .requester_did
+            .map(|did| format!(r#""{}""#, crate::graphql::escape_graphql_string(did)))
+            .unwrap_or_else(|| "null".into());
+        let scope = format!(
+            r#"node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }}"#,
+            crate::graphql::escape_graphql_string(self.node_did)
+        );
+        let query = format!(
+            r#"{{
+            created_output: AgentOutputSegment(filter: {{ _docID: {{ _eq: "{}" }}, {scope} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}
+            created_header: AgentMessage(filter: {{ _docID: {{ _eq: "{}" }}, {scope} }}) {{ {AGENT_MESSAGE_FIELDS} }}
+        }}"#,
+            crate::graphql::escape_graphql_string(output_doc_id),
+            crate::graphql::escape_graphql_string(header_doc_id)
+        );
+        let response = ReadAccess::Txn(self.txn)
+            .query(&query, "load_created_canonical_message")
+            .await?;
+        let output = rows_value(&response, "created_output")?;
+        anyhow::ensure!(
+            output.len() == 1,
+            "created canonical output is not uniquely readable"
+        );
+        let output = decode_output_segment_row(&output[0])?;
+        let headers = rows_value(&response, "created_header")?;
+        anyhow::ensure!(
+            headers.len() == 1,
+            "created canonical header is not uniquely readable"
+        );
+        let header = decode_transcript_message_row(&headers[0])?;
+        anyhow::ensure!(
+            output.doc_id == output_doc_id
+                && output.segment.node_did == self.node_did
+                && output.segment.requester_did.as_deref() == self.requester_did
+                && header.doc_id == header_doc_id
+                && header.message.node_did == self.node_did
+                && header.message.requester_did.as_deref() == self.requester_did,
+            "created canonical rows crossed their authorized scope"
+        );
+        if let Some(rows) = self.cache.requests.get_mut(&output.segment.request_doc_id) {
+            Arc::make_mut(rows).push(output);
+        }
+        self.cache.headers.clear();
+        self.cache.observed.clear();
+        if let Some(sessions) = self.cache.sessions.as_mut() {
+            sessions.clear();
+        }
+        self.observe_headers(std::slice::from_ref(&header));
+        self.load_message(header_doc_id).await
     }
 
     pub(crate) async fn load_message(
@@ -597,15 +848,10 @@ async fn coordinate_twins(
             .query(&query, "validate_canonical_header_coordinate")
             .await?;
         let rows = rows_value(&response, "AgentMessage")?.clone();
-        sessions.insert(session_id.clone(), rows);
+        sessions.insert(session_id.clone(), SessionHeaderRows::from(rows));
     }
     sessions[session_id]
-        .iter()
-        .filter(|row| {
-            row.get("message_key").and_then(serde_json::Value::as_str) == Some(key.as_str())
-                || row.get("sequence").and_then(serde_json::Value::as_u64)
-                    == Some(u64::from(sequence))
-        })
+        .coordinate_matches(key, sequence)
         .map(decode_transcript_message_row)
         .collect()
 }
@@ -669,18 +915,17 @@ async fn request_rows(
     node_did: &str,
     requester_did: Option<&str>,
     cache: &ReadCache,
-    local: &mut BTreeMap<String, Vec<super::canonical_rows::OutputSegmentRow>>,
-) -> Result<Vec<super::canonical_rows::OutputSegmentRow>> {
+    local: &mut BTreeMap<String, Arc<RequestOutputRows>>,
+) -> Result<Arc<RequestOutputRows>> {
     if let Some(rows) = cache
         .requests
         .get(request_doc_id)
         .or_else(|| local.get(request_doc_id))
     {
-        return Ok(rows.clone());
+        return Ok(Arc::clone(rows));
     }
     #[cfg(test)]
-    let _ = REQUEST_OUTPUT_SCANS
-        .try_with(|scans| scans.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    record_request_output_scan();
     let response = access
         .query(
             &request_output_segments_query(request_doc_id),
@@ -693,8 +938,151 @@ async fn request_rows(
         None,
         requester_did,
     )?;
-    local.insert(request_doc_id.to_owned(), rows.clone());
+    let rows = Arc::new(RequestOutputRows::from(rows));
+    local.insert(request_doc_id.to_owned(), Arc::clone(&rows));
     Ok(rows)
+}
+
+/// Load output segments for all request documents in the bounded replay view
+/// through the indexed request field, in chunks. The per-pass cache still
+/// owns freshness: if reconstruction detects an incomplete reused scan, its
+/// existing retry evicts and rereads that request alone.
+async fn preload_replay_request_output_segments(
+    node: &EmbeddedNode,
+    request_doc_ids: &[String],
+    node_did: &str,
+    requester_did: Option<&str>,
+    cache: &mut ReadCache,
+) -> Result<()> {
+    let distinct = request_doc_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    for chunk in distinct.chunks(crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH) {
+        let filter = chunk
+            .iter()
+            .map(|request_doc_id| {
+                format!(
+                    r#""{}""#,
+                    crate::graphql::escape_graphql_string(request_doc_id)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query = format!(
+            r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _in: [{filter}] }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
+        );
+        #[cfg(test)]
+        record_request_output_scan();
+        let response = ReadAccess::Node(node)
+            .query(&query, "preload_canonical_replay_output_segments")
+            .await?;
+        let rows = decode_scoped_request_output_segments(
+            rows_value(&response, "AgentOutputSegment")?,
+            node_did,
+            None,
+            requester_did,
+        )?;
+        let allowed = chunk.iter().cloned().collect::<BTreeSet<_>>();
+        let mut grouped: BTreeMap<String, Vec<super::canonical_rows::OutputSegmentRow>> =
+            BTreeMap::new();
+        for row in rows {
+            anyhow::ensure!(
+                allowed.contains(&row.segment.request_doc_id),
+                "canonical replay output batch returned an unrequested physical request"
+            );
+            grouped
+                .entry(row.segment.request_doc_id.clone())
+                .or_default()
+                .push(row);
+        }
+        for request_doc_id in chunk {
+            cache.requests.insert(
+                request_doc_id.clone(),
+                Arc::new(RequestOutputRows::from(
+                    grouped.remove(request_doc_id).unwrap_or_default(),
+                )),
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn load_replay_request_facts_batch(
+    node: &EmbeddedNode,
+    request_doc_ids: &[String],
+) -> Result<BTreeMap<String, ReplayRequestFacts>> {
+    let distinct = request_doc_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut facts = BTreeMap::new();
+    for chunk in distinct.chunks(crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH) {
+        let ids = chunk
+            .iter()
+            .map(|request_doc_id| {
+                format!(
+                    r#""{}""#,
+                    crate::graphql::escape_graphql_string(request_doc_id)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut query = format!(
+            r#"{{ requests: AgentRequest(docIDs: [{ids}]) {{ _docID request_id purpose session_id node_did requester_did }}"#
+        );
+        for (index, request_doc_id) in chunk.iter().enumerate() {
+            let escaped = crate::graphql::escape_graphql_string(request_doc_id);
+            query.push_str(&format!(
+                r#" commit{index}: _commits(docID: "{escaped}") {{ cid height fieldName signature {{ identity type }} }}"#
+            ));
+        }
+        query.push_str(" }");
+        #[cfg(test)]
+        let _ = REPLAY_REQUEST_FACT_BATCHES
+            .try_with(|batches| batches.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        let response = ReadAccess::Node(node)
+            .query(&query, "load_canonical_replay_request_facts")
+            .await?;
+        let request_rows = rows_value(&response, "requests")?;
+        let allowed = chunk.iter().cloned().collect::<BTreeSet<_>>();
+        let mut grouped = chunk
+            .iter()
+            .map(|request_doc_id| (request_doc_id.clone(), Vec::new()))
+            .collect::<BTreeMap<_, Vec<_>>>();
+        for row in request_rows {
+            let request_doc_id = row
+                .get("_docID")
+                .and_then(serde_json::Value::as_str)
+                .with_context(|| "canonical replay request batch returned a row without _docID")?;
+            anyhow::ensure!(
+                allowed.contains(request_doc_id),
+                "canonical replay request batch returned an unrequested physical request"
+            );
+            grouped
+                .get_mut(request_doc_id)
+                .expect("requested request IDs were initialized")
+                .push(row.clone());
+        }
+        for (index, request_doc_id) in chunk.iter().enumerate() {
+            let commit_rows = response
+                .pointer(&format!("/data/commit{index}"))
+                .and_then(serde_json::Value::as_array)
+                .with_context(|| {
+                    format!("canonical replay commit batch omitted {request_doc_id}")
+                })?;
+            let commits = crate::graphql::decode_composite_commits(commit_rows)?;
+            let rows = grouped
+                .remove(request_doc_id)
+                .expect("requested request IDs were initialized");
+            facts.insert(request_doc_id.clone(), ReplayRequestFacts { rows, commits });
+        }
+    }
+    Ok(facts)
 }
 
 /// `request_hint` is the physical request whose output the header's payloads
@@ -720,15 +1108,15 @@ async fn load_referenced_segments(
     let mut local = BTreeMap::new();
     let hinted = match request_hint {
         Some(request) if !close_ids.is_empty() => {
-            request_rows(access, request, node_did, requester_did, cache, &mut local).await?
+            Some(request_rows(access, request, node_did, requester_did, cache, &mut local).await?)
         }
-        _ => Vec::new(),
+        _ => None,
     };
     let mut closures = Vec::new();
     for close_id in close_ids {
         let found = hinted
             .iter()
-            .filter(|row| row.doc_id == close_id)
+            .flat_map(|rows| rows.with_doc_id(&close_id))
             .cloned()
             .collect::<Vec<_>>();
         if !found.is_empty() {
@@ -752,18 +1140,15 @@ async fn load_referenced_segments(
         if cache
             .requests
             .get(&closure.segment.request_doc_id)
-            .is_some_and(|rows| !rows.iter().any(|row| row.doc_id == closure.doc_id))
+            .is_some_and(|rows| rows.with_doc_id(&closure.doc_id).next().is_none())
         {
             cache.requests.remove(&closure.segment.request_doc_id);
         }
     }
     let mut sources = Vec::new();
+    let mut seen = HashSet::new();
     for closure in &closures {
-        if !sources.iter().any(
-            |(request, source): &(String, gents_protocol::output::OutputSource)| {
-                request == &closure.segment.request_doc_id && source == &closure.segment.source
-            },
-        ) {
+        if seen.insert((&closure.segment.request_doc_id, &closure.segment.source)) {
             sources.push((
                 closure.segment.request_doc_id.clone(),
                 closure.segment.source.clone(),
@@ -784,7 +1169,7 @@ async fn load_referenced_segments(
             &mut local,
         )
         .await?;
-        records.extend(rows.into_iter().filter(|row| row.segment.source == source));
+        records.extend(rows.for_source(&source).cloned());
     }
     // A transaction has a fixed view; a node read may still be receiving
     // additional facts, so reuse its scan only within one opted-in pass.
@@ -917,31 +1302,31 @@ pub(crate) async fn load_canonical_assistant_candidates(
     load_canonical_assistant_candidates_with(node, node, scope, boundary, None).await
 }
 
-/// Physical-request reads for replay. A failed store read is an error, never
-/// empty rows, so it cannot pass for a missing request.
+/// Physical-request reads for replay. Implementations read a bounded batch so
+/// replay does not issue one request and commit query per historical turn. A
+/// failed store read is an error, never empty rows, so it cannot pass for a
+/// missing request.
 #[async_trait::async_trait]
 pub(crate) trait ReplayRequestReader: Sync {
-    async fn request_rows(&self, query: &str) -> Result<serde_json::Value>;
-    async fn request_commits(
+    async fn request_facts(
         &self,
-        request_doc_id: &str,
-    ) -> Result<Vec<crate::graphql::CompositeCommit>>;
+        request_doc_ids: &[String],
+    ) -> Result<BTreeMap<String, ReplayRequestFacts>>;
+}
+
+#[derive(Clone)]
+pub(crate) struct ReplayRequestFacts {
+    pub(super) rows: Vec<serde_json::Value>,
+    commits: Vec<crate::graphql::CompositeCommit>,
 }
 
 #[async_trait::async_trait]
 impl ReplayRequestReader for EmbeddedNode {
-    async fn request_rows(&self, query: &str) -> Result<serde_json::Value> {
-        ReadAccess::Node(self)
-            .query(query, "load_canonical_replay_request")
-            .await
-    }
-
-    async fn request_commits(
+    async fn request_facts(
         &self,
-        request_doc_id: &str,
-    ) -> Result<Vec<crate::graphql::CompositeCommit>> {
-        crate::graphql::composite_commits(self, request_doc_id, "canonical replay request commits")
-            .await
+        request_doc_ids: &[String],
+    ) -> Result<BTreeMap<String, ReplayRequestFacts>> {
+        load_replay_request_facts_batch(self, request_doc_ids).await
     }
 }
 
@@ -1011,7 +1396,24 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         "canonical replay high-water header is absent from its bounded view"
     );
 
-    let mut selected = Vec::new();
+    let replay_output_requests = headers
+        .iter()
+        .filter(|row| {
+            row.message.role == MessageRole::Assistant
+                && !row.message.payload_references().is_empty()
+        })
+        .filter_map(|row| row.message.request_doc_id.clone())
+        .collect::<Vec<_>>();
+    preload_replay_request_output_segments(
+        node,
+        &replay_output_requests,
+        scope.node_did,
+        scope.requester_did,
+        &mut cache,
+    )
+    .await?;
+
+    let mut pending = Vec::new();
     for row in headers
         .into_iter()
         .filter(|row| row.message.role == MessageRole::Assistant)
@@ -1074,50 +1476,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
                 continue;
             }
         }
-        let request_scope = (
-            request_doc_id.to_owned(),
-            origin_header.node_did.clone(),
-            origin_header.requester_did.clone(),
-            origin_header.session_id.clone(),
-        );
-        let loaded = match request_facts.get(&request_scope) {
-            Some(facts) => Ok(facts.clone()),
-            None => {
-                load_replay_physical_request(
-                    requests,
-                    request_doc_id,
-                    &origin_header.node_did,
-                    origin_header.requester_did.as_deref(),
-                    &origin_header.session_id,
-                )
-                .await
-            }
-        };
-        let (request_id, request_commits) = match loaded {
-            Ok(request) => request,
-            // A historical request that is verifiably missing or out of scope
-            // makes only its turn non-replayable; the current request is
-            // validated above. A failed store read says nothing about the
-            // request and must not silently strip reasoning, so it propagates.
-            Err(error)
-                if request_doc_id != scope.request_doc_id
-                    && error
-                        .downcast_ref::<gents_loop::loop_stream::ReplayEvidenceViolation>()
-                        .is_some() =>
-            {
-                tracing::warn!(
-                    header_doc_id = %row.doc_id,
-                    error = %format!("{error:#}"),
-                    "accepted turn request is unverifiable; its reasoning is not replayed"
-                );
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
-        request_facts
-            .entry(request_scope)
-            .or_insert_with(|| (request_id.clone(), request_commits.clone()));
-        selected.push(SelectedReplayCandidate {
+        pending.push(PendingReplayCandidate {
             capture_key: replay_capture_key(
                 &origin_header.node_did,
                 &origin_header.session_id,
@@ -1129,12 +1488,88 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             node_did: origin_header.node_did.clone(),
             requester_did: origin_header.requester_did.clone(),
             session_id: origin_header.session_id.clone(),
-            request_id,
-            request_commits,
             coordinate,
             #[cfg(test)]
             sequence: row.message.sequence,
             message: reconstructed.message,
+        });
+    }
+    let missing_request_ids = pending
+        .iter()
+        .filter(|candidate| {
+            !request_facts.contains_key(&(
+                candidate.request_doc_id.clone(),
+                candidate.node_did.clone(),
+                candidate.requester_did.clone(),
+                candidate.session_id.clone(),
+            ))
+        })
+        .map(|candidate| candidate.request_doc_id.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let loaded_request_facts = requests.request_facts(&missing_request_ids).await?;
+    let mut selected = Vec::new();
+    for candidate in pending {
+        let request_scope = (
+            candidate.request_doc_id.clone(),
+            candidate.node_did.clone(),
+            candidate.requester_did.clone(),
+            candidate.session_id.clone(),
+        );
+        let loaded = match request_facts.get(&request_scope) {
+            Some(facts) => Ok(facts.clone()),
+            None => match loaded_request_facts.get(&candidate.request_doc_id) {
+                Some(facts) => validate_replay_request_facts(
+                    &candidate.request_doc_id,
+                    &candidate.node_did,
+                    candidate.requester_did.as_deref(),
+                    &candidate.session_id,
+                    facts,
+                ),
+                None => Err(anyhow::anyhow!(
+                    "canonical replay request batch omitted {}",
+                    candidate.request_doc_id
+                )),
+            },
+        };
+        let (request_id, request_commits) = match loaded {
+            Ok(request) => request,
+            // A historical request that is verifiably missing or out of scope
+            // makes only its turn non-replayable; the current request is
+            // validated above. A failed store read says nothing about the
+            // request and must not silently strip reasoning, so it propagates.
+            Err(error)
+                if candidate.request_doc_id != scope.request_doc_id
+                    && error
+                        .downcast_ref::<gents_loop::loop_stream::ReplayEvidenceViolation>()
+                        .is_some() =>
+            {
+                tracing::warn!(
+                    header_doc_id = %candidate.header_doc_id,
+                    error = %format!("{error:#}"),
+                    "accepted turn request is unverifiable; its reasoning is not replayed"
+                );
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        request_facts
+            .entry(request_scope)
+            .or_insert_with(|| (request_id.clone(), request_commits.clone()));
+        selected.push(SelectedReplayCandidate {
+            capture_key: candidate.capture_key,
+            header_doc_id: candidate.header_doc_id,
+            request_doc_id: candidate.request_doc_id,
+            node_did: candidate.node_did,
+            requester_did: candidate.requester_did,
+            session_id: candidate.session_id,
+            request_id,
+            request_commits,
+            coordinate: candidate.coordinate,
+            #[cfg(test)]
+            sequence: candidate.sequence,
+            message: candidate.message,
         });
     }
     // Capture reads are the pass's dominant per-candidate store cost; they
@@ -1169,6 +1604,19 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         });
     }
     Ok(candidates)
+}
+
+struct PendingReplayCandidate {
+    capture_key: String,
+    header_doc_id: String,
+    request_doc_id: String,
+    node_did: String,
+    requester_did: Option<String>,
+    session_id: String,
+    coordinate: CanonicalProviderCoordinate,
+    #[cfg(test)]
+    sequence: u32,
+    message: gents_protocol::message::Message,
 }
 
 /// One assistant of the bounded canonical view that passed every check a
@@ -1496,12 +1944,22 @@ async fn load_replay_physical_request(
     requester_did: Option<&str>,
     session_id: &str,
 ) -> Result<(String, BTreeSet<String>)> {
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id purpose session_id node_did requester_did }} }}"#,
-        crate::graphql::escape_graphql_string(request_doc_id)
-    );
-    let response = requests.request_rows(&query).await?;
-    let rows = rows_value(&response, "AgentRequest")?;
+    let request_doc_ids = [request_doc_id.to_owned()];
+    let mut facts = requests.request_facts(&request_doc_ids).await?;
+    let facts = facts
+        .remove(request_doc_id)
+        .with_context(|| format!("canonical replay request batch omitted {request_doc_id}"))?;
+    validate_replay_request_facts(request_doc_id, node_did, requester_did, session_id, &facts)
+}
+
+fn validate_replay_request_facts(
+    request_doc_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    session_id: &str,
+    facts: &ReplayRequestFacts,
+) -> Result<(String, BTreeSet<String>)> {
+    let rows = &facts.rows;
     replay_ensure!(
         rows.len() == 1,
         "canonical replay request is missing or ambiguous"
@@ -1516,11 +1974,10 @@ async fn load_replay_physical_request(
             && row["requester_did"].as_str() == requester_did,
         "canonical replay request crossed its physical node/session scope"
     );
-    let commits = requests
-        .request_commits(request_doc_id)
-        .await?
-        .into_iter()
-        .map(|commit| commit.cid)
+    let commits = facts
+        .commits
+        .iter()
+        .map(|commit| commit.cid.clone())
         .collect::<BTreeSet<_>>();
     Ok((required_row_str(row, "request_id")?.to_owned(), commits))
 }
@@ -1987,6 +2444,246 @@ pub(super) async fn load_sequenced_messages(
 mod tests {
     use super::*;
     use gents_protocol::output::{MessageRole, OutputOutcome, TranscriptMessage};
+
+    #[tokio::test]
+    async fn replay_preloads_output_and_request_facts_in_bounded_chunks() {
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let mut request_doc_ids = (0..=crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH)
+            .map(|index| {
+                document::DocID::new_v0_from_seed(&format!("missing-replay-request-{index}"))
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        request_doc_ids.push(request_doc_ids[0].clone());
+        let distinct_request_count = crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH + 1;
+        let mut cache = ReadCache {
+            reuse_node_scans: true,
+            ..ReadCache::default()
+        };
+
+        let (output_result, output_batches) =
+            count_request_output_scans(preload_replay_request_output_segments(
+                &node,
+                &request_doc_ids,
+                "did:test:replay-batch",
+                None,
+                &mut cache,
+            ))
+            .await;
+        output_result.unwrap();
+        assert_eq!(
+            output_batches, 2,
+            "33 request IDs require two indexed output reads at the 32-ID bound"
+        );
+        assert_eq!(cache.requests.len(), distinct_request_count);
+        assert!(cache.requests.values().all(|rows| rows.rows.is_empty()));
+
+        let (request_facts, request_fact_batches) = count_replay_request_fact_batches(
+            ReplayRequestReader::request_facts(&node, &request_doc_ids),
+        )
+        .await;
+        let request_facts = request_facts.unwrap();
+        assert_eq!(
+            request_fact_batches, 2,
+            "request and composite-commit aliases stay below the 32-document bound"
+        );
+        assert_eq!(request_facts.len(), distinct_request_count);
+        assert!(request_facts
+            .values()
+            .all(|facts| facts.rows.is_empty() && facts.commits.is_empty()));
+    }
+
+    #[test]
+    fn session_header_index_preserves_coordinate_observations() {
+        let rows = vec![
+            serde_json::json!({"_docID": "duplicate", "message_key": "key", "sequence": 1}),
+            serde_json::json!({"_docID": "duplicate", "message_key": "key", "sequence": 2}),
+            serde_json::json!({"_docID": "sequence-twin", "message_key": "other", "sequence": 1}),
+            serde_json::json!({"message_key": false, "sequence": -1, "blocks": "malformed"}),
+            serde_json::json!({"message_key": "key", "sequence": "1", "blocks": "malformed"}),
+            serde_json::json!({"message_key": 1, "sequence": 1, "blocks": "malformed"}),
+        ];
+        let indexed = SessionHeaderRows::from(rows.clone());
+        for (key, sequence, expected) in [
+            ("key", 1, vec![0, 1, 2, 4, 5]),
+            ("other", 2, vec![1, 2]),
+            ("missing", 3, vec![]),
+        ] {
+            assert_eq!(
+                indexed
+                    .coordinate_matches(key, sequence)
+                    .collect::<Vec<_>>(),
+                expected
+                    .iter()
+                    .map(|&index| &rows[index])
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "manual canonical session-coordinate benchmark"]
+    fn session_coordinate_lookup_size_benchmark() {
+        let mut measurements = Vec::new();
+        for count in [1_usize, 500, 10_000] {
+            let rows = (0..count)
+                .map(|sequence| {
+                    serde_json::json!({
+                        "_docID": format!("header-{sequence}"),
+                        "message_key": format!("key-{sequence}"),
+                        "sequence": sequence,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let coordinates = (0..count)
+                .map(|sequence| (format!("key-{sequence}"), u32::try_from(sequence).unwrap()))
+                .collect::<Vec<_>>();
+            let mut baseline = Vec::new();
+            let mut indexed = Vec::new();
+            let mut construction = Vec::new();
+            for iteration in 0..6 {
+                let start = std::time::Instant::now();
+                let cache = SessionHeaderRows::from(rows.clone());
+                let build_ms = start.elapsed().as_secs_f64() * 1000.0;
+                let scan = || {
+                    let start = std::time::Instant::now();
+                    for (key, sequence) in &coordinates {
+                        let matches = rows
+                            .iter()
+                            .filter(|row| {
+                                row.get("message_key").and_then(serde_json::Value::as_str)
+                                    == Some(key.as_str())
+                                    || row.get("sequence").and_then(serde_json::Value::as_u64)
+                                        == Some(u64::from(*sequence))
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(std::hint::black_box(matches).len(), 1);
+                    }
+                    start.elapsed().as_secs_f64() * 1000.0
+                };
+                let lookup = || {
+                    let start = std::time::Instant::now();
+                    for (key, sequence) in &coordinates {
+                        let matches = cache.coordinate_matches(key, *sequence).collect::<Vec<_>>();
+                        assert_eq!(std::hint::black_box(matches).len(), 1);
+                    }
+                    start.elapsed().as_secs_f64() * 1000.0
+                };
+                let (scan_ms, lookup_ms) = if iteration % 2 == 0 {
+                    (scan(), lookup())
+                } else {
+                    let lookup_ms = lookup();
+                    (scan(), lookup_ms)
+                };
+                if iteration > 0 {
+                    baseline.push(scan_ms);
+                    indexed.push(lookup_ms);
+                    construction.push(build_ms);
+                }
+            }
+            for values in [&mut baseline, &mut indexed, &mut construction] {
+                values.sort_by(f64::total_cmp);
+            }
+            measurements.push(serde_json::json!({
+                "headers": count, "lookups": count,
+                "baseline_median_ms": baseline[2], "indexed_median_ms": indexed[2],
+                "construction_with_row_clone_median_ms": construction[2],
+            }));
+        }
+        let result =
+            serde_json::json!({"measurements": measurements, "includes_database_reads": false});
+        if let Some(path) = std::env::var_os("GENTS_COORDINATE_BENCHMARK_OUTPUT") {
+            std::fs::write(path, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
+        }
+        tracing::info!(%result, "session coordinate lookup benchmark");
+    }
+
+    #[tokio::test]
+    #[ignore = "manual canonical request-size benchmark"]
+    async fn cached_output_reconstruction_request_size_benchmark() {
+        use gents_protocol::output::{MessageBlock, PayloadPresentation, PresentedPayload};
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        let request = "request-size-benchmark";
+        let payload = "x".repeat(64 * 1024);
+        for sources in [1, 32, 128] {
+            let mut rows = Vec::new();
+            let mut headers = Vec::new();
+            for index in 0..sources {
+                let key = format!("source-{index}");
+                let doc_id = format!("close-{index}");
+                let segment = authored_segments(request, &key, &[&payload]).pop().unwrap();
+                let mut message = header(
+                    &format!("header-{index}"),
+                    &segment.session_id,
+                    Some(request),
+                    MessagePublication::RequestExecution {
+                        execution_generation: "observed-generation".into(),
+                    },
+                );
+                message.message.node_did = segment.node_did.clone();
+                message.message.requester_did = None;
+                message.message.role = MessageRole::User;
+                message.message.native_id = None;
+                message.message.sequence = index;
+                message.message.blocks = vec![MessageBlock::Text {
+                    text: PresentedPayload {
+                        output: PayloadRef {
+                            close_doc_id: doc_id.clone(),
+                            stream: 0,
+                        },
+                        presentation: PayloadPresentation::Full,
+                    },
+                }];
+                rows.push(super::super::canonical_rows::OutputSegmentRow { doc_id, segment });
+                headers.push(message);
+            }
+            let mut cache = ReadCache::default();
+            cache.requests.insert(request.into(), Arc::new(rows.into()));
+            let expected = gents_protocol::message::Message::user(&payload);
+            let mut samples = Vec::new();
+            for pass in 0..6 {
+                let started = std::time::Instant::now();
+                for message in &headers {
+                    let selected = load_referenced_segments(
+                        ReadAccess::Node(&node),
+                        message,
+                        Some(request),
+                        "did:test:test",
+                        None,
+                        &mut cache,
+                    )
+                    .await
+                    .unwrap();
+                    let observed = selected
+                        .iter()
+                        .map(|row| ObservedSegment {
+                            doc_id: &row.doc_id,
+                            segment: &row.segment,
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        reconstruct_message(&observed, &[], &[], &message.message).unwrap(),
+                        expected
+                    );
+                }
+                if pass > 0 {
+                    samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            tracing::info!(
+                sources,
+                payload_bytes = payload.len(),
+                median_ms = samples[2],
+                min_ms = samples[0],
+                max_ms = samples[4],
+                "cached canonical reconstruction benchmark"
+            );
+        }
+        node.shutdown().await;
+    }
 
     #[test]
     fn current_input_selection_matches_lean_owner() {

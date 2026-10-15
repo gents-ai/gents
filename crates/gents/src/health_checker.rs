@@ -271,7 +271,7 @@ impl ServiceHealthMap {
 
 #[derive(Clone, Copy)]
 pub struct HealthPersistenceContext<'a> {
-    pub node: &'a EmbeddedNode,
+    pub node: &'a Arc<EmbeddedNode>,
     pub node_did: &'a str,
 }
 
@@ -310,7 +310,7 @@ pub fn spawn_health_checker(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let persistence = HealthPersistenceContext {
-            node: node.as_ref(),
+            node: &node,
             node_did: node_did.as_str(),
         };
         if let Err(error) = run_health_check(
@@ -339,7 +339,7 @@ pub fn spawn_health_checker(
                 }
                 _ = ticker.tick() => {
                     let persistence = HealthPersistenceContext {
-                        node: node.as_ref(),
+                        node: &node,
                         node_did: node_did.as_str(),
                     };
                     if let Err(error) = run_health_check(

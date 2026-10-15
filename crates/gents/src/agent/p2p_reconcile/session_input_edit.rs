@@ -299,19 +299,33 @@ async fn unanswered_commands(
     identity: &dyn NodeIdentity,
     sweep: Sweep,
 ) -> Result<Vec<String>> {
-    let receipt_filter = match sweep {
-        Sweep::Unanswered => ", receipt_json: { _eq: null }",
-        Sweep::Unverified => "",
+    let (receipt_filter, fields) = match sweep {
+        Sweep::Unanswered => (", receipt_json: { _eq: null }", "_docID"),
+        Sweep::Unverified => ("", "_docID intent_json receipt_json"),
     };
     let response = crate::graphql::graphql_with_transaction_retry(
         node,
         &format!(
-            r#"{{ AgentSessionInputEdit(filter: {{ node_did: {{ _eq: "{}" }}{receipt_filter} }}) {{ _docID intent_json receipt_json }} }}"#,
+            r#"{{ AgentSessionInputEdit(filter: {{ node_did: {{ _eq: "{}" }}{receipt_filter} }}) {{ {fields} }} }}"#,
             escape_graphql_string(identity.did())
         ),
         "queue.signed_edits",
     )
     .await?;
+    if matches!(sweep, Sweep::Unanswered) {
+        #[derive(Deserialize)]
+        struct DocIdRow {
+            #[serde(rename = "_docID")]
+            doc_id: String,
+        }
+        return Ok(
+            crate::graphql::rows::<DocIdRow>(&response, "AgentSessionInputEdit")?
+                .into_iter()
+                .map(|row| row.doc_id)
+                .collect(),
+        );
+    }
+
     #[derive(Deserialize)]
     struct Row {
         #[serde(rename = "_docID")]

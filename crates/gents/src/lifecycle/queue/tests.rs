@@ -196,7 +196,7 @@ async fn queue_rows(node: &EmbeddedNode, session_id: &str) -> Vec<QueueRow> {
 }
 
 async fn insert_raw_queue_request(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     request_id: &str,
     session_id: &str,

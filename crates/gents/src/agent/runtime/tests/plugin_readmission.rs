@@ -70,7 +70,7 @@ async fn demoted_agent_is_readmitted_when_its_named_plugin_installs_midrun() {
     let identity = Arc::new(test_identity("plugin-readmission"));
     let endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-plugin-readmit",
         endpoint.endpoint(),
@@ -106,7 +106,7 @@ async fn demoted_agent_is_readmitted_when_its_named_plugin_installs_midrun() {
     }))
     .unwrap();
     crate::config_client::write_tools_document(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &tools,
     )
     .await
@@ -127,7 +127,7 @@ async fn demoted_agent_is_readmitted_when_its_named_plugin_installs_midrun() {
 
     let pack = install_fixture_plugin(plugin_home.path());
     crate::pack::record_plugin_store_change(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &node_did,
         plugin_home.path(),
         &pack.coordinate,

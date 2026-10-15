@@ -139,7 +139,7 @@ fn folds_into(
 /// to verify each one's signed admission before the claim. Queue order and
 /// contiguity are decided by the claim transaction.
 pub(crate) async fn fold_candidates(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
 ) -> Result<Vec<AgentRequest>> {
     if !heads_user_turn(head) {
@@ -358,7 +358,7 @@ pub(crate) async fn ensure_folded_consumed_in_txn(
 /// The messages `head`'s turn already published and consumed, in queue order.
 /// A redrive reuses them ahead of its own selection.
 pub(crate) async fn load_consumed_folded_inputs(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
 ) -> Result<Vec<FoldedInput>> {
     if !heads_user_turn(head) {
@@ -387,7 +387,7 @@ pub(crate) async fn load_consumed_folded_inputs(
         return Ok(Vec::new());
     }
     let query = &query;
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "lifecycle.load_folded_inputs",

@@ -40,7 +40,7 @@ pub(super) async fn handle_thread_request(
             let record = create_codex_thread(state, &thread_id, &cwd).await?;
             state.set_thread_cwd(&thread_id, cwd.clone()).await;
             let bound_model_id = load_bound_model_selection_id_for_state(
-                state.node.as_ref(),
+                &state.node,
                 &state.node_did,
                 &state.agent_id,
             )
@@ -100,7 +100,7 @@ pub(super) async fn handle_thread_request(
                 .map(|link| link.node_did.as_str())
                 .unwrap_or(state.node_did.as_ref());
             let bound_model_id = load_bound_model_selection_id_for_state(
-                state.node.as_ref(),
+                &state.node,
                 response_node_did,
                 response_agent_id,
             )
@@ -116,13 +116,10 @@ pub(super) async fn handle_thread_request(
             )
             .await?;
             let (total_usage, last_usage) = thread_record_token_usage(state, &record).await?;
-            let model_context_window = load_bound_context_window(
-                state.node.as_ref(),
-                response_node_did,
-                response_agent_id,
-            )
-            .await
-            .context("resolving scoped context window for ThreadResume")?;
+            let model_context_window =
+                load_bound_context_window(&state.node, response_node_did, response_agent_id)
+                    .await
+                    .context("resolving scoped context window for ThreadResume")?;
             send_notification(
                 outbound,
                 state,

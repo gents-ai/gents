@@ -61,7 +61,7 @@ impl Fixture {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         crate::ensure_node(&node, did).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         for (provider, name) in [
             (CLAUDE_OAUTH_PROVIDER, "Claude"),
             (XAI_OAUTH_PROVIDER, "Grok"),
@@ -157,7 +157,7 @@ impl Fixture {
         )
         .unwrap();
         self.access
-            .transact("test.switch.apply", |txn| {
+            .transact_write("test.switch.apply", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
             })
@@ -169,7 +169,7 @@ impl Fixture {
         let did = self.did.as_str();
         let backends = self
             .access
-            .transact("test.switch.backends", |txn| {
+            .transact_write("test.switch.backends", |txn| {
                 Box::pin(async move { list_inference_backends_in_txn(txn, did).await })
             })
             .await
@@ -202,7 +202,7 @@ impl Fixture {
     async fn profiles(&self) -> BTreeMap<String, Value> {
         let did = self.did.as_str();
         self.access
-            .transact("test.switch.profiles", |txn| {
+            .transact_write("test.switch.profiles", |txn| {
                 Box::pin(async move {
                     let mut records = BTreeMap::new();
                     for id in ["p", "summ", "q", "k", "m", "o"] {
@@ -373,7 +373,7 @@ async fn next_turns_use_the_target_credentials() {
     let did_ref = did.as_str();
     let references = fixture
         .access
-        .transact("test.switch.references", |txn| {
+        .transact_write("test.switch.references", |txn| {
             Box::pin(async move { crate::ConfigReferences::load_in_txn(txn, did_ref).await })
         })
         .await
@@ -531,7 +531,7 @@ async fn refusals_write_nothing() {
     let b = fixture.credentials["b"].credential_id.clone();
     fixture
         .access
-        .transact("test.switch.remove", |txn| {
+        .transact_write("test.switch.remove", |txn| {
             let b = b.clone();
             Box::pin(async move { remove_account_in_txn(txn, did, &b).await.map(|_| ()) })
         })
@@ -581,7 +581,7 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
     crate::ensure_node(&node, did).await.unwrap();
     let fixture = Fixture {
         node: node.clone(),
-        access: ConfigAccess::Local(node),
+        access: ConfigAccess::local(node),
         did: did.to_owned(),
         credentials: BTreeMap::new(),
         backends: BTreeMap::from([("k1", "k1".to_owned()), ("k2", "k2".to_owned())]),

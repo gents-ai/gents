@@ -64,7 +64,7 @@ impl AgentResolutionError {
 }
 
 pub(crate) async fn resolve_document_runtime_snapshot_from_view(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     context: &DocumentResolveContext,
     view: &DocumentRuntimeView,
 ) -> Result<ResolvedRuntimeSnapshot> {

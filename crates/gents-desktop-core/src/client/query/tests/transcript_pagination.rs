@@ -365,7 +365,7 @@ async fn transcript_payload_page_batches_exact_dependencies_without_reading_othe
     use crate::client::canonical_output::{project_canonical_message, CanonicalMessageProjection};
     use gents::config_client::ConfigAccess;
 
-    let node = NodeBuilder::default().build().await.expect("node");
+    let node = std::sync::Arc::new(NodeBuilder::default().build().await.expect("node"));
     ensure_runtime_schemas(&node).await.expect("schemas");
     for sequence in 1..=40 {
         let response = ConfigAccess::write_local(&node, "test.payload_page", &format!(r#"mutation {{

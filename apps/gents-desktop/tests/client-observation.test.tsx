@@ -8,6 +8,7 @@ import type {
 
 import { useClientRuntime } from "../src/hooks/useClientRuntime";
 import { startClientObservation } from "../src/hooks/clientObservation";
+import * as shellPlatform from "../src/lib/shellPlatform";
 import { node, testApp } from "./app-fixture";
 import { liveAssistant, sessionSnapshot } from "./timeline-fixture";
 
@@ -164,5 +165,39 @@ describe("following the client while it runs", () => {
     await act(async () => {});
 
     expect(api.setSelectedNode.mock.calls).toEqual([[NODE_DID]]);
+  });
+
+  it("refreshes on native window focus without publishing selection again", async () => {
+    const mac = vi.spyOn(shellPlatform, "isMacTauriShell").mockReturnValue(true);
+    let stop: (() => void) | undefined;
+    try {
+      const api = bridgeApi();
+      const app = testApp({ api, snapshot: running });
+      stop = startClientObservation(
+        app,
+        vi.fn(async () => () => {}),
+      );
+      await act(async () => {});
+      expect(api.setSelectedNode.mock.calls).toEqual([[NODE_DID]]);
+
+      const reads = api.fetchDesktopSnapshot.mock.calls.length;
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      await waitFor(() =>
+        expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(reads + 1),
+      );
+      expect(api.setSelectedNode.mock.calls).toEqual([[NODE_DID]]);
+
+      stop();
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(reads + 1);
+      expect(api.setSelectedNode.mock.calls).toEqual([[NODE_DID]]);
+    } finally {
+      stop?.();
+      mac.mockRestore();
+    }
   });
 });

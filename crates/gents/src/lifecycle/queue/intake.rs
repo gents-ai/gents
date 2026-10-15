@@ -55,7 +55,7 @@ pub(crate) async fn pending_in_txn(
 }
 
 pub(crate) async fn steering_snapshot(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
     verifier: &crate::request_admission::AgentRequestAdmissionVerifier,
 ) -> Result<gents_loop::loop_stream::SteeringSnapshot> {
@@ -95,7 +95,7 @@ pub(crate) async fn steering_snapshot(
 }
 
 pub(crate) async fn steering_inputs(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
     verifier: &crate::request_admission::AgentRequestAdmissionVerifier,
 ) -> Result<Vec<gents_loop::loop_stream::FoldedPrompt>> {

@@ -233,6 +233,7 @@ impl ClientStore {
             agent_target_source_node_dids: rows.agent_target_source_node_dids,
             datastore_tool_surface_source_node_dids: rows.datastore_tool_surface_source_node_dids,
             chain_key_binding_source_node_dids: rows.chain_key_binding_source_node_dids,
+            operator_config_authoritative_node_dids: rows.operator_config_authoritative_node_dids,
             transcript_messages_by_session_id,
             output_segments_by_request_doc_id,
             requests_by_session_id,

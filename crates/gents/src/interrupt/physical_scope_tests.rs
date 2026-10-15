@@ -1,8 +1,8 @@
 use super::*;
 use serde_json::{json, Value};
 
-async fn insert(node: &EmbeddedNode, collection: &str, value: Value) -> String {
-    crate::config_client::ConfigAccess::transact_local(node, None, "test.physical_cancel_fixture", |txn| {
+async fn insert(node: &Arc<EmbeddedNode>, collection: &str, value: Value) -> String {
+    crate::config_client::ConfigAccess::transact_local_write(node, None, "test.physical_cancel_fixture", |txn| {
         let value = &value;
         Box::pin(async move {
             let query = format!("mutation($input: {collection}MutationInputArg!) {{create_{collection}(input:$input){{_docID}}}}");
@@ -26,7 +26,7 @@ async fn physical_interrupt_preserves_exact_scope_and_never_reaches_caused_reque
         ("owner", Some("")),
     ] {
         assert!(interrupt_request_by_doc_id_with_access(
-            &crate::config_client::ConfigAccess::Local(node.clone()),
+            &crate::config_client::ConfigAccess::local(node.clone()),
             &parent,
             owner,
             requester
@@ -34,7 +34,7 @@ async fn physical_interrupt_preserves_exact_scope_and_never_reaches_caused_reque
         .await
         .is_err());
     }
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     interrupt_request_by_doc_id_with_access(&access, &parent, "owner", None)
         .await
         .unwrap();
@@ -88,7 +88,7 @@ async fn colliding_logical_interrupt_fetch_rejects_ambiguity_and_binds_owner_phy
     .await;
 
     // The foreign principal latches only its own physical row.
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     interrupt_request_by_doc_id_with_access(&access, &foreign, "foreign", None)
         .await
         .unwrap();

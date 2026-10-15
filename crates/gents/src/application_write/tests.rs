@@ -48,7 +48,7 @@ async fn fixture() -> (Arc<crate::defra_node::EmbeddedNode>, WriteTool) {
     .await
     .unwrap();
     let tool = WriteTool::new(
-        ConfigAccess::Local(node.clone()),
+        ConfigAccess::local(node.clone()),
         BTreeSet::from(["Parcel".into()]),
         None,
     );
@@ -70,7 +70,7 @@ async fn preview_create_update_delete_and_fresh_reads_preserve_json() {
     );
     let preview = tool.execute(&create).await.unwrap();
     assert_eq!(preview["effect"]["target_count"], 1);
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let before = access.execute("{Parcel{_docID}}").await.unwrap();
     assert_eq!(before["data"]["Parcel"], json!([]));
     let next: WriteParams = serde_json::from_value(preview["next_call"]["args"].clone()).unwrap();
@@ -218,7 +218,7 @@ async fn native_relationship_input_uses_the_target_document_id() {
     .await
     .unwrap();
     let tool = WriteTool::new(
-        ConfigAccess::Local(node.clone()),
+        ConfigAccess::local(node.clone()),
         BTreeSet::from(["Writer".into(), "Volume".into()]),
         None,
     );
@@ -231,7 +231,7 @@ async fn native_relationship_input_uses_the_target_document_id() {
     let mut volume = call("create", json!({"title":"First","author":id}), None);
     volume.collection = Some("Volume".into());
     apply(&tool, volume).await.unwrap();
-    let rows = ConfigAccess::Local(node.clone())
+    let rows = ConfigAccess::local(node.clone())
         .execute("{Volume {title author {name}}}")
         .await
         .unwrap();
@@ -252,7 +252,7 @@ async fn a_collection_grant_cannot_bypass_native_document_acp() {
     let policy = node.add_dac_policy(OWNER, "name: Application write ACP\nresources:\n  - name: parcels\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
     node.add_schema(&format!("type Parcel @policy(id: \"{}\", resource: \"parcels\") {{ reference: String status: String }}",crate::graphql::escape_graphql_string(&policy))).await.unwrap();
     let owner = WriteTool::new(
-        ConfigAccess::Local(node.clone()),
+        ConfigAccess::local(node.clone()),
         BTreeSet::from(["Parcel".into()]),
         Some(identity::Did::new(OWNER).unwrap()),
     );
@@ -273,7 +273,7 @@ async fn a_collection_grant_cannot_bypass_native_document_acp() {
         .await
         .unwrap();
     let reader = WriteTool::new(
-        ConfigAccess::Local(node.clone()),
+        ConfigAccess::local(node.clone()),
         BTreeSet::from(["Parcel".into()]),
         Some(identity::Did::new(READER).unwrap()),
     );
@@ -287,7 +287,7 @@ async fn a_collection_grant_cannot_bypass_native_document_acp() {
     assert!(apply(&reader, call("delete", Value::Null, Some(filter)))
         .await
         .is_err());
-    let rows = ConfigAccess::transact_local(
+    let rows = ConfigAccess::transact_local_write(
         &node,
         Some(identity::Did::new(OWNER).unwrap()),
         "verify_application_acp",

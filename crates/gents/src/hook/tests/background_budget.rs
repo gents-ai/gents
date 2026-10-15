@@ -320,7 +320,7 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
             update: tools,
         }])
         .unwrap();
-        ConfigAccess::transact_local(&node, None, "test.output_budget", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "test.output_budget", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -400,7 +400,7 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
             update: tools,
         }])
         .unwrap();
-        ConfigAccess::transact_local(&node, None, "test.output_budget", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "test.output_budget", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })

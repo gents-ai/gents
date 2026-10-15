@@ -154,8 +154,11 @@ impl EventSource {
             Ok(super::super::FireResult::Fired { .. } | super::super::FireResult::Duplicate { .. })
         ) || matches!(&result, Ok(super::super::FireResult::Skipped { reason }) if reason == super::super::SERIAL_BUSY);
         if acknowledged {
-            let advanced =
-                ConfigAccess::transact_local(&self.node, None, "trigger.advance_arrival", |txn| {
+            let advanced = ConfigAccess::transact_local_write(
+                &self.node,
+                None,
+                "trigger.advance_arrival",
+                |txn| {
                     Box::pin(async {
                         crate::config_client::event_source_cursor::checkpoint_prefix(
                             txn,
@@ -170,8 +173,9 @@ impl EventSource {
                         )
                         .await
                     })
-                })
-                .await;
+                },
+            )
+            .await;
             self.durable_ready = advanced.as_ref().copied().unwrap_or(false);
             match advanced {
                 Ok(true) => {
@@ -324,7 +328,7 @@ impl EventSource {
         let record = match record {
             Some(record) => record,
             None => {
-                ConfigAccess::transact_local(
+                ConfigAccess::transact_local_write(
                     &self.node,
                     None,
                     "trigger.seed_arrival_cursor",
@@ -420,7 +424,7 @@ impl EventSource {
         trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
         position: &str,
     ) -> anyhow::Result<()> {
-        ConfigAccess::transact_local(&self.node, None, "trigger.exclude_arrival", |txn| {
+        ConfigAccess::transact_local_write(&self.node, None, "trigger.exclude_arrival", |txn| {
             Box::pin(async {
                 crate::config_client::event_source_cursor::exclude_arrival(
                     txn,

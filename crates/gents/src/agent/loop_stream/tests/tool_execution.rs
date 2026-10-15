@@ -82,7 +82,7 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
                     "lost authority must stop the loop"
                 );
                 assert!(collected.tool_results.is_empty());
-                let rows = crate::config_client::ConfigAccess::Local(node.clone())
+                let rows = crate::config_client::ConfigAccess::local(node.clone())
                     .execute("query { AgentToolCall { lifecycle_state } }")
                     .await
                     .unwrap();
@@ -242,7 +242,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
                         Some("tool_call.start_running_canonical"), collect,
                     ).await;
 
-                let rows = crate::config_client::ConfigAccess::Local(node.clone())
+                let rows = crate::config_client::ConfigAccess::local(node.clone())
                     .execute("query { AgentToolCall { lifecycle_state started_at tool_failure_class } }")
                     .await
                     .unwrap();
@@ -1340,7 +1340,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         assert_eq!(output, "output");
         assert_eq!(
             crate::background_tools::observe_canonical_tool_output_with_access(
-                &crate::config_client::ConfigAccess::Local(node.clone()),
+                &crate::config_client::ConfigAccess::local(node.clone()),
                 "tool-doc",
                 &request_id,
                 "session",
@@ -1635,7 +1635,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         let completed = completed.lock().unwrap().clone();
         let invoked = invoked.lock().unwrap().clone();
         assert_eq!(completed.len(), expected.len());
-        let rows = crate::config_client::ConfigAccess::Local(node.clone())
+        let rows = crate::config_client::ConfigAccess::local(node.clone())
             .execute("query { AgentToolCall { plugin_effect_ordinal lifecycle_state } }")
             .await
             .unwrap();
