@@ -126,7 +126,16 @@ pub(crate) async fn load_accepted_tool_arguments(
 pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Result<RunTimeline> {
     let mut timeline = build_run_timeline(load_run_timeline_rows(access, request_id).await?);
     if let Some(node_did) = timeline.node_did.as_deref() {
-        match crate::load_background_completion_diagnostics(access, node_did).await {
+        let diagnostics = match timeline.session_id.as_deref() {
+            Some(session_id) => {
+                crate::load_background_completion_diagnostics_for_session(
+                    access, node_did, session_id,
+                )
+                .await
+            }
+            None => crate::load_background_completion_diagnostics(access, node_did).await,
+        };
+        match diagnostics {
             Ok(diagnostics) => {
                 timeline.background_completions = diagnostics
                     .epochs
