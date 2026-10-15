@@ -16,6 +16,12 @@ type FixtureDoc {
 }
 "#;
 
+const UNRELATED_SDL: &str = r#"
+type UnrelatedDoc {
+    name: String
+}
+"#;
+
 const ADD_LABEL_PATCH: &str = r#"[
   {"op":"add","path":"/FixtureDoc/Fields/-","value":{"Name":"label","Kind":"String"}},
   {"op":"replace","path":"/IsActive","value":false}
@@ -127,6 +133,64 @@ async fn patch_versioned_lensless_attach_patch_activate_and_idempotent() {
     assert_eq!(report2.steps_applied, 0, "idempotent: {report2:?}");
     assert!(report2.steps_already_current >= 1);
 
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn materialization_rescans_versioned_collections_only() {
+    let discover = fresh_node().await;
+    let (fixture_v0, fixture_v1) = discover_inactive_patch_pin(discover.as_ref()).await;
+    discover
+        .add_schema(UNRELATED_SDL)
+        .await
+        .expect("add unrelated collection");
+    let unrelated_v0 = discover
+        .get_collection("UnrelatedDoc")
+        .expect("get unrelated collection")
+        .expect("unrelated collection exists")
+        .version_id;
+    discover.shutdown().await;
+
+    let node = fresh_node().await;
+    let registry = DynamicRegistry {
+        baseline: vec![
+            BaselineCollectionOwned {
+                name: "FixtureDoc".into(),
+                sdl: FIXTURE_SDL.into(),
+                expected_version: Some(fixture_v0),
+                expected_state: CollectionExpectation::dag_only(),
+            },
+            BaselineCollectionOwned {
+                name: "UnrelatedDoc".into(),
+                sdl: UNRELATED_SDL.into(),
+                expected_version: Some(unrelated_v0),
+                expected_state: CollectionExpectation::dag_only(),
+            },
+        ],
+        steps: vec![MigrationStepOwned::PatchVersioned {
+            id: "fixture-add-label-lensless".into(),
+            collection: "FixtureDoc".into(),
+            patch: ADD_LABEL_PATCH.into(),
+            lens: None,
+            expected_version: Some(fixture_v1),
+            expected_transform: None,
+            expected_state: CollectionExpectation::fields(&["name", "label"]),
+        }],
+    };
+
+    let first = ensure_migrations_dynamic(node.as_ref(), &registry)
+        .await
+        .expect("first migration and materialization");
+    assert_eq!(first.materialization.collections_attempted, 1);
+    assert_eq!(first.materialization.documents_materialized, 0);
+
+    // The recurring pass remains scoped to FixtureDoc, so old-version rows
+    // arriving over P2P after this first migration are still advanced.
+    let later = ensure_migrations_dynamic(node.as_ref(), &registry)
+        .await
+        .expect("repeat migration and materialization");
+    assert_eq!(later.steps_applied, 0);
+    assert_eq!(later.materialization.collections_attempted, 1);
     node.shutdown().await;
 }
 
