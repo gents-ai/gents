@@ -1111,12 +1111,12 @@ pub(crate) struct PackRunArgs {
         long = "with-pack",
         value_name = "DIR_OR_PACK",
         action = clap::ArgAction::Append,
-        help = "Admit a directory or .pack file into the run's home store first, so a graph dependency resolves from it offline; repeatable"
+        help = "Admit a directory or .pack file into the run's home store first, so a dependency resolves from it offline; repeatable"
     )]
     pub(crate) with_pack: Vec<PathBuf>,
     #[arg(
         long,
-        help = "Pack registry base URL, used to resolve the pack and its graph dependencies. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL, used to resolve the pack and its dependencies. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
 }
