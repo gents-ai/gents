@@ -272,7 +272,7 @@ mod tests {
     #[tokio::test]
     async fn an_update_keeps_a_documents_dependency_released_with_its_dependent() {
         let home = tempfile::tempdir().unwrap();
-        let scope = crate::cli::GraphScopeArgs {
+        let scope = crate::cli::ScopeArgs {
             home: Some(home.path().to_path_buf()),
             graphql: None,
             node_did: None,
