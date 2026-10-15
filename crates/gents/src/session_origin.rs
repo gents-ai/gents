@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use serde_json::Value;
@@ -182,38 +182,84 @@ pub async fn started_by(
         }))
 }
 
-pub async fn caused_requests<'a>(
-    access: &ConfigAccess,
-    tool_call_doc_ids: impl IntoIterator<Item = &'a str>,
-) -> Result<std::collections::BTreeMap<String, String>> {
-    let tool_call_doc_ids = tool_call_doc_ids.into_iter().collect::<BTreeSet<_>>();
-    if tool_call_doc_ids.is_empty() {
-        return Ok(Default::default());
-    }
-    let query = format!(
-        "{{AgentRequest(filter: {{{}}}) {{request_id caused_by_parent_tool_call_doc_id}}}}",
-        public_request_filter(&format!(
-            "caused_by_parent_tool_call_doc_id: {{ _in: {} }}",
-            graphql_string_list_literal(tool_call_doc_ids)
-        ))
-    );
-    let mut caused = std::collections::BTreeMap::<String, Option<String>>::new();
-    for row in collection(access, &query, "AgentRequest").await? {
-        let (Some(tool), Some(request_id)) = (
-            row.get("caused_by_parent_tool_call_doc_id")
-                .and_then(Value::as_str),
-            row.get("request_id").and_then(Value::as_str),
+/// One public request a physical tool call caused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CausedRequest {
+    pub request_id: String,
+    pub request_doc_id: String,
+    pub scope: SessionScope,
+    pub created_at: String,
+}
+
+/// Group request rows by `caused_by_parent_tool_call_doc_id`, each list
+/// ordered by `(created_at, request_doc_id)`.
+pub fn group_caused(rows: &[Value]) -> BTreeMap<String, Vec<CausedRequest>> {
+    let mut grouped = BTreeMap::<String, Vec<CausedRequest>>::new();
+    for row in rows {
+        let text = |field: &str| row.get(field).and_then(Value::as_str).map(str::to_owned);
+        let (Some(call), Some(request_id), Some(request_doc_id), Some(created_at), Some(scope)) = (
+            text("caused_by_parent_tool_call_doc_id"),
+            text("request_id"),
+            text("_docID"),
+            text("created_at"),
+            SessionScope::of_row(row),
         ) else {
             continue;
         };
-        caused
-            .entry(tool.to_owned())
-            .and_modify(|single| *single = None)
-            .or_insert_with(|| Some(request_id.to_owned()));
+        grouped.entry(call).or_default().push(CausedRequest {
+            request_id,
+            request_doc_id,
+            scope,
+            created_at,
+        });
     }
-    Ok(caused
+    for requests in grouped.values_mut() {
+        requests.sort_by(|a, b| {
+            (&a.created_at, &a.request_doc_id).cmp(&(&b.created_at, &b.request_doc_id))
+        });
+    }
+    grouped
+}
+
+/// Every public request each physical tool call caused: the requests whose
+/// `caused_by_parent_tool_call_doc_id` names that call.
+pub async fn requests_caused_by_calls<'a>(
+    access: &ConfigAccess,
+    call_doc_ids: impl IntoIterator<Item = &'a str>,
+) -> Result<BTreeMap<String, Vec<CausedRequest>>> {
+    let call_doc_ids = call_doc_ids.into_iter().collect::<BTreeSet<_>>();
+    if call_doc_ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let query = format!(
+        "{{AgentRequest(filter: {{{}}}) {{{SCOPE_FIELDS} request_id created_at caused_by_parent_tool_call_doc_id}}}}",
+        public_request_filter(&format!(
+            "caused_by_parent_tool_call_doc_id: {{ _in: {} }}",
+            graphql_string_list_literal(call_doc_ids)
+        ))
+    );
+    Ok(group_caused(
+        &collection(access, &query, "AgentRequest").await?,
+    ))
+}
+
+/// The single-request projection, for session-message calls (`agent_new`,
+/// `agent_message`); one call may cause many requests
+/// ([`requests_caused_by_calls`]). A call named by more than one request has
+/// no single caused request and is omitted.
+pub async fn caused_requests<'a>(
+    access: &ConfigAccess,
+    tool_call_doc_ids: impl IntoIterator<Item = &'a str>,
+) -> Result<BTreeMap<String, String>> {
+    Ok(requests_caused_by_calls(access, tool_call_doc_ids)
+        .await?
         .into_iter()
-        .filter_map(|(tool, request_id)| Some((tool, request_id?)))
+        .filter_map(
+            |(call, requests)| match <[CausedRequest; 1]>::try_from(requests) {
+                Ok([only]) => Some((call, only.request_id)),
+                Err(_) => None,
+            },
+        )
         .collect())
 }
 
@@ -413,6 +459,83 @@ mod tests {
             "AgentSession",
         )
         .await;
+    }
+
+    fn caused_row(doc_id: &str, request_id: &str, created_at: &str, call: &str) -> Value {
+        serde_json::json!({
+            "_docID": doc_id,
+            "request_id": request_id,
+            "node_did": "did:test:node",
+            "session_id": "child",
+            "requester_did": "did:test:node",
+            "created_at": created_at,
+            "caused_by_parent_request_doc_id": "bae-parent",
+            "caused_by_parent_tool_call_doc_id": call,
+        })
+    }
+
+    #[test]
+    fn group_caused_orders_by_created_at_then_doc_id() {
+        let grouped = group_caused(&[
+            caused_row("bae-c", "r3", "2026-09-26T00:00:02Z", "call-1"),
+            caused_row("bae-b", "r2", "2026-09-26T00:00:01Z", "call-1"),
+            caused_row("bae-a", "r1", "2026-09-26T00:00:01Z", "call-1"),
+        ]);
+        let doc_ids = grouped["call-1"]
+            .iter()
+            .map(|request| request.request_doc_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(doc_ids, ["bae-a", "bae-b", "bae-c"]);
+    }
+
+    #[test]
+    fn group_caused_keeps_every_request_of_one_call() {
+        let grouped = group_caused(&[
+            caused_row("bae-a", "r1", "2026-09-26T00:00:01Z", "call-1"),
+            caused_row("bae-b", "r2", "2026-09-26T00:00:02Z", "call-1"),
+            caused_row("bae-c", "r3", "2026-09-26T00:00:03Z", "call-2"),
+        ]);
+        let ids = |call: &str| {
+            grouped[call]
+                .iter()
+                .map(|request| request.request_id.as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids("call-1"), ["r1", "r2"]);
+        assert_eq!(ids("call-2"), ["r3"]);
+        assert_eq!(grouped["call-1"][0].scope, scope("child"));
+    }
+
+    #[tokio::test]
+    async fn caused_requests_projection_omits_a_call_with_two_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = std::sync::Arc::new(
+            EmbeddedNode::builder()
+                .data_path(dir.path().join("node"))
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        for (request_id, call) in [("a1", "call-one"), ("b1", "call-two"), ("b2", "call-two")] {
+            create(
+                &node,
+                format!(
+                    r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "did:test:node", requester_did: "did:test:node", agent_id: "worker", session_id: "child", caused_by_parent_request_id: "p1", caused_by_parent_request_doc_id: "bae-parent", caused_by_parent_tool_call_id: "{call}", caused_by_parent_tool_call_doc_id: "{call}", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:01Z", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#
+                ),
+                "AgentRequest",
+            )
+            .await;
+        }
+        let access = ConfigAccess::local(node.clone());
+        let projection = caused_requests(&access, ["call-one", "call-two"])
+            .await
+            .unwrap();
+        assert_eq!(
+            projection,
+            std::collections::BTreeMap::from([("call-one".to_owned(), "a1".to_owned())])
+        );
+        node.shutdown().await;
     }
 
     fn scope(session_id: &str) -> SessionScope {
