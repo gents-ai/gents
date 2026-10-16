@@ -1,8 +1,8 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::task::{Context, Poll};
 
@@ -73,19 +73,20 @@ fn poll_flush(future: &mut Option<AcquireFuture>, guard: &mut Option<MutationWri
 }
 
 fn actual_owner(gate: &MutationWriteGate) -> String {
-    gate.owner
+    gate.owners
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .as_ref()
-        .map_or_else(
-            || "none".to_owned(),
-            |owner| match owner.operation.as_str() {
-                "test.stream_waiter.initial" => "initial_guard".to_owned(),
-                "test.stream_waiter.stream" => "stream".to_owned(),
-                "test.stream_waiter.flush" => "flush".to_owned(),
-                other => panic!("unexpected test gate owner {other}"),
-            },
-        )
+        .values()
+        .find_map(|owner| {
+            let label = match owner.operation.as_str() {
+                "test.stream_waiter.initial" => "initial_guard",
+                "test.stream_waiter.stream" => "stream",
+                "test.stream_waiter.flush" => "flush",
+                _ => return None,
+            };
+            Some(label.to_owned())
+        })
+        .unwrap_or_else(|| "none".to_owned())
 }
 
 #[tokio::test]
@@ -103,6 +104,14 @@ async fn lean_stream_waiter_schedules_match_the_canonical_write_gate() {
                 .await
                 .expect("initial mutation gate owner"),
         );
+        let mut capacity_fillers = Vec::new();
+        for _ in 1..super::MUTATION_WRITE_GATE_CAPACITY {
+            capacity_fillers.push(
+                gate.acquire(write_operation("test.stream_waiter.capacity_filler"))
+                    .await
+                    .expect("fill remaining permits so the modeled waiter is next"),
+            );
+        }
         let stream_acquired = Arc::new(AtomicBool::new(false));
         let generator_dropped = Arc::new(AtomicBool::new(false));
         let yielded = Arc::new(AtomicUsize::new(0));
@@ -263,5 +272,6 @@ async fn lean_stream_waiter_schedules_match_the_canonical_write_gate() {
         drop(flush_guard.take());
         drop(flush_future.take());
         drop(initial_guard.take());
+        drop(capacity_fillers);
     }
 }

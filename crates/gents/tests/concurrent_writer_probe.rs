@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
 use serde_json::{json, Value};
-use tokio::sync::Barrier;
+use tokio::sync::{Barrier, Semaphore};
 use tokio::task::JoinSet;
 
 const SCHEMA: &str = "type WriterCounter { key: String @index(unique: true) value: Int }
@@ -169,5 +169,163 @@ async fn native_c64_distinct_writers_expose_conflicts_without_partial_commits() 
         json!({"concurrency":64,"committed":committed.len(),"typed_conflicts":64-committed.len(),"max_open_transactions":maximum.load(Ordering::SeqCst),"elapsed_ms":started.elapsed().as_secs_f64()*1000.0}),
     )?;
     node.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "persistent encrypted admission experiment; emits optional JSON measurements"]
+async fn encrypted_branchable_writers_at_varying_admission_widths() -> Result<()> {
+    measure_encrypted_admission(64, &[1, 2, 4, 8, 16, 32, 64], "native-admission-sweep").await
+}
+
+
+async fn measure_encrypted_admission(
+    writers: usize,
+    capacities: &[usize],
+    report_name: &str,
+) -> Result<()> {
+    const ITERATIONS: usize = 4;
+    let mut measurements = Vec::new();
+    for &capacity in capacities {
+        let home = tempfile::tempdir()?;
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(home.path().join("db"))
+                .with_at_rest_encryption_key([0x29; 32])
+                .build()
+                .await?,
+        );
+        ConfigAccess::local(node.clone())
+            .add_schema("type AdmissionDocument @branchable { writer: Int @immutable iteration: Int @immutable body: String @immutable }")
+            .await?;
+        let admission = Arc::new(Semaphore::new(capacity));
+        let barrier = Arc::new(Barrier::new(writers));
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let mut workers = JoinSet::new();
+        let started = Instant::now();
+        for writer in 0..writers {
+            let node = node.clone();
+            let admission = admission.clone();
+            let barrier = barrier.clone();
+            let active = active.clone();
+            let maximum = maximum.clone();
+            workers.spawn(async move {
+                barrier.wait().await;
+                let mut observations = Vec::new();
+                for iteration in 0..ITERATIONS {
+                    let requested = Instant::now();
+                    let permit = admission.acquire().await?;
+                    let admitted = Instant::now();
+                    let transaction = node.begin_transaction_guard(false).await?;
+                    let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    maximum.fetch_max(count, Ordering::SeqCst);
+                    tokio::task::yield_now().await;
+                    let body = gents::graphql::escape_graphql_string(&"x".repeat(1024));
+                    let response = transaction
+                        .execute(&format!(
+                            "mutation {{ create_AdmissionDocument(input: {{writer: {writer}, iteration: {iteration}, body: \"{body}\"}}) {{_docID}} }}"
+                        ))
+                        .await;
+                    let committed = if response.is_transaction_conflict() {
+                        drop(transaction);
+                        false
+                    } else {
+                        anyhow::ensure!(!response.has_errors(), "native execute: {:?}", response.errors);
+                        match transaction.commit().await {
+                            Ok(()) => true,
+                            Err(query::TransactionError::Conflict(_)) => false,
+                            Err(error) => return Err(error.into()),
+                        }
+                    };
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    let service_ms = admitted.elapsed().as_secs_f64() * 1000.0;
+                    drop(permit);
+                    observations.push((
+                        (writer as i64, iteration as i64),
+                        committed,
+                        requested.elapsed().as_secs_f64() * 1000.0,
+                        service_ms,
+                    ));
+                }
+                Ok::<_, anyhow::Error>(observations)
+            });
+        }
+        let observations = tokio::time::timeout(Duration::from_secs(120), async {
+            let mut all = Vec::new();
+            while let Some(worker) = workers.join_next().await {
+                all.extend(worker??);
+            }
+            Ok::<_, anyhow::Error>(all)
+        })
+        .await
+        .context("admitted native writers stalled")??;
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let committed: BTreeSet<_> = observations
+            .iter()
+            .filter(|row| row.1)
+            .map(|row| row.0)
+            .collect();
+        let rows = ConfigAccess::local(node.clone())
+            .execute("{ AdmissionDocument {writer iteration} }")
+            .await?;
+        let rows = rows["data"]["AdmissionDocument"]
+            .as_array()
+            .context("documents missing")?;
+        let durable: BTreeSet<_> = rows
+            .iter()
+            .map(|row| {
+                Ok((
+                    row["writer"].as_i64().context("writer missing")?,
+                    row["iteration"].as_i64().context("iteration missing")?,
+                ))
+            })
+            .collect::<Result<_>>()?;
+        assert_eq!(observations.len(), writers * ITERATIONS);
+        assert_eq!(
+            durable, committed,
+            "durable identities at admission {capacity}"
+        );
+        assert_eq!(
+            rows.len(),
+            committed.len(),
+            "duplicate or partial commits at admission {capacity}"
+        );
+        assert!(!committed.is_empty(), "no commits at admission {capacity}");
+        let overlap = maximum.load(Ordering::SeqCst);
+        assert!(overlap <= capacity);
+        if capacity == 1 {
+            assert_eq!(overlap, 1);
+        } else {
+            assert!(
+                overlap > 1,
+                "admission {capacity} did not overlap transactions"
+            );
+        }
+        let mut latency: Vec<_> = observations.iter().map(|row| row.2).collect();
+        let mut service: Vec<_> = observations.iter().map(|row| row.3).collect();
+        latency.sort_by(f64::total_cmp);
+        service.sort_by(f64::total_cmp);
+        measurements.push(json!({
+            "admission": capacity,
+            "workers": writers,
+            "attempts": observations.len(),
+            "committed": committed.len(),
+            "typed_conflicts": observations.len() - committed.len(),
+            "elapsed_ms": elapsed_ms,
+            "commits_per_second": committed.len() as f64 * 1000.0 / elapsed_ms,
+            "p50_total_ms": latency[latency.len()/2],
+            "p95_total_ms": latency[(latency.len()-1)*95/100],
+            "p50_service_ms": service[service.len()/2],
+            "p95_service_ms": service[(service.len()-1)*95/100],
+            "max_open_transactions": overlap,
+            "durable_identity_set_matches_commits": true
+        }));
+        report(
+            report_name,
+            json!({"measurements": measurements, "retries": false}),
+        )?;
+        node.shutdown().await;
+    }
     Ok(())
 }

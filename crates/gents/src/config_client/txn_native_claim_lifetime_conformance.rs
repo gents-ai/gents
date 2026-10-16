@@ -9,7 +9,7 @@ use identity::{Identity as _, RawIdentity};
 use serde::Deserialize;
 use tokio::sync::Notify;
 
-use super::{mutation_write_gate, ConfigAccess};
+use super::{ConfigAccess, mutation_write_gate};
 
 struct BlockingSigner {
     private_key: Vec<u8>,
@@ -101,13 +101,7 @@ fn assert_observation(
 ) {
     let claim_held = crate::home::lock_store(home, data).is_err();
     let gate = mutation_write_gate(node);
-    let mutation_gate_held = match gate.lock.clone().try_lock_owned() {
-        Ok(guard) => {
-            drop(guard);
-            false
-        }
-        Err(_) => true,
-    };
+    let mutation_gate_held = gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY;
     assert_eq!(
         claim_held, expected.claim_held,
         "{} store-claim state",

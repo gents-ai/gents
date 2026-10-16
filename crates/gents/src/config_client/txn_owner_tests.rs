@@ -10,7 +10,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{Barrier, Notify};
 use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
@@ -73,6 +73,28 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+async fn fill_write_gate(
+    gate: &Arc<super::MutationWriteGate>,
+    first_operation: &'static str,
+) -> Vec<super::MutationWriteGuard> {
+    let mut guards = Vec::with_capacity(super::MUTATION_WRITE_GATE_CAPACITY);
+    for index in 0..super::MUTATION_WRITE_GATE_CAPACITY {
+        let operation = if index == 0 {
+            first_operation
+        } else {
+            "test.additional_gate_holder"
+        };
+        guards.push(
+            gate.acquire(
+                crate::config_client::write_telemetry::WriteOperation::new(operation).unwrap(),
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    guards
 }
 
 #[derive(Clone, Default)]
@@ -168,10 +190,7 @@ async fn clean_known_noop_commit_is_debug_but_mutation_is_info() {
 async fn queued_auto_commit_cancellation_is_not_reported_as_native_pending() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     let gate = super::mutation_write_gate(&node);
-    let held = gate
-        .acquire(super::WriteOperation::new("test.hold_auto_commit_gate").unwrap())
-        .await
-        .unwrap();
+    let held = fill_write_gate(&gate, "test.hold_auto_commit_gate").await;
     let telemetry = EventCapture::default();
     let events = Arc::clone(&telemetry.events);
     let subscriber = tracing::Dispatch::new(Registry::default().with(telemetry));
@@ -249,6 +268,18 @@ async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
         1,
         "the second successful mutation must pause before its callback resumes"
     );
+    let capacity_fillers = {
+        let gate = super::mutation_write_gate(&node);
+        let mut fillers = Vec::new();
+        for _ in 1..super::MUTATION_WRITE_GATE_CAPACITY {
+            fillers.push(
+                gate.acquire(super::WriteOperation::new("test.mutation_pause_filler").unwrap())
+                    .await
+                    .unwrap(),
+            );
+        }
+        fillers
+    };
     let queued = Arc::new(Notify::new());
     let acquired = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut contender = Box::pin(ConfigApplyTxn::with_write_gate_observation(
@@ -289,6 +320,7 @@ async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
         acquired.load(Ordering::Acquire),
         "actual write-gate lock did not report Ready after release"
     );
+    drop(capacity_fillers);
 
     let dormant_queued = Arc::new(Notify::new());
     let dormant_acquired = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -478,7 +510,10 @@ async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() 
         .clone()
         .expect("registered transaction handle was observed");
     drop(transaction);
-    assert!(gate_for_assert.lock.try_lock().is_ok());
+    assert_eq!(
+        gate_for_assert.permits.available_permits(),
+        super::MUTATION_WRITE_GATE_CAPACITY
+    );
     assert_native_transaction_abandoned(&node, &handle).await;
 
     let next_guard = tokio::time::timeout(
@@ -736,7 +771,7 @@ async fn swallowed_abandoned_statement_cannot_start_another_statement_or_commit(
 async fn cancellation_before_begin_reports_no_scheduled_rollback() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     let gate = super::mutation_write_gate(&node);
-    let held = gate.lock.lock().await;
+    let held = fill_write_gate(&gate, "test.cancel_before_begin").await;
     let telemetry = EventCapture::default();
     let events = Arc::clone(&telemetry.events);
     let subscriber = tracing::Dispatch::new(Registry::default().with(telemetry));
@@ -907,13 +942,7 @@ async fn nested_idempotent_write_does_not_replay_the_ownership_violation() {
 #[tokio::test(start_paused = true)]
 async fn write_gate_timeout_names_waiter_and_current_owner() {
     let gate = Arc::new(super::MutationWriteGate::new());
-    let owner = gate
-        .acquire(
-            crate::config_client::write_telemetry::WriteOperation::new("test.current_owner")
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let owners = fill_write_gate(&gate, "test.current_owner").await;
     let mut waiting = Box::pin(
         gate.acquire(
             crate::config_client::write_telemetry::WriteOperation::new("test.waiting_operation")
@@ -940,12 +969,13 @@ async fn write_gate_timeout_names_waiter_and_current_owner() {
         super::retry::is_transaction_storage_failure(&error),
         "gate wait timeouts use the standard storage-failure retry classification"
     );
-    assert!(gate
-        .pending_acquires
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .is_empty());
-    drop(owner);
+    assert!(
+        gate.pending_acquires
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty()
+    );
+    drop(owners);
 }
 
 #[tokio::test]
@@ -965,6 +995,19 @@ async fn stream_owned_gate_waiter_is_copolled_with_flush() {
         )
         .await
         .unwrap();
+    let mut additional_owners = Vec::new();
+    for _ in 1..super::MUTATION_WRITE_GATE_CAPACITY {
+        additional_owners.push(
+            gate.acquire(
+                crate::config_client::write_telemetry::WriteOperation::new(
+                    "test.stream_gate_additional_owner",
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap(),
+        );
+    }
 
     let stream_gate = Arc::clone(&gate);
     let mut stream = Box::pin(async_stream::stream! {
@@ -1009,12 +1052,14 @@ async fn stream_owned_gate_waiter_is_copolled_with_flush() {
     );
     drop(owner);
 
-    assert!(gate
-        .owner
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .is_none());
-    assert!(gate.lock.try_lock().is_err());
+    assert_eq!(
+        gate.owners
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len(),
+        super::MUTATION_WRITE_GATE_CAPACITY - 1
+    );
+    assert_eq!(gate.permits.available_permits(), 1);
 
     let flush_gate = Arc::clone(&gate);
     let flush = flush_gate.acquire(
@@ -1030,22 +1075,28 @@ async fn stream_owned_gate_waiter_is_copolled_with_flush() {
 
     assert_eq!(item, Some(Some(())));
     let flush_guard = flush_result.expect("flush acquires the gate");
-    assert!(gate
-        .pending_acquires
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .is_empty());
-    assert!(gate
-        .owner
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .is_some());
+    assert!(
+        gate.pending_acquires
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty()
+    );
+    assert_eq!(
+        gate.owners
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len(),
+        super::MUTATION_WRITE_GATE_CAPACITY
+    );
     drop(flush_guard);
-    assert!(gate
-        .owner
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .is_none());
+    assert_eq!(
+        gate.owners
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len(),
+        super::MUTATION_WRITE_GATE_CAPACITY - 1
+    );
+    drop(additional_owners);
 }
 
 #[tokio::test]
@@ -1119,7 +1170,12 @@ async fn failed_rollback_abandons_before_transaction_retry_backoff() {
         .clone()
         .expect("callback observed the transaction");
     assert_native_transaction_abandoned(&node, &handle).await;
-    assert!(super::mutation_write_gate(&node).lock.try_lock().is_ok());
+    assert_eq!(
+        super::mutation_write_gate(&node)
+            .permits
+            .available_permits(),
+        super::MUTATION_WRITE_GATE_CAPACITY
+    );
     drop(transaction);
     node.shutdown().await;
 }
@@ -1167,11 +1223,12 @@ async fn dropping_stream_clears_its_pending_gate_acquire() {
     );
 
     drop(stream);
-    assert!(gate
-        .pending_acquires
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .is_empty());
+    assert!(
+        gate.pending_acquires
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty()
+    );
     drop(owner);
 }
 
@@ -1189,9 +1246,18 @@ async fn stalled_cancellation_cleanup_releases_the_embedded_write_gate() {
         .await
         .expect("cleanup task joins")
         .expect_err("stalled cleanup times out");
-    let _guard = tokio::time::timeout(Duration::from_millis(1), gate.lock())
-        .await
-        .expect("the embedded write gate is released after cleanup times out");
+    let _guard = tokio::time::timeout(
+        Duration::from_millis(1),
+        gate.acquire(
+            crate::config_client::write_telemetry::WriteOperation::new(
+                "test.cleanup_timeout_gate_reacquire",
+            )
+            .unwrap(),
+        ),
+    )
+    .await
+    .expect("the embedded write gate is released after cleanup times out")
+    .unwrap();
 }
 
 #[derive(Deserialize)]
@@ -1229,13 +1295,7 @@ async fn lean_cancelled_rollback_timeout_releases_actual_transaction_gate() {
 
     let gate = super::mutation_write_gate(&node);
     started.notified().await;
-    let gate_held = match gate.lock.clone().try_lock_owned() {
-        Ok(guard) => {
-            drop(guard);
-            false
-        }
-        Err(_) => true,
-    };
+    let gate_held = gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY;
     assert_eq!(
         gate_held, scenario.expected_gate_held_after_owner_handoff,
         "native gate observation must match the Lean handoff state"
@@ -1243,25 +1303,201 @@ async fn lean_cancelled_rollback_timeout_releases_actual_transaction_gate() {
     if scenario.cleanup_times_out {
         tokio::time::advance(super::EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT).await;
     }
-    let acquisition = tokio::time::timeout(
-        Duration::from_secs(1),
-        gate.acquire(
-            crate::config_client::write_telemetry::WriteOperation::new(
-                "test.rollback_timeout_releases_transaction_gate",
-            )
-            .unwrap(),
-        ),
-    )
-    .await;
-    let gate_held = !matches!(&acquisition, Ok(Ok(_)));
+    if !scenario.expected_gate_held {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cleanup timeout releases all modeled permits");
+    }
+    let gate_held = gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY;
     assert_eq!(
         gate_held, scenario.expected_gate_held,
         "native gate observation must match the Lean cleanup-timeout state"
     );
-    if let Ok(Ok(guard)) = acquisition {
-        drop(guard);
-    }
     node.shutdown().await;
+}
+
+#[derive(Deserialize)]
+struct WriteAdmissionScenario {
+    name: String,
+    capacity: usize,
+    initial_claimed: bool,
+    actions: Vec<WriteAdmissionAction>,
+    checkpoints: Vec<WriteAdmissionCheckpoint>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum WriteAdmissionAction {
+    Request { owner: usize },
+    Observe { owner: usize, event: String },
+    Release { owner: usize },
+}
+
+#[derive(Deserialize)]
+struct WriteAdmissionCheckpoint {
+    after_actions: usize,
+    active_count: usize,
+    active_owners: Vec<usize>,
+    waiting: Vec<usize>,
+    leases: Vec<WriteAdmissionLease>,
+    store_claim_held: bool,
+}
+
+#[derive(Deserialize)]
+struct WriteAdmissionLease {
+    owner: usize,
+    phase: String,
+}
+
+async fn wait_for_gate_waiters(gate: &super::MutationWriteGate, expected: usize) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if lock(&gate.pending_acquires).len() == expected {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("native gate waiter registrations match the Lean trace");
+}
+
+#[tokio::test]
+async fn lean_write_admission_traces_match_native_independent_leases_and_capacity() {
+    let scenarios: Vec<WriteAdmissionScenario> = serde_json::from_str(include_str!(
+        "../../tests/fixtures/storage_write_gate_admission.json"
+    ))
+    .expect("Lean write-admission traces");
+
+    for scenario in scenarios {
+        assert_eq!(
+            scenario.capacity,
+            super::MUTATION_WRITE_GATE_CAPACITY,
+            "{}: model and native gate capacity",
+            scenario.name
+        );
+        let home = tempfile::tempdir().unwrap();
+        let data = home.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(&data)
+                .build()
+                .await
+                .unwrap(),
+        );
+        let access = if scenario.initial_claimed {
+            Some(
+                ConfigAccess::claimed_local(
+                    Arc::clone(&node),
+                    crate::home::lock_store(home.path(), &data).unwrap(),
+                )
+                .unwrap(),
+            )
+        } else {
+            None
+        };
+        let gate = super::mutation_write_gate(&node);
+        let mut held = BTreeMap::new();
+        let mut acquiring = tokio::task::JoinSet::new();
+
+        for (index, action) in scenario.actions.into_iter().enumerate() {
+            let checkpoint = scenario
+                .checkpoints
+                .get(index)
+                .expect("Lean emits one checkpoint per action");
+            assert_eq!(checkpoint.after_actions, index + 1, "{}", scenario.name);
+
+            match action {
+                WriteAdmissionAction::Request { owner } => {
+                    let gate = Arc::clone(&gate);
+                    acquiring.spawn(async move {
+                        let operation = WriteOperation::new("test.write_admission.trace")?;
+                        Ok::<_, anyhow::Error>((owner, gate.acquire(operation).await?))
+                    });
+                }
+                WriteAdmissionAction::Observe { owner, event } => {
+                    let phase = checkpoint
+                        .leases
+                        .iter()
+                        .find(|lease| lease.owner == owner)
+                        .map(|lease| lease.phase.as_str());
+                    assert!(
+                        phase.is_some(),
+                        "{}: observed lease disappeared",
+                        scenario.name
+                    );
+                    assert!(
+                        matches!(event.as_str(), "storage_returned" | "release"),
+                        "{}: unexpected modeled event {event}",
+                        scenario.name
+                    );
+                }
+                WriteAdmissionAction::Release { owner } => {
+                    drop(
+                        held.remove(&owner)
+                            .expect("Lean only releases an admitted lease"),
+                    );
+                }
+            }
+
+            while held.len() < checkpoint.active_count {
+                let acquired = tokio::time::timeout(Duration::from_secs(5), acquiring.join_next())
+                    .await
+                    .expect("native write permit admission made progress")
+                    .expect("one lease acquisition remains to be joined")
+                    .expect("lease task did not panic")
+                    .expect("native lease acquisition succeeded");
+                assert!(held.insert(acquired.0, acquired.1).is_none());
+            }
+            wait_for_gate_waiters(&gate, checkpoint.waiting.len()).await;
+
+            let held_owners: Vec<_> = held.keys().copied().collect();
+            assert_eq!(held_owners, checkpoint.active_owners, "{}", scenario.name);
+            assert_eq!(
+                lock(&gate.owners).len(),
+                checkpoint.active_count,
+                "{}: native owner metadata",
+                scenario.name
+            );
+            assert_eq!(
+                gate.permits.available_permits(),
+                scenario.capacity.saturating_sub(checkpoint.active_count),
+                "{}: native permits",
+                scenario.name
+            );
+            assert_eq!(
+                lock(&gate.pending_acquires).len(),
+                checkpoint.waiting.len(),
+                "{}: native waiters",
+                scenario.name
+            );
+            assert_eq!(gate.store_claim().is_some(), checkpoint.store_claim_held);
+            for lease in &checkpoint.leases {
+                assert!(held.contains_key(&lease.owner), "{}", scenario.name);
+                assert!(
+                    matches!(
+                        lease.phase.as_str(),
+                        "storage" | "cleanup" | "dropping" | "releasable" | "released"
+                    ),
+                    "{}: unknown model lifecycle phase {}",
+                    scenario.name,
+                    lease.phase
+                );
+            }
+        }
+
+        acquiring.abort_all();
+        while acquiring.join_next().await.is_some() {}
+        held.clear();
+        drop(access);
+        drop(gate);
+        node.shutdown().await;
+    }
 }
 
 #[tokio::test]
@@ -2007,7 +2243,10 @@ async fn aborting_embedded_callback_discards_writes_and_releases_the_gate() {
             Some("not_needed")
         );
     }
-    assert!(gate.lock.try_lock().is_ok());
+    assert_eq!(
+        gate.permits.available_permits(),
+        super::MUTATION_WRITE_GATE_CAPACITY
+    );
     assert_native_transaction_abandoned(&node, &handle).await;
     let response = ConfigAccess::local(Arc::clone(&node))
         .execute("{ AbortedTransactionProbe { value } }")
@@ -2048,7 +2287,10 @@ fn dropping_embedded_transaction_after_runtime_shutdown_abandons_synchronously()
     runtime.shutdown_background();
     assert!(tokio::runtime::Handle::try_current().is_err());
     drop(txn);
-    assert!(gate.lock.try_lock().is_ok());
+    assert_eq!(
+        gate.permits.available_permits(),
+        super::MUTATION_WRITE_GATE_CAPACITY
+    );
 
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         assert_native_transaction_abandoned(&node, &handle).await;
@@ -2107,12 +2349,12 @@ async fn cancellation_at_embedded_finalization_boundaries_preserves_commit_outco
         .await
         .expect("finalizer reached the selected boundary");
         assert!(
-            gate.lock.try_lock().is_err(),
+            gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY,
             "finalization must retain its write gate"
         );
         drop(finalization);
         assert!(
-            gate.lock.try_lock().is_ok(),
+            gate.permits.available_permits() == super::MUTATION_WRITE_GATE_CAPACITY,
             "cancellation must release the write gate"
         );
         assert_native_transaction_abandoned(&node, &handle).await;

@@ -37,13 +37,15 @@ enum TxnBackend<'a> {
 }
 
 struct MutationWriteGate {
-    lock: Arc<tokio::sync::Mutex<()>>,
-    owner: StdMutex<Option<MutationWriteOwner>>,
+    permits: Arc<tokio::sync::Semaphore>,
+    owners: StdMutex<HashMap<u64, MutationWriteOwner>>,
     next_lease_id: AtomicU64,
     pending_acquires: StdMutex<HashMap<u64, PendingWriteAcquire>>,
     next_pending_acquire_id: AtomicU64,
     store_claim: StdMutex<Option<Arc<StoreClaim>>>,
 }
+
+const MUTATION_WRITE_GATE_CAPACITY: usize = 64;
 
 struct StoreClaim {
     node: Arc<EmbeddedNode>,
@@ -109,7 +111,6 @@ impl LocalConfigAccess {
 
 #[derive(Clone, Copy)]
 struct MutationWriteOwner {
-    lease_id: u64,
     operation: WriteOperation,
     acquired_at: Instant,
 }
@@ -177,31 +178,25 @@ struct OldestPendingWriteAcquire {
 
 struct MutationWriteGuard {
     gate: Arc<MutationWriteGate>,
-    _guard: tokio::sync::OwnedMutexGuard<()>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
     lease_id: u64,
 }
 
 impl Drop for MutationWriteGuard {
     fn drop(&mut self) {
-        let mut owner = self
-            .gate
-            .owner
+        self.gate
+            .owners
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if owner
-            .as_ref()
-            .is_some_and(|owner| owner.lease_id == self.lease_id)
-        {
-            *owner = None;
-        }
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.lease_id);
     }
 }
 
 impl MutationWriteGate {
     fn new() -> Self {
         Self {
-            lock: Arc::new(tokio::sync::Mutex::new(())),
-            owner: StdMutex::new(None),
+            permits: Arc::new(tokio::sync::Semaphore::new(MUTATION_WRITE_GATE_CAPACITY)),
+            owners: StdMutex::new(HashMap::new()),
             next_lease_id: AtomicU64::new(1),
             pending_acquires: StdMutex::new(HashMap::new()),
             next_pending_acquire_id: AtomicU64::new(1),
@@ -253,15 +248,15 @@ impl MutationWriteGate {
     async fn acquire(self: &Arc<Self>, operation: WriteOperation) -> Result<MutationWriteGuard> {
         ensure_not_reentrant_embedded_write(operation)?;
         let wait_started = Instant::now();
-        let lock = Arc::clone(&self.lock).lock_owned();
-        tokio::pin!(lock);
+        let acquire = Arc::clone(&self.permits).acquire_owned();
+        tokio::pin!(acquire);
         let mut registration = None;
         #[cfg(test)]
         let observation = SUCCESSFUL_MUTATION_FAULT
             .try_with(|fault| fault.write_gate_observation.clone())
             .ok()
             .flatten();
-        let lock_future = std::future::poll_fn(|cx| match lock.as_mut().poll(cx) {
+        let acquire_future = std::future::poll_fn(|cx| match acquire.as_mut().poll(cx) {
             std::task::Poll::Pending => {
                 if registration.is_none() {
                     let id = self.next_pending_acquire_id.fetch_add(1, Ordering::Relaxed);
@@ -284,28 +279,42 @@ impl MutationWriteGate {
                 }
                 std::task::Poll::Pending
             }
-            std::task::Poll::Ready(guard) => {
+            std::task::Poll::Ready(permit) => {
                 registration.take();
                 #[cfg(test)]
-                if let Some(observation) = observation.as_ref() {
-                    observation.acquired.store(true, Ordering::Release);
+                if permit.is_ok() {
+                    if let Some(observation) = observation.as_ref() {
+                        observation.acquired.store(true, Ordering::Release);
+                    }
                 }
-                std::task::Poll::Ready(guard)
+                std::task::Poll::Ready(permit)
             }
         });
         let guard = match tokio::time::timeout(
             EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-            lock_future,
+            acquire_future,
         )
         .await
         {
-            Ok(guard) => guard,
+            Ok(Ok(permit)) => permit,
+            Ok(Err(error)) => {
+                return Err(anyhow::anyhow!("embedded write gate is closed: {error}"));
+            }
             Err(_) => {
                 registration.take();
-                let owner = *self
-                    .owner
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let (active_owner_count, owner) = {
+                    let owners = self
+                        .owners
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    (
+                        owners.len(),
+                        owners
+                            .values()
+                            .copied()
+                            .min_by_key(|owner| owner.acquired_at),
+                    )
+                };
                 let (owner_operation, owner_held_ms) = owner.map_or(("unknown", 0), |owner| {
                     (
                         owner.operation.as_str(),
@@ -332,10 +341,10 @@ impl MutationWriteGate {
                             pending.span_name,
                         )
                     });
-                let owner_status = if owner.is_some() {
-                    "tracked_owner"
+                let owner_status = if active_owner_count > 0 {
+                    "tracked_owners"
                 } else if pending_count > 0 {
-                    "no_tracked_owner; mutex may be reserved for a pending acquire"
+                    "no_tracked_owner; semaphore capacity may be reserved for a pending acquire"
                 } else {
                     "no_tracked_owner_or_pending_acquire"
                 };
@@ -344,6 +353,7 @@ impl MutationWriteGate {
                     waiting_operation = operation.as_str(),
                     owner_operation,
                     owner_held_ms,
+                    active_owner_count,
                     owner_status,
                     pending_acquire_count = pending_count,
                     oldest_wait_operation,
@@ -354,12 +364,13 @@ impl MutationWriteGate {
                     timeout_ms =
                         u64::try_from(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT.as_millis())
                             .unwrap_or(u64::MAX),
-                    "embedded DefraDB canonical write gate acquisition timed out"
+                    "embedded DefraDB canonical write admission timed out"
                 );
                 return Err(retry::transaction_storage_failure(anyhow::anyhow!(
-                    "embedded transaction write-gate acquisition for {} timed out after {:?}; current owner {} held for {}ms",
+                    "embedded transaction write admission for {} timed out after {:?}; {} active owners, longest-held owner {} held for {}ms",
                     operation.as_str(),
                     EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+                    active_owner_count,
                     owner_operation,
                     owner_held_ms,
                 )));
@@ -371,17 +382,19 @@ impl MutationWriteGate {
             wait_started.elapsed(),
         );
         let lease_id = self.next_lease_id.fetch_add(1, Ordering::Relaxed);
-        *self
-            .owner
+        self.owners
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(MutationWriteOwner {
-            lease_id,
-            operation,
-            acquired_at: Instant::now(),
-        });
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                lease_id,
+                MutationWriteOwner {
+                    operation,
+                    acquired_at: Instant::now(),
+                },
+            );
         Ok(MutationWriteGuard {
             gate: Arc::clone(self),
-            _guard: guard,
+            _permit: guard,
             lease_id,
         })
     }

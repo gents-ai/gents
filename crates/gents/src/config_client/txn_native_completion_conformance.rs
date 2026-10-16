@@ -10,8 +10,8 @@ use serde::Deserialize;
 use tokio::sync::Notify;
 
 use super::{
-    mutation_write_gate, ConfigAccess, ConfigApplyTxn, NativeOperationTracker, TxnBackend,
-    EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+    ConfigAccess, ConfigApplyTxn, EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+    NativeOperationTracker, TxnBackend, mutation_write_gate,
 };
 use crate::config_client::write_telemetry::WriteOperation;
 
@@ -185,13 +185,7 @@ async fn lean_auto_commit_completion_owns_the_real_signed_worker() {
                 "gate_release_requested" => {}
                 other => panic!("unsupported native auto-commit action {other}"),
             }
-            let held = match gate.lock.clone().try_lock_owned() {
-                Ok(guard) => {
-                    drop(guard);
-                    false
-                }
-                Err(_) => true,
-            };
+            let held = gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY;
             assert_eq!(held, expected.gate_held, "{} after {event}", case.name);
         }
         assert!(
@@ -290,7 +284,7 @@ async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drain
         abandoned.native_outstanding
     );
     assert_eq!(
-        gate.lock.clone().try_lock_owned().is_err(),
+        gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY,
         abandoned.gate_held
     );
     let response = node
@@ -304,7 +298,7 @@ async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drain
     release.notify_one();
     wait_for_native_count(&tracker, expected.native_outstanding).await;
     assert_eq!(
-        gate.lock.clone().try_lock_owned().is_err(),
+        gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY,
         expected.gate_held
     );
     let response = node
@@ -325,7 +319,7 @@ async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drain
     .unwrap();
     drop(acquired);
     assert_eq!(
-        gate.lock.clone().try_lock_owned().is_err(),
+        gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY,
         concurrent.observations.last().unwrap().gate_held
     );
     let drained = concurrent.observations.last().unwrap();
