@@ -156,6 +156,9 @@ mod tests {
         type LiveProbe {
             batch: String
         }
+        type WorkspaceReceipt {
+            workspace_id: String
+        }
     "#;
 
     async fn probe_access(tempdir: &tempfile::TempDir) -> Result<ConfigAccess> {
@@ -211,6 +214,53 @@ mod tests {
             json ! ([{ "node_did" : OWNER , "task_id" : "review" , "agent_id" : "beh" , "prompt_template" : "Review attempt {{ doc.attempt }} for {{ doc.workspace_id }}" , "emit_outcome" : emit_outcome , }]),
             json ! ([{ "node_did" : OWNER , "trigger_id" : "on-review" , "task_id" : "review" , "source" : { "kind" : "event" , "event_source_id" : "reviewed" } , }]),
         )
+    }
+
+    #[tokio::test]
+    async fn refuses_native_route_fields_without_the_runtime_preconditions() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let access = probe_access(&tempdir).await?;
+        let grouped = receipt_manifest(
+            json ! ({ "correlation_field" : "workspace_id" , "group" : { "expected_count" : 2 } }),
+            true,
+        )?;
+        let errors = validate_manifest_against_live(&grouped, &access).await?;
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("trigger on-review prompt_template references doc.attempt")
+                && errors[0].contains("WorkspaceReceipt has no field \"attempt\""),
+            "{errors:?}"
+        );
+        let outcome_less = receipt_manifest(json ! ({ "event_kind" : "created" }), false)?;
+        let errors = validate_manifest_against_live(&outcome_less, &access).await?;
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("trigger on-review prompt_template references doc.attempt")
+                && errors[0].contains("WorkspaceReceipt has no field \"attempt\""),
+            "{errors:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refuses_a_filter_the_probe_query_cannot_execute() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let access = probe_access(&tempdir).await?;
+        let manifest = manifest(
+            json!([source(
+                "filtered",
+                json ! ({ "filter" : "{undeclared: {_eq: \"x\"}}" })
+            )]),
+            json!([]),
+            json!([]),
+        )?;
+        let errors = validate_manifest_against_live(&manifest, &access).await?;
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("filter syntax error"),
+            "a filter that names no declared field must fail the probe: {errors:?}"
+        );
+        Ok(())
     }
 
     #[tokio::test]
