@@ -132,7 +132,7 @@ async fn wait_for_live_node_readiness(
     loop {
         let last_observation =
             match crate::commands::status::load_live_node_readiness(
-                &gents::config_client::GraphqlEndpoint::anonymous(graphql_url),
+                &gents::config_client::GraphqlEndpoint::as_principal(graphql_url, node_did),
                 node_did,
             )
                 .await

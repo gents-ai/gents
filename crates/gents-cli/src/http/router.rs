@@ -229,7 +229,7 @@ async fn wait_for_activation(state: RuntimeHttpState) -> Response {
             }
             if current.successful_for(*generation, fingerprint) {
                 let readiness = match crate::commands::status::load_live_node_readiness(
-                    &state.graphql,
+                    &state.p2p_graphql,
                     &state.node_did,
                 )
                 .await
