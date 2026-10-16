@@ -183,6 +183,182 @@ describe("canonical tool selections", () => {
     ]);
   });
 
+  it("takes remote tool names typed one per line", async () => {
+    const { api, app } = harness();
+    const user = userEvent.setup();
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
+    await user.click(screen.getByRole("checkbox", { name: "Service A" }));
+    const names = screen.getByRole("textbox", { name: "Service A tool names" });
+    await user.type(names, "read{Enter}search{Enter}read");
+    expect(names).toHaveValue("read\nsearch\nread");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.saveToolsConfig.mock.calls[0][0].document.remote.services[0]).toEqual({
+      mcp_service_id: "service-a",
+      tool_names: ["read", "search"],
+    });
+  });
+
+  it("grants a reported tool by ticking it, in the one tool-names field", async () => {
+    const { api, app } = harness();
+    api.testToolService.mockResolvedValue({
+      tools: [
+        { name: "search", description: "Search the service" },
+        { name: "fetch", description: null },
+      ],
+      error: null,
+    });
+    const user = userEvent.setup();
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
+    await user.click(screen.getByRole("checkbox", { name: "Service A" }));
+    expect(screen.getByText(/No tools granted yet/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Discover remote tools" }));
+    expect(await screen.findByText("2 tools reported")).toBeInTheDocument();
+    expect(screen.queryByText("Discovered tools")).toBeNull();
+    await user.click(screen.getByRole("checkbox", { name: /search/ }));
+    expect(screen.getByRole("textbox", { name: "Service A tool names" })).toHaveValue(
+      "search",
+    );
+    expect(screen.getByText("1 tool granted.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(
+      api.saveToolsConfig.mock.calls[0][0].document.remote.services[0].tool_names,
+    ).toEqual(["search"]);
+  });
+
+  it("folds a service's settings with defaults and counts those changed", () => {
+    const { app } = harness();
+    const configured = {
+      ...deployment.tools[0],
+      remote: {
+        services: [
+          {
+            mcp_service_id: "service-a",
+            tool_names: ["search"],
+            required: true,
+            connect_timeout_secs: 5,
+            /* set, but to its default */
+            discovery_timeout_secs: 30,
+          },
+        ],
+      },
+    };
+    renderIn(
+      app,
+      <ToolsPanel deployment={{ ...deployment, tools: [configured] }} item="tools-a" />,
+    );
+    const fold = screen
+      .getByText(/Service A: presentation, admission and timeouts/)
+      .closest("details")!;
+    expect(fold).toHaveTextContent("2 changed from the defaults");
+    expect(fold.open).toBe(false);
+    expect(fold).toContainElement(
+      screen.getByRole("textbox", { name: "Connection timeout seconds" }),
+    );
+    expect(screen.getByRole("textbox", { name: "Service A tool names" })).toBeVisible();
+  });
+
+  it("opens a service's fold to an invalid timeout on Save and names the service", async () => {
+    const { api, app } = harness();
+    const user = userEvent.setup();
+    const configured = {
+      ...deployment.tools[0],
+      remote: { services: [{ mcp_service_id: "service-a", tool_names: ["search"] }] },
+    };
+    renderIn(
+      app,
+      <ToolsPanel deployment={{ ...deployment, tools: [configured] }} item="tools-a" />,
+    );
+    const timeout = screen.getByRole("textbox", { name: "Connection timeout seconds" });
+    const fold = timeout.closest("details")!;
+    fold.open = true;
+    fireEvent.change(timeout, { target: { value: "0" } });
+    fold.open = false;
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.saveToolsConfig).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Service A: connection timeout seconds must be a positive whole number",
+    );
+    expect(fold.open).toBe(true);
+    expect(timeout).toHaveFocus();
+  });
+
+  it("keeps a background grant through an edit that passes through another name", async () => {
+    const { api, app } = harness();
+    const user = userEvent.setup();
+    const configured = {
+      ...deployment.tools[0],
+      remote: {
+        services: [
+          {
+            mcp_service_id: "service-a",
+            tool_names: ["search"],
+            background_tool_names: ["search"],
+          },
+        ],
+      },
+    };
+    renderIn(
+      app,
+      <ToolsPanel deployment={{ ...deployment, tools: [configured] }} item="tools-a" />,
+    );
+    const names = screen.getByRole("textbox", { name: "Service A tool names" });
+    await user.click(names);
+    await user.type(names, "{End}{Backspace}h{Enter}read");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(
+      api.saveToolsConfig.mock.calls[0][0].document.remote.services[0],
+    ).toMatchObject({
+      tool_names: ["search", "read"],
+      background_tool_names: ["search"],
+    });
+  });
+
+  it("searches again from the start after discovering again", async () => {
+    const { api, app } = harness();
+    const tool = (name: string) => ({ name, description: null });
+    api.testToolService
+      .mockResolvedValueOnce({
+        tools: Array.from({ length: 10 }, (_, i) => tool(`tool-${i}`)),
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        tools: ["alpha", "beta", "gamma"].map(tool),
+        error: null,
+      });
+    const user = userEvent.setup();
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
+    await user.click(screen.getByRole("checkbox", { name: "Service A" }));
+    await user.click(screen.getByRole("button", { name: "Discover remote tools" }));
+    await user.type(await screen.findByLabelText("Search reported tools"), "nothing");
+    await user.click(screen.getByRole("button", { name: "Discover again" }));
+    expect(await screen.findByText("3 tools reported")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Search reported tools")).toBeNull();
+    expect(screen.getAllByRole("checkbox", { name: /alpha|beta|gamma/ })).toHaveLength(
+      3,
+    );
+  });
+
+  it("focuses the invalid field that comes first on the page, not the first reported", async () => {
+    const { api, app } = harness();
+    const user = userEvent.setup();
+    const configured = {
+      ...deployment.tools[0],
+      remote: { services: [{ mcp_service_id: "service-a", tool_names: ["search"] }] },
+    };
+    renderIn(
+      app,
+      <ToolsPanel deployment={{ ...deployment, tools: [configured] }} item="tools-a" />,
+    );
+    const remote = screen.getByRole("textbox", { name: "Connection timeout seconds" });
+    remote.closest("details")!.open = true;
+    fireEvent.change(remote, { target: { value: "0" } });
+    const bash = screen.getByRole("textbox", { name: "Bash timeout seconds" });
+    fireEvent.change(bash, { target: { value: "0" } });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.saveToolsConfig).not.toHaveBeenCalled();
+    expect(bash).toHaveFocus();
+  });
+
   it("reports remote discovery errors without changing the grant", async () => {
     const { api, app } = harness();
     api.testToolService.mockResolvedValue({

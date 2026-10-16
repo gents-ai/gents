@@ -1928,7 +1928,7 @@ describe("configuration panels", () => {
     expect(api.patchConfigComponents).not.toHaveBeenCalled();
   });
 
-  it("requires an inline second action before disconnecting a subscription", async () => {
+  it("asks in the shared dialog before disconnecting a subscription from its account row", async () => {
     const { api, app } = harness();
     api.listProviderAccounts.mockResolvedValue([
       {
@@ -1940,6 +1940,8 @@ describe("configuration panels", () => {
         accessTokenExpiresAt: "2099-01-01T00:00:00Z",
         lastRefresh: null,
         enabled: true,
+        accountRef: null,
+        label: "Grok",
       },
     ]);
     const subscriptionDeployment = {
@@ -1958,11 +1960,18 @@ describe("configuration panels", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Disconnect" }));
     expect(api.disconnectProviderAccount).not.toHaveBeenCalled();
-    expect(screen.getByText("Disconnect Grok / xAI?")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Keep connected" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Disconnect Grok?");
+    /* the reason it is a dialog: it names what stops working */
+    expect(dialog).toHaveTextContent("fail their next turn");
+    await user.click(within(dialog).getByRole("button", { name: "Keep connected" }));
     expect(api.disconnectProviderAccount).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Disconnect" }));
-    await user.click(screen.getByRole("button", { name: "Disconnect now" }));
+    await user.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "Disconnect now",
+      }),
+    );
     expect(api.disconnectProviderAccount).toHaveBeenCalledWith(
       deployment.nodeDid,
       "credential-a",

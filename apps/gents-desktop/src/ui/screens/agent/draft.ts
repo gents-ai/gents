@@ -23,8 +23,19 @@ export function focusFirstProblem(
   fields: Partial<Record<string, string>> = {},
 ): boolean {
   if (!hasProblems(problems)) return false;
-  const first = Object.keys(fields).find((field) => problems[field]);
-  const element = first ? document.getElementById(fields[first]!) : null;
+  const element = Object.entries(fields)
+    .flatMap(([field, id]) =>
+      problems[field] && id ? [document.getElementById(id)] : [],
+    )
+    .reduce<HTMLElement | null>(
+      (first, el) =>
+        el &&
+        (!first || el.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING)
+          ? el
+          : first,
+      null,
+    );
+  /* a field folded away in a disclosure is opened to be shown */
   for (
     let fold = element?.closest("details");
     fold;
