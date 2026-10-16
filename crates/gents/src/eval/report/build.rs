@@ -79,7 +79,6 @@ pub struct SlotReport {
     pub latest: Option<AttemptSummary>,
 }
 
-/// One verdict that counts for a slot.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SlotVerdict {
     pub verdict_id: String,

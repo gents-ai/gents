@@ -45,13 +45,11 @@ pub enum StageTarget {
         plugin: String,
         /// `sha256:<hex>` of the artifact that runs. A pack's own plugin is
         /// pinned when the pack is loaded; compiling an unpinned one fails.
-
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "typescript", ts(optional = nullable))]
         digest: Option<String>,
         /// How many times a failed call may run in all; absent is once. A
         /// retry never follows a call whose results were written.
-
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "typescript", ts(optional = nullable))]
         max_attempts: Option<u32>,
@@ -80,13 +78,14 @@ impl StageTarget {
 ///
 /// The model can select a capability revision, but cannot author the Task's
 /// agent, prompt, tools, model, or output permissions, nor the plugin that runs.
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct StageCapability {
     /// Owner of this capability and its referenced task. Every caller,
     /// including this owner, needs explicit allowed_callers admission and ACP.
+    
+    
     pub node_did: String,
     pub capability_id: String,
     pub revision: String,
@@ -204,6 +203,7 @@ pub struct EntryBinding {
     pub to: PortRef,
     /// JSON Schema for the operator-facing input this entry accepts. Absent
     /// means the entry takes an unvalidated JSON object, as before.
+    
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(type = "unknown", optional = nullable))]
     pub input_schema: Option<serde_json::Value>,
@@ -251,6 +251,7 @@ pub enum HostInput {
     },
     /// A read-only workspace over the `GitDiff` head; requires an earlier
     /// `GitDiff` in the same `host` list.
+    
     ReadOnlyWorkspace,
 }
 
@@ -456,8 +457,6 @@ pub struct PlannedPackageArtifact {
 pub struct RequiredSchemaDigest {
     pub namespace: String,
     pub digest: String,
-    /// Peers compare their active DefraDB collection versions through these
-    /// without the originating binary's bundled catalog.
     pub collection_contract_digests: BTreeMap<String, String>,
 }
 

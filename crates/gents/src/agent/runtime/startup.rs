@@ -518,8 +518,6 @@ async fn run_agent_owned(
         .publish_startup_snapshot(initial_active_snapshot.as_ref())
         .await
     {
-        // Bootstrap owns live generation-one slots; drop them through the
-        // ordered shutdown boundary.
         runtime_shutdown_tx.send_replace(true);
         cancel.cancel();
         let shutdown_result = generation_supervisor.shutdown_slots().await;

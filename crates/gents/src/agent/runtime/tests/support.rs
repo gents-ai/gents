@@ -138,8 +138,6 @@ async fn fetch_runtime_status_if_present(
     })
 }
 
-/// Waits for a phase the runtime rests in; pass-through phases are
-/// unobservable here.
 pub(super) async fn wait_for_runtime_reconcile_phase(
     node: &defra_node::EmbeddedNode,
     node_did: &str,

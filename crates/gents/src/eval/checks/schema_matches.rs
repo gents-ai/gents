@@ -4,9 +4,6 @@ use serde_json::{json, Value};
 use super::{graded, graded_reason_codes, grader, Check, CheckDescription, CheckVerdict};
 use crate::eval::runner::{CaptureResult, StageEvidence};
 
-/// Checks active saved fields, relationships and indexes against SDL parsed by
-/// the pinned native parser. Deployment only, not query execution or index
-/// performance.
 pub struct SchemaMatches;
 
 #[derive(Deserialize)]

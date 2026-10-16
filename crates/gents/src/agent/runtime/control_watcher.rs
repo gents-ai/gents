@@ -203,9 +203,6 @@ pub(super) async fn run_control_watcher_with_timing(
                         .set_reconcile_phase(ReconcilePhase::Idle)
                         .await;
                 }
-                // The settle deadline bounds retries for unresolved references
-                // and failed reloads; it must not turn every observed write
-                // into a full-view polling loop.
                 dirty = false;
                 settle_deadline = None;
                 sleep.as_mut().reset(tokio::time::Instant::now() + timing.idle_sleep);

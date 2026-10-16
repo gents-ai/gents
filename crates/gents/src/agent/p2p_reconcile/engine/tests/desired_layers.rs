@@ -25,7 +25,6 @@ fn explicit_client_route_keeps_requester_and_owner_across_remote_admin() {
             template: Some("client".to_string()),
             ..Default::default()
         },
-        // Owner comes from durable intent, not the remote-admin actor DID.
         "did:key:phone",
     )
     .expect("explicit route parses")
@@ -240,9 +239,6 @@ fn data_plane_desired_rejects_foreign_node_did_scope() {
     assert!(error.to_string().contains("foreign DID"));
 }
 
-/// #714 C1 regression: the `machine` template scopes session data-plane
-/// collections to the same requester DID as `conversation`, while
-/// `NodeDirectoryEntry` is restricted to the issuer's source-owned projection.
 #[test]
 fn data_plane_desired_machine_scopes_session_set_and_owned_directory() {
     let signed_endpoint = EnrollmentEndpointEntry {

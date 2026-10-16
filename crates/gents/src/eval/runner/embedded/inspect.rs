@@ -23,8 +23,7 @@ pub struct RetainedRequest {
 /// Reads request content and lineage with the retained trial's existing key.
 /// No runtime or schema installer is started. The blocking task owns the home
 /// until shutdown, even if the caller drops its future; a query panic also
-/// unwinds only after shutdown. Paths are checked before opening, so concurrent
-/// replacement of a checked directory is outside this filesystem boundary.
+/// unwinds only after shutdown.
 pub async fn inspect_retained_requests(
     runs_dir: &Path,
     locator: &TrialLocator,

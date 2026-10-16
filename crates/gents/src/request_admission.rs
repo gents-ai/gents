@@ -260,10 +260,6 @@ pub(crate) async fn terminalize_pending_request_rejection(
                             )
                             .await?;
                         }
-                        // A row that fails this decode keeps its refusal but
-                        // loses the session projection; the refusal already
-                        // persists in this transaction, so the skip is
-                        // warned, not fatal.
                         match serde_json::from_value::<AgentRequestRow>(row.clone())
                             .map_err(anyhow::Error::from)
                             .and_then(crate::watcher::AgentRequest::try_from)

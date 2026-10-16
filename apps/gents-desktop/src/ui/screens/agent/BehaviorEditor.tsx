@@ -247,8 +247,6 @@ export function AgentEditor({
       ? `A copy of ${nameOf(copiedFrom)} for this agent, created when you save.`
       : "New empty instructions for this agent, created when you save."
     : null;
-  /* the agents that share these instructions, each a link; past two,
-     the rest are counted and the count opens the context, which lists them */
   const agentLink = (b: AgentView) => (
     <a
       href={href({ ...base, item: b.agentId })}
@@ -282,9 +280,7 @@ export function AgentEditor({
         )}
       </>
     ) : null;
-  /* its context id points at nothing: deleted from under it */
   const dangling = Boolean(d.draft.contextChoice) && !creating && !selected;
-  /* a context only this agent uses can go with it */
   const soleContext =
     context &&
     (usersByContext.get(context.context_id) ?? []).every(
@@ -294,7 +290,6 @@ export function AgentEditor({
       : null;
   const readiness = agentReadiness(deployment, agent.agentId);
   const env = deployment.agentEnvironments.find((e) => e.agentId === agent.agentId);
-  /* said under the summary only when something needs attention */
   const attention =
     agent.enabled && !readiness.ready ? `It can’t run: ${readiness.reason}.` : null;
   return (
@@ -303,7 +298,6 @@ export function AgentEditor({
         data-testid="agent-header"
         className="mb-8 rounded-3xl bg-raised px-5 py-4 shadow-sm ring-1 ring-foreground/5"
       >
-        {/* avatar top-aligned beside the text; above it on phones */}
         <div className="flex min-w-0 items-start gap-3 max-md:flex-col">
           <AgentInitials
             name={draftMode ? d.draft.displayName.trim() || "New" : agent.displayName}

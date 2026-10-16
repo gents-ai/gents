@@ -473,7 +473,6 @@ async fn resolve_plugin_slot_owner(
     Ok(Some(owner))
 }
 
-/// The node and the owner a pack command acts for.
 pub(crate) async fn resolve_scope_owner(
     scope: &GraphScopeArgs,
 ) -> Result<(gents::config_client::ConfigAccess, String)> {
@@ -985,7 +984,6 @@ mod tests {
         .unwrap()
     }
 
-    /// A step after plugin install failing must leave the plugin store exactly as it was before this install attempt, not orphan whatever it just wrote.
     #[test]
     fn local_publication_failure_restores_exactly_the_previous_records() {
         let home = tempfile::tempdir().unwrap();

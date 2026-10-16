@@ -126,8 +126,6 @@ impl GentsBuilder {
         self
     }
 
-    /// Fail-closed capture sink for fault-injection tests: callers must not be
-    /// able to acknowledge a provider request without durable rendered input.
     #[doc(hidden)]
     pub fn fail_rendered_request_capture_for_test(mut self, message: impl Into<String>) -> Self {
         let message = Arc::new(message.into());

@@ -2,8 +2,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
 
-/// Resolve and open only targets under the pack root; lexical path checks do not constrain
-/// symlink targets.
 pub(crate) fn open_pack_asset(root: &Path, path: &str) -> Result<std::fs::File> {
     ensure!(
         is_distributable_asset(path) && has_canonical_asset_spelling(path),

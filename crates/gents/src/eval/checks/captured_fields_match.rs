@@ -28,7 +28,6 @@ fn one() -> usize {
     1
 }
 
-/// A present `equals: null` is a test for null, not an absent test.
 fn some<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
     Value::deserialize(deserializer).map(Some)
 }
@@ -54,8 +53,6 @@ pub(super) struct FieldPath {
 }
 
 impl FieldPath {
-    /// A missing or null primary value uses the fallback. Empty strings and
-    /// other non-null values retain precedence, matching nullable UI labels.
     pub(super) fn resolve(&self, mut lookup: impl FnMut(&str) -> Option<Value>) -> Option<Value> {
         let actual = lookup(&self.field);
         match &self.fallback_field {
@@ -106,7 +103,6 @@ fn text(value: &Value) -> String {
     }
 }
 
-/// `expectation` as a test, or why it is not one.
 pub(super) fn test(expectation: Expectation) -> Result<(FieldPath, Test), String> {
     let field = FieldPath {
         field: expectation.field,
@@ -356,8 +352,6 @@ mod tests {
         assert!(!text.contains("row 0"), "only what is missing: {text}");
     }
 
-    /// The schema admits `equals: null`, so the parser must read it as a test
-    /// for null rather than as no test at all.
     #[test]
     fn equals_null_tests_for_a_null_value() {
         let params = json!({"name": "items", "expect": [{"field": "sku", "equals": null}]});
@@ -409,8 +403,6 @@ mod tests {
         assert_eq!(vacuous.score_bp, Some(10_000));
     }
 
-    /// Per-pair scoring would otherwise reward padding a capture with rows
-    /// that happen to match.
     #[test]
     fn rows_beyond_max_rows_count_as_unmet_pairs() {
         let verdict = CapturedFieldsMatch.evaluate(

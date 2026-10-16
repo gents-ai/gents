@@ -1,5 +1,5 @@
 //! AppKit's tab-bar + button sends newWindowForTab: through the responder
-//! chain. Keep this thin adapter next to the native menu's New Tab action.
+//! chain.
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 

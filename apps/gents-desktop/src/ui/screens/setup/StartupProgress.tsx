@@ -1,8 +1,3 @@
-/* Gents getting ready, as every launch and first-run setup show it: the
-   mark and one title, then the step under way in a card of its own. A
-   finished step gives way to the next rather than staying listed. Each
-   stays at least STEP_DWELL_MS, so a fast one does not flash past, and the
-   cards share one place, so handing over moves nothing around them. */
 import {
   Fragment,
   useEffect,
@@ -24,18 +19,16 @@ import {
 } from "../../../lib/managedServerStartup";
 
 export const SETUP_COMPLETE_DWELL_MS = 2_000;
-/** how long a step's card stays at least, once shown */
 export const STEP_DWELL_MS = 800;
 
 export type StartupProgressStep = StartupStep & { detail?: string | null };
 
-/** What the finished card says: which node is up, and a few facts about it. */
 export type StartupSummary = {
   title: string;
   facts: {
     label: string;
     value: string;
-    /** shown on hover when shortened */ full?: string;
+    full?: string;
   }[];
 };
 
@@ -48,7 +41,6 @@ const ASIDES = [
   "Aligning the durable timelines.",
 ];
 
-/* one aside after another while startup is under way */
 function useAside() {
   const [index, setIndex] = useState(0);
   useEffect(() => {
@@ -61,7 +53,6 @@ function useAside() {
   return { index, text: ASIDES[index] };
 }
 
-/* the card to show: the target, once the card before it has had its time */
 function usePaced(target: string, immediate: boolean): string {
   const [shown, setShown] = useState(target);
   const since = useRef(Date.now());
@@ -79,7 +70,6 @@ function usePaced(target: string, immediate: boolean): string {
   return immediate ? target : shown;
 }
 
-/* the card handed over from, kept while it fades out */
 const HANDOVER_MS = 300;
 function useLeaving(shown: string): string | null {
   const [leaving, setLeaving] = useState<string | null>(null);
@@ -94,7 +84,6 @@ function useLeaving(shown: string): string | null {
   return leaving === shown ? null : leaving;
 }
 
-/* the cards' place is as tall as the one shown, easing between heights */
 function useShownHeight(shownKey: string) {
   const card = useRef<HTMLDivElement | null>(null);
   const [height, setHeight] = useState<number | null>(null);
@@ -137,7 +126,6 @@ function Card({
   cardRef,
   children,
 }: {
-  /** handed over from: it lifts away while the next one rises into place */
   leaving?: boolean;
   icon: ReactNode;
   cardRef?: React.Ref<HTMLDivElement>;
@@ -182,29 +170,21 @@ export function StartupProgress({
   summary,
 }: {
   title: string;
-  /** the title once everything has started and that has been shown */
   doneTitle?: string;
   titleId?: string;
   steps: StartupProgressStep[];
-  /** what the failed step's card says */
   failedLabel?: string;
   done?: boolean;
   wait?: ManagedServerWait | null;
   onOpenLoginItems?: () => Promise<void>;
   waitTestId: string;
   loginItemsTestId: string;
-  /** more ways on from a wait, after opening Login Items */
   waitActions?: ReactNode;
   error?: string | null;
   diagnosticsHint?: string | null;
-  /** the ways on from a failure */
   actions?: ReactNode;
-  /** shown once everything has started */
   footer?: ReactNode;
-  /** told when the finished card has come into view, after the steps had theirs */
   onFinished?: () => void;
-  /** what the finished card says; without it, that everything started and
-      what each step reported */
   summary?: StartupSummary;
 }) {
   const failed = steps.some((s) => s.state === "error");
@@ -284,8 +264,6 @@ export function StartupProgress({
             }
             const step = steps.find((s) => s.key === key);
             if (!step) return null;
-            /* a running step handed over from has finished; a retry hands
-               over from one that had not, and it keeps its state */
             const state = leaving && step.state === "active" ? "complete" : step.state;
             const text =
               state === "error"
@@ -312,7 +290,6 @@ export function StartupProgress({
             );
           })}
         </div>
-        {/* where it has got to: one mark per step, the shown one's state */}
         <div aria-hidden="true" className="flex gap-1.5">
           {steps.map((step, i) => {
             const state =

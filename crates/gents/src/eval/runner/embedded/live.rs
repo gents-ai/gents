@@ -13,7 +13,6 @@ use crate::eval::runner::progress::{LastToolCall, LiveSnapshot, ToolTally};
 use crate::graphql::graphql_with_transaction_retry;
 use crate::Collection;
 
-/// The configuration collections every snapshot counts.
 const CONFIGURATION: [Collection; 11] = [
     Collection::Agent,
     Collection::AgentContext,
@@ -28,8 +27,6 @@ const CONFIGURATION: [Collection; 11] = [
     Collection::Schedule,
 ];
 
-/// What one trial's snapshots read: its home, the collections registered
-/// before the subject ran, and the documents captures of every stage.
 pub(super) struct LiveObserver<'a> {
     node: &'a std::sync::Arc<EmbeddedNode>,
     trial_did: &'a str,
@@ -67,8 +64,6 @@ impl<'a> LiveObserver<'a> {
         }
     }
 
-    /// A collection or capture that cannot be read is left out rather than
-    /// counted as empty.
     pub(super) async fn snapshot(&self) -> Result<LiveSnapshot> {
         let registered = collection_names(self.node).await?;
         let schemas: Vec<String> = registered.difference(&self.installed).cloned().collect();

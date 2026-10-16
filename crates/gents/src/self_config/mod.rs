@@ -889,7 +889,6 @@ struct PackInstallParams {
     pub expected_digest: Option<String>,
 }
 
-/// A resolved pack and where it came from.
 struct ConfigPackDistribution(crate::pack_resolve::ResolvedNamedPack);
 
 impl ConfigPackDistribution {

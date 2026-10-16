@@ -1,4 +1,3 @@
-//! Generated attribution traces consumed by the actual GraphRun transaction owners.
 use super::*;
 use crate::graph_pipeline::runtime::graph_test_owner;
 use serde::Deserialize;

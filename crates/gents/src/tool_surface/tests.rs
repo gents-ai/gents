@@ -1287,8 +1287,6 @@ async fn write_tools_register_under_declared_names() {
     );
 }
 
-/// A count field resolving no argument schema is refused at registration, so
-/// no write through it can complete.
 #[tokio::test]
 async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registration() {
     use crate::document_config::{

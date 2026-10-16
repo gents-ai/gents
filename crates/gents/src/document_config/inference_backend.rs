@@ -144,7 +144,6 @@ pub struct BackendModelCatalog {
     /// None: the backend's shared credential scope; Some: the node whose
     /// OAuthCredential was used. Never contains secrets.
     pub node_did: Option<String>,
-    /// A failed refresh must not erase a prior catalog or claim it fresh.
     pub observed_at: String,
     #[serde(
         default,
@@ -159,7 +158,6 @@ pub struct BackendModelCatalog {
 pub struct AdvertisedModel {
     pub model_name: String,
     pub display_name: Option<String>,
-    /// Provider-advertised normal/default context size, when known.
     pub context_window: Option<i64>,
     /// Provider-advertised ceiling for an explicit context override; must
     /// never become a default itself.

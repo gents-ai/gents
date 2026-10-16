@@ -1,14 +1,3 @@
-//! The durable fact record for one provider call (#840): DefraDB-backed
-//! pieces only.
-//!
-//! The capture mechanism itself (the arm/claim scope, the capturing
-//! transport, the pure DTO builder) moved to `gents-loop` (G-1); this module
-//! re-exports it so `crate::rendered_request` keeps every symbol this crate's
-//! callers already use, and keeps the two pieces that cannot move: the
-//! DefraDB-backed sink (`sink`, `commits`) and the admission-controller
-//! provenance lookup, since a guest has neither a database nor an admission
-//! controller.
-
 pub mod commits;
 pub(crate) mod encoding;
 pub mod sink;
@@ -29,13 +18,9 @@ pub use gents_loop::rendered_request::{
 pub(crate) use sink::defra_rendered_request_capture_factory;
 pub use sink::DefraRenderedRequestSink;
 
-/// The admission identity to stamp into this capture's provenance, if the call
-/// in flight on this task belongs to the loop the capture describes.
-///
 /// The kind guard keeps the task-local admission join honest if a caller wires
 /// the wrong capture scope. One-shot captures never join because no admission
-/// scope exists there. Installed onto every production `RequestCaptureScope`
-/// via `scope_from_factory` below; the loop's own default is `|_| None`.
+/// scope exists there.
 fn admission_join_for_scope(capture_scope: &str) -> Option<AdmissionJoin> {
     let join = crate::admission::current_call_join()?;
     let scope_kind = capture_scope.parse::<CaptureScope>().ok()?.kind;
@@ -64,9 +49,7 @@ pub(crate) fn admission_kind_matches_scope(
     )
 }
 
-/// `RenderedRequestContext` for a claimed durable request. The loop-side
-/// struct dropped this constructor (it names the native `AgentRequest`
-/// document type); this is its native replacement.
+/// `RenderedRequestContext` for a claimed durable request.
 pub(crate) fn context_for_claimed_request(
     request: &crate::watcher::AgentRequest,
     request_commit_cid: &str,

@@ -1927,8 +1927,6 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         .await
         .unwrap();
 
-        // Ordering constraint: the Goal publishes its wrapup before the
-        // background process publishes its completion wake.
         for _ in 0..200 {
             if goal_children(&db).await.len() == 1
                 && runtime.backend.observed_requests(objective) > 0
@@ -2505,7 +2503,6 @@ async fn seed_a_passed_reset(db: &TestDb, opted_in: bool) {
         "test-model",
     )
     .await;
-    // Resume authenticates its predecessor, so the request is signed.
     let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "usage-limited-request",

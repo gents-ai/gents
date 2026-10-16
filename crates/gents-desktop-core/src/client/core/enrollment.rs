@@ -909,8 +909,6 @@ pub(super) async fn reconcile_status_enrollment_approvals(
     let known_peers = known_records.keys().cloned().collect();
     let retired = sync_state.retired_enrollment_digests().await;
     let mut approvals = prioritized_current_approvals(&outcomes, &known_peers);
-    // Without this filter every tick would reinstall the server the user
-    // removed.
     approvals.retain(|(_, approval)| !retired.contains(&approval.request_digest));
     let mut authentications = stream::iter(approvals)
         .map(|(peer_id, approval)| {
@@ -1664,8 +1662,6 @@ struct DurableEnrollmentProjection {
     decisions: Vec<(EnrollmentDecisionRecord, bool)>,
 }
 
-// Malformed authority rows are skipped per row; the well-formed remainder
-// still lists.
 fn listing_revision_rows(response: &QueryResponse) -> Result<Vec<EnrollmentRevisionRow>> {
     Ok(rows::<Value>(response, "NetworkAuthorizationRevision")?
         .into_iter()

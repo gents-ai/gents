@@ -32,9 +32,6 @@ async fn degraded_first_sweep_preserves_startup_replay_without_repeats() {
     );
     let mut replay_connections = BTreeMap::new();
 
-    // A degraded first sweep must keep the startup replay pending; recording
-    // the peer as already-seen-active would silently discharge that
-    // obligation without performing it.
     sweep_pairings(
         &admin,
         &store,

@@ -81,7 +81,6 @@ impl CallbackEngine {
         let mut desired = HashSet::new();
         let mut cursor_bindings = HashMap::new();
         let mut group_collections = HashSet::new();
-        // Per grouped collection, each binding and the source field that correlates it.
         let mut consumers: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
         for binding in &bindings {
             match load_event_source(&self.node, &binding.event_source_id, &binding.node_did).await {
@@ -382,8 +381,6 @@ impl CallbackEngine {
                     .as_str()
                     .context("arrival lacks document ID")?;
                 let position = entry["cursor"].as_str().context("arrival lacks cursor")?;
-                // Admission is idempotent per binding and document, so an
-                // arrival admitted before a crash finds its invocation again.
                 self.materialize_for_binding(binding, collection, doc_id, false)
                     .await?;
                 if !self.checkpoint(binding, collection, position).await? {

@@ -85,7 +85,6 @@ export async function pickDirectory(options: {
   return typeof picked === "string" ? picked : null;
 }
 
-/** This computer's home folder; null without the shell. */
 export async function homeFolder(): Promise<string | null> {
   if (!inNativeShell()) return null;
   return homeDir();

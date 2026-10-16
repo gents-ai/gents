@@ -55,12 +55,7 @@ fn a_guard_holds_the_lock_until_dropped_then_releases_it() {
     let exclusive = lock_store(home.path(), true).unwrap();
     assert!(!lock_is_free(home.path()), "exclusive guard holds the lock");
     drop(exclusive);
-    assert!(
-        lock_is_free(home.path()),
-        "dropping an exclusive guard unlocks"
-    );
-
-    // The next caller can take the lock again immediately.
+    assert!(lock_is_free(home.path()));
     lock_store(home.path(), true).unwrap();
 }
 

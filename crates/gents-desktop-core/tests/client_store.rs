@@ -148,8 +148,6 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     )
     .await?;
 
-    // Keep the replica's node config stale. Only the operator endpoint knows
-    // the completed request and the new default agent.
     let response = core
         .node()
         .execute(

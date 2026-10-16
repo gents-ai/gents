@@ -191,7 +191,6 @@ impl CapacityLedger {
     }
 }
 
-/// An admitted permit. It returns through its pool's ledger on drop.
 pub(super) struct PoolPermit {
     pool: Arc<CapacityPool>,
     permit: Option<(Arc<Semaphore>, OwnedSemaphorePermit)>,
@@ -228,9 +227,6 @@ impl BackendAdmissionController {
         self.config == *config
     }
 
-    /// Admits a call issued through a provider client built for
-    /// `slot_connection`, which the call's row records as its backend
-    /// fingerprint; a connection change never rejects an in-progress call.
     pub(super) async fn acquire(
         self: Arc<Self>,
         node: Arc<EmbeddedNode>,

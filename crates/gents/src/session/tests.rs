@@ -904,7 +904,6 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     node.shutdown().await;
 }
 
-/// Seed an already-published canonical observation for reader/claim tests.
 pub(crate) async fn import_history_observation(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     request_id: &str,

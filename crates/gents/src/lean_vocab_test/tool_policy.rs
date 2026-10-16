@@ -1,6 +1,3 @@
-//! Deserialization types for the Lean tool-policy contract rows
-//! (`Proofs/ToolPolicy.ContractCases`).
-
 use serde::Deserialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

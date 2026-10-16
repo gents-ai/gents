@@ -6,7 +6,6 @@ use serde_json::json;
 
 use crate::pack::{PackManifest, PackPlugin};
 
-/// The CLI implements this seam because its compiler lives behind the `afterburner` `bin` feature.
 pub trait PluginCompiler {
     fn builder_id(&self) -> &str {
         BUILDER_ID

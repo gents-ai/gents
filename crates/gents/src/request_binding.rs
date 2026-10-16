@@ -1,6 +1,5 @@
-//! Authoritative logical-to-physical AgentRequest binding lookup. Every caller
-//! shares the same limit-two lookup so missing and ambiguous labels cannot
-//! become half-bound writes.
+//! Every caller shares this limit-two lookup so missing and ambiguous labels
+//! cannot become half-bound writes.
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;

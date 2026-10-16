@@ -1,7 +1,4 @@
-//! The one implementation of rendered-request field-commit reads. Integrity
-//! comes from the witnessed commit chain, never a writer-supplied digest.
-//!
-//! Two DefraDB `_commits` constraints this helper encodes:
+//! DefraDB `_commits` constraints this helper encodes:
 //! * `_commits` accepts exactly ONE `docID`; batched reads alias one field per
 //!   document ([`field_commits_in_txn`]).
 //! * Its `fieldName` filter is evaluated in memory and silently degrades to no

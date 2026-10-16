@@ -179,7 +179,6 @@ pub async fn list_inference_profile_records(
         .collect()
 }
 
-/// Complete replacement through the existing transactional configuration owner.
 pub async fn upsert_inference_profile(
     node: &std::sync::Arc<EmbeddedNode>,
     profile: &InferenceProfile,

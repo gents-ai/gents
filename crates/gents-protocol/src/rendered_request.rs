@@ -50,7 +50,6 @@ impl RenderedRequestSource {
             .map(|(_, source)| *source)
     }
 
-    /// The body field carrying the provider message list on this wire shape.
     pub fn messages_field(self) -> &'static str {
         match self {
             Self::OpenAiResponses => "input",
@@ -86,7 +85,6 @@ impl CaptureScopeKind {
         }
     }
 
-    /// The inverse of `as_str`.
     pub fn from_label(label: &str) -> Option<Self> {
         match label {
             "inference" => Some(Self::Inference),
@@ -160,8 +158,6 @@ impl std::str::FromStr for CaptureScope {
         if label.is_empty() {
             return Err(CaptureScopeParseError::Empty);
         }
-        // Split on the LAST '.': a future kind label must not silently
-        // re-shape existing labels.
         let (kind, seq) = label
             .rsplit_once('.')
             .filter(|(kind, seq)| !kind.is_empty() && !seq.is_empty())
@@ -194,9 +190,6 @@ pub struct CaptureOrderKey {
 }
 
 impl CaptureOrderKey {
-    /// A zero-padded rendering whose lexical order equals `Ord`. The leading
-    /// numeric rank is load-bearing: kind labels sort lexically as
-    /// `compaction < inference`, contradicting declaration order.
     pub fn padded(&self) -> String {
         format!(
             "{:02}.{}.{:010}.{:06}.{:06}",

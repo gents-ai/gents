@@ -386,7 +386,6 @@ async fn agent_apply_in_txn(
                     ceiling.root.as_deref(),
                 )
                 .await?;
-                // An explicit --root authors a fresh grant; otherwise the source's root is re-admitted.
                 let stored_root = if args.root.is_present() {
                     None
                 } else {

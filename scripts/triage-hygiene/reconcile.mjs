@@ -40,9 +40,6 @@ const normalizeComment = (c) =>
 const hasMarker = (comments, marker) =>
   comments.map(normalizeComment).some((c) => c.body.includes(marker));
 
-// A comment is deletable only if it carries a retractable marker prefix AND its
-// author is one of this run's identities; never delete a comment it cannot
-// prove it wrote.
 function deletableBotNotices(comments, botLogins) {
   const logins = new Set(
     [...botLogins].filter(Boolean).map((l) => l.toLowerCase()),
@@ -92,9 +89,6 @@ export function reconcile({
   const unknown = roadmap.filter((l) => !HORIZONS.has(l));
 
   if (roadmap.length === 1 && unknown.length === 0) {
-    // Retract both notices along with the flag; gated on `flagged`, the bot's
-    // own record that it complained, so an unflagged clean issue costs no
-    // comment reads.
     if (!flagged) return noop;
     return {
       add: [],
@@ -104,7 +98,6 @@ export function reconcile({
     };
   }
 
-  // Only mutate on a state change.
   const add = flagged ? [] : [NEEDS_TRIAGE];
 
   if (roadmap.length === 0) {

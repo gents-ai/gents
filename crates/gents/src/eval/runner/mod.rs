@@ -88,7 +88,6 @@ pub fn provider_down(error: &anyhow::Error) -> Option<&ProviderDown> {
     error.downcast_ref::<ProviderDown>()
 }
 
-/// Local filesystem cancellation marker; remote cancellation uses its own path.
 pub const CANCEL_MARKER: &str = "cancel";
 
 pub fn run_dir(runs_dir: &Path, run_id: &str) -> Result<PathBuf> {
@@ -772,7 +771,6 @@ fn fixtures(
     Ok(fixtures)
 }
 
-/// Asset paths are confined to the run's pack copy.
 fn asset_files(pack_dir: &Path, asset: &str) -> Result<Vec<FixtureFile>> {
     anyhow::ensure!(
         Path::new(asset)

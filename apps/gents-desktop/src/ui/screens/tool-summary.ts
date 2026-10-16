@@ -1,4 +1,3 @@
-/* One line per tool call. */
 import type {
   RenderedToolCallView,
   ToolDiffLineKind,
@@ -8,13 +7,8 @@ import type {
 import type { ToolStepStatus } from "@gents/ui/conversation";
 import { shortPath } from "../lib/paths";
 
-/* An absolute path inside a checkout is mostly the checkout: every row in a
-   real session began with the same forty characters of home directory and
-   repo. Keep the tail, which is what tells two rows apart, and let the
-   title carry the rest. The path is on the agent's host, so no `~`. */
 const toolPath = (path: string) => shortPath(path, { keep: 3 });
 
-/* leading VAR=value assignments before a command */
 const ASSIGNMENTS = /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)(?:\s+|$))+/;
 
 export const spoken = (command: string): string => {
@@ -69,11 +63,9 @@ const readCount = (p: Extract<ToolPresentationView, { kind: "fileRead" }>) => {
   return `${p.returnedCount}${total}${p.truncated ? " · truncated" : ""}`;
 };
 
-/* a policy denial is not a failed tool */
 export function toolSummary(t: RenderedToolCallView): {
   kind: string;
   primary: string;
-  /** the whole of what `primary` shortens, for its title */
   full?: string;
   secondary?: string | null;
   mono?: boolean;

@@ -361,7 +361,6 @@ async fn persist_claimed_to_running(
     }
 }
 
-/// Testable planner + host-executor core. Persists journal/docs via the node.
 async fn execute_running_invocation(
     node: &std::sync::Arc<EmbeddedNode>,
     invocation: &mut CallbackInvocationDoc,

@@ -118,7 +118,6 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
             .status,
         "open"
     );
-    // The sweep cannot consume a valid but still-unclaimed reply either.
     assert_eq!(
         sweep_open_mailbox_items(&node, identity.did(), None)
             .await

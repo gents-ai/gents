@@ -1,4 +1,3 @@
-//! Strict desktop projection of immutable canonical transcript facts.
 use gents::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_protocol::message::Message;
 use gents_protocol::output::live::{

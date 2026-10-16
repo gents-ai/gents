@@ -23,9 +23,8 @@ fn gql_string_list(values: &[String]) -> String {
     format!("[{items}]")
 }
 
-/// `null` (never `[]`) for an empty `tool_refs`: DefraDB cannot type an empty
-/// array literal, and on the upsert update path `null` clears a stale value
-/// that omitting it would leave.
+/// On the upsert update path `null` clears a stale value that omitting it
+/// would leave.
 async fn upsert_skill(access: &ConfigAccess, skill: &SkillDocument) -> Result<String> {
     let skill_id = escape_graphql_string(&skill.skill_id);
     let tool_refs = if skill.tool_refs.is_empty() {

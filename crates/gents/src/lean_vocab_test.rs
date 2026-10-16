@@ -91,7 +91,6 @@ mod task_hook_executor;
 #[path = "lean_vocab_test/task_hook_recovery.rs"]
 mod task_hook_recovery;
 
-/// Generated TaskHooks vocabulary mapped onto production types.
 #[cfg(test)]
 mod task_hook_vocab {
     use super::{LeanCommandResult, LeanTaskHook};

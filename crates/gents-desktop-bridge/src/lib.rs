@@ -1,5 +1,3 @@
-//! Gents desktop bridge: Tauri plugin + view models + command logic.
-
 mod app_exit;
 pub mod approvals_watch;
 pub mod cause_derivation;

@@ -186,7 +186,6 @@ for subdir in "${LIBRARY_SUBDIRS[@]}"; do
   for pattern in "${LIBRARY_NAME_PATTERNS[@]}"; do
     for entry in "$base"/$pattern; do
       [[ -e "$entry" || -L "$entry" ]] || continue
-      # Safety guard: only direct children of a Library subdirectory.
       [[ "$(dirname "$entry")" == "$base" ]] || continue
       found_any=1
       remove_path "$entry"

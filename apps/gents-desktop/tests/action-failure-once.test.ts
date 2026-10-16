@@ -9,8 +9,6 @@ import { createConfigActions } from "../src/hooks/configActions";
 import { wasShown } from "../src/hooks/actionFailure";
 import { toastFailure } from "../src/ui/lib/failure";
 
-/* A failed action is reported once: the action names what failed; a screen
-   catching the same failure keeps its own state but does not report it. */
 describe("a failed action", () => {
   const actions = (saveSkillConfig: () => Promise<never>) => {
     const reportFailure = vi.fn();

@@ -155,9 +155,6 @@ async fn release_archives(
     Ok(released)
 }
 
-/// Removes an assets or plugins pack's file-recorded install: no node is
-/// opened, and a second call reports the same "not installed" a documents
-/// pack's remove does (the record is already gone).
 async fn remove_home_install(home: &Path, coordinate: &str) -> Result<Value> {
     let mut retained = Vec::new();
     let mut assets_removed = Vec::new();

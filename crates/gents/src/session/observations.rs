@@ -535,8 +535,6 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
         "session observation refresh found duplicate authoritative request rows"
     );
     let Some(row) = rows.first() else {
-        // Missing exact rows remain unknown; never fall back to an older
-        // local request.
         return Ok(false);
     };
     let current = gents_protocol::session::SessionRequestObservation {

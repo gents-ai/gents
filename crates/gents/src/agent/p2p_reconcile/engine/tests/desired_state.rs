@@ -17,8 +17,6 @@ pub(super) fn desired_row(template: Option<&str>, node_did: Option<&str>) -> Pai
     }
 }
 
-/// Push templates resolve to no subscription collections (no gossip leak)
-/// and a per-peer scope filter over the template set.
 #[test]
 fn push_template_resolves_to_filter_without_subscription() {
     let desired = desired_from_pairing_row(
@@ -43,8 +41,6 @@ fn push_template_resolves_to_filter_without_subscription() {
     );
 }
 
-/// Replicate templates subscribe to their collection set with an empty
-/// (unfiltered) replicator filter.
 #[test]
 fn replicate_template_resolves_to_subscription_without_filter() {
     let desired = desired_from_pairing_row(
@@ -208,9 +204,6 @@ fn app_collections_empty_collections_soft_skips() {
     );
 }
 
-/// #657: a foreign `node_did` on a data-plane row still hard-fails the whole
-/// peer load (`desired_read_failed`), including a co-existing control pairing.
-/// Security refusal, not soft-skip.
 #[test]
 fn foreign_node_did_still_hard_fails_whole_peer_load() {
     let signed_endpoint = EnrollmentEndpointEntry {

@@ -30,7 +30,6 @@ async fn wait_for_agent_state(
     }
 }
 
-/// Installs the fixture pack's `fixture/list_files` into the plugin store.
 fn install_fixture_plugin(plugin_home: &std::path::Path) -> crate::pack::PackIdentity {
     let (_pack_guard, pack_root) =
         crate::test_support::fixture_pack_copy("bind_plugin_fixture", &serde_json::json!({}));

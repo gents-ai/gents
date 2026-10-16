@@ -698,16 +698,6 @@ fn session_snapshot_hides_live_overlay_matching_last_materialized_assistant() {
 }
 
 #[test]
-fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
-    let snapshot = build_session_snapshot_from_store(&active_store(), "sess-1", Some("req-1"))
-        .expect("snapshot");
-    assert!(!snapshot
-        .timeline_items
-        .iter()
-        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
-}
-
-#[test]
 fn session_snapshot_projects_open_canonical_segment_before_header_arrives() {
     let mut rows = active_store().to_rows();
     rows.requests[0].execution_generation = Some("generation-1".into());

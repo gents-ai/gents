@@ -817,7 +817,6 @@ async fn load_header(
     }
 }
 
-/// Scoped headers sharing `header`'s key or sequence in its session.
 async fn coordinate_twins(
     access: ReadAccess<'_, '_>,
     header: &super::canonical_rows::TranscriptMessageRow,
@@ -1119,8 +1118,6 @@ async fn load_replay_request_facts_batch(
     Ok(facts)
 }
 
-/// Bulk readers reuse request snapshots; single transaction readers resolve
-/// physical closures and enumerate every observation of each selected source.
 async fn load_referenced_segments(
     access: ReadAccess<'_, '_>,
     header: &super::canonical_rows::TranscriptMessageRow,

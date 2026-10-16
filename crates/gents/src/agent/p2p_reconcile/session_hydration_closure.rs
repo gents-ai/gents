@@ -1,5 +1,3 @@
-//! Exact canonical-output reference closure for session hydration.
-
 use super::session_hydration::HydrationDocument;
 use crate::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
 use anyhow::anyhow;

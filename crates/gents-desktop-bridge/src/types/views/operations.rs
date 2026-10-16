@@ -160,12 +160,6 @@ pub enum BackendDisplayState {
     Disabled,
 }
 
-/// One backend's persisted health + recent admission outcomes. Read-only
-/// projection of `InferenceBackend` joined with the last N `InferenceCall`
-/// rows for that backend. `display_state` is derived from
-/// `(enabled, probe_status)` per the prototype's mapping (matches
-/// `InferenceBackend::is_available` and the Lean `backendAvailable`
-/// witness in `BoundaryRuntime.lean`).
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendHealthView {

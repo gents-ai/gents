@@ -1552,8 +1552,6 @@ fn integrate_does_not_commit_until_receipt_and_retries_from_journal() {
     );
     assert_eq!(first.receipt.kind, "integrator");
 
-    // Crash loses this new integration receipt, not the previously durable
-    // writer seal witness that authorizes integration.
     docs.receipts.remove(&first.receipt.receipt_id);
     std::thread::sleep(std::time::Duration::from_secs(2));
     let second = execute_integrate_workspace_plan(

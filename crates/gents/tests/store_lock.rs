@@ -115,7 +115,6 @@ struct BlockedChild {
 
 #[cfg(unix)]
 impl BlockedChild {
-    /// Lets the child exec and returns its wait status.
     fn release(mut self) -> libc::c_int {
         self.release_and_reap()
     }
@@ -163,8 +162,6 @@ fn a_store_outside_the_home_does_not_exclude_the_home_default_store() {
     assert_ne!(held.path(), home_store.path());
 }
 
-/// A fork inherits the open file description; the lock owner must unlock
-/// explicitly on drop so a child blocked before exec cannot retain its lock.
 #[cfg(unix)]
 #[test]
 fn dropping_the_store_lock_releases_it_even_before_a_forked_child_execs() {

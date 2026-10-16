@@ -260,7 +260,6 @@ pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyho
     ] {
         require_identifier(name, value)?;
     }
-    // Agent selection is required even for new sessions.
     require_identifier("agent_id", request.agent_id)?;
     for (name, value) in [
         ("requester_did", request.requester_did),
@@ -352,7 +351,6 @@ impl AgentRequestAdmissionRecord {
         }
     }
 
-    /// Cross-node request signed by its requester (`signer_did`).
     pub fn peer(signer_did: impl Into<String>) -> Self {
         Self {
             kind: AgentRequestAdmissionKind::Peer,

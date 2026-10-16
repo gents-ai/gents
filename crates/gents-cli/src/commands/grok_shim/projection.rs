@@ -50,11 +50,8 @@ impl BoundModelContext {
     }
 }
 
-/// Event ids are *reserved*, not simply allocated: a reservation commits only
-/// after the notification carrying it was successfully sent, and an
-/// uncommitted reservation rolls back on drop, so a failed send never
-/// consumes an id. Only the session's most recent id can roll back; a later
-/// committed id leaves a gap instead (gaps are harmless; duplicates are not).
+/// Only the most recent event id can roll back: downstream consumers treat
+/// gaps as harmless and duplicates as not.
 #[derive(Debug, Default)]
 pub(crate) struct ProjectionSequencer {
     sessions: std::sync::Mutex<BTreeMap<String, SessionSequence>>,
@@ -203,11 +200,6 @@ pub(crate) struct UpdateTimestamps {
     pub(crate) stream_start_ms: Option<i64>,
     pub(crate) turn_start_ms: Option<i64>,
 }
-#[cfg(test)]
-pub(crate) fn session_update_notification(session_id: &str, update: Value, meta: Value) -> Value {
-    session_notification_for_method(SESSION_UPDATE_METHOD, session_id, update, meta)
-}
-
 pub(crate) fn session_notification_for_method(
     method: &str,
     session_id: &str,
@@ -228,7 +220,6 @@ pub(crate) fn session_notification_for_method(
     })
 }
 
-/// The connection-scoped common send path for `session/update` notifications.
 /// The per-session send lock is held from before the event id is reserved
 /// until after the notification was successfully enqueued and the
 /// reservation committed, so allocation order equals enqueue order. The pager
@@ -895,12 +886,10 @@ pub(crate) struct LiveSegmentPlan {
     closed_evidence: Vec<ClosedEvidence>,
 }
 
-/// Append-only / no-loss contract: ACP chunks are append-only — bytes
-/// already sent can never be retracted. A divergence (the freshly observed
-/// tail no longer starts with the previously observed snapshot) never slices
-/// into the sent prefix; it closes the current segment and the whole freshly
-/// observed snapshot opens a new segment, dropping the un-sent remainder the
-/// runtime retracted while streaming the new observation in full.
+/// A divergence (the freshly observed tail no longer starts with the
+/// previously observed snapshot) never slices into the sent prefix; the whole
+/// freshly observed snapshot opens a new segment, dropping the un-sent
+/// remainder the runtime retracted.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LiveSegmentCursor {
     segment_key: Option<String>,

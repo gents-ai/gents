@@ -224,8 +224,6 @@ async fn load_request_workspace_overlay(
     operator_tool_root: Option<&Path>,
     sandbox_enforced: bool,
 ) -> Result<Option<(IsolatedWorkspaceRecord, WorkspaceOverlay)>> {
-    // Host eligibility is enforced before DB reads, binding, grant allocation
-    // and provider dispatch, not after a wasted model turn.
     if artifact_requested && !sandbox_enforced {
         bail!("artifact_write requires an enforceable artifact sandbox on this host");
     }

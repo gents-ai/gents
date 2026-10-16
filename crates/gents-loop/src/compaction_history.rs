@@ -521,7 +521,6 @@ fn extract_file_activity_iter<'a>(messages: impl IntoIterator<Item = &'a Message
 fn truncate_tool_result_content(content: ToolResultContent, max_chars: usize) -> ToolResultContent {
     match content {
         ToolResultContent::Text(text) if text.text.len() > max_chars => {
-            // Byte-budget slicing must land on a codepoint boundary.
             let cut = floor_char_boundary(&text.text, max_chars);
             let truncated = format!(
                 "{}… [pre-truncated {}/{} chars for compaction]",

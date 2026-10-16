@@ -46,7 +46,6 @@ def decodeCanonical : CanonicalBytes → Option CanonicalRequest
     decodeCanonical (canonicalBytes request) = some request := by
   cases request <;> rfl
 
-/-- Replace the middle of `base`, retaining exact prefix and suffix lengths. -/
 def splice (base : CanonicalBytes) (prefixLen suffixLen : Nat)
     (middle : CanonicalBytes) : Option CanonicalBytes :=
   if prefixLen + suffixLen ≤ base.length then

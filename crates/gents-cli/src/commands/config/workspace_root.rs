@@ -57,10 +57,9 @@ pub(super) async fn workspace_root_show(args: ConfigShowArgs) -> Result<()> {
     print_json(&rows.remove(0))
 }
 
-/// Reject relative paths and lexically normalize `.`/`..` components without
-/// touching the filesystem. The operator may pre-register a root before it
-/// exists, so this cannot use `std::fs::canonicalize` (which requires the
-/// path to exist and additionally resolves symlinks).
+/// The operator may pre-register a root before it exists, so this cannot use
+/// `std::fs::canonicalize` (which requires the path to exist and additionally
+/// resolves symlinks).
 fn canonicalize_workspace_root_path(path: &Path) -> Result<PathBuf> {
     if !path.is_absolute() {
         anyhow::bail!(

@@ -1,9 +1,3 @@
-/* A tool call, shown by what it did rather than by its raw document: the
-   same summary and body the desktop's ToolGroup builds from the
-   presentation kinds (command, fileRead, fileEdit, agent, process,
-   mcp, generic). Used by the activity steps in the transcript and by the
-   trace panel. */
-
 import { shortPath } from "@/lib/paths";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
@@ -34,7 +28,6 @@ const pretty = (value: string) => {
   }
 };
 
-/* kinds an icon already says on its own */
 const SAID_BY_ICON = new Set(["read", "edited", "$"]);
 
 export function ToolSummary({

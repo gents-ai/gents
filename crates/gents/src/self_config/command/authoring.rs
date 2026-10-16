@@ -1,6 +1,5 @@
 //! Pack build and test remain CLI operations because they invoke language
-//! toolchains. Authoring paths use the invoking agent's effective file tools
-//! and remain inside its effective tool root.
+//! toolchains.
 
 use std::path::PathBuf;
 

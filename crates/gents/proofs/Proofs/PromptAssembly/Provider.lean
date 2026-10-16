@@ -514,8 +514,6 @@ theorem filterCallsByP_cons_ordinary (h : pr.row.kind = .ordinary) :
 
 end FilterReduction
 
-/-! ## Coherence is preserved -/
-
 theorem coherent_restrictRow {pr : ProviderRow}
     {callIds : Finset ToolExecution.ToolCallId}
     (resolved : Finset ToolExecution.ToolCallId)
@@ -577,8 +575,6 @@ theorem allCoherent_filterCallsByP {rows : List ProviderRow}
         rcases List.mem_cons.mp hpr with rfl | htail
         · exact hhead
         · exact ih hrest pr htail
-
-/-! ## Irrelevance: resolved ids a list never announces cannot change the filter -/
 
 theorem restrictContent_union_of_disjoint
     (extra resolved : Finset ToolExecution.ToolCallId) (items : List Item)
@@ -692,8 +688,6 @@ theorem filterCallsByP_irrelevant (rows : List ProviderRow) :
       rw [filterCallsByP_cons_ordinary row rest (extra ∪ resolved) hk,
         filterCallsByP_cons_ordinary row rest resolved hk,
         ih extra resolved hrest hdisjRest]
-
-/-! ## Soundness -/
 
 theorem activeBlockValidFrom_filterCallsByP (rows : List ProviderRow) :
     ∀ pending,
@@ -851,8 +845,6 @@ theorem sanitizeForProviderGlobal_split_stable {old recent : List ProviderRow}
   refine sanitizeForProviderGlobal_sound ?_ hcoh
   refine UniqueCallIds.of_append_right (a := project old) ?_
   simpa [project, List.map_append] using huniq
-
-/-! ## Fixpoint and idempotence -/
 
 theorem restrictContent_eq_self {resolved : Finset ToolExecution.ToolCallId}
     {items : List Item} (h : Content.callsOf items ⊆ resolved) :
@@ -1014,11 +1006,6 @@ theorem allCoherent_sanitizeForProvider {rows : List ProviderRow}
   unfold sanitizeForProviderGlobal dropUnpairedCallsP dropOrphanedResultsP
   exact allCoherent_normalizeOrder
     (allCoherent_filterCallsByP _ (allCoherent_dropOrphanedFromP hcoh ∅))
-
-/-! ### The sanitizer's output carries no empty messages
-
-This is what makes the fixpoint hypothesis discharge for `sanitizeForProviderGlobal`'s
-own output, and therefore what makes idempotence hold. -/
 
 def OrphanStagePruned (pr : ProviderRow) : Prop :=
   match pr.row.kind with
@@ -1246,13 +1233,6 @@ theorem sanitizeForProviderGlobalFor_idempotent (mode : Content.OrderMode)
     (allNonDegenerate_sanitizeForProviderFor mode rows) ?_
   unfold sanitizeForProviderGlobalFor
   exact normalizeOrderFor_idempotent mode _
-
-/-! ## Refinement: how this relates to the row-only `sanitizeGlobal`
-
-`Proofs.PromptAssembly.Executable.sanitizeGlobal` is the coarser model. The two
-agree exactly on the fragment the coarser model can faithfully describe — assistant
-rows whose content is nothing but tool calls; off that fragment they differ by
-design (see the conditional refinement below). -/
 
 def CallsOnlyAssistant (pr : ProviderRow) : Prop :=
   match pr.row.kind with

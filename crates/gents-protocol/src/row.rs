@@ -187,14 +187,11 @@ pub struct AgentRequestRow {
 }
 
 impl AgentRequestRow {
-    /// Terminal per `RequestLifecycleState::is_terminal`. A row with no
-    /// (or an absent) `lifecycle_state` is not terminal.
     pub fn is_terminal(&self) -> bool {
         self.lifecycle_state
             .is_some_and(RequestLifecycleState::is_terminal)
     }
 
-    /// Claimable per `RequestLifecycleState::is_claimable`.
     pub fn is_claimable(&self) -> bool {
         self.lifecycle_state
             .is_some_and(RequestLifecycleState::is_claimable)

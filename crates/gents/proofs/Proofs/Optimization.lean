@@ -214,8 +214,6 @@ theorem inconclusive_iff (mode : Mode) (s r c i : Bool) :
     decideGates mode s r c i = .inconclusive ↔ s = false := by
   cases mode <;> cases s <;> cases r <;> cases c <;> cases i <;> decide
 
-/-- Accept is monotone in the gate flags: failing a gate can never manufacture
-an accept. -/
 theorem accept_monotone (mode : Mode) (s r c i s' r' c' i' : Bool)
     (hs : s' = true → s = true) (hr : r' = true → r = true)
     (hc : c' = true → c = true) (hi : i' = true → i = true)
@@ -223,7 +221,6 @@ theorem accept_monotone (mode : Mode) (s r c i s' r' c' i' : Bool)
   cases mode <;> cases s <;> cases r <;> cases c <;> cases i <;>
     cases s' <;> cases r' <;> cases c' <;> cases i' <;> simp_all [decideGates]
 
-/-- Too few cases can never be accepted, whatever the scores. -/
 theorem too_few_cases_never_accepts (mode : Mode) (p : Params) (e : Evidence) (r c i : Bool)
     (h : alphaEffectivePpm p * 2 ^ e.cases.length < 1000000) :
     decideGates mode (sufficient p e) r c i ≠ .accept := by

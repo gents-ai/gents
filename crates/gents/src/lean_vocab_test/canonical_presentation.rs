@@ -69,8 +69,7 @@ pub(crate) enum LeanTerminalDiagnosticPresentationExpected {
     },
 }
 
-/// Observe reconstructed payload fields at the native reconstruction boundary.
-/// This is deliberately not an adapter for provider_input::estimate_request.
+/// Deliberately not an adapter for provider_input::estimate_request.
 pub(crate) trait PayloadPresentationAdapter {
     type Error: std::fmt::Display;
 

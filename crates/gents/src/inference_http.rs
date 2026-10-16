@@ -2,9 +2,9 @@
 //! agent session id and trace context. `x-session-id` lets a load balancer in
 //! front of a multi-replica, prefix-caching inference backend pin every turn
 //! of a conversation to the same replica (sticky-session routing), keeping its
-//! prefix cache warm. The session id is resolved per request from the
-//! admission task-local context because the rig completion client is built
-//! once per agent while the session id varies per request.
+//! prefix cache warm; the session id is resolved per request from the
+//! admission task-local context because the completion client is built once
+//! per agent while the session id varies per request.
 
 use std::collections::HashMap;
 use std::future::Future;

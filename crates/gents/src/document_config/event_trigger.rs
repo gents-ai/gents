@@ -4,11 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::graphql::escape_graphql_string;
 
-/// Maximum cursors read ahead before ScheduleSource evaluates this tick's batch.
 pub(crate) const TRIGGER_CURSOR_BATCH_SIZE: usize = 64;
 
-/// Sparse runtime observations for the canonical Trigger. Setting a status
-/// clears a previous error unless a replacement error is supplied.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct TriggerRuntimeUpdate {
     pub(crate) next_run_at: Option<String>,
@@ -35,9 +32,6 @@ fn render_trigger_runtime_mutation(
     )
 }
 
-/// Load cursors for the exact owner/trigger scopes in bounded alias batches.
-/// Results stay aligned with `scopes`, so one malformed owner, ambiguous
-/// trigger, or aliased GraphQL error cannot hide another trigger's outcome.
 pub(crate) async fn load_trigger_next_run_at_batch(
     node: &EmbeddedNode,
     scopes: &[(String, String)],
@@ -176,9 +170,6 @@ pub(crate) async fn count_trigger_cursor_batch_queries<F: std::future::Future>(
     (output, queries.load(std::sync::atomic::Ordering::Relaxed))
 }
 
-/// Update only runtime observations on the exact owner-scoped trigger.
-/// Deleted triggers are harmless; fire-count changes commit atomically with
-/// their read so concurrent successful fires cannot overwrite one another.
 pub(crate) async fn update_trigger_runtime_fields(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
@@ -317,7 +308,6 @@ pub struct EventSource {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub correlation_field: Option<String>,
-    /// Requires a correlation_field when grouped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub group: Option<EventGroup>,
@@ -348,18 +338,20 @@ pub struct EventSource {
 /// latest_only concurrency on every graph edge (Lean
 /// `GraphPipeline.graphEdgeValid`); shared types do not widen graph semantics.
 
+
+
+
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EventGroup {
     /// Fixed count or count supplied by each source document, never both.
     /// Absence retains existing timeout-driven grouping, subject to validation.
-
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub expected_count: Option<EventGroupCount>,
     /// Time to wait for the group, not the task execution deadline.
-
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub timeout_secs: Option<i64>,

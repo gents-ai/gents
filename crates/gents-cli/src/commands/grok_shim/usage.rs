@@ -217,8 +217,3 @@ pub(super) async fn session_usage(
     }
     Ok(totals.wire(root.inference_turns))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-}

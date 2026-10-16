@@ -32,7 +32,6 @@ const INTRODUCED_MILESTONES = [
 ];
 const ROADMAP_ISSUE = 839;
 
-// Injectable so the restore guards are testable without a network.
 export const makeApi =
   (token) =>
   async (path, init = {}) => {
@@ -133,7 +132,6 @@ export const capture = async (api, file, REPO = DEFAULT_REPO) => {
 export const restore = async (api, file, REPO = DEFAULT_REPO) => {
   const snap = JSON.parse(readFileSync(file, "utf8"));
 
-  // Destructive tool: refuse a wrong target repository.
   if (snap.capturedFrom !== REPO) {
     throw new Error(
       `refusing to restore: snapshot was captured from ${snap.capturedFrom}, ` +
@@ -157,8 +155,6 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
     console.log(`recreated label: ${l.name}`);
   }
 
-  // 2. Remove labels this migration introduces that were not present at
-  // capture time, so a rollback leaves no orphaned definitions.
   const captured = new Set(snap.labels.map((l) => l.name));
   for (const name of INTRODUCED) {
     if (captured.has(name)) continue;
@@ -180,8 +176,6 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
   }
   console.log(`restored labels on ${snap.items.length} items`);
 
-  // Recreate captured milestones that no longer exist; deletion is
-  // allow-listed to INTRODUCED_MILESTONES only.
   const known = new Map(snap.milestones.map((m) => [m.title, m]));
   const liveMilestones = await paginate(
     api,
@@ -204,8 +198,6 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
     console.log(`recreated milestone: ${m.title}`);
   }
 
-  // Delete only milestones this migration introduces and that were absent at
-  // capture time; anything else is a maintainer's.
   const introduced = new Set(INTRODUCED_MILESTONES);
   for (const m of liveMilestones) {
     if (known.has(m.title)) continue;
@@ -220,8 +212,7 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
     console.log(`deleted introduced milestone: ${m.title}`);
   }
 
-  // Restore each item's milestone, clearing it when none was captured. Ordered
-  // after the deletion step so a captured title can never resolve to a
+  // Ordered after the deletion step so a captured title can never resolve to a
   // milestone that is about to be deleted.
   const byTitle = new Map(
     (await paginate(api, `/repos/${REPO}/milestones?state=all`)).map((m) => [
@@ -250,7 +241,6 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
   }
   console.log(`restored milestones on ${milestoned} items`);
 
-  // Restore the roadmap issue's title and body.
   await api(`/repos/${REPO}/issues/${snap.roadmapIssue.number}`, {
     method: "PATCH",
     body: JSON.stringify({

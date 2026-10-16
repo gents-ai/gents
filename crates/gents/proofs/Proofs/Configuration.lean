@@ -49,10 +49,6 @@ inductive ReasoningEffort where
   | none | minimal | low | medium | high | xhigh | max | ultra
   deriving DecidableEq, Repr
 
-/--
-Filling install scope: an omitted owner is filled from the install scope; an
-explicit owner must match or installation fails. No rewriting of foreign ids.
--/
 def fillOwner (scope : String) (declared : Option String) : Option String :=
   match declared with
   | none => some scope
@@ -146,8 +142,6 @@ deriving DecidableEq, Repr
 def defaultCompaction : CompactionConfig :=
   ⟨.stripThenSummarize, (3 / 4 : Rat)⟩
 
-/-- Omitted or null strategy inside an explicit document uses the same default
-as an absent compaction document. Threshold remains an optional authored field. -/
 def resolveCompaction (strategy : AuthoredField CompactionStrategy) (threshold : Option Rat) :
     CompactionConfig :=
   ⟨resolveDefault defaultCompaction.strategy strategy, threshold.getD defaultCompaction.threshold⟩
@@ -444,8 +438,6 @@ def oauthLookupOwner (scope : String) : BackendAuth → Option String
 theorem oauth_uses_execution_scope (scope : String) (account : Option String) :
     oauthLookupOwner scope (.nodeOAuth account) = some scope := rfl
 
-/-- A stored OAuth sign-in: owner DID, provider kind, account reference (`none`
-is the provider's original account) and enabled flag. -/
 structure OAuthAccountRow where
   owner : String
   kind : String

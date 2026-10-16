@@ -36,8 +36,8 @@ fn append_projection(
         };
         return (format!("{notice}{text}"), receipt);
     };
-    // An unchanged unknown-offset tail is not a new append. Do not infer
-    // overlap from repeated text when the source has no byte identity.
+    // Overlap cannot be inferred from repeated text when the source has no
+    // byte identity.
     if start == previous.start && end == previous.end && receipt.hash == previous.hash {
         return (String::new(), receipt);
     }

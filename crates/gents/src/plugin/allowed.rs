@@ -224,7 +224,6 @@ pub fn bind(
     }
 }
 
-// vertexia: a plain mutex over a handful of paths read once per file-tool call; a lock-free set if that ever shows in a profile
 static PROTECTED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
 
 pub fn protect(home: &Path) {

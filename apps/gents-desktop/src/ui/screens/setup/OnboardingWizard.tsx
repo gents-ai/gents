@@ -41,10 +41,8 @@ type Run = {
   error: string | null;
   phase: FailedPhase;
   details: Partial<Record<StartupDetail, string>>;
-  /** the node it started and the one it finished on, for the summary */
   startedDid: string | null;
   readyName: string | null;
-  /** when everything started; the provider step follows a moment later */
   provisionedAt: number | null;
 };
 
@@ -200,8 +198,6 @@ export function OnboardingWizard({
                 "The user home directory is unavailable."),
         );
     });
-  /* setup goes on by itself a while after the progress shows it ready,
-     not after it is ready: the steps' cards had their time first */
   const [readyShownAt, setReadyShownAt] = useState<number | null>(null);
   useEffect(() => {
     if (provisionedAt === null) setReadyShownAt(null);

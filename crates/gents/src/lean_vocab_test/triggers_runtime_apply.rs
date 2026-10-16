@@ -1,12 +1,3 @@
-//! Contract-section deserialization targets shared by the trigger, apply
-//! publication, runtime-reconcile, client-agent-readiness, and
-//! startup-readiness conformance consumers:
-//!
-//! - triggers: `Proofs/Conformance/Triggers/Contracts.lean`
-//! - apply publication: `Proofs/ApplyReconcile/Publication.lean` +
-//!   `Proofs/ApplyReconcile/ContractCases.lean`
-//! - runtime reconcile / readiness: `Proofs/RuntimeReconcile/*.lean`
-
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

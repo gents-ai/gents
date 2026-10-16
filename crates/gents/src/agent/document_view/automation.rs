@@ -179,8 +179,6 @@ fn resolve_schedule_trigger(
     unavailable_schedules: &mut HashSet<String>,
 ) {
     let Some(schedule_record) = view.schedules.get(schedule_id) else {
-        // Quarantined under its logical trigger_id, independently of other
-        // references to this cadence.
         tracing::warn!(
             trigger_id = %trigger_id,
             schedule_id = %schedule_id,
@@ -258,7 +256,6 @@ fn resolve_event_trigger(
         .filter(|value| !value.is_empty())
         .unwrap_or("created")
         .to_string();
-    // Replicated source documents must pass the same validation as authored ones.
     if let Err(error) = source.validate() {
         tracing::warn!(trigger_id = %trigger_id, %error,
             "event trigger quarantined: invalid event source configuration");

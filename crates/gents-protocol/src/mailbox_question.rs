@@ -112,7 +112,6 @@ impl MailboxQuestion {
         Ok(())
     }
 
-    /// Decode and validate a stored item payload.
     pub fn from_payload(payload: &str) -> Result<Self, MailboxQuestionError> {
         let question: Self = serde_json::from_str(payload)
             .map_err(|error| MailboxQuestionError::Decode(error.to_string()))?;
@@ -120,8 +119,6 @@ impl MailboxQuestion {
         Ok(question)
     }
 
-    /// The reply request's content: one line naming the item and each chosen
-    /// option by label and id, then any free-text note.
     pub fn reply_content(
         &self,
         title: &str,

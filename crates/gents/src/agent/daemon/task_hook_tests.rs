@@ -752,8 +752,6 @@ impl Harness {
         }
     }
 
-    /// Restarts against the same records through startup recovery, waiting
-    /// for request recovery and then the recovered cleanup it started.
     async fn restart(&self, records: &Path, doc_id: &str) {
         let registry =
             BackgroundExecutionRegistry::default().with_task_hook_records(records.to_path_buf());

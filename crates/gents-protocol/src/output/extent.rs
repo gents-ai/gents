@@ -1,7 +1,6 @@
-//! Exact open-source extent validation used before a recovery/producer close.
-//! This is deliberately not a live preview: gaps, twins and malformed runs
-//! fail rather than yielding a shorter prefix. Closure authority and uniqueness
-//! remain with the caller; this validator accounts for the complete data extent.
+//! Exact open-source extent validation used before a recovery/producer close:
+//! gaps, twins and malformed runs fail rather than yielding a shorter prefix.
+//! Closure authority and uniqueness remain with the caller.
 use super::reconstruction::{ObservedSegment, ReconstructedStream};
 use super::{OutputSource, OutputWriter, ReconstructionError, StreamPayload};
 use chrono::DateTime;

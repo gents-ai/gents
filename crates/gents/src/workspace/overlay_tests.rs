@@ -518,7 +518,6 @@ fn principal_and_placement_identity_mismatches_fail_closed() {
     .is_err());
 }
 
-/// Actual Git workspace, runtime schemas, signed request and held execution lease.
 /// Source files are authored before sealing; consumers must not mutate source.
 pub(crate) struct ArtifactTestFixture {
     pub grant: crate::workspace::ArtifactGrant,
@@ -798,8 +797,6 @@ async fn artifact_grant_rechecks_binding_generation_and_sealed_bytes() {
             assert_eq!(fx.grant.validate_for_launch().await.is_ok(), should_allow);
         }
     }
-    // Fixture-only lifecycle resets above isolate each launch guard; production
-    // terminal ownership is tested by the execution lease suite, not this seeder.
     let response = fx.node.execute(&format!(r#"mutation {{ update_WorkspaceBinding(filter: {{ request_doc_id: {{ _eq: "{doc}" }} }}, input: {{ lifecycle_state: "released" }}) {{ _docID }} }}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     assert!(fx
@@ -861,8 +858,6 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
         let mode = CommandExecutionMode::parse(case["mode"].as_str().unwrap()).unwrap();
         let fx = artifact_test_fixture(&[]).await;
         if name == "unsupported_platform" {
-            // Inject only the host observation into the actual admission path;
-            // do not substitute a launch-only selector for admission evidence.
             assert_eq!(case["expected_admitted"], false);
             assert!(case["expected_bound_mode"].is_null());
             let error = super::resolve_request_workspace_overlay_on_host(
@@ -900,8 +895,6 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
         let generation = if name == "stale_incarnation" {
             "stale-execution"
         } else {
-            // An intentionally rejected owner remains unclaimed; do not forge
-            // an execution tuple merely to reach the later launch guard.
             request_owner.execution_generation().unwrap_or("")
         };
         let resolved = super::resolve_request_workspace_overlay(
@@ -912,8 +905,6 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
             Some(fx._dir.path()),
         )
         .await;
-        // Resolver failure is evidence of invalid context, not by itself proof
-        // that execution fails: always drive actual command launch preparation.
         if matches!(
             name,
             "missing_binding"
@@ -1208,7 +1199,6 @@ async fn artifact_resolver_rejects_missing_or_ready_context_before_binding() {
             after.data, before.data,
             "{name}: rejected artifact request created a binding"
         );
-        // No artifact selection preserves the existing independent tool policy.
         let ordinary = super::resolve_request_workspace_overlay(
             &fx.node,
             owner.request(),

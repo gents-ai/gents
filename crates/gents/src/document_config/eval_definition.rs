@@ -3,7 +3,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 
-/// Untrusted-input judge check, development-tier in v1.
 pub const LLM_JUDGE_CHECK: &str = "llm_judge";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -129,7 +128,6 @@ fn default_weight() -> u32 {
 pub struct EvalCheckRef {
     /// Builtin check registry name.
     pub check: String,
-    /// Schema belongs to the named check.
     #[serde(default)]
     #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
     pub params: serde_json::Value,
@@ -138,7 +136,6 @@ pub struct EvalCheckRef {
     pub weight: u32,
 }
 
-/// Stage-collected evidence keyed by `name`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -151,7 +148,6 @@ pub enum EvalCapture {
     Documents {
         name: String,
         collection: String,
-        /// DefraDB filter for `collection`.
         #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
         filter: serde_json::Value,
         /// Empty reads every field.
@@ -191,7 +187,6 @@ pub struct EvalStage {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub settle: bool,
-    /// Continuation prods for a settling stage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub continuation: Option<EvalContinuation>,
@@ -444,8 +439,6 @@ impl EvalDefinition {
     }
 }
 
-/// Fixture paths must be relative ordinary components, so they cannot leave
-/// the trial workspace.
 fn validate_fixture_files(fixtures: Option<&EvalFixtures>, owner: &str) -> Result<()> {
     for file in fixtures.map_or(&[][..], |fixtures| &fixtures.files) {
         let path = &file.path;

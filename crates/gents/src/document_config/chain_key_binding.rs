@@ -1,4 +1,4 @@
-//! Apply-owned `ChainKeyBinding` documents. Key material is not stored here.
+// Key material is not stored here.
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;

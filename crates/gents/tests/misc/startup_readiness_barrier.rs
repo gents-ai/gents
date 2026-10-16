@@ -19,7 +19,6 @@ use crate::support::fixtures::test_identity;
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::waits::RecordingProcessObserver;
 
-// Guards against a wedged startup on shared CI runners, not latency.
 const STARTUP_DEADLOCK_GUARD: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Clone, Debug)]

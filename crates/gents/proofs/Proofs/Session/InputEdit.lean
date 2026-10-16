@@ -189,7 +189,6 @@ theorem unauthorized_preserves_queue (target : AgentSession.Scope) (now : Nat)
     · simp [h] at ha
     · rw [hd]
 
-/-- At most one receipt per command ID is ever recorded. -/
 def ReceiptsUnique (s : State) : Prop := (s.receipts.map (·.commandId)).Nodup
 
 theorem apply_receipts (target : AgentSession.Scope) (now : Nat) (a : Authority)

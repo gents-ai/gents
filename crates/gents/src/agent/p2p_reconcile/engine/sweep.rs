@@ -35,8 +35,6 @@ pub async fn run_pairing_reconciler(
     let store =
         GraphqlPairingStateStore::with_enrollment_authority(node.clone(), identity, enrollment);
     // Subscribe before resolving IDs so startup-racing commits stay pending.
-    // Enrollment authority changes materialize or remove PeerPairingDesired;
-    // transcript/config writes must not trigger a global topology scan.
     let subscription = node.subscribe_document_changes();
     let watched_collection_ids = pairing_state_collection_ids(&node)?;
 
