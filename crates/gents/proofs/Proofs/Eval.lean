@@ -43,7 +43,7 @@ def executionLeaseFailure (reason : String) : Bool :=
   reason == "request execution lease: execution lease expired or ownership was revoked"
 
 structure RequestEvidence where
-  state : RequestState
+  state : Option RequestState
   interruptedOnDeadline : Bool
   toolBudgetExhausted : Bool
   executionLeaseLost : Bool
@@ -51,33 +51,67 @@ structure RequestEvidence where
   toolFailed : Bool
   deriving DecidableEq, Repr
 
+/-- An interrupt records intent; only an observed durable terminal state is
+terminal evidence. A deadline or expired grace cannot supply that state. -/
+def observedTerminalState (state : Option RequestState) : Option RequestState :=
+  state.filter fun state => decide (HasTerminal.isTerminal state)
+
+theorem observed_terminal_is_durable (state : Option RequestState) (terminal : RequestState)
+    (observed : observedTerminalState state = some terminal) : state = some terminal := by
+  cases state with
+  | none => simp [observedTerminalState] at observed
+  | some state =>
+    simp only [observedTerminalState, Option.filter] at observed
+    split at observed <;> simp_all
+
+theorem nonterminal_is_not_terminal_evidence (state : RequestState)
+    (nonterminal : ¬ HasTerminal.isTerminal state) :
+    observedTerminalState (some state) = none := by
+  simp [observedTerminalState, Option.filter, nonterminal]
+
+theorem observed_terminal_is_terminal (state : Option RequestState) (terminal : RequestState)
+    (observed : observedTerminalState state = some terminal) :
+    HasTerminal.isTerminal terminal := by
+  have durable := observed_terminal_is_durable state terminal observed
+  subst state
+  by_contra nonterminal
+  rw [nonterminal_is_not_terminal_evidence terminal nonterminal] at observed
+  contradiction
+
 /-- Native execution leases belong to runtime infrastructure. Their loss alone
 does not establish a subject failure. A completed request, an observed stage
 deadline, or an explicit tool budget result retains its existing attribution. -/
 def classifyRequestOutcome (e : RequestEvidence) : Option OutcomeKind :=
   if e.interruptedOnDeadline then some .deadline
-  else if e.state == .completed then none
+  else if e.state == none then some .infrastructure
+  else if e.state == some .completed then none
   else if e.toolBudgetExhausted then some .tool
   else if e.executionLeaseLost then some .infrastructure
   else if e.inferenceFailed && e.toolFailed then some .unknown
   else if e.inferenceFailed then some .provider
   else if e.toolFailed then some .tool
   else match e.state with
-    | .failed | .interrupted | .dead | .superseded => some .runtime
+    | some .failed | some .interrupted | some .dead | some .superseded => some .runtime
     | _ => some .unknown
 
 theorem lease_loss_is_infrastructure (e : RequestEvidence)
     (deadline : e.interruptedOnDeadline = false)
-    (unfinished : e.state ≠ .completed)
+    (observed : e.state ≠ none)
+    (unfinished : e.state ≠ some .completed)
     (budget : e.toolBudgetExhausted = false)
     (lost : e.executionLeaseLost = true) :
     classifyRequestOutcome e = some .infrastructure := by
-  simp [classifyRequestOutcome, deadline, unfinished, budget, lost]
+  simp [classifyRequestOutcome, deadline, observed, unfinished, budget, lost]
 
 theorem completed_request_is_accepted (e : RequestEvidence)
     (deadline : e.interruptedOnDeadline = false)
-    (completed : e.state = .completed) : classifyRequestOutcome e = none := by
+    (completed : e.state = some .completed) : classifyRequestOutcome e = none := by
   simp [classifyRequestOutcome, deadline, completed]
+
+theorem missing_terminal_evidence_is_infrastructure (e : RequestEvidence)
+    (deadline : e.interruptedOnDeadline = false)
+    (unobserved : e.state = none) : classifyRequestOutcome e = some .infrastructure := by
+  simp [classifyRequestOutcome, deadline, unobserved]
 
 theorem observed_deadline_is_a_deadline (e : RequestEvidence)
     (deadline : e.interruptedOnDeadline = true) :
@@ -86,10 +120,11 @@ theorem observed_deadline_is_a_deadline (e : RequestEvidence)
 
 theorem exhausted_tool_budget_is_a_tool_failure (e : RequestEvidence)
     (deadline : e.interruptedOnDeadline = false)
-    (unfinished : e.state ≠ .completed)
+    (observed : e.state ≠ none)
+    (unfinished : e.state ≠ some .completed)
     (budget : e.toolBudgetExhausted = true) :
     classifyRequestOutcome e = some .tool := by
-  simp [classifyRequestOutcome, deadline, unfinished, budget]
+  simp [classifyRequestOutcome, deadline, observed, unfinished, budget]
 
 def allKinds : List OutcomeKind :=
   [.passed, .modelAcceptance, .deadline, .tool, .runtime, .skippedPrerequisite,
