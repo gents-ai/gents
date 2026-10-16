@@ -12,6 +12,45 @@ use crate::host::{local, protocol};
 use crate::state::resolve_policy;
 
 #[tokio::test]
+async fn an_existing_listener_reservation_prevents_desktop_from_opening_the_store() {
+    let temp = tempfile::tempdir().unwrap();
+    let policy = resolve_policy(
+        &BridgeConfig {
+            home: HomePolicy::FixedRoot(temp.path().join("client")),
+            bootstrap: BootstrapPolicy::PairedRemoteOnly,
+            client_host: true,
+            store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    let paths = policy.desktop_paths.clone();
+    let listener = local::LocalListener::bind(&paths).await.unwrap();
+    let app = tauri::test::mock_builder()
+        .manage(DesktopAppState::new(policy))
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let (progress, receiver) = watch::channel(ClientStartProgress::Pending);
+    run_detached_client_start(app.handle().clone(), paths.clone(), progress).await;
+    let error = wait_for_client_start_progress(receiver).await.unwrap_err();
+    assert_eq!(error.code, BridgeErrorCode::ClientStartFailed);
+    assert!(current_core(&app.state::<DesktopAppState>()).is_none());
+    assert!(!paths.principal_metadata_path().exists());
+    let claim = gents::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
+    drop(claim);
+    drop(listener);
+    let (progress, receiver) = watch::channel(ClientStartProgress::Pending);
+    run_detached_client_start(app.handle().clone(), paths, progress).await;
+    wait_for_client_start_progress(receiver).await.unwrap();
+    drop(
+        exclude_client(&app.state::<DesktopAppState>())
+            .await
+            .unwrap(),
+    );
+}
+
+#[tokio::test]
 async fn desktop_start_publishes_its_client_and_exclusion_closes_attachments_before_the_store() {
     let temp = tempfile::tempdir().unwrap();
     let policy = resolve_policy(

@@ -1,3 +1,4 @@
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,31 +21,82 @@ pub struct LocalListener {
 }
 
 pub async fn connect(paths: &DesktopPaths) -> Result<UnixStream> {
-    UnixStream::connect(endpoint(paths)?)
+    let metadata = owned_home(paths)?;
+    anyhow::ensure!(
+        metadata.mode() & 0o077 == 0,
+        "client home permissions must exclude other users"
+    );
+    let path = endpoint(paths)?;
+    let metadata = std::fs::symlink_metadata(&path)?;
+    anyhow::ensure!(
+        metadata.file_type().is_socket() && metadata.uid() == current_user(),
+        "client endpoint must be a socket owned by the current user"
+    );
+    let stream = UnixStream::connect(path)
         .await
-        .context("connecting to the client installation")
+        .context("connecting to the client installation")?;
+    anyhow::ensure!(
+        stream.peer_cred()?.uid() == current_user(),
+        "client installation belongs to another user"
+    );
+    Ok(stream)
+}
+
+async fn prepare_home(paths: &DesktopPaths) -> Result<()> {
+    paths.ensure_root_dirs().await?;
+    owned_home(paths)?;
+    std::fs::set_permissions(paths.root(), std::fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+fn current_user() -> libc::uid_t {
+    // SAFETY: geteuid has no preconditions and reads only the process effective UID.
+    unsafe { libc::geteuid() }
+}
+
+fn owned_home(paths: &DesktopPaths) -> Result<std::fs::Metadata> {
+    let metadata = std::fs::symlink_metadata(paths.root())?;
+    if !metadata.is_dir() || metadata.uid() != current_user() {
+        bail!("client home must be a directory owned by the current user");
+    }
+    Ok(metadata)
+}
+
+fn lock_file(paths: &DesktopPaths, name: &str) -> Result<std::fs::File> {
+    Ok(std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(paths.root().join(name))?)
+}
+
+/// Serializes service discovery and process creation. The service holds its
+/// separate listener lock after the attaching process releases this guard.
+pub async fn startup_lock(paths: &DesktopPaths) -> Result<FileLock> {
+    prepare_home(paths).await?;
+    let file = lock_file(paths, "client-start.lock")?;
+    acquire_startup_lock(file).await
+}
+
+async fn acquire_startup_lock(file: std::fs::File) -> Result<FileLock> {
+    loop {
+        match FileLock::try_exclusive(file.try_clone()?) {
+            Ok(lock) => return Ok(lock),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(error) => return Err(error).context("reserving client installation startup"),
+        }
+    }
 }
 
 impl LocalListener {
     pub async fn bind(paths: &DesktopPaths) -> Result<Self> {
-        use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
-
-        paths.ensure_root_dirs().await?;
-        let metadata = std::fs::symlink_metadata(paths.root())?;
-        // SAFETY: geteuid has no preconditions and reads only the process effective UID.
-        let uid = unsafe { libc::geteuid() };
-        if !metadata.is_dir() || metadata.uid() != uid {
-            bail!("client home must be a directory owned by the current user");
-        }
-        std::fs::set_permissions(paths.root(), std::fs::Permissions::from_mode(0o700))?;
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(paths.root().join("client-host.lock"))?;
+        prepare_home(paths).await?;
+        let file = lock_file(paths, "client-host.lock")?;
         let lock = FileLock::try_exclusive(file)
             .context("another process owns the client installation listener")?;
         let path = endpoint(paths)?;
@@ -147,6 +199,27 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn concurrent_startup_waits_for_the_previous_discovery_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(dir.path());
+        let first = startup_lock(&paths).await.unwrap();
+        let waiting = acquire_startup_lock(lock_file(&paths, "client-start.lock").unwrap());
+        tokio::pin!(waiting);
+        assert!(futures::poll!(waiting.as_mut()).is_pending());
+        drop(first);
+        let second = tokio::time::timeout(Duration::from_secs(30), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            FileLock::try_exclusive(lock_file(&paths, "client-start.lock").unwrap()),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        drop(second);
+        assert!(FileLock::try_exclusive(lock_file(&paths, "client-start.lock").unwrap()).is_ok());
+    }
+
+    #[tokio::test]
     async fn an_existing_listener_is_not_replaced_and_stale_endpoints_are_recovered() {
         let dir = tempfile::tempdir().unwrap();
         let paths = DesktopPaths::from_root(dir.path());
@@ -176,5 +249,26 @@ mod tests {
         std::os::unix::fs::symlink(&target, &endpoint).unwrap();
         assert!(LocalListener::bind(&paths).await.is_err());
         assert_eq!(std::fs::read(&target).unwrap(), b"keep");
+    }
+
+    #[tokio::test]
+    async fn attaching_requires_a_private_home_and_rejects_endpoint_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(dir.path());
+        let listener = LocalListener::bind(&paths).await.unwrap();
+        let _connection = connect(&paths).await.unwrap();
+        std::fs::set_permissions(paths.root(), std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(connect(&paths).await.is_err());
+        assert_eq!(
+            std::fs::metadata(paths.root()).unwrap().mode() & 0o777,
+            0o777
+        );
+        std::fs::set_permissions(paths.root(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = listener.path.clone();
+        let target = dir.path().join("other.sock");
+        let _other = UnixListener::bind(&target).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(connect(&paths).await.is_err());
     }
 }

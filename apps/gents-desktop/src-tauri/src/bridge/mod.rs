@@ -195,7 +195,7 @@ fn platform_bridge_config() -> BridgeConfig {
         },
         snapshot_grants: SnapshotGrants::all(),
         managed_server: platform_managed_server_policy(),
-        client_host: cfg!(unix),
+        client_host: cfg!(all(desktop, unix)),
         store_key_custody: gents::store_key::StoreKeyCustodyChoice::default(),
     };
     #[cfg(all(feature = "native-e2e", debug_assertions, desktop))]

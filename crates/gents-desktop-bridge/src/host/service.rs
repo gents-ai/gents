@@ -15,14 +15,13 @@ pub struct ClientHostService {
 }
 
 impl ClientHostService {
-    pub async fn start(core: Arc<ClientCore>) -> Result<Self> {
-        let listener = LocalListener::bind(core.paths()).await?;
+    pub fn start(core: Arc<ClientCore>, listener: LocalListener) -> Self {
         let stop = CancellationToken::new();
         let task = tokio::spawn(listener.serve(Arc::new(ClientHost::new(core)), stop.clone()));
-        Ok(Self {
+        Self {
             stop,
             task: Some(task),
-        })
+        }
     }
 
     pub async fn shutdown(mut self) -> Result<()> {

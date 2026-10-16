@@ -225,6 +225,8 @@ async fn run_detached_client_start<R: Runtime>(
     progress_tx: watch::Sender<ClientStartProgress>,
 ) {
     let state = app.state::<DesktopAppState>();
+    #[cfg(unix)]
+    let mut client_listener = None;
     // Own the lifecycle before opening the peer directory and embedded node,
     // not only while installing the result. Managed-runtime restart refreshes
     // its ephemeral P2P endpoint under this same lock. Without covering the
@@ -236,6 +238,24 @@ async fn run_detached_client_start<R: Runtime>(
             .await
         {
             Ok(lifecycle) => {
+                #[cfg(unix)]
+                {
+                    match reserve_client_listener(&state.policy).await {
+                        Ok((startup, listener)) => {
+                            client_listener = listener;
+                            let result = start_client_core_async(
+                                paths,
+                                state.policy.store_key_custody,
+                                lifecycle,
+                            )
+                            .await;
+                            drop(startup);
+                            result
+                        }
+                        Err(error) => Err((error, None)),
+                    }
+                }
+                #[cfg(not(unix))]
                 start_client_core_async(paths, state.policy.store_key_custody, lifecycle).await
             }
             Err(error) => Err((error, None)),
@@ -253,17 +273,8 @@ async fn run_detached_client_start<R: Runtime>(
         Ok((core, _lifecycle_guard)) => {
             let core = Arc::new(core);
             #[cfg(unix)]
-            let mut client_host = if state.policy.client_host {
-                match crate::host::ClientHostService::start(core.clone()).await {
-                    Ok(host) => Some(host),
-                    Err(error) => {
-                        tracing::warn!(%error, "local client attachments are unavailable");
-                        None
-                    }
-                }
-            } else {
-                None
-            };
+            let mut client_host = client_listener
+                .map(|listener| crate::host::ClientHostService::start(core.clone(), listener));
             let orphan = {
                 let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
                 let orphan = if bridge.core.is_none() {
@@ -323,6 +334,58 @@ async fn run_detached_client_start<R: Runtime>(
             let _ = progress_tx.send(ClientStartProgress::Failed(error));
         }
     }
+}
+
+#[cfg(unix)]
+async fn reserve_client_listener(
+    policy: &crate::config::ResolvedBridgePolicy,
+) -> Result<
+    (
+        Option<gents::file_lock::FileLock>,
+        Option<crate::host::local::LocalListener>,
+    ),
+    BridgeError,
+> {
+    use crate::host::local::{startup_lock, LocalListener};
+
+    if !policy.client_host {
+        return Ok((None, None));
+    }
+    let startup = match tokio::time::timeout(
+        CLIENT_LIFECYCLE_WAIT,
+        startup_lock(&policy.desktop_paths),
+    )
+    .await
+    {
+        Ok(Ok(startup)) => startup,
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "local client attachments are unavailable");
+            return Ok((None, None));
+        }
+        Err(_) => {
+            return Err(BridgeError::new(
+                BridgeErrorCode::ClientStartFailed,
+                "another frontend is starting the client installation; try again shortly",
+            ))
+        }
+    };
+    let listener = match LocalListener::bind(&policy.desktop_paths).await {
+        Ok(listener) => Some(listener),
+        Err(error)
+            if matches!(
+                error.downcast_ref::<std::fs::TryLockError>(),
+                Some(std::fs::TryLockError::WouldBlock)
+            ) =>
+        {
+            return Err(BridgeError::new(BridgeErrorCode::ClientStartFailed,
+                "the client installation is already in use; close its editor attachments before starting the desktop"));
+        }
+        Err(error) => {
+            tracing::warn!(%error, "local client attachments are unavailable");
+            None
+        }
+    };
+    Ok((Some(startup), listener))
 }
 
 async fn wait_for_client_start_progress(
