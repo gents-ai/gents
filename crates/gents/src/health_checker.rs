@@ -730,9 +730,12 @@ async fn persist_health_snapshot(
             continue;
         }
         let previous = persisted.remove(&key);
-        if let Err(error) =
-            upsert_persisted_health_state(persistence, previous.as_ref(), entry, now).await
-        {
+        let mut result =
+            upsert_persisted_health_state(persistence, previous.as_ref(), entry, now).await;
+        if result.is_err() && collapse_health_state_twins(persistence, &entry.service_id).await {
+            result = upsert_persisted_health_state(persistence, None, entry, now).await;
+        }
+        if let Err(error) = result {
             tracing::warn!(
                 service_id = %entry.service_id,
                 error = %error,
@@ -800,6 +803,67 @@ async fn upsert_persisted_health_state(
     )
     .await?;
     Ok(())
+}
+
+/// The schema cannot make (service_id, node_did) unique, and an upsert fails
+/// on every later cycle once twins exist. Keep the row readers select (newest
+/// `updated_at`, then lowest `_docID`) and delete this node's other rows.
+/// Returns whether any twin was deleted.
+async fn collapse_health_state_twins(
+    persistence: &HealthPersistenceContext<'_>,
+    service_id: &str,
+) -> bool {
+    let service = escape_graphql_string(service_id);
+    let node_did = escape_graphql_string(persistence.node_did);
+    let query = format!(
+        r#"{{ ToolServiceHealthState(
+            filter: {{ service_id: {{ _eq: "{service}" }}, node_did: {{ _eq: "{node_did}" }} }},
+            order: [{{ updated_at: DESC }}, {{ _docID: ASC }}]
+        ) {{ _docID }} }}"#
+    );
+    let twins = match crate::graphql::graphql_with_transaction_retry(
+        persistence.node,
+        &query,
+        "load_service_health_twins",
+    )
+    .await
+    {
+        Ok(response) => response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("ToolServiceHealthState"))
+            .and_then(|rows| rows.as_array())
+            .into_iter()
+            .flatten()
+            .skip(1)
+            .filter_map(|row| row.get("_docID").and_then(|id| id.as_str()))
+            .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
+            .collect::<Vec<_>>(),
+        Err(error) => {
+            tracing::warn!(service_id, error = %error, "failed to load ToolServiceHealthState twins");
+            return false;
+        }
+    };
+    if twins.is_empty() {
+        return false;
+    }
+    let mutation = format!(
+        r#"mutation {{ delete_ToolServiceHealthState(filter: {{ _docID: {{ _in: [{}] }} }}) {{ _docID }} }}"#,
+        twins.join(", ")
+    );
+    match crate::config_client::ConfigAccess::write_local_response(
+        persistence.node,
+        "health_checker.collapse_service_state_twins",
+        &mutation,
+    )
+    .await
+    {
+        Ok(_) => true,
+        Err(error) => {
+            tracing::warn!(service_id, error = %error, "failed to delete ToolServiceHealthState twins");
+            false
+        }
+    }
 }
 
 async fn delete_persisted_health_state(
@@ -1452,5 +1516,78 @@ mod tests {
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0]["node_did"], did_b);
         assert_eq!(remaining[0]["service_id"], "observability-mcp");
+    }
+
+    #[tokio::test]
+    async fn persistence_collapses_twins_to_the_row_readers_select() {
+        let node = crate::oauth_credential::test_support::test_node().await;
+        let node_did = "did:key:health-owner";
+        let mut created = std::collections::BTreeMap::<&str, Vec<String>>::new();
+        for (service, updated_at, endpoint) in [
+            ("newest", "2026-01-01T00:00:00Z", "a"),
+            ("newest", "2026-01-02T00:00:00Z", "b"),
+            ("tied", "2026-01-01T00:00:00Z", "a"),
+            ("tied", "2026-01-01T00:00:00Z", "b"),
+        ] {
+            let response = crate::config_client::ConfigAccess::write_local_response(
+                &node,
+                "test.health_twin",
+                &format!(
+                    r#"mutation {{ add_ToolServiceHealthState(input: {{service_id: "{service}", node_did: "{node_did}", status: "healthy", endpoint: "{endpoint}", updated_at: "{updated_at}"}}) {{ _docID }} }}"#
+                ),
+            )
+            .await
+            .unwrap();
+            let data = response.data.unwrap();
+            let doc_id = data["add_ToolServiceHealthState"][0]["_docID"]
+                .as_str()
+                .unwrap_or_else(|| panic!("add returned no _docID: {data}"));
+            created.entry(service).or_default().push(doc_id.to_owned());
+        }
+        let reader_order = |node: Arc<EmbeddedNode>| async move {
+            let response = node
+                .execute(
+                    r#"{ ToolServiceHealthState(order: [{ service_id: ASC }, { updated_at: DESC }, { _docID: ASC }]) { _docID service_id status } }"#,
+                )
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+            response.data.unwrap()["ToolServiceHealthState"]
+                .as_array()
+                .unwrap()
+                .clone()
+        };
+        let expected_newest = created["newest"][1].clone();
+        let expected_tied = created["tied"].iter().min().unwrap().clone();
+        let before = reader_order(node.clone()).await;
+        assert_eq!(before[0]["_docID"], expected_newest.as_str());
+        assert_eq!(before[2]["_docID"], expected_tied.as_str());
+
+        let now = chrono::Utc::now();
+        let snapshot = ["newest", "tied"].map(|service| super::MCPServiceHealthSnapshot {
+            service_id: service.into(),
+            endpoint: Some("http://localhost/mcp".into()),
+            status: "stale".into(),
+            tool_count: Some(1),
+            failure_count: 1,
+            k_max: 3,
+            backoff_until: None,
+            last_probe_at: now,
+            last_seen: now,
+            last_error: Some("connection refused".into()),
+        });
+        let map = ServiceHealthMap::new();
+        let context = HealthPersistenceContext {
+            node: &node,
+            node_did,
+        };
+        super::persist_health_snapshot(&context, &map, &snapshot, now).await;
+
+        let after = reader_order(node.clone()).await;
+        assert_eq!(after.len(), 2, "{after:?}");
+        assert_eq!(after[0]["_docID"], expected_newest.as_str());
+        assert_eq!(after[1]["_docID"], expected_tied.as_str());
+        assert!(after.iter().all(|row| row["status"] == "stale"));
+        assert_eq!(map.persisted.lock().await.len(), 2);
+        node.shutdown().await;
     }
 }
