@@ -1,5 +1,5 @@
-//! Wasmtime's process-wide trap handler thread must survive the signals the
-//! runtime installs handlers for, and still turn a guest fault into an error.
+//! Lens and plugin engines must share trap handling, survive host signals,
+//! and return guest faults as errors.
 
 use super::{build_plugin_pack, ECHO_WAT};
 use crate::plugin::{PluginBudget, PluginRunner, PluginVerdict};
@@ -9,8 +9,7 @@ const TEST_NAME: &str =
     "plugin::tests::trap_handler::a_signal_on_every_thread_after_a_plugin_call_does_not_abort";
 
 /// Loads past the end of its one-page memory. Wasmtime elides the bounds
-/// check and lets the guard page fault, so the trap reaches the Mach
-/// exception handler thread rather than an inline check.
+/// check and lets the guard page fault, exercising native trap handling.
 const OUT_OF_BOUNDS_WAT: &str = r#"
       (module
         (memory (export "memory") 1)
@@ -77,10 +76,17 @@ fn echo_once(runner: &PluginRunner, n: u64) {
 }
 
 /// Runs in a child process so the signals never reach this binary's other
-/// tests: the first plugin call there is what starts Wasmtime's handler thread.
+/// tests; Lens initializes the shared trap mode before the plugin engine.
 #[test]
 fn a_signal_on_every_thread_after_a_plugin_call_does_not_abort() {
     if std::env::var_os(CHILD_ENV).is_some() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("host runtime");
+        let node = runtime
+            .block_on(defra_node::EmbeddedNode::builder().build())
+            .expect("Lens engine starts before the plugin engine");
         let (plugin, afb) = build_plugin_pack("signal_pack", ECHO_WAT, None);
         let echo = PluginRunner::compile(&afb, &plugin).expect("compiles");
         echo_once(&echo, 1);
@@ -98,6 +104,7 @@ fn a_signal_on_every_thread_after_a_plugin_call_does_not_abort() {
         );
 
         echo_once(&echo, 2);
+        runtime.block_on(node.shutdown());
         return;
     }
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())

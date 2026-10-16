@@ -1065,16 +1065,28 @@ mod tests {
         super::persist_health_snapshot(&failed_context, &map, &[entry.clone()], later).await;
         assert!(map.persisted.lock().await.is_empty());
         unavailable.shutdown().await;
+        crate::config_client::ConfigAccess::write_local(
+            &node,
+            "test.health_repair",
+            r#"mutation { update_ToolServiceHealthState(input: {endpoint: "http://stale.invalid/mcp"}) { _docID } }"#,
+        )
+        .await
+        .unwrap();
+        let unconfirmed = field_commits(&node).await;
         super::persist_health_snapshot(&context, &map, &[entry.clone()], later).await;
         let repaired = field_commits(&node).await;
         assert_eq!(
             repaired["endpoint"],
-            probed["endpoint"] + 1,
+            unconfirmed["endpoint"] + 1,
             "unconfirmed publish must repair every field"
         );
         let row = node
-            .execute("{ ToolServiceHealthState { status last_error_class } }")
+            .execute("{ ToolServiceHealthState { endpoint status last_error_class } }")
             .await;
+        assert_eq!(
+            row.data.as_ref().unwrap()["ToolServiceHealthState"][0]["endpoint"],
+            "http://localhost/mcp"
+        );
         assert_eq!(
             row.data.as_ref().unwrap()["ToolServiceHealthState"][0]["status"],
             "stale"

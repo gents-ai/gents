@@ -1019,17 +1019,6 @@ fn plugin_requests_select_native_nan_arithmetic() {
     assert_eq!(request.nan_mode, NanMode::Native);
 }
 
-#[cfg(target_os = "macos")]
-#[test]
-fn masked_trap_startup_uses_the_plugin_request_engine() {
-    let startup = start_wasm_trap_handler_with_signals_blocked()
-        .unwrap()
-        .unwrap();
-    let request = plugin_run_request(Vec::new(), Manifold::sealed(), &PluginBudget::default());
-    let selected = afterburner::wasi::embedder_vm::shared_epoch_vm_with(request.nan_mode).unwrap();
-    assert!(std::ptr::eq(startup, selected));
-}
-
 #[test]
 fn generated_plugin_resource_cases_bind_budget_and_consent() {
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases;
