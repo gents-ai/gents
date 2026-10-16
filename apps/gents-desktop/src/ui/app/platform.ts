@@ -4,14 +4,26 @@
 import { useEffect } from "react";
 
 import { installExternalLinkGuard } from "../../lib/externalLinks";
-import { setWindowTitle } from "../../lib/nativeShell";
+import {
+  inNativeShell,
+  onZoomMenu,
+  setWebviewZoom,
+  setWindowTitle,
+} from "../../lib/nativeShell";
 import { startNativeSimulatorE2e } from "../../lib/nativeSimulatorE2e";
 import { applyShellPlatform, isMacTauriShell } from "../../lib/shellPlatform";
 import { useSelectedSessionValue } from "../hooks/useSelectedSession";
 import { useSelectedNode } from "../hooks/useClient";
 import type { Route } from "../lib/router";
 import { useApp } from "./AppContext";
-import { applyChosenTheme } from "../preferences";
+import {
+  applyChosenTheme,
+  followOtherWindows,
+  followZoom,
+  preferences,
+  zoomLevel,
+} from "../preferences";
+import { stepZoom } from "../lib/zoom";
 
 /** The window's theme, platform styling, link guard and simulator boot, once. */
 export function usePlatformSetup() {
@@ -26,6 +38,18 @@ export function usePlatformSetup() {
   );
   useEffect(() => {
     void startNativeSimulatorE2e();
+  }, []);
+  useEffect(() => followOtherWindows(), []);
+  useEffect(() => {
+    if (!inNativeShell()) return;
+    const stopFollowing = followZoom(setWebviewZoom);
+    const stopListening = onZoomMenu((action) =>
+      preferences.setZoom(stepZoom(zoomLevel(), action)),
+    );
+    return () => {
+      stopFollowing();
+      stopListening();
+    };
   }, []);
 }
 

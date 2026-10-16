@@ -151,6 +151,9 @@ export function OpenSessionComposer({
         >
           {/* one composer either way, so the caret stays where it is */}
           <Composer
+            /* the text wraps; at page zoom WebKit sizes a self-sizing textarea's
+               content wider than its box, and would draw a horizontal bar */
+            className="[&_textarea]:overflow-x-hidden"
             value={editing ? editing.text : draft}
             onChange={editing ? edit.setText : setDraft}
             onSend={

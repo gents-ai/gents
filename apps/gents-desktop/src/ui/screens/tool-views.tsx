@@ -94,7 +94,10 @@ function Payload({
         </span>
         <CopyButton getText={() => text} />
       </div>
-      <ScrollArea className="max-h-72 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
+      <ScrollArea
+        data-scroll-x
+        className="max-h-72 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]"
+      >
         <pre className="w-max min-w-full px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground">
           {text}
         </pre>
@@ -138,7 +141,10 @@ function DiffLines({
   tone?: keyof typeof TONE;
 }) {
   return (
-    <ScrollArea className="max-h-72 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
+    <ScrollArea
+      data-scroll-x
+      className="max-h-72 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]"
+    >
       <pre
         className={cn(
           "w-max min-w-full py-2 font-mono text-[11px] leading-relaxed",
@@ -352,6 +358,7 @@ function LiveOutput({ subject, tail }: { subject: string; tail: string }) {
         live output
       </span>
       <ScrollArea
+        data-scroll-x
         data-testid={`tool-live-output-${subject}`}
         className="max-h-40 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]"
       >
