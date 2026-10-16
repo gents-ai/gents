@@ -14,19 +14,19 @@ open Goals
 
 
 inductive Observation where
-  
+
 
 
   | ready (newerThanTerminal : Bool)
-  
+
 
   | backendRecovering
-  
+
 
   | unavailable
-  
+
   | unassigned
-  
+
 
   | unknown
   deriving DecidableEq, Repr
@@ -95,9 +95,9 @@ def publishes : Decision → Bool
 
 inductive Gated where
   | decided (decision : Decision)
-  
+
   | awaitReadiness
-  
+
   | agentUnavailable
   deriving DecidableEq, Repr
 
@@ -461,9 +461,9 @@ theorem trace_retry_budget_is_bounded (retries : Nat) (scans : List Scan)
 structure RaceState where
   readinessWrites : Nat
   reissues : Nat
-  
+
   fresh : Bool
-  
+
   rejected : Bool
   deriving DecidableEq, Repr
 

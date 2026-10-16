@@ -101,8 +101,8 @@ def transitionCases : List TransitionCase :=
     , post   := mkWorld [doc "a"] [doc "a", doc "z"] [] []
     }
   ,
-    
-    
+
+
     { name   := "handle_ready_trigger_preserves_pending_sibling"
     , pre    :=
         mkWorld
@@ -119,8 +119,8 @@ def transitionCases : List TransitionCase :=
           [doc "trigger-ready:doc-a"]
     }
   ,
-    
-    
+
+
     { name   := "release_returns_overtaken_doc"
     , pre    := mkWorld [doc "goal-cont-3"] [] [doc "goal-cont-3"] [doc "goal-cont-3"]
     , action := .release (doc "goal-cont-3")

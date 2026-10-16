@@ -47,9 +47,9 @@ structure ProtectedReplayCompactionCase where
   rawIndex : Nat
   required : List PromptAssembly.ClaudeMap.ReplayTag
   rows : List PromptAssembly.ClaudeMap.TaggedReplayRow
-  
+
   ceilingError : String
-  
+
 
   ceiling : Option Nat
   selectedSplit : Option Nat
@@ -141,7 +141,7 @@ structure CompactionReducerCase where
   postMessageCount    : Nat
   preservesPairs      : Bool
   preservesOrder      : Bool
-  
+
   gateOpen            : Option Bool
   publicationReady    : Bool
   providerFixpoint    : Bool
@@ -149,12 +149,12 @@ structure CompactionReducerCase where
   safeToReduce        : Bool
   reducerIsIdentity   : Bool
   reducerIsIdempotent : Bool
-  
+
   splitIndex          : Nat
-  
+
 
   safeBoundary        : Nat
-  
+
   retainedCount       : Nat
   deriving Repr
 
@@ -227,9 +227,9 @@ private def ordinaryPublication (row : Transcript.MessageRow) :
 private def assistantCallPublication (row : Transcript.MessageRow)
     (callIds : Finset Nat) :
     List CanonicalOutput.Segment × CanonicalOutput.MessageEnvelope :=
-  
-  
-  
+
+
+
   let indexed := ([fixtureCallSymbol, fixtureSecondCallSymbol].filter
     (fun call => call ∈ callIds)).zipIdx
   let records := indexed.map fun entry =>

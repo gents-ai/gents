@@ -140,7 +140,7 @@ theorem terminal_snapshot_cannot_change (s : Snapshot)
   simp [capture, requestCancel, finish, h]
 
 inductive Event where
-  
+
   | observedFailure (cause : Cause)
   | capture (expected : Nat) (witness : Option Cause)
   | cancel
