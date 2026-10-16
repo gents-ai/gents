@@ -10,6 +10,7 @@ use crate::tool_call_lifecycle::IllegalToolCallTransition;
 use crate::UpdateSubscriptionSource;
 
 mod cooldown;
+mod document_changes;
 mod query;
 #[cfg(test)]
 mod tests;
@@ -18,6 +19,7 @@ use cooldown::{
     prune_processed_requests, take_next_eligible_pending_request, GOSSIP_FALLBACK_POLL,
     PROCESSED_REQUEST_COOLDOWN,
 };
+pub use document_changes::DocumentChangeWakeup;
 pub(crate) use query::{agent_request_from_mutation_response, AGENT_REQUEST_FIELDS};
 
 #[derive(Debug, Clone)]

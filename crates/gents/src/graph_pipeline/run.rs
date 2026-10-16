@@ -14,7 +14,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config_client::{ConfigAccess, ConfigApplyTxn, TransactionOutcome};
 use crate::graphql::{
-    document_composite_version, escape_graphql_string, validate_collection_identifier,
+    document_composite_version, escape_graphql_string, graphql_with_transaction_retry,
+    validate_collection_identifier,
 };
 
 use super::{
@@ -30,6 +31,8 @@ pub(super) use workspace_lineage::fence_root_workspace_in_txn;
 pub(crate) use workspace_lineage::{resolve_graph_session, resolve_graph_workspace};
 
 const GRAPH_RUN_VIEW_VERSION: u32 = 1;
+const GRAPH_RUN_READ_INTERVAL: Duration = Duration::from_secs(1);
+const GRAPH_RUN_RECOVERY_INTERVAL: Duration = Duration::from_secs(5);
 
 #[path = "logical_invocation.rs"]
 mod logical_invocation;
@@ -1012,38 +1015,117 @@ pub async fn reconcile_owned_graph_runs(
     node: &std::sync::Arc<EmbeddedNode>,
     owner_did: &str,
 ) -> Result<usize> {
-    let response = node
-        .execute(&format!(
+    Ok(sweep_owned_graph_runs(node, owner_did).await?.terminalized)
+}
+
+#[derive(Default)]
+struct GraphRunSweep {
+    terminalized: usize,
+    running: usize,
+    next_deadline: Option<chrono::DateTime<chrono::FixedOffset>>,
+    retry_required: bool,
+}
+
+async fn sweep_owned_graph_runs(
+    node: &Arc<EmbeddedNode>,
+    owner_did: &str,
+) -> Result<GraphRunSweep> {
+    let response = graphql_with_transaction_retry(
+        node,
+        &format!(
             r#"{{ GraphRun(filter: {{ owner_did: {{ _eq: "{}" }}, status: {{ _eq: "running" }} }}, limit: 1001) {{ run_id }} }}"#,
             escape_graphql_string(owner_did),
-        ))
-        .await;
-    if response.has_errors() {
-        anyhow::bail!("query running graph runs failed: {:?}", response.errors);
-    }
+        ),
+        "query running graph runs",
+    )
+    .await?;
     let data = json!({ "data": response.data.unwrap_or(Value::Null) });
     let running = rows(&data, "GraphRun");
     if running.len() > 1_000 {
         anyhow::bail!("running graph run sweep exceeds the bounded 1000-run limit");
     }
 
-    let mut terminalized = 0;
+    let mut sweep = GraphRunSweep::default();
     for row in running {
+        sweep.running += 1;
         let Some(run_id) = row.get("run_id").and_then(Value::as_str) else {
             tracing::warn!("running GraphRun row is missing run_id");
+            sweep.retry_required = true;
             continue;
         };
         match reconcile_graph_run(node, None, owner_did, run_id).await {
-            Ok(view) if view.is_terminal() => terminalized += 1,
-            Ok(_) => {}
-            Err(error) => tracing::warn!(
-                run_id,
-                %error,
-                "graph run reconciliation failed; retrying on the next daemon tick"
-            ),
+            Ok(view) if view.is_terminal() => {
+                sweep.terminalized += 1;
+                sweep.running -= 1;
+            }
+            Ok(view) => {
+                if let Some(deadline) = view.deadline_at {
+                    let deadline = chrono::DateTime::parse_from_rfc3339(&deadline)?;
+                    sweep.next_deadline = Some(
+                        sweep
+                            .next_deadline
+                            .map_or(deadline, |current| current.min(deadline)),
+                    );
+                }
+            }
+            Err(error) => {
+                sweep.retry_required = true;
+                tracing::warn!(
+                    run_id,
+                    %error,
+                    "graph run reconciliation failed; retrying on the next daemon tick"
+                );
+            }
         }
     }
-    Ok(terminalized)
+    Ok(sweep)
+}
+
+fn prepare_graph_run_wait(
+    node: &EmbeddedNode,
+    wakeup: &mut crate::watcher::DocumentChangeWakeup,
+    sweep: &GraphRunSweep,
+    minimum_read_at: tokio::time::Instant,
+) -> Option<tokio::time::Instant> {
+    let active = sweep.running > 0;
+    wakeup.set_collections(node, if active { None } else { Some(&["GraphRun"]) });
+    if sweep.retry_required {
+        return Some(minimum_read_at);
+    }
+    sweep.next_deadline.map(|deadline| {
+        let remaining = deadline
+            .signed_duration_since(chrono::Utc::now())
+            .to_std()
+            .unwrap_or_default();
+        (tokio::time::Instant::now() + remaining).max(minimum_read_at)
+    })
+}
+
+async fn wait_for_graph_run_change(
+    wakeup: &mut crate::watcher::DocumentChangeWakeup,
+    next_deadline: Option<tokio::time::Instant>,
+    minimum_read_at: tokio::time::Instant,
+    cancel: &CancellationToken,
+) -> bool {
+    let changed = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => false,
+        _ = async {
+            match next_deadline {
+                Some(deadline) => tokio::time::sleep_until(deadline).await,
+                None => std::future::pending().await,
+            }
+        } => true,
+        _ = wakeup.wait() => true,
+    };
+    if !changed {
+        return false;
+    }
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => false,
+        _ = tokio::time::sleep_until(minimum_read_at) => true,
+    }
 }
 
 /// Own graph completion in the daemon rather than in a CLI/UI observer.
@@ -1052,26 +1134,38 @@ pub async fn run_graph_run_reconciler(
     owner_did: String,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let mut interval = tokio::time::interval(Duration::from_secs(1));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut wakeup = crate::watcher::DocumentChangeWakeup::new(
+        &node,
+        Some(&["GraphRun"]),
+        GRAPH_RUN_RECOVERY_INTERVAL,
+    );
     loop {
-        tokio::select! {
-            _ = cancel.cancelled() => return Ok(()),
-            _ = interval.tick() => {
-                match reconcile_owned_graph_runs(&node, &owner_did).await {
-                    Ok(terminalized) if terminalized > 0 => tracing::info!(
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+        let minimum_read_at = tokio::time::Instant::now() + GRAPH_RUN_READ_INTERVAL;
+        let next_deadline = match sweep_owned_graph_runs(&node, &owner_did).await {
+            Ok(sweep) => {
+                if sweep.terminalized > 0 {
+                    tracing::info!(
                         owner_did,
-                        terminalized,
+                        terminalized = sweep.terminalized,
                         "materialized durable graph run completion"
-                    ),
-                    Ok(_) => {}
-                    Err(error) => tracing::warn!(
-                        owner_did,
-                        %error,
-                        "graph run reconciliation sweep failed; retrying"
-                    ),
+                    );
                 }
+                prepare_graph_run_wait(&node, &mut wakeup, &sweep, minimum_read_at)
             }
+            Err(error) => {
+                tracing::warn!(
+                    owner_did,
+                    %error,
+                    "graph run reconciliation sweep failed; retrying"
+                );
+                Some(minimum_read_at)
+            }
+        };
+        if !wait_for_graph_run_change(&mut wakeup, next_deadline, minimum_read_at, &cancel).await {
+            return Ok(());
         }
     }
 }
@@ -1452,6 +1546,9 @@ pub async fn request_graph_run_cancellation_with_access(
     }
     reconcile_graph_run_with_access(access, actor_did, run_id).await
 }
+
+#[cfg(test)]
+mod scheduling_tests;
 
 #[cfg(test)]
 mod tests {
