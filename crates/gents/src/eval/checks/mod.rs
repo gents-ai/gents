@@ -238,6 +238,19 @@ mod tests {
     #[test]
     fn the_builtin_registry_holds_the_seed_check_under_its_own_name() {
         let registry = CheckRegistry::builtin();
+        assert_eq!(
+            registry.names(),
+            vec![
+                "captured_fields_match",
+                "captured_rows_count",
+                "crew_spec_match",
+                "final_message_matches",
+                "handoff_delivery",
+                "schema_matches",
+                "tool_calls_expected",
+                "tool_result_matches"
+            ]
+        );
         let check = registry.get("captured_rows_count").expect("the seed check");
         assert_eq!(
             (check.name(), check.version()),
@@ -299,11 +312,10 @@ mod catalog_tests {
 
     #[test]
     fn every_builtin_check_describes_itself_with_a_schema_and_reason_codes() {
-        let registry = CheckRegistry::builtin();
-        let catalog = registry.catalog();
+        let catalog = CheckRegistry::builtin().catalog();
         assert_eq!(
             catalog.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
-            registry.names()
+            CheckRegistry::builtin().names()
         );
         for check in &catalog {
             assert_eq!(check.params_schema["type"], "object", "{}", check.name);

@@ -365,6 +365,14 @@ mod tests {
         assert!(host_alive(std::process::id()));
         assert!(!host_alive(0));
         assert!(!host_alive(u32::MAX), "never kill(-1, 0)");
+        let mut slot = in_flight(None);
+        slot.pid = std::process::id();
+        slot.written_at = now_millis();
+        assert!(is_fresh(&slot, Duration::from_secs(3)));
+        slot.written_at = "2026-01-01T00:00:00.000Z".into();
+        assert!(!is_fresh(&slot, Duration::from_secs(3)), "too old");
+        slot.written_at = "not a time".into();
+        assert!(!is_fresh(&slot, Duration::from_secs(3)));
     }
 
     /// `gents eval rm --force` may remove a run directory under a live loop;

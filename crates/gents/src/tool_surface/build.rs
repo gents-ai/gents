@@ -382,7 +382,7 @@ mod tests {
             EndpointScope::<Vec<String>, ()>::None,
             EndpointScope::<Vec<String>, ()>::only_units(Vec::<Vec<String>>::new()),
         ] {
-            let mut eb = ToolPolicyBash::unrestricted();
+            let mut eb = top_bash();
             eb.allowed_argv_prefixes = scope;
             let out = constrain_command_policy_to_effective_bash(None, &eb, BashMode::Unrestricted)
                 .expect("deny-all must synthesize a policy");

@@ -2602,6 +2602,10 @@ mod tests {
         assert_eq!(error_code_for(&typed), -32602);
         let parser_error =
             super::super::turn::parse_prompt_request(&json!({}), None).expect_err("missing params");
+        assert!(
+            parser_error.to_string().contains("session/prompt"),
+            "the source parser message is preserved: {parser_error}"
+        );
         let wrapped = invalid_params(parser_error.to_string());
         assert_eq!(error_code_for(&wrapped), -32602);
         assert_eq!(

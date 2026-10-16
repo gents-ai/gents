@@ -4,7 +4,6 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
     use axum::routing::post;
     use rig::client::CompletionClient;
     use std::sync::Mutex as StdMutex;
-
     fn sse(events: &[serde_json::Value]) -> String {
         events
             .iter()
@@ -17,29 +16,21 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
             .collect()
     }
     fn completed(output: serde_json::Value) -> serde_json::Value {
-        serde_json::json!({"type":"response.completed","sequence_number":9,"response":{
-            "id":"resp_1","object":"response","created_at":1,"status":"completed",
-            "error":null,"incomplete_details":null,"instructions":null,
-            "max_output_tokens":null,"model":"gpt-test","output":output,
-            "usage":{"input_tokens":10,"input_tokens_details":{"cached_tokens":0},
-                "output_tokens":5,"output_tokens_details":{"reasoning_tokens":1},"total_tokens":15}}})
+        serde_json :: json ! ({ "type" : "response.completed" , "sequence_number" : 9 , "response" : { "id" : "resp_1" , "object" : "response" , "created_at" : 1 , "status" : "completed" , "error" : null , "incomplete_details" : null , "instructions" : null , "max_output_tokens" : null , "model" : "gpt-test" , "output" : output , "usage" : { "input_tokens" : 10 , "input_tokens_details" : { "cached_tokens" : 0 } , "output_tokens" : 5 , "output_tokens_details" : { "reasoning_tokens" : 1 } , "total_tokens" : 15 } } })
     }
-    let reasoning = serde_json::json!({"type":"reasoning","id":"rs_1",
-        "summary":[{"type":"summary_text","text":"plan"}],"encrypted_content":"sealed-1"});
-    let call = serde_json::json!({"type":"function_call","id":"fc_1","call_id":"call_1",
-        "name":"echo","arguments":"{\"text\":\"hi\"}","status":"completed"});
-    let message = serde_json::json!({"type":"message","id":"msg_2","role":"assistant",
-        "status":"completed","content":[{"type":"output_text","text":"done","annotations":[]}]});
+    let reasoning = serde_json :: json ! ({ "type" : "reasoning" , "id" : "rs_1" , "summary" : [{ "type" : "summary_text" , "text" : "plan" }] , "encrypted_content" : "sealed-1" });
+    let call = serde_json :: json ! ({ "type" : "function_call" , "id" : "fc_1" , "call_id" : "call_1" , "name" : "echo" , "arguments" : "{\"text\":\"hi\"}" , "status" : "completed" });
+    let message = serde_json :: json ! ({ "type" : "message" , "id" : "msg_2" , "role" : "assistant" , "status" : "completed" , "content" : [{ "type" : "output_text" , "text" : "done" , "annotations" : [] }] });
     let turns = vec![
         sse(&[
-            serde_json::json!({"type":"response.output_item.done","output_index":0,"sequence_number":1,"item":reasoning}),
-            serde_json::json!({"type":"response.output_item.added","output_index":1,"sequence_number":2,"item":call}),
-            serde_json::json!({"type":"response.output_item.done","output_index":1,"sequence_number":3,"item":call}),
+            serde_json :: json ! ({ "type" : "response.output_item.done" , "output_index" : 0 , "sequence_number" : 1 , "item" : reasoning }),
+            serde_json :: json ! ({ "type" : "response.output_item.added" , "output_index" : 1 , "sequence_number" : 2 , "item" : call }),
+            serde_json :: json ! ({ "type" : "response.output_item.done" , "output_index" : 1 , "sequence_number" : 3 , "item" : call }),
             completed(serde_json::json!([reasoning, call])),
         ]),
         sse(&[
-            serde_json::json!({"type":"response.output_text.delta","item_id":"msg_2","output_index":0,"content_index":0,"sequence_number":1,"delta":"done"}),
-            serde_json::json!({"type":"response.output_item.done","output_index":0,"sequence_number":2,"item":message}),
+            serde_json :: json ! ({ "type" : "response.output_text.delta" , "item_id" : "msg_2" , "output_index" : 0 , "content_index" : 0 , "sequence_number" : 1 , "delta" : "done" }),
+            serde_json :: json ! ({ "type" : "response.output_item.done" , "output_index" : 0 , "sequence_number" : 2 , "item" : message }),
             completed(serde_json::json!([message])),
         ]),
     ];
@@ -65,7 +56,6 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-
     let client = crate::inference_http::build_openai_responses_client(
         "test-key",
         &format!("http://{address}/v1"),
@@ -86,7 +76,6 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
         unreachable!("constructed above")
     };
     let model = client.completion_model("gpt-test");
-
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let scope_kind = gents_protocol::rendered_request::CaptureScopeKind::Inference;
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![echo_tool()]);
@@ -124,7 +113,6 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
         Some(&capture_factory),
     )
     .expect("DefraDB rendered-request capture scope");
-
     let stream = run_loop_stream(
         model,
         Some(hook.clone()),
@@ -145,7 +133,6 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
     assert!(collected.error.is_none(), "{:?}", collected.error);
     assert_eq!(collected.tool_results, vec!["ECHOED".to_string()]);
     assert_eq!(collected.final_text.as_deref(), Some("done"));
-
     let bodies = state.lock().unwrap().1.clone();
     assert_eq!(bodies.len(), 2, "two provider sends");
     let replayed = bodies[1]["input"]

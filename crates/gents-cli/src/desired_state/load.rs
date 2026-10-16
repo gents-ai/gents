@@ -168,14 +168,9 @@ mod filesystem_tests {
     #[test]
     fn sidecars_cannot_escape_through_symlinks() {
         let dir = tempfile::tempdir().unwrap();
-        for text in [
-            "{broken",
-            r#"{"node":{"node_did":"owner"},"unknown":true}"#,
-            r#"{"node":{"node_did":"owner"},"contexts":[{"context_id":"context","system_prompt":"./../outside.md"}]}"#,
-        ] {
-            fs::write(dir.path().join("pack_config.json"), text).unwrap();
-            assert!(!load_manifest_root(dir.path()).1.ok, "{text}");
-        }
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("linked.md")).unwrap();
+        assert!(hydrate_sidecar(&mut Some("./linked.md".into()), dir.path()).is_err());
     }
 
     #[test]

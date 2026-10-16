@@ -38,6 +38,12 @@ fn generated_root_admission_cases_drive_production_root_policy() {
             "duplicate case {}",
             case.name
         );
+        assert_eq!(
+            case.authored.trim().is_empty(),
+            case.blank,
+            "Lean blank observation drifted for {}",
+            case.name
+        );
         let sandbox = tempfile::tempdir().expect("case sandbox");
         let materialize = |anchor: &str, components: &[String]| {
             let mut path = sandbox.path().join(anchor);
@@ -164,7 +170,6 @@ fn generated_root_admission_cases_drive_production_root_policy() {
             }
             other => panic!("unhandled Lean filesystem observation {other}"),
         };
-
         let authored_root = if case.blank {
             case.authored.clone()
         } else {

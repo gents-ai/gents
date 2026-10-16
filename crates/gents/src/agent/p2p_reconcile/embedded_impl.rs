@@ -1599,14 +1599,12 @@ mod tests {
         let receiver_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&receiver));
         let sender_addresses = wait_for_peer_info(&sender_admin).await;
         let receiver_addresses = wait_for_peer_info(&receiver_admin).await;
-
         let (match_request_id, match_session_id, match_header_doc_id, match_sequence) =
             seed_agent_target_return_artifacts(&sender, "match", Some("did:key:coord")).await;
         let (unrelated_request_id, _unrelated_session_id, _unrelated_header, _unrelated_sequence) =
             seed_agent_target_return_artifacts(&sender, "unrelated", None).await;
         let (foreign_request_id, _foreign_session_id, _foreign_header, _foreign_sequence) =
             seed_agent_target_return_artifacts(&sender, "foreign", Some("did:key:other")).await;
-
         let template =
             resolve_template(AGENT_TARGET_HOST_TEMPLATE).expect("agent-target-host template");
         let collections = template
@@ -1614,20 +1612,16 @@ mod tests {
             .iter()
             .map(|collection| (*collection).to_string())
             .collect::<Vec<_>>();
-
         sender_admin
             .connect(&receiver_addresses)
             .await
             .expect("connect sender to receiver");
         wait_for_active_peer(&sender_admin).await;
         wait_for_active_peer(&receiver_admin).await;
-        // Push template: the subscription set stays empty; the per-peer
-        // replicators are the only authorized channels.
         receiver_admin
             .add_replicator(&sender_addresses, &collections, &PairingFilters::default())
             .await
             .expect("authorize only the agent-target return projection");
-
         let filters = scope_filter(
             &template.scope,
             template.collections,
@@ -1638,7 +1632,6 @@ mod tests {
             .add_replicator(&receiver_addresses, &collections, &filters)
             .await
             .expect("install requester-scoped return replicator");
-
         wait_for_value(&receiver, "AgentRequest", "request_id", &match_request_id).await;
         wait_for_value(&receiver, "AgentMessage", "_docID", &match_header_doc_id).await;
         assert_eq!(
@@ -1646,12 +1639,7 @@ mod tests {
             BTreeSet::from([match_request_id.clone()]),
             "only the requester-routed return request must replicate"
         );
-        let sender_terminal = sender
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID lifecycle_state terminal_output }} }}"#,
-                escape_graphql_string(&match_request_id),
-            ))
-            .await;
+        let sender_terminal = sender . execute (& format ! (r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID lifecycle_state terminal_output }} }}"# , escape_graphql_string (& match_request_id) ,)) . await ;
         let sender_terminal_row = &sender_terminal.data.as_ref().unwrap()["AgentRequest"][0];
         let match_request_doc_id = sender_terminal_row["_docID"]
             .as_str()
@@ -1665,23 +1653,7 @@ mod tests {
             })
             .unwrap()
         );
-        let receiver_message_rows = crate::session::canonical_rows::decode_transcript_message_row(
-            &receiver
-                .execute(&format!(
-                    r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
-                    escape_graphql_string(&match_header_doc_id),
-                    crate::session::canonical_rows::AGENT_MESSAGE_FIELDS,
-                ))
-                .await
-                .data
-                .as_ref()
-                .and_then(|data| data.get("AgentMessage"))
-                .and_then(|rows| rows.as_array())
-                .and_then(|rows| rows.first())
-                .cloned()
-                .expect("replicated canonical AgentMessage"),
-        )
-        .expect("decode replicated canonical AgentMessage");
+        let receiver_message_rows = crate :: session :: canonical_rows :: decode_transcript_message_row (& receiver . execute (& format ! (r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"# , escape_graphql_string (& match_header_doc_id) , crate :: session :: canonical_rows :: AGENT_MESSAGE_FIELDS ,)) . await . data . as_ref () . and_then (| data | data . get ("AgentMessage")) . and_then (| rows | rows . as_array ()) . and_then (| rows | rows . first ()) . cloned () . expect ("replicated canonical AgentMessage") ,) . expect ("decode replicated canonical AgentMessage") ;
         assert_eq!(
             receiver_message_rows.doc_id, match_header_doc_id,
             "AgentMessage replication must preserve the physical header identity"
@@ -1705,8 +1677,6 @@ mod tests {
             agent_response_rows.has_errors(),
             "AgentResponse is a retired collection: receiver queries must reject it"
         );
-        // Header replication races segment replication; poll until the full
-        // dependency closure has arrived.
         let mut projected = None;
         for _ in 0..120 {
             match crate::session::load_canonical_message_from_node(
@@ -1739,15 +1709,24 @@ mod tests {
             gents_protocol::message::Message::assistant("child result"),
             "receiver must project the exact child result"
         );
-        // The caused session returns with its request so the caller can open
-        // it; sessions the requester did not cause stay on the host.
+        assert!(
+            !collection_values(&receiver, "AgentRequest", "request_id")
+                .await
+                .contains(&unrelated_request_id),
+            "unrouted host-local artifact leaked to the receiver"
+        );
+        assert!(
+            !collection_values(&receiver, "AgentRequest", "request_id")
+                .await
+                .contains(&foreign_request_id),
+            "foreign-requester artifact leaked to the receiver"
+        );
         wait_for_value(&receiver, "AgentSession", "session_id", &match_session_id).await;
         assert_eq!(
             collection_values(&receiver, "AgentSession", "session_id").await,
             BTreeSet::from([match_session_id.clone()]),
             "only the requester's caused session crosses the return leg"
         );
-
         sender.shutdown().await;
         receiver.shutdown().await;
     }

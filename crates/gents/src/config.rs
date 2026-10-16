@@ -498,7 +498,12 @@ mod tests {
     #[test]
     fn resolve_backend_api_key_none_when_no_env_var_configured() {
         let agent = agent_with_wire(OpenAiWireApi::ChatCompletions);
-        assert_eq!(agent.resolve_backend_api_key().unwrap(), None);
+        assert_eq!(
+            agent
+                .resolve_backend_api_key()
+                .expect("no key configured is not an error"),
+            None
+        );
     }
 
     #[test]

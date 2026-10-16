@@ -2866,7 +2866,7 @@ async fn artifact_compiler_tool_keeps_sealed_source_read_only() {
 #[tokio::test]
 #[ignore = "dedicated offline compiler QA; run test executable directly without parent Cargo"]
 async fn artifact_compiler_build_script_cannot_escape_private_output() {
-    run_artifact_compiler_fixture(Some(r#"
+    run_artifact_compiler_fixture (Some (r#"
 use std::{env, fs, io, net::{SocketAddr, TcpStream}, os::unix::fs::{symlink, PermissionsExt}, path::PathBuf, time::Duration};
 fn denied(operation: impl FnOnce() -> io::Result<()>) {
     let error = operation().expect_err("forbidden build-script effect succeeded");
@@ -2887,10 +2887,11 @@ fn main() {
     let alias = output.join("source-symlink"); symlink(&protected, &alias).unwrap();
     denied(|| fs::write(&alias, "symlink escape"));
     denied(|| fs::hard_link(&protected, output.join("source-hardlink")));
+    // Redirecting model/build-process environment cannot redirect kernel authority.
     env::set_var("CARGO_TARGET_DIR", &source); env::set_var("TMPDIR", &source);
     denied(|| fs::write(PathBuf::from(env::var_os("TMPDIR").unwrap()).join("redirected"), "escape"));
     let address: SocketAddr = "127.0.0.1:9".parse().unwrap();
     denied(|| TcpStream::connect_timeout(&address, Duration::from_secs(2)).map(|_| ()));
 }
-"#)).await;
+"#)) . await ;
 }

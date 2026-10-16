@@ -507,7 +507,6 @@ async fn dispatch_manual_intent_renders_with_args_and_materializes() {
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
     let engine = TriggerEngine::new(rx, materializer.clone());
-
     let intent = FireIntent {
         trigger_id: None,
         trigger_kind: TriggerKind::Manual,
@@ -518,25 +517,35 @@ async fn dispatch_manual_intent_renders_with_args_and_materializes() {
         correlation: None,
         group_vars: None,
         trigger_context: None,
-        args_vars: Some(serde_json::json!({"name": "Amy"})),
+        args_vars: Some(serde_json :: json ! ({ "name" : "Amy" })),
         durable_fire_key: "manual-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
-
     let result = engine.dispatch(intent).await;
-
     match result {
-        FireResult::Fired { request_id } => assert_eq!(request_id, "req-0"),
-        other => panic!("expected Fired for Manual intent, got {other:?}"),
+        FireResult::Fired { request_id } => assert_eq!(
+            request_id, "req-0",
+            "spy materializer hands back sequentially-numbered ids starting at req-0"
+        ),
+        other => panic!("expected Fired for Manual intent (bypasses enabled-gate), got {other:?}"),
     }
-
     let calls = materializer.calls();
-    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls.len(),
+        1,
+        "exactly one materialize call expected for Manual dispatch"
+    );
     let (trigger_id, kind, rendered) = &calls[0];
-    assert!(trigger_id.is_none());
+    assert!(
+        trigger_id.is_none(),
+        "Manual intents carry trigger_id = None; got {trigger_id:?}"
+    );
     assert_eq!(*kind, TriggerKind::Manual);
-    assert_eq!(rendered, "hello Amy");
+    assert_eq!(
+        rendered, "hello Amy",
+        "dispatch must render the `args.name` template against args_vars"
+    );
 }
 
 #[tokio::test]
@@ -546,7 +555,6 @@ async fn dispatch_rejects_manual_intent_with_trigger_id() {
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
     let engine = TriggerEngine::new(rx, materializer.clone());
-
     let result_captured: Arc<Mutex<Option<FireResult>>> = Arc::new(Mutex::new(None));
     let capture = result_captured.clone();
     let intent = FireIntent {
@@ -566,18 +574,20 @@ async fn dispatch_rejects_manual_intent_with_trigger_id() {
             *capture.lock().unwrap() = Some(r);
         }),
     };
-
     let result = engine.dispatch(intent).await;
-
     match result {
-        FireResult::Rejected { error } => {
-            assert!(error.contains("must not carry trigger_id"), "{error}")
-        }
+        FireResult::Rejected { error } => assert!(
+            error.contains("must not carry trigger_id"),
+            "unexpected manual well-formedness error: {error}"
+        ),
         other => panic!("expected Rejected for malformed Manual intent, got {other:?}"),
     }
-    assert!(materializer.calls().is_empty());
-    assert!(matches!(
-        result_captured.lock().unwrap().as_ref(),
-        Some(FireResult::Rejected { .. })
-    ),);
+    assert!(
+        materializer.calls().is_empty(),
+        "malformed Manual intent must not reach the materializer"
+    );
+    assert!(
+        matches ! (result_captured . lock () . unwrap () . as_ref () , Some (FireResult :: Rejected { error }) if error . contains ("must not carry trigger_id")),
+        "on_result should receive the same malformed Manual error"
+    );
 }

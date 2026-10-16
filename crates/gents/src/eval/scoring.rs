@@ -286,13 +286,14 @@ mod tests {
     fn two_regrades_of_one_verdict_leave_one_survivor_whatever_the_row_order() {
         let original = v("v1", 0, OutcomeKind::ModelAcceptance, Some(0), 1);
         let regrade = |id: &str| {
-            let mut result = v(id, 0, OutcomeKind::Passed, Some(10_000), 1);
-            result.check = original.check.clone();
-            result.regrade_of = Some("v1".into());
-            result
+            let mut regrade = v(id, 0, OutcomeKind::Passed, Some(10_000), 1);
+            regrade.check = original.check.clone();
+            regrade.regrade_of = Some("v1".into());
+            regrade
         };
-        let forward = latest_verdicts(vec![original.clone(), regrade("v2"), regrade("v3")]);
-        let reversed = latest_verdicts(vec![regrade("v3"), regrade("v2"), original]);
+        let (v2, v3) = (regrade("v2"), regrade("v3"));
+        let forward = latest_verdicts(vec![original.clone(), v2.clone(), v3.clone()]);
+        let reversed = latest_verdicts(vec![v3, v2, original]);
         assert_eq!(forward.len(), 1, "one verdict per (stage, check)");
         assert_eq!(forward, reversed, "the survivor never depends on row order");
         assert_eq!(

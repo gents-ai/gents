@@ -417,8 +417,8 @@ mod tests {
     #[test]
     fn pending_turn_shown_iff_and_before_orphans() {
         let messages = vec![msg("a", 0, TimelineRole::User)];
+        let groups = vec![Some(9)];
         let slots = build_timeline_order(&messages, &groups, &pending_tail(), None);
-
         let pending_pos = slots
             .iter()
             .position(|s| matches!(s, TimelineSlot::Pending { .. }));
@@ -435,7 +435,6 @@ mod tests {
             pending_pos < orphan_pos,
             "pending must precede orphan groups: {slots:?}"
         );
-
         let no_pending = build_timeline_order(&messages, &groups, &[], None);
         assert!(!no_pending
             .iter()

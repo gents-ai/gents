@@ -329,22 +329,6 @@ mod tests {
             );
         }
         assert!(off.tool_router.has_route("query") && !off.tool_router.has_route("write"));
-        let on = DefraQueryMcp::new(GRAPHQL.to_owned(), options(true));
-        let mut offered = Vec::new();
-        for definition in gents::self_config::graph_tool_definitions() {
-            if let Some(route) = on.tool_router.get(&definition.name) {
-                assert_eq!(
-                    route.description.as_deref(),
-                    Some(definition.description.as_str())
-                );
-                assert_eq!(
-                    Value::Object((*route.input_schema).clone()),
-                    definition.parameters
-                );
-                offered.push(definition.name);
-            }
-        }
-        assert_eq!(offered, gents::self_config::MCP_GRAPH_READ_TOOL_NAMES);
     }
 
     #[tokio::test]

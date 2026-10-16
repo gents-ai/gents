@@ -200,22 +200,7 @@ mod tests {
     async fn accepts_native_route_template_fields_the_schema_does_not_declare() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let access = probe_access(&tempdir).await?;
-        let manifest = manifest(
-            json!([source("reviewed", json!({"event_kind": "created"}))]),
-            json!([{
-                "node_did": OWNER,
-                "task_id": "review",
-                "agent_id": "beh",
-                "prompt_template": "Review attempt {{ doc.attempt }} for {{ doc.workspace_id }}",
-                "emit_outcome": true,
-            }]),
-            json!([{
-                "node_did": OWNER,
-                "trigger_id": "on-review",
-                "task_id": "review",
-                "source": {"kind": "event", "event_source_id": "reviewed"},
-            }]),
-        )?;
+        let manifest = receipt_manifest(json ! ({ "event_kind" : "created" }), true)?;
         let errors = validate_manifest_against_live(&manifest, &access).await?;
         assert_eq!(errors, Vec::<String>::new(), "{errors:?}");
         Ok(())
@@ -226,27 +211,12 @@ mod tests {
         let tempdir = tempfile::tempdir()?;
         let access = probe_access(&tempdir).await?;
         let manifest = manifest(
-            json!([source("templated", json!({"correlation_field": "batch"}))]),
-            json!([{
-                "node_did": OWNER,
-                "task_id": "summarize",
-                "agent_id": "beh",
-                "prompt_template": "Summarize {{ doc.x"
-            }]),
-            json!([{
-                "node_did": OWNER,
-                "trigger_id": "on-templated",
-                "task_id": "summarize",
-                "source": {"kind": "event", "event_source_id": "templated"}
-            }]),
+            json!([source("broken", json ! ({ "correlation_field" : "batch" }),)]),
+            json ! ([{ "node_did" : OWNER , "task_id" : "summarize" , "agent_id" : "beh" , "prompt_template" : "Summarize {{ doc.x" , }]),
+            json ! ([{ "node_did" : OWNER , "trigger_id" : "on-broken" , "task_id" : "summarize" , "source" : { "kind" : "event" , "event_source_id" : "broken" } , }]),
         )?;
         let errors = validate_manifest_against_live(&manifest, &access).await?;
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("template parse error")),
-            "an unparsable template must fail the pre-flight: {errors:?}"
-        );
+        assert ! (errors . iter () . any (| error | error . contains ("template parse error")) , "an unparsable template must fail the pre-flight without a correlation or count probe: {errors:?}");
         Ok(())
     }
 

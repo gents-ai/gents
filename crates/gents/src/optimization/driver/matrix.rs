@@ -1137,7 +1137,6 @@ async fn an_inconclusive_round_is_rerun_on_a_new_seed_and_ends_inconclusive() {
     )
     .await;
     assert_eq!(outcome.state, JobState::NothingToPromote);
-
     let journal = journal(&harness, "inconclusive").await;
     let decided = journal
         .iter()
@@ -1161,7 +1160,7 @@ async fn an_inconclusive_round_is_rerun_on_a_new_seed_and_ends_inconclusive() {
         ]
     );
     assert_eq!(
-        decided.2, *decision,
+        decided.2,
         Decision::Inconclusive(InconclusiveReason::Insufficient)
     );
     let mut seeds = Vec::new();
@@ -1173,7 +1172,6 @@ async fn an_inconclusive_round_is_rerun_on_a_new_seed_and_ends_inconclusive() {
         seeds.push(run.origin.seed_base);
     }
     assert_ne!(seeds[0], seeds[1], "the re-run draws a new seed base");
-
     let definition =
         crate::optimization::driver::load_definition(harness.access(), OWNER, DEFINITION)
             .await

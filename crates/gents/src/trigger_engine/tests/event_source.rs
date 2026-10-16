@@ -526,7 +526,6 @@ async fn event_source_reconciles_subscriptions_on_generation_bump() {
 async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
     let webhook_sdl = r#"
         type WebhookEvent {
             external_id: String
@@ -536,7 +535,6 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     node.add_schema(webhook_sdl)
         .await
         .expect("add_schema for WebhookEvent");
-
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: "task-webhook".to_string(),
@@ -546,17 +544,14 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     let snapshot =
         snapshot_with_event_triggers(1, HashMap::from([("trigger-webhook".to_string(), trigger)]));
     let (_tx, rx) = watch::channel(snapshot.clone());
-
     let cancel = CancellationToken::new();
     let mut source = EventSource::new(rx, node.clone(), cancel.clone());
-
-    // The update bus only buffers messages for connected subscribers.
     source.reconcile_subscriptions(snapshot.as_ref()).await;
     assert_eq!(
         source.subscribed_collections(),
         vec!["WebhookEvent".to_string()],
+        "precondition: subscription set should match the trigger's source_collection",
     );
-
     let node_for_mutation = node.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -573,12 +568,10 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
             resp.errors
         );
     });
-
     let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("next_fire timed out waiting for WebhookEvent")
         .expect("next_fire returned None instead of emitting a FireIntent");
-
     assert_eq!(intent.trigger_id.as_deref(), Some("trigger-webhook"));
     assert_eq!(intent.trigger_kind, TriggerKind::Event);
     assert_eq!(intent.concurrency, ConcurrencyMode::Serial);
@@ -587,14 +580,13 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     let doc_vars = intent
         .doc_vars
         .as_ref()
-        .expect("every fire must hydrate doc_vars (filter is None here)");
+        .expect("Task 21: every fire must hydrate doc_vars (filter is None here)");
     assert_eq!(
         doc_vars["external_id"].as_str(),
         Some("wh-1"),
         "doc_vars must project the WebhookEvent fields, got {doc_vars}"
     );
     assert!(intent.args_vars.is_none());
-
     let ev = &intent.event_vars;
     assert_eq!(ev["trigger_id"].as_str(), Some("trigger-webhook"));
     assert_eq!(ev["trigger_kind"].as_str(), Some("event"));
@@ -1855,7 +1847,6 @@ async fn event_source_skips_event_for_doc_already_seen_at_subscribe() {
 async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
     let webhook_sdl = r#"
         type WebhookEvent {
             external_id: String
@@ -1865,7 +1856,6 @@ async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
     node.add_schema(webhook_sdl)
         .await
         .expect("add_schema for WebhookEvent");
-
     let task = resolved_task("ignored");
     let trigger = resolved_event_trigger("trigger-firstseen", "WebhookEvent", task);
     let snapshot = snapshot_with_event_triggers(
@@ -1876,7 +1866,6 @@ async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
     let cancel = CancellationToken::new();
     let mut source = EventSource::new(rx, node.clone(), cancel.clone());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
-
     let node_for_create = node.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1893,10 +1882,9 @@ async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
             resp.errors,
         );
     });
-
     let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
-        .expect("next_fire timed out on first observation")
+        .expect("next_fire timed out on first observation (create should fire)")
         .expect("next_fire returned None instead of emitting a FireIntent");
     assert_eq!(intent.trigger_id.as_deref(), Some("trigger-firstseen"));
     let doc_id = intent
@@ -1905,7 +1893,6 @@ async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
         .and_then(|v| v.as_str())
         .expect("source_doc_id must be a string")
         .to_string();
-
     let escaped = escape_graphql_string(&doc_id);
     let update_mutation = format!(
         r#"mutation {{
@@ -1925,13 +1912,12 @@ async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
             resp.errors,
         );
     });
-
     let result = tokio::time::timeout(Duration::from_millis(500), source.next_fire()).await;
     assert!(
         result.is_err(),
-        "next_fire yielded an intent for a doc's update",
+        "next_fire yielded an intent for a doc's update; first-seen gate failed to \
+         suppress the second observation",
     );
-
     cancel.cancel();
 }
 
@@ -1939,7 +1925,6 @@ async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
 async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
     let webhook_sdl = r#"
         type WebhookEvent {
             external_id: String
@@ -1949,7 +1934,6 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
     node.add_schema(webhook_sdl)
         .await
         .expect("add_schema for WebhookEvent");
-
     let task = resolved_task("ignored");
     let trigger_alpha = resolved_event_trigger("trigger-alpha", "WebhookEvent", task.clone());
     let trigger_beta = resolved_event_trigger("trigger-beta", "WebhookEvent", task);
@@ -1965,7 +1949,6 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
     let cancel = CancellationToken::new();
     let mut source = EventSource::new(rx, node.clone(), cancel.clone());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
-
     let node_for_mutation = node.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1982,7 +1965,6 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
             resp.errors,
         );
     });
-
     let first = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("next_fire timed out on the first fan-out intent")
@@ -1991,10 +1973,13 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
     (first.on_result)(result);
     let second = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
-        .expect("next_fire timed out on the second fan-out intent")
+        .expect("next_fire timed out on the second fan-out intent; fan-out dropped it?")
         .expect("next_fire returned None instead of emitting the second intent");
-
-    assert_eq!(first.trigger_id.as_deref(), Some("trigger-alpha"),);
+    assert_eq!(
+        first.trigger_id.as_deref(),
+        Some("trigger-alpha"),
+        "fan-out must emit intents in deterministic lex-by-trigger_id order",
+    );
     assert_eq!(second.trigger_id.as_deref(), Some("trigger-beta"));
     let first_doc_id = first
         .event_vars
@@ -2004,8 +1989,7 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
         .event_vars
         .get("source_doc_id")
         .and_then(|v| v.as_str());
-    assert_eq!(first_doc_id, second_doc_id,);
-
+    assert_eq ! (first_doc_id , second_doc_id , "both fan-out intents must carry the same source_doc_id: {first_doc_id:?} vs {second_doc_id:?}" ,);
     cancel.cancel();
 }
 
@@ -2013,7 +1997,6 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
 async fn event_source_tries_all_triggers_when_first_filter_misses() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
     let webhook_sdl = r#"
         type WebhookEvent {
             external_id: String
@@ -2024,7 +2007,6 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
     node.add_schema(webhook_sdl)
         .await
         .expect("add_schema for WebhookEvent");
-
     let task = resolved_task("ignored");
     let trigger_a = resolved_event_trigger_with_filter(
         "trigger-a-lex-first",
@@ -2049,7 +2031,6 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
     let cancel = CancellationToken::new();
     let mut source = EventSource::new(rx, node.clone(), cancel.clone());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
-
     let node_for_mutation = node.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -2067,19 +2048,25 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
             resp.errors,
         );
     });
-
     let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
-        .expect("next_fire timed out")
+        .expect(
+            "next_fire timed out; trigger-a's filter miss silently dropped the \
+             event for trigger-b (fan-out regression)",
+        )
         .expect("next_fire returned None instead of emitting a FireIntent");
-    assert_eq!(intent.trigger_id.as_deref(), Some("trigger-b-matches"),);
-
+    assert_eq!(
+        intent.trigger_id.as_deref(),
+        Some("trigger-b-matches"),
+        "after trigger-a filter-miss, the engine must still try trigger-b and fire \
+         for it; got trigger_id = {:?}",
+        intent.trigger_id,
+    );
     let maybe_extra = tokio::time::timeout(Duration::from_millis(300), source.next_fire()).await;
     assert!(
         maybe_extra.is_err(),
         "trigger-a emitted a FireIntent despite its filter miss",
     );
-
     cancel.cancel();
 }
 

@@ -537,30 +537,7 @@ mod task_view_tests {
 
     #[test]
     fn canonical_task_hooks_and_tags_survive_projection() {
-        let task: gents::document_config::Task = serde_json::from_value(serde_json::json!({
-            "node_did": "did:test:owner",
-            "task_id": "release",
-            "display_name": "Release",
-            "agent_id": "operator",
-            "prompt_template": "Ship it",
-            "emit_outcome": true,
-            "output_schema_ref": "schemas/release-result.json",
-            "hooks": [
-                {
-                    "hook_id": "prepare",
-                    "phase": "before",
-                    "command": ["sh", "-c", "./prepare.sh"],
-                    "timeout_secs": 45
-                },
-                {
-                    "hook_id": "cleanup",
-                    "phase": "finally",
-                    "command": ["./cleanup"]
-                }
-            ],
-            "tags": ["release", "operator"]
-        }))
-        .expect("canonical task");
+        let task : gents :: document_config :: Task = serde_json :: from_value (serde_json :: json ! ({ "node_did" : "did:test:owner" , "task_id" : "release" , "display_name" : "Release" , "agent_id" : "operator" , "prompt_template" : "Ship it" , "emit_outcome" : true , "output_schema_ref" : "schemas/release-result.json" , "hooks" : [{ "hook_id" : "prepare" , "phase" : "before" , "command" : ["sh" , "-c" , "./prepare.sh"] , "timeout_secs" : 45 } , { "hook_id" : "cleanup" , "phase" : "finally" , "command" : ["./cleanup"] }] , "tags" : ["release" , "operator"] })) . expect ("canonical task") ;
         let view = project_task_view(
             &task,
             TaskRecentRunsView {
@@ -573,7 +550,6 @@ mod task_view_tests {
             },
             Vec::new(),
         );
-
         assert_eq!(view.hooks, task.hooks);
         assert!(view.emit_outcome);
         assert_eq!(view.output_schema_ref, task.output_schema_ref);
@@ -583,6 +559,7 @@ mod task_view_tests {
         assert_eq!(wire["hooks"][0]["phase"], "before");
         assert_eq!(wire["hooks"][0]["timeout_secs"], 45);
         assert_eq!(wire["hooks"][1]["phase"], "finally");
+        assert_eq!(wire["tags"], serde_json::json!(["release", "operator"]));
     }
 }
 

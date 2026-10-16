@@ -583,6 +583,7 @@ mod tests {
             )
             .add(RUN, at("base", "disk", 4, 1), Outcome::Open);
         let report = build(&run, &rows.trials, &rows.verdicts, &definition, &[]).unwrap();
+        assert_eq!(report.report_version, REPORT_VERSION);
         assert_eq!(
             classes(&report),
             vec![
@@ -605,7 +606,7 @@ mod tests {
         };
         assert_eq!(cell.counts, one_each);
         assert_eq!(cell.cases[0].counts, one_each);
-        assert_eq!(cell.attempts, 5);
+        assert_eq!(cell.attempts, 5, "the planned slot has no row");
         assert_eq!(cell.cases[0].mean_bp, Some(3_333));
         assert_eq!(cell.headline_bp, Some(3_333));
         assert_eq!(

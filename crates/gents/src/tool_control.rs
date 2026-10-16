@@ -326,6 +326,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&data_path);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn cancel_without_live_worker_never_reports_an_unobserved_stop() {
         use crate::tool_call_lifecycle::admission_fixture::{

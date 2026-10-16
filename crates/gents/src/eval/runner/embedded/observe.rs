@@ -449,27 +449,15 @@ mod tests {
                 && case.outcome.as_deref() == Some("infrastructure")
         }));
         for case in cases {
-            let mut evidence = RequestEvidence::default();
-            if case.tool_failed {
-                evidence.tool_calls.push(ToolCallEvidence {
-                    tool_name: "t".into(),
-                    status: Some("failed".into()),
-                    lifecycle_state: Some("failed".into()),
-                    tool_failure_class: None,
-                    started_at: None,
-                    completed_at: None,
-                    args: Value::Null,
-                    result: Value::Null,
-                });
-            }
-            if case.inference_failed || case.inference_reason.is_some() {
+            let mut evidence = evidence(
+                case.inference_failed,
+                case.tool_failed,
+                case.request_reason.as_deref(),
+            );
+            if evidence.inference_calls.is_empty() {
                 evidence.inference_calls.push(InferenceCallEvidence {
                     call_seq: 1,
-                    call_state: if case.inference_failed {
-                        Some("failed".into())
-                    } else {
-                        Some("running".into())
-                    },
+                    call_state: Some("running".into()),
                     failure_reason: case.inference_reason.clone(),
                     prompt_tokens: None,
                     completion_tokens: None,
@@ -477,8 +465,9 @@ mod tests {
                     started_at: None,
                     ended_at: None,
                 });
+            } else {
+                evidence.inference_calls[0].failure_reason = case.inference_reason.clone();
             }
-            evidence.failure_reason = case.request_reason.clone();
             assert_eq!(
                 classify_request_outcome(
                     RequestLifecycleState::parse(&case.state).unwrap(),
@@ -521,9 +510,7 @@ mod tests {
 
     #[tokio::test]
     async fn every_query_observe_issues_is_valid_against_the_home_schema() {
-        let home = crate::eval::runner::embedded::EmbeddedHome::create_temp("observe-queries")
-            .await
-            .unwrap();
+        let home = EmbeddedHome::create_temp("observe-queries").await.unwrap();
         for query in [
             poll_query("req-\"quoted\""),
             evidence_query("req-\"quoted\""),
@@ -558,7 +545,6 @@ mod tests {
         use crate::tool_call_lifecycle::{AwaitMode, FailureClass};
         use gents_protocol::message::{AssistantContent, Message, Text};
         use gents_protocol::output::TerminalOutput;
-
         let home = EmbeddedHome::create_temp("observe-evidence").await.unwrap();
         let did = home.did().to_owned();
         let mut request = claimed_signed_request(
@@ -576,7 +562,7 @@ mod tests {
             0,
             "fs_read",
             "call-1",
-            serde_json::json!({"path": "x"}),
+            serde_json :: json ! ({ "path" : "x" }),
             AwaitMode::Foreground,
             true,
         )
@@ -610,12 +596,7 @@ mod tests {
             .unwrap();
         let request_doc_id = escape_graphql_string(&request.request().doc_id);
         let did_literal = escape_graphql_string(&did);
-        let response = home
-            .node
-            .execute(&format!(
-                r#"mutation {{ create_InferenceCall(input: {{ request_id: "req-evidence", request_doc_id: "{request_doc_id}", node_did: "{did_literal}", call_id: "inference-1", call_kind: "inference", attempt: 0, call_seq: 3, call_state: "failed", failure_reason: "HTTP 503", prompt_tokens: 11, completion_tokens: 7, queued_at: "2026-01-01T00:00:00Z", started_at: "2026-01-01T00:00:01Z", ended_at: "2026-01-01T00:00:02Z" }}) {{ _docID }} }}"#
-            ))
-            .await;
+        let response = home . node . execute (& format ! (r#"mutation {{ create_InferenceCall(input: {{ request_id: "req-evidence", request_doc_id: "{request_doc_id}", node_did: "{did_literal}", call_id: "inference-1", call_kind: "inference", attempt: 0, call_seq: 3, call_state: "failed", failure_reason: "HTTP 503", prompt_tokens: 11, completion_tokens: 7, queued_at: "2026-01-01T00:00:00Z", started_at: "2026-01-01T00:00:01Z", ended_at: "2026-01-01T00:00:02Z" }}) {{ _docID }} }}"#)) . await ;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
         request
             .terminalize_owned(
@@ -627,11 +608,9 @@ mod tests {
             )
             .await
             .unwrap();
-
         let evidence = collect_request_evidence(&home.node, "req-evidence")
             .await
             .unwrap();
-
         assert!(
             evidence
                 .failure_reason
@@ -640,7 +619,6 @@ mod tests {
             "{:?}",
             evidence.failure_reason
         );
-
         assert_eq!(evidence.tool_calls.len(), 1, "{:?}", evidence.tool_calls);
         let tool_call = &evidence.tool_calls[0];
         assert_eq!(tool_call.tool_name, "fs_read");
@@ -655,7 +633,7 @@ mod tests {
                 .args
                 .as_str()
                 .map(|args| serde_json::from_str::<Value>(args).unwrap()),
-            Some(serde_json::json!({"path": "x"}))
+            Some(serde_json :: json ! ({ "path" : "x" }))
         );
         assert!(
             tool_call
@@ -671,7 +649,6 @@ mod tests {
         ] {
             assert!(at.is_some_and(|at| !at.is_empty()), "{field}: {at:?}");
         }
-
         assert_eq!(evidence.inference_calls.len(), 1);
         let call = &evidence.inference_calls[0];
         assert_eq!(
@@ -683,9 +660,7 @@ mod tests {
         assert_eq!(call.queued_at.as_deref(), Some("2026-01-01T00:00:00Z"));
         assert_eq!(call.started_at.as_deref(), Some("2026-01-01T00:00:01Z"));
         assert_eq!(call.ended_at.as_deref(), Some("2026-01-01T00:00:02Z"));
-
         assert!(evidence.responses.is_empty());
-
         assert_eq!(
             evidence
                 .messages
@@ -702,6 +677,10 @@ mod tests {
                 .is_some_and(|at| !at.is_empty())),
             "a message's created_at is its canonical header's: {:?}",
             evidence.messages
+        );
+        assert_eq!(
+            classify_request_outcome(RequestLifecycleState::Failed, false, &evidence),
+            Some("tool")
         );
         home.node.shutdown().await;
     }

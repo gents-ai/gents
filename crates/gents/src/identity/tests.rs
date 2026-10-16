@@ -151,27 +151,34 @@ impl RemoteSigner for TestRemoteSigner {
 #[tokio::test]
 async fn verify_resolves_did_key_without_prior_registration() {
     use identity::FullIdentity as _;
-
     let raw_private_key = crypto::generate_ed25519().unwrap();
     let raw_public_key_bytes = raw_private_key.to_public_key().raw_owned();
     let raw_did = crypto::create_did_key(crypto::KeyType::Ed25519, &raw_public_key_bytes).unwrap();
     let raw_identity = RawIdentity::from_private_key(raw_private_key).unwrap();
     let payload = b"cross-node invite payload";
     let signature = raw_identity.sign(payload).unwrap();
-
     let dir = tempfile::tempdir().unwrap();
-    let node_b = KeyIdentity::load_or_create(&dir.path().join("node-b.key"), None).unwrap();
-
+    let path_b = dir.path().join("node-b.key");
+    let node_b = KeyIdentity::load_or_create(&path_b, None).unwrap();
     let result = node_b.verify(&raw_did, payload, &signature).await;
-    assert!(result.unwrap_or_default());
-
-    let tampered_result = node_b
-        .verify(&raw_did, b"tampered payload", &signature)
-        .await;
-    assert!(!matches!(tampered_result, Ok(true)));
-
-    let garbage_result = node_b
-        .verify("did:key:zGARBAGE_INVALID_DID", payload, &signature)
-        .await;
-    assert!(!matches!(garbage_result, Ok(true)));
+    assert!(
+        result.is_ok(),
+        "verify should succeed for an unregistered did:key, got: {result:?}"
+    );
+    assert!(
+        result.unwrap(),
+        "signature over the correct payload should verify as true"
+    );
+    let tampered = b"tampered payload";
+    let tampered_result = node_b.verify(&raw_did, tampered, &signature).await;
+    assert!(
+        !matches!(tampered_result, Ok(true)),
+        "tampered payload must not verify as true, got: {tampered_result:?}"
+    );
+    let garbage_did = "did:key:zGARBAGE_INVALID_DID";
+    let garbage_result = node_b.verify(garbage_did, payload, &signature).await;
+    assert!(
+        !matches!(garbage_result, Ok(true)),
+        "garbage DID must not verify as true, got: {garbage_result:?}"
+    );
 }

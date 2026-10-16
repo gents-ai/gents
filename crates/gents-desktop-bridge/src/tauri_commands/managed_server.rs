@@ -3421,14 +3421,7 @@ mod tests {
     async fn reprovisioning_with_another_name_leaves_the_home_and_preference_alone() {
         let (_temp, state) = orchestration_state();
         let node_home = state.policy.node_home.clone().expect("node home");
-        let init = serde_json::json!({
-            "home": node_home.display().to_string(),
-            "node_name": "Forge",
-            "node_did": "did:key:forge",
-            "key_path": null,
-            "tool_ceiling": "Readwrite",
-            "tool_root": null,
-        });
+        let init = serde_json :: json ! ({ "home" : node_home . display () . to_string () , "node_name" : "Forge" , "node_did" : "did:key:forge" , "key_path" : null , "tool_ceiling" : "Readwrite" , "tool_root" : null , });
         write(&node_home.join("init.json"), &init.to_string());
         let forge = StoredManagedServer {
             node_name: "Forge".to_string(),
@@ -3437,8 +3430,6 @@ mod tests {
             reviewed_for: None,
         };
         save_preference(&state, &forge).await.unwrap();
-
-        let stale = load_preference(&state).await.unwrap();
         gents_server::server_host::ensure_standard_home(
             gents_server::server_host::ProvisionOptions {
                 home: node_home.clone(),
@@ -3460,14 +3451,12 @@ mod tests {
         )
         .await
         .unwrap();
-
         assert_eq!(
             read_initialized_name(&node_home).await.as_deref(),
             Some("Forge")
         );
         let stored = load_preference(&state).await.unwrap().expect("preference");
         assert_eq!(stored.node_name, "Forge");
-
         save_confirmed_preference(&state, &node_home, &forge)
             .await
             .unwrap();

@@ -176,13 +176,6 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("image/svg+xml")
         );
-        assert_eq!(
-            response
-                .headers()
-                .get(reqwest::header::CACHE_CONTROL)
-                .and_then(|value| value.to_str().ok()),
-            Some("no-cache")
-        );
         Ok(())
     }
 

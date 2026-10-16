@@ -587,12 +587,10 @@ fn port_replacement_requires_address_in_use_for_the_requested_address() {
 async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
     const GROK_BEHAVIOR: &str = "port-live";
     const APPLIED_BACKEND: &str = "fresh-applied-grok-backend";
-
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("pack");
     fs::create_dir_all(&home_dir)?;
-
     let model_name = format!("mock-grok-apply-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
     let agent_name = format!("cli-grok-apply-{}", Uuid::new_v4().simple());
@@ -607,15 +605,10 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-
     run_cli_text(
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
-
-    // The backend does not exist when the runtime's immediate startup probe
-    // takes its tick, so the post-apply path must promote it before readiness
-    // can publish.
     let config_path = root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
     let mut backend = config["inference_backends"][0].clone();
@@ -644,7 +637,6 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
         .context("agents is not an array")?
         .push(agent);
     write_json_file(&config_path, &config)?;
-
     let port = allocate_port()?;
     let socket_path = tempdir.path().join("grok.sock");
     let (mut serve, readiness) = spawn_server_with_ready_json(
@@ -664,20 +656,13 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
         &[],
     )?;
     wait_for_port(port, &mut serve)?;
-    let _stderr = serve.captured_output()?;
-
+    let (_stdout, stderr) = serve.captured_output()?;
     assert_eq!(
         readiness.pointer("/apply_root/ok").and_then(Value::as_bool),
         Some(true),
         "the pack must apply before readiness: {readiness}"
     );
-    assert_eq!(
-        readiness
-            .pointer("/grok_shim/bound")
-            .and_then(Value::as_bool),
-        Some(true),
-        "the agent supplied by --apply-root must bind in the same invocation: {readiness}"
-    );
+    assert_eq ! (readiness . pointer ("/grok_shim/bound") . and_then (Value :: as_bool) , Some (true) , "the agent supplied by --apply-root must bind in the same invocation: {readiness}; stderr: {stderr}");
     assert_eq!(
         readiness
             .pointer("/grok_shim/socket")
@@ -688,7 +673,6 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
         socket_path.exists(),
         "the bound Grok leader must publish its socket"
     );
-
     Ok(())
 }
 

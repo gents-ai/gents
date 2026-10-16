@@ -2067,6 +2067,12 @@ fn template_doc_fields_follow_the_declared_schema_vocabulary() -> Result<()> {
             && message.contains("its fields are message, reply_session_id"),
         "{message}"
     );
+    let (trigger, task, source) =
+        rule_documents("Work {{ doc.COUNT }}", None, false, None, "GapInput")?;
+    let message = format!(
+        "{:#}",
+        validate_event_trigger_document_fields(&trigger, &task, &source, &declared).unwrap_err()
+    );
     assert!(
         message.contains("prompt_template references doc.COUNT"),
         "{message}"

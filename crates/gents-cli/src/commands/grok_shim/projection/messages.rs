@@ -584,7 +584,7 @@ mod canonical_selection_tests {
         terminal_request.lifecycle_state = Some(RequestLifecycleState::Failed);
         terminal_request.terminal_output = Some(gents_protocol::output::TerminalOutput::NoMessage);
         assert_eq!(
-            project_messages_with_sink(&partial, None, &terminal_request, 8192)
+            project_with_request(&partial, &terminal_request)
                 .await
                 .unwrap()
                 .live_tail

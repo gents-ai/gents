@@ -2234,21 +2234,7 @@ mod tests {
 
     #[test]
     fn parse_prompt_request_reads_audited_meta() {
-        let params = json!({
-            "sessionId": "session-1",
-            "prompt": [
-                {
-                    "type": "text",
-                    "text": "hello",
-                    "meta": {"skillTokenRanges": [[0, 5]]},
-                },
-            ],
-            "_meta": {
-                "promptId": "prompt-1",
-                "screenMode": "fullscreen",
-                "sendNow": true,
-            },
-        });
+        let params = json ! ({ "sessionId" : "session-1" , "prompt" : [{ "type" : "text" , "text" : "hello" , "meta" : { "skillTokenRanges" : [[0 , 5]] } , } ,] , "_meta" : { "promptId" : "prompt-1" , "screenMode" : "fullscreen" , "sendNow" : true , } , });
         let request = parse_prompt_request(&params, Some(json!(7))).unwrap();
         assert_eq!(request.session_id, "session-1");
         assert_eq!(request.prompt_id.as_deref(), Some("prompt-1"));
@@ -2256,18 +2242,18 @@ mod tests {
         assert!(request.send_now);
         assert_eq!(request.id, Some(json!(7)));
         assert_eq!(request.prompt.len(), 1);
+        assert!(request.prompt[0].has_skill_token_ranges());
+        assert_eq!(request.prompt[0].bash_command(), None);
     }
 
     #[test]
     fn parse_prompt_request_defaults_optional_meta() {
-        let params = json!({
-            "sessionId": "session-1",
-            "prompt": [text_block("hi")],
-        });
+        let params = json ! ({ "sessionId" : "session-1" , "prompt" : [text_block ("hi")] , });
         let request = parse_prompt_request(&params, None).unwrap();
         assert_eq!(request.prompt_id, None);
         assert_eq!(request.screen_mode, None);
         assert!(!request.send_now);
+        assert!(!request.prompt[0].has_skill_token_ranges());
     }
 
     #[test]
@@ -2300,31 +2286,31 @@ mod tests {
 
     #[test]
     fn parse_cancel_notification_reads_audited_meta() {
-        let params = json!({
-            "sessionId": "session-1",
-            "_meta": {
-                "cancelTrigger": "user",
-                "rewindIfNoOutput": true,
-                "rewindIfPristine": true,
-                "promptId": "prompt-1",
-            },
-        });
+        let params = json ! ({ "sessionId" : "session-1" , "_meta" : { "cancelTrigger" : "user" , "rewindIfNoOutput" : true , "rewindIfPristine" : true , "promptId" : "prompt-1" , } , });
         let notification = parse_cancel_notification(&params).unwrap();
         assert_eq!(notification.session_id, "session-1");
         assert_eq!(notification.cancel_trigger.as_deref(), Some("user"));
         assert!(notification.rewind_if_no_output);
         assert!(notification.rewind_if_pristine);
         assert_eq!(notification.prompt_id.as_deref(), Some("prompt-1"));
+        let meta = notification.meta();
+        assert_eq!(meta["cancelTrigger"], json!("user"));
+        assert_eq!(meta["rewindIfNoOutput"], json!(true));
+        assert_eq!(meta["rewindIfPristine"], json!(true));
+        assert_eq!(meta["promptId"], json!("prompt-1"));
     }
 
     #[test]
     fn parse_cancel_notification_omits_absent_optional_keys() {
-        let params = json!({"sessionId": "session-1", "_meta": {}});
+        let params = json ! ({ "sessionId" : "session-1" , "_meta" : { } });
         let notification = parse_cancel_notification(&params).unwrap();
         assert_eq!(notification.cancel_trigger, None);
         assert!(!notification.rewind_if_no_output);
         assert!(!notification.rewind_if_pristine);
         assert_eq!(notification.prompt_id, None);
+        let meta = notification.meta();
+        assert!(meta.get("cancelTrigger").is_none());
+        assert!(meta.get("promptId").is_none());
     }
 
     #[test]

@@ -732,10 +732,8 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
 async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
     let behavior = schedule_test_behavior();
     let owner_did = behavior.node_did().to_string();
-
     let trigger_doc_id = create_schedule_with_next_run_at(
         &node,
         &owner_did,
@@ -747,7 +745,13 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
         "serial",
     )
     .await;
-
+    let precondition = read_trigger_cursor(node.as_ref(), &owner_did, "sched-null")
+        .await
+        .unwrap();
+    assert!(
+        precondition.is_none(),
+        "precondition: created Trigger should have null next_run_at, got {precondition:?}"
+    );
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: "task-null".to_string(),
@@ -777,24 +781,21 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
     let cancel = CancellationToken::new();
     let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
         .with_tick_every(Duration::from_millis(50));
-
     let started = Instant::now();
     let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect(
             "next_fire did not yield a FireIntent within 2s for a trigger with null \
-             next_run_at; the engine must seed the Trigger cursor on first-seen",
+             next_run_at; the engine must seed the Trigger cursor on first-seen (Finding 2)",
         )
         .expect("next_fire returned None for a trigger with null next_run_at");
     let elapsed = started.elapsed();
-
     assert_eq!(intent.trigger_id.as_deref(), Some("sched-null"));
     assert_eq!(intent.trigger_kind, TriggerKind::Schedule);
     assert!(
         elapsed < Duration::from_secs(2),
         "first-tick fire should land within a couple of ticks, took {elapsed:?}"
     );
-
     let after_seed = read_trigger_cursor(node.as_ref(), &owner_did, "sched-null")
         .await
         .unwrap();

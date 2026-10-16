@@ -268,16 +268,7 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         "continue after background completion",
     )
     .await;
-
-    let foreign = serde_json::json!({
-        "request_id":"foreign-interactive", "node_did":node_did,
-        "purpose":"normal",
-        "requester_did":"did:test:foreign-requester", "agent_id":AGENT_NAME,
-        "session_id":"wake-redrive-session", "content":"foreign interactive",
-        "lifecycle_state":"pending", "execution_origin":"interactive",
-        "created_at":"2099-01-01T00:00:00Z", "retry_count":0, "max_retries":3,
-        "request_hop":0
-    });
+    let foreign = serde_json :: json ! ({ "request_id" : "foreign-interactive" , "node_did" : node_did , "purpose" : "normal" , "requester_did" : "did:test:foreign-requester" , "agent_id" : AGENT_NAME , "session_id" : "wake-redrive-session" , "content" : "foreign interactive" , "lifecycle_state" : "pending" , "execution_origin" : "interactive" , "created_at" : "2099-01-01T00:00:00Z" , "retry_count" : 0 , "max_retries" : 3 , "request_hop" : 0 });
     let foreign_input = gents_protocol::graphql::graphql_input_literal(&foreign).unwrap();
     let response = db
         .node
@@ -296,15 +287,12 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     assert_eq!(blocked.ineligible, 1);
     assert_eq!(blocked.redriven, 0);
     assert_eq!(blocked.failed, 0);
-    let response = db.node.execute(&format!(
-        r#"mutation {{ delete_AgentRequest(filter: {{ node_did: {{ _eq: "{node_did}" }}, request_id: {{ _eq: "foreign-interactive" }} }}) {{ _docID }} }}"#
-    )).await;
+    let response = db . node . execute (& format ! (r#"mutation {{ delete_AgentRequest(filter: {{ node_did: {{ _eq: "{node_did}" }}, request_id: {{ _eq: "foreign-interactive" }} }}) {{ _docID }} }}"#)) . await ;
     assert!(
         !response.has_errors(),
         "remove competing fixture: {:?}",
         response.errors
     );
-
     let (first, concurrent) = tokio::join!(
         RequestLifecycle::redrive_failed_background_wakeups(&db.node, &node_did),
         RequestLifecycle::redrive_failed_background_wakeups(&db.node, &node_did),
@@ -320,7 +308,6 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     );
     assert_eq!(first.already_redriven + concurrent.already_redriven, 1);
     assert_eq!(first.failed + concurrent.failed, 0);
-
     let rows = background_wake_retry_rows(&db.node, "wake-redrive-session").await;
     assert_eq!(rows.len(), 2);
     let successor = rows
@@ -355,11 +342,6 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         .is_some_and(|signature| !signature.is_empty()));
     assert_eq!(successor.backend_id, None);
     assert_eq!(successor.max_total_tokens, None);
-    assert_eq!(successor.retry_count, Some(2));
-    assert_eq!(successor.max_retries, Some(3));
-    assert_eq!(successor.input.as_ref(), Some(&input));
-    assert_eq!(successor.deadline, None);
-    assert_eq!(successor.valid_until, None);
     assert_eq!(
         successor.retry_parent_request.as_deref(),
         Some("failed-wake")
@@ -369,7 +351,11 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         successor.content.as_deref(),
         Some(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
     );
-
+    assert_eq!(successor.retry_count, Some(2));
+    assert_eq!(successor.max_retries, Some(3));
+    assert_eq!(successor.input.as_ref(), Some(&input));
+    assert_eq!(successor.deadline, None);
+    assert_eq!(successor.valid_until, None);
     let second = RequestLifecycle::redrive_failed_background_wakeups(&db.node, &node_did)
         .await
         .expect("repeat redrive");
