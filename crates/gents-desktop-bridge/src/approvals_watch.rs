@@ -113,6 +113,8 @@ fn changes_queue(event: &Event, queue: &Path) -> bool {
     })
 }
 
+/// notify 8.2 purges device event history when an FSEvents stream stops;
+/// macOS uses kqueue to keep approval watcher lifetimes independent.
 struct QueueWatch {
     watcher: RecommendedWatcher,
     queue: PathBuf,
