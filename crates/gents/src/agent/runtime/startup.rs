@@ -421,10 +421,17 @@ async fn run_agent_owned(
     }
     // Subscribe before the MCP health checker can persist a transition that
     // makes a required service runnable.
-    let control_subscription = agent
+    let control_subscription = match agent
         .document_runtime_context()
-        .is_some()
-        .then(|| agent.node.subscribe_document_changes());
+        .map(|_| super::control_watcher::subscribe_control_changes(&agent.node))
+        .transpose()
+    {
+        Ok(subscription) => subscription,
+        Err(error) => {
+            runtime_status.publish_error(&format!("{error:#}")).await;
+            return Err(error);
+        }
+    };
     log_recovery(
         &agent.node,
         agent.node_did(),

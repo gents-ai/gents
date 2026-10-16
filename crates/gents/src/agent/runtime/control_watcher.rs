@@ -34,9 +34,27 @@ const CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
     idle_sleep: CONTROL_WATCHER_IDLE_SLEEP,
 };
 
+/// Coalesced changes to the control collections, with each subscribed
+/// collection id mapped back to its name.
+pub(super) struct ControlSubscription {
+    changes: events::DocumentChangeSubscription,
+    names_by_id: HashMap<String, &'static str>,
+}
+
+pub(super) fn subscribe_control_changes(
+    node: &defra_node::EmbeddedNode,
+) -> Result<ControlSubscription> {
+    let names = document_view::control_collection_names().collect::<Vec<_>>();
+    let ids = crate::collection_ids(node, names.iter().copied())?;
+    Ok(ControlSubscription {
+        changes: node.subscribe_collection_changes(ids.clone()),
+        names_by_id: ids.into_iter().zip(names).collect(),
+    })
+}
+
 pub(super) async fn run_control_watcher(
     node: Arc<defra_node::EmbeddedNode>,
-    subscription: events::DocumentChangeSubscription,
+    subscription: ControlSubscription,
     node_did: String,
     resolve_context: DocumentResolveContext,
     proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
@@ -61,7 +79,7 @@ pub(super) async fn run_control_watcher(
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_control_watcher_with_timing(
     node: Arc<defra_node::EmbeddedNode>,
-    mut subscription: events::DocumentChangeSubscription,
+    subscription: ControlSubscription,
     node_did: String,
     resolve_context: DocumentResolveContext,
     proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
@@ -80,7 +98,10 @@ pub(super) async fn run_control_watcher_with_timing(
     let mut phase_transition_pending = false;
     let mut resync_required = false;
     let mut replicated_pending = false;
-    let mut collection_id_to_name = HashMap::<String, String>::new();
+    let ControlSubscription {
+        changes: mut subscription,
+        names_by_id,
+    } = subscription;
     let mut measured_mcp_availability =
         crate::tool_surface::measured_available_mcp_service_ids(&node, &node_did)
             .await?
@@ -243,12 +264,11 @@ pub(super) async fn run_control_watcher_with_timing(
                 }
 
                 for update in batch.changes {
-                    let collection_name = resolve_collection_name(
-                        node.as_ref(),
-                        &mut collection_id_to_name,
-                        update.collection_id.as_str(),
-                    );
-                    if collection_name.as_deref() == Some("ToolServiceHealthState") {
+                    let collection_name = names_by_id
+                        .get(&update.collection_id)
+                        .copied()
+                        .unwrap_or(update.collection_id.as_str());
+                    if collection_name == "ToolServiceHealthState" {
                         let current = match crate::tool_surface::measured_available_mcp_service_ids(
                             &node,
                             &node_did,
@@ -271,9 +291,8 @@ pub(super) async fn run_control_watcher_with_timing(
                         measured_mcp_availability = current;
                     }
                     match document_view::apply_control_update(
-                        node.as_ref(),
                         &node_did,
-                        collection_name.as_deref().unwrap_or(update.collection_id.as_str()),
+                        collection_name,
                         &update.doc_id,
                         &mut document_view,
                     )
@@ -360,22 +379,4 @@ pub(super) async fn run_control_watcher_with_timing(
             }
         }
     }
-}
-
-fn resolve_collection_name(
-    node: &defra_node::EmbeddedNode,
-    cache: &mut HashMap<String, String>,
-    collection_id: &str,
-) -> Option<String> {
-    if let Some(name) = cache.get(collection_id) {
-        return Some(name.clone());
-    }
-    let names = node.list_collections().ok()?;
-    for name in names {
-        let Some(definition) = node.get_collection(&name).ok().flatten() else {
-            continue;
-        };
-        cache.insert(definition.collection_id.clone(), definition.name.clone());
-    }
-    cache.get(collection_id).cloned()
 }

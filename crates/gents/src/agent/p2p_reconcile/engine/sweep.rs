@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use defra_node::EmbeddedNode;
 use futures::{stream, StreamExt};
 use tokio_util::sync::CancellationToken;
@@ -34,48 +34,16 @@ pub async fn run_pairing_reconciler(
     let admin = EmbeddedRemoteP2pAdmin::new(node.clone());
     let store =
         GraphqlPairingStateStore::with_enrollment_authority(node.clone(), identity, enrollment);
-    // Subscribe before resolving IDs so startup-racing commits stay pending.
-    let subscription = node.subscribe_document_changes();
-    let watched_collection_ids = pairing_state_collection_ids(&node)?;
+    let subscription = crate::subscribe_collections(&node, PAIRING_STATE_COLLECTIONS)?;
 
-    run_pairing_reconciler_loop(
-        &admin,
-        &store,
-        subscription,
-        &watched_collection_ids,
-        &cancel,
-    )
-    .await;
+    run_pairing_reconciler_loop(&admin, &store, subscription, &cancel).await;
     Ok(())
-}
-
-fn pairing_state_collection_ids(node: &EmbeddedNode) -> Result<BTreeSet<String>> {
-    PAIRING_STATE_COLLECTIONS
-        .into_iter()
-        .map(|name| {
-            node.get_collection(name)?
-                .map(|collection| collection.collection_id)
-                .with_context(|| format!("{name} schema is not installed"))
-        })
-        .collect()
-}
-
-pub(super) fn document_changes_wake_pairing_reconcile(
-    batch: &events::DocumentChangeBatch,
-    watched_collection_ids: &BTreeSet<String>,
-) -> bool {
-    batch.resync_required
-        || batch
-            .changes
-            .iter()
-            .any(|change| watched_collection_ids.contains(&change.collection_id))
 }
 
 pub(super) async fn run_pairing_reconciler_loop(
     admin: &dyn RemoteP2pAdmin,
     store: &dyn PairingStateStore,
     mut subscription: events::DocumentChangeSubscription,
-    watched_collection_ids: &BTreeSet<String>,
     cancel: &CancellationToken,
 ) {
     let mut interval = tokio::time::interval(super::super::intervals::sweep_interval());
@@ -117,9 +85,6 @@ pub(super) async fn run_pairing_reconciler_loop(
                     subscription_open = false;
                     continue;
                 };
-                if !document_changes_wake_pairing_reconcile(&batch, watched_collection_ids) {
-                    continue;
-                }
                 if batch.resync_required {
                     tracing::warn!(target: "gents::agent::p2p_reconcile::engine",
                         updates = batch.updates,

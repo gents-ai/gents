@@ -11,8 +11,7 @@ use super::reconcile::reconcile_peer_tick_with_replay;
 use super::remote_topology::{canonical_replicator_address, read_actual};
 use super::rows::{graphql_nullable_string_array, AppliedStateRow};
 use super::sweep::{
-    document_changes_wake_pairing_reconcile, run_pairing_reconciler_loop, sweep_pairings,
-    sweep_pairings_logged_until_cancelled,
+    run_pairing_reconciler_loop, sweep_pairings, sweep_pairings_logged_until_cancelled,
 };
 use super::*;
 use crate::agent::p2p_reconcile::graphql_helpers::rows;

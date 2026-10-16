@@ -603,7 +603,7 @@ pub(crate) async fn selected_background_wake_with_successor(
             .unwrap(),
         TerminalizeResult::Won
     );
-    let mut watcher = DefraWatcher::new(node.clone(), did);
+    let mut watcher = DefraWatcher::new(node.clone(), did).expect("request watcher");
     let selected = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             let selected = watcher

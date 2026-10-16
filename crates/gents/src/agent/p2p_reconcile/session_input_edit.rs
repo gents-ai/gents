@@ -346,11 +346,7 @@ pub async fn run_session_input_edit_reconciler(
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let collection_id = node
-        .get_collection("AgentSessionInputEdit")?
-        .context("AgentSessionInputEdit schema missing")?
-        .collection_id;
-    let mut changes = node.subscribe_document_changes();
+    let mut changes = crate::subscribe_collections(&node, ["AgentSessionInputEdit"])?;
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     let mut subscription_open = true;
     let mut deferred: HashMap<String, DateTime<Utc>> = HashMap::new();
@@ -408,9 +404,7 @@ pub async fn run_session_input_edit_reconciler(
             }
             event = changes.recv(), if subscription_open => match event {
                 Some(event) => {
-                    ids.extend(event.changes.into_iter()
-                        .filter(|change| change.collection_id == collection_id)
-                        .map(|change| change.doc_id));
+                    ids.extend(event.changes.into_iter().map(|change| change.doc_id));
                     event.resync_required.then_some(Sweep::Unverified)
                 }
                 None => {
