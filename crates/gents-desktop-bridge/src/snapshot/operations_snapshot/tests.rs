@@ -3,6 +3,42 @@ use super::super::super::types::{
 };
 use super::*;
 
+#[test]
+fn project_filters_to_background_await_mode_only() {
+    let mut toolcall_rows = vec![
+        ToolCallRow {
+            request_id: "req_a".into(),
+            tool_call_id: "tc_bg".into(),
+            tool_name: "grep".into(),
+            lifecycle_state: Some("running".into()),
+            status: None,
+            started_at: Some("2026-05-20T12:00:00Z".into()),
+            deadline_at: None,
+            await_mode: Some("background".into()),
+            stuck_since: None,
+        },
+        ToolCallRow {
+            request_id: "req_a".into(),
+            tool_call_id: "tc_fg".into(),
+            tool_name: "grep_fg".into(),
+            lifecycle_state: Some("running".into()),
+            status: None,
+            started_at: Some("2026-05-20T12:00:00Z".into()),
+            deadline_at: None,
+            await_mode: Some("foreground".into()),
+            stuck_since: None,
+        },
+    ];
+    let mut no_mode = toolcall_rows[1].clone();
+    no_mode.tool_call_id = "tc_no_mode".into();
+    no_mode.await_mode = None;
+    toolcall_rows.push(no_mode);
+    let projected =
+        project_backgrounded_tools(&toolcall_rows, &liveness_with(Vec::new(), Vec::new()));
+    assert_eq!(projected.len(), 1);
+    assert_eq!(projected[0].tool_call_id, "tc_bg");
+}
+
 fn liveness_with(
     tools: Vec<ActiveToolCallView>,
     execs: Vec<NativeExecutorStatusView>,
