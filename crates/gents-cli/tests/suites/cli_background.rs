@@ -14,6 +14,7 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
         let node = initialized_node(tempdir.path(), &node_home, "background-test").await?;
         ensure_runtime_schemas(&node).await?;
         seed_background_tool_calls(&node).await?;
+        node.shutdown().await;
     }
 
     let node_home = node_home.to_str().context("node home utf8")?;
