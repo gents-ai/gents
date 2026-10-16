@@ -459,12 +459,28 @@ impl ClientCore {
         session_id: &str,
         input: gents_protocol::request_input::RequestInput,
     ) -> Result<gents_protocol::request_input::RequestInput> {
+        self.prepare_user_message_input_with_delivery(
+            node_did,
+            session_id,
+            input,
+            gents_protocol::request_input::QueueDelivery::Steer,
+        )
+        .await
+    }
+
+    pub async fn prepare_user_message_input_with_delivery(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        input: gents_protocol::request_input::RequestInput,
+        delivery: gents_protocol::request_input::QueueDelivery,
+    ) -> Result<gents_protocol::request_input::RequestInput> {
         gents::lifecycle::prepare_user_message_input(
             &self.session_queue_access(node_did),
             node_did,
             session_id,
             input,
-            gents_protocol::request_input::QueueDelivery::Steer,
+            delivery,
         )
         .await
     }

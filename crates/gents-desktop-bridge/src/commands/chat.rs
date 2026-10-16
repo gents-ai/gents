@@ -49,13 +49,16 @@ pub async fn send_chat_message(
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
     let input = core
-        .prepare_user_message_input(
+        .prepare_user_message_input_with_delivery(
             &node_did,
             &session_id,
             gents_protocol::request_input::RequestInput {
                 cwd: chat_folder(request.cwd.as_deref())?,
                 ..Default::default()
             },
+            request
+                .delivery
+                .unwrap_or(gents_protocol::request_input::QueueDelivery::Steer),
         )
         .await?;
 

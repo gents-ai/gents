@@ -26,6 +26,7 @@ import type {
   AgentDeleteRequest,
   ContextDeleteRequest,
   AgentSaveRequest,
+  ChatSendRequest,
   ChatSendResult,
   CodexLoginResult,
   ClaudeLoginResult,
@@ -45,7 +46,6 @@ import type {
   InitSummary,
   InterruptRequestResult,
   MailboxItemView,
-  MailboxQuestionAnswer,
   MCPServiceHealthView,
   McpServiceProbeResult,
   NetworkStatusView,
@@ -174,15 +174,7 @@ export type DesktopApiAdapter = {
     baseReasoningByteLen: number;
     baseReasoningHash: string;
   }) => Promise<SessionLiveDeltaView | null>;
-  sendChatMessage: (request: {
-    nodeDid: string;
-    agentId?: string | null;
-    sessionId?: string | null;
-    content: string;
-    causedBySourceDocId?: string | null;
-    answer?: MailboxQuestionAnswer | null;
-    cwd?: string | null;
-  }) => Promise<ChatSendResult>;
+  sendChatMessage: (request: ChatSendRequest) => Promise<ChatSendResult>;
   editPendingQueue: (
     request: PendingQueueEditRequest,
   ) => Promise<PendingQueueEditResult>;

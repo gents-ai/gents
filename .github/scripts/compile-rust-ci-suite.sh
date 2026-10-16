@@ -25,6 +25,7 @@ case "${suite}" in
       gents-desktop-core
       gents-desktop
       gents-desktop-bridge
+      gents-client-host
       fixture-domain-plugin
       gents-fixture-host
     )

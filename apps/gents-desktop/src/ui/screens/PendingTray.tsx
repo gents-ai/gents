@@ -31,7 +31,7 @@ import {
   separatedBySettings,
   type PendingRow,
   type QueueEdit,
-} from "./pendingQueue";
+} from "@source-inc/gents-desktop-client";
 import { useComposerEdit } from "./session/composerEdit";
 import { AutomatedInput } from "./TranscriptInputs";
 

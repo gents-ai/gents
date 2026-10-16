@@ -6,6 +6,14 @@ license.workspace = true
 repository.workspace = true
 description = "Headless native host for Gents clients"
 
+[features]
+runtime-e2e = []
+editor-e2e = ["runtime-e2e"]
+
+[[test]]
+name = "runtime"
+required-features = ["runtime-e2e"]
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
@@ -16,9 +24,12 @@ tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
 
 [dev-dependencies]
+axum = "0.8"
 bytes.workspace = true
 futures = "0.3"
+futures-util = "0.3"
 gents = { path = "../gents" }
+gents-protocol.workspace = true
 serde_json.workspace = true
 tempfile = "3"
 

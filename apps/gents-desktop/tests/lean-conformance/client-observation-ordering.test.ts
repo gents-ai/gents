@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import { acceptsLiveCursor } from "../../src/hooks/liveDelta";
+import { acceptsLiveCursor } from "@source-inc/gents-desktop-client";
 import { acceptsAsyncResult } from "../../src/hooks/observationOrdering";
 import {
   projectStartupPhaseAfterSnapshot,

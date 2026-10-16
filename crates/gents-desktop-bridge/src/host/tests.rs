@@ -23,7 +23,12 @@ async fn two_attachments_share_a_core_and_detaching_does_not_close_it() {
             .max_frame_length(protocol::MAX_FRAME_BYTES)
             .new_framed(client);
         client
-            .send(Bytes::from_static(br#"{"kind":"hello","version":1}"#))
+            .send(Bytes::from(
+                serde_json::to_vec(&json!({
+                    "kind": "hello", "version": protocol::PROTOCOL_VERSION
+                }))
+                .unwrap(),
+            ))
             .await
             .unwrap();
         let hello: Value = serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
@@ -80,14 +85,17 @@ async fn initialization_rejects_incompatible_protocols_and_oversized_frames() {
     let (core, _dir) = crate::tests::support::boot_core().await;
     let host = Arc::new(ClientHost::new(core.clone()));
     for payload in [
-        br#"{"kind":"hello","version":2}"#.as_slice(),
+        serde_json::to_vec(&json!({"kind":"hello", "version": protocol::PROTOCOL_VERSION + 1}))
+            .unwrap(),
+        serde_json::to_vec(&json!({"kind":"hello", "version": protocol::PROTOCOL_VERSION - 1}))
+            .unwrap(),
         br#"{"kind":"call","id":1,"command":{"name":"desktop_client_snapshot","args":{}}}"#
-            .as_slice(),
+            .to_vec(),
     ] {
         let (client, server) = tokio::io::duplex(4096);
         let task = tokio::spawn(host.clone().serve(server, CancellationToken::new()));
         let mut client = LengthDelimitedCodec::builder().new_framed(client);
-        client.send(Bytes::copy_from_slice(payload)).await.unwrap();
+        client.send(Bytes::from(payload)).await.unwrap();
         assert!(task.await.unwrap().is_err());
     }
     let (mut client, server) = tokio::io::duplex(4096);

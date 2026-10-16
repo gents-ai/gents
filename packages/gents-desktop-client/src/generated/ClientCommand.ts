@@ -2,8 +2,9 @@
 import type { ChatSendRequest } from "./ChatSendRequest.js";
 import type { DesktopInterruptRequest } from "./DesktopInterruptRequest.js";
 import type { EnrollmentStatusRequest } from "./EnrollmentStatusRequest.js";
+import type { PendingQueueEditRequest } from "./PendingQueueEditRequest.js";
 import type { SessionLiveDeltaArgs } from "./SessionLiveDeltaArgs.js";
 import type { SessionRenameRequest } from "./SessionRenameRequest.js";
 import type { SessionSnapshotArgs } from "./SessionSnapshotArgs.js";
 
-export type ClientCommand = { "name": "desktop_client_snapshot", "args": Record<string, never> } | { "name": "desktop_peer_enroll_status", "args": { request: EnrollmentStatusRequest, } } | { "name": "desktop_session_snapshot", "args": SessionSnapshotArgs } | { "name": "desktop_session_live_delta", "args": SessionLiveDeltaArgs } | { "name": "desktop_chat_send", "args": { request: ChatSendRequest, } } | { "name": "desktop_session_rename", "args": { request: SessionRenameRequest, } } | { "name": "desktop_interrupt_request", "args": { request: DesktopInterruptRequest, } };
+export type ClientCommand = { "name": "desktop_client_snapshot", "args": Record<string, never> } | { "name": "desktop_peer_enroll_status", "args": { request: EnrollmentStatusRequest, } } | { "name": "desktop_session_snapshot", "args": SessionSnapshotArgs } | { "name": "desktop_session_live_delta", "args": SessionLiveDeltaArgs } | { "name": "desktop_chat_send", "args": { request: ChatSendRequest, } } | { "name": "desktop_pending_queue_edit", "args": { request: PendingQueueEditRequest, } } | { "name": "desktop_session_rename", "args": { request: SessionRenameRequest, } } | { "name": "desktop_interrupt_request", "args": { request: DesktopInterruptRequest, } };

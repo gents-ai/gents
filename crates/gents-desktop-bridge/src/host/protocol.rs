@@ -4,12 +4,13 @@ use ts_rs::TS;
 
 use crate::error::BridgeError;
 use crate::types::{
-    ChatSendRequest, DesktopInterruptRequest, EnrollmentStatusRequest, SessionRenameRequest,
+    ChatSendRequest, DesktopInterruptRequest, EnrollmentStatusRequest, PendingQueueEditRequest,
+    SessionRenameRequest,
 };
 
 /// Change the version for incompatible framing or operation semantics.
 /// Additional commands are negotiated through the initialization inventory.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PENDING_CALLS: usize = 32;
 
@@ -36,6 +37,8 @@ pub enum ClientCommand {
     SessionLiveDelta(SessionLiveDeltaArgs),
     #[serde(rename = "desktop_chat_send")]
     Send { request: ChatSendRequest },
+    #[serde(rename = "desktop_pending_queue_edit")]
+    EditPending { request: PendingQueueEditRequest },
     #[serde(rename = "desktop_session_rename")]
     Rename { request: SessionRenameRequest },
     #[serde(rename = "desktop_interrupt_request")]
@@ -49,6 +52,7 @@ impl ClientCommand {
         "desktop_session_snapshot",
         "desktop_session_live_delta",
         "desktop_chat_send",
+        "desktop_pending_queue_edit",
         "desktop_session_rename",
         "desktop_interrupt_request",
     ];

@@ -2,7 +2,7 @@ import type {
   PendingQueueEditRequest,
   PendingQueueEntryView,
   PendingTurnView,
-} from "@source-inc/gents-desktop-client";
+} from "./types.js";
 
 export type QueueEdit = Omit<PendingQueueEditRequest, "nodeDid" | "sessionId">;
 

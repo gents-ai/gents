@@ -4652,12 +4652,15 @@ name = "gents-client-host"
 version = "0.20.0"
 dependencies = [
  "anyhow",
+ "axum",
  "bytes",
  "clap",
  "futures",
+ "futures-util",
  "gents",
  "gents-desktop-bridge",
  "gents-desktop-core",
+ "gents-protocol",
  "libc",
  "serde_json",
  "tempfile",
