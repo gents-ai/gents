@@ -559,6 +559,13 @@ mod canonical_selection_tests {
             .contains("older"));
     }
 
+    async fn project_with_request(
+        facts: &Facts,
+        request: &gents_protocol::row::AgentRequestRow,
+    ) -> Result<MessageProjection> {
+        project_messages_with_sink(facts, None, request, 8192).await
+    }
+
     #[tokio::test]
     async fn active_partial_settles_but_terminal_retained_partial_is_not_live() {
         let partial = Facts {

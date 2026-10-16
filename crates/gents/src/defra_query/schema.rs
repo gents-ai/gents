@@ -228,6 +228,18 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn schema_from(names_and_types: &[(&str, &str)]) -> CollectionSchema {
+        CollectionSchema {
+            fields: names_and_types
+                .iter()
+                .map(|(n, t)| SchemaField {
+                    name: n.to_string(),
+                    type_name: t.to_string(),
+                })
+                .collect(),
+        }
+    }
+
     #[test]
     fn introspection_query_rejects_injection() {
         let err = introspection_query("X\") { } evil").unwrap_err();

@@ -376,6 +376,10 @@ pub(super) fn dedupe_strings(values: Vec<String>) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn top_bash() -> ToolPolicyBash {
+        ToolPolicyBash::unrestricted()
+    }
+
     #[test]
     fn effective_only_empty_allowed_projects_to_deny_all_not_allow_all() {
         for scope in [

@@ -704,6 +704,46 @@ mod tests {
         assert!(!observed.interrupted_on_deadline);
     }
 
+    fn evidence(
+        inference_failed: bool,
+        tool_failed: bool,
+        failure_reason: Option<&str>,
+    ) -> RequestEvidence {
+        RequestEvidence {
+            messages: vec![],
+            tool_calls: if tool_failed {
+                vec![ToolCallEvidence {
+                    tool_name: "t".into(),
+                    status: Some("failed".into()),
+                    lifecycle_state: Some("failed".into()),
+                    tool_failure_class: None,
+                    started_at: None,
+                    completed_at: None,
+                    args: Value::Null,
+                    result: Value::Null,
+                }]
+            } else {
+                vec![]
+            },
+            inference_calls: if inference_failed {
+                vec![InferenceCallEvidence {
+                    call_seq: 1,
+                    call_state: Some("failed".into()),
+                    failure_reason: None,
+                    prompt_tokens: None,
+                    completion_tokens: None,
+                    queued_at: None,
+                    started_at: None,
+                    ended_at: None,
+                }]
+            } else {
+                vec![]
+            },
+            responses: vec![],
+            failure_reason: failure_reason.map(str::to_string),
+        }
+    }
+
     #[tokio::test]
     async fn await_terminal_interrupts_on_the_deadline_and_reports_it() {
         let home = EmbeddedHome::create_temp("observe-deadline").await.unwrap();

@@ -196,6 +196,23 @@ mod tests {
         source
     }
 
+    fn receipt_source(id: &str, extra: serde_json::Value) -> serde_json::Value {
+        let mut source = source(id, extra);
+        source["source_collection"] = json!("WorkspaceReceipt");
+        source
+    }
+
+    fn receipt_manifest(
+        source_extra: serde_json::Value,
+        emit_outcome: bool,
+    ) -> Result<DesiredStateManifest> {
+        manifest(
+            json!([receipt_source("reviewed", source_extra)]),
+            json ! ([{ "node_did" : OWNER , "task_id" : "review" , "agent_id" : "beh" , "prompt_template" : "Review attempt {{ doc.attempt }} for {{ doc.workspace_id }}" , "emit_outcome" : emit_outcome , }]),
+            json ! ([{ "node_did" : OWNER , "trigger_id" : "on-review" , "task_id" : "review" , "source" : { "kind" : "event" , "event_source_id" : "reviewed" } , }]),
+        )
+    }
+
     #[tokio::test]
     async fn accepts_native_route_template_fields_the_schema_does_not_declare() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
