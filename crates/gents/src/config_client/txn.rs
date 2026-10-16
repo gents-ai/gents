@@ -1799,11 +1799,7 @@ impl<'a> ConfigApplyTxn<'a> {
                         Ok(())
                     }
                     Ok(Err(error)) => {
-                        let conflict = matches!(
-                            &error,
-                            query::TransactionError::Execution(message)
-                                if retry::is_transaction_conflict_text(message)
-                        );
+                        let conflict = matches!(&error, query::TransactionError::Conflict(_));
                         if conflict {
                             Err(CommitFailure {
                                 error: retry::transaction_conflict(ConflictSource::TypedError),
