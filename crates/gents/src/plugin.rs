@@ -290,7 +290,6 @@ impl PluginRunner {
             ..manifold
         };
 
-        start_wasm_trap_handler_with_signals_blocked()?;
         let stdin =
             serde_json::to_vec(arguments).context("encoding plugin arguments as canonical JSON")?;
         let request = plugin_run_request(stdin, manifold, budget);
@@ -379,52 +378,6 @@ fn plugin_run_request(stdin: Vec<u8>, manifold: Manifold, budget: &PluginBudget)
 
 /// Native NaN arithmetic is an external observation: payload bits can differ across hosts.
 const PLUGIN_NAN_MODE: NanMode = NanMode::Native;
-
-/// On macOS, Wasmtime's trap handler uses Mach ports and may abort if a signal interrupts its
-/// receive. Create its engine on a thread whose signal mask blocks delivery; Afterburner exposes
-/// no alternate trap configuration, and changing trap mode after engine creation panics.
-/// Calls fail closed when thread creation, signal masking, or engine creation fails.
-fn start_wasm_trap_handler_with_signals_blocked(
-) -> Result<Option<&'static afterburner::wasi::embedder_vm::EmbedderVm>> {
-    #[cfg(target_os = "macos")]
-    {
-        static STARTED: std::sync::OnceLock<
-            std::result::Result<&'static afterburner::wasi::embedder_vm::EmbedderVm, String>,
-        > = std::sync::OnceLock::new();
-        return STARTED
-            .get_or_init(|| {
-                std::thread::Builder::new()
-                    .name("gents-wasm-trap-init".into())
-                    .spawn(|| -> std::result::Result<&'static afterburner::wasi::embedder_vm::EmbedderVm, String> {
-                        // SAFETY: changes only this short-lived thread's own mask.
-                        let masked = unsafe {
-                            let mut all: libc::sigset_t = std::mem::zeroed();
-                            libc::sigfillset(&mut all);
-                            libc::pthread_sigmask(libc::SIG_BLOCK, &all, std::ptr::null_mut())
-                        };
-                        if masked != 0 {
-                            return Err(format!(
-                                "blocking signals: {}",
-                                std::io::Error::from_raw_os_error(masked)
-                            ));
-                        }
-                        afterburner::wasi::embedder_vm::shared_epoch_vm_with(PLUGIN_NAN_MODE)
-                            .map_err(|error| format!("creating the engine: {error}"))
-                    })
-                    .map_err(|error| format!("spawning the thread: {error}"))?
-                    .join()
-                    .map_err(|_| "the thread panicked".to_owned())?
-            })
-            .clone()
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "could not start the Wasmtime trap handler with signals blocked: {error}"
-                )
-            }).map(Some);
-    }
-    #[cfg(not(target_os = "macos"))]
-    Ok(None)
-}
 
 fn unbounded_dispatch_reason(afb: &afterburner_afb::Afb, granted: &Manifold) -> Option<String> {
     let supported = afterburner::afb_run::bounds_for(afb);

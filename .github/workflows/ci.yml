@@ -156,12 +156,12 @@ jobs:
       # gents-migration's build script compiles the fixture lens for WASM and
       # is in the dependency graph of every heavy suite. Install the target
       # explicitly instead of relying on mutable host toolchain state.
-      # The callback fixture's build script compiles its own WASI command; only
-      # its package tests and gents' tests (dev-dependency) build it.
+      # Runtime/support build the WASI callback fixture; CLI pack tests compile
+      # Rust plugins. Install their target rather than relying on host state.
       - name: Install pinned Rust toolchain and WASM targets
         run: >-
           .github/scripts/setup-rust.sh
-          ${{ (matrix.suite == 'runtime' || matrix.suite == 'support') && 'wasm32-wasip1' || '' }}
+          ${{ matrix.suite != 'desktop' && 'wasm32-wasip1' || '' }}
 
       - name: Install elan
         # Runtime conformance, desktop-bridge, and support migration tests load

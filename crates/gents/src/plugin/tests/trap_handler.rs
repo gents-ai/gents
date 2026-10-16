@@ -70,6 +70,13 @@ fn echo_once(runner: &PluginRunner, n: u64) {
 #[test]
 fn a_signal_on_every_thread_after_a_plugin_call_does_not_abort() {
     if std::env::var_os(CHILD_ENV).is_some() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("host runtime");
+        let node = runtime
+            .block_on(defra_node::EmbeddedNode::builder().build())
+            .expect("Lens engine starts before the plugin engine");
         let (plugin, afb) = build_plugin_pack("signal_pack", ECHO_WAT, None);
         let echo = PluginRunner::compile(&afb, &plugin).expect("compiles");
         echo_once(&echo, 1);
@@ -87,6 +94,7 @@ fn a_signal_on_every_thread_after_a_plugin_call_does_not_abort() {
         );
 
         echo_once(&echo, 2);
+        runtime.block_on(node.shutdown());
         return;
     }
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
