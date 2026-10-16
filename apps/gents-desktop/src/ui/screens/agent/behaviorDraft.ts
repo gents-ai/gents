@@ -48,6 +48,12 @@ export const usersOf = (deployment: NodeView, contextId: string) =>
 export const listNames = (names: string[]) =>
   names.length <= 2 ? names.join(" and ") : `${names[0]} and ${names.length - 1} more`;
 
+/* "and 1 more" is no shorter than the name it hides */
+export const someNames = (names: string[], shown = 3) =>
+  names.length <= shown + 1
+    ? names.join(", ")
+    : `${names.slice(0, shown).join(", ")} and ${names.length - shown} more`;
+
 /* a context name no other context has */
 export function freshName(deployment: NodeView, base: string) {
   const taken = new Set(deployment.contexts.map((c) => c.display_name));

@@ -117,3 +117,28 @@ export function PathFact({ path, local }: { path: string | null; local: boolean 
     </Fact>
   );
 }
+
+export function NameLinks({
+  items,
+  shown = 3,
+}: {
+  items: readonly { key: string; name: string; href: string }[];
+  shown?: number;
+}) {
+  const named = items.length <= shown + 1 ? items.length : shown;
+  return (
+    <span className="flex flex-wrap justify-end gap-x-3 gap-y-1">
+      {items.slice(0, named).map((item) => (
+        <a
+          key={item.key}
+          href={item.href}
+          title={item.name}
+          className="max-w-48 truncate underline-offset-2 hover:text-foreground hover:underline"
+        >
+          {item.name}
+        </a>
+      ))}
+      {items.length > named && <span>and {items.length - named} more</span>}
+    </span>
+  );
+}

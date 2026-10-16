@@ -14,6 +14,7 @@ import { setupErrorMessage } from "../../../lib/setupErrors";
 import { FactRow } from "./editors";
 import { ConfirmDelete } from "./ListDetail";
 import { Row } from "./rows";
+import { someNames } from "./behaviorDraft";
 import {
   Dialog,
   DialogContent,
@@ -83,11 +84,11 @@ export function accountWarnings(
     deployment.inferenceProfiles.filter((p) => p.backend_id === b.backendId);
   const profiles = backends.flatMap(usedBy).map((p) => p.display_name ?? p.profile_id);
   const names = (list: InferenceBackendView[]) =>
-    list.map((b) => b.name ?? b.backendId).join(", ");
+    someNames(list.map((b) => b.name ?? b.backendId));
   const gone = account.accountRef ? backends.filter((b) => !usedBy(b).length) : [];
   const kept = backends.filter((b) => !gone.includes(b));
   const disconnect = profiles.length
-    ? `These profiles use this account and fail their next turn until moved to another backend: ${profiles.join(", ")}.`
+    ? `These profiles use this account and fail their next turn until moved to another backend: ${someNames(profiles)}.`
     : "";
   const remove = [
     disconnect,
