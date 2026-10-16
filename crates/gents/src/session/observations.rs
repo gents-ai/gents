@@ -719,14 +719,12 @@ pub(crate) async fn load_recent_titles_for_agent(
         }}"#
     );
 
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "loading recent titles for node_did={}: {:?}",
-            node_did,
-            resp.errors
-        );
-    }
+    let resp = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "load_recent_titles_for_agent",
+    )
+    .await?;
 
     let rows = crate::graphql::rows::<serde_json::Value>(&resp, "AgentSession")?;
     let mut sessions: Vec<gents_protocol::session::AgentSession> = rows

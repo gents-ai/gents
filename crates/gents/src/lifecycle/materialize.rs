@@ -61,10 +61,8 @@ async fn resolve_created_agent_request_doc_id(
     let query = format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 2) {{ _docID request_id }} }}"#
     );
-    let query_resp = node.execute(&query).await;
-    if query_resp.has_errors() {
-        anyhow::bail!("{lookup_error}: {:?}", query_resp.errors);
-    }
+    let query_resp =
+        crate::graphql::graphql_with_transaction_retry(node, &query, lookup_error).await?;
 
     let rows: Vec<gents_protocol::row::AgentRequestRow> =
         crate::graphql::rows(&query_resp, "AgentRequest")?;

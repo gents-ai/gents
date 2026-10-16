@@ -148,13 +148,12 @@ async fn matching_coalesced_pending_requests(
         }}"#
     );
 
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query pending queue entries for session {session_id} failed: {:?}",
-            response.errors
-        );
-    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "matching_coalesced_pending_requests",
+    )
+    .await?;
 
     let rows: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
 
