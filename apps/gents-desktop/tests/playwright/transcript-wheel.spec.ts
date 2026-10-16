@@ -39,3 +39,19 @@ test("wheeling up past an open activity box keeps the transcript moving", async 
     .poll(() => scroller.evaluate((el) => el.scrollTop))
     .toBeLessThan(before - 200);
 });
+
+/* A failure folded into a group would be the row a reader wants and the
+   one they could not see: the header counts it, and the group opens. */
+test("a group with a failed command says so and starts open", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  const panel = page.getByTestId("transcript-panel");
+  await panel.getByText("stream-start", { exact: false }).last().waitFor();
+  await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.toolBatch(6, 2));
+  const group = panel.getByRole("button", { name: /6 commands/ });
+  await group.scrollIntoViewIfNeeded();
+  await expect(group).toHaveText(/Ran 6 commands, 2 failed/);
+  await expect(group).toHaveAttribute("aria-expanded", "true");
+  await expect(group).toHaveAttribute("data-failed", "true");
+});

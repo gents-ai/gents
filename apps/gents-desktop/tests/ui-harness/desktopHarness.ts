@@ -151,8 +151,9 @@ export type MobilePerformanceHarnessController = {
   finishStreaming(): void;
   streamUpdate(): number;
   streamBurst(count: number): number;
-  /** a settled group of `count` commands near the long session's foot */
-  toolBatch(count: number): void;
+  /** a settled group of `count` commands near the long session's foot,
+      the last `failed` of them exited non-zero */
+  toolBatch(count: number, failed?: number): void;
   /** appends `text` to the live reply, as one update */
   streamText(text: string): void;
   /** how long a read of an older timeline page takes, as the bridge's do */
@@ -2789,7 +2790,7 @@ export function createDesktopUiHarness(
           },
           /* a settled group of `count` commands near the long session's
              foot, where rows are always drawn: enough steps to cap its box */
-          toolBatch(count) {
+          toolBatch(count, failed = 0) {
             const session = sessions.get("session-large");
             if (!session) {
               throw new Error("mobile performance fixture lost session-large");
@@ -2807,9 +2808,9 @@ export function createDesktopUiHarness(
                 presentation: {
                   kind: "command" as const,
                   command: `cargo test -p gents step_${index}`,
-                  exitCode: 0,
+                  exitCode: index >= count - failed ? 101 : 0,
                   timedOut: false,
-                  failed: false,
+                  failed: index >= count - failed,
                   durationMs: null,
                   cwd: null,
                   executionMode: "read_only",

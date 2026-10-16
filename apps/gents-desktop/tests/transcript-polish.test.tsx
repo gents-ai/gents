@@ -289,6 +289,7 @@ describe("a folded group with a failure in it", () => {
     render(
       panel(
         session({ timelineItems: [group([command("a", false), command("b", true)])] }),
+        false,
       ),
     );
     const button = header();
@@ -301,6 +302,7 @@ describe("a folded group with a failure in it", () => {
     render(
       panel(
         session({ timelineItems: [group([command("a", false), command("b", false)])] }),
+        false,
       ),
     );
     const button = header();
