@@ -1884,6 +1884,7 @@ async fn park_with_assigned_permit(
     request_id: &'static str,
     mut holder: super::permit::AdmissionPermit,
 ) -> ParkedCall {
+    let _ = lean_inference_call_states();
     let parked_registry = registry.clone();
     let mut parked: ParkedCall =
         Box::pin(async move { acquire_on(&parked_registry, request_id, backend).await });
