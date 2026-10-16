@@ -734,6 +734,44 @@ describe("configuration panels", () => {
         ).not.toBeInTheDocument();
       });
 
+      it("hides Add another when the bridge offers no sign-in for that provider", async () => {
+        const { api, app } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
+          providers: [{ id: "grok", displayName: "Grok", authMethods: ["grok_oauth"] }],
+        });
+        renderIn(app, <InferencePanel deployment={rowsDeployment} />);
+        const user = userEvent.setup();
+        expect(screen.getAllByText("Anthropic / Claude").length).toBeGreaterThan(0);
+        await user.click(
+          (await screen.findAllByRole("button", { name: "More for Claude" }))[0]!,
+        );
+        expect(
+          screen.queryByRole("menuitem", { name: /Add another/ }),
+        ).not.toBeInTheDocument();
+        await user.keyboard("{Escape}");
+        await user.click(
+          (await screen.findAllByRole("button", { name: "More for Side" }))[0]!,
+        );
+        expect(
+          await screen.findByRole("menuitem", { name: "Add another Grok" }),
+        ).toBeVisible();
+      });
+
+      it("keeps an existing account available without offering unsupported sign-in", async () => {
+        const { api, app } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({ providers: [] });
+        renderIn(app, <InferencePanel deployment={rowsDeployment} item="claude" />);
+        expect(await screen.findByText("Connected")).toBeVisible();
+        expect(await screen.findByText("Sign in from the desktop app.")).toBeVisible();
+        expect(
+          screen.queryByRole("button", { name: "Reconnect" }),
+        ).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Disconnect" })).toBeEnabled();
+        expect(screen.getByText("Personal")).toBeVisible();
+      });
+
       it("can cancel a sign-in started from the row", async () => {
         const { api, app } = harness();
         api.listProviderAccounts.mockResolvedValue(accounts);

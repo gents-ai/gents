@@ -156,7 +156,10 @@ export function InferencePanel({
             title: b.name ?? b.backendId,
             /* the provider, only when the backend's name does not already say it */
             titleNote: (() => {
-              const title = providers.find((p) => p.id === provider)?.displayName ?? "";
+              const title =
+                providers.find((p) => p.id === provider)?.displayName ??
+                SUBSCRIPTION[b.providerKind ?? ""]?.title ??
+                "";
               const name = (b.name ?? b.backendId).toLowerCase();
               return name.includes(title.toLowerCase()) ||
                 name.includes(title.toLowerCase().replace(/\s+/g, ""))
@@ -200,10 +203,12 @@ export function InferencePanel({
                   }
                   warning={dependentsWarning(deployment, "backend", b.backendId)}
                 >
-                  <DropdownMenuItem onClick={() => setAdding(provider)}>
-                    Add another{" "}
-                    {providers.find((x) => x.id === provider)?.displayName ?? "backend"}
-                  </DropdownMenuItem>
+                  {providers.some((option) => option.id === provider) && (
+                    <DropdownMenuItem onClick={() => setAdding(provider)}>
+                      Add another{" "}
+                      {providers.find((x) => x.id === provider)?.displayName}
+                    </DropdownMenuItem>
+                  )}
                   {stored && (
                     <>
                       <DropdownMenuItem
