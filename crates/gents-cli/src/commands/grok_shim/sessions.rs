@@ -143,7 +143,7 @@ async fn scan_requests(
         let response = graphql_with_transaction_retry(
             node,
             &format!(
-                r#"{{ AgentRequest(filter: {{ {scope} }}, order: {{request_id: ASC}}, limit: {PAGE_SIZE}) {{
+                r#"{{ AgentRequest(filter: {{ {scope} }}, order: [{{request_id: ASC}}, {{_docID: ASC}}], limit: {PAGE_SIZE}) {{
             _docID request_id session_id node_did requester_did agent_id
             content created_at terminalized_at lifecycle_state runtime_source_kind
         }} }}"#,
@@ -429,6 +429,83 @@ pub(super) async fn roster(node: &EmbeddedNode, principal: &str, behavior: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn history_pages_filter_detached_requests_before_the_page_limit() {
+        use gents_protocol::request_admission::RequestPurpose;
+
+        let dir = tempfile::tempdir().unwrap();
+        let node = std::sync::Arc::new(
+            EmbeddedNode::builder()
+                .data_path(dir.path().join("db"))
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let owner = "did:test:history";
+        let mut rows = Vec::new();
+        for index in 0..PAGE_SIZE {
+            rows.push((
+                format!("a-foreign-{index:03}"),
+                "did:test:other",
+                RequestPurpose::PUBLIC,
+            ));
+            rows.push((
+                format!("b-public-{index:03}"),
+                owner,
+                RequestPurpose::PUBLIC,
+            ));
+            rows.push((
+                format!("c-detached-{index:03}"),
+                owner,
+                RequestPurpose::TitleAudit,
+            ));
+        }
+        rows.push(("d-public".into(), owner, RequestPurpose::PUBLIC));
+        let statements = rows
+            .chunks(64)
+            .map(|batch| {
+                let selections = batch
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (id, principal, purpose))| {
+                        let id = escape_graphql_string(id);
+                        let principal = escape_graphql_string(principal);
+                        let purpose = escape_graphql_string(purpose.as_str());
+                        format!(
+                            r#"r{index}: create_AgentRequest(input: {{
+                    request_id: "{id}", node_did: "{principal}", requester_did: "{principal}",
+                    session_id: "session", purpose: "{purpose}", lifecycle_state: "completed"
+                }}) {{ _docID }}"#
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("mutation {{{selections}}}")
+            })
+            .collect::<Vec<_>>();
+        gents::ConfigAccess::transact_local_write(&node, None, "history.page_fixture", |txn| {
+            let statements = &statements;
+            Box::pin(async move {
+                for statement in statements {
+                    txn.execute(statement).await?;
+                }
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        let mut observed = Vec::new();
+        let result = scan_requests(&node, owner, None, |row| observed.push(row.request_id)).await;
+        node.shutdown().await;
+        result.unwrap();
+        assert_eq!(observed.len(), PAGE_SIZE + 1);
+        assert_eq!(observed.last().map(String::as_str), Some("d-public"));
+        assert!(observed
+            .iter()
+            .all(|id| id.starts_with("b-public-") || id == "d-public"));
+    }
 
     #[test]
     fn summary_fold_preserves_first_prompt_search_and_activity_in_any_scan_order() {

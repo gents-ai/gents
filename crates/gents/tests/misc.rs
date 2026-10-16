@@ -16,3 +16,6 @@ mod node_access_control;
 mod oneshot_admission_exemption;
 #[path = "misc/startup_readiness_barrier.rs"]
 mod startup_readiness_barrier;
+
+#[path = "misc/ordered_read_plans.rs"]
+mod ordered_read_plans;

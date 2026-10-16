@@ -651,7 +651,7 @@ impl TurnManager {
         ));
         let query = format!(
             r#"{{ AgentRequest(filter: {{ {scope} }},
-                order: {{ request_id: ASC }}, limit: {PAGE_SIZE}) {{ {fields} }} }}"#,
+                order: [{{ request_id: ASC }}, {{ _docID: ASC }}], limit: {PAGE_SIZE}) {{ {fields} }} }}"#,
             fields = gents::SIGNED_REQUEST_FIELDS,
         );
         let response = graphql_with_transaction_retry(
