@@ -11,7 +11,7 @@ import {
   zoomLevel,
   type Preferences,
 } from "../src/ui/preferences";
-import { stepZoom } from "../src/ui/lib/zoom";
+import { onZoomKeys, stepZoom, zoomKey } from "../src/ui/lib/zoom";
 
 const defaults: Preferences = { theme: "light", nav: "hover", zoom: 1 };
 
@@ -40,6 +40,38 @@ describe("zooming", () => {
     expect(stepZoom(2, "in")).toBe(2);
     expect(stepZoom(0.67, "out")).toBe(0.67);
     expect(stepZoom(1.5, "reset")).toBe(1);
+  });
+
+  it("takes Ctrl with =, +, − and 0 where no menu carries the keys", () => {
+    const key = (key: string, mods: Partial<KeyboardEvent> = {}) =>
+      zoomKey({ key, ctrlKey: true, metaKey: false, altKey: false, ...mods });
+    expect([key("="), key("+"), key("-"), key("0")]).toEqual([
+      "in",
+      "in",
+      "out",
+      "reset",
+    ]);
+    expect(key("=", { ctrlKey: false })).toBeNull();
+    expect(key("=", { altKey: true })).toBeNull();
+    expect(key("1")).toBeNull();
+
+    const steps: string[] = [];
+    const stop = onZoomKeys(window, (action) => steps.push(action));
+    const press = new KeyboardEvent("keydown", {
+      key: "=",
+      ctrlKey: true,
+      cancelable: true,
+    });
+    document.body.dispatchEvent(press);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
+    );
+    stop();
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "0", ctrlKey: true }),
+    );
+    expect(steps).toEqual(["in"]);
+    expect(press.defaultPrevented).toBe(true);
   });
 });
 
