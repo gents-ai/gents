@@ -233,6 +233,7 @@ impl DefraRenderedRequestSink {
         let query = format!(
             r#"query {{
                 InferenceCall(filter: {{ call_id: {{ _eq: "{call_id}" }} }}, limit: 2) {{
+                    _docID
                     context_accounting_json
                 }}
             }}"#,
@@ -264,9 +265,16 @@ impl DefraRenderedRequestSink {
             anyhow::bail!("InferenceCall {call_id} already carries different context accounting");
         }
 
+        let doc_id = row
+            .get("_docID")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .context("joined InferenceCall lacks physical identity")?;
+        let doc_id = escape_graphql_string(doc_id);
         let mutation = format!(
             r#"mutation {{
                 update_InferenceCall(
+                    docID: "{doc_id}",
                     filter: {{ call_id: {{ _eq: "{call_id}" }} }},
                     input: {{
                         context_accounting_json: "{accounting_json}"
