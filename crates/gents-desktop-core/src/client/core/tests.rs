@@ -244,7 +244,6 @@ impl RecordingP2P {
     fn set_replicators(&self, replicators: Vec<ReplicatorInfo>) {
         *self.replicators.write().expect("replicators lock poisoned") = replicators;
     }
-
 }
 
 #[async_trait]

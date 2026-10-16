@@ -1576,7 +1576,7 @@ pub(crate) struct ProvisionArgs {
     pub(crate) secure_enclave_label: Option<String>,
     /// Keychain on macOS and a file elsewhere when omitted. Tests pass
     /// `file` so they never write login-keychain items.
-    
+
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
 }
@@ -1654,7 +1654,7 @@ pub(crate) struct InitArgs {
     pub(crate) secure_enclave_label: Option<String>,
     /// Keychain on macOS and a file elsewhere when omitted. Tests pass
     /// `file` so they never write login-keychain items.
-    
+
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
     #[arg(

@@ -84,8 +84,6 @@ impl StageTarget {
 pub struct StageCapability {
     /// Owner of this capability and its referenced task. Every caller,
     /// including this owner, needs explicit allowed_callers admission and ACP.
-    
-    
     pub node_did: String,
     pub capability_id: String,
     pub revision: String,
@@ -203,7 +201,7 @@ pub struct EntryBinding {
     pub to: PortRef,
     /// JSON Schema for the operator-facing input this entry accepts. Absent
     /// means the entry takes an unvalidated JSON object, as before.
-    
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(type = "unknown", optional = nullable))]
     pub input_schema: Option<serde_json::Value>,
@@ -251,7 +249,6 @@ pub enum HostInput {
     },
     /// A read-only workspace over the `GitDiff` head; requires an earlier
     /// `GitDiff` in the same `host` list.
-    
     ReadOnlyWorkspace,
 }
 

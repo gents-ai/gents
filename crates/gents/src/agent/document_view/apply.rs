@@ -19,7 +19,10 @@ pub(crate) async fn apply_control_update(
         .any(|c| c.graphql_type() == collection_name)
         || matches!(
             collection_name,
-            "OAuthCredential" | "ToolServiceHealthState" | "GraphRevision" | "GraphRun"
+            "OAuthCredential"
+                | "ToolServiceHealthState"
+                | "GraphRevision"
+                | "GraphRun"
                 | "PackInstallation"
         )
     {

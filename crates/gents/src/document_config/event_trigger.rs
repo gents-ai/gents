@@ -338,10 +338,6 @@ pub struct EventSource {
 /// latest_only concurrency on every graph edge (Lean
 /// `GraphPipeline.graphEdgeValid`); shared types do not widen graph semantics.
 
-
-
-
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
