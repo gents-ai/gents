@@ -151,7 +151,9 @@ export type MobilePerformanceHarnessController = {
   finishStreaming(): void;
   streamUpdate(): number;
   streamBurst(count: number): number;
-  toolBatch(count: number): void;
+
+  toolBatch(count: number, failed?: number): void;
+
   streamText(text: string): void;
   setOlderPageDelay(ms: number): void;
   endReply(step: { live: "keep" | "drop"; saved: boolean; completed: boolean }): void;
@@ -2752,7 +2754,8 @@ export function createDesktopUiHarness(
             syncSessions();
             notify("store");
           },
-          toolBatch(count) {
+
+          toolBatch(count, failed = 0) {
             const session = sessions.get("session-large");
             if (!session) {
               throw new Error("mobile performance fixture lost session-large");
@@ -2770,9 +2773,9 @@ export function createDesktopUiHarness(
                 presentation: {
                   kind: "command" as const,
                   command: `cargo test -p gents step_${index}`,
-                  exitCode: 0,
+                  exitCode: index >= count - failed ? 101 : 0,
                   timedOut: false,
-                  failed: false,
+                  failed: index >= count - failed,
                   durationMs: null,
                   cwd: null,
                   executionMode: "read_only",

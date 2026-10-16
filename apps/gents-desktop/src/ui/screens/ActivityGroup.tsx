@@ -24,6 +24,7 @@ import { WorkerStep, isWorkerStep } from "./WorkerStep";
 import { type Workers } from "./workers";
 import { diffTally, stepStatus, toolSummary } from "./tool-summary";
 import {
+  groupFailures,
   groupLabel,
   groupTools,
   liveGroupLabel,
@@ -127,7 +128,7 @@ function WorkerRunStep({
         )
       }
       detail={workerStory(tools)}
-      status={last.statusKind === "running" ? "running" : failed ? "pending" : "done"}
+      status={last.statusKind === "running" ? "running" : failed ? "failed" : "done"}
     >
       <ToolSteps className="-mx-2">
         {tools.map((tool) => (
@@ -168,7 +169,10 @@ export function ActivityGroup({
   const single = entry.members.length === 1 && entry.members[0]!.kind === "tool";
   const chosen = state.folded[entry.key];
   const openStep = state.openStep[entry.key] ?? null;
-  const folded = !single && (chosen ?? !openStep);
+
+  const failed = groupFailures(entry.members) > 0;
+  const folded = !single && (chosen ?? !(openStep || failed));
+
   const live = (!entry.settled && liveGroupLabel(entry.members)) || null;
   const [animated, setAnimated] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -194,6 +198,7 @@ export function ActivityGroup({
           }}
           aria-expanded={!folded}
           aria-busy={live ? true : undefined}
+          data-failed={failed || undefined}
           className={cn(
             "flex w-full cursor-pointer items-center gap-3 px-2 py-1 text-left text-sm hover:text-foreground",
             live ? "font-medium text-foreground" : "text-muted-foreground",

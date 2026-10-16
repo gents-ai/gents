@@ -180,6 +180,26 @@ describe("naming a group", () => {
       "Edited 1 file",
     );
   });
+
+  it("says how many calls failed, after what it did", () => {
+    const failed = (t: RenderedToolCallView) =>
+      ({ ...t, statusKind: "error" }) as RenderedToolCallView;
+    const exited = (t: RenderedToolCallView) =>
+      ({
+        ...t,
+        presentation: { ...t.presentation, exitCode: 1, failed: true },
+      }) as RenderedToolCallView;
+    expect(
+      groupLabel([
+        { kind: "tool", key: "a", tool: tool("command") },
+        { kind: "tool", key: "b", tool: exited(tool("command")) },
+        { kind: "tool", key: "c", tool: failed(tool("fileRead")) },
+      ]),
+    ).toBe("Read 1 file, ran 2 commands, 2 failed");
+    expect(groupLabel([{ kind: "tool", key: "d", tool: tool("command") }])).toBe(
+      "Ran 1 command",
+    );
+  });
 });
 
 describe("naming a live group", () => {
