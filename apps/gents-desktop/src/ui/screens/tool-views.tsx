@@ -109,7 +109,6 @@ function Meta({ items }: { items: (string | null | undefined)[] }) {
   );
 }
 
-
 const GUTTER: Record<ToolDiffLineView["kind"], string> = {
   added: "+",
   removed: "\u2212",
@@ -186,7 +185,6 @@ function DiffBlock({
   );
 }
 
-
 function DiffBody({
   diff,
   created,
@@ -209,7 +207,7 @@ function DiffBody({
         <DiffLines lines={diff} gutter />
       </div>
     );
-  
+
   if (shape === "addition")
     return created ? (
       <DiffBlock label="new file" lines={added} tone="plain" />
@@ -218,7 +216,7 @@ function DiffBody({
     );
   if (shape === "removal")
     return <DiffBlock label="removed" lines={removed} tone="removed" />;
-  
+
   return (
     <div className="@container">
       <div className="grid grid-cols-[minmax(0,1fr)] gap-2 @2xl:grid-cols-2">
@@ -232,7 +230,6 @@ function DiffBody({
     </div>
   );
 }
-
 
 export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
   const p = tool.presentation;

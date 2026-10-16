@@ -272,7 +272,7 @@ export function RailFlyout({
         <FlyoutOpenContext.Provider value={hover && open}>
           {hover && children}
         </FlyoutOpenContext.Provider>
-        
+
         <div
           aria-hidden={!shown}
           className={cn(

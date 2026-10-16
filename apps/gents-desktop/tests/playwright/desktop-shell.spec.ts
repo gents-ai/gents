@@ -197,7 +197,6 @@ test.describe("kit shell", () => {
     await expect(narrowed).toHaveText(/1 of 1 session/);
     await expect(session).toBeVisible();
 
-    
     await filters.getByRole("button", { name: "State" }).click();
     await expect(
       page.getByRole("menuitemcheckbox", { name: /Failed\s*0$/ }),

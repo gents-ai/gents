@@ -2,7 +2,6 @@ import { isLive } from "../../lib/turnState";
 
 export { isLive };
 
-
 export type SessionState = "working" | "waiting" | "failed" | "stopped" | "finished";
 
 export function stateOf(turnState: string | null | undefined): SessionState {

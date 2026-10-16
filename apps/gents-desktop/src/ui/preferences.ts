@@ -65,14 +65,12 @@ export const preferences = {
   },
 };
 
-
 export function followZoom(apply: (zoom: number) => void) {
   apply(store.getState().zoom);
   return store.subscribe((next, prev) => {
     if (next.zoom !== prev.zoom) apply(next.zoom);
   });
 }
-
 
 /** Browser storage events notify other windows, which hold independent stores. */
 export function followOtherWindows() {
@@ -83,7 +81,6 @@ export function followOtherWindows() {
   window.addEventListener("storage", reread);
   return () => window.removeEventListener("storage", reread);
 }
-
 
 export const applyChosenTheme = () => applyTheme(store.getState().theme);
 

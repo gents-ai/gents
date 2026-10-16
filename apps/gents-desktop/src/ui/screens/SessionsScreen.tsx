@@ -61,7 +61,7 @@ export function SessionsScreen({ nodeDid }: { nodeDid?: string }) {
   const [query, setQuery] = useState<string | null>(null);
   const filter = useListViews((v) => v.sessionFilter);
   const openSessions = useListViews((v) => v.openSessions);
-  
+
   const placement = { nodes, selectedNodeDid, homeDid };
   const defaultNodeIds = nodesInScope(defaultScope("sessions"), placement).map(
     nodeDidOf,
@@ -70,13 +70,13 @@ export function SessionsScreen({ nodeDid }: { nodeDid?: string }) {
   useLayoutEffect(() => {
     if (nodeDid) listViews.setSessionNodes([nodeDid]);
   }, [nodeDid]);
-  
+
   const knownIds = storedNodeIds && knownNodeIds(storedNodeIds, placement);
   const nodeIds =
     !knownIds || (knownIds.length === 0 && storedNodeIds!.length > 0)
       ? defaultNodeIds
       : knownIds;
-  
+
   const shownNodeIds = nodeIds.length ? nodeIds : nodes.map(nodeDidOf);
   const nodesPicked =
     shownNodeIds.length !== defaultNodeIds.length ||
@@ -133,7 +133,7 @@ export function SessionsScreen({ nodeDid }: { nodeDid?: string }) {
       isOpen: (key) => open.has(key),
     });
   }, [inScope, listedParents, filter, query, filtering, openSessions]);
-  
+
   const narrowed = filtering || Object.values(nodeCounts).some((count) => count > 0);
   const pickedNames = nodesPicked
     ? nodes
@@ -401,8 +401,6 @@ const SessionRow = memo(function SessionRow({
       >
         <SessionStatus turnState={session.turnState} />
         <p className="flex min-w-0 items-center gap-1.5 text-sm">
-          
-          
           {!parent && session.taskId && (
             <Play
               className="size-3.5 shrink-0 text-muted-foreground"

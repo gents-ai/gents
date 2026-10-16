@@ -1,4 +1,3 @@
-
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import {
   Activity,
@@ -295,7 +294,6 @@ export function SessionFilters({
     count: countFor("agents", (c) => c.agentId === id),
   }));
 
-  
   if (sessions.length === 0 && !hasFilter(value)) return null;
 
   return (

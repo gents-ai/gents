@@ -1,4 +1,3 @@
-
 import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";

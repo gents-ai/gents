@@ -1,4 +1,3 @@
-
 import type { SessionState } from "./live";
 
 export { stateOf, type SessionState } from "./live";
@@ -29,7 +28,6 @@ const STATES: readonly string[] = [
   "finished",
 ];
 const SOURCES: readonly string[] = ["person", "task", "session"];
-
 
 export function restoreSessionFilter(stored: unknown): SessionFilter {
   const saved = typeof stored === "object" && stored !== null ? stored : {};

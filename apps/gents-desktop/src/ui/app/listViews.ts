@@ -11,7 +11,7 @@ import { browserStorage, storedStrings } from "@/lib/storage";
 
 export type ListViews = {
   sessionFilter: SessionFilter;
-  
+
   sessionNodes: string[] | null;
   mailboxNodes: string[];
   mailboxKinds: string[];
@@ -59,7 +59,7 @@ export const listViews = {
   setSessionFilter(sessionFilter: SessionFilter) {
     store.setState({ sessionFilter });
   },
-  
+
   setSessionNodes(sessionNodes: string[] | null) {
     store.setState({ sessionNodes });
   },
