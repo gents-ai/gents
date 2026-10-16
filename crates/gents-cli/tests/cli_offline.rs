@@ -1,6 +1,8 @@
 //! No-infrastructure CLI suites: pure filesystem/exit-code/help surface.
 //! Aggregated per the test-estate consolidation: one link unit instead of
 //! eight. Run one module with `cargo test -p gents-cli --test cli_offline <module>::`.
+//! The `cli_pack` suite builds a Rust plugin, so it also needs the wasm32-wasip1
+//! target and the Afterburner tools on PATH.
 
 mod support;
 
@@ -18,6 +20,8 @@ mod cli_config_validate;
 mod cli_eval;
 #[path = "suites/cli_help.rs"]
 mod cli_help;
+#[path = "suites/cli_pack.rs"]
+mod cli_pack;
 #[path = "suites/cli_provision.rs"]
 mod cli_provision;
 #[path = "suites/cli_schema.rs"]
