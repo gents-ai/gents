@@ -258,6 +258,58 @@ describe("activity status", () => {
   });
 });
 
+describe("a folded group with a failure in it", () => {
+  const command = (key: string, failed: boolean): RenderedToolCallView => ({
+    ...tool({
+      kind: "command",
+      command: failed ? "cargo test" : "ls",
+      exitCode: failed ? 101 : 0,
+      timedOut: false,
+      failed,
+      durationMs: 10,
+      cwd: "~",
+      executionMode: "sandboxed",
+      networkMode: "disabled",
+      stdout: "",
+      stderr: "",
+      fallbackOutput: null,
+    }),
+    itemKey: key,
+  });
+  const group = (tools: RenderedToolCallView[]): RenderedTimelineItem => ({
+    kind: "toolGroup",
+    itemKey: "group",
+    messageSequence: 1,
+    tools,
+  });
+  const header = () =>
+    screen.getByRole("button", { name: /ran 2 commands/i, expanded: undefined });
+
+  it("names the failure on the header and starts open", () => {
+    render(
+      panel(
+        session({ timelineItems: [group([command("a", false), command("b", true)])] }),
+      ),
+    );
+    const button = header();
+    expect(button).toHaveTextContent("Ran 2 commands, 1 failed");
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(button).toHaveAttribute("data-failed", "true");
+  });
+
+  it("stays folded when every call worked", () => {
+    render(
+      panel(
+        session({ timelineItems: [group([command("a", false), command("b", false)])] }),
+      ),
+    );
+    const button = header();
+    expect(button).toHaveTextContent("Ran 2 commands");
+    expect(button).not.toHaveTextContent("failed");
+    expect(button).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
 describe("stop", () => {
   it("shows Stopping while the request is still running", () => {
     render(panel(session({}), true, true));

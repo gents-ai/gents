@@ -26,6 +26,7 @@ import { WorkerStep, isWorkerStep } from "./WorkerStep";
 import { type Workers } from "./workers";
 import { diffTally, stepStatus, toolSummary } from "./tool-summary";
 import {
+  groupFailures,
   groupLabel,
   groupTools,
   liveGroupLabel,
@@ -144,7 +145,7 @@ function WorkerRunStep({
         )
       }
       detail={workerStory(tools)}
-      status={last.statusKind === "running" ? "running" : failed ? "pending" : "done"}
+      status={last.statusKind === "running" ? "running" : failed ? "failed" : "done"}
     >
       <ToolSteps className="-mx-2">
         {tools.map((tool) => (
@@ -206,8 +207,11 @@ export function ActivityGroup({
      shows its work in one line that never changes height; a lone call is
      its own row, and becomes the header (the same height) when a second
      arrives. A step the reader opened before the group formed keeps the
-     group open, so what they opened does not disappear under a fold. */
-  const folded = !single && (chosen ?? !openStep);
+     group open, so what they opened does not disappear under a fold, and
+     a group with a failed call in it opens on its own: the failure is what
+     the reader is looking for, and a fold would hide it behind a count. */
+  const failed = groupFailures(entry.members) > 0;
+  const folded = !single && (chosen ?? !(openStep || failed));
   /* what it is doing right now, while a call in it runs */
   const live = (!entry.settled && liveGroupLabel(entry.members)) || null;
   /* only a fold the reader asks for is animated */
@@ -242,6 +246,7 @@ export function ActivityGroup({
           }}
           aria-expanded={!folded}
           aria-busy={live ? true : undefined}
+          data-failed={failed || undefined}
           className={cn(
             "flex w-full cursor-pointer items-center gap-3 px-2 py-1 text-left text-sm hover:text-foreground",
             /* a group at work reads like a step at work: full ink and a
