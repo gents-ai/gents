@@ -886,10 +886,12 @@ async fn load_persisted_service_ids(
             }}
         }}"#
     );
-    let resp = persistence.node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("load_persisted_service_ids failed: {:?}", resp.errors);
-    }
+    let resp = crate::graphql::graphql_with_transaction_retry(
+        persistence.node,
+        &query,
+        "load_persisted_service_ids",
+    )
+    .await?;
     let raw = resp
         .data
         .as_ref()

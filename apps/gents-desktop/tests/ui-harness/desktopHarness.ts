@@ -2195,13 +2195,19 @@ export function createDesktopUiHarness(
           {
             id: "anthropic" as const,
             displayName: "Anthropic",
-            description: "Use a Claude Pro or Max subscription.",
-            authMethods: ["claude_oauth" as const],
+            description:
+              "Use a Claude Pro or Max subscription, or an Anthropic API key.",
+            authMethods: ["claude_oauth" as const, "api_key" as const],
             authOptions: [
               {
                 method: "claude_oauth" as const,
                 displayName: "Claude sign-in",
                 defaultEndpoint: "claude-cli://subscription",
+              },
+              {
+                method: "api_key" as const,
+                displayName: "Anthropic API key",
+                defaultEndpoint: "https://api.anthropic.com/v1",
               },
             ],
             defaultAuthMethod: "claude_oauth" as const,
@@ -2210,13 +2216,19 @@ export function createDesktopUiHarness(
           {
             id: "grok" as const,
             displayName: "Grok",
-            description: "Use SuperGrok or an eligible X Premium+ subscription.",
-            authMethods: ["grok_oauth" as const],
+            description:
+              "Use SuperGrok, an eligible X Premium+ subscription, or an xAI API key.",
+            authMethods: ["grok_oauth" as const, "api_key" as const],
             authOptions: [
               {
                 method: "grok_oauth" as const,
                 displayName: "Grok sign-in",
                 defaultEndpoint: "https://cli-chat-proxy.grok.com/v1",
+              },
+              {
+                method: "api_key" as const,
+                displayName: "xAI API key",
+                defaultEndpoint: "https://api.x.ai/v1",
               },
             ],
             defaultAuthMethod: "grok_oauth" as const,
@@ -2284,19 +2296,33 @@ export function createDesktopUiHarness(
           request.provider === "local"
             ? "Local server"
             : request.provider === "anthropic"
-              ? "Anthropic"
+              ? request.authMethod === "api_key"
+                ? "Anthropic API"
+                : "Anthropic"
               : request.provider === "grok"
-                ? "Grok"
+                ? request.authMethod === "api_key"
+                  ? "xAI"
+                  : "Grok"
                 : "ChatGPT",
         providerKind:
           request.provider === "local"
             ? "OpenAiCompatible"
             : request.provider === "anthropic"
-              ? "ClaudeCliSubscription"
+              ? request.authMethod === "api_key"
+                ? "AnthropicApiKey"
+                : "ClaudeCliSubscription"
               : request.provider === "grok"
-                ? "XaiGrokOAuth"
+                ? request.authMethod === "api_key"
+                  ? "OpenAiCompatible"
+                  : "XaiGrokOAuth"
                 : "ChatGptCodex",
-        openaiWireApi: request.provider === "local" ? "chat_completions" : "responses",
+        openaiWireApi:
+          request.provider === "anthropic"
+            ? null
+            : request.provider === "local" ||
+                (request.provider === "grok" && request.authMethod === "grok_oauth")
+              ? "chat_completions"
+              : "responses",
         reachable: true,
         models: [
           {

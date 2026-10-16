@@ -15,7 +15,7 @@ use crate::{
     SESSION_AFTER_HELP, STATUS_AFTER_HELP, TASK_AFTER_HELP, TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
-use crate::default_backend_max_queue_depth;
+use gents::backend_registry::{DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_QUEUE_DEPTH};
 
 fn parse_env_var_name(value: &str) -> Result<String, String> {
     let mut chars = value.chars();
@@ -1697,9 +1697,9 @@ pub(crate) struct InitArgs {
         help = "Model id to bind to the default agent. Required for presets without a local default model"
     )]
     pub(crate) model_name: Option<String>,
-    #[arg(long, default_value_t = 2)]
+    #[arg(long, default_value_t = DEFAULT_MAX_CONCURRENT)]
     pub(crate) max_concurrent: i64,
-    #[arg(long, default_value_t = default_backend_max_queue_depth())]
+    #[arg(long, default_value_t = DEFAULT_MAX_QUEUE_DEPTH)]
     pub(crate) max_queue_depth: i64,
     #[arg(
         long = "write",

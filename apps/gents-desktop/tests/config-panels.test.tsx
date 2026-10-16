@@ -114,6 +114,47 @@ function expectFields(labels: string[]) {
 beforeEach(() => vi.clearAllMocks());
 
 describe("configuration panels", () => {
+  it.each([
+    ["AnthropicApiKey", "https://api.anthropic.com/v1", "Anthropic"],
+    ["AnthropicApiKey", "https://proxy.example/v1", "Anthropic"],
+    ["OpenAiCompatible", "https://api.x.ai/v1", "Grok"],
+    ["OpenAiCompatible", "HTTPS://API.X.AI/V1/", "Grok"],
+    ["OpenAiCompatible", "https://api.x.ai.example/v1", "Local"],
+    ["OpenAiCompatible", "https://proxy.example/api.x.ai/v1", "Local"],
+  ])("groups %s at %s under %s", async (providerKind, endpoint, provider) => {
+    const { api, app } = harness();
+    api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
+      providers: [
+        { id: "anthropic", displayName: "Anthropic" },
+        { id: "grok", displayName: "Grok" },
+        { id: "local", displayName: "Local" },
+      ],
+    });
+    renderIn(
+      app,
+      <InferencePanel
+        deployment={{
+          ...deployment,
+          inferenceBackends: [
+            {
+              ...deployment.inferenceBackends[0]!,
+              name: "My backend",
+              providerKind,
+              endpoint,
+            },
+          ],
+        }}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole("button", { name: "More for My backend" }),
+    );
+    expect(
+      await screen.findByRole("menuitem", { name: `Add another ${provider}` }),
+    ).toBeVisible();
+  });
+
   it("continues an existing local Gents home instead of creating a new identity", async () => {
     const { app } = harness();
     renderIn(app, <SetupScreen onDone={vi.fn()} />);
@@ -691,6 +732,44 @@ describe("configuration panels", () => {
         expect(
           screen.queryByRole("button", { name: "Disconnect" }),
         ).not.toBeInTheDocument();
+      });
+
+      it("hides Add another when the bridge offers no sign-in for that provider", async () => {
+        const { api, app } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
+          providers: [{ id: "grok", displayName: "Grok", authMethods: ["grok_oauth"] }],
+        });
+        renderIn(app, <InferencePanel deployment={rowsDeployment} />);
+        const user = userEvent.setup();
+        expect(screen.getAllByText("Anthropic / Claude").length).toBeGreaterThan(0);
+        await user.click(
+          (await screen.findAllByRole("button", { name: "More for Claude" }))[0]!,
+        );
+        expect(
+          screen.queryByRole("menuitem", { name: /Add another/ }),
+        ).not.toBeInTheDocument();
+        await user.keyboard("{Escape}");
+        await user.click(
+          (await screen.findAllByRole("button", { name: "More for Side" }))[0]!,
+        );
+        expect(
+          await screen.findByRole("menuitem", { name: "Add another Grok" }),
+        ).toBeVisible();
+      });
+
+      it("keeps an existing account available without offering unsupported sign-in", async () => {
+        const { api, app } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({ providers: [] });
+        renderIn(app, <InferencePanel deployment={rowsDeployment} item="claude" />);
+        expect(await screen.findByText("Connected")).toBeVisible();
+        expect(await screen.findByText("Sign in from the desktop app.")).toBeVisible();
+        expect(
+          screen.queryByRole("button", { name: "Reconnect" }),
+        ).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Disconnect" })).toBeEnabled();
+        expect(screen.getByText("Personal")).toBeVisible();
       });
 
       it("can cancel a sign-in started from the row", async () => {

@@ -185,17 +185,29 @@ async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<
             .map(Vec::as_slice)
             .with_context(|| format!("pack has no asset {path:?}"))
     })?;
-    // Each revision of the drafted pack replaces the one before it.
     let identity = gents::pack::PackIdentity::new(&manifest, digest, Vec::new());
-    gents::pack::install_pack_documents(
+    let expected = config
+        .eval_definitions
+        .iter()
+        .map(|definition| gents::config_client::DesiredStateExpectation {
+            collection: gents::Collection::EvalDefinition,
+            owner: ctx.owner.clone(),
+            id: definition.definition_id.clone(),
+            digest: None,
+        })
+        .collect();
+    gents::pack::install_pack_documents_with_expectations(
         &ctx.access,
         &ctx.owner,
         &identity,
         &config,
-        gents::pack::DriftPolicy::Overwrite,
+        gents::pack::DriftPolicy::Refuse,
+        expected,
     )
     .await
-    .context("installing the drafted definition pack into the home")?;
+    .context(
+        "installing the pilot definition; choose a new --definition-id if this home already has it",
+    )?;
     Ok(())
 }
 
@@ -566,6 +578,68 @@ mod tests {
             .into_iter()
             .filter(|run| run.origin.definition.definition_id == DEFINITION)
             .collect()
+    }
+
+    #[tokio::test]
+    async fn pilot_refuses_an_installed_definition_without_changing_it() {
+        let fixture = Fixture::new().await;
+        let registry = CheckRegistry::builtin();
+        let root = tempfile::tempdir().unwrap();
+        let init = context(&fixture, &registry, &root.path().join("out"));
+        let drafted = drafted(&init).await;
+        let dir = &drafted.written.as_ref().unwrap().out;
+        let mut existing =
+            serde_json::to_value(&drafted.assembled.as_ref().unwrap().definition).unwrap();
+        existing["title"] = json!("Existing instrument");
+        let plan = gents::config_client::DesiredStateApplyPlan::new(vec![
+            gents::config_client::DesiredStateApplyDocument {
+                collection: gents::Collection::EvalDefinition,
+                add: existing.clone(),
+                update: existing,
+            },
+        ])
+        .unwrap();
+        fixture
+            .ctx
+            .access
+            .transact_write("eval.pilot.existing_definition_fixture", |txn| {
+                let plan = &plan;
+                Box::pin(
+                    async move { gents::config_client::apply_desired_state_plan(txn, plan).await },
+                )
+            })
+            .await
+            .unwrap();
+        let query = "{ EvalDefinition { definition_id title cases } PackInstallation { coordinate digest documents history } }";
+        let before = fixture.ctx.access.execute(query).await.unwrap();
+        let error = install_definition(&fixture.ctx, dir).await.unwrap_err();
+        assert!(
+            gents::config_client::stale_expectation(&error).is_some(),
+            "{error:#}"
+        );
+        let after = fixture.ctx.access.execute(query).await.unwrap();
+        assert_eq!(before, after);
+        assert!(pilot_runs(&fixture).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn concurrent_pilots_cannot_replace_each_others_definition() {
+        let fixture = Fixture::new().await;
+        let registry = CheckRegistry::builtin();
+        let root = tempfile::tempdir().unwrap();
+        let init = context(&fixture, &registry, &root.path().join("out"));
+        let drafted = drafted(&init).await;
+        let dir = &drafted.written.as_ref().unwrap().out;
+        let (left, right) = tokio::join!(
+            install_definition(&fixture.ctx, dir),
+            install_definition(&fixture.ctx, dir)
+        );
+        assert_ne!(left.is_ok(), right.is_ok());
+        let error = left.err().or_else(|| right.err()).unwrap();
+        assert!(
+            gents::config_client::stale_expectation(&error).is_some(),
+            "{error:#}"
+        );
     }
 
     #[tokio::test]

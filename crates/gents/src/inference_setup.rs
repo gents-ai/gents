@@ -192,26 +192,42 @@ pub fn inference_setup_catalog() -> InferenceSetupCatalog {
             InferenceProviderOption {
                 id: Anthropic,
                 display_name: "Anthropic".into(),
-                description: "Use a Claude Pro or Max subscription.".into(),
-                auth_methods: vec![ClaudeOauth],
-                auth_options: vec![InferenceAuthOption {
-                    method: ClaudeOauth,
-                    display_name: "Claude sign-in".into(),
-                    default_endpoint: CLAUDE_ENDPOINT.into(),
-                }],
+                description: "Use a Claude Pro or Max subscription, or an Anthropic API key."
+                    .into(),
+                auth_methods: vec![ClaudeOauth, ApiKey],
+                auth_options: vec![
+                    InferenceAuthOption {
+                        method: ClaudeOauth,
+                        display_name: "Claude sign-in".into(),
+                        default_endpoint: CLAUDE_ENDPOINT.into(),
+                    },
+                    InferenceAuthOption {
+                        method: ApiKey,
+                        display_name: "Anthropic API key".into(),
+                        default_endpoint: crate::claude_subscription::ANTHROPIC_API_ENDPOINT.into(),
+                    },
+                ],
                 default_auth_method: ClaudeOauth,
                 default_endpoint: CLAUDE_ENDPOINT.into(),
             },
             InferenceProviderOption {
                 id: Grok,
                 display_name: "Grok".into(),
-                description: "Use SuperGrok or an eligible X Premium+ subscription.".into(),
-                auth_methods: vec![GrokOauth],
-                auth_options: vec![InferenceAuthOption {
-                    method: GrokOauth,
-                    display_name: "Grok sign-in".into(),
-                    default_endpoint: GROK_ENDPOINT.into(),
-                }],
+                description:
+                    "Use SuperGrok, an eligible X Premium+ subscription, or an xAI API key.".into(),
+                auth_methods: vec![GrokOauth, ApiKey],
+                auth_options: vec![
+                    InferenceAuthOption {
+                        method: GrokOauth,
+                        display_name: "Grok sign-in".into(),
+                        default_endpoint: GROK_ENDPOINT.into(),
+                    },
+                    InferenceAuthOption {
+                        method: ApiKey,
+                        display_name: "xAI API key".into(),
+                        default_endpoint: XAI_API_ENDPOINT.into(),
+                    },
+                ],
                 default_auth_method: GrokOauth,
                 default_endpoint: GROK_ENDPOINT.into(),
             },
@@ -935,17 +951,57 @@ mod tests {
             opus.reasoning_effort.unwrap().recommended,
             ReasoningEffort::Medium
         );
+    }
 
+    #[test]
+    fn subscription_catalogs_expose_api_keys_through_their_existing_connection_contracts() {
         let catalog = inference_setup_catalog();
-        let anthropic = catalog
-            .providers
-            .iter()
-            .find(|provider| provider.id == InferenceProviderId::Anthropic)
-            .unwrap();
-        assert_eq!(
-            anthropic.auth_methods,
-            vec![InferenceAuthMethod::ClaudeOauth]
-        );
+        for (id, subscription, subscription_endpoint, key_label, kind, key_endpoint) in [
+            (
+                InferenceProviderId::Anthropic,
+                InferenceAuthMethod::ClaudeOauth,
+                CLAUDE_ENDPOINT,
+                "Anthropic API key",
+                BackendProviderKind::AnthropicApiKey,
+                crate::claude_subscription::ANTHROPIC_API_ENDPOINT,
+            ),
+            (
+                InferenceProviderId::Grok,
+                InferenceAuthMethod::GrokOauth,
+                GROK_ENDPOINT,
+                "xAI API key",
+                BackendProviderKind::OpenAiCompatible,
+                XAI_API_ENDPOINT,
+            ),
+        ] {
+            let provider = catalog
+                .providers
+                .iter()
+                .find(|provider| provider.id == id)
+                .unwrap();
+            assert_eq!(
+                provider.auth_methods,
+                vec![subscription, InferenceAuthMethod::ApiKey]
+            );
+            assert_eq!(provider.default_auth_method, subscription);
+            assert_eq!(provider.default_endpoint, subscription_endpoint);
+            let key = provider
+                .auth_options
+                .iter()
+                .find(|option| option.method == InferenceAuthMethod::ApiKey)
+                .unwrap();
+            assert_eq!(key.display_name, key_label);
+            assert_eq!(key.default_endpoint, key_endpoint);
+            let spec = connection_spec(provider.id, key.method, &key.default_endpoint).unwrap();
+            assert_eq!(spec.provider_kind, kind);
+            assert_eq!(spec.endpoint, key_endpoint);
+            assert!(spec.api_key_required);
+            assert!(spec.oauth_provider.is_none());
+            assert_eq!(
+                provider_selection_for_backend(spec.provider_kind, &spec.endpoint),
+                (id, key.method)
+            );
+        }
     }
 
     #[test]

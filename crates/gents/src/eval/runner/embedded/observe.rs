@@ -37,7 +37,7 @@ impl ObservationHook for NoHook {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalObservation {
-    pub terminal_state: RequestLifecycleState,
+    pub terminal_state: Option<RequestLifecycleState>,
     pub session_id: Option<String>,
     pub interrupted_on_deadline: bool,
     pub elapsed: Duration,
@@ -96,14 +96,9 @@ pub struct RequestEvidence {
 /// is still non-terminal, call [`crate::interrupt::interrupt_request`] exactly
 /// once and set `interrupted_on_deadline`. Keep polling until `deadline + grace`.
 ///
-/// Return `Ok` as soon as the state parses to a terminal
-/// [`RequestLifecycleState`] (`Completed`, `Failed`, `Superseded`, `Dead`, or
-/// `Interrupted`). When the grace expires and the last observed state is still
-/// non-terminal, return `Ok` with `terminal_state` set to that state when
-/// [`RequestLifecycleState::parse`] yields a terminal state, otherwise
-/// `Interrupted`, and `interrupted_on_deadline: true`. This is the library form
-/// of today's `nonterminal_after_interrupt` observation: the caller still learns
-/// that the deadline fired, and a missing or unparseable row is not unwrapped.
+/// An interrupt records intent. Terminal evidence requires a durable terminal
+/// state: if the grace expires before one is observed, `terminal_state` remains
+/// `None` and `interrupted_on_deadline` remains `true`.
 pub async fn await_terminal(
     node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
@@ -124,7 +119,6 @@ pub async fn await_terminal_with(
 ) -> Result<TerminalObservation> {
     let started = std::time::Instant::now();
     let mut interrupted_on_deadline = false;
-    let mut last_state = String::new();
     let mut session_id = None;
     let mut last_progress: Option<(String, Option<String>)> = None;
     loop {
@@ -136,9 +130,6 @@ pub async fn await_terminal_with(
         let observed_session = row.as_ref().and_then(|row| row.session_id.clone());
         if let Some(row) = row.as_ref() {
             session_id.clone_from(&row.session_id);
-            if let Some(state) = row.lifecycle_state.as_deref() {
-                last_state = state.to_string();
-            }
         }
         let progress = (observed_state.clone(), observed_session.clone());
         if last_progress.as_ref() != Some(&progress) {
@@ -146,17 +137,15 @@ pub async fn await_terminal_with(
                 .await;
             last_progress = Some(progress);
         }
-        if let Some(state) = row.as_ref().and_then(|row| row.lifecycle_state.as_deref()) {
-            if let Ok(parsed) = RequestLifecycleState::parse(state) {
-                if parsed.is_terminal() {
-                    return Ok(TerminalObservation {
-                        terminal_state: parsed,
-                        session_id,
-                        interrupted_on_deadline,
-                        elapsed: started.elapsed(),
-                    });
-                }
-            }
+        let terminal_state =
+            observed_terminal_state(row.as_ref().and_then(|row| row.lifecycle_state.as_deref()));
+        if terminal_state.is_some() {
+            return Ok(TerminalObservation {
+                terminal_state,
+                session_id,
+                interrupted_on_deadline,
+                elapsed: started.elapsed(),
+            });
         }
         let elapsed = started.elapsed();
         hook.on_tick(elapsed).await;
@@ -168,10 +157,6 @@ pub async fn await_terminal_with(
             interrupted_on_deadline = true;
         }
         if interrupted_on_deadline && elapsed >= deadline.saturating_add(grace) {
-            let terminal_state = match RequestLifecycleState::parse(&last_state) {
-                Ok(state) if state.is_terminal() => state,
-                _ => RequestLifecycleState::Interrupted,
-            };
             return Ok(TerminalObservation {
                 terminal_state,
                 session_id,
@@ -181,6 +166,10 @@ pub async fn await_terminal_with(
         }
         tokio::time::sleep(poll).await;
     }
+}
+
+fn observed_terminal_state(state: Option<&str>) -> Option<RequestLifecycleState> {
+    RequestLifecycleState::parse_opt(state).filter(|state| state.is_terminal())
 }
 
 pub async fn collect_request_evidence(
@@ -305,13 +294,16 @@ fn assistant_messages(timeline: &RunTimelineRows) -> Vec<MessageEvidence> {
 /// `"provider"`, `"runtime"`, `"infrastructure"`, or `"unknown"`.
 /// `None` means the request completed.
 pub fn classify_request_outcome(
-    terminal_state: RequestLifecycleState,
+    terminal_state: Option<RequestLifecycleState>,
     interrupted_on_deadline: bool,
     evidence: &RequestEvidence,
 ) -> Option<&'static str> {
     if interrupted_on_deadline {
         return Some("deadline");
     }
+    let Some(terminal_state) = terminal_state else {
+        return Some("infrastructure");
+    };
     if terminal_state == RequestLifecycleState::Completed {
         return None;
     }
@@ -466,7 +458,8 @@ mod tests {
         #[derive(Debug, Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Case {
-            state: String,
+            state: Option<String>,
+            observed_terminal_state: Option<String>,
             deadline: bool,
             inference_failed: bool,
             tool_failed: bool,
@@ -479,13 +472,20 @@ mod tests {
             "/tests/fixtures/eval_request_outcome.json"
         )))
         .unwrap();
-        assert_eq!(cases.len(), 400);
+        assert_eq!(cases.len(), 656);
         let native_ownership_loss = crate::lifecycle::ExecutionOwnershipLost.to_string();
         assert!(cases.iter().any(|case| {
             case.request_reason.as_deref() == Some(native_ownership_loss.as_str())
                 && case.outcome.as_deref() == Some("infrastructure")
         }));
         for case in cases {
+            assert_eq!(
+                observed_terminal_state(case.state.as_deref()),
+                case.observed_terminal_state
+                    .as_deref()
+                    .map(|state| RequestLifecycleState::parse(state).unwrap()),
+                "{case:?}"
+            );
             let mut evidence = evidence(
                 case.inference_failed,
                 case.tool_failed,
@@ -507,7 +507,9 @@ mod tests {
             }
             assert_eq!(
                 classify_request_outcome(
-                    RequestLifecycleState::parse(&case.state).unwrap(),
+                    case.state
+                        .as_deref()
+                        .map(|state| RequestLifecycleState::parse(state).unwrap()),
                     case.deadline,
                     &evidence,
                 ),
@@ -589,16 +591,16 @@ mod tests {
     fn classification_matches_the_stages_table() {
         use RequestLifecycleState as S;
         assert_eq!(
-            classify_request_outcome(S::Interrupted, true, &evidence(false, false, None)),
+            classify_request_outcome(Some(S::Interrupted), true, &evidence(false, false, None)),
             Some("deadline")
         );
         assert_eq!(
-            classify_request_outcome(S::Completed, false, &evidence(false, false, None)),
+            classify_request_outcome(Some(S::Completed), false, &evidence(false, false, None)),
             None
         );
         assert_eq!(
             classify_request_outcome(
-                S::Failed,
+                Some(S::Failed),
                 false,
                 &evidence(false, false, Some("invalid_tool_call_budget_exhausted"))
             ),
@@ -606,7 +608,7 @@ mod tests {
         );
         assert_eq!(
             classify_request_outcome(
-                S::Failed,
+                Some(S::Failed),
                 false,
                 &evidence(
                     true,
@@ -619,7 +621,7 @@ mod tests {
         );
         assert_eq!(
             classify_request_outcome(
-                S::Failed,
+                Some(S::Failed),
                 false,
                 &evidence(
                     true,
@@ -642,16 +644,16 @@ mod tests {
             result: Value::Null,
         });
         assert_eq!(
-            classify_request_outcome(S::Failed, false, &status_only),
+            classify_request_outcome(Some(S::Failed), false, &status_only),
             Some("runtime"),
             "only the authoritative lifecycle_state marks a tool failed"
         );
         assert_eq!(
-            classify_request_outcome(S::Failed, false, &evidence(true, true, None)),
+            classify_request_outcome(Some(S::Failed), false, &evidence(true, true, None)),
             Some("unknown")
         );
         assert_eq!(
-            classify_request_outcome(S::Failed, false, &evidence(true, false, None)),
+            classify_request_outcome(Some(S::Failed), false, &evidence(true, false, None)),
             Some("provider")
         );
         let mut inference_reason = evidence(false, false, None);
@@ -668,11 +670,11 @@ mod tests {
                 ended_at: None,
             });
         assert_eq!(
-            classify_request_outcome(S::Failed, false, &inference_reason),
+            classify_request_outcome(Some(S::Failed), false, &inference_reason),
             Some("provider")
         );
         assert_eq!(
-            classify_request_outcome(S::Failed, false, &evidence(false, true, None)),
+            classify_request_outcome(Some(S::Failed), false, &evidence(false, true, None)),
             Some("tool")
         );
         let mut tool_lifecycle = evidence(false, false, None);
@@ -687,24 +689,24 @@ mod tests {
             result: Value::Null,
         });
         assert_eq!(
-            classify_request_outcome(S::Failed, false, &tool_lifecycle),
+            classify_request_outcome(Some(S::Failed), false, &tool_lifecycle),
             Some("tool")
         );
         assert_eq!(
-            classify_request_outcome(S::Failed, false, &evidence(false, false, None)),
+            classify_request_outcome(Some(S::Failed), false, &evidence(false, false, None)),
             Some("runtime")
         );
         assert_eq!(
-            classify_request_outcome(S::Dead, false, &evidence(false, false, None)),
+            classify_request_outcome(Some(S::Dead), false, &evidence(false, false, None)),
             Some("runtime")
         );
         assert_eq!(
-            classify_request_outcome(S::Superseded, false, &evidence(false, false, None)),
+            classify_request_outcome(Some(S::Superseded), false, &evidence(false, false, None)),
             Some("runtime")
         );
         // Old "mystery" row: a non-runtime, non-completed state is unknown.
         assert_eq!(
-            classify_request_outcome(S::Processing, false, &evidence(false, false, None)),
+            classify_request_outcome(Some(S::Processing), false, &evidence(false, false, None)),
             Some("unknown")
         );
     }
@@ -905,9 +907,64 @@ mod tests {
         // pinned against what it is for: the tool budget wins over the failed
         // inference call and the failed tool.
         assert_eq!(
-            classify_request_outcome(RequestLifecycleState::Failed, false, &evidence),
+            classify_request_outcome(Some(RequestLifecycleState::Failed), false, &evidence),
             Some("tool")
         );
+        home.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_expired_grace_never_invents_a_terminal_request_state() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/eval_request_outcome.json"
+        )))
+        .unwrap();
+        let home = EmbeddedHome::create_temp("observe-unsettled")
+            .await
+            .unwrap();
+        for state in ["pending", "processing"] {
+            let case = cases
+                .iter()
+                .find(|case| {
+                    case["state"] == state
+                        && case["deadline"] == true
+                        && case["request_reason"].is_null()
+                        && case["inference_reason"].is_null()
+                        && case["inference_failed"] == false
+                        && case["tool_failed"] == false
+                })
+                .unwrap();
+            let request_id = format!("req-unsettled-{state}");
+            insert_request(&home, &request_id, state).await;
+            let observed = await_terminal(
+                &home.node,
+                &request_id,
+                Duration::ZERO,
+                Duration::ZERO,
+                Duration::from_millis(1),
+            )
+            .await
+            .unwrap();
+            let stored = poll_request(&home.node, &request_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(stored.lifecycle_state.as_deref(), Some(state));
+            assert!(observed.interrupted_on_deadline);
+            assert_eq!(
+                serde_json::to_value(&observed).unwrap()["terminal_state"],
+                case["observed_terminal_state"]
+            );
+            assert_eq!(
+                classify_request_outcome(
+                    observed.terminal_state,
+                    observed.interrupted_on_deadline,
+                    &RequestEvidence::default()
+                ),
+                case["outcome"].as_str()
+            );
+        }
         home.node.shutdown().await;
     }
 
@@ -925,7 +982,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(observed.terminal_state, RequestLifecycleState::Completed);
+        assert_eq!(
+            observed.terminal_state,
+            Some(RequestLifecycleState::Completed)
+        );
         assert_eq!(observed.session_id.as_deref(), Some("s-1"));
         assert!(!observed.interrupted_on_deadline);
     }
@@ -946,7 +1006,7 @@ mod tests {
         assert!(observed.interrupted_on_deadline);
         // No runtime is running, so the observer never flips it; the state stays
         // non-terminal and the grace expires.
-        assert_ne!(observed.terminal_state, RequestLifecycleState::Completed);
+        assert_eq!(observed.terminal_state, None);
         let request_id = crate::graphql::escape_graphql_string("req-stuck");
         let query = format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ interrupt_requested_at }} }}"#

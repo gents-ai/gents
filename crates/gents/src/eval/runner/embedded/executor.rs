@@ -412,10 +412,8 @@ impl TrialExecutor for EmbeddedExecutor {
             let terminal_state = RequestLifecycleState::parse(&request.lifecycle_state)
                 .ok()
                 .filter(|state| state.is_terminal());
-            let failure_kind = match terminal_state {
-                Some(state) => classify_request_outcome(state, false, &evidence).map(outcome_kind),
-                None => Some(OutcomeKind::Unknown),
-            };
+            let failure_kind =
+                classify_request_outcome(terminal_state, false, &evidence).map(outcome_kind);
             stages.push(StageEvidence {
                 prods: 0,
                 stage_id: index.to_string(),
@@ -1051,7 +1049,7 @@ async fn observe_stage_terminal(
                     .ok()
                     .filter(|state| state.is_terminal())?;
                 Some(TerminalObservation {
-                    terminal_state,
+                    terminal_state: Some(terminal_state),
                     session_id: row.session_id,
                     interrupted_on_deadline: false,
                     elapsed: watch_started.elapsed(),
@@ -1206,7 +1204,9 @@ async fn submit_and_observe(
             return ObservedStage {
                 request_id: Some(request_id),
                 prods,
-                terminal_state: observed.as_ref().map(|observed| observed.terminal_state),
+                terminal_state: observed
+                    .as_ref()
+                    .and_then(|observed| observed.terminal_state),
                 failure_kind: Some(OutcomeKind::Infrastructure),
                 evidence,
             };
@@ -1216,7 +1216,9 @@ async fn submit_and_observe(
     ObservedStage {
         request_id: Some(request_id),
         prods,
-        terminal_state: observed.as_ref().map(|observed| observed.terminal_state),
+        terminal_state: observed
+            .as_ref()
+            .and_then(|observed| observed.terminal_state),
         failure_kind: match failure_kind {
             None => {
                 trigger_failure(
@@ -2555,7 +2557,7 @@ mod tests {
             ..Default::default()
         };
         let terminal = TerminalObservation {
-            terminal_state: RequestLifecycleState::Failed,
+            terminal_state: Some(RequestLifecycleState::Failed),
             session_id: Some("session".into()),
             interrupted_on_deadline: false,
             elapsed: Duration::ZERO,
@@ -2564,6 +2566,40 @@ mod tests {
         assert_eq!(outcome, Some(expected));
         assert_eq!(provider_reason(outcome, &evidence), None);
         assert_failure_class(outcome, expected, crate::eval::EvidenceClass::NotEvidence);
+    }
+
+    #[test]
+    fn a_deadline_without_terminal_evidence_keeps_its_deadline_outcome() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/eval_request_outcome.json"
+        )))
+        .unwrap();
+        let cases: Vec<_> = cases
+            .iter()
+            .filter(|case| {
+                case["state"].is_null()
+                    && case["request_reason"].is_null()
+                    && case["inference_reason"].is_null()
+                    && case["inference_failed"] == false
+                    && case["tool_failed"] == false
+            })
+            .collect();
+        assert_eq!(cases.len(), 2);
+        for case in cases {
+            let observed = TerminalObservation {
+                terminal_state: None,
+                session_id: Some("session".into()),
+                interrupted_on_deadline: case["deadline"].as_bool().unwrap(),
+                elapsed: Duration::ZERO,
+            };
+            let expected = OutcomeKind::parse(case["outcome"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                stage_failure_kind(Some(&observed), true, false, &RequestEvidence::default()),
+                Some(expected),
+                "{case}"
+            );
+        }
     }
 
     /// Cancellation reaches a seed stage before it has a request: while it
@@ -3011,7 +3047,7 @@ mod tests {
                 assert!(stopped);
                 assert_eq!(
                     terminal.unwrap().terminal_state,
-                    RequestLifecycleState::Interrupted
+                    Some(RequestLifecycleState::Interrupted)
                 );
             }
 
@@ -3037,7 +3073,7 @@ mod tests {
                 ) && call.ended_at.is_some()
             }));
             assert_ne!(
-                classify_request_outcome(terminal_state, false, &evidence),
+                classify_request_outcome(Some(terminal_state), false, &evidence),
                 Some("infrastructure"),
                 "{evidence:?}"
             );
@@ -3123,6 +3159,54 @@ mod tests {
 
     /// `home_hint` is read back from the database, so a hint that leaves the
     /// runs directory is refused before a home outside it is opened.
+    #[tokio::test]
+    async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/eval_request_outcome.json"
+        )))
+        .unwrap();
+        let case = cases
+            .iter()
+            .find(|case| {
+                case["state"].is_null()
+                    && case["deadline"] == false
+                    && case["request_reason"].is_null()
+                    && case["inference_reason"].is_null()
+                    && case["inference_failed"] == false
+                    && case["tool_failed"] == false
+            })
+            .unwrap();
+        let expected = OutcomeKind::parse(case["outcome"].as_str().unwrap()).unwrap();
+        let runs = tempfile::tempdir().unwrap();
+        let home = EmbeddedHome::create_retained(&runs.path().join("trial/home"))
+            .await
+            .unwrap();
+        for state in ["pending", "processing"] {
+            seed_request_with_state(&home, &format!("retained-{state}"), state).await;
+        }
+        let locator = TrialLocator {
+            trial_node_did: home.did().to_owned(),
+            session_id: "s-1".into(),
+            home_hint: Some("trial".into()),
+        };
+        close(home).await;
+
+        let executor =
+            EmbeddedExecutor::new(DocumentRuntimeOptions::default(), runs.path().to_owned());
+        let evidence = executor.recollect(&locator, &[]).await.unwrap();
+        assert_eq!(evidence.stages.len(), 2);
+        assert!(evidence.anchor.terminal_states.is_empty());
+        for stage in evidence.stages {
+            assert_eq!(
+                serde_json::to_value(stage.terminal_state).unwrap(),
+                case["observed_terminal_state"]
+            );
+            assert_eq!(stage.failure_kind, Some(expected));
+            assert_eq!(stage.provider_reason, None);
+        }
+    }
+
     #[tokio::test]
     async fn recollect_refuses_a_home_hint_outside_the_runs_directory() {
         let dir = tempfile::tempdir().unwrap();
@@ -3876,7 +3960,10 @@ mod tests {
         tokio::time::resume();
 
         let observed = observed.expect("settled request should remain observable after exit");
-        assert_eq!(observed.terminal_state, RequestLifecycleState::Completed);
+        assert_eq!(
+            observed.terminal_state,
+            Some(RequestLifecycleState::Completed)
+        );
         assert!(!stopped);
 
         let evidence = collect_request_evidence(&home.node, request_id)
@@ -3898,10 +3985,15 @@ mod tests {
     }
 
     async fn seed_request(home: &EmbeddedHome, request_id: &str) {
+        seed_request_with_state(home, request_id, "completed").await;
+    }
+
+    async fn seed_request_with_state(home: &EmbeddedHome, request_id: &str, state: &str) {
         let node_did = escape_graphql_string(home.did());
         let request_id = escape_graphql_string(request_id);
+        let state = escape_graphql_string(state);
         let mutation = format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "seeded-agent", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "completed", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "seeded-agent", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "{state}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
         );
         let response = home.node.execute(&mutation).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);

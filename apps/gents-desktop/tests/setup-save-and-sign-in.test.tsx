@@ -336,6 +336,120 @@ describe("the provider catalog", () => {
   });
 });
 
+describe.each(["onboarding", "add-backend"] as const)("%s API-key setup", (purpose) => {
+  it.each([
+    {
+      provider: "anthropic" as const,
+      subscription: "claude-subscription",
+      signIn: "Claude sign-in",
+      keyOption: "Anthropic API key",
+      endpoint: "https://api.anthropic.com/v1",
+      kind: "AnthropicApiKey",
+      wire: null,
+      model: "claude-sonnet-5",
+    },
+    {
+      provider: "grok" as const,
+      subscription: "xai-oauth",
+      signIn: "Grok sign-in",
+      keyOption: "xAI API key",
+      endpoint: "https://api.x.ai/v1",
+      kind: "OpenAiCompatible",
+      wire: "responses",
+      model: "grok-4.6",
+    },
+  ])(
+    "discovers and saves $keyOption without the subscription account",
+    async (choice) => {
+      const harness = createDesktopUiHarness({ scenario: "empty-fleet" });
+      const initialized = await harness.adapter.initLocalStandardRuntime({
+        label: "Forge",
+        dangerouslyOverwrite: false,
+        reset: false,
+      });
+      const discover = vi.fn(
+        harness.adapter.discoverInferenceModels.bind(harness.adapter),
+      );
+      const { api, app } = setup(
+        {
+          discoverInferenceModels: discover,
+          listProviderAccounts: vi.fn().mockResolvedValue([
+            {
+              credentialId: "credential-work",
+              nodeDid: initialized.nodeDid,
+              provider: choice.subscription,
+              accountId: "work@example.com",
+              accountRef: "acct-work",
+              planType: null,
+              accessTokenExpiresAt: "2099-01-01T00:00:00Z",
+              lastRefresh: null,
+              enabled: true,
+              pendingSave: false,
+            },
+          ]),
+        },
+        harness,
+      );
+      const onDone = vi.fn();
+      renderIn(
+        app,
+        <SetupScreen
+          initialStep="inference"
+          purpose={purpose}
+          provider={choice.provider}
+          nodeDid={initialized.nodeDid}
+          onCancel={vi.fn()}
+          onDone={onDone}
+        />,
+      );
+      const user = userEvent.setup();
+      const method = await screen.findByRole("combobox", { name: "Connection method" });
+      expect(method).toHaveTextContent(choice.signIn);
+      await user.click(method);
+      await user.click(await screen.findByRole("option", { name: choice.keyOption }));
+      expect(screen.getByLabelText("Endpoint")).toHaveValue(choice.endpoint);
+      expect(screen.queryByText(/Connected as/)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
+      const connect = screen.getByRole("button", { name: "Connect and find models" });
+      expect(connect).toBeDisabled();
+      await user.type(screen.getByLabelText("API key"), "test-api-key");
+      await user.click(connect);
+      await user.click(await screen.findByRole("option", { name: choice.model }));
+      expect(discover).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nodeDid: initialized.nodeDid,
+          provider: choice.provider,
+          authMethod: "api_key",
+          endpoint: choice.endpoint,
+          apiKey: "test-api-key",
+          accountRef: null,
+        }),
+      );
+      await user.click(screen.getByTestId("setup-save-inference"));
+      await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+      expect(api.applyConfigComponents).toHaveBeenCalledTimes(1);
+      expect(api.applyConfigComponents).toHaveBeenCalledWith({
+        document: expect.objectContaining({
+          inference_backends: [
+            expect.objectContaining({
+              provider_kind: choice.kind,
+              openai_wire_api: choice.wire,
+              endpoint: choice.endpoint,
+              auth: { kind: "api_key", key: "test-api-key" },
+            }),
+          ],
+        }),
+      });
+      expect(api.codexLogin).not.toHaveBeenCalled();
+      expect(api.claudeLogin).not.toHaveBeenCalled();
+      expect(api.grokLogin).not.toHaveBeenCalled();
+      expect(
+        screen.queryByText(/test-api-key|credential-work|acct-work/),
+      ).not.toBeInTheDocument();
+    },
+  );
+});
+
 describe("add another account", () => {
   const KIND = {
     openai: "chatgpt-codex",
