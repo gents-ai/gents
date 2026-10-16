@@ -40,8 +40,7 @@ export function failureLine(output: string | null | undefined): string | null {
         }
       }
     }
-  } catch {
-  }
+  } catch {}
   return null;
 }
 const since = (iso: string | null | undefined) =>

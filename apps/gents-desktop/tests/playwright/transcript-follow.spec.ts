@@ -357,10 +357,10 @@ test("a sent message is drawn once from send to saved", async ({ page }, testInf
   await page.waitForTimeout(300);
   await expect(sent).toHaveCount(1);
   await expect(row()).toHaveAttribute("data-probe", "sent");
-  for (const [step, arg] of [
-    ["userTurn", "saved"],
-    ["streamUpdate"],
-  ] as [string, unknown][]) {
+  for (const [step, arg] of [["userTurn", "saved"], ["streamUpdate"]] as [
+    string,
+    unknown,
+  ][]) {
     await harness(step, arg);
     await page.waitForTimeout(300);
     await expect(sent).toHaveCount(1);

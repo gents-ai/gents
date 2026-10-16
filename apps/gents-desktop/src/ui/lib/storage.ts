@@ -11,14 +11,12 @@ export const browserStorage = {
   setItem(key: string, value: string) {
     try {
       localStorage.setItem(key, value);
-    } catch {
-    }
+    } catch {}
   },
   removeItem(key: string) {
     try {
       localStorage.removeItem(key);
-    } catch {
-    }
+    } catch {}
   },
 };
 

@@ -44,12 +44,16 @@ const hasMarker = (comments, marker) =>
 // author is one of this run's identities; never delete a comment it cannot
 // prove it wrote.
 function deletableBotNotices(comments, botLogins) {
-  const logins = new Set([...botLogins].filter(Boolean).map((l) => l.toLowerCase()));
+  const logins = new Set(
+    [...botLogins].filter(Boolean).map((l) => l.toLowerCase()),
+  );
   return comments
     .map(normalizeComment)
     .filter((c) => c.id !== null && c.id !== undefined)
     .filter((c) => RETRACTABLE_MARKER_PREFIXES.some((p) => c.body.includes(p)))
-    .filter((c) => typeof c.author === "string" && logins.has(c.author.toLowerCase()))
+    .filter(
+      (c) => typeof c.author === "string" && logins.has(c.author.toLowerCase()),
+    )
     .map((c) => c.id);
 }
 

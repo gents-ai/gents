@@ -101,8 +101,7 @@ export async function observeManagedServerOperation(
         if (settled) return;
         wait = nextManagedServerWait(wait, status, Date.now());
         onWait(wait);
-      } catch {
-      }
+      } catch {}
     }
   })();
   try {

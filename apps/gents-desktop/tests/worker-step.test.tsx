@@ -130,7 +130,7 @@ function renderStep(
 
 describe("an agent row", () => {
   it("shows the request this row's call caused, not the session's latest", () => {
-  expect(
+    expect(
       workerNow(call(), reached(caused("child-req", "completed")), Date.now()),
     ).toEqual({
       tone: "done",

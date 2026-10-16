@@ -20,7 +20,8 @@ const MAX_BACKOFF_MS = 60_000;
 // Only explicit negatives disable dry-run: this bot holds `issues: write` on
 // the production tracker, so a typo'd truthy value must never enable live writes.
 const DRY_RUN_RAW = (process.env.DRY_RUN ?? "").trim().toLowerCase();
-const DRY_RUN = DRY_RUN_RAW !== "" && DRY_RUN_RAW !== "0" && DRY_RUN_RAW !== "false";
+const DRY_RUN =
+  DRY_RUN_RAW !== "" && DRY_RUN_RAW !== "0" && DRY_RUN_RAW !== "false";
 
 // A 403 is retryable only with rate-limit evidence; 404/422 are real answers.
 const isRetryable = (status, headers, body) => {
@@ -39,45 +40,47 @@ const retryDelayMs = (headers, attempt) => {
     return Math.min(retryAfter * 1000, MAX_BACKOFF_MS);
   }
   const reset = Number(headers.get("x-ratelimit-reset"));
-  if (headers.get("x-ratelimit-remaining") === "0" && Number.isFinite(reset) && reset > 0) {
+  if (
+    headers.get("x-ratelimit-remaining") === "0" &&
+    Number.isFinite(reset) &&
+    reset > 0
+  ) {
     const wait = reset * 1000 - Date.now();
     if (wait > 0) return Math.min(wait, MAX_BACKOFF_MS);
   }
   return Math.min(1000 * 2 ** attempt, MAX_BACKOFF_MS);
 };
 
-export const makeApi = ({
-  token,
-  fetchImpl = fetch,
-  sleepImpl = sleep,
-  warn = console.warn,
-} = {}) => async (path, init = {}) => {
-  const method = init.method ?? "GET";
-  for (let attempt = 0; ; attempt += 1) {
-    const res = await fetchImpl(`https://api.github.com${path}`, {
-      ...init,
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${token}`,
-        "x-github-api-version": "2022-11-28",
-        ...(init.body ? { "content-type": "application/json" } : {}),
-      },
-    });
-    if (res.ok) return res.status === 204 ? null : res.json();
+export const makeApi =
+  ({ token, fetchImpl = fetch, sleepImpl = sleep, warn = console.warn } = {}) =>
+  async (path, init = {}) => {
+    const method = init.method ?? "GET";
+    for (let attempt = 0; ; attempt += 1) {
+      const res = await fetchImpl(`https://api.github.com${path}`, {
+        ...init,
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${token}`,
+          "x-github-api-version": "2022-11-28",
+          ...(init.body ? { "content-type": "application/json" } : {}),
+        },
+      });
+      if (res.ok) return res.status === 204 ? null : res.json();
 
-    const body = await res.text();
-    const err = new Error(`${method} ${path} -> ${res.status} ${body}`);
-    err.status = res.status;
-    if (attempt >= MAX_RETRIES || !isRetryable(res.status, res.headers, body)) throw err;
+      const body = await res.text();
+      const err = new Error(`${method} ${path} -> ${res.status} ${body}`);
+      err.status = res.status;
+      if (attempt >= MAX_RETRIES || !isRetryable(res.status, res.headers, body))
+        throw err;
 
-    const delay = retryDelayMs(res.headers, attempt);
-    warn(
-      `${method} ${path} -> ${res.status}; retrying in ${delay}ms ` +
-        `(attempt ${attempt + 1}/${MAX_RETRIES})`,
-    );
-    await sleepImpl(delay);
-  }
-};
+      const delay = retryDelayMs(res.headers, attempt);
+      warn(
+        `${method} ${path} -> ${res.status}; retrying in ${delay}ms ` +
+          `(attempt ${attempt + 1}/${MAX_RETRIES})`,
+      );
+      await sleepImpl(delay);
+    }
+  };
 
 const paginate = async (api, path) => {
   const out = [];
@@ -93,11 +96,13 @@ const paginate = async (api, path) => {
 // Must be exhaustive: a prior conflict marker can sit on a later page, and
 // missing it reposts the same conflict comment on every sweep.
 const listComments = async (api, repo, number) =>
-  (await paginate(api, `/repos/${repo}/issues/${number}/comments`)).map((c) => ({
-    id: c.id,
-    body: c.body ?? "",
-    author: c.user?.login ?? null,
-  }));
+  (await paginate(api, `/repos/${repo}/issues/${number}/comments`)).map(
+    (c) => ({
+      id: c.id,
+      body: c.body ?? "",
+      author: c.user?.login ?? null,
+    }),
+  );
 
 // The identities this run may delete comments as.
 export const resolveBotLogins = async (api, warn = console.warn) => {
@@ -106,8 +111,10 @@ export const resolveBotLogins = async (api, warn = console.warn) => {
     const me = await api("/user");
     if (me?.login) logins.add(me.login);
   } catch (err) {
-    warn(`could not resolve the authenticated identity (${err.status ?? err.message}); ` +
-      `comment deletion is limited to ${[...logins].join(", ")}`);
+    warn(
+      `could not resolve the authenticated identity (${err.status ?? err.message}); ` +
+        `comment deletion is limited to ${[...logins].join(", ")}`,
+    );
   }
   return [...logins];
 };
@@ -121,10 +128,18 @@ export const run = async ({
   log = console.log,
   error = console.error,
 }) => {
-  const stats = { examined: 0, changed: 0, failed: 0, commentsPosted: 0, commentsSuppressed: 0 };
+  const stats = {
+    examined: 0,
+    changed: 0,
+    failed: 0,
+    commentsPosted: 0,
+    commentsSuppressed: 0,
+  };
 
   const applyTo = async (issue) => {
-    const labels = issue.labels.map((l) => (typeof l === "string" ? l : l.name));
+    const labels = issue.labels.map((l) =>
+      typeof l === "string" ? l : l.name,
+    );
     const context = { number: issue.number, labels, state: issue.state };
     // Fetch comments lazily; the pure module owns the condition.
     const comments = requiresCommentContext(context)
@@ -132,7 +147,12 @@ export const run = async ({
       : [];
 
     const plan = reconcile({ ...context, comments, botLogins });
-    if (!plan.add.length && !plan.remove.length && !plan.comment && !plan.deleteComments.length) {
+    if (
+      !plan.add.length &&
+      !plan.remove.length &&
+      !plan.comment &&
+      !plan.deleteComments.length
+    ) {
       return false;
     }
 
@@ -161,16 +181,21 @@ export const run = async ({
       });
     }
     for (const name of plan.remove) {
-      await api(`/repos/${repo}/issues/${issue.number}/labels/${encodeURIComponent(name)}`, {
-        method: "DELETE",
-      }).catch((err) => {
+      await api(
+        `/repos/${repo}/issues/${issue.number}/labels/${encodeURIComponent(name)}`,
+        {
+          method: "DELETE",
+        },
+      ).catch((err) => {
         // A 404 already means the desired end state; anything else must not
         // count as a successful reconcile.
         if (err.status !== 404) throw err;
       });
     }
     for (const id of plan.deleteComments) {
-      await api(`/repos/${repo}/issues/comments/${id}`, { method: "DELETE" }).catch((err) => {
+      await api(`/repos/${repo}/issues/comments/${id}`, {
+        method: "DELETE",
+      }).catch((err) => {
         if (err.status !== 404) throw err;
       });
     }
@@ -221,7 +246,8 @@ export const run = async ({
 };
 
 const isMain =
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isMain) {
   if (!TOKEN) {

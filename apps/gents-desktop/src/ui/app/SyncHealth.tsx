@@ -48,9 +48,7 @@ export function SyncHealth({
         title={status.detail}
         className={cn(
           "flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-          row
-            ? "h-8 w-full rounded-lg pr-2 text-sm"
-            : "h-7 rounded-full text-xs",
+          row ? "h-8 w-full rounded-lg pr-2 text-sm" : "h-7 rounded-full text-xs",
           !row && (compact ? "w-7 justify-center" : "px-2"),
         )}
       >

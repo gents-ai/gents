@@ -106,7 +106,7 @@ export async function stopProcess(
     ]);
     if (leaderDrain.kind === "timeout" || !groupDrained) {
       if (alreadyExited) {
-      console.warn(
+        console.warn(
           `[bombadil] process group ${child.pid ?? "unknown"} did not drain within ${killDrainMs}ms after SIGKILL; leaving cleanup to the OS`,
         );
         return;

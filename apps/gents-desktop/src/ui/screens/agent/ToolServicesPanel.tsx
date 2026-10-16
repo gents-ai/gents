@@ -270,11 +270,7 @@ export function ToolServicesPanel({
           (s) => s.service_id === id,
         )!;
         return (
-          <Editor
-            key={service.service_id}
-            deployment={deployment}
-            service={service}
-          />
+          <Editor key={service.service_id} deployment={deployment} service={service} />
         );
       }}
     />

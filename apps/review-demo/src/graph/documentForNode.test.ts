@@ -23,7 +23,9 @@ const snapshot: ReviewSnapshot = {
   calls: [],
 };
 
-function node(partial: Partial<GraphNode> & Pick<GraphNode, "id" | "kind">): GraphNode {
+function node(
+  partial: Partial<GraphNode> & Pick<GraphNode, "id" | "kind">,
+): GraphNode {
   return {
     label: partial.id,
     state: "live",
@@ -47,10 +49,12 @@ describe("documentForNode", () => {
       ],
     };
     expect(
-      documentForNode(node({ id: "area:area-1", kind: "area" }), twoRuns)?.fields.lens,
+      documentForNode(node({ id: "area:area-1", kind: "area" }), twoRuns)
+        ?.fields.lens,
     ).toBe("lean");
     expect(
-      documentForNode(node({ id: "scan:area-1", kind: "scan" }), twoRuns)?.fields.summary,
+      documentForNode(node({ id: "scan:area-1", kind: "scan" }), twoRuns)
+        ?.fields.summary,
     ).toBe("this run");
   });
 });

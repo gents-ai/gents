@@ -23,7 +23,6 @@ const MINIMUM = { width: mainWindow.minWidth, height: mainWindow.minHeight };
 
 type Box = { x: number; y: number; width: number; height: number };
 
-
 async function boxOf(locator: ReturnType<Page["locator"]>) {
   await expect(locator).toBeVisible();
   const box = await locator.boundingBox();

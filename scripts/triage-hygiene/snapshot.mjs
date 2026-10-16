@@ -2,7 +2,8 @@
 import { writeFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-const DEFAULT_REPO = process.env.GITHUB_REPOSITORY ?? process.env.GH_REPO ?? "gents-ai/gents";
+const DEFAULT_REPO =
+  process.env.GITHUB_REPOSITORY ?? process.env.GH_REPO ?? "gents-ai/gents";
 const TOKEN = process.env.GITHUB_TOKEN;
 const DOOMED = [
   "cluster: quality-ci",
@@ -32,24 +33,28 @@ const INTRODUCED_MILESTONES = [
 const ROADMAP_ISSUE = 839;
 
 // Injectable so the restore guards are testable without a network.
-export const makeApi = (token) => async (path, init = {}) => {
-  const res = await fetch(`https://api.github.com${path}`, {
-    ...init,
-    headers: {
-      accept: "application/vnd.github+json",
-      authorization: `Bearer ${token}`,
-      "x-github-api-version": "2022-11-28",
-      ...(init.body ? { "content-type": "application/json" } : {}),
-    },
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    const err = new Error(`${init.method ?? "GET"} ${path} -> ${res.status} ${body}`);
-    err.status = res.status;
-    throw err;
-  }
-  return res.status === 204 ? null : res.json();
-};
+export const makeApi =
+  (token) =>
+  async (path, init = {}) => {
+    const res = await fetch(`https://api.github.com${path}`, {
+      ...init,
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${token}`,
+        "x-github-api-version": "2022-11-28",
+        ...(init.body ? { "content-type": "application/json" } : {}),
+      },
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      const err = new Error(
+        `${init.method ?? "GET"} ${path} -> ${res.status} ${body}`,
+      );
+      err.status = res.status;
+      throw err;
+    }
+    return res.status === 204 ? null : res.json();
+  };
 
 const paginate = async (api, path) => {
   const out = [];
@@ -69,7 +74,9 @@ export const capture = async (api, file, REPO = DEFAULT_REPO) => {
     description: l.description ?? "",
   }));
 
-  const milestones = (await paginate(api, `/repos/${REPO}/milestones?state=all`)).map((m) => ({
+  const milestones = (
+    await paginate(api, `/repos/${REPO}/milestones?state=all`)
+  ).map((m) => ({
     number: m.number,
     title: m.title,
     state: m.state,
@@ -109,7 +116,11 @@ export const capture = async (api, file, REPO = DEFAULT_REPO) => {
     labels,
     milestones,
     items: [...items.values()].sort((a, b) => a.number - b.number),
-    roadmapIssue: { number: ROADMAP_ISSUE, title: roadmap.title, body: roadmap.body ?? "" },
+    roadmapIssue: {
+      number: ROADMAP_ISSUE,
+      title: roadmap.title,
+      body: roadmap.body ?? "",
+    },
   };
   writeFileSync(file, `${JSON.stringify(snap, null, 2)}\n`);
   console.log(
@@ -130,12 +141,18 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
     );
   }
 
-  const live = new Set((await paginate(api, `/repos/${REPO}/labels`)).map((l) => l.name));
+  const live = new Set(
+    (await paginate(api, `/repos/${REPO}/labels`)).map((l) => l.name),
+  );
   for (const l of snap.labels) {
     if (live.has(l.name)) continue;
     await api(`/repos/${REPO}/labels`, {
       method: "POST",
-      body: JSON.stringify({ name: l.name, color: l.color, description: l.description }),
+      body: JSON.stringify({
+        name: l.name,
+        color: l.color,
+        description: l.description,
+      }),
     });
     console.log(`recreated label: ${l.name}`);
   }
@@ -146,7 +163,9 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
   for (const name of INTRODUCED) {
     if (captured.has(name)) continue;
     try {
-      await api(`/repos/${REPO}/labels/${encodeURIComponent(name)}`, { method: "DELETE" });
+      await api(`/repos/${REPO}/labels/${encodeURIComponent(name)}`, {
+        method: "DELETE",
+      });
       console.log(`deleted introduced label: ${name}`);
     } catch (err) {
       if (err.status !== 404) throw err;
@@ -164,7 +183,10 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
   // Recreate captured milestones that no longer exist; deletion is
   // allow-listed to INTRODUCED_MILESTONES only.
   const known = new Map(snap.milestones.map((m) => [m.title, m]));
-  const liveMilestones = await paginate(api, `/repos/${REPO}/milestones?state=all`);
+  const liveMilestones = await paginate(
+    api,
+    `/repos/${REPO}/milestones?state=all`,
+  );
   const liveTitles = new Set(liveMilestones.map((m) => m.title));
 
   for (const m of snap.milestones) {
@@ -202,7 +224,10 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
   // after the deletion step so a captured title can never resolve to a
   // milestone that is about to be deleted.
   const byTitle = new Map(
-    (await paginate(api, `/repos/${REPO}/milestones?state=all`)).map((m) => [m.title, m.number]),
+    (await paginate(api, `/repos/${REPO}/milestones?state=all`)).map((m) => [
+      m.title,
+      m.number,
+    ]),
   );
   let milestoned = 0;
   for (const it of snap.items) {
@@ -211,7 +236,9 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
     if (title !== null) {
       milestone = byTitle.get(title) ?? null;
       if (milestone === null) {
-        console.log(`skipped #${it.number}: milestone "${title}" no longer exists`);
+        console.log(
+          `skipped #${it.number}: milestone "${title}" no longer exists`,
+        );
         continue;
       }
     }
@@ -235,7 +262,8 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
 };
 
 const isMain =
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isMain) {
   const [mode, file] = process.argv.slice(2);

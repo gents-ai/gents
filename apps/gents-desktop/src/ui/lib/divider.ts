@@ -78,8 +78,7 @@ export function useDivider({
       rest.current = w;
       try {
         localStorage.setItem(key, String(Math.round(w)));
-      } catch {
-      }
+      } catch {}
     },
     [key],
   );

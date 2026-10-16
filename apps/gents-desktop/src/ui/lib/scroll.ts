@@ -492,8 +492,7 @@ export function useOlderPages(
       setLoading(true);
       try {
         await latest.current.load();
-      } catch {
-      }
+      } catch {}
       if (disposed || hold.current !== held) return;
       held.settled = true;
       setLoading(false);

@@ -61,12 +61,10 @@ export function useManagedServerTrayControls({ actions, stores }: DesktopApp) {
         void (async () => {
           try {
             await showAndFocusWindow();
-          } catch {
-          }
+          } catch {}
           try {
             toast.error(`Node menu command failed: ${message}`);
-          } catch {
-          }
+          } catch {}
         })();
       },
       showAndFocusWindow,
@@ -77,8 +75,7 @@ export function useManagedServerTrayControls({ actions, stores }: DesktopApp) {
             toast.loading(describeManagedServerWait(wait, Date.now()).label, {
               id: TRAY_WAIT_TOAST,
             });
-        } catch {
-        }
+        } catch {}
       },
     );
   }, [actions, stores]);

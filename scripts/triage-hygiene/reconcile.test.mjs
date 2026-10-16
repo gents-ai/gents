@@ -19,7 +19,9 @@ test("a human comment containing the marker is NEVER deleted", () => {
   const r = reconcile({
     ...base,
     labels: ["roadmap: later", NEEDS_TRIAGE],
-    comments: [humanComment(99, `quoting the bot: ${stale} — why did this fire?`)],
+    comments: [
+      humanComment(99, `quoting the bot: ${stale} — why did this fire?`),
+    ],
   });
   assert.deepEqual(r.remove, [NEEDS_TRIAGE]);
   assert.deepEqual(r.deleteComments, []);
@@ -60,7 +62,10 @@ const labelSetsUpToSize = (alphabet, maxSize) => {
 };
 
 const LOADED_COMMENTS = [
-  botComment(101, `stale ${conflictMarker(["roadmap: now", "roadmap: later"])}`),
+  botComment(
+    101,
+    `stale ${conflictMarker(["roadmap: now", "roadmap: later"])}`,
+  ),
   botComment(102, `welcome ${MISSING_HORIZON_MARKER}`),
 ];
 
@@ -73,7 +78,12 @@ test("property: not requiring comment context implies comments cannot change the
       for (const labels of sets) {
         if (requiresCommentContext({ number, labels, state })) continue;
         const blind = reconcile({ number, labels, state, comments: [] });
-        const informed = reconcile({ number, labels, state, comments: LOADED_COMMENTS });
+        const informed = reconcile({
+          number,
+          labels,
+          state,
+          comments: LOADED_COMMENTS,
+        });
         assert.deepEqual(
           blind,
           informed,
@@ -81,8 +91,16 @@ test("property: not requiring comment context implies comments cannot change the
             `requiresCommentContext() said no comment context was needed, but the plan ` +
             `changes once comments are read.`,
         );
-        assert.equal(blind.comment, null, "a blind plan must never post a comment");
-        assert.deepEqual(blind.deleteComments, [], "a blind plan must never delete a comment");
+        assert.equal(
+          blind.comment,
+          null,
+          "a blind plan must never post a comment",
+        );
+        assert.deepEqual(
+          blind.deleteComments,
+          [],
+          "a blind plan must never delete a comment",
+        );
         checked += 1;
       }
     }
@@ -92,7 +110,10 @@ test("property: not requiring comment context implies comments cannot change the
 
 test("property: a human's comment is never deleted, whatever the labels", () => {
   const stale = conflictMarker(["roadmap: now", "roadmap: later"]);
-  const comments = [humanComment(1, stale), humanComment(2, MISSING_HORIZON_MARKER)];
+  const comments = [
+    humanComment(1, stale),
+    humanComment(2, MISSING_HORIZON_MARKER),
+  ];
   let checked = 0;
   for (const number of [1, 839]) {
     for (const state of ["open", "closed"]) {

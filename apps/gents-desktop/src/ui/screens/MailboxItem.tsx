@@ -341,8 +341,7 @@ export async function openItem(
         ? { name: "session", sessionId: item.sessionId }
         : { name: "session", sessionId: null },
     );
-  } catch {
-  }
+  } catch {}
 }
 
 export const KEY =

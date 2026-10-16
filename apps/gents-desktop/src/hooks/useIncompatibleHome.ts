@@ -130,8 +130,7 @@ export function createIncompatibleHomeOps({
               ? await api.resetManagedServer(undefined, undefined, true)
               : await api.resetManagedServer(),
           );
-        } catch {
-        }
+        } catch {}
       }
     } finally {
       if (!handedOff) setBusy(false);

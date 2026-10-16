@@ -70,11 +70,7 @@ const rowKey = (row: Row) =>
   row.kind === "session" ? sessionKeyOf(row.session) : `${row.of}-workers`;
 const rowHeight = (row: Row) => (row.kind === "toggle" ? 37 : row.child ? 41 : 61);
 
-export function SessionsScreen({
-  nodeDid,
-}: {
-  nodeDid?: string;
-}) {
+export function SessionsScreen({ nodeDid }: { nodeDid?: string }) {
   const nodes = useFleet(useShallow(fleetNodes));
   const homeDid = useHomeDid();
   const selectedNodeDid = useSelectedNodeDid();

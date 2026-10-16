@@ -22,8 +22,7 @@ export function loadChatFolders(): ChatFolders {
 function saveChatFolders(folders: ChatFolders) {
   try {
     localStorage.setItem(KEY, JSON.stringify(folders));
-  } catch {
-  }
+  } catch {}
 }
 
 export function withFolder(

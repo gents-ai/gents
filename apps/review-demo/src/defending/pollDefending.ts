@@ -118,8 +118,7 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
           : [],
       ),
     );
-  } catch {
-  }
+  } catch {}
   try {
     const optional = await postGraphql<{
       DefenseVerificationAssignment?: DefenseSnapshot["verificationAssignments"];
@@ -136,8 +135,7 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
     }`);
     verificationAssignments = optional.DefenseVerificationAssignment ?? [];
     verificationCompletions = optional.DefenseVerificationCompletion ?? [];
-  } catch {
-  }
+  } catch {}
   try {
     const optional = await postGraphql<{
       DefenseVerificationAssignment?: Array<{
@@ -163,8 +161,7 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
       ...row,
       ...assignmentProvenance.get(row.assignment_id),
     }));
-  } catch {
-  }
+  } catch {}
   try {
     const optional = await postGraphql<{
       DefenseVerificationCompletion?: Array<{
@@ -183,8 +180,7 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
       ...row,
       reason: completionReasons.get(row.assignment_id) ?? row.reason,
     }));
-  } catch {
-  }
+  } catch {}
   try {
     const optional = await postGraphql<{
       DefenseRootCauseCluster?: DefenseSnapshot["clusters"];
@@ -221,8 +217,7 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
     validations = optional.DefensePatchValidation ?? [];
     securityReviews = optional.DefensePatchSecurityReview ?? [];
     contractPipelineAvailable = true;
-  } catch {
-  }
+  } catch {}
   return {
     contractPipelineAvailable,
     jobs: data.DefendingCodeJob ?? [],

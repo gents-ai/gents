@@ -31,11 +31,7 @@ const KINDS: Option<string>[] = KIND_ORDER.map((value) => ({
   tint: KIND[value]!.tone,
 }));
 
-export function MailboxScreen({
-  nodeDid,
-}: {
-  nodeDid?: string;
-}) {
+export function MailboxScreen({ nodeDid }: { nodeDid?: string }) {
   const nodes = useFleet(useShallow(fleetNodes));
   const homeDid = useHomeDid();
   const { dismissMailboxItem, openMailboxItem } = useApp().actions;

@@ -230,8 +230,7 @@ export function createClientLifecycle({
   async function startClient() {
     try {
       await ensureDesktopClientStarted();
-    } catch {
-    }
+    } catch {}
   }
 
   const initializeDesktop = singleFlight(async (): Promise<void> => {

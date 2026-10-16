@@ -51,8 +51,7 @@ export function createPeerActions({
       if (clientWasRunning) {
         try {
           await mutateSnapshot(() => api.startDesktopClient());
-        } catch {
-        }
+        } catch {}
       }
       throw new Error(formatPeerConnectionError(err, "local-runtime"));
     } finally {

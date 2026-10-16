@@ -26,7 +26,9 @@ export function visualState(service: MCPServiceHealthView): VisualState {
   }
 }
 
-export function projectStatus(service: MCPServiceHealthView): DisplayProjection {
+export function projectStatus(
+  service: MCPServiceHealthView,
+): DisplayProjection {
   const displayState = service.displayState;
   if (
     displayState === "healthy" ||

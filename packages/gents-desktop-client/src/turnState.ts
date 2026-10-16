@@ -1,8 +1,5 @@
 export type TerminalTurnState =
-  | "completed"
-  | "failed"
-  | "superseded"
-  | "interrupted";
+  "completed" | "failed" | "superseded" | "interrupted";
 
 export function isTerminalTurnState(
   turnState?: string | null,

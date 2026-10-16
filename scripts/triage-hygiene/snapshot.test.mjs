@@ -27,8 +27,14 @@ const fakeApi = ({ milestones = [], labels = [] } = {}) => {
   const calls = [];
   const api = async (path, init = {}) => {
     const method = init.method ?? "GET";
-    calls.push({ method, path, body: init.body ? JSON.parse(init.body) : undefined });
-    const page = Number(new URL(`https://x${path}`).searchParams.get("page") ?? 1);
+    calls.push({
+      method,
+      path,
+      body: init.body ? JSON.parse(init.body) : undefined,
+    });
+    const page = Number(
+      new URL(`https://x${path}`).searchParams.get("page") ?? 1,
+    );
     if (path.includes("/milestones?")) return page === 1 ? milestones : [];
     if (path.includes("/labels?")) return page === 1 ? labels : [];
     return null;
@@ -49,7 +55,9 @@ const withLogs = async (fn) => {
 };
 
 const deleted = (calls) =>
-  calls.filter((c) => c.method === "DELETE" && /\/milestones\/\d+$/.test(c.path)).map((c) => c.path);
+  calls
+    .filter((c) => c.method === "DELETE" && /\/milestones\/\d+$/.test(c.path))
+    .map((c) => c.path);
 
 test("restore refuses to delete a milestone it did not capture and does not create", async () => {
   const { api, calls } = fakeApi({
@@ -58,10 +66,15 @@ test("restore refuses to delete a milestone it did not capture and does not crea
       { number: 2, title: "Someone else's epic", state: "open" },
     ],
   });
-  const logs = await withLogs(() => restore(api, snapshotFile(baseSnapshot()), REPO));
+  const logs = await withLogs(() =>
+    restore(api, snapshotFile(baseSnapshot()), REPO),
+  );
 
   assert.deepEqual(deleted(calls), [], "no milestone may be deleted");
-  assert.equal(logs.filter((l) => l.includes("refusing to delete it")).length, 2);
+  assert.equal(
+    logs.filter((l) => l.includes("refusing to delete it")).length,
+    2,
+  );
 });
 
 test("restore deletes only milestones this migration introduces", async () => {
@@ -83,7 +96,12 @@ test("restore deletes only milestones this migration introduces", async () => {
 test("restore still refuses to run against a different repository", async () => {
   const { api } = fakeApi();
   await assert.rejects(
-    () => restore(api, snapshotFile(baseSnapshot({ capturedFrom: "someone/fork" })), REPO),
+    () =>
+      restore(
+        api,
+        snapshotFile(baseSnapshot({ capturedFrom: "someone/fork" })),
+        REPO,
+      ),
     /refusing to restore/,
   );
 });

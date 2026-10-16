@@ -25,21 +25,18 @@ export function AllowedFoldersPanel() {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const run = useCallback(
-    async (command: () => Promise<AllowedFolders>) => {
-      setBusy(true);
-      try {
-        setFolders(await command());
-        return true;
-      } catch (error) {
-        toast.error(errorText(error));
-        return false;
-      } finally {
-        setBusy(false);
-      }
-    },
-    [],
-  );
+  const run = useCallback(async (command: () => Promise<AllowedFolders>) => {
+    setBusy(true);
+    try {
+      setFolders(await command());
+      return true;
+    } catch (error) {
+      toast.error(errorText(error));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   useEffect(() => {
     void run(() => actions.listAllowedFolders());
