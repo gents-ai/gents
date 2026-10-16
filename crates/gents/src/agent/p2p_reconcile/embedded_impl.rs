@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,7 +9,10 @@ use tokio::time::timeout;
 
 use crate::defra_node::EmbeddedNode;
 
-use super::templates::{to_replication_filters, PairingFilters};
+use super::templates::{
+    filter_conditions, live_filter_string_eq, to_replication_filters, FilterPredicate,
+    PairingFilters,
+};
 use super::{
     resolve_embedded_collection_id, resolve_embedded_collection_name, RemoteP2pAdmin,
     RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
@@ -66,6 +70,132 @@ impl EmbeddedRemoteP2pAdmin {
             Ok(Err(error)) => Err(map_p2p_error(operation, error)),
             Err(_) => Err(RemoteP2pAdminError::RpcTimeout),
         }
+    }
+
+    /// For each of `doc_ids`, whether replicator `peer_id` acknowledged the
+    /// heads this node currently holds for it.
+    pub async fn documents_acknowledged(
+        &self,
+        peer_id: &str,
+        collection: &str,
+        doc_ids: &[String],
+    ) -> RemoteP2pAdminResult<Vec<bool>> {
+        let p2p = self.p2p()?;
+        self.run(
+            "replication_acknowledged",
+            p2p.replication_acknowledged(peer_id, collection, doc_ids),
+        )
+        .await
+    }
+
+    /// The `(doc_id, requester_did)` documents of `collection` whose current
+    /// heads every replicator carrying them acknowledged: those scoped to the
+    /// requester and those carrying the whole collection. A document no
+    /// replicator carries acknowledges nothing.
+    pub async fn requester_acknowledged(
+        &self,
+        collection: &str,
+        documents: &[(String, String)],
+    ) -> RemoteP2pAdminResult<BTreeSet<String>> {
+        let collection_id = self
+            .resolve_collection_id(collection)
+            .await?
+            .ok_or_else(|| {
+                RemoteP2pAdminError::LocalError(format!(
+                    "collection {collection} is not registered"
+                ))
+            })?;
+        let mut peers_by_requester: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut collection_peers = BTreeSet::new();
+        for replicator in self.list_replicators().await? {
+            let (Some(peer_id), Some(filters)) = (replicator.id, replicator.filters) else {
+                continue;
+            };
+            match filters.get(&collection_id) {
+                None if replicator.collections.contains(&collection_id) => {
+                    collection_peers.insert(peer_id);
+                }
+                None => {}
+                Some(filter) => {
+                    if let Some(requester) = live_filter_string_eq(filter, "requester_did") {
+                        peers_by_requester
+                            .entry(requester.to_string())
+                            .or_default()
+                            .insert(peer_id);
+                    }
+                }
+            }
+        }
+
+        let mut doc_ids_by_peer: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        let mut routed = BTreeSet::new();
+        for (doc_id, requester) in documents {
+            for peer_id in peers_by_requester
+                .get(requester)
+                .into_iter()
+                .flatten()
+                .chain(&collection_peers)
+            {
+                doc_ids_by_peer
+                    .entry(peer_id)
+                    .or_default()
+                    .push(doc_id.clone());
+                routed.insert(doc_id.clone());
+            }
+        }
+        for (peer_id, doc_ids) in doc_ids_by_peer {
+            let acknowledged = self
+                .documents_acknowledged(peer_id, collection, &doc_ids)
+                .await?;
+            for (doc_id, acknowledged) in doc_ids.iter().zip(acknowledged) {
+                if !acknowledged {
+                    routed.remove(doc_id);
+                }
+            }
+        }
+        Ok(routed)
+    }
+
+    async fn selected_document_ids(
+        &self,
+        collection: &str,
+        filter: Option<&FilterPredicate>,
+    ) -> RemoteP2pAdminResult<Vec<String>> {
+        crate::graphql::validate_collection_identifier(collection)
+            .map_err(|error| RemoteP2pAdminError::LocalError(error.to_string()))?;
+        let filter = match filter {
+            None => serde_json::Value::Null,
+            Some(filter) => {
+                serde_json::Value::Object(filter_conditions(filter).ok_or_else(|| {
+                    RemoteP2pAdminError::LocalError(format!(
+                        "{collection} replicator filter has no document predicate"
+                    ))
+                })?)
+            }
+        };
+        let query = format!(
+            "query($filter: {collection}FilterArg) {{ {collection}(filter: $filter) {{ _docID }} }}"
+        );
+        let variables = serde_json::json!({ "filter": filter });
+        let response = crate::config_client::ConfigAccess::transact_local_readonly(
+            &self.node,
+            None,
+            "p2p_reconcile.replicated_document_ids",
+            move |txn| {
+                let query = query.clone();
+                let variables = variables.clone();
+                Box::pin(async move { txn.execute_with_variables(&query, &variables).await })
+            },
+        )
+        .await
+        .map_err(|error| RemoteP2pAdminError::LocalError(format!("{error:#}")))?;
+        Ok(response
+            .pointer(&format!("/data/{collection}"))
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row.get("_docID")?.as_str().map(str::to_string))
+            .collect())
     }
 }
 
@@ -234,6 +364,24 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
             p2p.sync_branchable_collection(collection_id),
         )
         .await
+    }
+
+    async fn replication_acknowledged(
+        &self,
+        peer_id: &str,
+        collection: &str,
+        filter: Option<&FilterPredicate>,
+    ) -> RemoteP2pAdminResult<Option<bool>> {
+        let doc_ids = self.selected_document_ids(collection, filter).await?;
+        if doc_ids.is_empty() {
+            return Ok(Some(true));
+        }
+        let acknowledged = self
+            .documents_acknowledged(peer_id, collection, &doc_ids)
+            .await?;
+        Ok(Some(
+            acknowledged.into_iter().all(|acknowledged| acknowledged),
+        ))
     }
 }
 

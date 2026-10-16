@@ -279,6 +279,53 @@ pub(super) async fn apply_op(
     }
 }
 
+/// Whether the replicator at `address` acknowledged the current heads of
+/// every document it routes. A replay then only discards DefraDB's retry
+/// markers and acknowledgement records, so it is skipped; any unknown or
+/// failed observation keeps the replay.
+pub(super) async fn replicator_acknowledged(
+    admin: &dyn RemoteP2pAdmin,
+    address: &str,
+    desired: &PairingDesired,
+    actual: &ActualSnapshot,
+) -> bool {
+    let Some(peer_id) = actual
+        .replicator_ids_by_addr
+        .get(address)
+        .cloned()
+        .or_else(|| {
+            TransportEndpoint::parse(address.to_string())
+                .ok()
+                .map(|endpoint| endpoint.peer_id().to_string())
+        })
+    else {
+        return false;
+    };
+    for collection in desired.effective_replicator_collections() {
+        match admin
+            .replication_acknowledged(
+                &peer_id,
+                collection,
+                desired.replicator_filter.get(collection),
+            )
+            .await
+        {
+            Ok(Some(true)) => {}
+            Ok(_) => return false,
+            Err(error) => {
+                tracing::debug!(target: "gents::agent::p2p_reconcile::engine",
+                    address,
+                    collection = %collection,
+                    error = %error,
+                    "replication acknowledgement unavailable; replaying replicator"
+                );
+                return false;
+            }
+        }
+    }
+    true
+}
+
 pub(super) async fn replay_replicator_after_reconnect(
     admin: &dyn RemoteP2pAdmin,
     address: &str,

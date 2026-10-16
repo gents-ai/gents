@@ -6,7 +6,9 @@ use super::super::{
     compute_owned_pairing_diff, owned_pairing_live_matches, DiffOp, PairingApplied, PairingDesired,
     RemoteP2pAdmin,
 };
-use super::remote_topology::{apply_op, read_actual, replay_replicator_after_reconnect};
+use super::remote_topology::{
+    apply_op, read_actual, replay_replicator_after_reconnect, replicator_acknowledged,
+};
 use super::{
     EnrollmentRouteGeneration, LoadedPairingApplied, PairingStateStore, PairingTickOutcome,
 };
@@ -205,9 +207,10 @@ pub(super) async fn reconcile_prepared_peer(
 
     // DefraDB's idempotent add_replicator skips initial replay for an existing
     // identity (#664), so after a reconnect force-reinstall every otherwise-
-    // converged agent-target replicator to replay owner-authored DAG heads. If
-    // the desired identity changed, the diff already contains the
-    // teardown+install replay; avoid doing it twice.
+    // converged agent-target replicator whose peer has not acknowledged every
+    // routed document, replaying owner-authored DAG heads. If the desired
+    // identity changed, the diff already contains the teardown+install replay;
+    // avoid doing it twice.
     if (reconnected || force_replay)
         && desired_state.uses_agent_target_template()
         && fresh_enrollment_generation_or_close(store, enrollment_generation.as_ref()).await
@@ -224,7 +227,9 @@ pub(super) async fn reconcile_prepared_peer(
                         if candidate == address
                 )
             });
-            if diff_reinstalls_address {
+            if diff_reinstalls_address
+                || replicator_acknowledged(admin, address, &desired_state, &actual).await
+            {
                 continue;
             }
             replay_replicator_after_reconnect(admin, address, &desired_state, &actual).await?;

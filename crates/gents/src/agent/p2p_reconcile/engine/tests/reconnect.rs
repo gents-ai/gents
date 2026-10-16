@@ -336,3 +336,54 @@ async fn reconnect_replay_reinstalls_when_delete_reports_remote_not_found() {
     );
     assert!(admin.replicators.lock().unwrap().contains_key("addr1"));
 }
+
+#[tokio::test]
+async fn reconnect_skips_replay_when_peer_acknowledged_every_document() {
+    let filter = one_filter("AgentRequest", "requester_did", "did:key:peer");
+    let desired = PairingDesired {
+        replicator_addresses: set(&["addr1"]),
+        replicator_collections: set(&["AgentRequest", "AgentSession"]),
+        replicator_filter: filter.clone(),
+        template_ids: set(&["agent-target-host"]),
+        ..Default::default()
+    };
+    let store = MockStore::with_desired(Some(desired));
+    *store.applied.lock().unwrap() = PairingApplied {
+        replicator_addresses: set(&["addr1"]),
+        replicator_filter: filter.clone(),
+        ..Default::default()
+    };
+    let admin = MockAdmin {
+        acknowledged_peers: set(&["id-addr1"]),
+        ..Default::default()
+    };
+    admin.replicators.lock().unwrap().insert(
+        "addr1".into(),
+        RemoteReplicator {
+            id: Some("id-addr1".into()),
+            collections: vec![
+                mock_collection_id("AgentRequest"),
+                mock_collection_id("AgentSession"),
+            ],
+            address: Some("addr1".into()),
+            filters: Some(mock_live_filters(&filter)),
+        },
+    );
+
+    let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+        .await
+        .expect("acknowledged reconnect tick");
+
+    assert!(outcome.replayed_replicators.is_empty());
+    assert!(
+        admin.emitted.lock().unwrap().is_empty(),
+        "an acknowledged replicator keeps its retry markers and acknowledgement records"
+    );
+    assert_eq!(
+        *admin.acknowledgement_queries.lock().unwrap(),
+        vec![
+            ("id-addr1".to_string(), "AgentRequest".to_string()),
+            ("id-addr1".to_string(), "AgentSession".to_string()),
+        ]
+    );
+}

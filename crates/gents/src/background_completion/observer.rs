@@ -146,13 +146,13 @@ impl BackgroundCompletionObserver {
                 "redrove failed background-completion wakes"
             );
         }
-        // Reassert terminal state so replicas that missed the one-shot push receive the delta.
         let redrive =
             crate::RequestLifecycle::redrive_terminal_convergence(&self.node, &self.local_did)
                 .await?;
         if !redrive.is_noop() {
             tracing::debug!(
                 reasserted = redrive.reasserted,
+                acknowledged = redrive.acknowledged,
                 scanned = redrive.scanned,
                 "re-drove terminal request convergence to replicas"
             );
