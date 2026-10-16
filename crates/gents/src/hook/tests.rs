@@ -321,6 +321,45 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         Some(crate::goal::GoalStatus::Active)
     );
 
+    for (id, args) in [
+        (
+            "goal-edit-valid",
+            r#"{"objective":"verify","token_budget":200}"#,
+        ),
+        (
+            "goal-edit-retry",
+            r#"{"status":"active","objective":"verify","token_budget":200}"#,
+        ),
+        (
+            "goal-edit-forged",
+            r#"{"objective":"other","session_id":"other"}"#,
+        ),
+        ("goal-edit-blank", r#"{"objective":"  "}"#),
+        (
+            "goal-edit-terminal-mix",
+            r#"{"status":"complete","objective":"other"}"#,
+        ),
+    ] {
+        accept_hook_tool_call(&hook, id, crate::goal::UPDATE_GOAL_TOOL_NAME, args, None).await;
+        assert!(matches!(
+            hook.on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, id, args)
+                .await,
+            ToolCallHookAction::Skip { .. }
+        ));
+        let updated = crate::goal::load_canonical_goal(&node, "did:test:owner", &session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.objective, "verify", "{id}");
+        assert_eq!(updated.token_budget, Some(200), "{id}");
+        assert_eq!(
+            updated.parsed_status(),
+            Some(crate::goal::GoalStatus::Active),
+            "{id}"
+        );
+        assert_eq!(updated.goal_id, goal.goal_id, "{id}");
+    }
+
     accept_hook_tool_call(
         &hook,
         "goal-get-valid",

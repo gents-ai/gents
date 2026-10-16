@@ -205,7 +205,7 @@ fn generated_goal_transition_cases_fence_runtime_state_machine() {
 #[test]
 fn generated_goal_create_cases_fence_authority_and_idempotency() {
     let cases = lean_goal_create_cases();
-    assert_eq!(cases.len(), 14, "the durable-goal creation matrix drifted");
+    assert_eq!(cases.len(), 16, "the durable-goal creation matrix drifted");
     for case in cases {
         let request = GoalCreateRequest {
             caller: case.caller.clone(),

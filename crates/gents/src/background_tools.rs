@@ -141,10 +141,12 @@ pub(crate) async fn handle_list_background_tools(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!("list_background_tools query failed: {:?}", response.errors);
-    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "handle_list_background_tools",
+    )
+    .await?;
     let rows: Vec<ListBackgroundToolRow> =
         rows_skipping_malformed(response.data.as_ref(), "AgentToolCall")?;
 
@@ -263,10 +265,9 @@ pub(crate) async fn read_tool_output_slice(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!("read_tool_output query failed: {:?}", response.errors);
-    }
+    let response =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "read_tool_output_slice")
+            .await?;
     let Some(row) = first_row::<ReadToolOutputRow>(response.data.as_ref(), "AgentToolCall") else {
         return Ok(ReadToolOutputOutcome::NotAuthorized);
     };

@@ -1423,6 +1423,16 @@ def caseCoverage : List CoverageEntry :=
       "goal::request_head::tests::generated_goal_request_head_cases_drive_signed_row_selector")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "goal_edit_cases"
+      "GoalEditCases"
+      "goal::edit::contract_tests::generated_goal_edit_cases_drive_real_transactions")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_objective_whitespace_codepoints"
+      "GoalObjectiveWhitespace"
+      "goal::edit::contract_tests::generated_goal_objective_whitespace_matches_native_character_classification")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "goal_operator_resume_cases"
       "GoalOperatorResumeCases"
       "goal::operator_resume::contract_tests::generated_goal_operator_resume_cases_drive_real_transactions")

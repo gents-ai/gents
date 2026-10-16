@@ -25,6 +25,7 @@ use crate::schema::ensure_runtime_schemas;
 use crate::watcher::AgentRequest;
 
 async fn test_node() -> Arc<EmbeddedNode> {
+    lean_inference_slot_accounting_cases();
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node

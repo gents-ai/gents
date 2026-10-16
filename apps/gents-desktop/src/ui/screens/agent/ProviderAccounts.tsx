@@ -23,6 +23,7 @@ import { RenameDialog } from "../AgentsScreen";
 import { useApp } from "@/app/AppContext";
 import { SUBSCRIPTION } from "./inferenceKinds";
 import { errorText } from "../../../lib/errorText";
+import { useSetupCatalog } from "@/hooks/useProviders";
 
 function referencedAccount(
   accounts: readonly ProviderAccountView[],
@@ -203,6 +204,13 @@ export function AccountRows({
 }) {
   const { actions } = useApp();
   const sub = SUBSCRIPTION[kind]!;
+  const { catalog } = useSetupCatalog();
+  const signInSupported =
+    !catalog ||
+    catalog.providers.some(
+      (provider) =>
+        provider.id === sub.providerId && provider.authMethods.includes(sub.authMethod),
+    );
   const stored = referencedAccount(accounts, sub.provider, accountRef);
   const account = stored?.enabled ? stored : undefined;
   const elsewhere = accountRef !== null && !stored;
@@ -309,14 +317,20 @@ export function AccountRows({
               Cancel
             </Button>
           )}
-          <Button
-            size="sm"
-            variant={stored || unsaved ? "outline" : "brand"}
-            disabled={busy}
-            onClick={signIn}
-          >
-            {signingIn ? "Signing in…" : stored ? "Reconnect" : "Connect"}
-          </Button>
+          {signInSupported ? (
+            <Button
+              size="sm"
+              variant={stored || unsaved ? "outline" : "brand"}
+              disabled={busy}
+              onClick={signIn}
+            >
+              {signingIn ? "Signing in…" : stored ? "Reconnect" : "Connect"}
+            </Button>
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              Sign in from the desktop app.
+            </span>
+          )}
         </span>
       </Row>
       {stored && (

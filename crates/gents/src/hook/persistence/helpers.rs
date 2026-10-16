@@ -22,13 +22,12 @@ pub(super) async fn count_live_backgrounded_rows(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query live backgrounded tool count for request {request_id} failed: {:?}",
-            response.errors
-        );
-    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "count_live_backgrounded_rows",
+    )
+    .await?;
     let rows: Vec<BackgroundedRow> = response
         .data
         .as_ref()

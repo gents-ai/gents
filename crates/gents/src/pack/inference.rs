@@ -260,7 +260,20 @@ pub async fn install_pack_documents(
     config: &PackConfig,
     policy: super::DriftPolicy,
 ) -> Result<super::InstallReport> {
-    super::provenance::apply_pack_documents(access, owner, pack, config, policy).await
+    install_pack_documents_with_expectations(access, owner, pack, config, policy, Vec::new()).await
+}
+
+/// Keep preconditions in the installation transaction; a separate preflight
+/// can become stale before write admission.
+pub async fn install_pack_documents_with_expectations(
+    access: &ConfigAccess,
+    owner: &str,
+    pack: &super::PackIdentity,
+    config: &PackConfig,
+    policy: super::DriftPolicy,
+    expected: Vec<crate::config_client::DesiredStateExpectation>,
+) -> Result<super::InstallReport> {
+    super::provenance::apply_pack_documents(access, owner, pack, config, policy, expected).await
 }
 
 pub(super) fn validate_pack_inference_authoring(

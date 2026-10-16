@@ -48,6 +48,7 @@ pub async fn show(access: &ConfigAccess, owner: &str, job_id: &str) -> Result<Jo
         Some(definition) => definition_ref(definition)? != origin.definition,
         None => true,
     };
+    let definition = definition.filter(|_| !definition_changed);
 
     let mut decisions = Vec::new();
     for entry in &job.journal {
@@ -164,12 +165,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_definition_edited_after_the_job_is_flagged_as_changed() {
+    async fn an_edited_definition_cannot_recompute_historical_decisions() {
         let (harness, request) = accepting_harness("show-edited").await;
         harness
             .install(vec![(
                 Collection::EvalDefinition,
-                definition(DEFINITION, "captured_rows_count", &VALIDATION_CASES, 2),
+                definition(DEFINITION, "captured_rows_count", &["replacement-case"], 2),
             )])
             .await;
         let view = show(harness.access(), OWNER, &request.job_id)
@@ -180,7 +181,9 @@ mod tests {
         assert!(
             view.decisions
                 .iter()
-                .all(|decision| decision.recomputed.is_some()),
+                .all(|decision| decision.recomputed.is_none()
+                    && !decision.mismatch
+                    && !decision.invalidated),
             "{:#?}",
             view.decisions
         );

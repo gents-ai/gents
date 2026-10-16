@@ -873,10 +873,12 @@ async fn load_running_tool_call_rows_with_filter(
     }}"#
     );
 
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("querying stuck running tool calls: {:?}", resp.errors);
-    }
+    let resp = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "load_running_tool_call_rows_with_filter",
+    )
+    .await?;
 
     let values = resp
         .data
@@ -931,13 +933,12 @@ async fn load_pending_background_completion_rows(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "querying pending background completion side effects: {:?}",
-            response.errors
-        );
-    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "load_pending_background_completion_rows",
+    )
+    .await?;
     let values = response
         .data
         .as_ref()
@@ -1016,13 +1017,9 @@ async fn lookup_parent_request(
         }}"#
     );
 
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "querying parent request for tool-call recovery request_id={request_id}: {:?}",
-            resp.errors
-        );
-    }
+    let resp =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "lookup_parent_request")
+            .await?;
 
     let value = resp
         .data

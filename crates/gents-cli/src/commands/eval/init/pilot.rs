@@ -165,15 +165,28 @@ async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<
             .with_context(|| format!("pack has no asset {path:?}"))
     })?;
     let identity = gents::pack::PackIdentity::new(&manifest, digest, Vec::new());
-    gents::pack::install_pack_documents(
+    let expected = config
+        .eval_definitions
+        .iter()
+        .map(|definition| gents::config_client::DesiredStateExpectation {
+            collection: gents::Collection::EvalDefinition,
+            owner: ctx.owner.clone(),
+            id: definition.definition_id.clone(),
+            digest: None,
+        })
+        .collect();
+    gents::pack::install_pack_documents_with_expectations(
         &ctx.access,
         &ctx.owner,
         &identity,
         &config,
-        gents::pack::DriftPolicy::Overwrite,
+        gents::pack::DriftPolicy::Refuse,
+        expected,
     )
     .await
-    .context("installing the drafted definition pack into the home")?;
+    .context(
+        "installing the pilot definition; choose a new --definition-id if this home already has it",
+    )?;
     Ok(())
 }
 
@@ -415,5 +428,163 @@ async fn revise(
             )?;
             Ok(false)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use gents::eval::checks::CheckRegistry;
+    use gents::eval::report::load_runs;
+    use serde_json::json;
+
+    use super::super::tests::draft_block;
+    use super::super::validate::tests::dossier;
+    use super::super::validate::{assemble, validate, Floors};
+    use super::super::write::write_pack;
+    use super::*;
+    use crate::commands::eval::testing::Fixture;
+
+    const DEFINITION: &str = "pilot-def";
+    const SUMMARY: &str = "It must record findings.";
+
+    fn case(case_id: &str, split: &str) -> Value {
+        json!({
+            "case_id": case_id,
+            "split": split,
+            "stages": [{
+                "stage_id": "check",
+                "prompt": "Run the monitor.",
+                "deadline_secs": 600,
+                "checks": [{
+                    "check": "captured_rows_count",
+                    "params": {"name": "findings", "min": 1},
+                    "tier": "acceptance",
+                }],
+            }],
+        })
+    }
+
+    fn cases() -> Vec<Value> {
+        vec![
+            case("train-a", "train"),
+            case("val-a", "validation"),
+            case("val-b", "validation"),
+            case("ho-a", "held_out"),
+        ]
+    }
+
+    fn block(cases: &[Value]) -> String {
+        draft_block(cases).replace("canary-quality", DEFINITION)
+    }
+
+    fn context<'a>(fixture: &Fixture, registry: &'a CheckRegistry, out: &Path) -> InitContext<'a> {
+        let mut subject = dossier();
+        subject.agent_id = "monitor".into();
+        InitContext {
+            dossier: subject,
+            registry,
+            floors: Floors { validation_min: 1 },
+            definition_id: None,
+            owner: fixture.ctx.owner.clone(),
+            out: out.to_path_buf(),
+            force: false,
+            subject: fixture.pack_arg(),
+            subject_dir: fixture.pack.clone(),
+            profile: "local".into(),
+            scope: EvalScopeArgs::default(),
+        }
+    }
+
+    /// What the interview hands the pilot: the pack of [`cases`], written.
+    async fn drafted(init: &InitContext<'_>) -> InitOutcome {
+        let draft = super::super::draft::parse_reply(&block(&cases()))
+            .unwrap()
+            .unwrap();
+        let assembled = assemble(&draft, None, &init.owner, &init.dossier.slot).unwrap();
+        validate(&assembled, init.registry, &init.dossier, &init.floors).unwrap();
+        let written = write_pack(&assembled, SUMMARY, &init.dossier, &init.out, false)
+            .await
+            .unwrap();
+        InitOutcome {
+            written: Some(written),
+            assembled: Some(assembled),
+            summary: SUMMARY.into(),
+            rounds: 1,
+        }
+    }
+
+    /// Every trial passes but `val-a`'s.
+
+    async fn pilot_runs(fixture: &Fixture) -> Vec<gents::eval::RunRecord> {
+        load_runs(&fixture.ctx.access, &fixture.ctx.owner)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|run| run.origin.definition.definition_id == DEFINITION)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn pilot_refuses_an_installed_definition_without_changing_it() {
+        let fixture = Fixture::new().await;
+        let registry = CheckRegistry::builtin();
+        let root = tempfile::tempdir().unwrap();
+        let init = context(&fixture, &registry, &root.path().join("out"));
+        let drafted = drafted(&init).await;
+        let dir = &drafted.written.as_ref().unwrap().out;
+        let mut existing =
+            serde_json::to_value(&drafted.assembled.as_ref().unwrap().definition).unwrap();
+        existing["title"] = json!("Existing instrument");
+        let plan = gents::config_client::DesiredStateApplyPlan::new(vec![
+            gents::config_client::DesiredStateApplyDocument {
+                collection: gents::Collection::EvalDefinition,
+                add: existing.clone(),
+                update: existing,
+            },
+        ])
+        .unwrap();
+        fixture
+            .ctx
+            .access
+            .transact_write("eval.pilot.existing_definition_fixture", |txn| {
+                let plan = &plan;
+                Box::pin(
+                    async move { gents::config_client::apply_desired_state_plan(txn, plan).await },
+                )
+            })
+            .await
+            .unwrap();
+        let query = "{ EvalDefinition { definition_id title cases } PackInstallation { coordinate digest documents history } }";
+        let before = fixture.ctx.access.execute(query).await.unwrap();
+        let error = install_definition(&fixture.ctx, dir).await.unwrap_err();
+        assert!(
+            gents::config_client::stale_expectation(&error).is_some(),
+            "{error:#}"
+        );
+        let after = fixture.ctx.access.execute(query).await.unwrap();
+        assert_eq!(before, after);
+        assert!(pilot_runs(&fixture).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn concurrent_pilots_cannot_replace_each_others_definition() {
+        let fixture = Fixture::new().await;
+        let registry = CheckRegistry::builtin();
+        let root = tempfile::tempdir().unwrap();
+        let init = context(&fixture, &registry, &root.path().join("out"));
+        let drafted = drafted(&init).await;
+        let dir = &drafted.written.as_ref().unwrap().out;
+        let (left, right) = tokio::join!(
+            install_definition(&fixture.ctx, dir),
+            install_definition(&fixture.ctx, dir)
+        );
+        assert_ne!(left.is_ok(), right.is_ok());
+        let error = left.err().or_else(|| right.err()).unwrap();
+        assert!(
+            gents::config_client::stale_expectation(&error).is_some(),
+            "{error:#}"
+        );
     }
 }

@@ -128,6 +128,7 @@ export function OpenSession() {
           <ScrollArea className="h-full">
             <div
               ref={setContent}
+              data-transcript-content
               className={cn(
                 "mx-auto flex min-h-full w-full max-w-page flex-col px-6 pt-4",
                 parentWork.hasSenders && "sm:pr-14",

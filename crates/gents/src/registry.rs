@@ -35,12 +35,9 @@ pub(crate) async fn configured_mcp_services(
         "{{ ToolServiceRegistry(filter: {{ node_did: {{ _eq: \"{owner}\" }} }}) {{ {} }} }}",
         fields.join(" ")
     );
-    let response = node.execute(&query).await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "MCP registry query failed: {:?}",
-        response.errors
-    );
+    let response =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "configured_mcp_services")
+            .await?;
     let rows = response
         .data
         .as_ref()

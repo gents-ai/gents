@@ -122,10 +122,9 @@ pub(super) async fn load_agent_session_rows(
         }}"#
     );
 
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("loading session session_id={session_id}: {:?}", resp.errors);
-    }
+    let resp =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "load_agent_session_rows")
+            .await?;
 
     let rows = crate::graphql::rows::<serde_json::Value>(&resp, "AgentSession")?;
     rows.iter().map(decode_session_row).collect()

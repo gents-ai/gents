@@ -458,13 +458,8 @@ async fn max_in_flight_nonce(
             }}) {{ nonce status }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        bail!(
-            "load in-flight EthSubmission nonces failed: {:?}",
-            response.errors
-        );
-    }
+    let response =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "max_in_flight_nonce").await?;
     let rows = response
         .data
         .as_ref()
@@ -589,10 +584,8 @@ async fn load_submission(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        bail!("load EthSubmission failed: {:?}", response.errors);
-    }
+    let response =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "load_submission").await?;
     let rows = response
         .data
         .as_ref()

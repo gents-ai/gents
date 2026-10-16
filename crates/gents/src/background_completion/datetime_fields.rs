@@ -24,13 +24,12 @@ pub(super) async fn agent_tool_call_datetime_update_fragment(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query AgentToolCall DateTime fields failed: {:?}",
-            response.errors
-        );
-    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "agent_tool_call_datetime_update_fragment",
+    )
+    .await?;
     let row = response
         .data
         .as_ref()

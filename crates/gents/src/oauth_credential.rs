@@ -401,15 +401,12 @@ pub async fn lookup_oauth_credential_by_id(
     node: &EmbeddedNode,
     credential_id: &str,
 ) -> Result<Option<OAuthCredential>> {
-    let response = node
-        .execute(&oauth_credential_by_id_query(credential_id))
-        .await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "querying OAuthCredential returned errors: {:?}",
-            response.errors
-        );
-    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &oauth_credential_by_id_query(credential_id),
+        "lookup_oauth_credential_by_id",
+    )
+    .await?;
     let response = json!({ "data": response.data.unwrap_or(Value::Null) });
     oauth_credentials_from_response(&response)
         .into_iter()
@@ -443,15 +440,12 @@ pub async fn list_oauth_credentials(
     node: &EmbeddedNode,
     node_did: &str,
 ) -> Result<Vec<OAuthCredential>> {
-    let response = node
-        .execute(&oauth_credentials_for_node_query(node_did))
-        .await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "querying OAuthCredential returned errors: {:?}",
-            response.errors
-        );
-    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &oauth_credentials_for_node_query(node_did),
+        "list_oauth_credentials",
+    )
+    .await?;
     let response = json!({ "data": response.data.unwrap_or(Value::Null) });
     oauth_credentials_from_response(&response)
         .into_iter()
@@ -476,15 +470,12 @@ pub async fn lookup_oauth_credential_by_doc_id(
     node: &EmbeddedNode,
     doc_id: &str,
 ) -> Result<Option<OAuthCredential>> {
-    let response = node
-        .execute(&oauth_credential_by_doc_id_query(doc_id))
-        .await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "querying OAuthCredential returned errors: {:?}",
-            response.errors
-        );
-    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &oauth_credential_by_doc_id_query(doc_id),
+        "lookup_oauth_credential_by_doc_id",
+    )
+    .await?;
     let response = json!({ "data": response.data.unwrap_or(Value::Null) });
     oauth_credentials_from_response(&response)
         .into_iter()

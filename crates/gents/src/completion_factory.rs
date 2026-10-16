@@ -243,13 +243,9 @@ async fn load_prior_charged_tokens(
         }}"#,
         escape_graphql_string(request_doc_id)
     );
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "loading prior InferenceCall usage for request_doc_id={request_doc_id}: {:?}",
-            resp.errors
-        );
-    }
+    let resp =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "load_prior_charged_tokens")
+            .await?;
     let rows = prior_usage_rows_from_response(
         resp.data
             .as_ref()

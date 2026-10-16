@@ -93,10 +93,55 @@ test.describe("a reader scrolled up in a transcript", () => {
     expect(Math.abs(moved)).toBe(0);
   });
 
-  /* A held arrow key or trackpad momentum moves the view a frame at a time
-     with its scroll event after; a content write in between must not pull
-     the reader back by the move they just made (WebKit stops a keyboard
-     scroll at any such write). */
+  test("holds a growing row during wheel motion without writing the position", async ({
+    page,
+  }) => {
+    const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+    await wheelUp(page, viewport);
+    const result = await viewport.evaluate(async (scroller) => {
+      const top = scroller.getBoundingClientRect().top;
+      const rows = Array.from(
+        scroller.querySelectorAll<HTMLElement>("[data-timeline-key]"),
+      );
+      const reader = rows.find(
+        (row) => row.getBoundingClientRect().bottom > top + 200,
+      )!;
+      const above = rows
+        .filter((row) => row.getBoundingClientRect().bottom < top)
+        .at(-1)!;
+      const before = reader.getBoundingClientRect().top;
+      const position = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+      let writes = 0;
+      Object.defineProperty(scroller, "scrollTop", {
+        configurable: true,
+        get: () => position.get!.call(scroller),
+        set: (value) => {
+          writes++;
+          position.set!.call(scroller, value);
+        },
+      });
+      try {
+        scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+        above.style.paddingTop = "120px";
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        );
+        const during = { writes, moved: reader.getBoundingClientRect().top - before };
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        return { during, after: reader.getBoundingClientRect().top - before };
+      } finally {
+        delete (scroller as Partial<HTMLElement>).scrollTop;
+      }
+    });
+    expect(result.during.writes).toBe(0);
+    expect(Math.abs(result.during.moved)).toBeLessThan(1);
+    expect(Math.abs(result.after)).toBeLessThan(1);
+  });
+
+  /* A held arrow key or a trackpad's momentum moves the view a little each
+     frame, and the scroll event saying so comes after; a row swapping or a
+     reply growing in between must not pull the reader back by the move they
+     just made (WebKit stops a keyboard scroll at any such write). */
   test("does not undo the reader's own move when the content changes before its scroll event", async ({
     page,
   }) => {

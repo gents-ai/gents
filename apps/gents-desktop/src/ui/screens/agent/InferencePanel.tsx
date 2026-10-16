@@ -31,6 +31,7 @@ function providerOf(b: InferenceBackendView): ProviderId {
     case "ChatGptCodex":
       return "openai";
     case "ClaudeCliSubscription":
+    case "AnthropicApiKey":
       return "anthropic";
     case "XaiGrokOAuth":
       return "grok";
@@ -38,6 +39,7 @@ function providerOf(b: InferenceBackendView): ProviderId {
       return "openrouter";
   }
   const host = b.endpoint ?? "";
+  if (host.replace(/\/+$/, "").toLowerCase() === "https://api.x.ai/v1") return "grok";
   if (/openai\.com/.test(host)) return "openai";
   if (/anthropic\.com/.test(host)) return "anthropic";
   if (/openrouter/.test(host)) return "openrouter";
@@ -141,7 +143,10 @@ export function InferencePanel({
             metaLeadToggles: true,
             title: b.name ?? b.backendId,
             titleNote: (() => {
-              const title = providers.find((p) => p.id === provider)?.displayName ?? "";
+              const title =
+                providers.find((p) => p.id === provider)?.displayName ??
+                SUBSCRIPTION[b.providerKind ?? ""]?.title ??
+                "";
               const name = (b.name ?? b.backendId).toLowerCase();
               return name.includes(title.toLowerCase()) ||
                 name.includes(title.toLowerCase().replace(/\s+/g, ""))
@@ -183,10 +188,12 @@ export function InferencePanel({
                   }
                   warning={dependentsWarning(deployment, "backend", b.backendId)}
                 >
-                  <DropdownMenuItem onClick={() => setAdding(provider)}>
-                    Add another{" "}
-                    {providers.find((x) => x.id === provider)?.displayName ?? "backend"}
-                  </DropdownMenuItem>
+                  {providers.some((option) => option.id === provider) && (
+                    <DropdownMenuItem onClick={() => setAdding(provider)}>
+                      Add another{" "}
+                      {providers.find((x) => x.id === provider)?.displayName}
+                    </DropdownMenuItem>
+                  )}
                   {stored && (
                     <>
                       <DropdownMenuItem

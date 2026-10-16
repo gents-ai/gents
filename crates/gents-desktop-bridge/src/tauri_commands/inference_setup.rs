@@ -28,6 +28,8 @@ const CODEX_LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
 const LOG_TARGET: &str = "gents_desktop_bridge::inference_setup";
 
+mod sign_in_platform;
+
 fn provider_label(provider: &str) -> &'static str {
     match provider {
         gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER => "ChatGPT",
@@ -280,7 +282,7 @@ pub struct InferenceBackendRecommendationRequest {
 
 #[tauri::command]
 pub(crate) fn desktop_inference_setup_catalog() -> InferenceSetupCatalog {
-    gents::inference_setup::inference_setup_catalog()
+    sign_in_platform::setup_catalog(cfg!(target_os = "ios"))
 }
 
 #[tauri::command]
@@ -675,6 +677,10 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
     request: CodexLoginRequest,
     state: State<'_, DesktopAppState>,
 ) -> Result<CodexLoginResult, BridgeError> {
+    sign_in_platform::require_supported(
+        InferenceAuthMethod::ChatGptOauth,
+        cfg!(target_os = "ios"),
+    )?;
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -2607,6 +2613,7 @@ pub(crate) async fn desktop_claude_login<R: Runtime>(
     };
     use gents_claude_login::{run_loopback_login, LoginOptions};
 
+    sign_in_platform::require_supported(InferenceAuthMethod::ClaudeOauth, cfg!(target_os = "ios"))?;
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };

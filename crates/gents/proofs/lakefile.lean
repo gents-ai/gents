@@ -23,6 +23,7 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.NativeClaimLifetime,
   `Proofs.Conformance.EvalRequestOutcome,
   `Proofs.Conformance.ToolArgumentFailure,
+  `Proofs.Conformance.ResponsesTermination,
   `Proofs.Conformance.StorageWriteGateStreamWaiter]
 
 @[default_target]

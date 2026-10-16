@@ -127,16 +127,11 @@ fn published_notification_budget(
 
 async fn load_tool_call_id(node: &EmbeddedNode, tool_call_doc_id: &str) -> Result<String> {
     let doc_id = escape_graphql_string(tool_call_doc_id);
-    let response = node
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 2) {{ _docID tool_call_id }} }}"#
-        ))
-        .await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "query background tool notification identity failed: {:?}",
-        response.errors
+    let query = format!(
+        r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 2) {{ _docID tool_call_id }} }}"#
     );
+    let response =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "load_tool_call_id").await?;
     let rows = crate::graphql::rows::<serde_json::Value>(&response, "AgentToolCall")?;
     anyhow::ensure!(
         rows.len() == 1,
@@ -234,13 +229,12 @@ async fn mark_background_tool_completion_side_effects_done(
             ) {{ _docID status lifecycle_state }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query background completion tool row failed: {:?}",
-            response.errors
-        );
-    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "mark_background_tool_completion_side_effects_done",
+    )
+    .await?;
     let row = response
         .data
         .as_ref()

@@ -256,12 +256,9 @@ async fn query_backend_records(
 ) -> Result<Vec<(String, InferenceBackend)>> {
     let query =
         format!("query {{ InferenceBackend({arguments}) {{ _docID {BACKEND_CONFIG_FIELDS} }} }}");
-    let response = node.execute(&query).await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "query InferenceBackend failed: {:?}",
-        response.errors
-    );
+    let response =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "query_backend_records")
+            .await?;
     response
         .data
         .as_ref()
