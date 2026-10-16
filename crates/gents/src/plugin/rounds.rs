@@ -176,7 +176,6 @@ pub(super) async fn drive(
                 let session = calls.tools.as_mut().expect("parsed only when offered");
                 let serving = Instant::now();
                 let results = session.serve(batch.requests).await;
-                // Lean `PluginCalls.chargedCompute`: children are not guest compute.
                 deadline += serving.elapsed();
                 if let Some(reason) = session.fatal.take() {
                     return Ok(refused(started, fuel, PluginVerdict::Failed, reason));

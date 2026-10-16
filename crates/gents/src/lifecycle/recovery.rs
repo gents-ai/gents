@@ -122,9 +122,6 @@ impl RequestLifecycle {
             let next_attempts = attempts.saturating_add(1);
             let escaped_doc_id = escape_graphql_string(doc_id);
             let escaped_lifecycle_state = escape_graphql_string(lifecycle_state.as_str());
-            // Defense-in-depth: keep the mutation owner-scoped even though the
-            // candidate query already is — a re-drive must never touch a
-            // foreign replica.
             let mutation = format!(
                 r#"mutation {{
                     update_AgentRequest(

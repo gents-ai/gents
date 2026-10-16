@@ -367,11 +367,6 @@ fn collect_message_dependencies(
     }
     for reference in message.message.payload_references() {
         let closing = retain_reference_extent(&reference, segments, bases, selected)?;
-        // CanonicalOutput/Hydration.lean `requiredProvenance`: authored
-        // delivery derives its tool owner from a ToolExecution writer; a
-        // ToolCall source names its exact AgentToolCall base regardless of
-        // writer. Shared reconstruction already rejects incoherent
-        // source/writer pairs, so this only retains the base it admitted.
         let tool_call_doc_id = match &closing.segment.source {
             OutputSource::ToolCall { tool_call_doc_id } => Some(tool_call_doc_id),
             OutputSource::Authored { .. } => match &closing.segment.writer {
@@ -392,8 +387,6 @@ fn collect_message_dependencies(
     Ok(())
 }
 
-/// Lean `referenceDocuments`: the request owner, closing record and exact
-/// extent of an already reconstructed reference.
 fn retain_reference_extent<'a>(
     reference: &PayloadRef,
     segments: &[ObservedSegment<'a>],

@@ -418,10 +418,8 @@ fn asset_cache_root(home: &std::path::Path, pack: &PackSource) -> Result<std::pa
     )
 }
 
-/// Records a plugin-store change of `coordinate` in `home`'s node for the
-/// home's Node (`gents::pack::record_plugin_store_change`), after the
-/// store itself changed. An uninitialized home has no node, so no runtime to
-/// wake: the next start resolves the plugin store as it is.
+/// An uninitialized home has no node, so no runtime to wake: the next start
+/// resolves the plugin store as it is.
 pub(crate) async fn record_plugin_store_change(
     home: &std::path::Path,
     coordinate: &str,

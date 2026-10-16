@@ -157,8 +157,6 @@ async fn load_mcp_services(
     access: &ConfigAccess,
     service_id: Option<&str>,
 ) -> Result<Vec<McpHealthCheckService>> {
-    // No `order` on the exact `service_id` read: DefraDB applies `limit` to the
-    // scanned document list before the scan's `status` filter, so an ordered
     let registry_args = match service_id {
         Some(service_id) => format!(
             r#"filter: {{ _and: [{{ status: {{ _eq: "online" }} }}, {{ service_id: {{ _eq: "{}" }} }}] }}, limit: 1"#,

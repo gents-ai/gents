@@ -365,8 +365,6 @@ impl ConfigCommandTool {
         .await
     }
 
-    /// Ordered composition of existing transactions: a failed item leaves
-    /// later items unattempted; callers receive every attempted item's receipt.
     pub(super) async fn batch(&self, argv: &[String]) -> Result<String> {
         let parsed = ParsedArgs::parse(&argv[1..])?;
         anyhow::ensure!(

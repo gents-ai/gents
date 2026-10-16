@@ -359,8 +359,6 @@ pub async fn wait_for_request_lifecycle_state(
     }
 }
 
-/// Wait for any terminal lifecycle state and report which one it reached.
-///
 /// `budget` must cover the request's own timing envelope plus
 /// [`REQUEST_TERMINAL_PUBLICATION_MARGIN`]; terminal publication is
 /// scheduler-bound on a loaded host, so a short fixed bound flakes under the

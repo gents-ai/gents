@@ -581,9 +581,9 @@ structure ComposedInvariantWitness where
 namespace R4cWitnesses
 
 /-- One executable canonical-tool-source projection input and the result
-    computed by `Background.ToolOutput.project`.  The native adapter supplies the
-    fixed accepted physical tool binding and persists these exact segment
-    facts; it does not infer output from flags. -/
+computed by `Background.ToolOutput.project`. The native adapter supplies the
+fixed accepted physical tool binding and persists these exact segment facts;
+it does not infer output from flags. -/
 structure ToolOutputProjectionCase where
   name : String
   document : Nat
@@ -593,7 +593,7 @@ structure ToolOutputProjectionCase where
   deriving Repr
 
 /-- Canonical `read_tool_output`: open and closed reads use the same immutable
-    physical tool source; missing/conflicting facts are rejection. -/
+physical tool source; missing/conflicting facts are rejection. -/
 structure ReadToolOutputCanonicalSourceReconstruction where
   toolCallId : String
   canonicalSource : String

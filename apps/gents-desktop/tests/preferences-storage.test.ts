@@ -110,7 +110,6 @@ describe("list views read back from storage", () => {
         agents: [],
       },
     });
-    /* "live" is every unsettled session: working or waiting */
     expect(restored.sessionFilter).toEqual({
       states: ["working", "waiting"],
       sources: ["task"],

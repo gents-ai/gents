@@ -52,7 +52,6 @@ impl ConfigCommandTool {
         let mut request = ApplyRequest::new(target, patch);
         let skill_id = argv[1].clone();
         request.resolve_unique = Box::new(move |_| Ok(skill_id.clone()));
-        // Never overwrite a skill referenced by another agent.
         request.allow_create = true;
         request.require_create = true;
         let owner = self.node_did.clone();

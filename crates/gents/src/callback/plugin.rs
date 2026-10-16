@@ -240,8 +240,6 @@ pub(super) async fn execute(
     persist_journal(node, invocation, &journal, LIFECYCLE_FAILED, Some(&reason)).await
 }
 
-/// Writes the outputs, marks the invocation succeeded and records its result,
-/// atomically.
 async fn commit_success(
     node: &std::sync::Arc<EmbeddedNode>,
     invocation: &mut CallbackInvocationDoc,
@@ -613,9 +611,6 @@ mod tests {
             .is_empty());
     }
 
-    /// A graph stage has no working folder, so a writing call reaches only a
-    /// folder the operator allowed `read_write` (#2303); a read-only folder
-    /// denies it with the command that allows it.
     #[tokio::test]
     async fn a_graph_stage_writes_only_where_the_operator_allowed_writing() {
         let writer = || {

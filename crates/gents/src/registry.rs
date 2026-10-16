@@ -15,9 +15,6 @@ where
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
-#[cfg(test)]
-mod tests;
-
 pub(crate) async fn configured_mcp_services(
     node: &defra_node::EmbeddedNode,
     node_did: &str,

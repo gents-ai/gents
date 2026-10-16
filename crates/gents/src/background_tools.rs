@@ -603,6 +603,8 @@ mod tests {
     use super::*;
 
     #[test]
+
+    #[test]
     fn process_control_requester_absence_is_exact_not_empty_string() {
         let owner = ProcessControlScope {
             request_id: "request-1".to_string(),
@@ -635,6 +637,7 @@ mod tests {
     /// `read_retained_output_slice`; the rows are computed from the Lean
     /// `ToolOutput.readSlice` model, so paging drift in either direction
     /// fails here. ASCII payloads keep byte and UTF-8 boundaries identical.
+
     #[test]
     fn generated_tool_output_paging_cases_match_slice_function() {
         let cases = crate::lean_vocab_test::lean_tool_output_paging_cases();

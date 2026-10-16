@@ -52,7 +52,6 @@ pub struct CaseView {
     pub trials: Vec<PairedTrial>,
 }
 
-/// Per check, sorted by check.
 pub fn by_check(comparison: &Comparison) -> Vec<CheckDiff> {
     tally(comparison, |verdict| verdict.check.clone())
         .into_iter()
@@ -68,7 +67,6 @@ pub fn by_check(comparison: &Comparison) -> Vec<CheckDiff> {
         .collect()
 }
 
-/// Per stage, sorted by stage id.
 pub fn by_stage(comparison: &Comparison) -> Vec<StageDiff> {
     tally(comparison, |verdict| verdict.stage_id.clone())
         .into_iter()
@@ -84,7 +82,6 @@ pub fn by_stage(comparison: &Comparison) -> Vec<StageDiff> {
         .collect()
 }
 
-/// One case side by side.
 pub fn case_view(comparison: &Comparison, case_id: &str) -> Result<CaseView> {
     let summary = comparison
         .cases

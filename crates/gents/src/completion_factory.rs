@@ -413,8 +413,7 @@ fn normalize_cache_scope(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests;
 
-/// Optional summary provider, built by the same client/admission factory as
-/// ordinary inference. The enclosing request later supplies deadline and ledger.
+/// The enclosing request later supplies deadline and ledger.
 pub(crate) async fn build_compaction_engine(
     node: std::sync::Arc<EmbeddedNode>,
     agent_config: &ResolvedAgent,

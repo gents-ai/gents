@@ -77,7 +77,6 @@ export function InferencePanel({
     providerUsage.usage.find((u) => u.backendId === backendId);
   const catalog = useSetupCatalog();
   const providers = catalog.providers;
-  /* the provider whose inputs are open, from a catalog row or Add another */
   const adding = addingFrom(item);
   const setAdding = (provider: ProviderId) =>
     navigate({ ...base, item: addItem(provider) });
@@ -98,8 +97,6 @@ export function InferencePanel({
       />
     );
   }
-  /* the catalog: configured backends under their provider, then the rest */
-  /* backends in the catalog's provider order, so two of one provider sit together */
   const order = (id: ProviderId) => providers.findIndex((p) => p.id === id);
   const configured = deployment.inferenceBackends
     .map((b) => ({ b, provider: providerOf(b), stored: backendAccount(accounts, b) }))

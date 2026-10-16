@@ -14,7 +14,6 @@ use serde_json::Value;
 
 use crate::types::{DesktopInterruptRequest, InterruptRequestResult};
 
-/// The physical request an operator's interrupt names.
 struct Target {
     doc_id: String,
     node_did: String,

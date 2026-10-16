@@ -502,9 +502,6 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
     let default_agent_id = crate::default_agent_id_for_node(node_did);
     bind_default_agent_backend(&node, node_did, &default_agent_id).await;
 
-    // A LOCAL target naming an agent_config that does not exist locally must be
-    // rejected; remote targets are exempt (delegation admission owns cross-node
-    // targets). Both rows are seeded raw to model peer-replicated documents.
     let tools_id = format!("{default_agent_id}:tools");
     seed_raw_tools(
         node.as_ref(),
@@ -555,8 +552,6 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
     );
 }
 
-/// Model replicated automation rows, including deliberately invalid references.
-/// These loader tests bypass installer admission so they exercise quarantine.
 async fn seed_automation(
     node: &Arc<defra_node::EmbeddedNode>,
     documents: Vec<(crate::Collection, serde_json::Value)>,
@@ -1449,7 +1444,6 @@ async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
     let did = identity.did();
     bind_default_agent_backend(&node, did, "known").await;
     crate::test_support::install_test_agent(&node, did, "future").await;
-    // A raw write bypasses validate(), like a row a newer peer wrote.
     let response = node
         .execute(&format!(
             r#"mutation {{ update_InferenceBackend(filter: {{node_did: {{_eq: "{}"}}, backend_id: {{_eq: "future:backend"}}}}, input: {{provider_kind: "FutureProviderKind"}}) {{ _docID }} }}"#,

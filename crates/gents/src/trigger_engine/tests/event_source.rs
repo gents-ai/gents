@@ -580,7 +580,7 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     let doc_vars = intent
         .doc_vars
         .as_ref()
-        .expect("Task 21: every fire must hydrate doc_vars (filter is None here)");
+        .expect("every fire must hydrate doc_vars when the filter is None");
     assert_eq!(
         doc_vars["external_id"].as_str(),
         Some("wh-1"),

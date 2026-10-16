@@ -66,10 +66,6 @@ fn confined_create_dir_all(root: &std::path::Path, dir: &std::path::Path) -> Res
     let relative = dir
         .strip_prefix(root)
         .with_context(|| format!("asset path escapes the pack cache root {}", root.display()))?;
-    // The root itself is a cache component and gets the same creation-time
-    // symlink/dir check as those below it (its parent is pre-created by
-    // `cached`); see `ensure_root_dir` and `confined_create_dir_all` for the
-    // exact guarantee, which is final-component only.
     ensure_root_dir(root)?;
     let mut current = root.to_path_buf();
     for component in relative.components() {

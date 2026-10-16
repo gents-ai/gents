@@ -11,8 +11,7 @@ use anyhow::Result;
 use chrono::{SecondsFormat, Utc};
 use serde_json::json;
 
-/// `$GROK_HOME` (documented by grok as the config directory override), else
-/// `$HOME/.grok`.
+/// `$GROK_HOME` (config-directory override), else `$HOME/.grok`.
 pub(super) fn default_grok_home() -> Option<PathBuf> {
     if let Some(home) = std::env::var_os("GROK_HOME") {
         return Some(PathBuf::from(home));

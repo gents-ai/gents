@@ -18,8 +18,6 @@ use crate::client::{PeerDirectory, PeerRecord};
 
 type LastErrorPatch = (Option<String>, Option<String>);
 
-/// The sole in-process owner of configured-peer and transport observations.
-///
 /// Replicated-schema compatibility is a live observation between two running
 /// nodes, owned here, and deliberately not part of the signed enrollment
 /// schema fingerprint: signed offers are re-verified against the current
@@ -505,7 +503,6 @@ impl ClientSyncStateOwner {
     }
 }
 
-/// An in-flight replicated-schema observation of one runtime.
 #[derive(Debug, Clone)]
 pub struct RuntimeSchemaObservation {
     runtime_did: String,

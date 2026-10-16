@@ -131,6 +131,296 @@ fn pack_system_prompt() -> String {
     load_pack_system_prompt(&pack_dir()).expect("load pack lsp-coder system prompt")
 }
 
+fn pack_unscripted_prompt() -> String {
+    std::fs::read_to_string(pack_dir().join("unscripted_prompt.md"))
+        .expect("pack unscripted prompt")
+}
+
+struct CurrentDirGuard(PathBuf);
+
+impl CurrentDirGuard {
+    fn set(path: &std::path::Path) -> Self {
+        let original = std::env::current_dir().expect("current directory");
+        std::env::set_current_dir(path).expect("set live LSP workspace cwd");
+        Self(original)
+    }
+}
+
+impl Drop for CurrentDirGuard {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.0).expect("restore current directory after live LSP test");
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ToolCallRow {
+    tool_name: Option<String>,
+    status: Option<String>,
+    lifecycle_state: Option<String>,
+    args: Option<String>,
+    result: Option<String>,
+}
+
+async fn fetch_tool_calls(node: &Arc<EmbeddedNode>, request_id: &str) -> Vec<ToolCallRow> {
+    fetch_tool_call_payloads_for_request(node, request_id)
+        .await
+        .into_iter()
+        .map(|call| ToolCallRow {
+            tool_name: Some(call.tool_name),
+            status: call.status,
+            lifecycle_state: call.lifecycle_state,
+            args: call.arguments,
+            result: call.result,
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: set GENTS_LIVE_LSP=1 and pass --ignored"]
+async fn lsp_live_model_uses_rust_analyzer() {
+    assert!(
+        live_lsp_enabled(),
+        "set GENTS_LIVE_LSP=1 and pass --ignored to run the rust-analyzer lsp live qualification"
+    );
+    assert!(
+        rust_analyzer_on_path(),
+        "rust-analyzer must be on PATH (rust-analyzer --version)"
+    );
+
+    let workspace = repo_root();
+    // The document runtime resolves its initial host-tool root from cwd before
+    // the persisted selection is reconciled; restore cwd on every exit so a
+    // failed run cannot poison subsequent tests in the same process.
+    let _cwd = CurrentDirGuard::set(&workspace);
+
+    let db = test_db("lsp-live").await;
+    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("lsp-live"));
+
+    let (node_did, agent_id) = bind_target(&db.node, identity.as_ref(), &live_target()).await;
+
+    configure_agent_tools(
+        &db.node,
+        &node_did,
+        &agent_id,
+        Some(pack_system_prompt()),
+        Tools {
+            tools_id: "lsp-live-tools".to_string(),
+            node_did: node_did.clone(),
+            host: Some(HostTools {
+                root: Some(workspace.display().to_string()),
+                files: Some(FileTools {
+                    mode: FileToolMode::ReadOnly,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            integrations: Some(IntegrationTools {
+                lsp: Some(LspTools {
+                    config: Some(pack_lsp_config()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        Vec::new(),
+    )
+    .await;
+
+    let agent = Gents::from_default_agent_documents(
+        db.node.clone(),
+        Arc::clone(&identity),
+        DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::readonly_at(&workspace),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("boot agent");
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let handle = tokio::spawn(agent.run(shutdown_rx));
+    wait_for_runtime_ready(&db.node, &node_did).await;
+    let booted = BootedAgent::new(shutdown_tx, handle, node_did.clone());
+
+    let unscripted_request_id = "lsp-live-unscripted-1";
+    create_runtime_request(
+        &db.node,
+        &node_did,
+        &agent_id,
+        unscripted_request_id,
+        "lsp-live-unscripted-session-1",
+        &pack_unscripted_prompt(),
+    )
+    .await;
+    let terminal =
+        wait_for_request_terminal(&db.node, unscripted_request_id, Duration::from_secs(600)).await;
+    let mut failures = Vec::new();
+    if terminal != "completed" {
+        failures.push(format!("unscripted live lsp run must complete: {terminal}"));
+    }
+    let unscripted_calls = fetch_tool_calls(&db.node, unscripted_request_id).await;
+    let useful_semantic = unscripted_calls.iter().any(|call| {
+        call.tool_name.as_deref() == Some("lsp")
+            && call_completed(call)
+            && matches!(
+                action_of(call).as_deref(),
+                Some(
+                    "hover"
+                        | "symbols"
+                        | "definition"
+                        | "type_definition"
+                        | "implementation"
+                        | "references"
+                )
+            )
+            && !result_is_error(call)
+    });
+    if !useful_semantic {
+        failures.push(format!(
+            "unscripted arm must produce at least one useful semantic lsp result; calls: {:?}",
+            summarize_calls(unscripted_calls.iter())
+        ));
+    }
+    let unscripted_answer =
+        wait_for_assistant_answer(&db.node, unscripted_request_id, Duration::from_secs(10)).await;
+    if !answer_reports_meet_contract(&unscripted_answer) {
+        failures.push(format!(
+            "unscripted answer must report that the more restrictive mode wins in Disabled < Inherit < Enabled order; got:\n{unscripted_answer}"
+        ));
+    }
+
+    let request_id = "lsp-live-req-1";
+    let prompt = pack_default_prompt();
+    create_runtime_request(
+        &db.node,
+        &node_did,
+        &agent_id,
+        request_id,
+        "lsp-live-session-1",
+        &prompt,
+    )
+    .await;
+
+    let terminal = wait_for_request_terminal(&db.node, request_id, Duration::from_secs(600)).await;
+    if terminal != "completed" {
+        failures.push(format!("live lsp run must complete: {terminal}"));
+    }
+
+    let calls = fetch_tool_calls(&db.node, request_id).await;
+    let lsp_calls: Vec<_> = calls
+        .iter()
+        .filter(|call| call.tool_name.as_deref() == Some("lsp"))
+        .collect();
+    if lsp_calls.is_empty() {
+        failures.push(format!(
+            "model must persist at least one lsp tool call; calls: {:?}",
+            summarize_calls(calls.iter())
+        ));
+    }
+    for (file, symbol, required) in [
+        (MEET_FILE, "meet", &["Disabled", "Inherit"][..]),
+        (ADVERTISED_FILE, "lsp_advertised", &["FileToolMode"][..]),
+    ] {
+        if matching_hover(&lsp_calls, file, symbol, required).is_none() {
+            failures.push(format!(
+                "need a completed hover on {file} symbol={symbol} quoting {required:?}; lsp calls: {:?}",
+                summarize_calls(lsp_calls.iter().copied())
+            ));
+        }
+    }
+
+    let answer = wait_for_assistant_answer(&db.node, request_id, Duration::from_secs(10)).await;
+    if !(answer.contains("FileToolMode")
+        || (answer.contains("Disabled") && answer.contains("Inherit")))
+    {
+        failures.push(format!(
+            "assistant must report a rust-analyzer fact; got:\n{answer}"
+        ));
+    }
+
+    booted.shutdown().await;
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+fn matching_hover<'a>(
+    calls: &[&'a ToolCallRow],
+    file: &str,
+    symbol: &str,
+    required: &[&str],
+) -> Option<&'a ToolCallRow> {
+    calls.iter().copied().find(|call| {
+        call_completed(call)
+            && action_of(call).as_deref() == Some("hover")
+            && file_of(call).is_some_and(|path| gents::toolset::result_path_matches(file, &path))
+            && symbol_of(call).as_deref() == Some(symbol)
+            && !result_is_error(call)
+            && call
+                .result
+                .as_deref()
+                .is_some_and(|text| required.iter().all(|needle| text.contains(needle)))
+    })
+}
+
+fn call_completed(call: &ToolCallRow) -> bool {
+    call.lifecycle_state.as_deref() == Some("completed")
+}
+
+fn answer_reports_meet_contract(answer: &str) -> bool {
+    let lower = answer.to_ascii_lowercase();
+    lower.contains("disabled < inherit < enabled")
+        && (lower.contains("restrict") || lower.contains("wins"))
+}
+
+fn args_json(call: &ToolCallRow) -> Option<serde_json::Value> {
+    serde_json::from_str(call.args.as_deref()?).ok()
+}
+
+fn action_of(call: &ToolCallRow) -> Option<String> {
+    args_json(call)?
+        .get("action")?
+        .as_str()
+        .map(ToOwned::to_owned)
+}
+
+fn file_of(call: &ToolCallRow) -> Option<String> {
+    args_json(call)?
+        .get("file")?
+        .as_str()
+        .map(ToOwned::to_owned)
+}
+
+fn symbol_of(call: &ToolCallRow) -> Option<String> {
+    args_json(call)?
+        .get("symbol")?
+        .as_str()
+        .map(ToOwned::to_owned)
+}
+
+fn result_is_error(call: &ToolCallRow) -> bool {
+    gents::toolset::result_looks_failed(call.result.as_deref().unwrap_or(""))
+}
+
+fn summarize_calls<'a>(
+    calls: impl IntoIterator<Item = &'a ToolCallRow>,
+) -> Vec<(
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+)> {
+    calls
+        .into_iter()
+        .map(|call| {
+            (
+                call.tool_name.clone(),
+                action_of(call),
+                call.args.clone(),
+                call.status.clone(),
+                call.result.clone(),
+            )
+        })
+        .collect()
 #[test]
 fn lsp_pack_prompt_follows_agent_context_sidecar_reference() {
     let root = tempfile::tempdir().unwrap();
@@ -457,4 +747,7 @@ fn summarize_calls<'a>(
             )
         })
         .collect()
+}
+
+
 }

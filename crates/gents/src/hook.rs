@@ -205,9 +205,6 @@ impl BackgroundExecutionRegistry {
         self.process_records.list()
     }
 
-    /// Forgets a finished execution's record once its leader is observed
-    /// gone; a leader that outlives its execution keeps the record so a
-    /// later sweep can stop it.
     pub(crate) async fn release_process_record(&self, tool_call_id: &str, tool_call_doc_id: &str) {
         if let Some(record) = self.process_record(tool_call_id, tool_call_doc_id) {
             let observed = record
@@ -848,7 +845,6 @@ impl DefraSessionHook {
         }
     }
 
-    /// Call-hook failure never authorizes ordinary dispatch.
     fn on_tool_persistence_error(
         &self,
         context: &str,

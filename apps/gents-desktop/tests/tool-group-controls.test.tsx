@@ -239,7 +239,6 @@ describe("canonical tool selections", () => {
             tool_names: ["search"],
             required: true,
             connect_timeout_secs: 5,
-            /* set, but to its default */
             discovery_timeout_secs: 30,
           },
         ],

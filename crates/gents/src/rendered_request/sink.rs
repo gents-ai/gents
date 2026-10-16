@@ -1266,7 +1266,6 @@ mod tests {
         }
         node.shutdown().await;
     }
-
     #[test]
     fn the_collection_names_are_valid_graphql_identifiers() {
         crate::graphql::validate_collection_identifier(RENDERED_REQUEST_COLLECTION)
@@ -1276,4 +1275,7 @@ mod tests {
             .expect("RenderedRequestBlock must be a valid GraphQL identifier");
         assert_eq!(RENDERED_REQUEST_BLOCK_COLLECTION, "RenderedRequestBlock");
     }
+}
+
+
 }

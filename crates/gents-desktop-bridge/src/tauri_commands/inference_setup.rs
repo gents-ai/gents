@@ -829,7 +829,6 @@ pub(crate) struct ProviderAccountView {
     pub access_token_expires_at: String,
     pub last_refresh: Option<String>,
     pub enabled: bool,
-    /// A completed sign-in the bridge holds because saving it failed.
     pub pending_save: bool,
     pub account_ref: Option<String>,
     pub label: String,

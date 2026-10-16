@@ -87,9 +87,6 @@ pub(crate) use sessions::{
     ensure_session_in_txn, max_sequence, reopen_session_in_txn, touch_session_in_txn,
 };
 
-/// Render an immutable requester route key for a document create branch.
-/// Ordinary local lineage leaves the field null by omitting it; remote child
-/// lineage stamps the normalized coordinator DID exactly once.
 pub(crate) fn requester_did_create_field(requester_did: Option<&str>) -> String {
     requester_did
         .map(str::trim)

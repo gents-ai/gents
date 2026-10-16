@@ -1,5 +1,3 @@
-//! The embedded [`TrialExecutor`]: one trial, one fresh DefraDB home.
-
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -2301,8 +2299,6 @@ mod tests {
             provider_reason(Some(OutcomeKind::Infrastructure), &evidence),
             None
         );
-
-        // The neighbouring arms keep their grades.
         assert_eq!(
             stage_failure_kind(None, false, false, &evidence),
             Some(OutcomeKind::Infrastructure),

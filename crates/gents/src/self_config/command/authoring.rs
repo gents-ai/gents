@@ -1,6 +1,3 @@
-//! Pack build and test remain CLI operations because they invoke language
-//! toolchains.
-
 use std::path::PathBuf;
 
 use super::*;
@@ -283,6 +280,7 @@ mod tests {
             assert!(ensure_mode(FileToolMode::ReadOnly, false, operation).is_ok());
         }
     }
+
 
     #[test]
     fn an_unverified_check_never_reports_full_validation() {

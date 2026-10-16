@@ -154,9 +154,6 @@ pub struct RefreshedRequestProjection {
     pub published_version: Option<u64>,
 }
 
-/// A validated applied receipt is the command result. The local projection is
-/// a separate replica observation; if it is unavailable, the selected-session
-/// refresh and normal observer path reconcile it without inviting replay.
 async fn merge_accepted_edit_projection(
     access: &ConfigAccess,
     store: &ObservedStore,

@@ -496,6 +496,7 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
         assert!(result.contains("per-call cap"), "{result}");
     }
 
+
     #[test]
     fn cap_expiry_is_a_recoverable_typed_failure() {
         let now = Utc::now();

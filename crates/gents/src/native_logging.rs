@@ -40,8 +40,6 @@ pub fn mirror_service_diagnostic(diagnostic: &str) {
     }
 }
 
-/// Human-readable diagnostic instructions, not a pretend file path.
-///
 /// The macOS command is spelled by absolute path: zsh, the default shell,
 /// has a `log` builtin that shadows `/usr/bin/log` and prints nothing useful.
 pub fn diagnostics_hint() -> &'static str {

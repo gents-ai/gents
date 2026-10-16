@@ -326,7 +326,6 @@ pub(super) async fn next_request_sequence(node: &EmbeddedNode, request_doc_id: &
 
 /// Seed one physical tool row through a matching canonical ToolCall admission
 /// and, for terminal lifecycle states, one exact ToolDelivery observation.
-/// The sole Grok-shim test encoding owner for tool arguments/results.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn seed_canonical_tool_call(
     node: &EmbeddedNode,
@@ -346,8 +345,6 @@ pub(super) async fn seed_canonical_tool_call(
     let requester_did = request.requester_did.clone();
     let session_id = request.session_id.as_deref().expect("fixture session");
     let request_doc_id = request.doc_id.as_deref().expect("fixture request doc");
-    // Keep the provider source unique even when two calls share a visible
-    // message sequence (stable-identity tie break).
     let source_sequence = next_request_sequence(node, request_doc_id).await;
     let sequence = if let Some(sequence) = message_sequence {
         sequence
@@ -494,10 +491,6 @@ pub(super) async fn seed_canonical_tool_call(
     )
     .await;
     if let Some(result) = result {
-        // Tool-row and transcript publication chronology are separate
-        // coordinates; allocate the reply in the session's canonical sequence
-        // space instead of `admission + 1`, which would create an immutable
-        // header twin and make both publications conflicting.
         let delivery_sequence = next_request_sequence(node, request_doc_id).await;
         let delivered = OutputSegment {
             node_did: node_did.into(),
@@ -741,8 +734,6 @@ pub(super) async fn complete_canonical_spawned_process_output(
             writer: OutputWriter::ToolExecution {
                 tool_call_doc_id: tool_doc_id.into(),
             },
-            // The open output already supplied the only data flush; closing
-            // adds a closure fact, not a zero-byte flush.
             ordinal: None,
             runs: Vec::new(),
             payload: String::new(),

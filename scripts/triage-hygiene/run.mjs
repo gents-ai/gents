@@ -221,7 +221,6 @@ export const run = async ({
       try {
         if (await applyTo(issue)) stats.changed += 1;
       } catch (err) {
-        // One failure must not abort the rest of the sweep.
         stats.failed += 1;
         error(`#${issue.number}: FAILED ${err.message}`);
       }

@@ -51,7 +51,6 @@ function advancedChanges(service: RemoteService) {
   );
 }
 
-/* a note that belongs to the group, set in the row's own padding */
 function Note({ children }: { children: ReactNode }) {
   return <p className="px-5 py-3 text-sm text-muted-foreground">{children}</p>;
 }
@@ -425,7 +424,6 @@ export function ToolGroupControls({
             );
           const granted = service.tool_names?.length ?? 0;
           const changed = advancedChanges(service);
-          /* rows, not a wrapper, so the group's dividers run between them */
           return (
             <Fragment key={service.mcp_service_id}>
               <Row

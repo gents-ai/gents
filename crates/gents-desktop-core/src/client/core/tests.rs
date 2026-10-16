@@ -28,7 +28,6 @@ struct RecordingP2P {
     connected_peers_error: StdRwLock<Option<String>>,
     connect_calls: StdRwLock<Vec<String>>,
     connect_error: StdRwLock<Option<String>>,
-    connect_gate: StdRwLock<Option<Arc<Notify>>>,
     add_replicator_calls: StdRwLock<Vec<String>>,
     cleanup_calls: StdRwLock<Vec<String>>,
     replicators: StdRwLock<Vec<ReplicatorInfo>>,
@@ -309,14 +308,6 @@ impl P2POps for RecordingP2P {
             .write()
             .expect("connect calls lock poisoned")
             .push(addr.to_string());
-        let gate = self
-            .connect_gate
-            .read()
-            .expect("connect gate lock poisoned")
-            .clone();
-        if let Some(gate) = gate {
-            gate.notified().await;
-        }
         if let Some(error) = self
             .connect_error
             .read()

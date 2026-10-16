@@ -1,5 +1,3 @@
-//! Embedded trial homes: one DefraDB data directory, one identity, one runtime.
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
