@@ -9,8 +9,4 @@ export type QueryToolDecl = { tool_name: string, collection: string, description
 /**
  * Projection allowlist; omit `fields` at call time to return all of these.
  */
-fields?: Array<string>,
-/**
- * Runtime-filled entries are hidden from the model, applied as `_eq`.
- */
-filter_fields?: Array<WriteToolField>, };
+fields?: Array<string>, filter_fields?: Array<WriteToolField>, };

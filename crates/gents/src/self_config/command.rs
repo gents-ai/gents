@@ -72,11 +72,6 @@ pub struct ConfigCommandParams {
 }
 
 impl ConfigCommandParams {
-    #[cfg(test)]
-    pub(crate) fn into_argv_for_test(self) -> Result<Vec<String>> {
-        self.into_argv()
-    }
-
     fn into_argv(self) -> Result<Vec<String>> {
         anyhow::ensure!(!self.argv.is_empty(), "argv requires a config command");
         if config_help_resource(&self.argv).is_some() {

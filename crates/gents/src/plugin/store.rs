@@ -205,7 +205,7 @@ pub fn read_bytes(home: &Path, digest_hex: &str) -> Result<Vec<u8>> {
 
 pub struct StoreGuard {
     home: PathBuf,
-    lock: crate::file_lock::FileLock,
+    _lock: crate::file_lock::FileLock,
 }
 
 impl StoreGuard {
@@ -244,7 +244,7 @@ pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
     .with_context(|| format!("locking {}", path.display()))?;
     Ok(StoreGuard {
         home: home.to_owned(),
-        lock,
+        _lock: lock,
     })
 }
 
@@ -273,7 +273,7 @@ pub(crate) fn try_lock_store(home: &Path) -> Result<StoreGuard> {
     };
     Ok(StoreGuard {
         home: home.to_owned(),
-        lock,
+        _lock: lock,
     })
 }
 

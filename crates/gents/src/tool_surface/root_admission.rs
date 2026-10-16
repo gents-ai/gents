@@ -62,12 +62,6 @@ impl RootExecutionGuard {
 }
 
 impl WorkspaceRootPolicy {
-    pub(crate) fn published_strings(&self) -> impl Iterator<Item = String> + '_ {
-        self.published
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-    }
-
     pub(crate) fn admit(&self, candidate: &Path) -> Result<RootAdmission> {
         anyhow::ensure!(
             candidate.is_absolute(),

@@ -16,7 +16,7 @@ use super::sweep::{
 };
 use super::*;
 use crate::agent::p2p_reconcile::graphql_helpers::rows;
-use crate::agent::p2p_reconcile::templates::{equality_filter, PairingFilters};
+use crate::agent::p2p_reconcile::templates::PairingFilters;
 use crate::agent::p2p_reconcile::{
     single_string_eq, to_replication_filters, RemoteP2pAdmin, RemoteP2pAdminError,
     RemoteP2pAdminResult, RemoteReplicator,

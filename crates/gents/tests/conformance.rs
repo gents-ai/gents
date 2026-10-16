@@ -11,15 +11,7 @@ use gents::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
-use gents::llm::tool::BoxFuture;
-use gents::llm::tool::ToolDefinition;
-use gents::llm::tool::{ToolDyn, ToolError};
-use gents::llm::{HookAction, ToolCallHookAction};
-use gents::{
-    fetch_interrupt_requested_at, interrupt_request, write_manual_agent_request,
-    BackgroundToolRegistry, DefraSessionHook, DefraStreamWriter, DefraWatcher, FailurePolicy,
-    InferenceCall, RequestLifecycle, Watcher,
-};
+use gents::{write_manual_agent_request, InferenceCall, RequestLifecycle};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -46,12 +38,11 @@ use lean_vocab_test::{
     lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
     lean_event_delivery_transition_cases, lean_inference_slot_accounting_cases,
     lean_interrupt_disposition_cases, lean_mcp_health_cases, lean_queue_deadline_cases,
-    lean_r4c_background_work_cases, lean_r6_background_theorem_witness,
-    lean_r6_background_theorem_witnesses, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
-    lean_recovery_sweep_cases, lean_request_transition_cases, lean_restart_disposition_cases,
-    lean_startup_readiness_cases, lean_state_machine_contract, lean_tool_output_paging_cases,
-    lean_transcript_case, lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
-    LeanLifecycleTransitionCase,
+    lean_r4c_background_work_cases, lean_r6_background_theorem_witnesses,
+    lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_sweep_cases,
+    lean_request_transition_cases, lean_restart_disposition_cases, lean_startup_readiness_cases,
+    lean_tool_output_paging_cases, lean_transcript_cases, lean_vocabulary_values,
+    LeanEventDeliveryAction, LeanLifecycleTransitionCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{

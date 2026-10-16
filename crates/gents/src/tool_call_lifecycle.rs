@@ -424,11 +424,6 @@ impl ToolCallLifecycle {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_doc_id(&mut self, doc_id: Option<String>) {
-        self.doc_id = doc_id;
-    }
-
     /// Deadline expiry is inclusive; fresh output admission uses `now > deadline`.
     pub(crate) fn is_deadline_expired(&self, now: chrono::DateTime<chrono::Utc>) -> bool {
         self.deadline_at <= now

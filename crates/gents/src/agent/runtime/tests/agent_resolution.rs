@@ -35,7 +35,7 @@ async fn explicit_agent_resolution_matches_lean_binding_cases() {
             .requested_agent
             .expect("explicit fixture selection")
             .to_string();
-        let default = case.pre_default_agent.to_string();
+        let _default = case.pre_default_agent.to_string();
         if let Some(bound) = case.pre_session_agent {
             crate::session::create_session_with_agent_id(
                 &node,

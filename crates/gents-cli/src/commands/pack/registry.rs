@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 #[cfg(test)]
 use gents::pack_archive::PackArchive;
+#[cfg(test)]
+use gents::pack_registry::verify_pack_coordinate;
 pub(crate) use gents::pack_registry::{
     fetch_pack, resolve_pack_coordinate, resolve_registry_url, RegistryClient,
 };
-#[cfg(test)]
-use gents::pack_registry::{verify_pack_coordinate, DEFAULT_REGISTRY_URL, REGISTRY_ENV_VAR};
 #[cfg(test)]
 use serde_json::Value;
 

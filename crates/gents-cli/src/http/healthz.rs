@@ -21,7 +21,7 @@ fn render_healthz_payload_at(
     state: &RuntimeHttpState,
     data: Option<&MetricsQueryData>,
     error: Option<String>,
-    observed_at: chrono::DateTime<chrono::Utc>,
+    _observed_at: chrono::DateTime<chrono::Utc>,
 ) -> Value {
     let version = version_response();
     let uptime_seconds = state.started_instant.elapsed().as_secs();

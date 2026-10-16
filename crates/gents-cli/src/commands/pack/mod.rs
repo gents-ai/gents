@@ -306,6 +306,7 @@ fn materialize(pack: &PackSource, root: &std::path::Path) -> Result<()> {
     gents::pack::materialize::materialize(&pack.archive, root)
 }
 
+#[cfg(test)]
 fn set_distribution_permissions(file: &std::fs::File) -> Result<()> {
     gents::pack::materialize::set_distribution_permissions(file)
 }

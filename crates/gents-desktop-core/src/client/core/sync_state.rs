@@ -599,7 +599,6 @@ pub(super) fn conservative_status(record: &PeerRecord) -> ClientPeerStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn configured_peer_mutation_callers_cannot_bypass_the_owner() {

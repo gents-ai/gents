@@ -1393,7 +1393,7 @@ fn outcome(job: &JobRecord, state: JobState) -> JobOutcome {
 mod tests {
     use super::matrix::findings_capture as findings;
     use super::*;
-    use crate::document_config::EvalCase;
+
     use crate::eval::{DefinitionRef, SubjectRef};
     use crate::optimization::policy::PolicyV2;
     use crate::optimization::target::{Target, TargetField};

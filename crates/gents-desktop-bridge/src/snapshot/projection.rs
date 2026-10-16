@@ -1,6 +1,6 @@
 use crate::types::{
-    AgentEnvironmentView, AgentView, DeploymentView, DesktopBootstrapSummary,
-    DesktopClientSnapshot, DesktopRuntimeSnapshot, InferenceBackendView, NodeView, SkillView,
+    AgentView, DeploymentView, DesktopBootstrapSummary, DesktopClientSnapshot,
+    DesktopRuntimeSnapshot, InferenceBackendView, SkillView,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

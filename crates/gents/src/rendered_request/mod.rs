@@ -774,7 +774,7 @@ pub fn decode_inline_capture_json(capture_version: u32, stored: &str) -> Result<
 pub struct CaptureStoreReadError(pub anyhow::Error);
 
 #[async_trait::async_trait]
-trait CaptureBaseReader {
+pub(crate) trait CaptureBaseReader {
     async fn execute_capture_query(&self, query: &str) -> Result<Value>;
 }
 

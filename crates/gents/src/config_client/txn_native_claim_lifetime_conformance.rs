@@ -5,7 +5,7 @@ use std::time::Duration;
 use crypto::keys::PrivateKey;
 use defra_core::signing::{RemoteSigner, SigningAuthorization, SigningConfig, SigningKeyType};
 use defra_node::EmbeddedNode;
-use identity::{FullIdentity as _, Identity as _, RawIdentity};
+use identity::{Identity as _, RawIdentity};
 use serde::Deserialize;
 use tokio::sync::Notify;
 

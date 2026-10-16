@@ -269,7 +269,7 @@ pub(crate) mod tests {
         .is_err());
         assert!(store::list_records(home.path()).unwrap().is_empty());
         let (_dir2, _, sealed) = fixture("1.0.0", false);
-        let error = install(
+        let _error = install(
             home.path(),
             &sealed,
             false,

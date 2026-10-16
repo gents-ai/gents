@@ -2,12 +2,4 @@
 import type { BackendDisplayState } from "./BackendDisplayState.js";
 import type { InferenceCallSummaryView } from "./InferenceCallSummaryView.js";
 
-/**
- * One backend's persisted health + recent admission outcomes. Read-only
- * projection of `InferenceBackend` joined with the last N `InferenceCall`
- * rows for that backend. `display_state` is derived from
- * `(enabled, probe_status)` per the prototype's mapping (matches
- * `InferenceBackend::is_available` and the Lean `backendAvailable`
- * witness in `BoundaryRuntime.lean`).
- */
 export type BackendHealthView = { backendId: string, name: string, providerKind: string, endpoint: string, enabled: boolean, probeStatus: string, displayState: BackendDisplayState, lastProbe: string | null, maxConcurrent: number, maxQueueDepth: number, models: Array<string>, recentCalls: Array<InferenceCallSummaryView>, };

@@ -7,8 +7,8 @@ use serde_json::json;
 
 use crate::cli::{PackCheckArgs, PackGraphArgs};
 
+#[cfg(test)]
 const TOPOLOGY_START: &str = "<!-- pack-topology:start -->";
-const TOPOLOGY_END: &str = "<!-- pack-topology:end -->";
 
 #[derive(Debug, Serialize)]
 pub(crate) struct CheckReport {

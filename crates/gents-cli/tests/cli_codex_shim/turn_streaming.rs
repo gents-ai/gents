@@ -729,7 +729,7 @@ async fn codex_shim_completes_blank_materialized_terminal_message() -> Result<()
 
     let prompt = "Read notes.txt, then finish without visible final text.";
     send_turn(&mut ws, &thread_id, prompt).await?;
-    let (request_id, session_id, agent_id) = wait_for_request(&graphql, &node_did, prompt).await?;
+    let (request_id, session_id, _agent_id) = wait_for_request(&graphql, &node_did, prompt).await?;
     assert_eq!(session_id, thread_id);
     seed_blank_materialized_completion(&graphql, &request_id, &node_did, &thread_id).await?;
 

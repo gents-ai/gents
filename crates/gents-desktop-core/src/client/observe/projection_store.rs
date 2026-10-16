@@ -417,6 +417,7 @@ impl ObservedStore {
         });
     }
 
+    #[cfg(test)]
     pub(crate) fn accepts_chat_patch_read(
         &self,
         captured: &StoreReadFence,

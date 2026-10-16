@@ -19,10 +19,6 @@ fn phased(
     }
 }
 
-fn exec() -> ManagedTaskHookExec {
-    ManagedTaskHookExec::new(std::env::temp_dir(), TaskHookCancellation::default())
-}
-
 #[tokio::test]
 async fn an_interrupt_cancels_ordinary_phases_before_launch_but_not_cleanup() {
     let directory = tempfile::tempdir().expect("hook marker directory");

@@ -62,11 +62,11 @@ pub use gents_protocol::request_input::{
 pub(crate) use goal_continuation::{
     goal_continuation_agent, goal_continuation_identity, prepare_goal_continuation,
 };
+#[cfg(test)]
+use input::queue_is_automated_wakeup;
 pub(crate) use input::{
     background_wake_queue, is_automated_wakeup, row_is_automated_wakeup, row_queue,
 };
-#[cfg(test)]
-use input::{queue_is_automated_wakeup, BACKGROUND_COMPLETION_WAKE_VERSION};
 pub(crate) use intake::{pending_ids_in_txn, steering_inputs, steering_snapshot};
 #[cfg(test)]
 use management::replace_pending_user_messages;

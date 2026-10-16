@@ -270,7 +270,7 @@ pub(crate) fn display_host(host: IpAddr) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{endpoint_serves_home, resolve_graphql_endpoint};
+    use super::endpoint_serves_home;
 
     #[test]
     fn bearers_go_only_to_the_homes_runtime_or_loopback() {

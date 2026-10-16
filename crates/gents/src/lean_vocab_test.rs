@@ -1,6 +1,7 @@
 #[path = "lean_vocab_test/support.rs"]
 mod support;
 
+pub(crate) use support::canonical_presentation::native_adapter::native_presentation;
 pub(crate) use support::*;
 
 pub(crate) async fn native_queue_image(

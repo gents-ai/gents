@@ -10,8 +10,4 @@ export type EventSource = { node_did: string, event_source_id: string, display_n
 /**
  * Absent/null means created, never all events.
  */
-event_kind?: string | null, filter?: string | null, correlation_field?: string | null,
-/**
- * Requires a correlation_field when grouped.
- */
-group?: EventGroup | null, workspace_authority?: WorkspaceAuthority | null, created_at?: string | null, updated_at?: string | null, tags?: Array<string> | null, };
+event_kind?: string | null, filter?: string | null, correlation_field?: string | null, group?: EventGroup | null, workspace_authority?: WorkspaceAuthority | null, created_at?: string | null, updated_at?: string | null, tags?: Array<string> | null, };

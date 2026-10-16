@@ -4,11 +4,7 @@ import type { ReasoningEffort } from "./ReasoningEffort.js";
 /**
  * Server-advertised model option, scoped by its containing backend catalog.
  */
-export type AdvertisedModel = { model_name: string, display_name: string | null,
-/**
- * Provider-advertised normal/default context size, when known.
- */
-context_window: number | null,
+export type AdvertisedModel = { model_name: string, display_name: string | null, context_window: number | null,
 /**
  * Provider-advertised ceiling for an explicit context override; must
  * never become a default itself.

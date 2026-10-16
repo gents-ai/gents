@@ -24,8 +24,6 @@ pub use observe::{
     StoreUpdateNotice,
 };
 pub use paths::{DesktopPaths, DESKTOP_HOME_ENV};
-#[cfg(test)]
-pub(crate) use peer_directory::load_peer_directory_snapshot;
 pub(crate) use peer_directory::PeerDirectory;
 pub use peer_directory::{initialize_local_standard_peer, load_peer_records, PeerRecord};
 pub use principal_identity::PrincipalIdentity;

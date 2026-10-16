@@ -1243,7 +1243,7 @@ mod canonical_execution;
 #[path = "canonical_output.rs"]
 mod canonical_output;
 #[path = "canonical_presentation.rs"]
-mod canonical_presentation;
+pub(crate) mod canonical_presentation;
 #[path = "client_session.rs"]
 mod client_session;
 #[path = "codex_shim.rs"]

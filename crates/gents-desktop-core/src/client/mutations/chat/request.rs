@@ -67,6 +67,7 @@ pub async fn submit_request(
     Ok(result)
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub async fn submit_goal_backed_request(
     node: &EmbeddedNode,

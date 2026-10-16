@@ -2,14 +2,12 @@ use std::path::PathBuf;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-use crate::tool_surface::FileToolMode;
 use crate::toolset::{
     apply_workspace_authority, CommandExecutionMode, CommandExecutionPolicy, WorkspaceAuthority,
 };
 
 use super::{
-    bind_workspace_overlay, workspace_authority_file_mode, IsolatedWorkspaceRecord,
-    WorkspaceBindInput, WorkspacePlacementRecord,
+    bind_workspace_overlay, IsolatedWorkspaceRecord, WorkspaceBindInput, WorkspacePlacementRecord,
 };
 
 fn temp_tree() -> (tempfile::TempDir, PathBuf, PathBuf) {

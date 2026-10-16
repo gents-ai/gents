@@ -32,16 +32,19 @@ describe("canonical tool selections", () => {
     const timeout = screen.getByRole("textbox", {
       name: "Bash timeout seconds",
     });
-    await user.type(screen.getByRole("textbox", { name: "Display name" }), " edited");
+    fireEvent.change(screen.getByRole("textbox", { name: "Display name" }), {
+      target: { value: "Tools edited" },
+    });
+    const save = screen.getByRole("button", { name: "Save" });
     for (const invalid of ["0", "-1", "1.5", "abc", "9007199254740992"]) {
       fireEvent.change(timeout, { target: { value: invalid } });
       expect(timeout).toHaveValue(invalid);
       expect(screen.getByRole("alert")).toHaveTextContent("positive whole number");
-      await user.click(screen.getByRole("button", { name: "Save" }));
+      await user.click(save);
       expect(api.saveToolsConfig).not.toHaveBeenCalled();
     }
     fireEvent.change(timeout, { target: { value: "15" } });
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(save);
     expect(api.saveToolsConfig.mock.calls[0][0].document.host.bash.timeout_secs).toBe(
       15,
     );

@@ -47,8 +47,6 @@ pub(crate) use document_patches::{
     is_transcript_content_collection, supports_doc_patch_collection,
 };
 pub(crate) use request_closure::{close_request_rows, close_request_rows_on};
-#[cfg(test)]
-use session_transcript::tool_group_cursor_sequence;
 pub use session_transcript::{
     load_session_context_store, load_session_context_store_on, load_session_diagnostics_store,
     load_session_transcript_page, load_session_transcript_page_on,

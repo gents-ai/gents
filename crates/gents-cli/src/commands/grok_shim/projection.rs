@@ -239,11 +239,6 @@ impl SessionUpdateChannel {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn sequencer(&self) -> &ProjectionSequencer {
-        &self.sequencer
-    }
-
     fn session_lock(&self, session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
         let mut send_locks = self
             .send_locks

@@ -357,15 +357,6 @@ mod tests {
         findings: Vec<String>,
     }
 
-    fn valid_sample_json() -> String {
-        serde_json::json!({
-            "report_type": "steward",
-            "body": "ok",
-            "findings": ["a", "b"]
-        })
-        .to_string()
-    }
-
     #[test]
     fn repair_preserves_valid_escapes_and_only_fixes_lone_backslashes() {
         let raw = r#"{"body":"line\nwith \d and a quote \" here"}"#;

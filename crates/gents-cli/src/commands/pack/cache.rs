@@ -12,6 +12,7 @@ use crate::cli::PackPruneArgs;
 const CACHE_MARKER: &str = ".gents-pack-cache-v1";
 const CACHE_LOCK: &str = ".cache.lock";
 
+#[cfg(test)]
 pub(super) fn write_cache_marker(root: &Path) -> Result<()> {
     let marker = root.join(CACHE_MARKER);
     if marker.exists() {
@@ -68,14 +69,6 @@ pub(super) fn asset_cache_root_for(
     digest: &str,
 ) -> Result<std::path::PathBuf> {
     gents::pack::materialize::cache_root(home, namespace, name, digest)
-}
-
-pub(super) fn release_recorded_cache(
-    home: &Path,
-    coordinate: &str,
-    record: &HomePackInstall,
-) -> Result<CacheRelease> {
-    prepare_recorded_cache(home, coordinate, record)?.finish()
 }
 
 pub(super) struct PreparedCacheRelease {

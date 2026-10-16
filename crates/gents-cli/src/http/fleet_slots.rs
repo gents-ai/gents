@@ -476,7 +476,7 @@ fn build_fleet_slot_snapshot(
 fn backend_admission_from_readiness(
     agents: &BTreeMap<(String, String), ResolvedAgentRow>,
     readiness_by_agent: &BTreeMap<String, NodeReadinessRow>,
-    observed_at: DateTime<Utc>,
+    _observed_at: DateTime<Utc>,
 ) -> BTreeMap<(String, String), bool> {
     let mut accepting = BTreeMap::<(String, String), bool>::new();
     for ((node_did, agent_id), agent_config) in agents {

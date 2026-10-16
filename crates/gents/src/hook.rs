@@ -441,19 +441,6 @@ impl SessionState {
         }
     }
 
-    #[cfg(test)]
-    fn persist_assistant_turn(&mut self) -> u32 {
-        let sequence = match self.transcript_turn {
-            TranscriptTurnState::AssistantBuilding { sequence } => sequence,
-            TranscriptTurnState::Idle | TranscriptTurnState::AssistantPersisted { .. } => {
-                self.sequence += 1;
-                self.sequence
-            }
-        };
-        self.transcript_turn = TranscriptTurnState::AssistantPersisted { sequence };
-        sequence
-    }
-
     fn register_tool_result_identity(
         &mut self,
         internal_call_id: &str,
@@ -505,30 +492,6 @@ impl SessionState {
 
         let keys = self.tool_result_dedupe_keys(internal_call_id, result_id, call_id);
         self.mark_tool_result_keys_seen(keys)
-    }
-
-    #[cfg(test)]
-    fn mark_stream_tool_result_seen(
-        &mut self,
-        internal_call_id: &str,
-        result_id: &str,
-        call_id: Option<&str>,
-    ) -> anyhow::Result<bool> {
-        self.register_tool_result_identity(internal_call_id, Some(result_id), call_id);
-        let keys = self.tool_result_dedupe_keys(internal_call_id, Some(result_id), call_id);
-        if !matches!(
-            self.transcript_turn,
-            TranscriptTurnState::AssistantPersisted { .. }
-        ) {
-            if self.tool_result_keys_already_seen(&keys) {
-                self.persist_tool_result_keys(keys);
-                return Ok(false);
-            }
-            anyhow::bail!(
-                "cannot persist streamed tool result before its assistant turn is persisted"
-            );
-        }
-        Ok(self.mark_tool_result_keys_seen(keys))
     }
 
     fn tool_result_dedupe_keys(

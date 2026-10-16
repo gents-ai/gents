@@ -1040,7 +1040,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::calls::ParamDecl;
+
     use super::*;
 
     async fn signing_fixture() -> (

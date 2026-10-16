@@ -1411,17 +1411,6 @@ async fn read_guard_unresolvable_key_is_unavailable_with_no_request() {
     never_called(handle).await;
 }
 
-fn view_now() -> DateTime<Utc> {
-    "2026-10-01T16:00:00Z".parse().expect("now")
-}
-
-fn stored_with(windows: Vec<UsageWindow>) -> StoredUsage {
-    StoredUsage {
-        report: report(windows),
-        ..StoredUsage::default()
-    }
-}
-
 const GROK: &str = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
 const CLAUDE: &str = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
 const GROK_BILLING_BODY: &str = r#"{"config":{"creditUsagePercent":30,"currentPeriod":{"start":"2100-01-01T00:00:00Z","end":"2100-01-08T00:00:00Z"}}}"#;

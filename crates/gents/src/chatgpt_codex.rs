@@ -6,8 +6,6 @@ use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use defra_node::EmbeddedNode;
 use gents_loop::provider_patches::patch_instructions_body;
-#[cfg(test)]
-use gents_loop::provider_patches::CHATGPT_CODEX_UNSUPPORTED_PARAMS;
 use rig::http_client::{
     self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, Request, ReqwestClient, Response,
 };
@@ -17,7 +15,7 @@ use rig::wasm_compat::WasmCompatSend;
 use serde_json::{json, Value};
 
 #[cfg(test)]
-use crate::oauth_credential::{classify_chatgpt_auth_error, BearerSource, OAuthAuthProblem};
+use crate::oauth_credential::BearerSource;
 use crate::oauth_credential::{
     oauth_credential_id, DbCredentialBearer, OAuthCredential, OAuthRefreshKind,
     CHATGPT_OAUTH_PRODUCT,
@@ -667,13 +665,6 @@ mod tests {
             .unwrap();
         assert!(!unscoped.headers().contains_key("session_id"));
         assert!(!unscoped.headers().contains_key("x-codex-turn-state"));
-    }
-
-    fn status_error(status: &str) -> http_client::Error {
-        http_client::Error::InvalidStatusCodeWithMessage(
-            status.parse().expect("valid status"),
-            String::new(),
-        )
     }
 
     #[tokio::test]

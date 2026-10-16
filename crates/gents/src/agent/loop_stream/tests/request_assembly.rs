@@ -910,7 +910,7 @@ fn has_raw_leaf(value: &serde_json::Value) -> bool {
 }
 
 fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
-    let mut history = vec![
+    let history = vec![
         Message::Assistant {
             id: None,
             content: vec![AssistantContent::ToolCall(crate::llm::message::ToolCall {
@@ -956,7 +956,7 @@ fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
 
 #[test]
 fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
-    let mut history = vec![Message::Assistant {
+    let history = vec![Message::Assistant {
         id: None,
         content: vec![AssistantContent::ToolCall(crate::llm::message::ToolCall {
             id: "call-1".to_string(),
@@ -969,7 +969,7 @@ fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
             additional_params: None,
         })],
     }];
-    let mut new_messages = vec![Message::User {
+    let new_messages = vec![Message::User {
         content: vec![UserContent::ToolResult(crate::llm::message::ToolResult {
             id: "call-1".to_string(),
             call_id: Some("call-1".to_string()),

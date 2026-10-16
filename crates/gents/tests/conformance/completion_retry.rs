@@ -350,7 +350,7 @@ fn assert_deadline_behind_clock_fails_fast(case: &LeanCompletionRetryCase) {
     assert_eq!(state.retry_count(), 0);
 }
 
-fn assert_deterministic_400_repairs(case: &LeanCompletionRetryCase) {
+fn assert_deterministic_400_repairs(_case: &LeanCompletionRetryCase) {
     let mut state = CompletionRetryState::new(CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(5), Duration::from_secs(30)],
         max_resample: 2,
