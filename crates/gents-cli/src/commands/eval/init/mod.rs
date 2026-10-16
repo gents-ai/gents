@@ -30,6 +30,7 @@ mod contract;
 pub(crate) mod dossier;
 pub(crate) mod draft;
 mod pilot;
+mod readiness;
 pub(crate) mod turn;
 pub(super) mod validate;
 mod write;
@@ -319,6 +320,14 @@ pub(crate) async fn run(
         gents::default_inference_profile_id_for_agent(&gents::default_agent_id_for_node(&ctx.owner))
     });
     install_pack_slot(&ctx.access, &ctx.owner, &author, &author_slot, &profile).await?;
+    readiness::wait_for_author(
+        &ctx.access,
+        &ctx.owner,
+        &author_agent,
+        std::time::Duration::from_secs(args.timeout_secs),
+        std::time::Duration::from_secs(args.poll_secs).max(std::time::Duration::from_millis(1)),
+    )
+    .await?;
 
     let init = InitContext {
         dossier,
