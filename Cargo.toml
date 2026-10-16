@@ -182,7 +182,7 @@ iroh-relay = { git = "https://github.com/jackzampolin/iroh", rev = "bd3405911703
 # This pin also preserves prompt_cache_key through the typed Responses serializer.
 # Cargo patches the dependency's original crates.io source, not a git source
 # introduced by another patch entry.
-rig-core = { git = "https://github.com/jackzampolin/rig", rev = "7e44b7a9ce081fa1b54a4012c1691ebe04ca1845" }
+rig-core = { git = "https://github.com/jackzampolin/rig", rev = "e12f875ea5b28ec5dfbb6d7c668309a288198f27" }
 # noq 1.1.1 includes the stale-path and duplicate-Draining fixes, and
 # n0-computer/noq#723 has been closed. Keep the two endpoint Drop paths from
 # aborting the process when an earlier driver panic poisons their mutex.
