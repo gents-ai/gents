@@ -4,6 +4,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { homeDir } from "@tauri-apps/api/path";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import type { ZoomAction } from "../ui/lib/zoom";
 
 export const inNativeShell = () =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -98,4 +101,19 @@ export async function revealInFolder(path: string): Promise<void> {
 export async function openWithOpener(url: string): Promise<void> {
   const { openUrl } = await import("@tauri-apps/plugin-opener");
   await openUrl(url);
+}
+
+export function setWebviewZoom(level: number) {
+  void getCurrentWebview()
+    .setZoom(level)
+    .catch((error) => console.warn("could not zoom the window", error));
+}
+
+/** Calls `handle` with each step the shell's View menu asks of this window. */
+export function onZoomMenu(handle: (action: ZoomAction) => void) {
+  const stop = getCurrentWebviewWindow().listen<string>("zoom", (event) => {
+    if (event.payload === "in" || event.payload === "out" || event.payload === "reset")
+      handle(event.payload);
+  });
+  return () => void stop.then((unlisten) => unlisten());
 }

@@ -1,6 +1,9 @@
 import { shortPath } from "@/lib/paths";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
-import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
+import type {
+  RenderedToolCallView,
+  ToolDiffLineView,
+} from "@source-inc/gents-desktop-client";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
 import { Button } from "@gents/ui/components/button";
@@ -12,7 +15,7 @@ import { useHomeDid, useSelectedNode } from "../hooks/useClient";
 import { isWorkingNode } from "../lib/nodes";
 import { CopyButton } from "./Markdown";
 import {
-  DIFF_MARK,
+  diffShape,
   diffText,
   duration,
   isAbsolutePath,
@@ -82,7 +85,10 @@ function Payload({
         </span>
         <CopyButton getText={() => text} />
       </div>
-      <ScrollArea className="max-h-72 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
+      <ScrollArea
+        data-scroll-x
+        className="max-h-72 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]"
+      >
         <pre className="w-max min-w-full px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground">
           {text}
         </pre>
@@ -102,6 +108,131 @@ function Meta({ items }: { items: (string | null | undefined)[] }) {
     </div>
   );
 }
+
+
+const GUTTER: Record<ToolDiffLineView["kind"], string> = {
+  added: "+",
+  removed: "\u2212",
+  context: " ",
+};
+const TONE: Record<ToolDiffLineView["kind"] | "plain", string> = {
+  added: "bg-diff-added text-diff-added-fg",
+  removed: "bg-diff-removed text-diff-removed-fg",
+  context: "text-muted-foreground",
+  plain: "text-foreground",
+};
+
+function DiffLines({
+  lines,
+  gutter,
+  tone,
+}: {
+  lines: readonly ToolDiffLineView[];
+  gutter: boolean;
+  tone?: keyof typeof TONE;
+}) {
+  return (
+    <ScrollArea
+      data-scroll-x
+      className="max-h-72 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]"
+    >
+      <pre
+        className={cn(
+          "w-max min-w-full py-2 font-mono text-[11px] leading-relaxed",
+          tone && TONE[tone],
+        )}
+      >
+        {lines.map((line, i) => (
+          <span
+            key={i}
+            data-diff={line.kind}
+            className={cn("block px-3", !tone && TONE[line.kind])}
+          >
+            {gutter && (
+              <span
+                aria-hidden="true"
+                className="mr-2 inline-block w-2 font-medium opacity-70 select-none"
+              >
+                {GUTTER[line.kind]}
+              </span>
+            )}
+            {line.text}
+          </span>
+        ))}
+      </pre>
+    </ScrollArea>
+  );
+}
+
+function DiffBlock({
+  label,
+  lines,
+  tone,
+}: {
+  label: string;
+  lines: readonly ToolDiffLineView[];
+  tone: keyof typeof TONE;
+}) {
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+          {label}
+        </span>
+        <CopyButton getText={() => lines.map((line) => line.text).join("\n")} />
+      </div>
+      <DiffLines lines={lines} gutter={false} tone={tone} />
+    </div>
+  );
+}
+
+
+function DiffBody({
+  diff,
+  created,
+}: {
+  diff: readonly ToolDiffLineView[];
+  created: boolean;
+}) {
+  const shape = diffShape(diff);
+  const added = diff.filter((line) => line.kind === "added");
+  const removed = diff.filter((line) => line.kind === "removed");
+  if (shape === "unified")
+    return (
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
+        <div className="flex items-center justify-between">
+          <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+            diff
+          </span>
+          <CopyButton getText={() => diffText([...diff])} />
+        </div>
+        <DiffLines lines={diff} gutter />
+      </div>
+    );
+  
+  if (shape === "addition")
+    return created ? (
+      <DiffBlock label="new file" lines={added} tone="plain" />
+    ) : (
+      <DiffBlock label="added" lines={added} tone="added" />
+    );
+  if (shape === "removal")
+    return <DiffBlock label="removed" lines={removed} tone="removed" />;
+  
+  return (
+    <div className="@container">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-2 @2xl:grid-cols-2">
+        <div className="min-w-0">
+          <DiffBlock label="replaced" lines={removed} tone="removed" />
+        </div>
+        <div className="min-w-0">
+          <DiffBlock label="with" lines={added} tone="added" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
   const p = tool.presentation;
@@ -163,41 +294,7 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
       )}
       {p.kind === "fileEdit" && (
         <>
-          {p.diff.length > 0 && (
-            <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
-              <div className="flex items-center justify-between">
-                <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-                  diff
-                </span>
-                <CopyButton getText={() => diffText(p.diff)} />
-              </div>
-              <ScrollArea className="max-h-72 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
-                <pre className="w-max min-w-full py-2 font-mono text-[11px] leading-relaxed">
-                  {p.diff.map((l, i) => (
-                    <span
-                      key={i}
-                      data-diff={l.kind}
-                      className={cn(
-                        "block px-3",
-                        l.kind === "added" && "bg-success text-marker-foreground",
-                        l.kind === "removed" &&
-                          "bg-destructive/10 text-muted-foreground line-through decoration-destructive/40",
-                        l.kind === "context" && "text-muted-foreground",
-                      )}
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="mr-2 inline-block w-2 select-none"
-                      >
-                        {DIFF_MARK[l.kind]}
-                      </span>
-                      {l.text}
-                    </span>
-                  ))}
-                </pre>
-              </ScrollArea>
-            </div>
-          )}
+          {p.diff.length > 0 && <DiffBody diff={p.diff} created={p.created === true} />}
           {(p.revealPath || p.path) && tool.statusKind === "success" && (
             <RevealFile path={p.revealPath || p.path!} />
           )}
@@ -246,6 +343,7 @@ function LiveOutput({ subject, tail }: { subject: string; tail: string }) {
         live output
       </span>
       <ScrollArea
+        data-scroll-x
         data-testid={`tool-live-output-${subject}`}
         className="max-h-40 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]"
       >

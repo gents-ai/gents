@@ -27,7 +27,8 @@ import {
   TagsRow,
 } from "./editors";
 import { DeleteButton } from "./ListDetail";
-import { Group, Row, StackedRow } from "./rows";
+import { Group, NameLinks, Row, StackedRow } from "./rows";
+import { href } from "@/lib/router";
 import { ProviderLogo } from "../ProviderLogo";
 import { useApp } from "@/app/AppContext";
 import { toastFailure } from "@/lib/failure";
@@ -222,9 +223,9 @@ export function BackendEditor({
       setRefreshing(false);
     }
   };
-  const users = deployment.inferenceProfiles
-    .filter((p) => p.backend_id === backend.backendId)
-    .map((p) => p.display_name ?? p.profile_id);
+  const profiles = deployment.inferenceProfiles.filter(
+    (p) => p.backend_id === backend.backendId,
+  );
   return (
     <>
       <Group
@@ -323,9 +324,24 @@ export function BackendEditor({
         )}
         <FactRow
           label="Used by"
-          description="Delete is blocked while an agent points here."
+          description="Delete is blocked while a profile uses it."
         >
-          {users.length ? users.join(", ") : "no agent"}
+          {profiles.length ? (
+            <NameLinks
+              items={profiles.map((p) => ({
+                key: p.profile_id,
+                name: p.display_name ?? p.profile_id,
+                href: href({
+                  name: "agent",
+                  nodeDid: deployment.nodeDid,
+                  section: "profiles",
+                  item: p.profile_id,
+                }),
+              }))}
+            />
+          ) : (
+            "No profile yet."
+          )}
         </FactRow>
       </Group>
       <Group title={subscription ? "Subscription" : "Credential"}>

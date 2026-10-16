@@ -34,7 +34,7 @@ import {
   type ProfileDraft,
 } from "./profileDraft";
 import { DeleteButton } from "./ListDetail";
-import { Group } from "./rows";
+import { Group, NameLinks } from "./rows";
 import {
   InferenceModelControls,
   recommendedInferenceSettings,
@@ -44,8 +44,6 @@ import {
 import { useApp } from "@/app/AppContext";
 import { useModelRecommendation } from "./useModelRecommendation";
 import { Disclosure } from "../../components/Disclosure";
-
-const USERS_SHOWN = 3;
 
 function settingsForDraft(
   recommendation: InferenceModelRecommendation,
@@ -477,20 +475,13 @@ export function ProfileEditor({
         />
         <FactRow label="Used by">
           {usedBy.length ? (
-            <span className="flex flex-wrap justify-end gap-x-3 gap-y-1">
-              {usedBy.slice(0, USERS_SHOWN).map((b) => (
-                <a
-                  key={b.agentId}
-                  href={href({ ...base, section: "agents", item: b.agentId })}
-                  className="max-w-48 truncate underline-offset-2 hover:text-foreground hover:underline"
-                >
-                  {b.displayName}
-                </a>
-              ))}
-              {usedBy.length > USERS_SHOWN && (
-                <span>and {usedBy.length - USERS_SHOWN} more</span>
-              )}
-            </span>
+            <NameLinks
+              items={usedBy.map((b) => ({
+                key: b.agentId,
+                name: b.displayName,
+                href: href({ ...base, section: "agents", item: b.agentId }),
+              }))}
+            />
           ) : (
             "No agent yet. Pick it under an agent’s Model."
           )}

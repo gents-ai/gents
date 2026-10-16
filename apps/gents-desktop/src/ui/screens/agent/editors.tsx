@@ -224,7 +224,9 @@ export function AreaRow({
         placeholder={placeholder}
         rows={rows}
         style={clipped ? { maxHeight: `calc(${rows}lh + 1rem + 2px)` } : undefined}
-        className={`${stacked ? "w-full" : "w-96 max-md:w-full"} ${mono ? "font-mono text-xs" : ""}`}
+        /* the kit's textarea grows with its text; beside a label it stops
+           at a height and scrolls, as a stacked one does behind Show all */
+        className={`${stacked ? "w-full" : "max-h-48 w-96 max-md:w-full"} ${mono ? "font-mono text-xs" : ""}`}
       />
       {stacked && (overflowing || expanded) && (
         <div className="-mt-1 flex justify-end">

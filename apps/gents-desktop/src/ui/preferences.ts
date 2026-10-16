@@ -4,12 +4,14 @@ import { createStore } from "zustand/vanilla";
 
 import { browserStorage } from "./lib/storage";
 import { applyTheme, systemTheme, type ThemePreference } from "./theme";
+import { ZOOM_STEPS } from "./lib/zoom";
 
 export type NavMode = "hover" | "expanded" | "collapsed";
 
 export type Preferences = {
   theme: ThemePreference;
   nav: NavMode;
+  zoom: number;
 };
 
 const NAV_MODES: readonly string[] = ["hover", "expanded", "collapsed"];
@@ -17,6 +19,7 @@ const NAV_MODES: readonly string[] = ["hover", "expanded", "collapsed"];
 const initial = (): Preferences => ({
   theme: systemTheme(),
   nav: "hover",
+  zoom: 1,
 });
 
 export function restorePreferences(
@@ -34,6 +37,9 @@ export function restorePreferences(
       typeof saved.nav === "string" && NAV_MODES.includes(saved.nav)
         ? (saved.nav as NavMode)
         : defaults.nav,
+    zoom: (ZOOM_STEPS as readonly unknown[]).includes(saved.zoom)
+      ? (saved.zoom as number)
+      : defaults.zoom,
   };
 }
 
@@ -54,7 +60,30 @@ export const preferences = {
   setNav(nav: NavMode) {
     store.setState({ nav });
   },
+  setZoom(zoom: number) {
+    store.setState({ zoom });
+  },
 };
+
+
+export function followZoom(apply: (zoom: number) => void) {
+  apply(store.getState().zoom);
+  return store.subscribe((next, prev) => {
+    if (next.zoom !== prev.zoom) apply(next.zoom);
+  });
+}
+
+
+/** Browser storage events notify other windows, which hold independent stores. */
+export function followOtherWindows() {
+  const reread = (event: StorageEvent) => {
+    if (event.key !== "gents-preferences") return;
+    void Promise.resolve(store.persist.rehydrate()).then(applyChosenTheme);
+  };
+  window.addEventListener("storage", reread);
+  return () => window.removeEventListener("storage", reread);
+}
+
 
 export const applyChosenTheme = () => applyTheme(store.getState().theme);
 
@@ -64,5 +93,6 @@ export function usePreferences<T>(select: (preferences: Preferences) => T): T {
 
 export const useTheme = () => usePreferences((p) => p.theme);
 export const useNavMode = () => usePreferences((p) => p.nav);
+export const zoomLevel = () => store.getState().zoom;
 
 export const resetPreferences = () => store.setState(initial(), true);

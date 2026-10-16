@@ -132,7 +132,7 @@ function Details({ item }: { item: MailboxItemView }) {
           </CollapsibleTrigger>
           <CollapsibleContent>
             <ScrollArea className="mt-2 max-h-40 rounded-xl border border-border/60 bg-background">
-              <pre className="px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
+              <pre className="px-3 py-2 font-mono text-[11px] leading-relaxed wrap-break-word whitespace-pre-wrap text-muted-foreground">
                 {pretty(item.payload)}
               </pre>
             </ScrollArea>
