@@ -314,12 +314,10 @@ async fn copy_and_verify(
         if exists(stage)? {
             fs::remove_dir_all(stage)?;
         }
-        let target_options =
-            crate::storage_backend::regolith_options().with_encryption_key(*key.0);
+        let target_options = crate::storage_backend::regolith_options().with_encryption_key(*key.0);
         source.copy_snapshot_to(stage, &target_options, &mut || {
             progress("store_encryption_copy");
         })?;
-        fs::set_permissions(stage, fs::metadata(data)?.permissions())?;
         let destination = RegolithStore::open_with_options(stage, target_options)?;
         let verified = verify_values(&source, &destination, progress).await;
         let closed = destination.close().await;

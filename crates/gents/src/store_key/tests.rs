@@ -145,9 +145,13 @@ async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_it
     reopened.shutdown().await;
 
     let plain = temp.path().join("plain");
+    let mut plain_options = crate::storage_backend::regolith_options();
+    plain_options.engine = plain_options
+        .engine
+        .compression(regolith::CompressionType::None);
     let control = defra_node::EmbeddedNode::builder()
         .data_path(&plain)
-        .with_storage_backend(defra_node::StorageBackend::Regolith)
+        .with_regolith_options(plain_options)
         .build()
         .await
         .unwrap();
