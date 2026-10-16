@@ -42,6 +42,7 @@ import Proofs.GoalAutomation.OperatorResume
 import Proofs.GoalAutomation.ClaimedPublication
 import Proofs.GoalAutomation.ResetResume
 import Proofs.GoalAutomation.RequestHead
+import Proofs.GoalAutomation.RequestAncestry
 import Proofs.GoalAutomation.ReadinessGate
 import Proofs.Mailbox
 import Proofs.Client

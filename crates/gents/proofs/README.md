@@ -649,6 +649,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/GraphPipeline.lean` | Model-callable graph publication and run lifecycle: validation/materialization gates, active-pointer alignment, immutable revision identity, atomic seed/run start, cancellation suppression, result-commit-gated success, and terminal CAS safety |
 | `Proofs/GraphPipeline/FailureAttribution.lean` | Existing GraphRun transaction refinement: capture the first durable failure before interrupting siblings, preserve it through drain/restart, reject stale generation writes, and retain explicit cancellation precedence. “First” means the first committed fail-fast decision; evidence discovery and logical continuation eligibility remain separate inputs. |
 | `Proofs/GraphPipeline/LogicalInvocation.lean` | Derived authenticated physical ancestry, conservative committed Goal obligations, logical tip outcome and physical limits; existing GraphRun publication generation fence. Projection cases and publication traces target signed-row and transaction tests; new cases require consumer migration in the conformance layer. |
+| `Proofs/GoalAutomation/RequestAncestry.lean` | Authenticated physical request ancestry (`Doc`, `Attempt`, `Edge`, `parents`, `rootsAt`, `roots`, `members`, `ambiguous`, `tips`) for Goal and graph invocation entries; Rust owner `goal::authenticated_goal_request_members`. Exhausted or ambiguous paths fail closed. `GraphPipeline.LogicalInvocation` re-exports it. |
 | `Proofs/PromptAssembly/` | Provider-view sanitation and prompt assembly, per-turn context budgeting, and the request-wide aggregate token ledger. Fences: generated cases consumed by `agent::loop_stream::tests`. |
 | `Proofs/PromptAssembly/CurrentInput.lean` | Request membership alone never identifies admission input. `current_input_cases` derives retained header indices from the model; `session::output::tests::current_input_selection_matches_lean_owner` binds the canonical prompt/context key classification. Current-request tool results, notifications and assistant output remain history. The separate database regression exercises actual reconstruction; neither test claims reachability of arbitrary imported facts. |
 | `Proofs/PromptAssembly/ClaudeMap.lean` | Claude tool-name map and Messages provider-input assembly: advertised reasoning metadata gates `selectedEffort` (unknown/unsupported efforts are omitted), plus `splitSystem_partition`, `systemBlocks_head`, `systemBlocks_tail_verbatim`, `toolsField_empty`, `accumulate_ignores_start_when_streamed`, `runStream_*`. Fences: `tests/conformance/prompt_assembly.rs::generated_claude_{map,stream,body}_cases_*`; the identity pin lives in `claude_messages::tests`. |
@@ -1756,8 +1757,8 @@ budgets. `repeated_tool_failure_cases` and the composed fields of
 
 ### Logical invocation output obligations
 
-`CompletionRetry.LogicalOutputObligation` reuses the existing authenticated
-physical ancestry projection for both graph and non-graph invocation entries.
+`CompletionRetry.LogicalOutputObligation` reuses the authenticated physical ancestry of
+`GoalAutomation.RequestAncestry` for both graph and non-graph invocation entries.
 Trigger activation follows the root; the contract remains the current configured
 tool surface shared by the loop and model hook, with no new configuration pin.
 Completed calls from validated members are unioned by physical tool-call ID and
