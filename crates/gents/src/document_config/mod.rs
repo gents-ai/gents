@@ -37,7 +37,7 @@ pub use principal::{load_node, Node, DEFAULT_MAX_REQUEST_HOP};
 
 pub use callback::{
     BuiltInCallback, Callback, CallbackBinding, CallbackHandler, CallbackInvocationOrigin,
-    CallbackModule,
+    CallbackModule, PortCardinality, PortSpec,
 };
 pub use compaction::CompactionConfig;
 pub use context::AgentContext;
