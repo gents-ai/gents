@@ -1,5 +1,3 @@
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::Arc;
 use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{Manager, Runtime};
 
@@ -59,6 +57,16 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                         "could not restart the agent service that predates this app"
                     );
                 }
+                if let Err(error) = tauri::async_runtime::block_on(
+                    tauri_commands::managed_server::start_configured_managed_server(
+                        &handle, &state,
+                    ),
+                ) {
+                    tracing::warn!(
+                        error = %error.message,
+                        "could not start the configured local node"
+                    );
+                }
             });
             Ok(())
         })
@@ -70,45 +78,12 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                     .clear_plugin_approval_subscriptions(webview.window().label());
             }
         })
-        .on_event({
-            let exit_owner = Arc::new(ExitRequestOwner::default());
-            move |app, event| match event {
-                tauri::RunEvent::WindowEvent { label, event, .. } => {
-                    app.state::<DesktopAppState>().window_event(label, event);
-                }
-                // Tauri's restart path ignores prevent_exit, so it cannot await
-                // shutdown.
-                tauri::RunEvent::ExitRequested { code, api, .. }
-                    if *code != Some(tauri::RESTART_EXIT_CODE) =>
-                {
-                    let exit_code = *code;
-                    match exit_owner.request() {
-                        ExitRequest::StartShutdown => {
-                            api.prevent_exit();
-                            let app = app.clone();
-                            let exit_owner = Arc::clone(&exit_owner);
-                            tauri::async_runtime::spawn(async move {
-                                let state = app.state::<DesktopAppState>();
-                                if let Err(error) =
-                                    tauri_commands::lifecycle::shutdown_client_for_app_exit(
-                                        &app, &state,
-                                    )
-                                    .await
-                                {
-                                    tracing::warn!(
-                                        error = %error.message,
-                                        "desktop client shutdown failed during app exit"
-                                    );
-                                }
-                                exit_owner.complete();
-                                app.exit(exit_code.unwrap_or(0));
-                            });
-                        }
-                        ExitRequest::WaitForShutdown => api.prevent_exit(),
-                        ExitRequest::Allow => {}
-                    }
-                }
-                _ => {}
+        .on_event(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                crate::app_exit::requested(app, api, *code);
+            }
+            if let tauri::RunEvent::WindowEvent { label, event, .. } = event {
+                app.state::<DesktopAppState>().window_event(label, event);
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -225,33 +200,6 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
         .build()
 }
 
-#[derive(Default)]
-struct ExitRequestOwner(AtomicU8);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExitRequest {
-    StartShutdown,
-    WaitForShutdown,
-    Allow,
-}
-
-impl ExitRequestOwner {
-    fn request(&self) -> ExitRequest {
-        match self
-            .0
-            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
-        {
-            Ok(_) => ExitRequest::StartShutdown,
-            Err(1) => ExitRequest::WaitForShutdown,
-            Err(_) => ExitRequest::Allow,
-        }
-    }
-
-    fn complete(&self) {
-        self.0.store(2, Ordering::Release);
-    }
-}
-
 fn register_window<R: Runtime>(webview: tauri::Webview<R>) {
     let window = webview.window();
     window
@@ -282,15 +230,6 @@ mod tests {
     use gents_desktop_core::home_reset::{
         lock_browser_store, lock_desktop_process, BrowserStoreLock, DesktopProcessLock,
     };
-
-    #[test]
-    fn exit_is_deferred_once_until_the_existing_shutdown_owner_finishes() {
-        let owner = ExitRequestOwner::default();
-        assert_eq!(owner.request(), ExitRequest::StartShutdown);
-        assert_eq!(owner.request(), ExitRequest::WaitForShutdown);
-        owner.complete();
-        assert_eq!(owner.request(), ExitRequest::Allow);
-    }
 
     #[test]
     fn browser_store_and_process_locks_are_both_held_after_setup() {

@@ -121,6 +121,136 @@ async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_ow
 }
 
 #[tokio::test]
+async fn unchanged_desired_state_replay_does_not_add_document_commit() -> Result<()> {
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    register_config_schemas(&node).await?;
+    let access = ConfigAccess::local(node.clone());
+    let owner = "did:key:desired-state-replay";
+    let backend_id = "unchanged-backend";
+    let document = document(backend(owner, backend_id));
+
+    let created = apply_with_counts(&access, vec![document.clone()]).await?;
+    assert_eq!(created.get(Collection::InferenceBackend), 1);
+    let query = format!(
+        r#"{{ InferenceBackend(filter: {{ node_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
+        crate::graphql::escape_graphql_string(owner),
+        crate::graphql::escape_graphql_string(backend_id),
+    );
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node.as_ref(),
+        &query,
+        "test.desired_state_replay.read_backend",
+    )
+    .await?;
+    let doc_id = crate::graphql::first_row::<Value>(&response, "InferenceBackend")?
+        .and_then(|row| {
+            row.get("_docID")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .context("created backend is missing _docID")?;
+    let before = crate::graphql::composite_commits(
+        node.as_ref(),
+        &doc_id,
+        "test.desired_state_replay.before",
+    )
+    .await?;
+    assert!(!before.is_empty(), "create must publish a document commit");
+
+    let replayed = apply_with_counts(&access, vec![document]).await?;
+    assert_eq!(
+        replayed.get(Collection::InferenceBackend),
+        1,
+        "counts continue to report each planned document"
+    );
+    let after = crate::graphql::composite_commits(
+        node.as_ref(),
+        &doc_id,
+        "test.desired_state_replay.after",
+    )
+    .await?;
+    assert_eq!(
+        after, before,
+        "an identical desired-state replay must not add a whole-document commit"
+    );
+
+    node.shutdown().await;
+    Ok(())
+}
+
+#[test]
+fn every_canonical_collection_uses_derived_owner_and_identity_fields() {
+    for collection in Collection::ALL {
+        let (fields, _) = config_projection(collection, None).unwrap();
+        assert!(fields.contains(&"node_did"), "{collection:?}");
+        assert!(
+            fields.contains(&collection.unique_field()),
+            "{collection:?}"
+        );
+        assert!(!fields.contains(&"_docID"), "{collection:?}");
+    }
+}
+
+#[test]
+fn plans_reject_unknown_fields_sparse_updates_and_scope_changes() {
+    let mut value = backend("did:key:owner", "local");
+    value["probe_status"] = "healthy".into();
+    assert!(DesiredStateApplyPlan::new(vec![document(value)]).is_err());
+    let mut doc = document(backend("did:key:owner", "local"));
+    doc.update = json!({"enabled":false});
+    assert!(DesiredStateApplyPlan::new(vec![doc]).is_err());
+    let mut doc = document(backend("did:key:owner", "local"));
+    doc.update["node_did"] = "did:key:other".into();
+    assert!(DesiredStateApplyPlan::new(vec![doc]).is_err());
+    assert!(DesiredStateApplyPlan::new(vec![
+        document(backend("did:key:a", "same")),
+        document(backend("did:key:b", "same"))
+    ])
+    .is_ok());
+    assert!(DesiredStateApplyPlan::new(vec![
+        document(backend("did:key:a", "same")),
+        document(backend("did:key:a", "same"))
+    ])
+    .is_err());
+}
+
+#[test]
+fn commitments_do_not_reinterpret_authored_strings_as_json() {
+    assert_ne!(
+        desired_state_document_digest(&json!({"value":["{\"a\":1}"]})).unwrap(),
+        desired_state_document_digest(&json!({"value":[{"a":1}]})).unwrap()
+    );
+}
+
+#[test]
+fn task_projection_excludes_runtime_updated_at_and_normalizes_defaults() {
+    let desired = json!({
+        "node_did": "did:key:owner",
+        "task_id": "run-once",
+        "agent_id": "operator",
+        "prompt_template": "Run once"
+    });
+    let mut observed = desired.clone();
+    observed["updated_at"] = "2026-09-10T18:16:43.843636Z".into();
+    observed["enabled"] = true.into();
+    observed["hooks"] = Value::Null;
+    observed["tags"] = Value::Null;
+
+    let desired = config_projection(Collection::Task, Some(&desired))
+        .unwrap()
+        .1
+        .unwrap();
+    let observed = config_projection(Collection::Task, Some(&observed))
+        .unwrap()
+        .1
+        .unwrap();
+
+    assert_eq!(desired, observed);
+    assert_eq!(desired["enabled"], true);
+    assert!(desired.get("updated_at").is_none());
+}
+
+#[tokio::test]
 async fn replacement_resets_defaults_and_preserves_backend_observations() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
@@ -239,6 +369,60 @@ async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()>
         assert_eq!(value["backend_id"], id);
         assert!(!doc_id.is_empty());
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() -> Result<()> {
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    register_config_schemas(&node).await?;
+    let access = ConfigAccess::local(node.clone());
+    let owner = "did:key:owner";
+    let docs = ["backend-a", "backend-b", "backend-c"]
+        .into_iter()
+        .map(|id| document(backend(owner, id)))
+        .collect::<Vec<_>>();
+    apply(&access, docs.clone()).await?;
+    let expected_backend_writes = docs.len();
+
+    let plan = DesiredStateApplyPlan::new(docs)?;
+    let expected = plan
+        .documents()
+        .iter()
+        .map(|doc| {
+            let (owner, id) = document_identity(doc.collection, &doc.add)?;
+            Ok(DesiredStateExpectation {
+                collection: doc.collection,
+                owner: owner.to_owned(),
+                id: id.to_owned(),
+                digest: Some(desired_state_document_digest(&doc.add)?),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let plan = plan.with_expected(expected)?;
+    let (result, read_queries) = count_desired_state_read_page_queries(access.transact_write(
+        "test.desired.apply.batched_reads",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        },
+    ))
+    .await;
+    let counts = result?;
+
+    // Counts describe documents staged by this apply, including canonical
+    // replacements that preserve the current configuration. This plan still
+    // submits all three backend documents; the assertions below measure that
+    // its reads were batched independently of those write counts.
+    assert_eq!(
+        counts.get(Collection::InferenceBackend),
+        expected_backend_writes
+    );
+    assert_eq!(
+        read_queries, 2,
+        "one page reads all expectations and one reads all planned documents"
+    );
+    node.shutdown().await;
     Ok(())
 }
 
@@ -553,15 +737,26 @@ async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Resu
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
-    apply(&access, vec![document(backend(owner, "packaged"))]).await?;
+    let packaged = ["packaged", "packaged-two", "packaged-three"]
+        .into_iter()
+        .map(|id| document(backend(owner, id)))
+        .collect::<Vec<_>>();
+    apply(&access, packaged.clone()).await?;
 
-    let matching = DesiredStateApplyPlan::new(vec![document(backend(owner, "packaged"))])?;
-    access
-        .transact_write("test.verify.matching", |txn| {
+    // The matching plan (authored digest == live projection) verifies clean.
+    let matching = DesiredStateApplyPlan::new(packaged)?;
+    let (matching_result, read_queries) = count_desired_state_read_page_queries(
+        access.transact_write("test.verify.matching", |txn| {
             let plan = &matching;
             Box::pin(async move { expect_existing_documents_unchanged(txn, plan).await })
-        })
-        .await?;
+        }),
+    )
+    .await;
+    matching_result?;
+    assert_eq!(
+        read_queries, 2,
+        "capture and validation each read all three identities in one page"
+    );
 
     access.write("test.drift", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:owner"},backend_id:{_eq:"packaged"}},input:{name:"out-of-band"}){_docID} }"#).await?;
     let error = access

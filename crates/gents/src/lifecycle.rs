@@ -26,9 +26,7 @@ pub use crate::trigger_engine::durable::request_arrival_order;
 pub(crate) use execution_lease::revoke_execution_preserving_output_at;
 #[cfg(test)]
 pub(crate) use execution_lease::terminalize_owned_at;
-pub(crate) use execution_lease::{
-    revoke_execution_preserving_output, ExecutionOwnershipLost, RequestExecutionLease,
-};
+pub(crate) use execution_lease::{ExecutionOwnershipLost, RequestExecutionLease};
 pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
 pub(crate) use gents_loop::execution_policy;
 #[cfg(test)]
@@ -63,7 +61,10 @@ pub(crate) use materialize::{
 };
 pub use queue::enqueue_local_steering_request;
 pub use queue::validate_position as validate_queue_position;
-pub use queue::{pending_user_queue, PendingQueueEntry, PendingQueueSnapshot};
+pub use queue::{
+    pending_user_queue, pending_user_queue_projection, PendingQueueEntry, PendingQueueProjection,
+    PendingQueueSnapshot,
+};
 pub use queue::{prepare_pending_user_edit, prepare_user_message_input};
 pub use queue::{
     submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,

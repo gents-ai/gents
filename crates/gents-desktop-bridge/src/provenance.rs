@@ -48,7 +48,7 @@ pub async fn session_provenance(
     let fail = |error: anyhow::Error| format!("session provenance: {error:#}");
     let lineage = lineage(&access, &scope).await.map_err(fail)?;
     let calls = caused_calls(&access, &scope).await.map_err(fail)?;
-    let senders = turn_senders(core, &scope, &lineage);
+    let senders = turn_senders(&lineage);
     let link = |link: &SessionLink| LinkedSessionView {
         node_did: link.scope.node_did.clone(),
         session_id: link.scope.session_id.clone(),
@@ -155,9 +155,12 @@ async fn caused_calls(
         .collect())
 }
 
+/// Which lineage session sent each of this session's requests. A request
+/// names its causing request document; that document is either the link's
+/// own cause or belongs to one of the linked sessions. Request and cause
+/// scopes come from the canonical lineage read, independent of bounded cache
+/// retention. A cause neither names stays unattributed.
 fn turn_senders<'a>(
-    core: &ClientCore,
-    scope: &SessionScope,
     lineage: &'a gents::session_origin::SessionLineage,
 ) -> Vec<(String, &'a SessionLink)> {
     let links = lineage
@@ -168,38 +171,18 @@ fn turn_senders<'a>(
     if links.is_empty() {
         return Vec::new();
     }
-    let store = core.store().snapshot();
-    let scope_of = |doc_id: &str| {
-        store
-            .requests
-            .iter()
-            .find(|row| row.doc_id.as_deref() == Some(doc_id))
-            .and_then(|row| {
-                Some(SessionScope {
-                    node_did: row.node_did.clone()?,
-                    session_id: row.session_id.clone()?,
-                    requester_did: row.requester_did.clone(),
-                })
-            })
-    };
-    store
-        .requests
+    lineage
+        .request_causes
         .iter()
-        .filter(|row| {
-            row.node_did.as_deref() == Some(scope.node_did.as_str())
-                && row.session_id.as_deref() == Some(scope.session_id.as_str())
-                && row.requester_did == scope.requester_did
-        })
-        .filter_map(|row| {
-            let cause = row.caused_by_parent_request_doc_id.as_deref()?;
+        .filter_map(|request| {
             let sender = links
                 .iter()
-                .find(|link| link.cause_request_doc_id == cause)
+                .find(|link| link.cause_request_doc_id == request.cause_request_doc_id)
                 .or_else(|| {
-                    let cause_scope = scope_of(cause)?;
-                    links.iter().find(|link| link.scope == cause_scope)
+                    let cause_scope = request.cause_scope.as_ref()?;
+                    links.iter().find(|link| link.scope == *cause_scope)
                 })?;
-            Some((row.request_id.clone(), *sender))
+            Some((request.request_id.clone(), *sender))
         })
         .collect()
 }

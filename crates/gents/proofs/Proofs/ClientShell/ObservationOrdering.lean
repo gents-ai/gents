@@ -525,3 +525,31 @@ theorem changed_source_requires_snapshot (base current : Option Nat)
     accepts base current terminal = false := by simp [accepts, h]
 
 end ClientLiveDelta
+
+namespace ClientStoreNotice
+
+/-- Producers release the store lock before notifying watchers, so delivery can
+be reordered. A watcher accepts only a newer committed store version. -/
+structure Notice where
+  version : Nat
+  provenance : Nat
+  requestEvent : Nat
+  deriving DecidableEq, Repr
+
+def deliver (current incoming : Notice) : Notice :=
+  if current.version < incoming.version then incoming else current
+
+theorem delivery_never_regresses (current incoming : Notice) :
+    current.version ≤ (deliver current incoming).version := by
+  unfold deliver
+  split <;> omega
+
+theorem stale_delivery_is_ignored (current incoming : Notice)
+    (h : incoming.version ≤ current.version) : deliver current incoming = current := by
+  simp [deliver, Nat.not_lt.mpr h]
+
+theorem newer_delivery_keeps_entire_revision (current incoming : Notice)
+    (h : current.version < incoming.version) : deliver current incoming = incoming := by
+  simp [deliver, h]
+
+end ClientStoreNotice

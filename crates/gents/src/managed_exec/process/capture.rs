@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use futures::FutureExt;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::Notify;
 
@@ -80,16 +81,23 @@ async fn read_capped<R>(
         let exited_before_read = child_exited.load(std::sync::atomic::Ordering::Acquire);
         let read_started = Instant::now();
         let next = if exited_before_read {
-            let remaining = POST_EXIT_DRAIN_READ_BUDGET.saturating_sub(post_exit_read_time);
-            if remaining.is_zero() {
-                lock_output(&output).truncated = true;
-                break;
-            }
-            match tokio::time::timeout(remaining, reader.read(&mut buf)).await {
-                Ok(result) => result,
-                Err(_) => {
-                    lock_output(&output).truncated = true;
-                    break;
+            // A scheduling delay can exhaust the wait budget while bytes or
+            // EOF are already ready. The byte budget still bounds ready writers.
+            match reader.read(&mut buf).now_or_never() {
+                Some(result) => result,
+                None => {
+                    let remaining = POST_EXIT_DRAIN_READ_BUDGET.saturating_sub(post_exit_read_time);
+                    if remaining.is_zero() {
+                        lock_output(&output).truncated = true;
+                        break;
+                    }
+                    match tokio::time::timeout(remaining, reader.read(&mut buf)).await {
+                        Ok(result) => result,
+                        Err(_) => {
+                            lock_output(&output).truncated = true;
+                            break;
+                        }
+                    }
                 }
             }
         } else {
@@ -127,9 +135,7 @@ async fn read_capped<R>(
         if let Some((writer, stream)) = &live_output {
             writer.append(*stream, &buf[..read]).await;
         }
-        if post_exit_bytes >= POST_EXIT_DRAIN_BYTE_BUDGET
-            || post_exit_read_time >= POST_EXIT_DRAIN_READ_BUDGET
-        {
+        if post_exit_bytes >= POST_EXIT_DRAIN_BYTE_BUDGET {
             lock_output(&output).truncated = true;
             break;
         }
@@ -152,4 +158,37 @@ pub(super) async fn join_capture_after_child_exit(task: CaptureTask) -> OutputCa
         output.truncated = true;
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use tokio::io::ReadBuf;
+
+    struct DelayedReadyRead(bool);
+
+    impl AsyncRead for DelayedReadyRead {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            if !self.0 {
+                self.0 = true;
+                std::thread::sleep(POST_EXIT_DRAIN_READ_BUDGET * 2);
+                buf.put_slice(b"x");
+            }
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn ready_eof_after_a_scheduling_stall_is_complete() {
+        let task = spawn_optional_capped(Some(DelayedReadyRead(false)), 65536, None);
+        let output = join_capture_after_child_exit(task).await;
+        assert_eq!(output.bytes, b"x");
+        assert!(!output.truncated);
+    }
 }

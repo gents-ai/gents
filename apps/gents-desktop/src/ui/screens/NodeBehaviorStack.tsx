@@ -59,22 +59,17 @@ export function NodeAgentStack({
     ),
   ];
   const spread = node !== null || workerAgents.length > 0 || workerNodes.length > 0;
+  /* the order says whose is whose: this session's node and agent lead,
+     then each distinct agent its workers use, then any remote node a
+     worker runs on. The stack says who worked on it, not how many workers
+     did: three of each at most, and the count is only what that left out */
   const shownNodes = workerNodes.slice(0, 3);
   const shownAgents = workerAgents.slice(0, 3);
-  const leftOut =
-    workerNodes.length - shownNodes.length + (workerAgents.length - shownAgents.length);
-  // folded marks keep a zero-width box: an anchor with no box sends a closing card to the page's corner
-  const motion = "transition-[width,margin,opacity,box-shadow] duration-200 ease-out";
-  const foldedAgent = cn(
-    "ml-0 w-0 overflow-hidden opacity-0 ring-0",
-    size === "sm" ? "group-hover/stack:w-5" : "group-hover/stack:w-7",
-    "group-hover/stack:opacity-100 group-hover/stack:ring-2",
-  );
-  const foldedCount = cn(
-    "overflow-hidden",
-    leftOut === 0 &&
-      "group-hover/stack:ml-0 group-hover/stack:w-0 group-hover/stack:opacity-0 group-hover/stack:ring-0",
-  );
+  const agentsLeft = workerAgents.length - shownAgents.length;
+  const nodesLeft = workerNodes.length - shownNodes.length;
+  const leftOut = agentsLeft + nodesLeft;
+  /* every mark moves with the same curve, so the spread reads as one motion */
+  const motion = "transition-[margin,box-shadow] duration-200 ease-out";
   const shifted = cn(
     "cursor-default ring-2 ring-background",
     motion,
@@ -120,7 +115,7 @@ export function NodeAgentStack({
       </AgentHoverCard>
       {shownAgents.map(([identity, [b, on]]) => (
         <AgentHoverCard key={identity} deployment={on} agentId={b} side="bottom">
-          <AgentInitials name={agentName(b, on)} className={cn(shifted, foldedAgent)} />
+          <AgentInitials name={agentName(b, on)} className={shifted} />
         </AgentHoverCard>
       ))}
       {shownNodes.map((n) => (
@@ -128,23 +123,20 @@ export function NodeAgentStack({
           <NodeAvatar name={n.node.displayName ?? n.label} className={shifted} />
         </NodeHoverCard>
       ))}
-      {workers.length > 0 && (
+      {leftOut > 0 && (
         <span
           className={cn(
             "grid shrink-0 place-items-center rounded-full border border-border bg-raised font-medium text-muted-foreground",
             shifted,
-            foldedCount,
           )}
-          title={`${workers.length} started session${workers.length === 1 ? "" : "s"}`}
+          title={[
+            agentsLeft > 0 && `${agentsLeft} more agent${agentsLeft === 1 ? "" : "s"}`,
+            nodesLeft > 0 && `${nodesLeft} more node${nodesLeft === 1 ? "" : "s"}`,
+          ]
+            .filter(Boolean)
+            .join(" and ")}
         >
-          {leftOut > 0 ? (
-            <>
-              <span className="group-hover/stack:hidden">+{workers.length}</span>
-              <span className="hidden group-hover/stack:inline">+{leftOut}</span>
-            </>
-          ) : (
-            <span>+{workers.length}</span>
-          )}
+          +{leftOut}
         </span>
       )}
     </span>

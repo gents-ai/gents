@@ -1,4 +1,6 @@
-//! Exercises the real `ToolDyn::call` seam; no live backend needed.
+//! Escape repair preserves large report bodies and rejects incomplete input.
+//! Direct tool calls have no provider termination observation, so JSON EOF does
+//! not establish that a token limit caused the malformed arguments.
 
 use crate::llm::tool::{Tool, ToolDefinition, ToolDyn, ToolError, UnparseableArgsKind};
 use serde::{Deserialize, Serialize};
@@ -135,8 +137,8 @@ async fn post_status_json_truncated_body_is_rejected_not_posted() {
         ToolError::UnparseableArgs { kind, reason } => {
             assert_eq!(
                 kind,
-                UnparseableArgsKind::Truncated,
-                "a mid-object cut is the finish_reason=length shape (serde Category::Eof)"
+                UnparseableArgsKind::Malformed,
+                "a parser EOF cannot authenticate a provider token limit"
             );
             assert!(
                 reason.contains("EOF while parsing"),
@@ -144,13 +146,13 @@ async fn post_status_json_truncated_body_is_rejected_not_posted() {
             );
         }
         other => {
-            panic!("expected ToolError::UnparseableArgs {{ Truncated }}, got: {other:?}")
+            panic!("expected ToolError::UnparseableArgs {{ Malformed }}, got: {other:?}")
         }
     }
 }
 
 #[tokio::test]
-async fn post_status_json_truncation_signal_is_offset_independent() {
+async fn post_status_json_incomplete_input_is_rejected_at_every_offset() {
     let tool = PostStatusTool;
     for cut_at in [4_096usize, 5_037, 6_500, 8_000] {
         let args = arguments_truncated_mid_object(cut_at);
@@ -161,8 +163,8 @@ async fn post_status_json_truncation_signal_is_offset_independent() {
         match error {
             ToolError::UnparseableArgs { kind, .. } => assert_eq!(
                 kind,
-                UnparseableArgsKind::Truncated,
-                "cut at {cut_at} should be the truncation (Eof) shape"
+                UnparseableArgsKind::Malformed,
+                "cut at {cut_at} has no provider token-limit observation"
             ),
             other => panic!("cut at {cut_at}: expected UnparseableArgs, got {other:?}"),
         }

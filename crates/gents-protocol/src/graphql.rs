@@ -64,106 +64,6 @@ pub struct GraphqlSessionShape {
     pub tool_calls: Vec<AgentToolCallRow>,
 }
 
-/// Adapt whole-object mutation variables to the pinned DefraDB parser, which
-/// resolves field variables but otherwise treats UPDATE/UPSERT input variables
-/// as empty objects. Values remain variables, preserving JSON keys and arrays.
-pub fn expand_mutation_input_variables(
-    document: &str,
-    variables: &Value,
-) -> Result<(String, Value)> {
-    use graphql_parser::query::{
-        Definition, OperationDefinition, Selection, Type, Value as AstValue, VariableDefinition,
-    };
-    let mut values = variables
-        .as_object()
-        .context("GraphQL variables must be an object")?
-        .clone();
-    if !document.contains('$') {
-        return Ok((document.to_owned(), variables.clone()));
-    }
-    let mut parsed = graphql_parser::parse_query::<String>(document)?.into_static();
-    let mut names: std::collections::HashSet<String> = values.keys().cloned().collect();
-    for definition in &parsed.definitions {
-        let definitions = match definition {
-            Definition::Operation(OperationDefinition::Mutation(operation)) => {
-                &operation.variable_definitions
-            }
-            Definition::Operation(OperationDefinition::Query(operation)) => {
-                &operation.variable_definitions
-            }
-            Definition::Operation(OperationDefinition::Subscription(operation)) => {
-                &operation.variable_definitions
-            }
-            _ => continue,
-        };
-        names.extend(definitions.iter().map(|variable| variable.name.clone()));
-    }
-    let mut changed = false;
-    let mut next = 0usize;
-    for definition in &mut parsed.definitions {
-        let Definition::Operation(OperationDefinition::Mutation(operation)) = definition else {
-            continue;
-        };
-        for selection in &mut operation.selection_set.items {
-            let Selection::Field(field) = selection else {
-                continue;
-            };
-            for (argument, value) in &mut field.arguments {
-                if !((field.name.starts_with("update_") && argument == "input")
-                    || (field.name.starts_with("upsert_")
-                        && (argument == "add" || argument == "update")))
-                {
-                    continue;
-                }
-                let AstValue::Variable(name) = value else {
-                    continue;
-                };
-                let input = values
-                    .get(name)
-                    .with_context(|| format!("missing mutation variable ${name}"))?
-                    .clone();
-                if input.is_null() {
-                    *value = AstValue::Null;
-                    changed = true;
-                    continue;
-                }
-                let input = input
-                    .as_object()
-                    .with_context(|| format!("mutation variable ${name} must be an object"))?;
-                let mut fields = std::collections::BTreeMap::new();
-                for (key, payload) in input {
-                    validate_graphql_name(key)?;
-                    let fresh = loop {
-                        let candidate = format!("_gents_input_{next}");
-                        next += 1;
-                        if names.insert(candidate.clone()) {
-                            break candidate;
-                        }
-                    };
-                    operation.variable_definitions.push(VariableDefinition {
-                        position: field.position,
-                        name: fresh.clone(),
-                        var_type: Type::NamedType("JSON".to_owned()),
-                        default_value: None,
-                    });
-                    values.insert(fresh.clone(), payload.clone());
-                    fields.insert(key.clone(), AstValue::Variable(fresh));
-                }
-                *value = AstValue::Object(fields);
-                changed = true;
-            }
-        }
-    }
-    Ok((
-        if changed {
-            parsed.to_string()
-        } else {
-            document.to_owned()
-        },
-        Value::Object(values),
-    ))
-}
-
 /// Validate `name` against the GraphQL `Name` grammar:
 /// `[_A-Za-z][_0-9A-Za-z]*` (ASCII only). Anything interpolated into a
 /// GraphQL document in identifier position MUST pass this check first —
@@ -1095,4 +995,31 @@ mod tx_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn public_transport_rejects_mutations_before_network_io() {
+    async fn execute_graphql_async_retries_retryable_store_conflict_errors() {
+        assert_execute_graphql_async_retries_error(
+            "commit error: datastore error: storage error: transaction conflict. Please retry",
+        )
+        .await;
+    }
+
+    #[test]
+    fn retryable_graphql_error_text_matches_store_conflict_variants() {
+        assert!(retryable_graphql_error_text("Transaction conflict"));
+        assert!(retryable_graphql_error_text(
+            "wrapped backend: PLEASE RETRY the TRANSACTION CONFLICT"
+        ));
+        assert!(retryable_graphql_error_text("please retry"));
+        assert!(retryable_graphql_error_text("database is locked"));
+        assert!(!retryable_graphql_error_text(
+            "validation error: unknown collection"
+        ));
+    }
+
+    #[test]
+    fn retryable_graphql_error_walks_wrapped_cause_chain_case_insensitively() {
+        let error = anyhow::anyhow!("TRANSACTION CONFLICT")
+            .context("request submit failed")
+            .context("outer shim context");
+        assert!(graphql_error_is_retryable(&error));
+    }
+}

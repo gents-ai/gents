@@ -6,6 +6,7 @@ use ts_rs::TS;
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopInitRequest {
+    #[ts(optional = nullable)]
     pub label: Option<String>,
     pub dangerously_overwrite: bool,
     pub reset: bool,
@@ -16,8 +17,10 @@ pub struct DesktopInitRequest {
 pub struct ManagedServerStartRequest {
     pub node_name: String,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub tool_ceiling: Option<ManagedServerToolCeiling>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub tool_root: Option<String>,
 }
 
@@ -34,6 +37,7 @@ pub struct ManagedServerRootValidationRequest {
 pub struct ManagedServerRestartRequest {
     pub node_name: String,
     pub tool_ceiling: ManagedServerToolCeiling,
+    #[ts(optional = nullable)]
     pub tool_root: Option<String>,
 }
 
@@ -42,10 +46,14 @@ pub struct ManagedServerRestartRequest {
 pub struct ManagedServerResetRequest {
     #[serde(default)]
     #[ts(optional)]
+    #[ts(optional = nullable)]
     pub full_reset: Option<bool>,
+    /// Omit to preview what would be retired and the required confirmation.
+    #[ts(optional = nullable)]
     pub confirmation: Option<String>,
     #[ts(optional = nullable)]
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub disposition: Option<crate::types::HomeResetDisposition>,
 }
 
@@ -67,10 +75,13 @@ pub struct EnrollmentStatusRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ChatSendRequest {
     pub node_did: String,
+    #[ts(optional = nullable)]
     pub agent_id: Option<String>,
+    #[ts(optional = nullable)]
     pub session_id: Option<String>,
     pub content: String,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub caused_by_source_doc_id: Option<String>,
     #[serde(default)]
     #[ts(optional = nullable)]
@@ -218,10 +229,15 @@ pub struct ToolServiceSaveRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ToolServiceTestRequest {
     pub service_id: String,
+    #[ts(optional = nullable)]
     pub hostname: Option<String>,
+    #[ts(optional = nullable)]
     pub tailscale_ip: Option<String>,
+    #[ts(optional = nullable)]
     pub lan_ip: Option<String>,
+    #[ts(optional = nullable)]
     pub mcp_port: Option<i64>,
+    #[ts(optional = nullable)]
     pub mcp_path: Option<String>,
 }
 
@@ -244,8 +260,10 @@ pub struct SkillSaveRequest {
 pub struct TaskRunRequest {
     pub task_id: String,
     #[ts(optional)]
+    #[ts(optional = nullable)]
     pub node_did: Option<String>,
     #[ts(type = "unknown", optional)]
+    #[ts(optional = nullable)]
     pub args: Option<serde_json::Value>,
 }
 
@@ -261,6 +279,7 @@ pub struct ScheduleSaveRequest {
 pub struct ScheduleRunRequest {
     pub schedule_id: String,
     #[ts(optional)]
+    #[ts(optional = nullable)]
     pub node_did: Option<String>,
 }
 
@@ -275,12 +294,15 @@ pub struct TriggerSaveRequest {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopOperationsSnapshotRequest {
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub node_did: Option<String>,
     #[serde(default)]
     #[allow(dead_code)]
+    #[ts(optional = nullable)]
     pub root_request_id: Option<String>,
     #[serde(default)]
     #[allow(dead_code)]
+    #[ts(optional = nullable)]
     pub include_terminal: Option<bool>,
 }
 
@@ -289,8 +311,10 @@ pub struct DesktopOperationsSnapshotRequest {
 pub struct DesktopSessionProvenanceRequest {
     pub session_id: String,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub node_did: Option<String>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub requester_did: Option<String>,
 }
 
@@ -299,6 +323,7 @@ pub struct DesktopSessionProvenanceRequest {
 pub struct DesktopInterruptRequest {
     pub request_id: String,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub node_did: Option<String>,
     /// Only `"userCancelled"` is operator-authentic; the runtime derives every
     /// other cause.

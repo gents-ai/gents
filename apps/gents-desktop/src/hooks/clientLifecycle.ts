@@ -21,6 +21,7 @@ import { writeSession } from "./sessionStore";
 import type { ShellStores } from "./shellProjection";
 import { createIncompatibleHomeOps } from "./useIncompatibleHome";
 import { clientStatus } from "./clientStore";
+import { errorText } from "../lib/errorText";
 
 function shouldAutoRestartP2P(
   previous: P2PHealth | null,
@@ -244,7 +245,7 @@ export function createClientLifecycle({
         localServerAvailable = await localServer.restoreLocalServer(abort.signal);
       } catch (error) {
         localServerAvailable = false;
-        setError(error instanceof Error ? error.message : String(error));
+        setError(errorText(error));
         if (await home.adopt(error)) {
           setStartupPhase("managed-server-error");
           return;
@@ -288,7 +289,7 @@ export function createClientLifecycle({
       await localServer.restartLocalServer(nodeName, authority);
       await initializeDesktop();
     } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
+      setError(errorText(error));
       setStartupPhase("managed-server-error");
       await home.adopt(error);
     } finally {

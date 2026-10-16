@@ -24,7 +24,7 @@ use super::read_stored_init_config;
 use super::recent_runs_for_task_views;
 use super::scoped_hydration_observation_view;
 use super::session_summaries;
-use super::task_run_history;
+use super::task_run_histories;
 
 #[test]
 fn supplied_hydration_observation_is_projected_only_for_its_exact_session_and_node() {

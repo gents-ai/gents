@@ -175,9 +175,61 @@ fn task_run_history_is_node_scoped_when_trigger_ids_match() {
         last_error: None,
         fire_count: None,
     }];
-    let runs = task_run_history(&store, "did:test:mini-1", "task-1", &triggers);
+    let histories = task_run_histories(&store, "did:test:mini-1", &triggers);
+    let runs = histories.get("task-1").unwrap();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].request_id, "req-mini-1");
+}
+
+#[test]
+fn task_histories_keep_eight_latest_rows_per_task_without_foreign_or_duplicate_triggers() {
+    let request = |index, owner: &str, trigger: &str| AgentRequestRow {
+        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+        request_id: format!("{trigger}-{index:02}"),
+        node_did: Some(owner.into()),
+        caused_by_trigger_id: Some(trigger.into()),
+        created_at: Some(format!("2026-01-01T00:00:{index:02}Z")),
+        ..Default::default()
+    };
+    let trigger = |id: &str, task: &str| TriggerView {
+        config: serde_json::from_value(serde_json::json!({
+            "node_did":"owner", "trigger_id":id, "task_id":task,
+            "source":{"kind":"schedule","schedule_id":"schedule"}
+        }))
+        .unwrap(),
+        next_run_at: None,
+        last_attempt_at: None,
+        last_fired_source_doc_id: None,
+        last_status: None,
+        last_error: None,
+        fire_count: None,
+    };
+    let store = ClientStore::from_rows(ClientStoreRows {
+        requests: (0..20)
+            .map(|i| request(i, "owner", "a"))
+            .chain((0..4).map(|i| request(i, "owner", "b")))
+            .chain((30..40).map(|i| request(i, "foreign", "a")))
+            .collect(),
+        ..Default::default()
+    });
+    let histories = task_run_histories(
+        &store,
+        "owner",
+        &[
+            trigger("a", "task-a"),
+            trigger("a", "task-a"),
+            trigger("b", "task-b"),
+        ],
+    );
+    assert_eq!(
+        histories["task-a"]
+            .iter()
+            .map(|row| row.request_id.as_str())
+            .collect::<Vec<_>>(),
+        ["a-19", "a-18", "a-17", "a-16", "a-15", "a-14", "a-13", "a-12"]
+    );
+    assert_eq!(histories["task-b"].len(), 4);
+    assert_eq!(histories.len(), 2);
 }
 
 #[test]
@@ -338,7 +390,8 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
             case.name
         );
 
-        let run_history = task_run_history(&store, "did:test:contract-node", &task_id, &triggers);
+        let histories = task_run_histories(&store, "did:test:contract-node", &triggers);
+        let run_history = histories.get(&task_id).unwrap();
         assert_eq!(
             run_history.len(),
             1,

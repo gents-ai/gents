@@ -18,6 +18,15 @@ pub(crate) fn first_turn(
     floors: &Floors,
 ) -> String {
     let mut text = dossier.text.trim_end().to_owned();
+    text.push_str("\n\n# Runtime captures\n\nRead-only documents captures may also name these runtime collections: ");
+    text.push_str(
+        &super::dossier::runtime_collections()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    text.push_str(". Invalid-field errors list the available fields. Seeds must use the subject's collections.\n");
     text.push_str("\n\n# Check catalog\n\n```json\n");
     text.push_str(
         &serde_json::to_string_pretty(catalog).unwrap_or_else(|error| {

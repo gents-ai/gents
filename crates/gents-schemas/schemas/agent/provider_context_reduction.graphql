@@ -29,7 +29,8 @@ type ProviderContextReduction @branchable {
     compacted_prefix_json: String @immutable
     retained_suffix_json: String @immutable
     pair_closed: Boolean @immutable
-    # Exact sticky native provider projection activated after persistence.
+    # Versioned exact rendered prefix; the provider projection appends the
+    # retained suffix. Existing full-array checkpoint values remain readable.
     checkpoint_messages_json: String @immutable
     # Canonical provider-source tags aligned to the prefix/suffix projection.
     replay_associations_json: String @immutable

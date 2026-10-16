@@ -38,12 +38,18 @@ pub async fn ensure_migrations_with_registry(
     verify_managed_lineages(node, registry, &mut report).await?;
     let lineages_ready = Instant::now();
 
-    // Once the registry contains a migration step, retain the eager pass: old
-    // versions can arrive over P2P after the step was originally applied.
-    if !registry.steps.is_empty() {
-        report.materialization = materialize::materialize_all(node, registry).await?;
+    // Keep rescanning every collection with a versioned step: old-version
+    // documents can arrive over P2P after a migration was first applied.
+    // Unrelated collections need no pass because their baseline schema and
+    // indexes are already current on writes and merges.
+    let versioned_collections = versioned_step_collections(registry);
+    if !versioned_collections.is_empty() {
+        report.materialization =
+            materialize::materialize_collections(node, &versioned_collections).await?;
     }
     let materialization_ready = Instant::now();
+    reconcile_ordinary_indexes(node, registry).await?;
+    let indexes_ready = Instant::now();
     report.warnings.extend(
         report
             .materialization
@@ -65,11 +71,76 @@ pub async fn ensure_migrations_with_registry(
         materialization_ms = materialization_ready
             .duration_since(lineages_ready)
             .as_millis(),
-        elapsed_ms = materialization_ready.duration_since(started).as_millis(),
+        index_reconciliation_ms = indexes_ready
+            .duration_since(materialization_ready)
+            .as_millis(),
+        elapsed_ms = indexes_ready.duration_since(started).as_millis(),
         "ensure_migrations complete"
     );
 
     Ok(report)
+}
+
+fn versioned_step_collections<'a>(registry: &Registry<'a>) -> Vec<&'a str> {
+    let mut seen = HashSet::new();
+    registry
+        .steps
+        .iter()
+        .filter_map(|step| match step {
+            MigrationStep::PatchVersioned { collection, .. } => Some(*collection),
+            MigrationStep::AddCollection { .. } | MigrationStep::PatchInPlace { .. } => None,
+        })
+        .filter(|collection| seen.insert(*collection))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::versioned_step_collections;
+    use crate::expectation::CollectionExpectation;
+    use crate::registry::{MigrationStep, Registry};
+
+    #[test]
+    fn only_distinct_versioned_step_collections_are_materialized() {
+        let steps = [
+            MigrationStep::AddCollection {
+                id: "add",
+                sdl: "type Added { name: String }",
+                expected_version: None,
+                expected_state: CollectionExpectation::dag_only(),
+            },
+            MigrationStep::PatchInPlace {
+                id: "index",
+                collection: "IndexedOnly",
+                patch: "[]",
+                expected_state: CollectionExpectation::dag_only(),
+            },
+            MigrationStep::PatchVersioned {
+                id: "version-one",
+                collection: "Migrated",
+                patch: "[]",
+                lens: None,
+                expected_version: Some("version-one"),
+                expected_transform: None,
+                expected_state: CollectionExpectation::dag_only(),
+            },
+            MigrationStep::PatchVersioned {
+                id: "version-two",
+                collection: "Migrated",
+                patch: "[]",
+                lens: None,
+                expected_version: Some("version-two"),
+                expected_transform: None,
+                expected_state: CollectionExpectation::dag_only(),
+            },
+        ];
+        let registry = Registry {
+            baseline: &[],
+            steps: &steps,
+            ordinary_indexes: &[],
+        };
+        assert_eq!(versioned_step_collections(&registry), vec!["Migrated"]);
+    }
 }
 
 /// Convenience for call sites that use `Arc<EmbeddedNode>` and ignore the report.
@@ -85,6 +156,7 @@ pub async fn ensure_migrations_dynamic(
     let view = Registry {
         baseline: &baseline,
         steps: &steps,
+        ordinary_indexes: &[],
     };
     ensure_migrations_with_registry(node, &view).await
 }
@@ -135,6 +207,23 @@ async fn register_baseline(
         collections = missing.len(),
         "baseline schemas registered in one batch"
     );
+    Ok(())
+}
+
+async fn reconcile_ordinary_indexes(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
+    for index in registry.ordinary_indexes {
+        let fields = index
+            .fields
+            .iter()
+            .map(|field| schema::IndexedFieldDescription {
+                name: field.name.to_owned(),
+                descending: field.descending,
+            })
+            .collect();
+        node.ensure_ordinary_index(index.collection, index.name, fields)
+            .await
+            .map_err(Error::Node)?;
+    }
     Ok(())
 }
 

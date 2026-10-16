@@ -28,6 +28,7 @@ import { cadenceInWords, eventInWords } from "./automation";
 import { newId, validateCronSchedule } from "./draft";
 import { PRESETS, TZ, type Task } from "./NewAutomationDialog";
 import { defaultAgentOf } from "@/lib/agents";
+import { errorText } from "../../../lib/errorText";
 
 export type NewReference =
   | { kind: "task"; document: Task }
@@ -123,7 +124,7 @@ export function NewReferenceDialog({
         finish({ kind, document });
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     }
   };
   return (

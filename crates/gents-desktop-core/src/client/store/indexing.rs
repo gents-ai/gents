@@ -1,3 +1,4 @@
+use gents_protocol::row::AgentRequestRow;
 use std::collections::HashMap;
 
 use super::{ClientStore, ClientStoreRows};
@@ -45,12 +46,7 @@ pub(super) fn normalize_rows(rows: &mut ClientStoreRows) {
             .then_with(|| left.segment.ordinal.cmp(&right.segment.ordinal))
             .then_with(|| left.doc_id.cmp(&right.doc_id))
     });
-    rows.requests.sort_by(|left, right| {
-        left.session_id
-            .cmp(&right.session_id)
-            .then_with(|| cmp_opt_str_asc(left.created_at.as_deref(), right.created_at.as_deref()))
-            .then_with(|| left.request_id.cmp(&right.request_id))
-    });
+    sort_request_rows(&mut rows.requests);
     rows.mailbox_items.sort_by(|left, right| {
         right
             .created_at
@@ -152,7 +148,7 @@ pub(super) fn normalize_rows(rows: &mut ClientStoreRows) {
 impl ClientStore {
     pub fn from_rows(mut rows: ClientStoreRows) -> Self {
         normalize_rows(&mut rows);
-        let (request_index_by_doc_id, unscoped_request_ids, mailbox_index_by_doc_id) =
+        let (request_index_by_doc_id, unscoped_placeholder_request_ids, mailbox_index_by_doc_id) =
             Self::build_scope_indexes(&rows);
 
         let transcript_messages_by_session_id = build_vec_index(&rows.transcript_messages, |row| {
@@ -243,7 +239,7 @@ impl ClientStore {
             node_readiness_by_node_did,
             request_index_by_id,
             request_index_by_doc_id,
-            unscoped_request_ids,
+            unscoped_placeholder_request_ids,
             mailbox_index_by_doc_id,
         }
     }
@@ -305,4 +301,16 @@ pub(super) fn cmp_opt_str_desc(left: Option<&str>, right: Option<&str>) -> std::
 
 pub(super) fn cmp_opt_str_asc(left: Option<&str>, right: Option<&str>) -> std::cmp::Ordering {
     left.unwrap_or_default().cmp(right.unwrap_or_default())
+}
+
+/// Physical identity resolves equal display-order keys so full and batched
+/// projections give graph adapters the same order regardless of fetch order.
+pub(crate) fn sort_request_rows(requests: &mut [AgentRequestRow]) {
+    requests.sort_by(|left, right| {
+        left.session_id
+            .cmp(&right.session_id)
+            .then_with(|| cmp_opt_str_asc(left.created_at.as_deref(), right.created_at.as_deref()))
+            .then_with(|| left.request_id.cmp(&right.request_id))
+            .then_with(|| left.doc_id.cmp(&right.doc_id))
+    });
 }

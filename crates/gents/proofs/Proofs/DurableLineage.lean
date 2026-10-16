@@ -7,6 +7,29 @@ cascade or authority over the calling session. -/
 
 namespace DurableLineage
 
+/-- The session-message reader supplies these facts from a canonical session
+visible through DefraDB ACP and the caller's current agent-target grants.
+Listing and inspection use this same target predicate; neither copied session
+labels nor a lineage display grants access outside its requester scope. -/
+def sessionTargetAllowed (sameRequester sameNode caused allowedTarget : Bool) : Bool :=
+  sameRequester && (sameNode || (caused && allowedTarget))
+
+theorem foreign_requester_target_refused (sameNode caused allowedTarget : Bool) :
+    sessionTargetAllowed false sameNode caused allowedTarget = false := by
+  simp [sessionTargetAllowed]
+
+theorem same_node_target_needs_no_lineage (caused allowedTarget : Bool) :
+    sessionTargetAllowed true true caused allowedTarget = true := by
+  simp [sessionTargetAllowed]
+
+theorem remote_target_requires_current_grant (caused : Bool) :
+    sessionTargetAllowed true false caused false = false := by
+  simp [sessionTargetAllowed]
+
+theorem remote_root_target_refused (allowedTarget : Bool) :
+    sessionTargetAllowed true false false allowedTarget = false := by
+  simp [sessionTargetAllowed]
+
 structure RawLineage where
   hasParentRequestId : Bool
   hasParentRequestDocId : Bool

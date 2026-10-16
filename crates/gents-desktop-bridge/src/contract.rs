@@ -18,6 +18,7 @@ pub struct PermissionSetContract {
 pub const CLIENT_UPDATED_EVENT: &str = "desktop://client-updated";
 pub const CODEX_LOGIN_URL_EVENT: &str = "desktop://codex-login-url";
 pub const MANAGED_SERVER_UPDATED_EVENT: &str = "desktop://managed-server-updated";
+pub const APP_QUIT_FAILED_EVENT: &str = "desktop://app-quit-failed";
 pub const MANAGED_SERVER_TRAY_START_EVENT: &str = "desktop://managed-server-tray-start";
 pub const MANAGED_SERVER_TRAY_STOP_EVENT: &str = "desktop://managed-server-tray-stop";
 pub const MANAGED_SERVER_TRAY_RESTART_EVENT: &str = "desktop://managed-server-tray-restart";
@@ -587,6 +588,7 @@ mod tests {
             GROK_LOGIN_URL_EVENT,
             CLAUDE_LOGIN_URL_EVENT,
             MANAGED_SERVER_UPDATED_EVENT,
+            APP_QUIT_FAILED_EVENT,
             MANAGED_SERVER_TRAY_START_EVENT,
             MANAGED_SERVER_TRAY_STOP_EVENT,
             MANAGED_SERVER_TRAY_RESTART_EVENT,

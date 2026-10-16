@@ -70,6 +70,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
         replay: &gents_loop::loop_stream::LoopReplayInput,
         resume_from_history: bool,
+        wake_notifications: &[TaggedMessage],
     ) -> Result<usize> {
         let config = crate::completion_factory::loop_config_for_request(
             &self.agent_config,
@@ -89,6 +90,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
             &request.content,
             resume_from_history,
             request_context_message,
+            wake_notifications,
         )?;
         let mut new_messages = gents_loop::loop_stream::assemble_new_messages(
             if resume_from_history {
@@ -277,6 +279,16 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                         crate::workspace::request_workspace_cwd(&request),
                     ),
                 };
+                let wake_notifications = if resume_from_history {
+                    Vec::new()
+                } else {
+                    super::wake_input::load(
+                        &self.node,
+                        &request,
+                        lifecycle.background_completion_input_through_sequence(),
+                    )
+                    .await?
+                };
                 let (mut built, replay) = async {
                 for assembly_attempt in 0..=1 {
                     let background_cutoff =
@@ -388,6 +400,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                             aggregate_token_budget.clone(),
                             &replay,
                             resume_from_history,
+                            &wake_notifications,
                         )
                         .await?;
                     let reduction_admission = compaction::ReductionAdmission::for_input(
@@ -591,6 +604,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     replay,
                     consumed_prompts,
                     folded_prompts,
+                    wake_notifications,
                 ))
             };
             let Some(prepared) = prepare_unless_interrupted(&mut interrupt_rx, preparation).await
@@ -607,6 +621,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                 replay,
                 consumed_prompts,
                 folded_prompts,
+                wake_notifications,
             ) = prepared?;
 
             let doc_id = lifecycle.request().doc_id.clone();
@@ -618,6 +633,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     &request,
                     &doc_id,
                     &built.messages,
+                    &wake_notifications,
                     replay,
                     lifecycle,
                     stream_writer,

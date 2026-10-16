@@ -1,6 +1,6 @@
 use gents::toolset::{
     AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
-    AGENT_TOOL_NAMES,
+    AGENT_SESSION_LIST_TOOL_NAME, AGENT_SESSION_READ_TOOL_NAME, AGENT_TOOL_NAMES,
 };
 use serde_json::{Map, Value};
 
@@ -451,6 +451,8 @@ fn project_agent(tool: &ToolCallView, name: &str) -> ToolPresentationView {
             AGENT_MESSAGE_TOOL_NAME => "message",
             AGENT_INTERRUPT_TOOL_NAME => "interrupt",
             AGENT_LIST_TOOL_NAME => "list",
+            AGENT_SESSION_LIST_TOOL_NAME => "sessions",
+            AGENT_SESSION_READ_TOOL_NAME => "read",
             other => other,
         }
         .to_string(),
@@ -827,5 +829,13 @@ write_file: wrote 4 bytes to file.txt"#,
             "interrupt"
         );
         assert_eq!(presented(AGENT_LIST_TOOL_NAME, "{}", "{}").0, "list");
+        assert_eq!(
+            presented(AGENT_SESSION_LIST_TOOL_NAME, "{}", "{}").0,
+            "sessions"
+        );
+        assert_eq!(
+            presented(AGENT_SESSION_READ_TOOL_NAME, "{}", "{}").0,
+            "read"
+        );
     }
 }

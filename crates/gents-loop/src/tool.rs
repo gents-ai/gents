@@ -22,11 +22,12 @@ pub enum ToolError {
     ToolCallError(#[from] Box<dyn std::error::Error + Send + Sync>),
     #[error("tool json error: {0}")]
     JsonError(#[from] serde_json::Error),
-    /// `arguments` string unparseable even after the escape-only repair pass
-    /// (malformed, or truncated by the generation token cap — serde_json
-    /// `Category::Eof`). Terminalizes the call as `failed(ArgumentInvalid)` so
-    /// the model is told what went wrong instead of the parse failure being
-    /// swallowed.
+    /// The model's tool-call `arguments` string could not be parsed even after a
+    /// tolerant (escape-only) repair pass: the payload was malformed (a
+    /// lone-backslash escape the model emitted raw that the repair could not make
+    /// deserialize). Provider dispatch may classify syntax failure as truncated
+    /// only when that attempt reports a token limit. Schema failures remain
+    /// distinct from JSON syntax errors.
     #[error("tool args unparseable ({kind}): {reason}")]
     UnparseableArgs {
         kind: UnparseableArgsKind,
@@ -167,12 +168,15 @@ impl<T: Tool> ToolDyn for T {
     }
 }
 
-/// Deserialize a tool's `Args` from the model's raw `arguments` string,
-/// applying one tolerant escape-only repair pass when the raw string fails
-/// to parse; on unrecoverable failure raise the typed retryable
-/// [`ToolError::UnparseableArgs`].
-// pub, not pub(crate): gents' native tool call sites parse their typed
-// arguments through this, and a pub(crate) item in this crate is
+/// Deserialize a tool's `Args` from the model's raw `arguments` string, applying
+/// one tolerant [`repair_tool_arguments`] pass when the raw string fails to
+/// parse.
+///
+/// Repair changes escaping only; it never completes a cut-off value. Syntax
+/// failures remain malformed unless provider dispatch has a token-limit signal
+/// from the same attempt. Complete JSON receives typed schema validation.
+// pub, not pub(crate): gents' native tool call sites (eth, meta_tools) parse
+// their typed arguments through this, and a pub(crate) item in this crate is
 // invisible outside it.
 pub fn parse_tool_args<A>(args: &str) -> Result<A, ToolError>
 where
@@ -196,17 +200,23 @@ where
 }
 
 /// Map a failing [`serde_json::Error`] to the typed [`ToolError::UnparseableArgs`].
-/// A `Category::Eof` failure is the parse-seam fingerprint of a
-/// `finish_reason == "length"` truncation (the generation hit its token cap
-/// mid-arguments); everything else is treated as malformed.
 fn unparseable_args_error(error: &serde_json::Error) -> ToolError {
-    let kind = match error.classify() {
-        serde_json::error::Category::Eof => UnparseableArgsKind::Truncated,
-        _ => UnparseableArgsKind::Malformed,
-    };
     ToolError::UnparseableArgs {
-        kind,
+        kind: UnparseableArgsKind::Malformed,
         reason: error.to_string(),
+    }
+}
+
+pub(crate) fn with_provider_token_limit(error: ToolError, token_limit: bool) -> ToolError {
+    match error {
+        ToolError::UnparseableArgs {
+            kind: UnparseableArgsKind::Malformed,
+            reason,
+        } if token_limit => ToolError::UnparseableArgs {
+            kind: UnparseableArgsKind::Truncated,
+            reason,
+        },
+        other => other,
     }
 }
 
@@ -477,13 +487,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_tool_args_truncated_reports_truncated_kind() {
+    fn parse_tool_args_incomplete_without_provider_reason_is_malformed() {
         let raw = r#"{"report_type":"steward","body":"a long body that got cut o"#;
         let error = parse_tool_args::<Sample>(raw).expect_err("truncated payload must not parse");
         assert!(matches!(
             error,
             ToolError::UnparseableArgs {
-                kind: UnparseableArgsKind::Truncated,
+                kind: UnparseableArgsKind::Malformed,
                 ..
             }
         ));
@@ -537,12 +547,12 @@ mod tests {
     }
 
     #[test]
-    fn unparseable_args_error_maps_eof_to_truncated() {
+    fn unparseable_args_error_does_not_infer_token_limit_from_eof() {
         let eof = serde_json::from_str::<serde_json::Value>("{\"a\":").unwrap_err();
         assert!(matches!(
             unparseable_args_error(&eof),
             ToolError::UnparseableArgs {
-                kind: UnparseableArgsKind::Truncated,
+                kind: UnparseableArgsKind::Malformed,
                 ..
             }
         ));
@@ -556,13 +566,18 @@ mod tests {
 
     #[test]
     fn parse_tool_args_truncation_in_last_field_is_not_run() {
+        // A payload truncated INSIDE its last present field: if the repair closed
+        // the dangling string it would yield `{"note":"…"}`, which DOES deserialize
+        // into the tool's `Args` — and running it would silently commit a
+        // half-written value. Escape-only repair refuses to close, so this never
+        // runs.
         let raw = r#"{"note":"a long note that got cut o"#;
         let error = parse_tool_args::<SingleField>(raw)
             .expect_err("a truncated-but-would-type-check payload must NOT run");
         assert!(matches!(
             error,
             ToolError::UnparseableArgs {
-                kind: UnparseableArgsKind::Truncated,
+                kind: UnparseableArgsKind::Malformed,
                 ..
             }
         ));
@@ -591,13 +606,16 @@ mod tests {
 
     #[test]
     fn repair_control_chars_still_does_not_close_truncation() {
+        // A payload with an in-string control char AND a truncated tail: the
+        // control char is escaped, but the truncation is never closed — the
+        // reparse still fails and the incomplete value never runs.
         let raw = "{\"note\":\"line one\nline two that got cut";
         let error = parse_tool_args::<SingleField>(raw)
             .expect_err("truncated payload must not run even after control-char repair");
         assert!(matches!(
             error,
             ToolError::UnparseableArgs {
-                kind: UnparseableArgsKind::Truncated,
+                kind: UnparseableArgsKind::Malformed,
                 ..
             }
         ));
@@ -694,6 +712,7 @@ mod tests {
 
     #[test]
     fn parse_tool_args_lone_backslash_then_truncation_is_not_run() {
+        // Escape repair must never complete a half-written value.
         let raw = r#"{"report_type":"steward C:\drive","body":"the cluster is healthy, node C is"#;
         let first = serde_json::from_str::<Sample>(raw).expect_err("must not parse");
         assert_ne!(first.classify(), serde_json::error::Category::Eof);
@@ -703,11 +722,11 @@ mod tests {
             matches!(
                 error,
                 ToolError::UnparseableArgs {
-                    kind: UnparseableArgsKind::Truncated,
+                    kind: UnparseableArgsKind::Malformed,
                     ..
                 }
             ),
-            "post-escape reparse fails with Eof, so it is reported Truncated, got: {error:?}"
+            "post-escape reparse remains malformed without a provider reason, got: {error:?}"
         );
     }
 }

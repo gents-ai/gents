@@ -5,17 +5,21 @@ import { Button } from "@gents/ui/components/button";
 import { Composer } from "@gents/ui/conversation";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp, useView } from "@/app/AppContext";
-import { useChatFolder, useInterruptVisible, useSelectedNode } from "@/hooks/useClient";
+import { useInterruptVisible, useSelectedNode } from "@/hooks/useClient";
 import { agentOf } from "@/lib/agents";
 import { placeholderFor } from "@/lib/send-status";
-import { ChatFolderPicker } from "../ChatFolderPicker";
+import { SelectedChatFolder } from "../ChatFolderPicker";
 import { LoadingStatus } from "../LoadingStatus";
 import { SelectedPendingTray, useSessionQueue } from "../PendingTray";
 import { ReplyingTo } from "../ReplyingTo";
 import { Goal } from "../SessionHeader";
 import { SlashSkillMenu } from "../SlashSkillMenu";
 import { useSlashSkills } from "../useSlashSkills";
-import { SessionSubmissionStatus, presentedComposerSendStatus } from "./composerParts";
+import {
+  ComposerFooter,
+  SessionSubmissionStatus,
+  presentedComposerSendStatus,
+} from "./composerParts";
 import { ComposerEditContext, lastEditable, useComposerEditing } from "./composerEdit";
 import { useComposerSend } from "./useComposerSend";
 
@@ -36,16 +40,12 @@ export function OpenSessionComposer({
   goal: DesktopSessionSnapshot["goal"];
   agentId: string | null;
 }) {
-  const {
-    stores,
-    actions: { setChatFolder },
-  } = useApp();
+  const { stores } = useApp();
   const activityStatus = useView((view) => view.shellProjection.activityStatus);
   const sendStatus = useView((view) => view.shellProjection.nonEmptyContentSendStatus);
   const loadingStatus = useView((view) => view.loadingStatus);
   const sending = stores.chat.use.sending();
   const inFlight = useInterruptVisible();
-  const chatFolder = useChatFolder();
   const deployment = useSelectedNode();
   const { draft, setDraft, send } = useComposerSend(agentId);
   const textarea = useRef<HTMLTextAreaElement | null>(null);
@@ -152,7 +152,8 @@ export function OpenSessionComposer({
             }
             onKeyDown={onKeyDown}
             textareaRef={textarea}
-            leading={<ChatFolderPicker folder={chatFolder} onChange={setChatFolder} />}
+            /* while it holds an edit, the chip's X is the way out and the
+               button saves; an edit the agent already took sends as new */
             clearable={!editing}
             submitLabel={
               editing ? (editing.reached ? "Send as a new message" : "Save") : "Send"
@@ -171,12 +172,19 @@ export function OpenSessionComposer({
         </div>
         {covered && <LoadingStatus overlay />}
       </div>
-      <SessionSubmissionStatus
-        activityStatus={activityStatus}
-        hint={
-          status.kind === "disabled" && !inFlight && !covered && draft.trim() !== ""
-            ? status.hint
-            : null
+      {/* the placeholder already says why sending is off while the
+          box is empty; the hint is only for when typed text hides it */}
+      <ComposerFooter
+        folder={<SelectedChatFolder />}
+        status={
+          <SessionSubmissionStatus
+            activityStatus={activityStatus}
+            hint={
+              status.kind === "disabled" && !inFlight && !covered && draft.trim() !== ""
+                ? status.hint
+                : null
+            }
+          />
         }
       />
     </div>

@@ -262,6 +262,8 @@ pub async fn list_backends_with_health_for_core(
                 }
             })
             .to_string();
+        let display_state = serde_json::from_value(serde_json::Value::String(display_state))
+            .map_err(|error| format!("invalid backend display state: {error}"))?;
         let catalog_scope = matches!(
             backend.auth,
             gents::document_config::BackendAuth::NodeOAuth { .. }

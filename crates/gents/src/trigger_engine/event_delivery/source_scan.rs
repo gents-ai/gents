@@ -95,7 +95,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     pub(crate) async fn create_source_documents(node: &Arc<EmbeddedNode>) -> BTreeSet<String> {
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         access
             .add_schema("type RescanSource { correlation: String }")
             .await
@@ -103,7 +103,7 @@ pub(crate) mod tests {
         let mut inserted = BTreeSet::new();
         for first in (0..10_001).step_by(250) {
             let ids = access
-                .transact("test.source_scan.fixture", |txn| {
+                .transact_write("test.source_scan.fixture", |txn| {
                     Box::pin(async move {
                         let mut ids = Vec::new();
                         for index in first..(first + 250).min(10_001) {

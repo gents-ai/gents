@@ -9,6 +9,7 @@ import {
 
 import { ManagedServerStartupError } from "../lib/managedServerStartup";
 import type { ClientState, ClientStore } from "./clientStore";
+import { errorText } from "../lib/errorText";
 
 type IncompatibleHomeOptions = {
   api: DesktopApiAdapter;
@@ -86,7 +87,7 @@ export function createIncompatibleHomeOps({
       const report = await api.resetManagedServer(undefined, undefined, true);
       setHome({ report, fullReset: true });
     } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
+      setError(errorText(error));
     } finally {
       setBusy(false);
     }
@@ -121,7 +122,7 @@ export function createIncompatibleHomeOps({
       }
       setReport(result);
     } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
+      setError(errorText(error));
       // The bridge refuses a confirmation whose home changed since review;
       // show the current plan so the user reviews what would change now.
       if (error instanceof BridgeInvokeError && error.code === "invalidArgument") {

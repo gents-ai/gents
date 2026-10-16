@@ -10,6 +10,7 @@ import {
   findNewChatButton,
   isSessionTurnSettled,
 } from "./nativeSimulatorE2eDom";
+import { errorText } from "./errorText";
 
 export {
   sessionRowCount,
@@ -71,7 +72,7 @@ export function startNativeSimulatorE2e(
   }
 
   activeRun = runNativeSimulatorE2e().catch(async (error) => {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = errorText(error);
     const status = { stage: "failed", detail };
     renderStatus(status);
     await invoke(bridgeCommand("desktop_native_e2e_status"), { status }).catch(
@@ -234,7 +235,7 @@ async function runNativeSimulatorE2e() {
 
     await reportStatus({ stage: "passed" });
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = errorText(error);
     await reportStatus({ stage: "failed", detail }).catch(() => {});
   }
 }

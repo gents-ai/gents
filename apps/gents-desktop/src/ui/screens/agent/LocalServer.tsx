@@ -17,10 +17,11 @@ import {
   describeManagedServerWait,
   managedServerWaitKind,
 } from "../../../lib/managedServerStartup";
-import { Fact, Group, Row, StackedRow } from "./rows";
+import { Fact, Group, PathFact, Row, StackedRow } from "./rows";
 import { useApp } from "@/app/AppContext";
 import { ManagedRuntimeUnavailableError } from "../../../lib/managedRuntimeReadiness";
 import { useStartup } from "@/hooks/useClient";
+import { errorText } from "../../../lib/errorText";
 
 export function LocalServer() {
   const { stores, actions } = useApp();
@@ -102,7 +103,7 @@ export function LocalServer() {
       await refreshSnapshot();
       toast("Managed runtime restarted with the reviewed access");
     } catch (cause) {
-      setAuthorityError(cause instanceof Error ? cause.message : String(cause));
+      setAuthorityError(errorText(cause));
       await incompatibleHome?.adopt(cause);
     } finally {
       setBusy(false);
@@ -171,16 +172,16 @@ export function LocalServer() {
       </Row>
       <Row
         label="Desktop app"
-        description="Closing the window keeps controls in the menu bar. Quit Desktop closes only this frontend; the node keeps running."
+        description="Closing the window keeps controls in the menu bar. Quitting stops the local node unless background running is enabled."
       >
-        <Fact>Independent</Fact>
+        <Fact>{status?.autoStart ? "Runs in background" : "Stops on quit"}</Fact>
       </Row>
       <Row
-        label="Start at login"
-        description="Let your operating system—not the desktop app—start the node when you sign in. Stop node keeps this preference, so it may start again at your next login."
+        label="Keep running after quit"
+        description="Keep triggers, schedules and sync running after quitting, and start the node when you sign in. Stop node keeps this setting."
       >
         <Switch
-          aria-label="Start at login"
+          aria-label="Keep running after quit"
           checked={status?.autoStart ?? false}
           disabled={busy || !status}
           onCheckedChange={(on) =>
@@ -202,7 +203,11 @@ export function LocalServer() {
       >
         <div className="grid justify-items-end gap-1 text-right *:max-w-full max-md:justify-items-start max-md:text-left md:max-w-1/2 md:shrink-0">
           <Fact>{status?.effectiveToolCeiling ?? "—"}</Fact>
-          <Fact mono>{status?.effectiveToolRoot ?? "No host path"}</Fact>
+          {status?.effectiveToolRoot ? (
+            <PathFact path={status.effectiveToolRoot} local />
+          ) : (
+            <Fact mono>No host path</Fact>
+          )}
           {running && status?.state !== "external" ? (
             <Button size="sm" variant="outline" onClick={beginAuthorityEdit}>
               Change access…

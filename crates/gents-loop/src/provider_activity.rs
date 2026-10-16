@@ -20,6 +20,7 @@ pub enum ActivityPhase {
 struct ActivityState {
     phase: ActivityPhase,
     stall_reason: Option<String>,
+    token_limit_reached: bool,
 }
 
 #[derive(Debug, Default)]
@@ -46,6 +47,16 @@ impl ProviderActivity {
         self.lock().phase
     }
 
+    pub(crate) fn observe_token_limit(&self) {
+        self.lock().token_limit_reached = true;
+    }
+
+    pub(crate) fn token_limit_reached(&self) -> bool {
+        self.lock().token_limit_reached
+    }
+
+    /// Recorded before the stalled attempt's stream is dropped, so the
+    /// admission permit's drop path can report why the call ended.
     pub fn mark_stalled(&self, reason: String) {
         self.lock().stall_reason = Some(reason);
     }

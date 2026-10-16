@@ -70,26 +70,23 @@ pub async fn load_background_completion_diagnostics(
     access: &ConfigAccess,
     node_did: &str,
 ) -> Result<BackgroundCompletionDiagnostics> {
-    let escaped_node_did = escape_graphql_string(node_did);
-    let query = format!(
-        r#"{{
-            wakes: AgentRequest(filter: {{
-                node_did: {{ _eq: "{escaped_node_did}" }},
-                execution_origin: {{ _eq: "scheduled" }}
-            }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}], limit: {WAKE_SCAN_LIMIT}) {{
-                _docID request_id session_id retry_root_request input lifecycle_state
-                failure_reason created_at claimed_at terminalized_at
-                retry_count max_retries background_completion_input_through_sequence
-                background_completion_notification_keys_json
-            }}
-            notifications: AgentMessage(filter: {{
-                node_did: {{ _eq: "{escaped_node_did}" }},
-                message_key: {{ _like: "background-completion-notification:%" }}
-            }}, order: {{ created_at: DESC }}, limit: {NOTIFICATION_SCAN_LIMIT}) {{
-                message_key request_doc_id
-            }}
-        }}"#
-    );
+    load_background_completion_diagnostics_scoped(access, node_did, None).await
+}
+
+pub(crate) async fn load_background_completion_diagnostics_for_session(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+) -> Result<BackgroundCompletionDiagnostics> {
+    load_background_completion_diagnostics_scoped(access, node_did, Some(session_id)).await
+}
+
+async fn load_background_completion_diagnostics_scoped(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: Option<&str>,
+) -> Result<BackgroundCompletionDiagnostics> {
+    let query = diagnostics_query(node_did, session_id);
     access
         .transact_readonly("background_completion.diagnostics", |txn| {
             let query = &query;
@@ -104,12 +101,42 @@ pub async fn load_background_completion_diagnostics(
                         .context("diagnostics omitted wakes")?,
                 )
                 .context("decoding background completion wakes")?;
-                let notifications: Vec<NotificationRow> = serde_json::from_value(
-                    data.get("notifications")
-                        .cloned()
-                        .context("diagnostics omitted notifications")?,
-                )
-                .context("decoding background completion notifications")?;
+                let notifications: Vec<NotificationRow> = if session_id.is_some() {
+                    let wake_doc_ids = wakes
+                        .iter()
+                        .filter(|wake| {
+                            wake.input
+                                .as_ref()
+                                .is_some_and(crate::lifecycle::is_background_completion_request)
+                        })
+                        .filter_map(|wake| wake.doc_id.as_deref())
+                        .collect::<BTreeSet<_>>();
+                    if wake_doc_ids.is_empty() {
+                        Vec::new()
+                    } else {
+                        let notifications_query = notification_query(
+                            node_did,
+                            wake_doc_ids.into_iter().collect::<Vec<_>>().as_slice(),
+                        );
+                        let response = txn.execute(&notifications_query).await?;
+                        let data = response.get("data").context(
+                            "background completion diagnostics has no notification data",
+                        )?;
+                        serde_json::from_value(
+                            data.get("notifications")
+                                .cloned()
+                                .context("diagnostics omitted notifications")?,
+                        )
+                        .context("decoding background completion notifications")?
+                    }
+                } else {
+                    serde_json::from_value(
+                        data.get("notifications")
+                            .cloned()
+                            .context("diagnostics omitted notifications")?,
+                    )
+                    .context("decoding background completion notifications")?
+                };
                 let mut sessions = BTreeSet::new();
                 for wake in &wakes {
                     let session_id = wake
@@ -141,6 +168,65 @@ pub async fn load_background_completion_diagnostics(
             })
         })
         .await
+}
+
+fn diagnostics_query(node_did: &str, session_id: Option<&str>) -> String {
+    let escaped_node_did = escape_graphql_string(node_did);
+    let session_filter = session_id
+        .map(|session_id| {
+            format!(
+                "session_id: {{ _eq: \"{}\" }},",
+                escape_graphql_string(session_id)
+            )
+        })
+        .unwrap_or_default();
+    let notifications = if session_id.is_none() {
+        format!(
+            r#"notifications: AgentMessage(filter: {{
+                node_did: {{ _eq: "{escaped_node_did}" }},
+                message_key: {{ _like: "background-completion-notification:%" }}
+            }}, order: {{ created_at: DESC }}, limit: {NOTIFICATION_SCAN_LIMIT}) {{
+                message_key request_doc_id
+            }}"#
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        r#"{{
+            wakes: AgentRequest(filter: {{
+                node_did: {{ _eq: "{escaped_node_did}" }},
+                {session_filter}
+                execution_origin: {{ _eq: "scheduled" }}
+            }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}], limit: {WAKE_SCAN_LIMIT}) {{
+                _docID request_id session_id retry_root_request input lifecycle_state
+                failure_reason created_at claimed_at terminalized_at
+                retry_count max_retries background_completion_input_through_sequence
+                background_completion_notification_keys_json
+            }}
+            {notifications}
+        }}"#
+    )
+}
+
+fn notification_query(node_did: &str, request_doc_ids: &[&str]) -> String {
+    let node_did = escape_graphql_string(node_did);
+    let request_doc_ids = request_doc_ids
+        .iter()
+        .map(|doc_id| format!("\"{}\"", escape_graphql_string(doc_id)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        r#"{{
+            notifications: AgentMessage(filter: {{
+                node_did: {{ _eq: "{node_did}" }},
+                request_doc_id: {{ _in: [{request_doc_ids}] }},
+                message_key: {{ _like: "background-completion-notification:%" }}
+            }}, order: {{ created_at: DESC }}, limit: {NOTIFICATION_SCAN_LIMIT}) {{
+                message_key request_doc_id
+            }}
+        }}"#
+    )
 }
 
 fn summarize(
@@ -433,6 +519,268 @@ mod tests {
 
     fn input() -> gents_protocol::request_input::RequestInput {
         serde_json::from_value(serde_json::json!({"queue":{"source":"background_completion","policy":"coalesce","key":"parent-1","queued_after_request_id":"parent-1","background_completion_wake_version":1}})).unwrap()
+    }
+
+    fn wake(
+        request_id: &str,
+        root: Option<&str>,
+        state: &str,
+        retry_count: i64,
+        max_retries: i64,
+    ) -> AgentRequestRow {
+        AgentRequestRow {
+            request_id: request_id.to_string(),
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+            session_id: Some("session-1".to_string()),
+            retry_root_request: root.map(ToOwned::to_owned),
+            input: Some(input()),
+            doc_id: Some(format!("physical-{request_id}")),
+            lifecycle_state: Some(
+                RequestLifecycleState::parse(state).expect("valid test lifecycle state"),
+            ),
+            failure_reason: (state == "failed").then(|| "provider unavailable".to_string()),
+            created_at: Some(format!("2026-08-12T00:00:0{retry_count}Z")),
+            claimed_at: (state != "pending").then(|| "2026-08-12T00:00:03Z".to_string()),
+            terminalized_at: (state == "failed").then(|| "2026-08-12T00:00:05Z".to_string()),
+            retry_count: Some(retry_count),
+            max_retries: Some(max_retries),
+            background_completion_input_through_sequence: Some(1),
+            background_completion_notification_keys_json: Some(
+                r#"["background-completion-notification:child-1:agent"]"#.to_string(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    fn notification(request_id: &str, suffix: &str) -> NotificationRow {
+        NotificationRow {
+            message_key: format!("background-completion-notification:{suffix}:agent"),
+            request_doc_id: Some(format!("physical-{request_id}")),
+        }
+    }
+
+    fn head(request_id: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([("session-1".to_owned(), format!("physical-{request_id}"))])
+    }
+
+    #[test]
+    fn scoped_query_filters_wakes_by_escaped_session_id() {
+        let query = diagnostics_query("did:agent:amy", Some("session\"one"));
+        assert!(query.contains("node_did: { _eq: \"did:agent:amy\" },"));
+        assert!(query.contains("session_id: { _eq: \"session\\\"one\" },"));
+        assert!(!query.contains("notifications: AgentMessage"));
+
+        let notifications = notification_query("did:agent:amy", &["doc\"id"]);
+        assert!(notifications.contains("request_doc_id: { _in: [\"doc\\\"id\"] }"));
+        assert!(notifications
+            .contains("message_key: { _like: \"background-completion-notification:%\" }"));
+
+        let full_query = diagnostics_query("did:agent:amy", None);
+        assert!(!full_query.contains("session_id: { _eq:"));
+        assert!(full_query.contains("notifications: AgentMessage"));
+    }
+
+    #[test]
+    fn session_scope_preserves_the_timeline_epoch_projection() {
+        let now = DateTime::parse_from_rfc3339("2026-08-12T00:00:06Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let target = wake("wake-1", None, "failed", 0, 3);
+        let mut unrelated = wake("wake-elsewhere", None, "failed", 0, 3);
+        unrelated.session_id = Some("session-2".to_owned());
+        let notifications = vec![
+            notification("wake-1", "child-1"),
+            notification("wake-elsewhere", "child-2"),
+        ];
+        let heads = BTreeMap::from([
+            ("session-1".to_owned(), "physical-wake-1".to_owned()),
+            ("session-2".to_owned(), "physical-wake-elsewhere".to_owned()),
+        ]);
+        let full = summarize(
+            vec![target.clone(), unrelated],
+            notifications.clone(),
+            heads,
+            now,
+        );
+        let scoped = summarize(vec![target], notifications, head("wake-1"), now);
+        let matching_full_epochs = full
+            .epochs
+            .into_iter()
+            .filter(|epoch| epoch.session_id == "session-1")
+            .collect::<Vec<_>>();
+        assert_eq!(scoped.epochs, matching_full_epochs);
+    }
+
+    #[test]
+    fn notification_membership_requires_the_physical_wake_not_its_logical_label() {
+        let now = DateTime::parse_from_rfc3339("2026-08-12T00:00:06Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut wrong = notification("wake-1", "foreign");
+        wrong.request_doc_id = Some("wake-1".into());
+        let diagnostics = summarize(
+            vec![wake("wake-1", None, "failed", 0, 3)],
+            vec![notification("wake-1", "child-1"), wrong],
+            head("wake-1"),
+            now,
+        );
+        assert_eq!(diagnostics.scanned_notifications, 2);
+        assert_eq!(diagnostics.pending_notifications, 1);
+        assert_eq!(diagnostics.epochs[0].notification_count, 1);
+    }
+
+    #[test]
+    fn failed_epoch_surfaces_backoff_and_unacknowledged_notification() {
+        let now = DateTime::parse_from_rfc3339("2026-08-12T00:00:06Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let diagnostics = summarize(
+            vec![wake("wake-1", None, "failed", 0, 3)],
+            vec![notification("wake-1", "child-1")],
+            head("wake-1"),
+            now,
+        );
+
+        assert_eq!(diagnostics.pending_notifications, 1);
+        assert_eq!(diagnostics.acknowledged_notifications, 0);
+        assert_eq!(diagnostics.stranded_notifications, 0);
+        assert_eq!(diagnostics.oldest_pending_age_seconds, Some(6));
+        let epoch = &diagnostics.epochs[0];
+        assert_eq!(epoch.state, "retry_backoff");
+        assert_eq!(epoch.attempt_count, 1);
+        assert_eq!(epoch.last_failure.as_deref(), Some("provider unavailable"));
+        assert_eq!(
+            epoch.next_retry_at.as_deref(),
+            Some("2026-08-12T00:00:10+00:00")
+        );
+    }
+
+    #[test]
+    fn completed_retry_acknowledges_the_whole_epoch() {
+        let now = DateTime::parse_from_rfc3339("2026-08-12T00:01:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let diagnostics = summarize(
+            vec![
+                wake("wake-1", None, "failed", 0, 3),
+                wake("wake-2", Some("wake-1"), "completed", 1, 3),
+            ],
+            vec![notification("wake-1", "child-1")],
+            head("wake-2"),
+            now,
+        );
+
+        assert_eq!(diagnostics.pending_notifications, 0);
+        assert_eq!(diagnostics.acknowledged_notifications, 1);
+        assert_eq!(diagnostics.stranded_notifications, 0);
+        let epoch = &diagnostics.epochs[0];
+        assert_eq!(epoch.state, "acknowledged");
+        assert_eq!(epoch.active_request_id, "wake-2");
+        assert_eq!(epoch.attempt_count, 2);
+        assert_eq!(epoch.acknowledged_notification_count, 1);
+    }
+
+    #[test]
+    fn exhausted_epoch_is_stranded() {
+        let now = DateTime::parse_from_rfc3339("2026-08-12T00:01:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let diagnostics = summarize(
+            vec![wake("wake-1", None, "failed", 3, 3)],
+            vec![notification("wake-1", "child-1")],
+            head("wake-1"),
+            now,
+        );
+
+        assert_eq!(diagnostics.stranded_notifications, 1);
+        assert_eq!(diagnostics.epochs[0].state, "exhausted");
+        assert_eq!(diagnostics.epochs[0].next_retry_at, None);
+    }
+
+    #[test]
+    fn completed_successor_epoch_acknowledges_failed_active_epoch_input() {
+        let now = DateTime::parse_from_rfc3339("2026-08-12T00:01:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let first = wake("wake-1", None, "failed", 0, 3);
+        let mut successor = wake("wake-2", None, "completed", 0, 3);
+        successor.background_completion_notification_keys_json = Some(
+            serde_json::to_string(&vec![
+                "background-completion-notification:child-1:agent",
+                "background-completion-notification:child-2:agent",
+            ])
+            .unwrap(),
+        );
+        let diagnostics = summarize(
+            vec![first, successor],
+            vec![
+                notification("wake-1", "child-1"),
+                notification("wake-2", "child-2"),
+            ],
+            head("wake-2"),
+            now,
+        );
+
+        assert_eq!(diagnostics.pending_notifications, 0);
+        assert_eq!(diagnostics.acknowledged_notifications, 2);
+        let first = diagnostics
+            .epochs
+            .iter()
+            .find(|epoch| epoch.root_request_id == "wake-1")
+            .unwrap();
+        assert_eq!(first.state, "acknowledged_by_successor");
+        assert_eq!(first.acknowledged_notification_count, 1);
+        assert!(first.pending_notification_keys.is_empty());
+    }
+
+    #[test]
+    fn failed_wake_displaced_by_later_turn_is_stranded_not_retrying() {
+        let now = DateTime::parse_from_rfc3339("2026-08-12T00:01:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let diagnostics = summarize(
+            vec![wake("wake-1", None, "failed", 0, 3)],
+            vec![notification("wake-1", "child-1")],
+            head("later-interactive-request"),
+            now,
+        );
+
+        assert_eq!(diagnostics.pending_notifications, 1);
+        assert_eq!(diagnostics.stranded_notifications, 1);
+        let epoch = &diagnostics.epochs[0];
+        assert_eq!(epoch.state, "retry_ineligible_not_latest");
+        assert_eq!(epoch.next_retry_at, None);
+        assert_eq!(epoch.pending_notification_keys.len(), 1);
+    }
+    #[test]
+    fn retry_eligibility_requires_the_exact_physical_request_head() {
+        let failed = wake("same-logical-id", None, "failed", 0, 3);
+        let authoritative_heads =
+            BTreeMap::from([("session-1".to_owned(), "different-physical-row".to_owned())]);
+        let diagnostics = summarize(
+            vec![failed],
+            vec![notification("same-logical-id", "child-1")],
+            authoritative_heads,
+            Utc::now(),
+        );
+        assert_eq!(diagnostics.epochs[0].state, "retry_ineligible_not_latest");
+        assert_eq!(diagnostics.epochs[0].next_retry_at, None);
+        assert_eq!(diagnostics.stranded_notifications, 1);
+    }
+
+    #[test]
+    fn scan_limits_remain_visible_even_when_non_wake_requests_are_filtered() {
+        let mut ordinary = wake("ordinary", None, "pending", 0, 3);
+        ordinary.input = None;
+        let diagnostics = summarize(
+            vec![ordinary; WAKE_SCAN_LIMIT],
+            vec![],
+            BTreeMap::new(),
+            Utc::now(),
+        );
+        assert_eq!(diagnostics.scanned_wakes, WAKE_SCAN_LIMIT);
+        assert!(diagnostics.scan_truncated);
+        assert!(diagnostics.epochs.is_empty());
     }
 
     #[tokio::test]

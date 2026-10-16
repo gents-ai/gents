@@ -24,6 +24,7 @@ fn old_registry() -> Registry<'static> {
     Registry {
         baseline: old_baseline(),
         steps: DEFAULT_STEPS,
+        ordinary_indexes: &[],
     }
 }
 

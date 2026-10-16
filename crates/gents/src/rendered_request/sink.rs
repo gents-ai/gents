@@ -164,12 +164,11 @@ impl DefraRenderedRequestSink {
         Ok(())
     }
 
-    async fn persist_inference_call_context_accounting(
-        &self,
+    fn inference_call_context_accounting(
         rendered: &RenderedCompletionRequest,
-    ) -> Result<()> {
+    ) -> Result<Option<(&str, String)>> {
         let Some(accounting) = rendered.assembly_trace.context_accounting.as_ref() else {
-            return Ok(());
+            return Ok(None);
         };
         let Some(call_id) = rendered
             .provenance_json
@@ -177,28 +176,33 @@ impl DefraRenderedRequestSink {
             .and_then(|value| value.get("call_id"))
             .and_then(Value::as_str)
         else {
-            return Ok(());
+            // One-shot calls have no InferenceCall join. Their accounting is
+            // still durable in RenderedRequest.provenance_json.
+            return Ok(None);
         };
         let accounting_json = canonical_json_string(
             &serde_json::to_value(accounting).context("encoding context accounting")?,
         )?;
+        Ok(Some((call_id, accounting_json)))
+    }
+
+    async fn persist_inference_call_context_accounting_in_txn(
+        txn: &crate::config_client::ConfigApplyTxn<'_>,
+        call_id: &str,
+        accounting_json: &str,
+    ) -> Result<()> {
         let call_id = escape_graphql_string(call_id);
         let query = format!(
             r#"query {{
                 InferenceCall(filter: {{ call_id: {{ _eq: "{call_id}" }} }}, limit: 2) {{
+                    _docID
                     context_accounting_json
                 }}
             }}"#,
         );
-        let response = crate::graphql::graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "rendered_request::lookup_inference_context_accounting",
-        )
-        .await?;
+        let response = txn.execute(&query).await?;
         let rows = response
-            .data
-            .as_ref()
+            .get("data")
             .and_then(|data| data.get("InferenceCall"))
             .and_then(Value::as_array)
             .ok_or_else(|| anyhow!("reading joined InferenceCall returned an unexpected shape"))?;
@@ -223,9 +227,16 @@ impl DefraRenderedRequestSink {
             anyhow::bail!("InferenceCall {call_id} already carries different context accounting");
         }
 
+        let doc_id = row
+            .get("_docID")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .context("joined InferenceCall lacks physical identity")?;
+        let doc_id = escape_graphql_string(doc_id);
         let mutation = format!(
             r#"mutation {{
                 update_InferenceCall(
+                    docID: "{doc_id}",
                     filter: {{ call_id: {{ _eq: "{call_id}" }} }},
                     input: {{
                         context_accounting_json: "{accounting_json}"
@@ -234,15 +245,9 @@ impl DefraRenderedRequestSink {
             }}"#,
             accounting_json = escape_graphql_string(&accounting_json),
         );
-        let response = crate::config_client::ConfigAccess::write_local_response(
-            &self.node,
-            "rendered_request.persist_context_accounting",
-            &mutation,
-        )
-        .await?;
+        let response = txn.execute(&mutation).await?;
         if !response
-            .data
-            .as_ref()
+            .get("data")
             .and_then(single_mutation_result)
             .is_some_and(crate::graphql::response_has_documents)
         {
@@ -281,6 +286,7 @@ impl DefraRenderedRequestSink {
             rendered.capture_version,
             gents_protocol::rendered_request::CAPTURE_VERSION
         );
+        let context_accounting = Self::inference_call_context_accounting(&rendered)?;
         let request_layout = super::encoding::capture_block_layout(&rendered.request_json)
             .context("encoding rendered-request request_json")?;
         let provenance_payload_layout =
@@ -288,8 +294,8 @@ impl DefraRenderedRequestSink {
                 .context("encoding rendered-request provenance payload")?;
         let provenance_json = canonical_json_string(&rendered.provenance_json)
             .context("encoding rendered-request provenance_json")?;
-        let request_chunks = super::encoding::chunk_capture_body(&request_layout);
-        let provenance_chunks = super::encoding::chunk_capture_body(&provenance_payload_layout);
+        let [request_chunks, provenance_chunks] =
+            super::encoding::chunk_capture_payloads([&request_layout, &provenance_payload_layout]);
         let blocks = unique_blocks(&[&request_chunks, &provenance_chunks]);
 
         let capture_container = crate::config_client::ConfigAccess::transact_local_write(
@@ -299,6 +305,7 @@ impl DefraRenderedRequestSink {
             |txn| {
                 let (request_chunks, provenance_chunks) = (&request_chunks, &provenance_chunks);
                 let (blocks, rendered, provenance_json) = (&blocks, &rendered, &provenance_json);
+                let context_accounting = &context_accounting;
                 Box::pin(async move {
                     let pins = pin_capture_blocks(txn, rendered, blocks).await?;
                     let container = super::encoding::encode_container(
@@ -306,13 +313,21 @@ impl DefraRenderedRequestSink {
                         &encode_payload_manifest(provenance_chunks, &pins)?,
                     )?;
                     Self::create_in_txn(txn, rendered, &container, provenance_json).await?;
+                    if let Some((call_id, accounting_json)) = context_accounting {
+                        Self::persist_inference_call_context_accounting_in_txn(
+                            txn,
+                            call_id,
+                            accounting_json,
+                        )
+                        .await?;
+                    }
                     Ok(container)
                 })
             },
         )
         .await;
 
-        let capture_result = match capture_container {
+        match capture_container {
             Ok(_) => {
                 tracing::debug!(
                     capture_key = %rendered.capture_key,
@@ -328,14 +343,27 @@ impl DefraRenderedRequestSink {
             Err(create_error) => match self.stored_fact(&rendered.capture_key).await {
                 Ok(Some(stored)) => {
                     self.reconcile_existing(&rendered, stored, "create_conflict")
-                        .await
+                        .await?;
+                    let Some((call_id, accounting_json)) = context_accounting.as_ref() else {
+                        return Ok(());
+                    };
+                    crate::config_client::ConfigAccess::transact_local_write(
+                        &self.node,
+                        None,
+                        "rendered_request.reconcile_context_accounting",
+                        |txn| {
+                            Box::pin(Self::persist_inference_call_context_accounting_in_txn(
+                                txn,
+                                call_id,
+                                accounting_json,
+                            ))
+                        },
+                    )
+                    .await
                 }
                 _ => Err(create_error),
             },
-        };
-        capture_result?;
-        self.persist_inference_call_context_accounting(&rendered)
-            .await
+        }
     }
 
     async fn reconcile_existing(
@@ -485,8 +513,11 @@ struct BlockPin {
     field_commit_cid: String,
 }
 
-const CREATE_RENDERED_REQUEST_BLOCK_MUTATION: &str = "mutation($input: \
-RenderedRequestBlockMutationInputArg!) { create_RenderedRequestBlock(input: $input) { _docID } }";
+/// Typed variables preserve canonical JSON block bytes without GraphQL escaping.
+const CREATE_RENDERED_REQUEST_BLOCKS_MUTATION: &str = "mutation($input: \
+[RenderedRequestBlockMutationInputArg!]!) { create_RenderedRequestBlock(input: $input) { _docID content_key } }";
+
+const CAPTURE_BLOCK_CREATE_BATCH: usize = 32;
 
 async fn prior_block_pins_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
@@ -590,34 +621,70 @@ async fn stored_block_doc_ids_in_txn(
     Ok(stored)
 }
 
-async fn create_block_in_txn(
+/// A create that
+/// loses the unique content key to a concurrent writer surfaces as a
+/// transaction conflict; the transaction owner replays the capture on a fresh
+/// snapshot, whose existence read then finds the winner.
+/// Only content fields are written: DefraDB derives identical document ids
+/// from identical block content across writers.
+async fn create_blocks_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    block: &super::encoding::ChunkedBlock,
-) -> Result<String> {
-    let payload = std::str::from_utf8(&block.bytes).context(
-        "capture block bytes must be valid UTF-8; chunk boundaries land on character boundaries",
-    )?;
-    let variables = serde_json::json!({ "input": {
-        "content_key": block.content_key,
-        "payload": payload,
-    } });
-    let response = txn
-        .execute_with_variables(CREATE_RENDERED_REQUEST_BLOCK_MUTATION, &variables)
-        .await?;
-    response
-        .get("data")
-        .and_then(single_mutation_result)
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("_docID"))
-        .and_then(Value::as_str)
-        .with_context(|| {
-            format!(
-                "creating capture block returned no document: {}",
-                block.content_key
+    blocks: &[&super::encoding::ChunkedBlock],
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut created = std::collections::BTreeMap::new();
+    for batch in blocks.chunks(CAPTURE_BLOCK_CREATE_BATCH) {
+        let input = batch
+            .iter()
+            .map(|block| {
+                let payload = std::str::from_utf8(&block.bytes).context(
+                    "capture block bytes must be valid UTF-8; chunk boundaries land on character boundaries",
+                )?;
+                Ok(serde_json::json!({
+                    "content_key": block.content_key,
+                    "payload": payload,
+                }))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let response = txn
+            .execute_with_variables(
+                CREATE_RENDERED_REQUEST_BLOCKS_MUTATION,
+                &serde_json::json!({"input": input}),
             )
-        })
-        .map(ToOwned::to_owned)
+            .await?;
+        let rows = response
+            .get("data")
+            .and_then(single_mutation_result)
+            .and_then(Value::as_array)
+            .context("creating capture blocks returned no documents")?;
+        anyhow::ensure!(
+            rows.len() == batch.len(),
+            "capture block create omitted documents"
+        );
+        let expected = batch
+            .iter()
+            .map(|block| block.content_key.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        for row in rows {
+            let key = row
+                .get("content_key")
+                .and_then(Value::as_str)
+                .context("created capture block lacks content_key")?;
+            let doc_id = row
+                .get("_docID")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .context("created capture block lacks _docID")?;
+            anyhow::ensure!(
+                expected.contains(key),
+                "capture block create returned an unexpected key"
+            );
+            anyhow::ensure!(
+                created.insert(key.to_owned(), doc_id.to_owned()).is_none(),
+                "capture block create repeated a key"
+            );
+        }
+    }
+    Ok(created)
 }
 
 async fn pin_capture_blocks(
@@ -636,12 +703,12 @@ async fn pin_capture_blocks(
         .map(|block| block.content_key.as_str())
         .collect();
     let mut doc_ids = stored_block_doc_ids_in_txn(txn, &keys).await?;
-    for block in &unpinned {
-        if !doc_ids.contains_key(&block.content_key) {
-            let doc_id = create_block_in_txn(txn, block).await?;
-            doc_ids.insert(block.content_key.clone(), doc_id);
-        }
-    }
+    let missing = unpinned
+        .iter()
+        .copied()
+        .filter(|block| !doc_ids.contains_key(&block.content_key))
+        .collect::<Vec<_>>();
+    doc_ids.extend(create_blocks_in_txn(txn, &missing).await?);
     let witness_docs = unpinned
         .iter()
         .map(|block| doc_ids[&block.content_key].clone())
@@ -794,6 +861,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn capture_and_context_accounting_commit_together() {
+        use gents_protocol::rendered_request::{
+            AdmissionJoin, ContextAccounting, ContextCompactionReason, ContextInputComponents,
+            ProvenanceManifest, CONTEXT_ACCOUNTING_VERSION,
+        };
+
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+        crate::config_client::ConfigAccess::write_local_response(
+            &node,
+            "test.create_accounting_call",
+            r#"mutation { create_InferenceCall(input: {
+                call_id: "accounting", request_id: "request", call_state: "running"
+            }) { _docID } }"#,
+        )
+        .await
+        .unwrap();
+        let with_accounting = |turn, call_id: &str, messages| {
+            let mut rendered = rendered_turn(
+                turn,
+                json!({"model": "m", "messages": [{"role": "user", "content": "body"}]}),
+            );
+            rendered.assembly_trace.context_accounting = Some(ContextAccounting {
+                accounting_version: CONTEXT_ACCOUNTING_VERSION,
+                turn_index: turn,
+                attempt: 0,
+                estimator: "serialized_json_bytes_div_4_v1".into(),
+                components: ContextInputComponents {
+                    messages,
+                    documents: 0,
+                    tool_schemas: 0,
+                    additional_parameters: 0,
+                    output_schema: 0,
+                },
+                estimated_input_tokens: messages,
+                context_window: 100,
+                compaction_threshold_basis_points: 7500,
+                compaction_threshold_tokens: 75,
+                configured_max_output_tokens: Some(10),
+                effective_max_output_tokens: Some(10),
+                compaction_reason: ContextCompactionReason::BelowThreshold,
+                pre_compaction_input_tokens: None,
+            });
+            rendered.provenance_payload_json =
+                serde_json::to_value(&rendered.assembly_trace).unwrap();
+            rendered.provenance_json = serde_json::to_value(ProvenanceManifest::captured_only(
+                rendered.capture_scope.clone(),
+                None,
+                Some(AdmissionJoin {
+                    call_id: call_id.into(),
+                    call_seq: 1,
+                }),
+                rendered.assembly_trace.clone(),
+            ))
+            .unwrap();
+            rendered
+        };
+        let first = with_accounting(0, "accounting", 1);
+        sink.capture(first.clone()).await.unwrap();
+        sink.capture(first.clone()).await.unwrap();
+        let call = crate::graphql::graphql_with_transaction_retry(
+            &node,
+            r#"{ InferenceCall(filter: {call_id: {_eq: "accounting"}}) {
+                context_accounting_json
+            } }"#,
+            "test.read_context_accounting",
+        )
+        .await
+        .unwrap();
+        let stored: Value = serde_json::from_str(
+            call.data.as_ref().unwrap()["InferenceCall"][0]["context_accounting_json"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            stored,
+            serde_json::to_value(first.assembly_trace.context_accounting.as_ref().unwrap())
+                .unwrap()
+        );
+        let original_blocks = block_rows(&node).await.len();
+        for rejected in [
+            with_accounting(1, "accounting", 2),
+            with_accounting(2, "missing", 1),
+        ] {
+            assert!(sink.capture(rejected).await.is_err());
+            let captures = crate::graphql::graphql_with_transaction_retry(
+                &node,
+                "{ RenderedRequest { _docID } }",
+                "test.read_captures",
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                captures.data.unwrap()["RenderedRequest"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(block_rows(&node).await.len(), original_blocks);
+        }
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn capture_writes_blocks_and_a_manifest_that_decode_back() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -831,6 +1005,52 @@ mod tests {
         node.shutdown().await;
     }
 
+    #[tokio::test]
+    async fn repeated_tool_output_is_stored_once_across_wire_and_native_payloads() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+        let text = capture_text(73, 8 * 1024);
+        let mut rendered = rendered_turn(
+            0,
+            json!({
+                "messages": [{"role": "tool", "content": text}]
+            }),
+        );
+        rendered.provenance_payload_json = json!({
+            "effective_messages": [{"content": [{"text": text}]}],
+            "threaded_tool_results": [{"content": [{"text": text}]}]
+        });
+        sink.capture(rendered.clone()).await.unwrap();
+        let rows = block_rows(node.as_ref()).await;
+        let text_chunks =
+            super::super::encoding::chunk_capture_body(&serde_json::to_string(&text).unwrap());
+        for chunk in text_chunks {
+            assert_eq!(
+                rows.iter()
+                    .filter(|row| row["content_key"] == chunk.content_key)
+                    .count(),
+                1
+            );
+        }
+        let row = stored_capture(node.as_ref(), &rendered.capture_key).await;
+        let decoded = super::super::decode_capture_pair_embedded(
+            node.as_ref(),
+            3,
+            row["request_json"].as_str().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            decoded,
+            (rendered.request_json, rendered.provenance_payload_json)
+        );
+        node.shutdown().await;
+    }
+
+    /// The regression #2333 exists to fix: two turns sharing a conversation
+    /// prefix write only the new blocks and a manifest row, so total capture
+    /// storage grows linearly with the conversation instead of quadratically.
     #[tokio::test]
     async fn a_shared_prefix_writes_only_new_blocks_and_a_small_manifest() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
@@ -1030,7 +1250,7 @@ mod tests {
 
         let request_json = json!({
             "model": "m",
-            "messages": [{"role": "user", "content": capture_text(23, 20 * 1024)}]
+            "messages": [{"role": "user", "content": capture_text(23, 256 * 1024)}]
         });
         let turns = (0..4)
             .map(|turn| rendered_turn(turn, request_json.clone()))
@@ -1049,7 +1269,9 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(rows.len(), keys.len(), "one document per content key");
         let layout = super::super::encoding::capture_block_layout(&request_json).unwrap();
-        for chunk in super::super::encoding::chunk_capture_body(&layout) {
+        let chunks = super::super::encoding::chunk_capture_body(&layout);
+        assert!(chunks.len() > CAPTURE_BLOCK_CREATE_BATCH);
+        for chunk in chunks {
             assert!(keys.contains(&chunk.content_key));
         }
         for rendered in &turns {

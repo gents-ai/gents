@@ -300,11 +300,11 @@ impl BackendAdmissionController {
             node: node.clone(),
             controller: self.clone(),
             call: call.clone(),
-            persist_on_drop: false,
+            doc_id: None,
         };
         let doc_id = match super::persistence::persist_call_queued(node.clone(), &call).await {
             Ok(doc_id) => {
-                queued_guard.arm();
+                queued_guard.arm(doc_id.clone());
                 doc_id
             }
             Err(error) => {
@@ -319,6 +319,7 @@ impl BackendAdmissionController {
                 if let Err(persist_error) = persist_existing_call_terminal(
                     node,
                     &call,
+                    &doc_id,
                     "cancelled",
                     Some("BackendGone"),
                     None,
@@ -331,9 +332,10 @@ impl BackendAdmissionController {
                 return Err(self.backend_gone());
             }
         };
-        // Only the queued row can acquire this running state; other persistence
-        // failures leave a queued row for ordered recovery.
-        if let Err(error) = persist_existing_call_running(node.clone(), &call).await {
+        // Only the queued row can acquire this running state. If recovery has
+        // already terminalized it, release the permit before provider dispatch.
+        // Other persistence failures leave a queued row for ordered recovery.
+        if let Err(error) = persist_existing_call_running(node.clone(), &call, &doc_id).await {
             drop(permit);
             return Err(super::persistence::completion_persistence_error(error));
         }
@@ -453,16 +455,16 @@ pub(super) struct QueuedCallGuard {
     node: Arc<EmbeddedNode>,
     controller: Arc<BackendAdmissionController>,
     call: InferenceCallRecord,
-    persist_on_drop: bool,
+    doc_id: Option<String>,
 }
 
 impl QueuedCallGuard {
-    fn arm(&mut self) {
-        self.persist_on_drop = true;
+    fn arm(&mut self, doc_id: String) {
+        self.doc_id = Some(doc_id);
     }
 
     pub(super) fn disarm(mut self) -> Self {
-        self.persist_on_drop = false;
+        self.doc_id = None;
         self
     }
 }
@@ -470,15 +472,16 @@ impl QueuedCallGuard {
 impl Drop for QueuedCallGuard {
     fn drop(&mut self) {
         self.controller.leave_queue();
-        if !self.persist_on_drop {
+        let Some(doc_id) = self.doc_id.take() else {
             return;
-        }
+        };
         let node = self.node.clone();
         let call = self.call.clone();
         spawn_persistence(async move {
             if let Err(error) = persist_existing_call_terminal(
                 node,
                 &call,
+                &doc_id,
                 "cancelled",
                 Some("Cancelled"),
                 None,

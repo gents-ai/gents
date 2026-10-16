@@ -36,6 +36,7 @@ use crate::remote_admin::PairingErrorClass;
 
 pub use enrollment::EnrollmentRequestResult;
 pub use sync_state::RuntimeSchemaObservation;
+pub use writes::RefreshedRequestProjection;
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);

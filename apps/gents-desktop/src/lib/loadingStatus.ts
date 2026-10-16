@@ -61,8 +61,8 @@ export function projectStartupLoadingStatus(
     case "checking-managed-server":
       return {
         failed: false,
-        title: "Bringing Gents online",
-        currentLabel: "Checking the background node",
+        title: "Starting Gents",
+        currentLabel: "Starting your local node",
         managedServerState: "active",
         connectionState: "pending",
         clientState: "pending",
@@ -70,7 +70,7 @@ export function projectStartupLoadingStatus(
     case "loading-configuration":
       return {
         failed: false,
-        title: "Bringing Gents online",
+        title: "Starting Gents",
         currentLabel: "Reading saved connections",
         managedServerState: managedServerSupported ? "complete" : null,
         connectionState: "active",
@@ -79,7 +79,7 @@ export function projectStartupLoadingStatus(
     case "starting-client":
       return {
         failed: false,
-        title: "Bringing Gents online",
+        title: "Starting Gents",
         currentLabel: "Starting the secure client",
         managedServerState: managedServerSupported ? "complete" : null,
         connectionState: "complete",
@@ -113,6 +113,56 @@ export function projectStartupLoadingStatus(
         clientState: "error",
       };
   }
+}
+
+/** One step of starting Gents, as both progress screens show it: what it
+    is, what is happening while it runs, and where it has got to. */
+export type StartupStep = {
+  key: "node" | "connections" | "client";
+  label: string;
+  doing: string;
+  state: LoadingStepState;
+};
+
+/** The steps a startup status stands for, in order. The node step is
+    there only where this platform manages a node; a home that reaches a
+    remote server names that step for the server instead. */
+export function startupSteps(
+  status: StartupLoadingStatus,
+  options: { remote?: boolean } = {},
+): StartupStep[] {
+  const node: StartupStep[] = status.managedServerState
+    ? [
+        options.remote
+          ? {
+              key: "node",
+              label: "Connect to server",
+              doing: "Connecting to the server",
+              state: status.managedServerState,
+            }
+          : {
+              key: "node",
+              label: "Start local node",
+              doing: "Starting your local node",
+              state: status.managedServerState,
+            },
+      ]
+    : [];
+  return [
+    ...node,
+    {
+      key: "connections",
+      label: "Load saved connections",
+      doing: "Reading saved connections",
+      state: status.connectionState,
+    },
+    {
+      key: "client",
+      label: "Start secure client",
+      doing: "Starting the secure client",
+      state: status.clientState,
+    },
+  ];
 }
 
 export type SessionLoadState = {

@@ -13,6 +13,7 @@ mod request;
 #[cfg(test)]
 mod task_hook_tests;
 mod title;
+mod wake_input;
 
 #[derive(Debug, thiserror::Error)]
 #[error("graceful shutdown could not confirm received provider output was retained: {reason}")]

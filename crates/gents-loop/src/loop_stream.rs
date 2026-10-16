@@ -1056,12 +1056,13 @@ where
                             drop(live_output);
                             repeated_tool_failure.suppress()
                         } else {
-                            crate::tool_effects::scope(effects.clone().map(|effects| effects as Arc<dyn crate::tool_effects::ToolEffectDispatcher>), dispatch_tool(
+                            crate::tool_effects::scope(effects.clone().map(|effects| effects as Arc<dyn crate::tool_effects::ToolEffectDispatcher>), tool_dispatch::dispatch_provider_tool(
                                 tools.as_slice(),
                                 &tool_name,
                                 tool_args.clone(),
                                 live_output,
                                 session_id,
+                                activity.as_ref().is_some_and(|activity| activity.token_limit_reached()),
                             ))
                             .await
                         };

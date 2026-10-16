@@ -2,12 +2,18 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod authoring;
 mod home_install;
 mod inference;
 mod installation;
 pub mod interpolate;
 mod loader;
+pub mod local;
+pub mod materialize;
+pub mod plugin_lifecycle;
 mod provenance;
+#[cfg(test)]
+mod publication_contract_tests;
 pub use home_install::{
     forget_home_install, list_home_installs, read_home_install, write_home_install, HomePackInstall,
 };
@@ -19,9 +25,9 @@ pub use inference::{
 pub use installation::{
     document_pack_schema_paths, install_prepared_document_pack, installed_packs,
     list_installed_packs, prepare_document_pack_install, read_installed_pack,
-    record_plugin_store_change, referenced_pack_digests, remove_pack, DriftPolicy, InstallReport,
-    InstalledPack, InstalledPackPlugin, PackIdentity, PreparedDocumentPackInstall, RemoveReport,
-    Retained,
+    record_plugin_store_change, record_plugin_store_change_as, referenced_pack_digests,
+    remove_pack, DriftPolicy, InstallReport, InstalledPack, InstalledPackPlugin, PackIdentity,
+    PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub(crate) use installation::{observe_graph_install_in_txn, record_graph_install_in_txn};
 pub use loader::{
@@ -126,6 +132,9 @@ pub struct PackPlugin {
     pub model_slot: Option<String>,
 }
 
+/// How much of a bound directory a plugin uses. Ordered: `ReadWrite`
+/// includes `Read`, so a folder allowed `ReadWrite` also serves a reader.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BindAccess {
@@ -509,6 +518,16 @@ pub fn is_distributable_asset_path(path: &str) -> bool {
     asset_path::is_distributable_asset(path) && asset_path::has_canonical_asset_spelling(path)
 }
 
+pub(crate) fn open_pack_asset(root: &std::path::Path, path: &str) -> Result<std::fs::File> {
+    asset_path::open_pack_asset(root, path)
+}
+
+/// Everything a pack manifest has to be true of, whichever way the pack
+/// arrived.
+///
+/// A pack compiled into this binary and a pack downloaded from a registry
+/// are held to one set of rules, checked here, because a pack that only
+/// passes when it comes from a trusted place is not checked at all.
 pub fn validate_manifest(name: &str, manifest: &PackManifest) -> Result<()> {
     anyhow::ensure!(
         manifest.manifest_version == 1 && manifest.name == name,

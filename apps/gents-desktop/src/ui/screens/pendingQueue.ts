@@ -21,11 +21,8 @@ export type PendingRow =
       index: number;
     };
 
-/**
- * Runtime-managed entries take their queue order, the order an edit moves
- * them in; other queued inputs keep their place. A message is editable only
- * when the runtime lists it as such.
- */
+/* The native snapshot owns arrival order, including already claimed inputs.
+   Queue controls determine editability without reordering that snapshot. */
 export function pendingRows(
   queued: readonly PendingTurnView[],
   queue: readonly PendingQueueEntryView[] | null,
@@ -33,12 +30,7 @@ export function pendingRows(
   const listed = new Map(
     queue?.map((entry, index) => [entry.requestId, { entry, index }]),
   );
-  const byQueue = (queue ?? []).flatMap(
-    (entry) => queued.find((turn) => turn.requestId === entry.requestId) ?? [],
-  );
-  let next = 0;
-  return queued.map((original) => {
-    const turn = listed.has(original.requestId) ? byQueue[next++]! : original;
+  return queued.map((turn) => {
     if (turn.origin) return { kind: "automated", turn };
     const slot = listed.get(turn.requestId);
     return {

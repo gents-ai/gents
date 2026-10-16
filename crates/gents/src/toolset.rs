@@ -30,8 +30,9 @@ use bash_tools::{ReadOnlyBashTool, UnrestrictedBashTool};
 use cli_tool::CliTool;
 use file_tools::{EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool};
 use session_message::{
-    AgentInterruptTool, AgentListTool, AgentMessageTool, AgentNewTool, CancelProcessTool,
-    ListProcessesTool, ReadProcessTool, SpawnProcessTool, WaitProcessTool,
+    AgentInterruptTool, AgentListTool, AgentMessageTool, AgentNewTool, AgentSessionListTool,
+    AgentSessionReadTool, CancelProcessTool, ListProcessesTool, ReadProcessTool, SpawnProcessTool,
+    WaitProcessTool,
 };
 
 use crate::tool_surface::{AgentToolConfig, BackgroundToolConfig};
@@ -74,10 +75,10 @@ pub use session_history::{
     build_session_history_tool, load_pinned_request_context_observation,
     load_request_context_observation, load_session_context_details, load_session_history_snapshot,
     load_session_history_snapshot_with_access, load_session_inference_observation,
-    load_session_investigation, RequestContextObservation, SessionCompactionEvent,
-    SessionContextDetails, SessionHistoryRow, SessionHistorySnapshot, SessionInferenceObservation,
-    SessionInvestigationSnapshot, SessionRequestEvent, SessionTokenUsage, SessionToolCallStats,
-    SESSION_HISTORY_TOOL_NAME,
+    load_session_investigation, load_session_request_doc_ids, RequestContextObservation,
+    SessionCompactionEvent, SessionContextDetails, SessionHistoryRow, SessionHistorySnapshot,
+    SessionInferenceObservation, SessionInvestigationSnapshot, SessionRequestEvent,
+    SessionTokenUsage, SessionToolCallStats, SESSION_HISTORY_TOOL_NAME,
 };
 #[cfg(test)]
 pub(crate) use shared::apply_workspace_authority;
@@ -110,11 +111,17 @@ pub const AGENT_NEW_TOOL_NAME: &str = "agent_new";
 pub const AGENT_MESSAGE_TOOL_NAME: &str = "agent_message";
 pub const AGENT_INTERRUPT_TOOL_NAME: &str = "agent_interrupt";
 pub const AGENT_LIST_TOOL_NAME: &str = "agent_list";
-pub const AGENT_TOOL_NAMES: [&str; 4] = [
+pub const AGENT_SESSION_LIST_TOOL_NAME: &str = "agent_session_list";
+pub const AGENT_SESSION_READ_TOOL_NAME: &str = "agent_session_read";
+/// The agents tool group (`AgentTools.enabled`), in the order they are
+/// offered.
+pub const AGENT_TOOL_NAMES: [&str; 6] = [
     AGENT_NEW_TOOL_NAME,
     AGENT_MESSAGE_TOOL_NAME,
     AGENT_INTERRUPT_TOOL_NAME,
     AGENT_LIST_TOOL_NAME,
+    AGENT_SESSION_LIST_TOOL_NAME,
+    AGENT_SESSION_READ_TOOL_NAME,
 ];
 pub(crate) const SPAWN_PROCESS_TOOL_NAME: &str = "spawn_process";
 pub(crate) const WAIT_PROCESS_TOOL_NAME: &str = "wait_process";
@@ -667,6 +674,8 @@ pub(crate) fn build_agent_tools(config: AgentToolConfig) -> Vec<Box<dyn ToolDyn>
     tools.push(Box::new(AgentMessageTool));
     tools.push(Box::new(AgentInterruptTool));
     tools.push(Box::new(AgentListTool));
+    tools.push(Box::new(AgentSessionListTool));
+    tools.push(Box::new(AgentSessionReadTool));
     tools
 }
 

@@ -291,6 +291,21 @@ pub(crate) async fn claimed_signed_request_with_trigger(
     created_at: Option<&str>,
     trigger_id: Option<&str>,
 ) -> RequestLifecycle {
+    claimed_signed_request_with_trigger_correlation(
+        node, request_id, session_id, identity, created_at, trigger_id, None,
+    )
+    .await
+}
+
+pub(crate) async fn claimed_signed_request_with_trigger_correlation(
+    node: &Arc<EmbeddedNode>,
+    request_id: &str,
+    session_id: &str,
+    identity: &dyn NodeIdentity,
+    created_at: Option<&str>,
+    trigger_id: Option<&str>,
+    correlation: Option<&str>,
+) -> RequestLifecycle {
     let now = created_at
         .map(str::to_owned)
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
@@ -311,6 +326,7 @@ pub(crate) async fn claimed_signed_request_with_trigger(
         create.caused_by_trigger_id = Some(trigger_id.to_owned());
         create.caused_by_trigger_kind = Some("schedule".to_owned());
     }
+    create.caused_by_correlation = correlation.map(str::to_owned);
     crate::sign_agent_request_create(identity, &mut create)
         .await
         .expect("sign canonical admission fixture request");

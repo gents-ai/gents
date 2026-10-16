@@ -1,5 +1,6 @@
 use super::*;
 
+mod authoring;
 mod crud;
 mod datastore;
 mod discovery;
@@ -36,6 +37,10 @@ const HELP_INDEX: &[(&str, &str)] = &[
         "connect sources, tasks and triggers; wiring recipes",
     ),
     ("pack", "pack and graph installation"),
+    (
+        "plugin",
+        "installed plugin inspection and explicit Tools selection",
+    ),
     ("discovery", "external configuration scan"),
     ("cleanup", "atomic multi-document deletion"),
     ("validate", "check saved configuration and references"),
@@ -103,7 +108,8 @@ impl ConfigCommandParams {
                 | ["backend", "get" | "create" | "discover", ..]
                 | ["profile", "create", ..]
                 | ["skill", "get", ..]
-                | ["pack", "get" | "install" | "update" | "remove", ..] => 2,
+                | ["pack", "get" | "install" | "update" | "remove", ..]
+                | ["plugin", "get", ..] => 2,
                 ["automation", "get" | "preview" | "edit", _, ..] => 3,
                 ["get", ..] => return Err(CommandGuidance {
                     message: "Put the resource before the verb: use agent get to inspect an agent.".into(),
@@ -373,7 +379,7 @@ fn log_config_call(
     let resource = argv.first().map(String::as_str).unwrap_or("");
     let verb = argv.get(1).map(String::as_str).unwrap_or("");
     let reads = [
-        "get", "list", "discover", "context", "help", "--help", "-h", "scan",
+        "get", "list", "discover", "context", "help", "--help", "-h", "scan", "verify",
     ];
     if help
         || previewing
@@ -480,6 +486,9 @@ fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<&'static st
     if pack {
         resources.push("pack");
     }
+    if pack || categories.contains("tools") {
+        resources.push("plugin");
+    }
     if !categories.is_empty() {
         resources.push("cleanup");
         resources.push("batch");
@@ -559,6 +568,16 @@ impl ConfigCommandTool {
                 message,
                 json!({"tool":"schema","next_call":{"argv":["help"]}}),
             );
+        }
+        if matches!(argv.first().map(String::as_str), Some("pack"))
+            && matches!(argv.get(1).map(String::as_str), Some("install" | "update"))
+        {
+            if let Some(package) = argv.get(2) {
+                return (
+                    message,
+                    json!({"next_call":{"argv":["pack","preview",argv[1],package]}}),
+                );
+            }
         }
         let resource = argv.first().map(String::as_str).unwrap_or("help");
         let next = if resources
@@ -666,6 +685,7 @@ impl ConfigCommandTool {
             "automation" => self.automation(&argv[1..]).await,
             "cleanup" => self.cleanup(&argv[1..]).await,
             "pack" => self.pack(&argv[1..]).await,
+            "plugin" => self.plugin(&argv[1..]),
             "skill" => self.skill(&argv[1..]).await,
             "discovery" => self.discovery(&argv[1..]).await,
             "validate" => self.validate_saved(&argv[1..]).await,
@@ -1425,6 +1445,59 @@ impl ConfigCommandTool {
         .pretty()
     }
 
+    fn plugin(&self, argv: &[String]) -> Result<String> {
+        anyhow::ensure!(
+            self.core.held_grants().pack_install || self.categories.contains("tools"),
+            "plugin inspection requires the pack or tools grant"
+        );
+        let home = self
+            .plugins
+            .home()
+            .context("this runtime has no plugin home")?;
+        match argv.first().map(String::as_str) {
+            Some("list") => {
+                let parsed = ParsedArgs::parse(&argv[1..])?;
+                parsed.reject_mutation_flags()?;
+                anyhow::ensure!(
+                    parsed.positionals.is_empty()
+                        && parsed
+                            .options
+                            .keys()
+                            .all(|name| matches!(name.as_str(), "limit" | "cursor")),
+                    "plugin list accepts options.limit and options.cursor only"
+                );
+                let limit = parse_limit(&parsed)?;
+                let cursor = parsed.one("cursor")?;
+                let mut records = crate::plugin::store::list_records(home)?;
+                records.sort_by_key(|record| format!("{}/{}", record.namespace, record.name));
+                let mut items = records.into_iter().filter(|record| cursor.is_none_or(|cursor| format!("{}/{}", record.namespace, record.name).as_str() > cursor)).take(limit + 1).map(|record| json!({"plugin":format!("{}/{}",record.namespace,record.name),"version":record.version,"digest":record.digest,"owner_pack_coordinate":record.owner_pack_coordinate})).collect::<Vec<_>>();
+                let truncated = items.len() > limit;
+                items.truncate(limit);
+                let next_cursor = truncated
+                    .then(|| {
+                        items
+                            .last()
+                            .and_then(|item| item["plugin"].as_str())
+                            .map(ToOwned::to_owned)
+                    })
+                    .flatten();
+                ordered! {"items": items, "next_cursor": next_cursor, "next_call": json!({"argv":["plugin","get","<PLUGIN>"]})}.pretty()
+            }
+            Some("get") if argv.len() == 2 => {
+                let (namespace, name) = crate::plugin::store::parse_coordinate(&argv[1])?;
+                let record = crate::plugin::store::read_record(home, namespace, name)?;
+                ordered! {
+                    "plugin": argv[1],
+                    "selection": json!({"plugin":argv[1],"digest":record.digest}),
+                    "next_call": json!({"argv":["tools","get"]}),
+                    "guidance": "Read the target Tools document and preserve its other integration settings and plugin entries. Explicitly update integrations.plugins with the pinned selection, then read tools get and effective config get for resolved readback. Start a fresh request to call the tool; installation alone does not expose it to the current request.",
+                    "installed": record,
+                }.pretty()
+            }
+            _ => bail!("plugin supports list and get; call [\"help\",\"plugin\"]"),
+        }
+    }
+
     async fn pack(&self, argv: &[String]) -> Result<String> {
         anyhow::ensure!(
             self.core.held_grants().pack_install,
@@ -1439,6 +1512,9 @@ impl ConfigCommandTool {
             .first()
             .map(String::as_str)
             .context("pack command is required; see [\"help\",\"pack\"]")?;
+        if matches!(verb, "scaffold" | "check" | "verify" | "build" | "test") {
+            return self.authoring(verb, &argv[1..]).await;
+        }
         match verb {
             "search" => {
                 let parsed = ParsedArgs::parse(&argv[1..])?;
@@ -2458,7 +2534,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
                 "display_name": "string|null",
                 "host": {"root":"string|null; absent uses runtime cwd", "files":{"mode":"Off|ReadOnly|ReadWrite (default Off)","max_read_chars":"integer 1..1000000|null; default 32000; read_file bytes, default and maximum","max_list_entries":"integer 1..5000|null; default 200","max_matches":"integer 1..5000|null; default 200; glob and grep"}, "bash":{"mode":"Off|ReadOnly|Unrestricted; default Off; ReadOnly still runs shell commands","execution_mode":"read_only|workspace_write|artifact_write|unrestricted|null","network_mode":"inherit|disabled|enabled|null","allowed_argv_prefixes":"array<array<string>>|null","forbidden_argv_prefixes":"array<array<string>>|null","read_only_commands":"array<string>|null","background_enabled":"boolean; default false","timeout_secs":"positive integer|null; default host --command-timeout-secs (120); clamped to the host maximum","max_timeout_secs":"positive integer|null; default timeout_secs if set, else host maximum; clamped to host --command-timeout-max-secs","background_timeout_secs":"positive integer|null; default 36000; clamped to 36000","wait_timeout_secs":"positive integer|null; default 30","max_wait_timeout_secs":"positive integer|null; default 600; clamped to 600","max_output_chars":"integer 1..1000000|null; default 16000; stdout and stderr each"}, "cli":[{"name":"string; host-registered CLI tool name (cli default [])","timeout_secs":"positive integer|null; default host registration (10); clamped to host --command-timeout-max-secs","max_output_chars":"integer 1..1000000|null; default host registration (16000); stdout and stderr each"}]},
                 "remote": {"services":"array<{mcp_service_id:string,tool_names:array<string>,style:flat|discovery(default),required:boolean(default false),background_tool_names:array<string>,connect_timeout_secs?:integer,discovery_timeout_secs?:integer,timeout_secs?:integer,stale_timeout_secs?:integer,background_timeout_secs?:integer (default 36000; clamped to 36000),wait_timeout_secs?:integer (default 30),max_wait_timeout_secs?:integer (default 600; clamped to 600)}>; default []"},
-                "agents": {"target_ids":"array<existing same-node AgentTarget ID>; default []; the agents agent_new may address (create them with agent-target)","enabled":"boolean|null; enables the agents tools: agent_message, agent_interrupt and agent_list, plus agent_new when target_ids selects a target"},
+                "agents": {"target_ids":"array<existing same-node AgentTarget ID>; default []; the agents agent_new may address (create them with agent-target)","enabled":"boolean|null; enables the agents tools: agent_message, agent_interrupt, agent_list, agent_session_list and agent_session_read, plus agent_new when target_ids selects a target"},
                 "built_ins": {"enable_graph_tools":"boolean|null","enable_goal_tools":"boolean|null","enable_goal_creation":"boolean|null","enable_memory":"boolean|null","enable_session_history_tool":"boolean|null","enable_schema_tool":"boolean|null","enable_p2p_tool":"boolean|null","enable_p2p_mutations":"boolean|null","p2p_collections":"array<string>|null","enable_context_budget":"boolean|null"},
                 "datastore": {"enable_defra_query":"boolean|null","defra_query_collections":"array<string>|null","write_collections":"array<exact application collection>|null (empty denies all)","datastore_tool_surface_ids":"array<existing same-node DatastoreToolSurface ID>|null"},
                 "integrations": {"lsp":{"config":"JSON encoded as a string|null","timeout_secs":"positive integer|null; default 20","max_timeout_secs":"positive integer|null; default 300; clamped to 300"},"eth_tool_ids":"array<existing same-node EthTool ID>|null","plugins":"array<{plugin: installed namespace/name, digest: sha256:<hex>|null}>|null"},
@@ -2526,7 +2602,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
             patch_contract(
                 SelfConfigTarget::Trigger,
                 json!({
-                    "display_name":"string|null","description":"string|null","task_id":"existing task ID owned by selected agent","source":"{kind:schedule,schedule_id:string}|{kind:event,event_source_id:string}","enabled":"boolean; default true","concurrency":"parallel|queued_serial|serial|latest_only|null; default parallel; controls overlap, not session destination; queued_serial needs an event source","session_id_template":"string|null; template rendering an existing session ID; event sources only. Null creates a session per fire. Independent of concurrency","tags":"array<string>; default []"
+                    "display_name":"string|null","description":"string|null","task_id":"existing task ID owned by selected agent","source":"{kind:schedule,schedule_id:string}|{kind:event,event_source_id:string}","enabled":"boolean; default true","concurrency":"parallel|queued_serial|serial|latest_only|null; default parallel; controls overlap, not session destination; queued_serial needs an event source or an explicit scheduled session destination","session_id_template":"string|null; template rendering an existing session ID; event or schedule sources; target must be open and use the Task agent. Null creates a session per fire. Independent of concurrency","tags":"array<string>; default []"
                 }),
             ),
             patch_contract(

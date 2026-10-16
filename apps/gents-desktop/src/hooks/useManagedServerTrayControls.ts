@@ -17,6 +17,34 @@ const TRAY_WAIT_TOAST = "managed-server-tray-wait";
 
 export function useManagedServerTrayControls({ actions, stores }: DesktopApp) {
   useEffect(() => {
+    if (!ownsAutomaticRecovery() || !inNativeShell()) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    const report = (message: string) => {
+      try {
+        toast.error(message);
+      } catch {}
+    };
+    void listenToWindow<string>("desktop://app-quit-failed", (message) => {
+      void showAndFocusWindow().catch(() => {});
+      report(`Could not quit: ${message}. The desktop remains open.`);
+    })
+      .then((cleanup) => {
+        if (cancelled) cleanup();
+        else unlisten = cleanup;
+      })
+      .catch((cause) => {
+        report(
+          `Could not observe quit errors: ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
     if (
       !ownsAutomaticRecovery() ||
       !supportsLocalManagedServer() ||

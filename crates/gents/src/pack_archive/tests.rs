@@ -125,6 +125,21 @@ fn packing_twice_gives_the_same_bytes() {
     assert_eq!(first_header, second_header);
 }
 
+#[cfg(unix)]
+#[test]
+fn pack_writer_refuses_a_declared_asset_symlink_outside_the_pack() {
+    let (_guard, root) = fixture_pack_dir("assets_fixture");
+    let outside = tempfile::tempdir().unwrap();
+    let sentinel = outside.path().join("sentinel.txt");
+    std::fs::write(&sentinel, "external sentinel contents").unwrap();
+    let readme = root.join("README.md");
+    std::fs::remove_file(&readme).unwrap();
+    std::os::unix::fs::symlink(&sentinel, &readme).unwrap();
+
+    let error = pack_dir(&root).expect_err("must not follow an external asset symlink");
+    assert!(format!("{error:#}").contains("outside"), "{error:#}");
+}
+
 #[test]
 fn a_pack_is_a_tar_gz_any_archive_tool_can_read_with_its_header_first() {
     let (_guard, root) = fixture_pack_dir("assets_fixture");

@@ -6,6 +6,7 @@ import type {
   InferenceBackendView,
   InferenceModelRecommendation,
 } from "@source-inc/gents-desktop-client";
+import { errorText } from "../../../lib/errorText";
 
 type AdvertisedModel = NonNullable<InferenceBackendView["advertisedModels"]>[number];
 
@@ -84,7 +85,7 @@ export function useModelRecommendation({
           setAnswer({
             asked,
             recommendation: null,
-            error: `Model-aware settings unavailable: ${error instanceof Error ? error.message : String(error)}`,
+            error: `Model-aware settings unavailable: ${errorText(error)}`,
           });
         });
     }, 150);

@@ -338,7 +338,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "automation" => Page {
             what: "documents that start work without a user: event-source or schedule, trigger, task (automation grant). Use it to run an agent on new documents or on a timer.",
             commands: &["task|trigger|schedule|event-source [preview] create|update|delete ID", "task|trigger|schedule|event-source list|get ID"],
-            notes: "task create uses options.agent (default: you); agent_id is protected. Triggers use their Task’s owner; updates retain it. Create Task before Trigger. A reply can finish a task; writing to its input collection fires it again.\nfilter: GraphQL object literal string with unquoted keys. Templates: doc, event, args, session, request, group. Missing values fail the fire. Render needed source data separately from instructions.\nTask.emit_outcome=true records success or failure in FireOutcome; false (default) records neither. For emit_outcome, source documents need a nonempty String handoff_id: declare it before schema installation and populate it in writers (schema tool and help datastore).\nConcurrency: parallel (default); queued_serial runs in order; serial skips while busy; latest_only supersedes. Session destination is separate: session_id_template names an existing session with the Task’s agent; omit for a new one per fire. queued_serial, session_id_template and emit_outcome require an event source.\nPipelines: writing output triggers the next collection’s event source. Fan-in: group waits for expected_count documents sharing correlation_field.",
+            notes: "task create uses options.agent (default: you); agent_id is protected. Triggers use their Task’s owner; updates retain it. Create Task before Trigger. A reply can finish a task; writing to its input collection fires it again.\nfilter: GraphQL object literal string with unquoted keys. Templates: doc, event, args, session, request, group. Missing values fail the fire. Render needed source data separately from instructions.\nTask.emit_outcome=true records success or failure in FireOutcome; false (default) records neither. For emit_outcome, source documents need a nonempty String handoff_id: declare it before schema installation and populate it in writers (schema tool and help datastore).\nConcurrency: parallel (default); queued_serial runs in order; serial skips while busy; latest_only supersedes. Event/schedule session_id_template targets an authorized open session with the Task agent; omit for a new session. Scheduled queued_serial needs an explicit target. emit_outcome is event-only. Schedule retries deduplicate by due occurrence.\nPipelines: writing output triggers the next collection’s event source. Fan-in: group waits for expected_count documents sharing correlation_field.",
             next: "create one source document, inspect the request with sessions, and query the output through its datastore tool.",
         },
         "cleanup" => Page {
@@ -350,18 +350,30 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             notes: "RESOURCE: agent, context, tools, agent-target, profile, sampling, execution, retry-policy, compaction, backend, mcp-service, task, schedule, trigger, event-source, datastore, skill. Datastore surfaces and skills are removable once unreferenced; schemas cannot be removed. Remove refuses if any target changed since the preview. Agent and context need the agent catalog grant; the Engineer agent cannot be removed.",
             next: "read back to confirm the targets are gone.",
         },
+        "plugin" => Page {
+            what: "inspect installed plugins; installation and model tool selection are separate steps.",
+            commands: &["plugin list  options: limit, cursor", "plugin get NAMESPACE/NAME"],
+            notes: "get returns the exact artifact digest and pinned selection. Read the target Tools document, preserve its other fields and existing integration/plugin entries, then explicitly select integrations.plugins through tools update. Operator authority is enforced by the plugin store; model input cannot grant it.",
+            next: "Read tools get and effective config get to verify resolved selection. Start a fresh request to call the selected plugin.",
+        },
         "pack" => Page {
-            what: "discover registry packs and install document or graph packs with their configuration (pack grant). Assets and plugins-only packs require the CLI installer.",
+            what: "inspect verified local plugin artifacts and discover registry packs; install document, graph or plugins-only packs (pack grant).",
             commands: &[
                 "pack search  options: query (omit to browse), page (starts at 1); reads the registry",
                 "pack list  options: limit, cursor; reads this home's store",
-                "pack get PACKAGE",
+                "pack get PACKAGE  a name, sha256:<hex>, or explicit built .pack path",
                 "pack preview install|update PACKAGE [--inference-slot NAME=PROFILE_ID ...] [--var NAME=VALUE ...]",
                 "pack install|update PACKAGE  the same pairs, and options.digest from the preview",
                 "pack remove PACKAGE",
+                "pack scaffold NAME  options: namespace (default gents), kind (documents|graph|assets|plugins), template, language",
+                "pack check [DIR]  every validation an install runs; reports unverified in problems' place, never full success",
+                "pack verify PACK  verify a built .pack file in place",
+                "pack scaffold --help",
+                "pack check --help",
+                "pack verify --help",
             ],
-            notes: "Bind every declared inference slot to an existing profile whose backend is account-free or its provider's default account. A pack resolves from the home's pack store first, then the operator's registry; NAME alone means the gents namespace, NAMESPACE/NAME[@VERSION] names any other, and update looks up the newest version on the registry. Plugin permissions and increased resource limits need operator approval. Inspect installation_blockers; a preview with ready:false supplies no apply call. Existing operator grants may satisfy those requirements. Installing does not run a graph. Remove deletes the package's graph and documents, refused while a run has not finished; it releases no plugin bytes or archive, and schemas and run history stay.",
-            next: "run the installed graph with the graph tools.",
+            notes: "Bind every declared inference slot to an existing profile whose backend is account-free or its provider's default account. Local .pack paths require the held file read grant and explicit tool root; symlinks and request workspace paths use the file owner. Local pack authoring: scaffold, check and verify run inside the effective tool root; scaffold needs readwrite file tools, check and verify only read, and all take the pack grant. pack build (compiles plugin sources through language toolchains) and pack test (author tests) are unavailable through config; run them from the operator CLI. A digest opens only the runtime home store. A named pack resolves from the home's pack store first, then the operator's registry; NAME alone means the gents namespace, NAMESPACE/NAME[@VERSION] names any other, and update looks up the newest version on the registry. Plugin permissions and increased resource limits need operator approval. Inspect installation_blockers; a preview with ready:false supplies no apply call. Existing operator grants may satisfy those requirements. Installing does not run a graph or select model tools. Inspect plugins with plugin get, then explicitly select integrations.plugins on Tools and start a fresh request. Remove deletes the package's graph and documents, refused while a run has not finished; it releases no plugin bytes or archive, and schemas and run history stay.",
+            next: "Inspect plugin selection with plugin get, or run the installed graph with graph tools.",
         },
         _ => return None,
     })

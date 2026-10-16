@@ -46,6 +46,14 @@ export function adoptNewChatFolder(
   return withFolder(withFolder(folders, null, null), sessionId, pick);
 }
 
+/* Picks are re-inserted on every change, so the map's order is the order
+   they were last made in. */
+/** Distinct folders, the most recently picked first. */
+export function recentFolders(folders: ChatFolders, limit = 5): string[] {
+  return [...new Set(Object.values(folders).reverse())].slice(0, limit);
+}
+
+/** The folder chosen for a session, or for the new chat under null. */
 export function folderOf(
   folders: ChatFolders,
   sessionId: string | null,

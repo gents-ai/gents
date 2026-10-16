@@ -19,6 +19,7 @@ use crate::request_helpers::capture_report;
 /// What to do with pack documents someone edited since they were installed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum EditedDocuments {
     /// Stop and name them.
     #[default]

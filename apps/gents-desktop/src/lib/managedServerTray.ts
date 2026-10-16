@@ -9,6 +9,7 @@ import {
   type ManagedServerWait,
 } from "./managedServerStartup";
 import { DEFAULT_NODE_NAME } from "@source-inc/gents-desktop-fleet";
+import { errorText } from "./errorText";
 
 type Unlisten = () => void;
 type Listen = (event: string, handler: () => void) => Promise<Unlisten>;
@@ -46,7 +47,7 @@ export function installManagedServerTrayListeners(
       const unwatch = server.watchWait(onWait);
       void action()
         .catch((cause) => {
-          reportError(cause instanceof Error ? cause.message : String(cause));
+          reportError(errorText(cause));
         })
         .finally(() => {
           unwatch();
@@ -58,9 +59,7 @@ export function installManagedServerTrayListeners(
         else cleanups.push(cleanup);
       })
       .catch((cause) => {
-        reportError(
-          `Could not register the node menu command: ${cause instanceof Error ? cause.message : String(cause)}`,
-        );
+        reportError(`Could not register the node menu command: ${errorText(cause)}`);
       });
   };
 

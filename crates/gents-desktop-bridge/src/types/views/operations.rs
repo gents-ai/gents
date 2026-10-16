@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -148,8 +148,24 @@ pub struct InterruptRequestResult {
     pub already_interrupted: bool,
 }
 
-/// `display_state` derives from `(enabled, probe_status)` and matches the
-/// Lean `backendAvailable` witness.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum BackendDisplayState {
+    Available,
+    Unhealthy,
+    Stale,
+    RateLimited,
+    CircuitOpen,
+    Unknown,
+    Disabled,
+}
+
+/// One backend's persisted health + recent admission outcomes. Read-only
+/// projection of `InferenceBackend` joined with the last N `InferenceCall`
+/// rows for that backend. `display_state` is derived from
+/// `(enabled, probe_status)` per the prototype's mapping (matches
+/// `InferenceBackend::is_available` and the Lean `backendAvailable`
+/// witness in `BoundaryRuntime.lean`).
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendHealthView {
@@ -159,7 +175,7 @@ pub struct BackendHealthView {
     pub endpoint: String,
     pub enabled: bool,
     pub probe_status: String,
-    pub display_state: String,
+    pub display_state: BackendDisplayState,
     pub last_probe: Option<String>,
     pub max_concurrent: i64,
     pub max_queue_depth: i64,

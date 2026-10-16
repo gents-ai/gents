@@ -33,7 +33,7 @@ const turn = (
 });
 
 describe("pendingRows", () => {
-  it("orders listed messages by the queue and keeps other inputs in place", () => {
+  it("preserves native arrival order while locating controls in the pending queue", () => {
     const automated = turn("auto", {
       kind: "backgroundCompletion",
     } as PendingTurnView["origin"]);
@@ -42,9 +42,14 @@ describe("pendingRows", () => {
       [entry("b"), entry("a")],
     );
     expect(rows.map((row) => [row.kind, row.turn.requestId])).toEqual([
-      ["message", "b"],
-      ["automated", "auto"],
       ["message", "a"],
+      ["automated", "auto"],
+      ["message", "b"],
+    ]);
+    expect(rows.map((row) => (row.kind === "message" ? row.index : null))).toEqual([
+      1,
+      null,
+      0,
     ]);
   });
 

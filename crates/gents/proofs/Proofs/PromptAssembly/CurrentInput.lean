@@ -114,4 +114,47 @@ theorem provider_history_idempotent (currentRequestId : String)
       providerHistory currentRequestId rows := by
   simp [providerHistory]
 
+/-- A completed wake acknowledges its claim receipt. Failed or interrupted
+wakes do not acknowledge delivery. Claim receipts contain the complete key
+owned prefix, so subtraction from the latest completed receipt selects this
+wake's new input without changing notification publication or transcript order.
+Fork imports have no request membership and stay in retained history. -/
+def wakeNotificationKeys (claimed acknowledged : List String) : List String :=
+  claimed.filter fun key => !acknowledged.contains key
+
+theorem acknowledged_notification_is_not_current (claimed acknowledged : List String)
+    (key : String) (h : key ∈ acknowledged) :
+    key ∉ wakeNotificationKeys claimed acknowledged := by
+  simp [wakeNotificationKeys, h]
+
+/-- Stable partition at provider entry, after canonical history reduction.
+Only physical headers selected by the claim receipt move; text equality and
+provider IDs confer no ownership. The canonical transcript remains untouched. -/
+def wakeHistory (current : α → Bool) (rows : List α) : List α :=
+  rows.filter (fun row => !current row) ++ rows.filter current
+
+/-- Current notification input is reconstructed from its canonical headers
+even when a prior compaction removed those rows from retained history. -/
+def wakeEntry (current : α → Bool) (history notifications : List α) : List α :=
+  history.filter (fun row => !current row) ++ notifications
+
+theorem retained_wake_entry_is_stable_partition (current : α → Bool) (rows : List α) :
+    wakeEntry current rows (rows.filter current) = wakeHistory current rows := rfl
+
+theorem wake_history_preserves_length (current : α → Bool) (rows : List α) :
+    (wakeHistory current rows).length = rows.length := by
+  induction rows with
+  | nil => simp [wakeHistory]
+  | cons row rows ih =>
+    cases h : current row <;> simp_all [wakeHistory, List.filter_cons, ← Nat.add_assoc]
+
+theorem wake_history_preserves_membership (current : α → Bool) (rows : List α) (row : α) :
+    row ∈ wakeHistory current rows ↔ row ∈ rows := by
+  cases h : current row <;> simp [wakeHistory, h]
+
+theorem wake_history_preserves_prior_order (current : α → Bool) (rows : List α) :
+    (wakeHistory current rows).filter (fun row => !current row) =
+      rows.filter (fun row => !current row) := by
+  simp [wakeHistory, List.filter_filter]
+
 end PromptAssembly.CurrentInput

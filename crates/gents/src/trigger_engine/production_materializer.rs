@@ -473,144 +473,37 @@ impl MaterializerHandle for ProductionMaterializer {
     ) -> Pin<Box<dyn std::future::Future<Output = Result<usize>> + Send + '_>> {
         let node = self.node.clone();
         let owner = node_did.to_owned();
-        let escaped_node_did = escape_graphql_string(node_did);
-        let escaped_trigger_id = escape_graphql_string(trigger_id);
-        let request_exclusion_filter = excluded_request_id
-            .map(escape_graphql_string)
-            .map(|value| format!(r#", request_id: {{ _neq: "{value}" }}"#))
-            .unwrap_or_default();
+        let trigger_id = trigger_id.to_owned();
+        let excluded = excluded_request_id.map(str::to_owned);
         Box::pin(async move {
-            let now = chrono::Utc::now().to_rfc3339();
-            let terminalized_at = escape_graphql_string(&now);
-            let mutation = format!(
-                r#"mutation {{
-                    update_AgentRequest(
-                        filter: {{
-                            node_did: {{ _eq: "{node_did}" }},
-                            caused_by_trigger_id: {{ _eq: "{trigger_id}" }}{request_exclusion_filter},
-                            lifecycle_state: {{ _eq: "pending" }}
-                        }},
-                        input: {{
-                            lifecycle_state: "superseded",
-                            terminalized_at: "{terminalized_at}",
-                            terminal_redrive_attempts: 0
-                        }}
-                    ) {{ _docID request_id }}
-                }}"#,
-                node_did = escaped_node_did,
-                trigger_id = escaped_trigger_id,
-                request_exclusion_filter = request_exclusion_filter,
-            );
-            let resp = crate::config_client::ConfigAccess::transact_local_write(
+            crate::config_client::ConfigAccess::transact_local_write(
                 &node,
                 None,
-                "supersede_active_runtime_requests_for_trigger",
+                "trigger.supersede_requests",
                 |txn| {
-                    let mutation = &mutation;
                     let owner = &owner;
-                    let now = &now;
+                    let trigger_id = &trigger_id;
+                    let excluded = excluded.as_deref();
                     Box::pin(async move {
-                        let response = txn.execute_local_response(mutation).await?;
-                        if let Some(rows) = response
-                            .data
-                            .as_ref()
-                            .and_then(|data| data["update_AgentRequest"].as_array())
-                        {
-                            for row in rows {
-                                if let Some(request_id) = row["request_id"].as_str() {
-                                    crate::trigger_engine::durable::publish_request_outcome(
-                                        txn,
-                                        owner,
-                                        request_id,
-                                        "superseded",
-                                        "newer trigger fire",
-                                        now,
-                                    )
-                                    .await?;
-                                }
-                            }
-                        }
-                        Ok(response)
+                        crate::lifecycle::materialize::supersede_trigger_requests_in_txn(
+                            txn, owner, trigger_id, excluded,
+                        )
+                        .await
                     })
                 },
             )
-            .await?;
-            let mut count = resp
-                .data
-                .as_ref()
-                .and_then(|data| data.get("update_AgentRequest"))
-                .and_then(|rows| rows.as_array())
-                .map(|rows| rows.len())
-                .unwrap_or(0);
-            // Claims racing the pending CAS above are observed here;
-            // post-claim cancellation belongs to the execution lease owner.
-            let active = RequestLifecycleState::graphql_list([
-                RequestLifecycleState::Claimed,
-                RequestLifecycleState::Processing,
-            ]);
-            let query = format!(
-                r#"{{ AgentRequest(filter: {{
-                node_did: {{ _eq: "{escaped_node_did}" }},
-                caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }}{request_exclusion_filter},
-                lifecycle_state: {{ _in: {active} }}
-            }}) {{ _docID request_id node_did requester_did agent_id session_id lifecycle_state
-                execution_generation execution_lease_expires_at
-            }} }}"#
-            );
-            // A lease renewal may invalidate the observed tuple; converge
-            // before allowing LatestOnly to dispatch its replacement.
-            let mut converged = false;
-            const EXECUTION_REVOCATION_ATTEMPTS: usize = 4;
-            for _ in 0..EXECUTION_REVOCATION_ATTEMPTS {
-                let result = graphql_with_transaction_retry(
-                    &node,
-                    &query,
-                    "loading executions to supersede",
-                )
-                .await?;
-                let active_rows = rows::<AgentRequestRow>(&result, "AgentRequest")?;
-                if active_rows.is_empty() {
-                    converged = true;
-                    break;
-                }
-                for row in active_rows {
-                    if crate::lifecycle::revoke_execution_preserving_output(
-                        &node,
-                        &row,
-                        crate::lifecycle::RequestTerminalOutcome::Superseded,
-                        "superseded by a newer trigger fire",
-                    )
-                    .await?
-                        == crate::lifecycle::TerminalizeResult::Won
-                    {
-                        count += 1;
-                    }
-                }
-            }
-            anyhow::ensure!(
-                converged,
-                "execution renewal raced LatestOnly revocation; retry trigger dispatch"
-            );
-            if count > 0 {
-                tracing::info!(
-                    node_did = %escaped_node_did,
-                    trigger_id = %escaped_trigger_id,
-                    count,
-                    "superseded active runtime AgentRequests for trigger"
-                );
-            }
-            Ok(count)
+            .await
         })
     }
 
-    fn recover_event_fire(
+    fn recover_admitted_fire(
         &self,
         identity: &gents_protocol::trigger_delivery::FireIdentity,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + '_>> {
         let identity = identity.clone();
         Box::pin(async move {
             let key = crate::trigger_engine::durable::fire_key(&identity);
-            crate::config_client::ConfigAccess::transact_local_write(
+            crate::config_client::ConfigAccess::transact_local_readonly(
                 &self.node, Some(self.runtime_actor()?), "trigger.recover_admitted_fire",
                 |txn| { let key = key.clone(); let identity = identity.clone(); Box::pin(async move {
                     let result = txn.execute(&format!(
@@ -618,16 +511,16 @@ impl MaterializerHandle for ProductionMaterializer {
                         escape_graphql_string(&key),
                     )).await?;
                     let receipts = result["data"]["TriggerFire"].as_array()
-                        .context("event recovery omitted receipt rows")?;
-                    anyhow::ensure!(receipts.len() <= 1, "event fire receipt is not unique");
+                        .context("fire recovery omitted receipt rows")?;
+                    anyhow::ensure!(receipts.len() <= 1, "fire receipt is not unique");
                     let Some(receipt) = receipts.first() else { return Ok(None); };
                     let request_id = identity.request_id();
-                    anyhow::ensure!(receipt["request_id"].as_str() == Some(request_id.as_str()), "event receipt request identity mismatch");
+                    anyhow::ensure!(receipt["request_id"].as_str() == Some(request_id.as_str()), "fire receipt request identity mismatch");
                     let result = txn.execute(&format!(
                         "{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}, limit: 2) {{_docID}} }}",
                         escape_graphql_string(&identity.owner_did), escape_graphql_string(&request_id),
                     )).await?;
-                    anyhow::ensure!(result["data"]["AgentRequest"].as_array().is_some_and(|rows| rows.len() == 1), "event receipt has no unique admitted request");
+                    anyhow::ensure!(result["data"]["AgentRequest"].as_array().is_some_and(|rows| rows.len() == 1), "fire receipt has no unique admitted request");
                     Ok(Some(request_id))
                 }) },
             ).await

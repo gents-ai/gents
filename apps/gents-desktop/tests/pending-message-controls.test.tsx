@@ -24,6 +24,7 @@ const turn = (row: PendingQueueEntryView, createdAt: string): PendingTurnView =>
   createdAt,
 });
 
+/** The native snapshot supplies arrival order independently of creation time. */
 function setup(
   queue: PendingQueueEntryView[],
   queued = queue.map((row, index) => turn(row, `2026-10-10T00:00:0${index}Z`)),
@@ -103,7 +104,7 @@ describe("pending message controls", () => {
     const second = entry("second");
     const onEdit = setup(
       [edited, second],
-      [turn(second, "2026-10-10T00:00:01Z"), turn(edited, "2026-10-10T00:00:02Z")],
+      [turn(edited, "2026-10-10T00:00:02Z"), turn(second, "2026-10-10T00:00:01Z")],
     );
     expect(screen.getAllByTestId("queued-input").map((row) => row.textContent)).toEqual(
       [
@@ -123,6 +124,24 @@ describe("pending message controls", () => {
       }),
     );
   });
+
+  it.each(["partially", "fully"])(
+    "keeps native order when the queue was %s taken",
+    (taken) => {
+      const edited = entry("edited");
+      const second = entry("second");
+      setup(taken === "partially" ? [second] : [], [
+        turn(edited, "2026-10-10T00:00:02Z"),
+        turn(second, "2026-10-10T00:00:01Z"),
+      ]);
+      expect(
+        screen.getAllByTestId("queued-input").map((row) => row.textContent),
+      ).toEqual([
+        expect.stringContaining("message edited"),
+        expect.stringContaining("message second"),
+      ]);
+    },
+  );
 
   it("cannot move a source across a different execution group", async () => {
     setup([entry("a"), entry("b", "other")]);

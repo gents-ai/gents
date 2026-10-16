@@ -65,6 +65,37 @@ pub fn request_output_segments_query(request_doc_id: &str) -> String {
     )
 }
 
+/// DefraDB indexes JSON leaves, not whole objects. Readers must check complete
+/// typed source equality after this discriminator lookup, without a row limit
+/// that could hide conflicting observations of the same source.
+pub(crate) fn source_output_segments_query(
+    request_doc_id: &str,
+    source: &gents_protocol::output::OutputSource,
+) -> Result<String> {
+    use gents_protocol::output::OutputSource;
+
+    let discriminator = match source {
+        OutputSource::ProviderTurn { turn_index, .. } => {
+            serde_json::json!({"turn_index": {"_eq": turn_index}})
+        }
+        OutputSource::ToolCall { tool_call_doc_id }
+        | OutputSource::ToolEffectArguments { tool_call_doc_id } => {
+            serde_json::json!({"tool_call_doc_id": {"_eq": tool_call_doc_id}})
+        }
+        OutputSource::Authored { key } => serde_json::json!({"key": {"_eq": key}}),
+    };
+    let filter = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+        "request_doc_id": {"_eq": request_doc_id},
+        "source": discriminator,
+    }))?;
+    Ok(format!(
+        "{{ AgentOutputSegment(filter: {filter}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"
+    ))
+}
+
+/// Read the canonical output facts for one physical request in a single
+/// response. Both collections use their request_doc_id indexes; scope checks
+/// are applied before decoding below.
 pub fn request_output_facts_query(request_doc_id: &str) -> String {
     let request_doc_id = gents_protocol::graphql::escape_graphql_string(request_doc_id);
     format!(

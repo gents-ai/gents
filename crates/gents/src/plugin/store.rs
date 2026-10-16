@@ -120,8 +120,10 @@ pub fn check_plugin_ownership(
     name: &str,
     pack_coordinate: &str,
 ) -> Result<()> {
-    let Ok(existing) = read_record(home, namespace, name) else {
-        return Ok(());
+    let existing = match read_record(home, namespace, name) {
+        Ok(existing) => existing,
+        Err(error) if is_not_found(&error) => return Ok(()),
+        Err(error) => return Err(error).context("reading existing plugin ownership"),
     };
     match existing.owner_pack_coordinate {
         Some(owner) if owner != pack_coordinate => Err(anyhow::anyhow!(
@@ -130,6 +132,14 @@ pub fn check_plugin_ownership(
         )),
         _ => Ok(()),
     }
+}
+
+pub(crate) fn is_not_found(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+    })
 }
 
 /// Whether `namespace/name`'s installed record is owned by `pack_coordinate`:
@@ -150,6 +160,47 @@ pub fn owns_plugin_record(
     })
 }
 
+/// Removes a plugin record only when its current owner still matches the
+/// pack being removed. The ownership read and deletion share the store's
+/// nonblocking exclusive lock, so a concurrent reinstall cannot be deleted
+/// after a stale ownership check.
+pub fn remove_record_if_owned(
+    home: &Path,
+    namespace: &str,
+    name: &str,
+    pack_coordinate: &str,
+    digest: &str,
+) -> Result<bool> {
+    let guard = try_lock_store(home)?;
+    remove_record_if_owned_locked(&guard, home, namespace, name, pack_coordinate, digest)
+}
+
+pub(crate) fn remove_record_if_owned_locked(
+    guard: &StoreGuard,
+    home: &Path,
+    namespace: &str,
+    name: &str,
+    pack_coordinate: &str,
+    digest: &str,
+) -> Result<bool> {
+    guard.for_home(home)?;
+    let record = match read_record(home, namespace, name) {
+        Ok(record) => record,
+        Err(error) if is_not_found(&error) => return Ok(false),
+        Err(error) => return Err(error).context("reading plugin ownership before removal"),
+    };
+    let owned = match record.owner_pack_coordinate.as_deref() {
+        Some(owner) => owner == pack_coordinate,
+        None => record.digest == digest,
+    };
+    if !owned {
+        return Ok(false);
+    }
+    let path = record_path(home, namespace, name)?;
+    std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+    Ok(true)
+}
+
 /// The grant to record when `plugin` is installed as `namespace/name`,
 /// asking for consent only when it wants more than was granted before.
 pub fn grant_on_install(
@@ -158,7 +209,11 @@ pub fn grant_on_install(
     plugin: &crate::pack::PackPlugin,
     consent: bool,
 ) -> Result<Option<crate::plugin::Manifold>> {
-    let previous = read_record(home, namespace, &plugin.name).ok();
+    let previous = match read_record(home, namespace, &plugin.name) {
+        Ok(record) => Some(record),
+        Err(error) if is_not_found(&error) => None,
+        Err(error) => return Err(error).context("reading the existing plugin grant"),
+    };
     let previous_limits = previous
         .as_ref()
         .filter(|record| record.granted.is_some())
@@ -195,11 +250,35 @@ pub fn read_bytes(home: &Path, digest_hex: &str) -> Result<Vec<u8>> {
         .with_context(|| format!("reading the installed plugin bytes at {}", path.display()))
 }
 
+/// A held plugin store lock, tied to the `home` it was taken for. A
+/// lock-aware mutation path takes `&StoreGuard` rather than a bare lock so
+/// a caller holding a guard for one home cannot hand it to a mutation of
+/// another home and run unlocked.
+pub struct StoreGuard {
+    home: PathBuf,
+    lock: crate::file_lock::FileLock,
+}
+
+impl StoreGuard {
+    /// Refuses a guard that does not belong to `home`'s store.
+    pub fn for_home(&self, home: &Path) -> Result<()> {
+        anyhow::ensure!(
+            self.home.as_path() == home,
+            "the plugin store lock in use belongs to {}, not {}",
+            self.home.display(),
+            home.display()
+        );
+        Ok(())
+    }
+}
+
 /// Takes the plugin byte store's lock: shared while an install writes bytes
 /// and its record, exclusive while [`release_unreferenced_bytes`] scans and
-/// deletes. Without it, a racing install could leave a record pointing at
-/// bytes release just deleted.
-pub fn lock_store(home: &Path, exclusive: bool) -> Result<crate::file_lock::FileLock> {
+/// deletes. Without this, a concurrent install's `store_bytes` (bytes
+/// written) racing `release_unreferenced_bytes`'s scan (bytes still
+/// unreferenced) then `write_record` (record now pointing at them) could end
+/// with a record pointing at bytes release just deleted.
+pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
     let path = plugins_root(home).join(".store.lock");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -212,19 +291,54 @@ pub fn lock_store(home: &Path, exclusive: bool) -> Result<crate::file_lock::File
         .truncate(false)
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))?;
-    if exclusive {
+    let lock = if exclusive {
         crate::file_lock::FileLock::exclusive(file)
     } else {
         crate::file_lock::FileLock::shared(file)
     }
-    .with_context(|| format!("locking {}", path.display()))
+    .with_context(|| format!("locking {}", path.display()))?;
+    Ok(StoreGuard {
+        home: home.to_owned(),
+        lock,
+    })
+}
+
+/// Takes an exclusive store lock without blocking the calling thread. Async
+/// pack commands use this entry point so another install holding the lock
+/// cannot park a Tokio worker while it awaits its node transaction.
+pub(crate) fn try_lock_store(home: &Path) -> Result<StoreGuard> {
+    let path = plugins_root(home).join(".store.lock");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    let lock = match crate::file_lock::FileLock::try_exclusive(file) {
+        Ok(lock) => lock,
+        Err(std::fs::TryLockError::WouldBlock) => {
+            anyhow::bail!("plugin store is busy; retry this pack operation")
+        }
+        Err(std::fs::TryLockError::Error(error)) => {
+            return Err(error).with_context(|| format!("locking {}", path.display()));
+        }
+    };
+    Ok(StoreGuard {
+        home: home.to_owned(),
+        lock,
+    })
 }
 
 /// Removes every store byte named in `digests` that no installed-plugin
 /// record in `home` references any more. Takes the exclusive store lock
 /// ([`lock_store`]) around the whole scan and delete.
 pub fn release_unreferenced_bytes(home: &Path, digests: &BTreeSet<String>) -> Result<Vec<String>> {
-    let _lock = lock_store(home, true)?;
+    let _lock = try_lock_store(home)?;
     let referenced: BTreeSet<String> = list_records(home)?
         .into_iter()
         .map(|record| record.digest)
@@ -487,6 +601,60 @@ mod tests {
     }
 
     #[test]
+    fn guarded_removal_rechecks_owner_under_the_store_lock() {
+        let home = tempfile::tempdir().unwrap();
+        write_record(
+            home.path(),
+            &sample_record("acme", "echo", Some("acme/widget")),
+        )
+        .unwrap();
+
+        assert!(!remove_record_if_owned(
+            home.path(),
+            "acme",
+            "echo",
+            "acme/gadget",
+            "sha256:unused",
+        )
+        .unwrap());
+        assert!(read_record(home.path(), "acme", "echo").is_ok());
+
+        assert!(remove_record_if_owned(
+            home.path(),
+            "acme",
+            "echo",
+            "acme/widget",
+            "sha256:unused",
+        )
+        .unwrap());
+        assert!(is_not_found(
+            &read_record(home.path(), "acme", "echo").unwrap_err()
+        ));
+    }
+
+    #[test]
+    fn malformed_plugin_record_is_not_treated_as_missing_ownership() {
+        let home = tempfile::tempdir().unwrap();
+        let path = record_path(home.path(), "acme", "echo").unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let malformed = b"{not-json";
+        std::fs::write(&path, malformed).unwrap();
+
+        assert!(check_plugin_ownership(home.path(), "acme", "echo", "acme/widget").is_err());
+        assert!(remove_record_if_owned(
+            home.path(),
+            "acme",
+            "echo",
+            "acme/widget",
+            "sha256:unused",
+        )
+        .is_err());
+        assert_eq!(std::fs::read(path).unwrap(), malformed);
+    }
+
+    /// `gents pack remove` releases bytes no remaining record references,
+    /// and keeps bytes another record still points at.
+    #[test]
     fn release_keeps_bytes_another_record_references_and_frees_the_rest() {
         let home = tempfile::tempdir().unwrap();
         let shared_digest = format!("sha256:{}", "a".repeat(64));
@@ -529,3 +697,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "store_guard_tests.rs"]
+mod store_guard_tests;

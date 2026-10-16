@@ -118,7 +118,15 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
             .status,
         "open"
     );
-    assert_eq!(sweep_open_mailbox_items(&node).await.unwrap().acted, 0);
+    // The sweep cannot consume a valid but still-unclaimed reply either.
+    assert_eq!(
+        sweep_open_mailbox_items(&node, identity.did(), None)
+            .await
+            .unwrap()
+            .report
+            .acted,
+        0
+    );
     claim(&node, &request, false).await.unwrap();
     claim(&node, &request, false).await.unwrap();
     let replay = signed_reply(&node, &identity, &item, "replayed-request").await;

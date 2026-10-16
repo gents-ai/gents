@@ -18,6 +18,7 @@ import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { RowMenu } from "./RowMenu";
 import { useApp } from "@/app/AppContext";
+import { errorText } from "../../../lib/errorText";
 
 function Editor({
   deployment,
@@ -105,7 +106,7 @@ function Editor({
           : `${result.status} · ${result.toolCount} tools`,
       );
     } catch (error) {
-      toast(`Test failed: ${error instanceof Error ? error.message : String(error)}`);
+      toast(`Test failed: ${errorText(error)}`);
     }
   };
   const id = (f: string) => `${service.service_id}-${f}`;

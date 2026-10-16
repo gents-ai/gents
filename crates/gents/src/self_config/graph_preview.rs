@@ -597,7 +597,7 @@ mod tests {
         assert!(matches!(
             malformed,
             ToolError::UnparseableArgs {
-                kind: UnparseableArgsKind::Truncated,
+                kind: UnparseableArgsKind::Malformed,
                 ..
             }
         ));

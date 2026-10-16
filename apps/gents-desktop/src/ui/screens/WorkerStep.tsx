@@ -194,7 +194,14 @@ function Row({
   );
 }
 
-
+export function isWorkerStep(tool: RenderedToolCallView) {
+  const p = tool.presentation;
+  return (
+    (p.kind === "agent" &&
+      (p.action === "start" || p.action === "message" || p.action === "interrupt")) ||
+    (p.kind === "process" && tool.awaitMode === "background")
+  );
+}
 
 export function WorkerStep({
   tool,

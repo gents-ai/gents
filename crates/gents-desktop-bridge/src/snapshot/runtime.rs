@@ -17,7 +17,7 @@ use super::super::types::{
     TriggerView,
 };
 use super::runtime_tasks::{
-    recent_runs_for_task_views, session_summaries, source_matches_node, task_run_history,
+    recent_runs_for_task_views, session_summaries, source_matches_node, task_run_histories,
 };
 use super::to_health_view;
 
@@ -323,13 +323,14 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 .collect::<Vec<_>>();
             triggers.sort_by(|left, right| left.config.trigger_id.cmp(&right.config.trigger_id));
 
+            let mut run_histories = task_run_histories(store.as_ref(), &peer.node_did, &triggers);
             let mut tasks = scoped_task_rows
                 .into_iter()
                 .map(|(_index, row)| {
                     project_task_view(
                         row,
                         recent_runs_for_task_views(&triggers, &peer.node_did, &row.task_id),
-                        task_run_history(store.as_ref(), &peer.node_did, &row.task_id, &triggers),
+                        run_histories.remove(&row.task_id).unwrap_or_default(),
                     )
                 })
                 .collect::<Vec<_>>();

@@ -13,6 +13,21 @@ export function agentOf(
   return node.agents.find((agent) => agent.agentId === agentId) ?? null;
 }
 
+/** The backend an agent's inference profile runs on, when the node has both. */
+export function backendOf(
+  node: Pick<NodeView, "inferenceProfiles" | "inferenceBackends">,
+  agent: Pick<AgentView, "inferenceProfileId">,
+) {
+  const profile = node.inferenceProfiles.find(
+    (p) => p.profile_id === agent.inferenceProfileId,
+  );
+  if (!profile) return null;
+  return node.inferenceBackends.find((b) => b.backendId === profile.backend_id) ?? null;
+}
+
+/** The node's default agent, by the client's one rule: the node's
+    default, then the one marked default, then the conventional id, then
+    the first enabled. */
 export function defaultAgentOf(node: NodeView | null | undefined): AgentView | null {
   return agentOf(node, selectedAgentIdForDeployment(node ?? null, null));
 }

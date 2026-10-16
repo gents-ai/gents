@@ -435,3 +435,227 @@ impl DefraSessionHook {
         Ok((session_id, request_id, deadline_at, sequence))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hook_results_lead_with_the_answer_and_keep_nulls() {
+        let value = json!({"ok":true,"status":"idle","result":null,"session_id":"session"});
+        let rendered = json_string(value.clone());
+        assert!(rendered.starts_with("{\n  \"result\": null,"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&rendered).unwrap(),
+            value
+        );
+    }
+
+    #[test]
+    fn successful_process_stop_leads_with_the_observed_outcome() {
+        let value = json!({"ok":true,"status":"cancelled","process":"stopped","error":null,"tool_call_id":"call"});
+        let rendered = json_string(value.clone());
+        assert!(
+            rendered.starts_with("{\n  \"status\": \"cancelled\",\n  \"process\": \"stopped\",")
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&rendered).unwrap(),
+            value
+        );
+    }
+
+    #[test]
+    fn json_envelope_bounds_oversized_result_and_stays_valid_json() {
+        let limits = crate::truncation::TruncationLimits::default();
+        let big = "x".repeat(2 * limits.max_bytes);
+        let rendered = json_envelope_with_bounded_result(
+            serde_json::json!({"ok": true, "status": "completed", "result": null}),
+            "result",
+            &big,
+            "wait_process",
+            &limits,
+        );
+        assert!(
+            rendered.len() <= limits.max_bytes,
+            "envelope must fit the outer bound: {} > {}",
+            rendered.len(),
+            limits.max_bytes
+        );
+        assert!(rendered.starts_with("{\n  \"result\":"));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&rendered).expect("envelope must remain valid JSON");
+        let result = parsed["result"].as_str().expect("result string");
+        assert!(!result.is_empty(), "bounded result must be non-empty");
+        assert!(result.len() < big.len(), "result must be bounded");
+    }
+
+    #[test]
+    fn json_envelope_falls_back_to_stub_when_escaping_inflates_past_limits() {
+        // Control characters escape 6x (0x01 -> \\u0001), defeating the half-budget
+        // headroom; the helper must fall back to a stub rather than let the
+        // outer truncation slice the envelope.
+        let limits = crate::truncation::TruncationLimits::default();
+        // Many short control-char lines: small enough to survive the inner
+        // half-budget bound, but escaping inflates ~6x past the full budget.
+        let pathological = vec!["\u{1}".repeat(10); 1500].join("\n");
+        let rendered = json_envelope_with_bounded_result(
+            serde_json::json!({"ok": true, "result": null}),
+            "result",
+            &pathological,
+            "wait_process",
+            &limits,
+        );
+        assert!(rendered.len() <= limits.max_bytes);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&rendered).expect("stub envelope must be valid JSON");
+        assert!(
+            parsed["result"]
+                .as_str()
+                .is_some_and(|s| s.contains("omitted")),
+            "expected the stub fallback, got {parsed}"
+        );
+    }
+
+    #[test]
+    fn json_envelope_passes_small_results_through_untruncated() {
+        let limits = crate::truncation::TruncationLimits::default();
+        let rendered = json_envelope_with_bounded_result(
+            serde_json::json!({"ok": true, "result": null}),
+            "result",
+            "done",
+            "wait_process",
+            &limits,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(parsed["result"], "done");
+    }
+
+    #[test]
+    fn read_file_compact_output_projects_to_model_observation() {
+        let raw = concat!(
+            r#"gents_fs: {"ok":true,"status":"success","tool":"read_file","path":"notes.txt","returned_count":2,"total_count":3,"truncated":false,"start_line":2,"end_line":3}"#,
+            "\ncontent:\nL2: beta\nL3: gamma\n"
+        );
+
+        assert_eq!(
+            model_observation_for_tool_result("read_file", raw),
+            "Read notes.txt (lines 2-3 of 3):\nL2: beta\nL3: gamma"
+        );
+    }
+
+    #[test]
+    fn read_file_raw_json_output_projects_to_model_observation() {
+        let raw = r#"{"ok":true,"status":"success","tool":"read_file","path":"src/main.rs","returned_count":1,"total_count":9,"truncated":true,"start_line":4,"end_line":4,"content":"L4: fn main() {}"}"#;
+
+        assert_eq!(
+            model_observation_for_tool_result("read_file", raw),
+            "Read src/main.rs (lines 4-4 of 9, truncated):\nL4: fn main() {}"
+        );
+    }
+
+    #[test]
+    fn read_file_projection_does_not_parse_plain_file_json() {
+        let raw = r#"{"path":"data.json","content":"not a wrapper"}"#;
+
+        assert_eq!(model_observation_for_tool_result("read_file", raw), raw);
+    }
+
+    #[test]
+    fn non_read_tool_result_is_unchanged_for_model() {
+        let raw = r#"{"ok":true,"content":"still structured"}"#;
+
+        assert_eq!(model_observation_for_tool_result("grep", raw), raw);
+    }
+
+    #[test]
+    fn hook_managed_tool_result_is_bounded_before_model_loop() {
+        let limits = crate::truncation::TruncationLimits {
+            max_lines: 2,
+            max_bytes: 80,
+        };
+        let raw = "line 1\nline 2\nline 3\nline 4";
+
+        let bounded = bounded_tool_result_for_model("agent_new", raw, &limits);
+
+        assert!(bounded.contains("line 1\nline 2"));
+        assert!(!bounded.contains("line 3"));
+        assert!(bounded.contains("[Showing lines 1-2 of 4"));
+    }
+
+    #[test]
+    fn prepared_presentation_handles_normalized_crlf_head_and_tail() {
+        let limits = crate::truncation::TruncationLimits {
+            max_lines: 2,
+            max_bytes: 80,
+        };
+        let raw = "one\r\ntwo\r\nthree\r\nfour";
+        for tool in [
+            "wait_process",
+            "bash",
+            "agent_session_list",
+            "agent_session_read",
+        ] {
+            let (bounded, presentation) = bounded_tool_result_with_presentation(tool, raw, &limits);
+            let presentation = presentation.expect("CRLF input should truncate");
+            assert_eq!(
+                crate::tool_call_lifecycle::delivery::render_presentation(raw, &presentation)
+                    .unwrap(),
+                bounded
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_presentation_keeps_the_oversized_line_as_an_exact_range() {
+        use gents_protocol::output::{PayloadPresentation, PresentationPart};
+
+        let limits = crate::truncation::TruncationLimits::default();
+        let payload = format!("{{\"items\":[{}]}}", vec!["\"v\""; 20_000].join(","));
+        for (tool, raw) in [
+            ("wait_process", format!("Results:\n{payload}")),
+            ("bash", format!("{payload}\nexit status 1")),
+        ] {
+            let (bounded, presentation) =
+                bounded_tool_result_with_presentation(tool, &raw, &limits);
+            let Some(PayloadPresentation::Composed { parts }) = presentation else {
+                panic!("{tool}: oversized output must be truncated");
+            };
+            let range = parts
+                .iter()
+                .find_map(|part| match part {
+                    PresentationPart::OutputRange {
+                        start_byte,
+                        end_byte,
+                    } => Some(end_byte - start_byte),
+                    PresentationPart::Literal { .. } => None,
+                })
+                .unwrap_or_else(|| panic!("{tool}: selection must reference the source"));
+            assert_eq!(range, limits.max_bytes as u64, "{tool}");
+            assert_eq!(
+                crate::tool_call_lifecycle::delivery::render_presentation(
+                    &raw,
+                    &PayloadPresentation::Composed { parts }
+                )
+                .unwrap(),
+                bounded,
+                "{tool}"
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_presentation_handles_empty_selected_output() {
+        let limits = crate::truncation::TruncationLimits {
+            max_lines: 0,
+            max_bytes: 0,
+        };
+        let raw = "one\ntwo";
+        let (bounded, presentation) =
+            bounded_tool_result_with_presentation("wait_process", raw, &limits);
+        let presentation = presentation.expect("zero budget should truncate");
+        assert_eq!(
+            crate::tool_call_lifecycle::delivery::render_presentation(raw, &presentation).unwrap(),
+            bounded
+        );
+    }
+}

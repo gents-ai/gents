@@ -3,12 +3,6 @@ import type { DesktopOperationsSnapshotRequest as GeneratedDesktopOperationsSnap
 import type { DesktopProbeMcpServiceRequest as GeneratedDesktopProbeMcpServiceRequest } from "../generated/DesktopProbeMcpServiceRequest.js";
 import type { DesktopSessionProvenanceRequest as GeneratedDesktopSessionProvenanceRequest } from "../generated/DesktopSessionProvenanceRequest.js";
 
-type RequestInput<T> = {
-  [K in keyof T as null extends T[K] ? never : K]: T[K];
-} & {
-  [K in keyof T as null extends T[K] ? K : never]?: T[K];
-};
-
 export type { ActiveRequestView } from "../generated/ActiveRequestView.js";
 export type { ActiveToolCallView } from "../generated/ActiveToolCallView.js";
 export type { BackgroundedToolView } from "../generated/BackgroundedToolView.js";
@@ -28,11 +22,10 @@ export type { StuckWorkDiagnosticView } from "../generated/StuckWorkDiagnosticVi
 export type { WorkspaceEntryView } from "../generated/WorkspaceEntryView.js";
 export type { WorkspaceListingView } from "../generated/WorkspaceListingView.js";
 
-export type DesktopInterruptRequestRequest =
-  RequestInput<GeneratedDesktopInterruptRequest>;
+export type DesktopInterruptRequestRequest = GeneratedDesktopInterruptRequest;
 export type DesktopOperationsSnapshotRequest =
-  RequestInput<GeneratedDesktopOperationsSnapshotRequest>;
+  GeneratedDesktopOperationsSnapshotRequest;
 export type DesktopProbeMcpServiceRequest =
-  RequestInput<GeneratedDesktopProbeMcpServiceRequest>;
+  GeneratedDesktopProbeMcpServiceRequest;
 export type DesktopSessionProvenanceRequest =
-  RequestInput<GeneratedDesktopSessionProvenanceRequest>;
+  GeneratedDesktopSessionProvenanceRequest;

@@ -45,6 +45,10 @@ pub(crate) struct LeanSessionTurnRow {
     pub(crate) folded_into: Option<usize>,
     pub(crate) queued_after: Option<usize>,
     pub(crate) retry_parent: Option<usize>,
+    pub(crate) retry_parent_doc: Option<usize>,
+    pub(crate) completed: bool,
+    pub(crate) public_input: bool,
+    pub(crate) authored_input_materialized: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +56,7 @@ pub(crate) struct LeanSessionTurnRow {
 pub(crate) struct LeanSessionTurnCase {
     pub(crate) name: String,
     pub(crate) rows: Vec<LeanSessionTurnRow>,
+    pub(crate) expected_read_docs: Vec<usize>,
     pub(crate) expected_turn_doc: usize,
     pub(crate) expected_queued_docs: Vec<usize>,
     pub(crate) expected_folded_requests: Vec<usize>,

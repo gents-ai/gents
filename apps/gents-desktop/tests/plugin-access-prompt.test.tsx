@@ -19,6 +19,7 @@ const { windowListeners, unlisten, registration, environment } = vi.hoisted(() =
 });
 vi.mock("../src/lib/nativeShell", () => ({
   inNativeShell: () => environment.native,
+  homeFolder: () => Promise.resolve(null),
   listenToWindow: (event: string, handler: () => void) => {
     windowListeners.set(event, handler);
     if (registration.autoResolve) return Promise.resolve(unlisten);

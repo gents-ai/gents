@@ -293,11 +293,13 @@ pub fn write_pack(dir: &Path, out: impl Write) -> Result<PackHeader> {
 }
 
 fn write_pack_bounded(dir: &Path, out: impl Write, bounds: Bounds) -> Result<PackHeader> {
-    let manifest_path = dir.join("manifest.json");
-    let manifest_bytes = std::fs::read(&manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
-    let manifest: PackManifest = serde_json::from_slice(&manifest_bytes)
-        .with_context(|| format!("parsing {}", manifest_path.display()))?;
+    let mut manifest_file = crate::pack::open_pack_asset(dir, "manifest.json")?;
+    let mut manifest_bytes = Vec::new();
+    manifest_file
+        .read_to_end(&mut manifest_bytes)
+        .context("reading manifest.json")?;
+    let manifest: PackManifest =
+        serde_json::from_slice(&manifest_bytes).context("parsing manifest.json")?;
     validate_manifest(&manifest.name.clone(), &manifest)?;
     let paths = declared_paths(&manifest);
     ensure!(
@@ -373,21 +375,18 @@ pub fn pack_dir(dir: &Path) -> Result<(Vec<u8>, PackHeader)> {
 }
 
 fn open_declared(dir: &Path, path: &str) -> Result<(std::fs::File, u64)> {
-    let source = dir.join(path);
-    let file = std::fs::File::open(&source).with_context(|| {
+    let file = crate::pack::open_pack_asset(dir, path).with_context(|| {
         format!(
-            "the pack declares {path:?} and {} is unreadable; a plugin's artifact has to be \
-             built before the pack is packed",
-            source.display()
+            "the pack declares {path:?} and it is unreadable; a plugin's artifact has to be \
+             built before the pack is packed"
         )
     })?;
     let metadata = file
         .metadata()
-        .with_context(|| format!("reading {}", source.display()))?;
+        .with_context(|| format!("reading declared pack asset {path:?}"))?;
     ensure!(
         metadata.is_file(),
-        "the pack declares {path:?} and {} is not a regular file",
-        source.display()
+        "the pack declares {path:?} and it is not a regular file"
     );
     Ok((file, metadata.len()))
 }

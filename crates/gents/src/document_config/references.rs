@@ -477,8 +477,10 @@ impl ConfigReferences {
                 let forbidden: &[&str] = match &doc.source {
                     TriggerSource::Schedule { schedule_id } => {
                         require(Collection::Schedule, schedule_id, "source.schedule_id")?;
-                        // Publication refuses what schedule fire would error on (#2080).
-                        crate::trigger_engine::validate_non_document_task_options(
+                        // The fire-time owner, so publication refuses exactly
+                        // what every schedule fire would error on (#2080).
+                        crate::trigger_engine::validate_task_delivery_options(
+                            crate::trigger_engine::TriggerKind::Schedule,
                             task.emit_outcome,
                             doc.concurrency.unwrap_or_default(),
                             doc.session_id_template.is_some(),

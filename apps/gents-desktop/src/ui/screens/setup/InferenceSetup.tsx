@@ -5,7 +5,7 @@ import { DEFAULT_NODE_NAME } from "@source-inc/gents-desktop-fleet";
 import { newestWins } from "../../../lib/reads";
 import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
-import { ManagedServerWaitNotice } from "./SetupProgress";
+import { ManagedServerWaitNotice } from "./StartupProgress";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
 import {
   CREDENTIAL_NOT_SAVED,
@@ -503,6 +503,8 @@ export function InferenceSetup({
             {managedWait ? (
               <ManagedServerWaitNotice
                 wait={managedWait}
+                testId="setup-managed-server-wait"
+                loginItemsTestId="setup-open-login-items"
                 onOpenLoginItems={
                   actions.localServerOffers.loginItems
                     ? actions.openLocalServerLoginItems

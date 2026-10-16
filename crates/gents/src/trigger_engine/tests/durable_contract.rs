@@ -97,6 +97,25 @@ fn request_mutation(receipt: &TriggerFire) -> String {
 #[test]
 fn durable_delivery_predicates_match_executable_lean_owners() {
     let cases = contract();
+    for case in cases["delivery_options"].as_array().unwrap() {
+        let kind = match case["kind"].as_str().unwrap() {
+            "schedule" => TriggerKind::Schedule,
+            "event" => TriggerKind::Event,
+            "manual" => TriggerKind::Manual,
+            other => panic!("unknown modeled trigger kind {other}"),
+        };
+        assert_eq!(
+            super::super::validate_task_delivery_options(
+                kind,
+                case["emit_outcome"].as_bool().unwrap(),
+                decode(&case["concurrency"]),
+                case["target_existing"].as_bool().unwrap(),
+            )
+            .is_ok(),
+            case["allowed"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
     for case in cases["identities"].as_array().unwrap() {
         let id: FireIdentity = decode(&case["identity"]);
         let key = durable::fire_key(&id);
@@ -168,6 +187,133 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
     }
 }
 
+#[tokio::test]
+async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_work() {
+    for case in contract()["latest_admissions"].as_array().unwrap() {
+        for pending_state in [
+            gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
+            gents_protocol::request_lifecycle::RequestLifecycleState::WorkspaceBindingPending,
+        ] {
+            let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+            ensure_runtime_schemas(&node).await.unwrap();
+            let behavior = integration_test_agent("general");
+            let owner = behavior.node_did().to_owned();
+            let pre: State = decode(&case["pre"]);
+            let next: Fire = decode(&case["fire"]);
+            let allowed = case["destination_allowed"].as_bool().unwrap();
+            let task = resolved_task("replace work");
+            if allowed {
+                crate::session::ensure_session_with_agent_id_and_requester_did(
+                    &node,
+                    &next.session,
+                    &owner,
+                    "general",
+                    Some(&owner),
+                )
+                .await
+                .unwrap();
+            }
+            for (index, request) in pre.requests.iter().enumerate() {
+                let mut fire = receipt(&request.fire, index);
+                fire.identity.owner_did = owner.clone();
+                fire.fire_key = fire.identity.fire_key();
+                fire.request_id = fire.identity.request_id();
+                fire.task_id = task.task_id.clone();
+                crate::config_client::ConfigAccess::transact_local_write(
+                &node, None, "test.seed_latest_delivery", |txn| {
+                    let fire = &fire;
+                    let owner = &owner;
+                    Box::pin(async move {
+                        durable::stage_fire_receipt(txn, fire).await?;
+                        txn.execute_with_variables(
+                            "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                            &serde_json::json!({"input": {
+                                "request_id": fire.request_id, "node_did": owner,
+                                "requester_did": owner, "session_id": fire.session_id,
+                                "agent_id": "general", "purpose": "normal", "content": "prior work",
+                                "lifecycle_state": pending_state.as_str(), "caused_by_trigger_id": fire.identity.trigger_id,
+                                "caused_by_trigger_kind": "schedule", "created_at": fire.created_at
+                            }}),
+                        ).await?;
+                        Ok(())
+                    })
+                },
+            ).await.unwrap();
+            }
+            let mut schedule = resolved_schedule(&next.identity.trigger_id, task.clone());
+            schedule.session_id_template = Some(next.session.clone());
+            schedule.concurrency = ConcurrencyMode::LatestOnly;
+            let snapshot = snapshot_with_agent_and_schedules(
+                behavior,
+                HashMap::from([(next.identity.trigger_id.clone(), schedule)]),
+            );
+            let (_tx, rx) = watch::channel(snapshot);
+            let materializer = Arc::new(ProductionMaterializer::new(node.clone(), rx.clone()));
+            let engine = TriggerEngine::new(rx, materializer);
+            let result = engine
+                .dispatch(FireIntent {
+                    trigger_id: Some(next.identity.trigger_id.clone()),
+                    trigger_kind: TriggerKind::Schedule,
+                    task,
+                    concurrency: ConcurrencyMode::LatestOnly,
+                    event_vars: serde_json::json!({}),
+                    doc_vars: None,
+                    correlation: None,
+                    group_vars: None,
+                    trigger_context: None,
+                    args_vars: None,
+                    durable_fire_key: next.identity.source_doc_id.clone(),
+                    pre_materialized_request_id: None,
+                    on_result: Box::new(|_| {}),
+                })
+                .await;
+            assert_eq!(
+                matches!(
+                    result,
+                    FireResult::Fired { .. } | FireResult::Duplicate { .. }
+                ),
+                allowed,
+                "{case}: {result:?}"
+            );
+            let response = crate::graphql::graphql_with_transaction_retry(
+                &node,
+                "{ TriggerFire { fire_key } AgentRequest { request_id lifecycle_state } }",
+                "test.latest_delivery_state",
+            )
+            .await
+            .unwrap();
+            let post: State = decode(&case["post"]);
+            let data = response.data.unwrap();
+            assert_eq!(
+                data["TriggerFire"].as_array().unwrap().len(),
+                post.receipts.len(),
+                "{case}"
+            );
+            let rows = data["AgentRequest"].as_array().unwrap();
+            assert_eq!(rows.len(), post.requests.len(), "{case}");
+            for request in post.requests {
+                let mut id = request.fire.identity;
+                let existed = pre.requests.iter().any(|prior| prior.fire.identity == id);
+                id.owner_did = owner.clone();
+                let row = rows
+                    .iter()
+                    .find(|row| row["request_id"] == id.request_id())
+                    .unwrap();
+                assert_eq!(
+                    row["lifecycle_state"],
+                    if request.terminal {
+                        "superseded"
+                    } else if existed {
+                        pending_state.as_str()
+                    } else {
+                        "pending"
+                    },
+                    "{case}"
+                );
+            }
+        }
+    }
+}
 #[tokio::test]
 async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
     for case in contract()["admissions"].as_array().unwrap() {

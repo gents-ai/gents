@@ -42,6 +42,7 @@ unicode-normalization = "0.1.25"
 chrono.workspace = true
 chrono-tz.workspace = true
 crypto.workspace = true
+cursor.workspace = true
 defra-core.workspace = true
 defra-p2p-adapter.workspace = true
 gents-fs-runner = { path = "../gents-fs-runner" }

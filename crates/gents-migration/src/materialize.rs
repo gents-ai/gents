@@ -7,10 +7,9 @@ use defra_node::EmbeddedNode;
 use tracing::{debug, info, warn};
 
 use crate::error::{Error, Result};
-use crate::registry::Registry;
 use crate::report::MaterializationStats;
 
-/// Eagerly materialize every managed collection.
+/// Materialize the named collections using DefraDB's datastore-only primitive.
 ///
 /// Any collection-level failure is a hard error — after lineage verification
 /// every managed collection is expected to exist — with one deliberate
@@ -21,15 +20,8 @@ use crate::report::MaterializationStats;
 /// violation during the boot-time reindex is expected residue, not
 /// corruption. The failed reindex transaction rolls back, preserving the
 /// merge-time winner; boot skips the collection's eager pass, records the
-/// parked state in the report, and continues.
-pub async fn materialize_all(
-    node: &EmbeddedNode,
-    registry: &Registry<'_>,
-) -> Result<MaterializationStats> {
-    let names: Vec<&str> = registry.managed_names().collect();
-    materialize_collections(node, &names).await
-}
-
+/// parked state in the report, and continues. A foreign stale doc must never
+/// be a poison pill.
 pub async fn materialize_collections(
     node: &EmbeddedNode,
     collections: &[&str],

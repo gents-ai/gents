@@ -44,6 +44,58 @@ def CurrentInputCase.retainedIndices (witness : CurrentInputCase) : List Nat :=
 example : currentInputCases[0]?.map CurrentInputCase.retainedIndices = some [0, 3, 4, 5] := by
   native_decide
 
+structure WakeInputRow where
+  header : String
+  notificationKey : Option String
+  deriving Repr
+
+structure WakeInputCase where
+  name : String
+  claimed : List String
+  acknowledged : List String
+  rows : List WakeInputRow
+  retainedHeaders : Option (List String) := none
+  deriving Repr
+
+def WakeInputCase.currentKeys (witness : WakeInputCase) : List String :=
+  PromptAssembly.CurrentInput.wakeNotificationKeys witness.claimed witness.acknowledged
+
+def WakeInputCase.history (witness : WakeInputCase) : List WakeInputRow :=
+  witness.rows.filter fun row => witness.retainedHeaders.all (·.contains row.header)
+
+def WakeInputCase.notifications (witness : WakeInputCase) : List WakeInputRow :=
+  witness.rows.filter fun row => row.notificationKey.any witness.currentKeys.contains
+
+def WakeInputCase.expectedOrder (witness : WakeInputCase) : List String :=
+  (PromptAssembly.CurrentInput.wakeEntry
+    (fun row => row.notificationKey.any witness.currentKeys.contains)
+    witness.history witness.notifications).map (·.header)
+
+def wakeInputCases : List WakeInputCase :=
+  [ ⟨"successor_wake_moves_only_new_notification", ["a", "b"], ["a"],
+      [⟨"notification-a", some "a"⟩, ⟨"review-0", none⟩,
+       ⟨"notification-b", some "b"⟩, ⟨"answer-0", none⟩], none⟩
+  , ⟨"first_wake_keeps_notifications_together", ["a", "b"], [],
+      [⟨"notification-a", some "a"⟩, ⟨"answer-before", none⟩,
+       ⟨"notification-b", some "b"⟩], none⟩
+  , ⟨"unclaimed_notification_stays_in_history", ["a"], ["a"],
+      [⟨"notification-a", some "a"⟩, ⟨"notification-b", some "b"⟩,
+       ⟨"answer", none⟩], none⟩
+  , ⟨"empty_claim_does_not_reorder", [], [],
+      [⟨"prompt", none⟩, ⟨"answer", none⟩], none⟩
+  , ⟨"several_new_notifications_keep_append_order", ["a", "b", "c"], ["a"],
+      [⟨"notification-a", some "a"⟩, ⟨"notification-b", some "b"⟩,
+       ⟨"notification-c", some "c"⟩, ⟨"answer", none⟩], none⟩
+  , ⟨"compacted_notification_remains_current_input", ["a", "b"], ["a"],
+      [⟨"notification-a", some "a"⟩, ⟨"notification-b", some "b"⟩,
+       ⟨"answer", none⟩], some ["answer"]⟩
+  , ⟨"imported_notification_stays_in_history", ["a"], [],
+      [⟨"imported-notification", some "imported"⟩, ⟨"notification-a", some "a"⟩,
+       ⟨"answer", none⟩], none⟩
+  ]
+
+/-- A content item, flattened for emission. `value` is the text/reasoning index
+for `text`/`other`, and the tool-call id for `call`. -/
 structure PromptAssemblyItemCase where
   item : String
   value : Nat

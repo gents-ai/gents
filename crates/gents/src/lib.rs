@@ -460,6 +460,7 @@ pub use backend_registry::{
     record_discovered_catalog_on, record_model_catalog_in_txn, InferenceBackend,
     HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS,
 };
+pub(crate) use background_completion_diagnostics::load_background_completion_diagnostics_for_session;
 pub use background_completion_diagnostics::{
     load_background_completion_diagnostics, BackgroundCompletionDiagnostics,
     BackgroundCompletionEpochDiagnostic,
@@ -584,6 +585,7 @@ pub use watcher::{AgentRequest, DefraWatcher, Watcher};
 pub mod __test_internals {
     pub use crate::agent::principal_assembly::AgentBuildError;
     pub use crate::lifecycle::activate_workspace_bound_request;
+    pub use crate::lifecycle::materialize::supersede_trigger_requests_in_txn;
     pub use crate::lifecycle::materialize::EnqueuedAgentRequest;
     pub use crate::lifecycle::queue::{reconcile_coalesced_pending_request, QueueSource};
 }

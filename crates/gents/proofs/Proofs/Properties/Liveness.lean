@@ -28,7 +28,8 @@ theorem phase_change_decreases_measure
     simp [terminationMeasure, h_pre]
   | dedup_lose h_pre _ h_post =>
     rw [h_post]
-    simp [terminationMeasure, h_pre]
+    rcases h_pre with h_pre | h_pre <;>
+      simp [terminationMeasure, h_pre]
   | admission_reject h_pre _ h_post =>
     rw [h_post]
     simp [terminationMeasure, h_pre]

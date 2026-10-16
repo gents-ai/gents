@@ -10,6 +10,12 @@ use gents_protocol::row::AgentRequestRow;
 use super::indexing::clean_string;
 use super::ClientStore;
 
+#[derive(Hash, PartialEq, Eq)]
+enum RequestRowIdentity<'a> {
+    Physical(&'a str),
+    Unpersisted(*const AgentRequestRow),
+}
+
 pub(super) fn derive_turn(
     store: &ClientStore,
     session_id: &str,
@@ -40,7 +46,7 @@ pub fn session_turn_request<'a>(
     requests: &[&'a AgentRequestRow],
     newest: &'a AgentRequestRow,
 ) -> &'a AgentRequestRow {
-    resolve(requests, requests.len() + 1, newest)
+    resolve(requests, requests.len() + 1, &mut HashSet::new(), newest)
 }
 
 fn in_scope<'a>(
@@ -57,9 +63,22 @@ fn in_scope<'a>(
 fn resolve<'a>(
     requests: &[&'a AgentRequestRow],
     fuel: usize,
+    seen: &mut HashSet<RequestRowIdentity<'a>>,
     row: &'a AgentRequestRow,
 ) -> &'a AgentRequestRow {
     if fuel == 0 {
+        return row;
+    }
+    // A repeated physical row ends this walk at the first repeat. Row
+    // references also distinguish optimistic rows without a persisted physical ID.
+    let identity = row
+        .doc_id
+        .as_deref()
+        .map(RequestRowIdentity::Physical)
+        .unwrap_or(RequestRowIdentity::Unpersisted(
+            row as *const AgentRequestRow,
+        ));
+    if !seen.insert(identity) {
         return row;
     }
     if gents::lifecycle::folded_into(row).is_some() {
@@ -68,7 +87,7 @@ fn resolve<'a>(
                 candidate.doc_id.as_deref() == Some(doc.as_str())
             })
         });
-        return owner.map_or(row, |owner| resolve(requests, fuel - 1, owner));
+        return owner.map_or(row, |owner| resolve(requests, fuel - 1, seen, owner));
     }
     match row.lifecycle_state {
         Some(state) if state.is_terminal() => {
@@ -76,7 +95,7 @@ fn resolve<'a>(
                 clean_string(candidate.retry_parent_request.as_deref()).as_deref()
                     == Some(row.request_id.as_str())
             });
-            next.map_or(row, |next| resolve(requests, fuel - 1, next))
+            next.map_or(row, |next| resolve(requests, fuel - 1, seen, next))
         }
         _ if unclaimed(row) => {
             let ahead = row
@@ -87,7 +106,7 @@ fn resolve<'a>(
                 .and_then(|ahead| {
                     in_scope(requests, row, |candidate| candidate.request_id == ahead)
                 });
-            match ahead.map(|ahead| resolve(requests, fuel - 1, ahead)) {
+            match ahead.map(|ahead| resolve(requests, fuel - 1, seen, ahead)) {
                 Some(turn)
                     if turn
                         .lifecycle_state

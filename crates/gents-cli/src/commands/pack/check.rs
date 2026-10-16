@@ -1,24 +1,14 @@
-//! `gents pack check` and `gents pack graph`: every validation an install
-//! runs, for a pack directory, writing nothing; and the README's generated
-//! topology diagram.
-//!
-//! The rules are the installer's own owners, called the way install calls
-//! them: the pack writer and reader for files, paths and the digest, the
-//! configuration loader and apply plan, the graph compiler with a
-//! placeholder owner, and DefraDB itself for every event-source filter
-//! against the runtime and pack schemas.
+//! CLI validation around the shared pack check and topology owners.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::pack::{declared_paths, PackKind, PackManifest};
 use gents::pack_archive::{pack_dir, PackArchive};
 use serde::Serialize;
 use serde_json::json;
 
 use crate::cli::{PackCheckArgs, PackGraphArgs};
 
-const PLACEHOLDER_OWNER: &str = "did:key:zPackCheckPlaceholderOwner";
 const TOPOLOGY_START: &str = "<!-- pack-topology:start -->";
 const TOPOLOGY_END: &str = "<!-- pack-topology:end -->";
 
@@ -54,14 +44,20 @@ pub(crate) async fn check(args: PackCheckArgs) -> Result<()> {
     Ok(())
 }
 
+/// Runs the shared authoring checks and adds checks whose owners live in the CLI.
 pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
+    let shared = gents::pack::authoring::check_dir(dir).await;
     let mut report = CheckReport {
-        dir: dir.to_path_buf(),
-        pack: None,
-        digest: None,
-        graphs: Vec::new(),
-        problems: Vec::new(),
+        dir: shared.dir,
+        pack: shared.pack,
+        digest: shared.digest,
+        graphs: shared.graphs,
+        problems: shared.problems,
     };
+    if !report.problems.is_empty() || report.digest.is_none() {
+        return report;
+    }
+
     let manifest = match read_manifest(dir) {
         Ok(manifest) => manifest,
         Err(error) => {
@@ -69,25 +65,6 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
             return report;
         }
     };
-    report.pack = Some(manifest.name.clone());
-    let unbuilt = check_files(dir, &manifest, &mut report.problems);
-    if !report.problems.is_empty() {
-        return report;
-    }
-    if !unbuilt.is_empty() {
-        if let Err(error) = gents::pack::validate_manifest(&manifest.name, &manifest) {
-            report.problems.push(format!("{error:#}"));
-        }
-        if manifest.metadata.kind != PackKind::Plugins {
-            report.problems.push(format!(
-                "build the plugins ({}) with gents pack build before checking its configuration",
-                unbuilt.join(", ")
-            ));
-        }
-        check_readme(dir, &mut report.problems);
-        return report;
-    }
-
     let archive = match pack_dir(dir).and_then(|(bytes, _)| PackArchive::from_bytes(&bytes)) {
         Ok(archive) => archive,
         Err(error) => {
@@ -95,23 +72,12 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
             return report;
         }
     };
-    report.digest = Some(archive.digest().to_owned());
-
     if matches!(
         manifest.metadata.kind,
-        PackKind::Documents | PackKind::Graph
+        gents::pack::PackKind::Documents | gents::pack::PackKind::Graph
     ) {
         match load_config(&archive) {
             Ok(config) => {
-                if manifest.metadata.kind == PackKind::Graph {
-                    match gents::graph_package::check_graph_pack(&archive, PLACEHOLDER_OWNER) {
-                        Ok(plans) => {
-                            report.graphs = plans.into_iter().map(|plan| plan.graph_id).collect()
-                        }
-                        Err(error) => report.problems.push(format!("{error:#}")),
-                    }
-                    check_topology(dir, &config, &mut report.problems);
-                }
                 if let Err(error) = check_filters(dir, &config, &mut report.problems).await {
                     report.problems.push(format!("{error:#}"));
                 }
@@ -124,96 +90,18 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
             report.problems.push(format!("{error:#}"));
         }
     }
-    check_readme(dir, &mut report.problems);
     report
 }
 
-fn read_manifest(dir: &Path) -> Result<PackManifest> {
-    let path = dir.join("manifest.json");
-    let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
-}
-
-fn check_files(dir: &Path, manifest: &PackManifest, problems: &mut Vec<String>) -> Vec<String> {
-    let declared = declared_paths(manifest);
-    let mut unbuilt = Vec::new();
-    for path in &declared {
-        if dir.join(path).is_file() {
-            continue;
-        }
-        match manifest
-            .metadata
-            .plugins
-            .iter()
-            .find(|plugin| &plugin.artifact == path && plugin.source.is_some())
-        {
-            Some(plugin) => unbuilt.push(plugin.name.clone()),
-            None => problems.push(format!("declares {path}, which is missing")),
-        }
-    }
-    let sources: Vec<String> = manifest
-        .metadata
-        .plugins
-        .iter()
-        .filter_map(|plugin| plugin.source.as_ref())
-        .map(|source| format!("{}/", source.trim_end_matches('/')))
-        .collect();
-    let mut present = Vec::new();
-    if let Err(error) = walk(dir, dir, &mut present) {
-        problems.push(format!("{error:#}"));
-    }
-    for path in present {
-        if declared.binary_search(&path).is_err()
-            && !sources
-                .iter()
-                .any(|source| path.starts_with(source.as_str()))
-        {
-            problems.push(format!("{path} is present but not declared in assets"));
-        }
-    }
-    unbuilt
-}
-
-fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
-    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-        let entry = entry?;
-        let path = entry.path();
-        let relative = path
-            .strip_prefix(root)
-            .context("walked outside the pack")?
-            .to_string_lossy()
-            .replace('\\', "/");
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.')
-            || matches!(
-                name.as_str(),
-                "runs" | "target" | "node_modules" | "__pycache__"
-            )
-        {
-            continue;
-        }
-        if entry.file_type()?.is_dir() {
-            walk(root, &path, out)?;
-        } else {
-            out.push(relative);
-        }
-    }
-    Ok(())
+fn read_manifest(dir: &Path) -> Result<gents::pack::PackManifest> {
+    gents::pack::authoring::read_manifest(dir)
 }
 
 fn load_config(archive: &PackArchive) -> Result<gents::document_config::PackConfig> {
-    let config = gents::pack::load_pack_config(
-        archive.manifest(),
-        &gents::pack::PackInstallOptions {
-            node_did: PLACEHOLDER_OWNER.into(),
-        },
-        &|path| archive.asset(path).map(Vec::from),
-        &|_| None,
-    )?;
-    gents::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;
-    Ok(config)
+    gents::pack::authoring::load_config(archive)
 }
 
+/// Runs event-source filters as queries against runtime and pack schemas.
 async fn check_filters(
     dir: &Path,
     config: &gents::document_config::PackConfig,
@@ -248,62 +136,8 @@ async fn check_filters(
     Ok(())
 }
 
-fn check_readme(dir: &Path, problems: &mut Vec<String>) {
-    match std::fs::read_to_string(dir.join("README.md")) {
-        Ok(text) if text.contains("## ") => {}
-        Ok(_) => problems.push("README.md needs sections on configuration and usage".into()),
-        Err(_) => problems.push("README.md is missing".into()),
-    }
-}
-
-fn check_topology(
-    dir: &Path,
-    config: &gents::document_config::PackConfig,
-    problems: &mut Vec<String>,
-) {
-    let block = topology_block(config);
-    let current = std::fs::read_to_string(dir.join("README.md")).unwrap_or_default();
-    if !current.contains(&block) {
-        problems.push(
-            "README.md topology diagram is stale or missing; run gents pack graph --write-readme"
-                .into(),
-        );
-    }
-}
-
 pub(crate) fn topology_block(config: &gents::document_config::PackConfig) -> String {
-    let mut labels: Vec<&str> = Vec::new();
-    fn id<'a>(labels: &mut Vec<&'a str>, label: &'a str) -> usize {
-        labels
-            .iter()
-            .position(|known| *known == label)
-            .unwrap_or_else(|| {
-                labels.push(label);
-                labels.len() - 1
-            })
-    }
-    let mut edges = Vec::new();
-    for graph in &config.graph_intents {
-        for node in &graph.nodes {
-            id(&mut labels, &node.node_id);
-        }
-        for edge in &graph.edges {
-            let from = id(&mut labels, &edge.from.node_id);
-            let to = id(&mut labels, &edge.to.node_id);
-            let label = format!("{} \u{2192} {}", edge.from.port, edge.to.port);
-            edges.push(format!("    n{from} -->|{}| n{to}", json!(label)));
-        }
-    }
-    let nodes = labels
-        .iter()
-        .enumerate()
-        .map(|(index, label)| format!("    n{index}[{}]", json!(label)))
-        .collect::<Vec<_>>();
-    format!(
-        "{TOPOLOGY_START}\n```mermaid\nflowchart LR\n{}\n{}\n```\n{TOPOLOGY_END}",
-        nodes.join("\n"),
-        edges.join("\n")
-    )
+    gents::pack::authoring::topology_block(config)
 }
 
 pub(crate) fn graph(args: PackGraphArgs) -> Result<()> {
@@ -311,7 +145,7 @@ pub(crate) fn graph(args: PackGraphArgs) -> Result<()> {
     let (bytes, _) = pack_dir(&dir).with_context(|| format!("packing {}", dir.display()))?;
     let archive = PackArchive::from_bytes(&bytes)?;
     anyhow::ensure!(
-        archive.manifest().metadata.kind == PackKind::Graph,
+        archive.manifest().metadata.kind == gents::pack::PackKind::Graph,
         "{} is not a graph pack",
         archive.manifest().name
     );
@@ -323,25 +157,7 @@ pub(crate) fn graph(args: PackGraphArgs) -> Result<()> {
 }
 
 pub(crate) fn write_topology(dir: &Path) -> Result<()> {
-    let (bytes, _) = pack_dir(dir).with_context(|| format!("packing {}", dir.display()))?;
-    let block = topology_block(&load_config(&PackArchive::from_bytes(&bytes)?)?);
-    let readme = dir.join("README.md");
-    let text = std::fs::read_to_string(&readme)
-        .with_context(|| format!("reading {}", readme.display()))?;
-    let updated = match (text.find(TOPOLOGY_START), text.find(TOPOLOGY_END)) {
-        (Some(start), Some(end)) if start < end => {
-            format!(
-                "{}{block}{}",
-                &text[..start],
-                &text[end + TOPOLOGY_END.len()..]
-            )
-        }
-        _ => format!(
-            "{}\n## Declared topology\n\nCompiled capability edges.\n\n{block}\n",
-            text.trim_end_matches('\n')
-        ),
-    };
-    std::fs::write(&readme, updated).with_context(|| format!("writing {}", readme.display()))
+    gents::pack::authoring::write_topology(dir)
 }
 
 #[cfg(test)]

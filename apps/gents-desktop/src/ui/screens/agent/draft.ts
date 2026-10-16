@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { toastFailure } from "@/lib/failure";
+import { errorText } from "../../../lib/errorText";
 
 /**
  * A reviewable draft. Nothing crosses the bridge until the user saves;
@@ -21,7 +22,7 @@ export function problemOf(parse: () => unknown): string | undefined {
     parse();
     return undefined;
   } catch (e) {
-    return e instanceof Error ? e.message : String(e);
+    return errorText(e);
   }
 }
 
@@ -99,7 +100,7 @@ export function useDraft<T extends object>(
       else toast("Saved");
       return true;
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      const message = errorText(e);
       setError(message);
       toastFailure("save", e);
       return false;

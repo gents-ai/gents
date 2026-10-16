@@ -18,7 +18,8 @@ pub use expectation::CollectionExpectation;
 pub use lens::{lens_config, predict_transform_id};
 pub use registry::{
     fixture_lens_wasm, BaselineCollection, BaselineCollectionOwned, DynamicRegistry, LensSpec,
-    LensSpecOwned, MigrationStep, MigrationStepOwned, Registry, CLIENT_AUTHORED_COLLECTIONS,
-    DEFAULT_BASELINE, DEFAULT_REGISTRY, DEFAULT_STEPS,
+    LensSpecOwned, MigrationStep, MigrationStepOwned, OrdinaryIndex, OrdinaryIndexField, Registry,
+    CLIENT_AUTHORED_COLLECTIONS, DEFAULT_BASELINE, DEFAULT_ORDINARY_INDEXES, DEFAULT_REGISTRY,
+    DEFAULT_STEPS,
 };
 pub use report::{MaterializationStats, MigrationReport};

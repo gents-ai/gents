@@ -87,11 +87,15 @@ impl ToolCallKind {
     /// Map a durable Gents tool name onto the pager kind vocabulary.
     pub(super) fn from_tool_name(tool_name: &str) -> Self {
         match tool_name {
-            "read_file" => ToolCallKind::Read,
+            "read_file" | gents::toolset::AGENT_SESSION_READ_TOOL_NAME => ToolCallKind::Read,
             "edit_file" | "write_file" | "apply_patch" | "create_file" => ToolCallKind::Edit,
             "delete_file" | "remove_file" => ToolCallKind::Delete,
             "move_file" | "rename_file" => ToolCallKind::Move,
-            "grep" | "glob" | "list_files" | "search" => ToolCallKind::Search,
+            "grep"
+            | "glob"
+            | "list_files"
+            | "search"
+            | gents::toolset::AGENT_SESSION_LIST_TOOL_NAME => ToolCallKind::Search,
             "bash"
             | "bash_unrestricted"
             | "shell"
@@ -1104,6 +1108,52 @@ mod tests {
         };
         assert_eq!(update.payload["rawOutput"]["output_for_prompt"], text);
         assert_eq!(update.payload["rawOutput"]["truncated"], true);
+    }
+
+    #[test]
+    fn kind_mapping_covers_durable_tool_names() {
+        assert_eq!(
+            ToolCallKind::from_tool_name("read_file"),
+            ToolCallKind::Read
+        );
+        for name in [
+            "bash",
+            "bash_unrestricted",
+            "shell",
+            "execute",
+            "execute_command",
+            "run_command",
+            "run_terminal_command",
+            "run_terminal_cmd",
+            "terminal",
+        ] {
+            assert_eq!(
+                ToolCallKind::from_tool_name(name),
+                ToolCallKind::Execute,
+                "{name}"
+            );
+        }
+        assert_eq!(ToolCallKind::from_tool_name("grep"), ToolCallKind::Search);
+        assert_eq!(
+            ToolCallKind::from_tool_name(gents::toolset::AGENT_SESSION_LIST_TOOL_NAME),
+            ToolCallKind::Search
+        );
+        assert_eq!(
+            ToolCallKind::from_tool_name(gents::toolset::AGENT_SESSION_READ_TOOL_NAME),
+            ToolCallKind::Read
+        );
+        assert_eq!(
+            ToolCallKind::from_tool_name("unknown_tool"),
+            ToolCallKind::Other
+        );
+    }
+
+    #[test]
+    fn status_wire_names_match_grok_pager() {
+        assert_eq!(ToolCallStatus::Pending.wire_name(), "pending");
+        assert_eq!(ToolCallStatus::InProgress.wire_name(), "in_progress");
+        assert_eq!(ToolCallStatus::Completed.wire_name(), "completed");
+        assert_eq!(ToolCallStatus::Failed.wire_name(), "failed");
     }
 
     #[test]

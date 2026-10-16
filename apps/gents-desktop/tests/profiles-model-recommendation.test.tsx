@@ -6,16 +6,7 @@ import { renderIn, testApp } from "./app-fixture";
 import type { InferenceModelRecommendation } from "@source-inc/gents-desktop-client";
 import { ProfilesPanel } from "../src/ui/screens/agent/ProfilesPanel";
 import { deployment as fixture } from "./config-panel-wiring/fixtures";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((next, fail) => {
-    resolve = next;
-    reject = fail;
-  });
-  return { promise, reject, resolve };
-}
+import { deferred } from "./deferred";
 
 function recommendation(context: number): InferenceModelRecommendation {
   return {

@@ -1,5 +1,4 @@
-//! Resolving a named pack: explicit local forms are the CLI's job
-//! (`commands::pack::local::classify` in gents-cli), everything else comes
+//! Resolving a named pack: explicit local forms use [`crate::pack::local`] with caller-owned path admission, everything else comes
 //! through here.
 
 use std::path::Path;
@@ -76,8 +75,12 @@ pub struct ResolveOptions<'a> {
     pub installed: &'a [InstalledPack],
 }
 
-/// Resolves a non-local pack spec: installed record, then the store's name
-/// index, then the registry.
+/// Resolves a non-local pack spec: an installed record whose digest the
+/// store still holds, then the store's name index, then the registry.
+///
+/// A caller with an explicit local form (`sha256:`, `./`, `../`, an
+/// absolute path, `*.pack`) never reaches this: that classification belongs to [`crate::pack::local`], so this resolver only ever sees `name`, `ns/name`, or either
+/// pinned with `@version`.
 pub async fn resolve_named(spec: &str, options: &ResolveOptions<'_>) -> Result<ResolvedNamedPack> {
     let parsed = parse_pack_spec(spec)?;
     let coordinate = format!("{}/{}", parsed.namespace, parsed.name);

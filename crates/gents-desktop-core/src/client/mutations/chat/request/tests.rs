@@ -375,7 +375,7 @@ async fn seed_session_recovery_pre_state(
     core.refresh_store().await?;
 
     let parent = if case.pre_failed_exists {
-        let parent = request_from_store_for_test(core, &failed_request_id)?;
+        let parent = fetch_request_row_for_test(core.node(), &failed_request_id).await?;
         assert_eq!(
             parent.lifecycle_state.map(|state| state.as_str()),
             Some(case.pre_failed_state.as_str()),

@@ -22,6 +22,7 @@ import {
 import { RenameDialog } from "../AgentsScreen";
 import { useApp } from "@/app/AppContext";
 import { SUBSCRIPTION } from "./inferenceKinds";
+import { errorText } from "../../../lib/errorText";
 
 function referencedAccount(
   accounts: readonly ProviderAccountView[],
@@ -251,9 +252,7 @@ export function AccountRows({
       toast("Disconnected");
       setConfirmingDisconnect(false);
     } catch (error) {
-      toast(
-        `Disconnect failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      toast(`Disconnect failed: ${errorText(error)}`);
     } finally {
       setBusy(false);
     }

@@ -205,6 +205,7 @@ pub(crate) async fn build_desktop_session_snapshot(
         None,
         context_store.is_some(),
         timeline_before_item_key.is_none(),
+        None,
     )
     .await?;
     if let Err(error) = apply_session_timeline_page_with_query(
@@ -359,6 +360,7 @@ async fn build_request_diagnostics(
         None,
         false,
         true,
+        None,
     )
     .await;
     let matching_responses = session_snapshot

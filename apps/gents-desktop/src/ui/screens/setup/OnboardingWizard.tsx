@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useState } from "react";
-import { Server, Wifi } from "lucide-react";
+import { ArrowRight, Server, Wifi } from "lucide-react";
 import type {
   DesktopClientSnapshot,
   ManagedServerAuthorityInput,
@@ -10,9 +10,10 @@ import { Input } from "@gents/ui/components/input";
 import { Spinner } from "@gents/ui/components/spinner";
 import {
   projectStartupLoadingStatus,
+  startupSteps,
   type DesktopStartupPhase,
 } from "../../../lib/loadingStatus";
-import { SETUP_COMPLETE_DWELL_MS, SetupProgress } from "./SetupProgress";
+import { SETUP_COMPLETE_DWELL_MS, StartupProgress } from "./StartupProgress";
 import { engineerPatches } from "@/lib/engineer";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
 import { NodeAvatar } from "@/screens/AgentAvatar";
@@ -22,6 +23,8 @@ import { ManagedRuntimeAuthorityPicker } from "@/components/ManagedRuntimeAuthor
 import { authoritiesEqual, authorityForSelection } from "@/lib/managedRuntimeAuthority";
 import { useApp } from "@/app/AppContext";
 import { useBootstrap, useStartup } from "@/hooks/useClient";
+import { useHomeFolder } from "@/hooks/useHomeFolder";
+import { shortPath } from "@/lib/paths";
 import { Field, Frame, Nav, Option, Title } from "./parts";
 import { InferenceSetup } from "./InferenceSetup";
 import { nodeSetUp } from "@/lib/firstRun";
@@ -38,13 +41,22 @@ type Run = {
   error: string | null;
   phase: FailedPhase;
   details: Partial<Record<StartupDetail, string>>;
+  /** the node it started and the one it finished on, for the summary */
+  startedDid: string | null;
+  readyName: string | null;
+  /** when everything started; the provider step follows a moment later */
   provisionedAt: number | null;
 };
 
 type RunEvent =
   | { type: "begun"; phase: FailedPhase }
-  | { type: "reached"; phase: FailedPhase; detail?: [StartupDetail, string] }
-  | { type: "provisioned"; at: number; client: string }
+  | {
+      type: "reached";
+      phase: FailedPhase;
+      detail?: [StartupDetail, string];
+      startedDid?: string | null;
+    }
+  | { type: "provisioned"; at: number; client: string; name: string | null }
   | { type: "failed"; phase: FailedPhase; error: string }
   | { type: "ended" }
   | { type: "retried" }
@@ -61,6 +73,8 @@ function runReducer(run: Run, event: RunEvent): Run {
         error: null,
         phase: event.phase,
         details: {},
+        startedDid: null,
+        readyName: null,
         provisionedAt: null,
       };
     case "reached":
@@ -70,11 +84,13 @@ function runReducer(run: Run, event: RunEvent): Run {
         details: event.detail
           ? { ...run.details, [event.detail[0]]: event.detail[1] }
           : run.details,
+        startedDid: event.startedDid === undefined ? run.startedDid : event.startedDid,
       };
     case "provisioned":
       return {
         ...run,
         details: { ...run.details, client: event.client },
+        readyName: event.name,
         provisionedAt: event.at,
       };
     case "failed":
@@ -124,6 +140,7 @@ export function OnboardingWizard({
   provider?: ProviderId;
 }) {
   const bootstrap = useBootstrap();
+  const home = useHomeFolder();
   const { stores, actions } = useApp();
   const { initLocalRuntime, refreshSnapshot, changeConfig } = actions;
   const { diagnosticsHint } = useStartup();
@@ -134,9 +151,20 @@ export function OnboardingWizard({
     error: null,
     phase: "checking-managed-server",
     details: {},
+    startedDid: null,
+    readyName: null,
     provisionedAt: null,
   });
-  const { step, busy, error, phase, details: startupDetails, provisionedAt } = run;
+  const {
+    step,
+    busy,
+    error,
+    phase,
+    details: startupDetails,
+    startedDid,
+    readyName,
+    provisionedAt,
+  } = run;
   const allowLocal = supportsLocalManagedServer();
   const [where, setWhere] = useState<"local" | "remote">(
     allowLocal ? "local" : "remote",
@@ -172,14 +200,20 @@ export function OnboardingWizard({
                 "The user home directory is unavailable."),
         );
     });
+  /* setup goes on by itself a while after the progress shows it ready,
+     not after it is ready: the steps' cards had their time first */
+  const [readyShownAt, setReadyShownAt] = useState<number | null>(null);
   useEffect(() => {
-    if (provisionedAt === null) return;
+    if (provisionedAt === null) setReadyShownAt(null);
+  }, [provisionedAt]);
+  useEffect(() => {
+    if (readyShownAt === null) return;
     const timer = window.setTimeout(
       () => dispatch({ type: "continued" }),
-      Math.max(0, provisionedAt + SETUP_COMPLETE_DWELL_MS - Date.now()),
+      Math.max(0, readyShownAt + SETUP_COMPLETE_DWELL_MS - Date.now()),
     );
     return () => window.clearTimeout(timer);
-  }, [provisionedAt]);
+  }, [readyShownAt]);
   const root = bootstrap?.defaultNodeHome ?? "~/.gents";
   const toolRoot = selectedDirectory === undefined ? homeRoot : selectedDirectory;
   const authority = authorityForSelection(toolCeiling, toolRoot);
@@ -216,6 +250,7 @@ export function OnboardingWizard({
       client: nextDeployment
         ? `Connected securely to ${nextDeployment.label}`
         : "Secure client started",
+      name: nextDeployment?.label ?? null,
     });
   };
 
@@ -257,10 +292,8 @@ export function OnboardingWizard({
         dispatch({
           type: "reached",
           phase: "checking-managed-server",
-          detail: [
-            "managedServer",
-            `${requestedName} is running as ${shortDid(status.nodeDid)}, with its identity and data in ${root}`,
-          ],
+          detail: ["managedServer", `${requestedName} is running`],
+          startedDid: status.nodeDid,
         });
       }
       dispatch({ type: "reached", phase: "loading-configuration" });
@@ -269,7 +302,7 @@ export function OnboardingWizard({
       dispatch({
         type: "reached",
         phase: "starting-client",
-        detail: ["configuration", `Saved the local connection to ${requestedName}`],
+        detail: ["configuration", `Saved the connection to ${requestedName}`],
       });
       failedPhase = "client-error";
       await actions.commitLocalServerAutoStart(requestedName);
@@ -310,7 +343,7 @@ export function OnboardingWizard({
   if (step === "welcome") {
     return (
       <Frame>
-        <Mark className="mb-6 h-6 text-ink" />
+        <Mark className="mb-6 h-5 w-7 text-ink" />
         <Title note="Gents keeps a record of every step an agent takes, so you can see what it did and it can pick up where it left off. Start a node here, or connect to one that already runs.">
           Let’s get set up
         </Title>
@@ -330,8 +363,21 @@ export function OnboardingWizard({
               <div className="flex items-end gap-3">
                 <NodeAvatar name={nodeName} className="mb-1 size-8 shrink-0" />
                 <div className="min-w-0 flex-1">
-                  <Field label="Node name">
+                  <Field
+                    label="Node name"
+                    htmlFor="setup-node-name"
+                    info={
+                      <>
+                        Its identity and data live in{" "}
+                        <span className="font-mono break-all">{root}</span>. Your
+                        operating system runs it as a background service: closing this
+                        window or quitting Desktop leaves it running, and the menu bar’s
+                        Stop Node stops it. Starting at login is a separate setting.
+                      </>
+                    }
+                  >
                     <Input
+                      id="setup-node-name"
                       value={nodeName}
                       onChange={(event) => setName(event.target.value)}
                       readOnly={existingName !== null}
@@ -376,7 +422,10 @@ export function OnboardingWizard({
                 </div>
               )}
               <p className="break-all text-xs text-muted-foreground">
-                Node data: <span className="font-mono">{root}</span>
+                Node data:{" "}
+                <span className="font-mono" title={root}>
+                  {shortPath(root, { home })}
+                </span>
               </p>
               {existingHome ? (
                 <p className="text-xs text-muted-foreground">
@@ -385,12 +434,6 @@ export function OnboardingWizard({
                   Next keeps that identity, native service, and reviewed host authority.
                 </p>
               ) : null}
-              <p className="text-xs text-muted-foreground">
-                Your operating system manages the node as a background service. Closing
-                this window or choosing Quit Desktop leaves the node running; use the
-                menu bar’s Stop Node command to stop it. Start-at-login remains a
-                separate operating-system preference.
-              </p>
             </Option>
           )}
           <Option
@@ -435,45 +478,70 @@ export function OnboardingWizard({
   if (step === "starting") {
     const status = projectStartupLoadingStatus(phase, true);
     const done = provisionedAt !== null;
-    const saying: Record<string, string> = {
-      "checking-managed-server": "Starting your local node…",
-      "loading-configuration": "Loading node configuration…",
-      "starting-client": "Starting the secure client…",
+    const detail = {
+      node: startupDetails.managedServer,
+      connections: startupDetails.configuration,
+      client: startupDetails.client,
     };
     return (
       <Frame>
-        <SetupProgress
-          title={status.failed ? status.title : done ? "Ready" : "Starting"}
-          label={done ? "Everything started." : (saying[phase] ?? status.currentLabel)}
-          failed={status.failed}
+        <StartupProgress
+          title={status.title}
+          doneTitle="Gents is ready"
+          summary={
+            readyName
+              ? {
+                  title:
+                    where === "local"
+                      ? `${readyName} is running`
+                      : `Connected to ${readyName}`,
+                  facts: [
+                    ...(startedDid
+                      ? [
+                          {
+                            label: "Identity",
+                            value: shortDid(startedDid),
+                            full: startedDid,
+                          },
+                        ]
+                      : []),
+                    ...(where === "local" ? [{ label: "Data", value: root }] : []),
+                  ],
+                }
+              : undefined
+          }
+          steps={startupSteps(status, { remote: where !== "local" }).map((s) => ({
+            ...s,
+            state: done ? "complete" : s.state,
+            detail: detail[s.key] ?? null,
+          }))}
+          failedLabel={status.currentLabel}
           done={done}
-          steps={[
-            {
-              label: where === "local" ? "Start local node" : "Connect to server",
-              state: done ? "complete" : status.managedServerState,
-              detail: startupDetails.managedServer ?? null,
-            },
-            {
-              label: "Load configuration",
-              state: done ? "complete" : status.connectionState,
-              detail: startupDetails.configuration ?? null,
-            },
-            {
-              label: "Start secure client",
-              state: done ? "complete" : status.clientState,
-              detail: startupDetails.client ?? null,
-            },
-          ]}
           wait={managedWait}
-          error={error}
-          onRetry={() => dispatch({ type: "retried" })}
-          onContinue={() => dispatch({ type: "continued" })}
+          waitTestId="setup-managed-server-wait"
+          loginItemsTestId="setup-open-login-items"
           onOpenLoginItems={
             actions.localServerOffers.loginItems
               ? actions.openLocalServerLoginItems
               : undefined
           }
+          error={error}
           diagnosticsHint={diagnosticsHint ?? bootstrap?.diagnosticsHint}
+          actions={
+            <Button variant="brand" onClick={() => dispatch({ type: "retried" })}>
+              Try again
+            </Button>
+          }
+          onFinished={() => setReadyShownAt(Date.now())}
+          footer={
+            <Button
+              data-testid="setup-continue"
+              variant="brand"
+              onClick={() => dispatch({ type: "continued" })}
+            >
+              Continue <ArrowRight />
+            </Button>
+          }
         />
       </Frame>
     );

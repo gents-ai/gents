@@ -254,10 +254,10 @@ impl ClientStore {
         HashMap<String, Option<usize>>,
     ) {
         let mut request_index_by_doc_id = HashMap::new();
-        let mut unscoped_request_ids = HashSet::new();
+        let mut unscoped_placeholder_request_ids = HashSet::new();
         for (index, row) in rows.requests.iter().enumerate() {
-            if nonblank(row.node_did.as_deref()).is_none() {
-                unscoped_request_ids.insert(row.request_id.clone());
+            if row.doc_id.is_none() && nonblank(row.node_did.as_deref()).is_none() {
+                unscoped_placeholder_request_ids.insert(row.request_id.clone());
             }
             if let Some(doc_id) = row.doc_id.as_deref() {
                 insert_doc_owner(
@@ -285,7 +285,7 @@ impl ClientStore {
 
         (
             request_index_by_doc_id,
-            unscoped_request_ids,
+            unscoped_placeholder_request_ids,
             mailbox_index_by_doc_id,
         )
     }
@@ -352,7 +352,7 @@ mod tests {
             ..ClientStoreRows::default()
         });
         assert_eq!(
-            ClientStore::default().merge_scope(&incoming, false),
+            ClientStore::default().merge_scope(&incoming),
             scoped(&["did:node:canonical", "did:node:observed"])
         );
     }
@@ -386,7 +386,11 @@ mod tests {
     fn merge_footprint_includes_mailbox_collision_and_unscoped_request_removal() {
         let store = ClientStore::from_rows(ClientStoreRows {
             mailbox_items: vec![mailbox("mailbox-doc", "did:node:old")],
-            requests: vec![request("legacy-doc", "request-key", None)],
+            requests: vec![{
+                let mut placeholder = request("", "request-key", None);
+                placeholder.doc_id = None;
+                placeholder
+            }],
             ..ClientStoreRows::default()
         });
         let incoming = ClientStore::from_rows(ClientStoreRows {
@@ -395,7 +399,7 @@ mod tests {
             ..ClientStoreRows::default()
         });
         assert_eq!(
-            store.merge_scope(&incoming, false),
+            store.merge_scope(&incoming),
             scoped(&["did:node:old", "did:node:new"])
         );
 
@@ -407,7 +411,23 @@ mod tests {
             )],
             ..ClientStoreRows::default()
         });
-        assert_eq!(store.merge_scope(&incoming, true), StoreScope::All);
+        assert_eq!(store.merge_scope(&incoming), StoreScope::All);
+    }
+
+    #[test]
+    fn physical_request_replacement_includes_previous_owner() {
+        let rows = |owner| {
+            ClientStore::from_rows(ClientStoreRows {
+                requests: vec![request("physical", "request", owner)],
+                ..Default::default()
+            })
+        };
+        let incoming = rows(Some("did:node:new"));
+        assert_eq!(
+            rows(Some("did:node:old")).merge_scope(&incoming),
+            scoped(&["did:node:old", "did:node:new"])
+        );
+        assert_eq!(rows(None).merge_scope(&incoming), StoreScope::All);
     }
 
     #[test]

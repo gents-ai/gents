@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSelectionStore } from "../src/hooks/selectionStore";
 import { readSession, writeSession } from "../src/hooks/sessionStore";
 import { lifecycleFor } from "./shell-fixture";
+import { deferred } from "./deferred";
 
 const ownership = vi.hoisted(() => ({ main: true }));
 vi.mock("../src/lib/shellPlatform", () => ({
@@ -13,16 +14,6 @@ vi.mock("../src/lib/shellPlatform", () => ({
 beforeEach(() => {
   ownership.main = true;
 });
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, reject, resolve };
-}
 
 describe("desktop client restart selection ordering", () => {
   it.each([true, false])(

@@ -82,12 +82,15 @@ pub(super) async fn persist_call_started(
 pub(super) async fn persist_existing_call_running(
     node: Arc<EmbeddedNode>,
     call: &InferenceCallRecord,
+    doc_id: &str,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let call_id = escape_graphql_string(&call.call_id);
+    let doc_id = escape_graphql_string(doc_id);
     let started_at = escape_graphql_string(&now);
     let mutation = format!(
         r#"mutation {{ update_InferenceCall(
+            docID: "{doc_id}",
             filter: {{ call_id: {{ _eq: "{call_id}" }}, call_state: {{ _eq: "queued" }} }},
             input: {{ call_state: "running", started_at: "{started_at}" }}
         ) {{ _docID }} }}"#
@@ -135,6 +138,7 @@ pub(super) async fn persist_terminal_call(
 pub(super) async fn persist_existing_call_terminal(
     node: Arc<EmbeddedNode>,
     call: &InferenceCallRecord,
+    doc_id: &str,
     call_state: &str,
     failure_reason: Option<&str>,
     usage: Option<ProviderCallUsage>,
@@ -148,12 +152,14 @@ pub(super) async fn persist_existing_call_terminal(
         _ => anyhow::bail!("invalid terminal InferenceCall state: {call_state}"),
     };
     let call_id = escape_graphql_string(&call.call_id);
+    let doc_id = escape_graphql_string(doc_id);
     let ended_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let failure_reason = optional_graphql_string("failure_reason", failure_reason);
     let (prompt_tokens, completion_tokens, cached_input_tokens) =
         usage_fields(usage, cache_observation);
     let mutation = format!(
         r#"mutation {{ update_InferenceCall(
+            docID: "{doc_id}",
             filter: {{ call_id: {{ _eq: "{call_id}" }}, call_state: {live_source} }},
             input: {{ call_state: "{call_state}", {failure_reason} ended_at: "{ended_at}",
                 {prompt_tokens} {completion_tokens} {cached_input_tokens} }}
@@ -170,13 +176,14 @@ pub(super) async fn persist_existing_call_terminal(
     }
 
     let terminal_filter = format!(
-        r#"call_id: {{ _eq: "{call_id}" }}, call_state: {{ _in: ["completed", "failed", "cancelled"] }}"#
+        r#"_docID: {{ _eq: "{doc_id}" }}, call_id: {{ _eq: "{call_id}" }}, call_state: {{ _in: ["completed", "failed", "cancelled"] }}"#
     );
     let exists = if usage.is_some() {
         // Recovery may win while a provider response is in flight; record only
         // its observed usage, never the winning outcome.
         let mutation = format!(
             r#"mutation {{ update_InferenceCall(
+                docID: "{doc_id}",
                 filter: {{ {terminal_filter} }},
                 input: {{ {prompt_tokens} {completion_tokens} {cached_input_tokens} }}
             ) {{ _docID }} }}"#

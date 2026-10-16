@@ -67,7 +67,14 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(sweep_open_mailbox_items(&node).await.unwrap().acted, 0);
+        assert_eq!(
+            sweep_open_mailbox_items(&node, "did:test:agent", None)
+                .await
+                .unwrap()
+                .report
+                .acted,
+            0
+        );
         let response = node.execute(&format!(
             r#"mutation {{ create_MailboxFixture(input: {{ mailbox_item_key: "{}", body: "declined" }}) {{ _docID }} }}"#,
             escape_graphql_string(&item.item_key)
@@ -79,7 +86,14 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        assert_eq!(sweep_open_mailbox_items(&node).await.unwrap().acted, 1);
+        assert_eq!(
+            sweep_open_mailbox_items(&node, "did:test:agent", None)
+                .await
+                .unwrap()
+                .report
+                .acted,
+            1
+        );
         let resolved = load_mailbox_item(&node, &item.doc_id)
             .await
             .unwrap()
@@ -89,7 +103,14 @@ mod tests {
             resolved.resolved_doc_id.as_deref(),
             Some(response_id.as_str())
         );
-        assert_eq!(sweep_open_mailbox_items(&node).await.unwrap().acted, 0);
+        assert_eq!(
+            sweep_open_mailbox_items(&node, "did:test:agent", None)
+                .await
+                .unwrap()
+                .report
+                .acted,
+            0
+        );
     }
 
     #[test]

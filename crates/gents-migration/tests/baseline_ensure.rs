@@ -548,6 +548,7 @@ async fn empty_registry_injectable_for_tests() {
     let empty = Registry {
         baseline: &[],
         steps: &[],
+        ordinary_indexes: &[],
     };
     let node = fresh_node().await;
     let report = ensure_migrations_with_registry(node.as_ref(), &empty)

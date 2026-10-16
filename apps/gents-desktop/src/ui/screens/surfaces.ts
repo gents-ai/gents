@@ -1,5 +1,6 @@
-/* The surfaces this app registers; importing this module fills the registry. */
-import { ListTree, Users } from "lucide-react";
+/* The surfaces this app registers. Importing this module once (App does)
+   fills the registry; a new surface is a file here and one entry. */
+import { ListTree, SquareStack } from "lucide-react";
 import { registerSurface } from "@/app/surfaces";
 import { workersOfId } from "@/hooks/useFleet";
 import { TraceSurface } from "./TracePanel";
@@ -17,7 +18,7 @@ registerSurface({
 registerSurface({
   id: "workers",
   title: "Started sessions",
-  icon: Users,
+  icon: SquareStack,
   placements: ["dock", "sheet"],
   routes: ["session"],
   render: WorkersSurface,

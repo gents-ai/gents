@@ -1,7 +1,28 @@
-use super::rows::{dedupe_paths, CompactionEntryRow};
+use super::rows::dedupe_paths;
 use super::*;
 use crate::graphql::graphql_response_with_transaction_retry as execute_query_timed;
 use anyhow::Context;
+use std::collections::{BTreeSet, HashSet};
+
+#[derive(Serialize)]
+struct FilePathDelta<'a> {
+    version: u32,
+    paths: &'a [String],
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredFilePathDelta {
+    version: u32,
+    paths: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredFilePaths {
+    Cumulative(Vec<String>),
+    Delta(StoredFilePathDelta),
+}
 
 #[derive(Deserialize)]
 struct PromptCompactionRow {
@@ -15,6 +36,10 @@ struct PromptCompactionRow {
 
 #[derive(Clone, Deserialize)]
 pub(super) struct CompactionGenerationRow {
+    #[serde(
+        default,
+        deserialize_with = "crate::document_config::deserialize_default_on_null"
+    )]
     compaction_key: String,
     sequence: u32,
     summary: String,
@@ -236,7 +261,10 @@ pub async fn load_compaction_entries(
                 filter: {{ {scope} }},
                 order: {{ sequence: ASC }}
             ) {{
+                compaction_key
                 session_id
+                node_did
+                requester_did
                 sequence
                 summary
                 files_read
@@ -259,7 +287,7 @@ pub async fn load_compaction_entries(
         );
     }
 
-    let rows: Vec<CompactionEntryRow> = match resp
+    let rows: Vec<CompactionGenerationRow> = match resp
         .data
         .as_ref()
         .and_then(|data| data.get("CompactionEntry"))
@@ -268,9 +296,34 @@ pub async fn load_compaction_entries(
         None => Vec::new(),
     };
 
+    // Legacy arrays are self-contained snapshots. Once a row stores deltas,
+    // the public cumulative projection depends on every preceding chain row.
+    validate_file_path_projection_chain(node_did, session_id, requester_did, &rows)?;
+
+    let mut files_read = FilePathAccumulator::default();
+    let mut files_modified = FilePathAccumulator::default();
     let entries = rows
         .into_iter()
-        .map(CompactionEntry::try_from)
+        .map(|row| {
+            files_read.push(&row.files_read)?;
+            files_modified.push(&row.files_modified)?;
+            let original_tokens = usize::try_from(row.original_tokens)
+                .context("compaction original_tokens must be a non-negative usize")?;
+            let compacted_tokens = usize::try_from(row.compacted_tokens)
+                .context("compaction compacted_tokens must be a non-negative usize")?;
+            Ok(CompactionEntry {
+                session_id: session_id.to_owned(),
+                sequence: row.sequence,
+                summary: row.summary,
+                files_read: files_read.snapshot(),
+                files_modified: files_modified.snapshot(),
+                messages_compacted: row.messages_compacted,
+                compacted_through_sequence: row.compacted_through_sequence,
+                original_tokens,
+                compacted_tokens,
+                created_at: row.created_at,
+            })
+        })
         .collect::<Result<Vec<_>>>()?;
     let compacted_message_count = entries
         .iter()
@@ -417,18 +470,15 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                     );
                 }
 
-                let mut cumulative_files_read = rows
-                    .last()
-                    .map(|entry| decode_paths(&entry.files_read))
-                    .transpose()?
-                    .unwrap_or_default();
+                let mut cumulative_files_read =
+                    cumulative_file_paths(&rows, |row| &row.files_read)?;
+                let file_read_delta = new_file_paths(&cumulative_files_read, files_read);
                 cumulative_files_read.extend(files_read.iter().cloned());
                 dedupe_paths(&mut cumulative_files_read);
-                let mut cumulative_files_modified = rows
-                    .last()
-                    .map(|entry| decode_paths(&entry.files_modified))
-                    .transpose()?
-                    .unwrap_or_default();
+                let mut cumulative_files_modified =
+                    cumulative_file_paths(&rows, |row| &row.files_modified)?;
+                let file_modified_delta =
+                    new_file_paths(&cumulative_files_modified, files_modified);
                 cumulative_files_modified.extend(files_modified.iter().cloned());
                 dedupe_paths(&mut cumulative_files_modified);
 
@@ -467,9 +517,9 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                     compaction_key = escape_graphql_string(&compaction_key),
                     summary = escape_graphql_string(&summary),
                     files_read_json =
-                        escape_graphql_string(&serde_json::to_string(&cumulative_files_read)?),
+                        escape_graphql_string(&encode_file_path_delta(&file_read_delta)?),
                     files_modified_json =
-                        escape_graphql_string(&serde_json::to_string(&cumulative_files_modified)?),
+                        escape_graphql_string(&encode_file_path_delta(&file_modified_delta)?),
                     created_at = escape_graphql_string(&created_at),
                 );
                 txn.execute(&mutation).await?;
@@ -491,11 +541,205 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
     .await
 }
 
-fn decode_paths(value: &str) -> Result<Vec<String>> {
-    if value.trim().is_empty() {
-        return Ok(Vec::new());
+fn encode_file_path_delta(paths: &[String]) -> Result<String> {
+    Ok(serde_json::to_string(&FilePathDelta { version: 1, paths })?)
+}
+
+fn new_file_paths(cumulative: &[String], current: &[String]) -> Vec<String> {
+    let mut seen = cumulative
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let mut delta = current
+        .iter()
+        .filter(|path| seen.insert(path.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    dedupe_paths(&mut delta);
+    delta
+}
+
+fn decode_file_paths(encoded: &str) -> Result<StoredFilePaths> {
+    if encoded.trim().is_empty() {
+        return Ok(StoredFilePaths::Cumulative(Vec::new()));
     }
-    serde_json::from_str(value).map_err(Into::into)
+    Ok(serde_json::from_str::<StoredFilePaths>(encoded)?)
+}
+
+#[derive(Default)]
+struct FilePathAccumulator {
+    cumulative: Vec<String>,
+    deltas: Option<BTreeSet<String>>,
+}
+
+impl FilePathAccumulator {
+    fn push(&mut self, encoded: &str) -> Result<()> {
+        match decode_file_paths(encoded)? {
+            StoredFilePaths::Cumulative(paths) => {
+                self.cumulative = paths;
+                self.deltas = None;
+            }
+            StoredFilePaths::Delta(delta) => {
+                anyhow::ensure!(
+                    delta.version == 1,
+                    "unsupported compaction file-list version"
+                );
+                let paths = self.deltas.get_or_insert_with(|| {
+                    std::mem::take(&mut self.cumulative).into_iter().collect()
+                });
+                paths.extend(delta.paths);
+            }
+        }
+        Ok(())
+    }
+
+    fn snapshot(&self) -> Vec<String> {
+        self.deltas.as_ref().map_or_else(
+            || self.cumulative.clone(),
+            |paths| paths.iter().cloned().collect(),
+        )
+    }
+
+    fn finish(self) -> Vec<String> {
+        self.deltas
+            .map_or(self.cumulative, |paths| paths.into_iter().collect())
+    }
+}
+
+fn cumulative_file_paths(
+    rows: &[CompactionGenerationRow],
+    paths: impl for<'a> Fn(&'a CompactionGenerationRow) -> &'a str,
+) -> Result<Vec<String>> {
+    let mut accumulator = FilePathAccumulator::default();
+    for row in rows {
+        accumulator.push(paths(row))?;
+    }
+    Ok(accumulator.finish())
+}
+
+fn is_cumulative_file_paths(encoded: &str) -> bool {
+    encoded.trim().is_empty() || encoded.trim_start().starts_with('[')
+}
+
+fn validate_file_path_projection_chain(
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    rows: &[CompactionGenerationRow],
+) -> Result<()> {
+    if rows.iter().any(|row| {
+        !is_cumulative_file_paths(&row.files_read) || !is_cumulative_file_paths(&row.files_modified)
+    }) {
+        validate_compaction_chain(node_did, session_id, requester_did, rows)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod file_path_tests {
+    use super::*;
+
+    fn compaction_row(
+        sequence: u32,
+        files_read: &str,
+        files_modified: &str,
+    ) -> CompactionGenerationRow {
+        CompactionGenerationRow {
+            compaction_key: compaction_key("did:test:files", "session", None, sequence),
+            sequence,
+            summary: format!("summary-{sequence}"),
+            messages_compacted: 1,
+            compacted_through_sequence: Some(sequence * 10),
+            files_read: files_read.to_owned(),
+            files_modified: files_modified.to_owned(),
+            node_did: "did:test:files".to_owned(),
+            requester_did: None,
+            request_id: Some(format!("request-{sequence}")),
+            request_doc_id: Some(format!("request-doc-{sequence}")),
+            original_tokens: 10,
+            compacted_tokens: 5,
+            created_at: format!("2026-10-15T00:00:{sequence:02}Z"),
+        }
+    }
+
+    #[test]
+    fn cumulative_arrays_and_versioned_deltas_keep_legacy_views() {
+        let mut paths = FilePathAccumulator::default();
+        paths.push(r#"["/b.rs","/a.rs"]"#).unwrap();
+        assert_eq!(paths.snapshot(), vec!["/b.rs", "/a.rs"]);
+        paths.push(r#"["/b.rs","/a.rs","/c.rs"]"#).unwrap();
+        assert_eq!(paths.snapshot(), vec!["/b.rs", "/a.rs", "/c.rs"]);
+        paths
+            .push(r#"{"version":1,"paths":["/d.rs","/a.rs"]}"#)
+            .unwrap();
+        assert_eq!(paths.snapshot(), vec!["/a.rs", "/b.rs", "/c.rs", "/d.rs"]);
+
+        paths.push(r#"["/historical.rs"]"#).unwrap();
+        assert_eq!(paths.snapshot(), vec!["/historical.rs"]);
+    }
+
+    #[test]
+    fn file_path_deltas_reject_unknown_versions_and_shapes() {
+        let mut paths = FilePathAccumulator::default();
+        assert!(paths.push(r#"{"version":2,"paths":[]}"#).is_err());
+        assert!(paths
+            .push(r#"{"version":1,"paths":[],"extra":true}"#)
+            .is_err());
+        assert!(paths.push(r#"{"version":1}"#).is_err());
+    }
+
+    #[test]
+    fn delta_projection_rejects_missing_prefix_and_interior_chain_rows() {
+        let missing_prefix = [compaction_row(
+            2,
+            r#"{"version":1,"paths":["/b.rs"]}"#,
+            r#"{"version":1,"paths":[]}"#,
+        )];
+        assert!(validate_file_path_projection_chain(
+            "did:test:files",
+            "session",
+            None,
+            &missing_prefix
+        )
+        .is_err());
+
+        let interior_gap = [
+            compaction_row(1, r#"["/a.rs"]"#, "[]"),
+            compaction_row(
+                3,
+                r#"{"version":1,"paths":["/c.rs"]}"#,
+                r#"{"version":1,"paths":[]}"#,
+            ),
+        ];
+        assert!(validate_file_path_projection_chain(
+            "did:test:files",
+            "session",
+            None,
+            &interior_gap
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn delta_projection_accepts_complete_mixed_legacy_chain() {
+        let complete = [
+            compaction_row(1, r#"["/a.rs"]"#, r#"["/x.rs"]"#),
+            compaction_row(
+                2,
+                r#"{"version":1,"paths":["/b.rs"]}"#,
+                r#"{"version":1,"paths":[]}"#,
+            ),
+        ];
+        validate_file_path_projection_chain("did:test:files", "session", None, &complete).unwrap();
+        assert_eq!(
+            cumulative_file_paths(&complete, |row| &row.files_read).unwrap(),
+            vec!["/a.rs", "/b.rs"]
+        );
+        assert_eq!(
+            cumulative_file_paths(&complete, |row| &row.files_modified).unwrap(),
+            vec!["/x.rs"]
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -523,23 +767,18 @@ fn reconcile_exact_redelivery(
     let predecessor = &rows[..predecessor_len];
     let persisted = &rows[predecessor_len];
 
-    let mut expected_files_read = predecessor
-        .last()
-        .map(|row| decode_paths(&row.files_read))
-        .transpose()?
-        .unwrap_or_default();
+    let mut expected_files_read = cumulative_file_paths(predecessor, |row| &row.files_read)?;
     expected_files_read.extend(files_read.iter().cloned());
     dedupe_paths(&mut expected_files_read);
-    let mut expected_files_modified = predecessor
-        .last()
-        .map(|row| decode_paths(&row.files_modified))
-        .transpose()?
-        .unwrap_or_default();
+    let mut expected_files_modified =
+        cumulative_file_paths(predecessor, |row| &row.files_modified)?;
     expected_files_modified.extend(files_modified.iter().cloned());
     dedupe_paths(&mut expected_files_modified);
 
-    let persisted_files_read = decode_paths(&persisted.files_read)?;
-    let persisted_files_modified = decode_paths(&persisted.files_modified)?;
+    let persisted_files_read =
+        cumulative_file_paths(&rows[..=predecessor_len], |row| &row.files_read)?;
+    let persisted_files_modified =
+        cumulative_file_paths(&rows[..=predecessor_len], |row| &row.files_modified)?;
     let requester_matches = persisted.requester_did.as_deref() == requester_did;
     let matches = persisted.node_did == node_did
         && requester_matches

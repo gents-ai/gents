@@ -56,6 +56,8 @@ pub(crate) use output::count_capture_row_queries;
 #[cfg(test)]
 pub(crate) use output::count_request_output_scans;
 #[cfg(test)]
+pub(crate) use output::count_source_output_queries;
+#[cfg(test)]
 pub(crate) use output::load_canonical_payload_from_node;
 pub(crate) use output::load_canonical_payload_in_txn;
 pub(crate) use output::load_canonical_payload_with_access;

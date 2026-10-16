@@ -6,8 +6,7 @@ use std::sync::Arc;
 
 #[test]
 fn snapshot_coalesces_shared_roots_and_splits_strict_projections() {
-    let query = snapshot_query(Some("filter: { node_did: { _eq: \"did:alpha\" } }"))
-        .expect("snapshot query");
+    let query = snapshot_query(Some("did:alpha")).expect("snapshot query");
     assert_eq!(query.matches("triggers: Trigger(").count(), 1);
     assert_eq!(
         query
@@ -80,6 +79,157 @@ fn snapshot_coalesces_shared_roots_and_splits_strict_projections() {
     assert_eq!(observation.len(), 2);
     assert_eq!(observation[1].last_status.as_deref(), Some("ok"));
     assert_eq!(schedule_observation.len(), 2);
+}
+
+#[test]
+fn snapshot_request_seeds_use_bounded_trigger_and_physical_head_queries() {
+    let snapshot = snapshot_query(None).expect("full snapshot query");
+    assert!(snapshot.contains("lifecycle_state: { _in:"));
+    assert!(!snapshot.contains("groupBy"));
+    assert!(snapshot.contains("mailbox_items: MailboxItem(filter: {  status: { _eq: \"open\" } })"));
+
+    let triggers = serde_json::json!({
+        "triggers": [
+            {"node_did": "did:alpha", "trigger_id": "trigger-a"},
+            {"node_did": "did:alpha", "trigger_id": "trigger-b"},
+            {"node_did": "did:beta", "trigger_id": "trigger-c"}
+        ]
+    });
+    let scoped = task_request_queries(&triggers, Some("did:alpha"));
+    assert_eq!(scoped.len(), 1);
+    assert_eq!(scoped[0].matches("trigger_0: AgentRequest").count(), 1);
+    assert_eq!(scoped[0].matches("trigger_1: AgentRequest").count(), 1);
+    assert!(!scoped[0].contains("trigger-c"));
+    assert_eq!(scoped[0].matches("limit: 8").count(), 2);
+    assert!(scoped[0].contains(
+        "order: [{ node_did: ASC }, { caused_by_trigger_id: ASC }, { purpose: ASC }, { created_at: DESC }, { request_id: DESC }, { session_id: ASC }]"
+    ));
+
+    let many_heads = (0..129)
+        .map(|index| {
+            (
+                format!("doc-{index:03}"),
+                "did:alpha".to_owned(),
+                format!("session-{index}"),
+                None,
+                format!("request-{index}"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let head_queries = session_head_queries(&many_heads);
+    assert_eq!(head_queries.len(), 2);
+    assert_eq!(head_queries[0].matches("docIDs").count(), 1);
+    assert!(head_queries[0].contains("doc-000"));
+    assert!(!head_queries[0].contains("doc-128"));
+    assert!(head_queries[1].contains("doc-128"));
+}
+
+#[tokio::test]
+async fn bounded_task_history_preserves_physical_twins_at_the_cutoff() {
+    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    ensure_runtime_schemas(&node).await.expect("schemas");
+    let mut docs = Vec::new();
+    for index in 0..24 {
+        let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+            "node_did":"did:task-history", "request_id":"same-logical-request",
+            "session_id":"task-session", "caused_by_trigger_id":"task-trigger",
+            "created_at":"2026-10-15T00:00:00Z", "lifecycle_state":"completed",
+            "purpose":"normal", "content":format!("physical twin {index}")
+        }))
+        .unwrap();
+        let result = gents::config_client::ConfigAccess::write_local(
+            &node,
+            "test.task_history_twins",
+            &format!("mutation {{ create_AgentRequest(input: {input}) {{ _docID }} }}"),
+        )
+        .await
+        .unwrap();
+        docs.push(gents::graphql::created_doc_id(&result, "AgentRequest").unwrap());
+    }
+    for index in 0..9 {
+        let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+            "node_did":"did:task-history", "request_id":format!("legacy-{index}"),
+            "session_id":"task-session", "caused_by_trigger_id":"task-trigger",
+            "created_at":"2026-10-16T00:00:00Z", "lifecycle_state":"completed",
+            "purpose":null
+        }))
+        .unwrap();
+        gents::config_client::ConfigAccess::write_local(
+            &node,
+            "test.task_history_nonpublic",
+            &format!("mutation {{ create_AgentRequest(input: {input}) {{ _docID }} }}"),
+        )
+        .await
+        .unwrap();
+    }
+    docs.sort();
+    let data = serde_json::json!({
+        "requests":[], "sessions":[],
+        "triggers":[{"node_did":"did:task-history", "trigger_id":"task-trigger"}]
+    });
+    let rows = complete_local_snapshot_requests(&node, &data, Some("did:task-history"))
+        .await
+        .expect("bounded task history");
+    assert!(
+        rows.len() <= 16,
+        "only candidates and cutoff refinements are loaded"
+    );
+    let mut actual = rows
+        .iter()
+        .map(|row| row.doc_id.clone().unwrap())
+        .collect::<Vec<_>>();
+    actual.sort();
+    actual.truncate(8);
+    assert_eq!(
+        actual,
+        docs[..8],
+        "same top eight as complete history, including physical ties"
+    );
+    node.shutdown().await;
+}
+
+#[test]
+fn complete_request_projection_rejects_mixed_valid_and_malformed_rows() {
+    let data = serde_json::json!({"requests":[
+        {"request_id":"valid", "lifecycle_state":"pending"},
+        {"request_id":"malformed", "lifecycle_state":42}
+    ]});
+    assert!(complete_request_rows(&data, "requests").is_err());
+}
+
+#[test]
+fn session_head_seed_requires_observed_physical_and_logical_identity() {
+    let rows = vec![
+        serde_json::from_value::<gents_protocol::row::AgentRequestRow>(serde_json::json!({
+            "_docID": "request-doc",
+            "request_id": "observed-request",
+            "purpose": "normal",
+            "node_did": "did:alpha",
+            "session_id": "session-a",
+            "requester_did": "did:requester"
+        }))
+        .expect("valid observed row"),
+        serde_json::from_value::<gents_protocol::row::AgentRequestRow>(serde_json::json!({
+            "_docID": "request-doc",
+            "request_id": "other-logical-request",
+            "purpose": "normal",
+            "node_did": "did:alpha",
+            "session_id": "session-a",
+            "requester_did": "did:requester"
+        }))
+        .expect("valid mismatched row"),
+    ];
+    let scopes = vec![(
+        "request-doc".to_owned(),
+        "did:alpha".to_owned(),
+        "session-a".to_owned(),
+        Some("did:requester".to_owned()),
+        "observed-request".to_owned(),
+    )];
+
+    let accepted = scoped_session_heads(rows, &scopes);
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(accepted[0].request_id, "observed-request");
 }
 
 #[test]

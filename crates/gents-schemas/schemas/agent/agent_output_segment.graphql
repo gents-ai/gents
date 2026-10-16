@@ -1,6 +1,12 @@
-# Canonical durable output (#1571): a flush, source closure, or both. Decode
-# through gents_protocol::output::OutputSegment. Terminal-only records have no
-# ordinal, no runs and no payload; they cannot collide with a late data flush.
+# Canonical durable output (#1571): a flush, source closure, or both.
+# Decode through gents_protocol::output::OutputSegment. No separate seal collection.
+#
+# Data coordinate: (request_doc_id, source, ordinal). Closure coordinate:
+# (request_doc_id, source). Terminal-only records have no ordinal, no runs and
+# no payload; they cannot collide with a late data flush. A final flush carries
+# both coordinates. Enumerate closure conflicts before projecting its extent;
+# data outside a committed extent is inert. No unique or synthetic key.
+#
 type AgentOutputSegment @branchable {
     node_did: String @index @immutable
     requester_did: String @index @immutable

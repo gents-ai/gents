@@ -3,7 +3,9 @@
 //! Mailbox rows are stamped envelopes. They do not advance graph work: only
 //! the correlated `AgentRequest` or domain-document create carries semantics.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -936,42 +938,141 @@ pub struct MailboxSweepReport {
     pub skipped_errors: usize,
 }
 
-pub async fn sweep_open_mailbox_items(node: &Arc<EmbeddedNode>) -> Result<MailboxSweepReport> {
-    sweep_open_mailbox_items_with_close_collections(node, MAILBOX_CLOSE_COLLECTIONS).await
+pub(crate) struct MailboxSweepPage {
+    pub report: MailboxSweepReport,
+    pub next_cursor: Option<String>,
 }
 
-pub async fn sweep_open_mailbox_items_with_close_collections(
+const MAILBOX_SWEEP_PAGE_SIZE: usize = 16;
+const MAILBOX_SWEEP_TIME_BUDGET: Duration = Duration::from_millis(500);
+
+pub(crate) async fn sweep_open_mailbox_items(
     node: &Arc<EmbeddedNode>,
+    local_did: &str,
+    after_doc_id: Option<&str>,
+) -> Result<MailboxSweepPage> {
+    sweep_open_mailbox_items_with_close_collections(
+        node,
+        local_did,
+        after_doc_id,
+        MAILBOX_CLOSE_COLLECTIONS,
+    )
+    .await
+}
+
+// Keep this complete order aligned with the ordinary index: Defra only seeks
+// cursor pages when the declared order is fully covered by one index.
+fn open_mailbox_page_query(local_did: &str, after_cursor: Option<&str>) -> String {
+    let after_arg = after_cursor
+        .map(|cursor| format!(", after: \"{}\"", escape_graphql_string(cursor)))
+        .unwrap_or_default();
+    format!(
+        r#"{{ _cursor {{ MailboxItem(
+            first: {MAILBOX_SWEEP_PAGE_SIZE}{after_arg},
+            filter: {{ node_did: {{ _eq: "{}" }}, status: {{ _eq: "open" }} }},
+            order: [{{ node_did: ASC }}, {{ status: ASC }}, {{ item_key: ASC }}]
+        ) {{ {MAILBOX_FIELDS} }}
+        _pageInfo {{ hasNext }} }} }}"#,
+        escape_graphql_string(local_did),
+    )
+}
+
+fn mailbox_item_cursor(raw_item: &Value) -> Result<String> {
+    let doc_id = raw_item
+        .get("_docID")
+        .and_then(Value::as_str)
+        .context("mailbox sweep row lacks physical _docID")?;
+    let keys = BTreeMap::from([
+        (
+            "item_key".to_owned(),
+            raw_item
+                .get("item_key")
+                .cloned()
+                .context("mailbox cursor row omitted ordered item_key")?,
+        ),
+        (
+            "node_did".to_owned(),
+            raw_item
+                .get("node_did")
+                .cloned()
+                .context("mailbox cursor row omitted ordered node_did")?,
+        ),
+        (
+            "status".to_owned(),
+            raw_item
+                .get("status")
+                .cloned()
+                .context("mailbox cursor row omitted ordered status")?,
+        ),
+    ]);
+    Ok(cursor::Cursor {
+        doc_id: doc_id.to_owned(),
+        keys,
+        direction: String::new(),
+    }
+    .encode())
+}
+
+async fn sweep_open_mailbox_items_with_close_collections(
+    node: &Arc<EmbeddedNode>,
+    local_did: &str,
+    after_cursor: Option<&str>,
     close_collections: &[MailboxCloseCollection],
-) -> Result<MailboxSweepReport> {
+) -> Result<MailboxSweepPage> {
     validate_close_collections(close_collections)?;
     let response = graphql_with_transaction_retry(
         node,
-        &format!(
-            r#"{{ MailboxItem(filter: {{ status: {{ _eq: "open" }} }}) {{ {MAILBOX_FIELDS} }} }}"#
-        ),
+        &open_mailbox_page_query(local_did, after_cursor),
         "load open mailbox items",
     )
     .await?;
-    let raw_items = response
+    let cursor_page = response
         .data
-        .and_then(|mut data| data.as_object_mut()?.remove(MAILBOX_COLLECTION));
-    let raw_items: Vec<Value> = match raw_items {
-        Some(Value::Array(rows)) => rows,
-        Some(rows) => serde_json::from_value(rows).context("decode MailboxItem rows")?,
-        None => Vec::new(),
-    };
+        .context("mailbox cursor query omitted data")?
+        .get("_cursor")
+        .context("mailbox cursor query omitted _cursor")?
+        .clone();
+    let raw_items: Vec<Value> = serde_json::from_value(
+        cursor_page
+            .get(MAILBOX_COLLECTION)
+            .context("mailbox cursor query omitted collection rows")?
+            .clone(),
+    )
+    .context("decode MailboxItem cursor rows")?;
+    anyhow::ensure!(
+        raw_items.len() <= MAILBOX_SWEEP_PAGE_SIZE,
+        "mailbox cursor query exceeded requested page size"
+    );
+    let has_more = cursor_page
+        .get("_pageInfo")
+        .and_then(|page_info| page_info.get("hasNext"))
+        .and_then(Value::as_bool)
+        .context("mailbox cursor query omitted _pageInfo.hasNext")?;
+    anyhow::ensure!(
+        !has_more || !raw_items.is_empty(),
+        "mailbox cursor query hasNext without returning rows"
+    );
     let mut report = MailboxSweepReport {
-        scanned: raw_items.len(),
+        scanned: 0,
         ..Default::default()
     };
     let now = Utc::now();
+    let turn_started = Instant::now();
+    let mut last_processed_cursor = None;
+    let mut stopped_early = false;
     for raw_item in raw_items {
+        if report.scanned > 0 && turn_started.elapsed() >= MAILBOX_SWEEP_TIME_BUDGET {
+            stopped_early = true;
+            break;
+        }
+        let item_cursor = mailbox_item_cursor(&raw_item)?;
         let item_id = raw_item
             .get("_docID")
             .and_then(Value::as_str)
-            .unwrap_or("<unknown>")
-            .to_string();
+            .context("mailbox sweep row lacks physical _docID")?
+            .to_owned();
+        report.scanned += 1;
+        last_processed_cursor = Some(item_cursor);
         let item = match serde_json::from_value::<MailboxItem>(raw_item) {
             Ok(item) => item,
             Err(error) => {
@@ -1041,7 +1142,15 @@ pub async fn sweep_open_mailbox_items_with_close_collections(
             }
         }
     }
-    Ok(report)
+    let next_cursor = if stopped_early || has_more {
+        last_processed_cursor
+    } else {
+        None
+    };
+    Ok(MailboxSweepPage {
+        report,
+        next_cursor,
+    })
 }
 
 #[cfg(test)]
@@ -1330,9 +1439,15 @@ mod tests {
             Utc::now().to_rfc3339()
         );
         assert!(!node.execute(&event_child).await.has_errors());
-        let observer_report = sweep_open_mailbox_items_with_close_collections(&node, FIXTURE_CLOSE)
-            .await
-            .unwrap();
+        let observer_report = sweep_open_mailbox_items_with_close_collections(
+            &node,
+            "did:test:agent",
+            None,
+            FIXTURE_CLOSE,
+        )
+        .await
+        .unwrap()
+        .report;
         assert_eq!(observer_report.acted, 0);
         assert_eq!(
             load_mailbox_item(&node, &observed_item.doc_id)
@@ -1361,9 +1476,15 @@ mod tests {
             Utc::now().to_rfc3339()
         );
         assert!(!node.execute(&create_request).await.has_errors());
-        let report = sweep_open_mailbox_items_with_close_collections(&node, FIXTURE_CLOSE)
-            .await
-            .unwrap();
+        let report = sweep_open_mailbox_items_with_close_collections(
+            &node,
+            "did:test:agent",
+            None,
+            FIXTURE_CLOSE,
+        )
+        .await
+        .unwrap()
+        .report;
         assert_eq!(report.acted, 0);
         assert_eq!(report.expired, 1);
 
@@ -1386,9 +1507,15 @@ mod tests {
             Utc::now().to_rfc3339()
         );
         assert!(!node.execute(&unrelated_request).await.has_errors());
-        let request_only = sweep_open_mailbox_items_with_close_collections(&node, FIXTURE_CLOSE)
-            .await
-            .unwrap();
+        let request_only = sweep_open_mailbox_items_with_close_collections(
+            &node,
+            "did:test:agent",
+            None,
+            FIXTURE_CLOSE,
+        )
+        .await
+        .unwrap()
+        .report;
         assert_eq!(request_only.acted, 0);
         assert_eq!(request_only.expired, 0);
         assert_eq!(
@@ -1404,9 +1531,15 @@ mod tests {
             escape_graphql_string(&domain_item.item_key)
         );
         assert!(!node.execute(&fixture).await.has_errors());
-        let report = sweep_open_mailbox_items_with_close_collections(&node, FIXTURE_CLOSE)
-            .await
-            .unwrap();
+        let report = sweep_open_mailbox_items_with_close_collections(
+            &node,
+            "did:test:agent",
+            None,
+            FIXTURE_CLOSE,
+        )
+        .await
+        .unwrap()
+        .report;
         assert_eq!(report.acted, 1);
         assert_eq!(report.expired, 0);
         let closed = load_mailbox_item(&node, &domain_item.doc_id)
@@ -1448,9 +1581,15 @@ mod tests {
             .await
             .unwrap();
 
-        let report = sweep_open_mailbox_items_with_close_collections(&node, FIXTURE_CLOSE)
-            .await
-            .unwrap();
+        let report = sweep_open_mailbox_items_with_close_collections(
+            &node,
+            "did:test:agent",
+            None,
+            FIXTURE_CLOSE,
+        )
+        .await
+        .unwrap()
+        .report;
         assert_eq!(report.skipped_errors, 2);
         assert_eq!(report.expired, 1);
         assert_eq!(
@@ -1460,6 +1599,304 @@ mod tests {
                 .unwrap()
                 .status,
             "expired"
+        );
+    }
+
+    #[tokio::test]
+    async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
+        use std::collections::BTreeMap;
+
+        let node = test_node().await;
+        let contract = crate::lean_vocab_test::lean_contract_snapshot();
+        let case = contract
+            .mailbox_sweep_cases
+            .first()
+            .expect("Lean mailbox sweep case");
+        let node_did = case["node_did"].as_str().unwrap();
+        assert_eq!(
+            case["page_size"].as_u64(),
+            Some(MAILBOX_SWEEP_PAGE_SIZE as u64)
+        );
+        assert_eq!(
+            case["budget"].as_u64(),
+            Some(MAILBOX_SWEEP_PAGE_SIZE as u64)
+        );
+        let actions = case["actions"].as_array().unwrap();
+        assert_eq!(actions.len(), 4);
+        let future = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        let mut modeled_doc_ids = BTreeMap::<u64, String>::new();
+        let mut modeled_item_keys = BTreeMap::<u64, String>::new();
+        let mut modeled_ids_by_doc = BTreeMap::<String, u64>::new();
+        let mut modeled_ids_by_item_key = BTreeMap::<String, u64>::new();
+        let mut modeled_due = BTreeMap::<u64, bool>::new();
+        let mut created_local_ids = Vec::new();
+        let mut foreign_doc_id = None;
+        for row in actions[0]["rows"].as_array().unwrap() {
+            let model_id = row["doc_id"].as_u64().unwrap();
+            let due = row["due"].as_bool().unwrap();
+            modeled_due.insert(model_id, due);
+            let mut row_context = context("did:test:owner");
+            let local = row["node_did"].as_str().unwrap() == node_did;
+            if !local {
+                row_context.node_did = "did:test:foreign".into();
+            }
+            let mut row_args = args(
+                MailboxAction::WriteDocument,
+                &format!("model-row-{model_id:04}"),
+            );
+            row_args.deadline_at = Some(future.clone());
+            let created =
+                stamp_create_with_close_collections(&node, &row_context, row_args, FIXTURE_CLOSE)
+                    .await
+                    .unwrap();
+            if local {
+                modeled_doc_ids.insert(model_id, created.doc_id.clone());
+                modeled_item_keys.insert(model_id, created.item_key.clone());
+                modeled_ids_by_doc.insert(created.doc_id.clone(), model_id);
+                modeled_ids_by_item_key.insert(created.item_key, model_id);
+                created_local_ids.push(created.doc_id);
+            } else {
+                foreign_doc_id = Some(created.doc_id);
+            }
+        }
+
+        // Older closed rows and foreign open rows must not widen the indexed
+        // page scan for this node's open mailbox.
+        for index in 0..64 {
+            let mut closed_context = context("did:test:owner");
+            let mut closed_args = args(
+                MailboxAction::WriteDocument,
+                &format!("000-closed-{index:04}"),
+            );
+            closed_args.deadline_at = Some(future.clone());
+            let closed = stamp_create_with_close_collections(
+                &node,
+                &closed_context,
+                closed_args,
+                FIXTURE_CLOSE,
+            )
+            .await
+            .unwrap();
+            assert!(
+                transition_open_item(&node, &closed, MailboxStatus::Acted, None)
+                    .await
+                    .unwrap()
+            );
+
+            closed_context.node_did = "did:test:foreign".into();
+            let mut foreign_args = args(
+                MailboxAction::WriteDocument,
+                &format!("000-foreign-{index:04}"),
+            );
+            foreign_args.deadline_at = Some(future.clone());
+            stamp_create_with_close_collections(
+                &node,
+                &closed_context,
+                foreign_args,
+                FIXTURE_CLOSE,
+            )
+            .await
+            .unwrap();
+        }
+        let response = node
+            .execute(&format!(
+                r#"{{ MailboxItem(filter: {{ _and: [
+                    {{ node_did: {{ _eq: "{}" }} }},
+                    {{ status: {{ _eq: "open" }} }}
+                ] }}, order: {{ item_key: ASC }}) {{ _docID item_key }} }}"#,
+                escape_graphql_string("did:test:agent")
+            ))
+            .await;
+        assert!(
+            !response.has_errors(),
+            "mailbox fixture order: {:?}",
+            response.errors
+        );
+        let ordered_rows = response.data.unwrap()[MAILBOX_COLLECTION]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["_docID"].as_str().unwrap().to_owned(),
+                    row["item_key"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ordered_rows.len(), created_local_ids.len());
+        for (doc_id, item_key) in ordered_rows {
+            let model_id = modeled_ids_by_doc[&doc_id];
+            assert_eq!(modeled_item_keys[&model_id], item_key);
+            if modeled_due[&model_id] {
+                let item = load_mailbox_item(&node, &doc_id).await.unwrap().unwrap();
+                let response = node.execute(&format!(
+                    r#"mutation {{ create_MailboxFixture(input: {{ mailbox_item_key: "{}", body: "done" }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&item.item_key),
+                )).await;
+                assert!(
+                    !response.has_errors(),
+                    "mailbox close fixture: {:?}",
+                    response.errors
+                );
+            }
+        }
+        let mut cursor = None::<String>;
+        fn metric(value: &Value, name: &str) -> Option<u64> {
+            match value {
+                Value::Object(object) => object
+                    .get(name)
+                    .and_then(Value::as_u64)
+                    .or_else(|| object.values().find_map(|value| metric(value, name))),
+                Value::Array(array) => array.iter().find_map(|value| metric(value, name)),
+                _ => None,
+            }
+        }
+        fn cursor_model_id(token: &str, modeled_ids_by_item_key: &BTreeMap<String, u64>) -> u64 {
+            let decoded = cursor::Cursor::decode(token).expect("native cursor token");
+            let item_key = decoded.keys["item_key"].as_str().unwrap();
+            modeled_ids_by_item_key[item_key]
+        }
+        fn cursor_doc_id(token: &str) -> String {
+            cursor::Cursor::decode(token)
+                .expect("native cursor token")
+                .doc_id
+        }
+        for (index, action) in actions.iter().enumerate() {
+            let input_cursor = action["cursor"].as_u64();
+            assert_eq!(
+                cursor
+                    .as_deref()
+                    .map(|token| cursor_model_id(token, &modeled_ids_by_item_key)),
+                input_cursor,
+                "native indexed cursor follows Lean row ordering"
+            );
+            if let (Some(token), Some(model_id)) = (cursor.as_deref(), input_cursor) {
+                assert_eq!(
+                    cursor_doc_id(token),
+                    modeled_doc_ids[&model_id],
+                    "opaque cursor retains the physical identity of the modeled row"
+                );
+            }
+            if index == 1 {
+                let current_cursor = cursor.as_deref().expect("second page keyset cursor");
+                let cursor_model_id = cursor_model_id(current_cursor, &modeled_ids_by_item_key);
+                for model_id in [4, cursor_model_id + 4] {
+                    assert!(!modeled_due[&model_id]);
+                    assert_eq!(
+                        load_mailbox_item(&node, &modeled_doc_ids[&model_id])
+                            .await
+                            .unwrap()
+                            .unwrap()
+                            .status,
+                        "open",
+                        "residual open row {model_id} should remain on either side of the cursor"
+                    );
+                }
+                let page_query = open_mailbox_page_query("did:test:agent", Some(current_cursor));
+                let planned = node
+                    .execute(&format!("query @explain(type: simple) {page_query}"))
+                    .await;
+                assert!(!planned.has_errors(), "mailbox simple explain: {planned:?}");
+                let plan = planned.data.as_ref().unwrap().get("explain").unwrap();
+                assert!(
+                    plan.to_string()
+                        .contains("MailboxItem_node_status_item_key"),
+                    "mailbox page must select its registered compound index: {plan}"
+                );
+                let explain = node
+                    .execute(&format!("query @explain(type: execute) {page_query}"))
+                    .await;
+                assert!(!explain.has_errors(), "mailbox keyset explain: {explain:?}");
+                let execution = explain.data.as_ref().unwrap().get("explain").unwrap();
+                assert_eq!(execution["executionSuccess"], true, "{execution}");
+                let roots = execution["operationNode"].as_array().unwrap();
+                assert_eq!(roots.len(), 1);
+                let doc_fetches = metric(&roots[0], "docFetches").expect("docFetches metric");
+                let index_fetches = metric(&roots[0], "indexFetches").expect("indexFetches metric");
+                let remaining_local_open_rows = action["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|row| {
+                        row["node_did"] == node_did
+                            && row["open"] == true
+                            && row["doc_id"]
+                                .as_u64()
+                                .is_some_and(|id| id > cursor_model_id)
+                    })
+                    .count() as u64;
+                assert!(
+                    doc_fetches <= (MAILBOX_SWEEP_PAGE_SIZE + 1) as u64,
+                    "keyset page must bound document reads, got {doc_fetches}: {execution}"
+                );
+                // DefraDB retains the node/status predicate as a residual filter,
+                // so its index scan has no page-size early-stop bound. Keep this
+                // honest suffix bound: older history before the cursor and other
+                // nodes must not widen the scan, while the current eligible tail
+                // can still be inspected to satisfy the residual predicate.
+                assert!(
+                    index_fetches <= remaining_local_open_rows,
+                    "keyset index scan should stay within the modeled local open suffix of {remaining_local_open_rows}, got {index_fetches}: {execution}"
+                );
+            }
+            let page = sweep_open_mailbox_items_with_close_collections(
+                &node,
+                "did:test:agent",
+                cursor.as_deref(),
+                FIXTURE_CLOSE,
+            )
+            .await
+            .unwrap();
+            assert!(page.report.scanned <= MAILBOX_SWEEP_PAGE_SIZE);
+            let selected = action["selected"].as_array().unwrap();
+            assert_eq!(page.report.scanned, selected.len());
+            let due_selected = selected
+                .iter()
+                .filter(|model_id| modeled_due[&model_id.as_u64().unwrap()])
+                .count();
+            assert_eq!(page.report.acted, due_selected);
+            assert_eq!(page.report.expired, 0);
+            let expected_next = action["next_cursor"].as_u64();
+            if let Some(next) = expected_next {
+                assert_eq!(
+                    page.next_cursor
+                        .as_deref()
+                        .map(|token| { cursor_model_id(token, &modeled_ids_by_item_key) }),
+                    Some(next),
+                    "returned cursor is the last processed indexed row"
+                );
+                assert_eq!(
+                    page.next_cursor.as_deref().map(cursor_doc_id),
+                    Some(modeled_doc_ids[&next].clone()),
+                    "returned cursor retains the corresponding physical document ID"
+                );
+            } else {
+                assert!(page.next_cursor.is_none());
+            }
+            cursor = page.next_cursor;
+        }
+        for (model_id, doc_id) in &modeled_doc_ids {
+            let expected_status = if modeled_due[model_id] {
+                "acted"
+            } else {
+                "open"
+            };
+            assert_eq!(
+                load_mailbox_item(&node, doc_id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .status,
+                expected_status
+            );
+        }
+        assert_eq!(
+            load_mailbox_item(&node, foreign_doc_id.as_deref().unwrap())
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "open"
         );
     }
 }

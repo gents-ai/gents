@@ -727,6 +727,136 @@ async fn plugin_image_parts_become_a_note_where_the_provider_refuses_them() {
     );
 }
 
+#[test]
+fn value_to_json_string_passes_strings_through_unquoted() {
+    assert_eq!(
+        value_to_json_string(&serde_json::json!("plain")),
+        "plain".to_string()
+    );
+    assert_eq!(
+        value_to_json_string(&serde_json::json!({"path": "x"})),
+        r#"{"path":"x"}"#.to_string()
+    );
+}
+
+#[tokio::test]
+async fn dispatch_tool_calls_known_tool_and_reports_unknown() {
+    // No tool runtime scope is active in this unit test, so dispatch_tool takes
+    // the unscoped path: look up by name and call directly.
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(EchoTool {
+        name: "echo".to_string(),
+        output: "ECHOED".to_string(),
+    })];
+
+    assert_eq!(
+        super::dispatch_tool(&tools, "echo", "{}".to_string(), None, None).await,
+        crate::tool_call_lifecycle::ToolOutcome::Completed("ECHOED".to_string())
+    );
+    // An unresolved tool name is a dispatch FAILURE carried as typed data.
+    // Classifying it `Completed` would durably record a hallucinated tool name
+    // as a successful call (fenced end-to-end by
+    // `hook::tests::hook_maps_unknown_tool_dispatch_to_failed_lifecycle`).
+    let unknown = super::dispatch_tool(&tools, "missing", "{}".to_string(), None, None).await;
+    match &unknown {
+        crate::tool_call_lifecycle::ToolOutcome::Failed {
+            denial: None, text, ..
+        } => {
+            assert_eq!(text, "error: unknown tool 'missing'");
+        }
+        other => panic!("unknown tool must classify as a dispatch failure, got {other:?}"),
+    }
+    // The model still sees exactly the text it always saw.
+    assert_eq!(unknown.model_facing_text(), "error: unknown tool 'missing'");
+}
+
+#[tokio::test]
+async fn dispatch_tool_types_unparseable_args_as_argument_invalid() {
+    use crate::llm::tool::{Tool, ToolDefinition};
+
+    struct StrictArgsTool {
+        calls: Arc<AtomicUsize>,
+    }
+    #[derive(Debug, thiserror::Error)]
+    #[error("strict tool error")]
+    struct StrictToolError;
+    #[derive(serde::Deserialize)]
+    struct StrictArgs {
+        #[allow(dead_code)]
+        text: String,
+    }
+    impl Tool for StrictArgsTool {
+        const NAME: &'static str = "strict";
+        type Error = StrictToolError;
+        type Args = StrictArgs;
+        type Output = String;
+        async fn definition(&self, _prompt: String) -> ToolDefinition {
+            ToolDefinition {
+                name: Self::NAME.to_string(),
+                description: String::new(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok("ran".to_string())
+        }
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Case {
+        termination: String,
+        arguments: String,
+        kind: String,
+    }
+    let cases: Vec<Case> = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/tool_argument_failure.json"
+    )))
+    .unwrap();
+    let cases: Vec<_> = cases
+        .into_iter()
+        .filter(|case| case.termination == "unreported" && case.kind == "malformed")
+        .collect();
+    assert!(!cases.is_empty());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StrictArgsTool {
+        calls: calls.clone(),
+    })];
+    for case in cases {
+        let result = super::dispatch_tool(&tools, "strict", case.arguments, None, None).await;
+        match &result {
+            crate::tool_call_lifecycle::ToolOutcome::Failed {
+                class,
+                denial: None,
+                text,
+            } => {
+                assert_eq!(
+                    *class,
+                    crate::tool_call_lifecycle::FailureClass::ArgumentInvalid
+                );
+                assert!(
+                    text.contains(&format!("arguments were rejected ({})", case.kind)),
+                    "{text}"
+                );
+                assert!(
+                    !text.contains("ran") && !text.contains("token limit"),
+                    "{text}"
+                );
+            }
+            other => panic!("unparseable args must classify ArgumentInvalid, got {other:?}"),
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+}
+
+/// Loop-level fence: an unparseable-args tool call (a) does NOT run the tool,
+/// (b) surfaces a clean notice to the model (the internal marker stripped) so it
+/// can re-emit corrected arguments next turn, and (c) terminalizes the started
+/// `AgentToolCall` as `failed`/`argumentInvalid` via `on_tool_result`. This
+/// preserves the tool-call liveness invariant (Lean
+/// `ToolExecution.live_call_reaches_terminal`, T5: the started call reaches a
+/// terminal state) using the proven `Running → Failed` edge with the existing
+/// `FailureClass::ArgumentInvalid`.
 #[tokio::test]
 async fn missing_tool_args_notify_model_and_terminalize_failed() {
     use crate::llm::tool::{Tool, ToolDefinition};

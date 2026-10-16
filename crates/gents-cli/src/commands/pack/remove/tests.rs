@@ -2,6 +2,7 @@ use super::*;
 use crate::cli::{GraphScopeArgs, PackDriftArgs, PackInstallArgs};
 use crate::commands::pack::test_support::{assets_pack_dir, fixture_dir};
 use crate::output_format::OutputFormat;
+use gents::pack::HomePackInstall;
 use serde_json::json;
 
 fn scope(home: &Path) -> GraphScopeArgs {

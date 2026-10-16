@@ -35,6 +35,7 @@ pub enum ClientStartProgress {
 }
 
 pub struct DesktopAppState {
+    pub(crate) app_exit: Arc<crate::app_exit::AppExitState>,
     pub bridge: Mutex<DesktopBridge>,
     /// Owns the desktop store for install, shutdown, init and reset; the
     /// detached starter holds it until the core is installed.
@@ -316,6 +317,7 @@ impl DesktopAppState {
                 incompatible_client_store: None,
             }),
             client_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
+            app_exit: Arc::new(crate::app_exit::AppExitState::default()),
             managed_server_lifecycle: tokio::sync::Mutex::new(()),
             policy,
             managed_server: tokio::sync::Mutex::new(ManagedServerState::default()),

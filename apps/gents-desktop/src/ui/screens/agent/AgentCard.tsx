@@ -10,7 +10,9 @@ import { href } from "@/lib/router";
 import { NodeAvatar } from "../AgentAvatar";
 import { isLive } from "@/lib/live";
 import { useApp } from "@/app/AppContext";
-import { useToolAuthority } from "@/hooks/useClient";
+import { useHomeFolder } from "@/hooks/useHomeFolder";
+import { useNodeReach } from "@/hooks/useClient";
+import { shortPath } from "@/lib/paths";
 import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
 
 function pulse(
@@ -41,7 +43,8 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
   const {
     actions: { fetchOperationsSnapshot },
   } = useApp();
-  const authority = useToolAuthority();
+  const reach = useNodeReach(deployment);
+  const home = useHomeFolder();
   const node = deployment.node;
   const name = node.displayName ?? deployment.label;
   const [ops, setOps] = useState<DesktopOperationsSnapshot | null>(null);
@@ -58,8 +61,8 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
   }, [fetchOperationsSnapshot, deployment.nodeDid, sessions]);
   const now = pulse(sessions, ops);
   const facts = [
-    authority.ceiling ?? null,
-    authority.root ?? null,
+    reach.ceiling,
+    reach.root && shortPath(reach.root, { home: reach.local ? home : null, max: 40 }),
     deployment.peerId ? `on ${deployment.peerId}` : null,
   ].filter(Boolean) as string[];
   return (

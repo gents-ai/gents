@@ -339,7 +339,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     });
     let tray = TrayIconBuilder::with_id("gents-managed-server")
         .menu(&menu)
-        .tooltip("Gents node service — independent of the desktop")
+        .tooltip("Gents local node")
         .icon(tray_icon(app)?)
         .icon_as_template(cfg!(target_os = "macos"))
         .on_menu_event(|app, event| match event.id.as_ref() {

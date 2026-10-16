@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::graphql::escape_graphql_string;
 
 /// Maximum cursors read ahead before ScheduleSource evaluates this tick's batch.
 pub(crate) const TRIGGER_CURSOR_BATCH_SIZE: usize = 64;
@@ -19,8 +19,25 @@ pub(crate) struct TriggerRuntimeUpdate {
     pub(crate) fire_count_delta: Option<i64>,
 }
 
-/// Load cursors for the exact owner/trigger scopes in bounded alias batches;
-/// results stay aligned with `scopes`.
+fn render_trigger_runtime_mutation(
+    escaped_owner: &str,
+    escaped_trigger_id: &str,
+    entries: &[String],
+) -> String {
+    let input_literal = format!("{{ {} }}", entries.join(", "));
+    format!(
+        r#"mutation {{
+            update_Trigger(
+                filter: {{ node_did: {{ _eq: "{escaped_owner}" }}, trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
+                input: {input_literal}
+            ) {{ _docID }}
+        }}"#
+    )
+}
+
+/// Load cursors for the exact owner/trigger scopes in bounded alias batches.
+/// Results stay aligned with `scopes`, so one malformed owner, ambiguous
+/// trigger, or aliased GraphQL error cannot hide another trigger's outcome.
 pub(crate) async fn load_trigger_next_run_at_batch(
     node: &EmbeddedNode,
     scopes: &[(String, String)],
@@ -159,8 +176,9 @@ pub(crate) async fn count_trigger_cursor_batch_queries<F: std::future::Future>(
     (output, queries.load(std::sync::atomic::Ordering::Relaxed))
 }
 
-/// Update only runtime observations on the exact owner-scoped trigger;
-/// deleted triggers are harmless, concurrent fire-count updates may undercount.
+/// Update only runtime observations on the exact owner-scoped trigger.
+/// Deleted triggers are harmless; fire-count changes commit atomically with
+/// their read so concurrent successful fires cannot overwrite one another.
 pub(crate) async fn update_trigger_runtime_fields(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
@@ -182,47 +200,8 @@ pub(crate) async fn update_trigger_runtime_fields(
         return Ok(());
     }
 
-    let current_fire_count = if updates.fire_count_delta.is_some() {
-        let escaped_trigger_id = escape_graphql_string(trigger_id);
-        let query = format!(
-            r#"{{
-                Trigger(
-                    filter: {{ node_did: {{ _eq: "{escaped_owner}" }}, trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
-                    limit: 2
-                ) {{
-                    fire_count
-                }}
-            }}"#
-        );
-        let resp = graphql_with_transaction_retry(
-            node,
-            &query,
-            "query Trigger fire_count for runtime update",
-        )
-        .await?;
-        let rows = resp
-            .data
-            .as_ref()
-            .and_then(|data| data.get("Trigger"))
-            .and_then(|value| value.as_array())
-            .cloned()
-            .unwrap_or_default();
-        anyhow::ensure!(rows.len() <= 1, "ambiguous scoped trigger observation");
-        if rows.is_empty() {
-            tracing::info!(
-                trigger_id,
-                "Trigger doc missing during runtime update; skipping"
-            );
-            return Ok(());
-        }
-        rows.first()
-            .and_then(|row| row.get("fire_count"))
-            .and_then(|value| value.as_i64())
-            .unwrap_or(0)
-    } else {
-        0
-    };
-
+    // Build the input literal with only the requested fields so apply-owned
+    // fields are never overwritten.
     let mut entries: Vec<String> = Vec::new();
     if let Some(value) = &updates.next_run_at {
         entries.push(format!("next_run_at: \"{}\"", escape_graphql_string(value)));
@@ -245,27 +224,71 @@ pub(crate) async fn update_trigger_runtime_fields(
     if updates.last_error.is_none() && updates.last_status.is_some() {
         entries.push("last_error: null".into());
     }
-    if let Some(delta) = updates.fire_count_delta {
-        let new_fire_count = current_fire_count.saturating_add(delta);
-        entries.push(format!("fire_count: {new_fire_count}"));
-    }
-    let input_literal = format!("{{ {} }}", entries.join(", "));
-
     let escaped_trigger_id = escape_graphql_string(trigger_id);
-    // Filter-keyed mutation; trigger_id is unique so it targets one doc.
-    let mutation = format!(
-        r#"mutation {{
-            update_Trigger(
-                filter: {{ node_did: {{ _eq: "{escaped_owner}" }}, trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
-                input: {input_literal}
-            ) {{ _docID }}
-        }}"#
-    );
+    let Some(fire_count_delta) = updates.fire_count_delta else {
+        let mutation =
+            render_trigger_runtime_mutation(&escaped_owner, &escaped_trigger_id, &entries);
+        crate::config_client::ConfigAccess::write_local(
+            node,
+            "document.update_trigger_runtime",
+            &mutation,
+        )
+        .await?;
+        return Ok(());
+    };
 
-    crate::config_client::ConfigAccess::write_local(
+    // Read and write in one transaction. Conflict retries rerun this whole
+    // read-modify-write against a fresh snapshot, so concurrent committed
+    // deltas cannot overwrite one another.
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
+        None,
         "document.update_trigger_runtime",
-        &mutation,
+        |txn| {
+            let escaped_owner = escaped_owner.clone();
+            let escaped_trigger_id = escaped_trigger_id.clone();
+            let mut entries = entries.clone();
+            Box::pin(async move {
+                let query = format!(
+                    r#"{{
+                        Trigger(
+                            filter: {{ node_did: {{ _eq: "{escaped_owner}" }}, trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
+                            limit: 2
+                        ) {{ fire_count }}
+                    }}"#
+                );
+                let response = txn.execute(&query).await?;
+                let rows = response
+                    .get("data")
+                    .and_then(|data| data.get("Trigger"))
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                anyhow::ensure!(rows.len() <= 1, "ambiguous scoped trigger observation");
+                let Some(row) = rows.first() else {
+                    tracing::info!(
+                        trigger_id,
+                        "Trigger doc missing during runtime update; skipping"
+                    );
+                    return Ok(());
+                };
+                let current_fire_count = row
+                    .get("fire_count")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0);
+                entries.push(format!(
+                    "fire_count: {}",
+                    current_fire_count.saturating_add(fire_count_delta)
+                ));
+                let mutation = render_trigger_runtime_mutation(
+                    &escaped_owner,
+                    &escaped_trigger_id,
+                    &entries,
+                );
+                txn.execute(&mutation).await?;
+                Ok(())
+            })
+        },
     )
     .await?;
 

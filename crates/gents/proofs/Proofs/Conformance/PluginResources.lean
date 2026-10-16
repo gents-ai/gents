@@ -1,3 +1,4 @@
+import Proofs.ToolPolicy.PluginPublication
 import Proofs.ToolPolicy.Configuration
 import Proofs.ToolPolicy.PluginNetwork
 import Proofs.ToolPolicy.PluginInvocation
@@ -171,8 +172,17 @@ private def childAdmissionJson : Json := toJson <| [false, true].flatMap fun sel
       ("selected", toJson selected), ("route", toJson name), ("admitted", toJson admitted),
       ("expected", toJson (PluginCalls.childAdmissible selected route admitted))]
 
+private def publicationJson : Json := toJson <| [false, true].flatMap fun previous =>
+  [("local_failure", [PluginPublication.Event.localFailure]),
+   ("notification_success", [.localPublished, .notificationSucceeded]),
+   ("notification_failure", [.localPublished, .notificationFailed]),
+   ("notification_cancelled", [.localPublished, .cancelled])].map fun (outcome, events) =>
+    Json.mkObj [("previous", toJson previous), ("outcome", toJson outcome),
+      ("expected", if PluginPublication.installedNew events then toJson "new"
+        else if previous then toJson "previous" else Json.null)]
+
 def casesJson : String := (Json.mkObj [("consent", consentJson), ("budgets", budgetsJson),
-  ("tool_calls", toolCallsJson), ("child_admission", childAdmissionJson),
+  ("publication", publicationJson), ("tool_calls", toolCallsJson), ("child_admission", childAdmissionJson),
   ("tool_effects", PluginEffects.casesJson),
   ("tool_effect_terminals", PluginEffects.terminalCasesJson),
   ("tool_effect_accounting", PluginEffects.accountingCasesJson),

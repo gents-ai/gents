@@ -1,0 +1,307 @@
+use std::collections::BTreeMap;
+use std::future::Future;
+use std::path::Path;
+
+use anyhow::{Context, Result};
+
+use super::{HomePackInstall, InstalledPackPlugin, PackIdentity, PackKind};
+use crate::plugin::{install, store};
+
+/// The caller supplies operator consent and the existing node notification owner.
+/// Model-facing callers must pass false; a statement in model input is never consent.
+///
+/// Local plugin records, bindings, and the home install pin publish together
+/// under one nonblocking store lock. Once that synchronous local publication
+/// succeeds it is the installed state; a node notification failure or caller
+/// cancellation must not roll it back, because the durable transaction may
+/// have committed without returning its receipt. The notification owner can
+/// reconcile its auxiliary node record on a later operation.
+#[allow(clippy::too_many_arguments)]
+pub async fn install<F: Future<Output = Result<()>>>(
+    home: &Path,
+    archive: &crate::pack_archive::PackArchive,
+    consent: bool,
+    owner: Option<&str>,
+    bindings: &BTreeMap<String, String>,
+    notify: impl FnOnce(PackIdentity) -> F,
+) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)> {
+    let manifest = archive.manifest();
+    anyhow::ensure!(
+        matches!(manifest.metadata.kind, PackKind::Plugins | PackKind::Assets),
+        "expected a plugins or assets pack"
+    );
+    let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+    let (root, _cache_lease) = super::materialize::cached(home, archive)?;
+    let install_owner = if bindings.is_empty() {
+        None
+    } else {
+        Some(owner.context("plugin slot bindings require an owner")?)
+    };
+    let mut published_record = None;
+    let installed = install::install_pack_plugins_with_bindings(
+        home,
+        manifest,
+        archive.digest(),
+        |path| archive.asset(path),
+        consent,
+        install_owner,
+        bindings,
+        |plugins| {
+            let previous = super::read_home_install(home, &coordinate)?;
+            let record = HomePackInstall {
+                coordinate: coordinate.clone(),
+                version: manifest.version.clone(),
+                digest: archive.digest().to_owned(),
+                kind: manifest.metadata.kind.clone(),
+                assets: root.strip_prefix(home)?.to_string_lossy().into_owned(),
+                plugins: plugins
+                    .iter()
+                    .map(|plugin| InstalledPackPlugin {
+                        name: plugin.name.clone(),
+                        digest: plugin.digest.clone(),
+                    })
+                    .collect(),
+                installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            };
+            if let Err(error) = super::write_home_install(home, &record) {
+                let restored = match previous {
+                    Some(previous) => super::write_home_install(home, &previous),
+                    None => super::forget_home_install(home, &coordinate),
+                };
+                if let Err(restore_error) = restored {
+                    tracing::error!(coordinate = %coordinate, error = %restore_error, "failed to restore pack install record after local publication error");
+                }
+                return Err(error).context("publishing the local pack install record");
+            }
+            published_record = Some(record);
+            Ok(())
+        },
+    )?;
+    let record = published_record.context("local pack install did not publish its record")?;
+    if !record.plugins.is_empty() {
+        if let Err(error) = notify(PackIdentity::new(
+            manifest,
+            archive.digest(),
+            record.plugins.clone(),
+        ))
+        .await
+        {
+            return Err(error).context(
+                "the pack was installed locally, but its node notification was not confirmed; retry the pack operation to reconcile the node record",
+            );
+        }
+    }
+    Ok((record, installed))
+}
+
+pub struct LocalPackRemoval {
+    pub record: HomePackInstall,
+    pub plugins: Vec<InstalledPackPlugin>,
+    pub cache_error: Option<String>,
+}
+
+/// Removes a home pin and its owned plugin records under the same exclusion
+/// used by publication. Cache cleanup runs under that exclusion so a concurrent
+/// reinstall cannot publish into the cache while it is being retired.
+pub fn remove_local<P>(
+    home: &Path,
+    coordinate: &str,
+    prepare_cache: impl FnOnce(&HomePackInstall) -> Result<P>,
+    cleanup_cache: impl FnOnce(P) -> Result<()>,
+) -> Result<LocalPackRemoval> {
+    let guard = store::try_lock_store(home)?;
+    let record = super::read_home_install(home, coordinate)?
+        .with_context(|| format!("{coordinate} is not installed"))?;
+    let prepared_cache = prepare_cache(&record)?;
+    let (namespace, _) = crate::pack_registry::split_pack_coordinate(coordinate);
+    let mut previous = Vec::new();
+    for plugin in &record.plugins {
+        match store::read_record(home, namespace, &plugin.name) {
+            Ok(existing) => previous.push(existing),
+            Err(error) if store::is_not_found(&error) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let result = (|| {
+        let mut removed = Vec::new();
+        for plugin in &record.plugins {
+            if store::remove_record_if_owned_locked(
+                &guard,
+                home,
+                namespace,
+                &plugin.name,
+                coordinate,
+                &plugin.digest,
+            )? {
+                removed.push(plugin.clone());
+            }
+        }
+        super::forget_home_install(home, coordinate)?;
+        Ok(removed)
+    })();
+    match result {
+        Ok(plugins) => {
+            let cache_error = cleanup_cache(prepared_cache)
+                .err()
+                .map(|error| format!("{error:#}"));
+            Ok(LocalPackRemoval {
+                record,
+                plugins,
+                cache_error,
+            })
+        }
+        Err(error) => {
+            for plugin in previous {
+                if let Err(restore) = store::write_record(home, &plugin) {
+                    tracing::error!(%coordinate, %restore, "failed to restore plugin after removal error");
+                }
+            }
+            if let Err(restore) = super::write_home_install(home, &record) {
+                tracing::error!(%coordinate, %restore, "failed to restore home pin after removal error");
+            }
+            Err(error)
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use serde_json::json;
+
+    pub(crate) fn fixture(
+        version: &str,
+        authority: bool,
+    ) -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        crate::pack_archive::PackArchive,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        std::fs::create_dir_all(source.join("plugins")).unwrap();
+        let wat = crate::plugin::tests::constant_output_wat(br#"{"native_pack_echo":"ok"}"#);
+        let afb = crate::plugin::tests::build_plugin_afb(&wat);
+        std::fs::write(source.join("plugins/native_echo.afb"), afb).unwrap();
+        let mut plugin = json!({"name":"native_echo","description":"Deterministic sealed native pack fixture","artifact":"plugins/native_echo.afb","language":"rust","input_schema":{"type":"object","properties":{},"additionalProperties":false}});
+        if authority {
+            plugin["manifold"] = json!({"fs":"None","net":{"OutboundHttp":["https://example.invalid"]},"env":"None","crypto":false,"child_process":false});
+        }
+        let manifest = json!({"manifest_version":1,"name":"native_echo_pack","namespace":"fixture","version":version,"description":"Offline native pack lifecycle fixture","authors":["gents-ai"],"kind":"plugins","assets":["README.md","plugins/native_echo.afb"],"plugins":[plugin]});
+        std::fs::write(
+            source.join("manifest.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            source.join("README.md"),
+            b"Offline deterministic plugin fixture.\n",
+        )
+        .unwrap();
+        let (bytes, _) = crate::pack_archive::pack_dir(&source).unwrap();
+        let artifact = dir.path().join("native_echo.pack");
+        std::fs::write(&artifact, &bytes).unwrap();
+        let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        (dir, artifact, archive)
+    }
+
+    #[tokio::test]
+    async fn plugin_lifecycle_keeps_local_publication_after_notification_failure_or_cancellation() {
+        let home = tempfile::tempdir().unwrap();
+        let (_dir, _path, archive) = fixture("1.0.0", false);
+        let coordinate = "fixture/native_echo_pack";
+        let error = install(
+            home.path(),
+            &archive,
+            false,
+            None,
+            &BTreeMap::new(),
+            |_| async { anyhow::bail!("notification failed") },
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("installed locally"));
+        let first = super::super::read_home_install(home.path(), coordinate)
+            .unwrap()
+            .expect("local pin survives a failed notification");
+        assert_eq!(first.version, "1.0.0");
+        assert_eq!(first.digest, archive.digest());
+        let first_plugin = store::read_record(home.path(), "fixture", "native_echo").unwrap();
+        assert_eq!(first_plugin.version, "1.0.0");
+        let (before, _) = install(
+            home.path(),
+            &archive,
+            false,
+            None,
+            &BTreeMap::new(),
+            |_| async { Ok(()) },
+        )
+        .await
+        .unwrap();
+        assert_eq!(before.version, "1.0.0");
+        let plugin_before = store::read_record(home.path(), "fixture", "native_echo").unwrap();
+        assert_eq!(plugin_before.version, "1.0.0");
+        let (_dir2, _, updated) = fixture("2.0.0", false);
+        let cancelled = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            install(home.path(), &updated, false, None, &BTreeMap::new(), |_| {
+                std::future::pending::<Result<()>>()
+            }),
+        )
+        .await;
+        assert!(cancelled.is_err());
+        let after_cancel = super::super::read_home_install(home.path(), coordinate)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after_cancel.version, "2.0.0");
+        assert_eq!(after_cancel.digest, updated.digest());
+        let plugin_after_cancel =
+            store::read_record(home.path(), "fixture", "native_echo").unwrap();
+        assert_eq!(plugin_after_cancel.version, "2.0.0");
+    }
+
+    #[tokio::test]
+    async fn plugin_lifecycle_refuses_authority_and_cross_pack_ownership() {
+        let home = tempfile::tempdir().unwrap();
+        let (_dir, _, protected) = fixture("1.0.0", true);
+        assert!(install(
+            home.path(),
+            &protected,
+            false,
+            None,
+            &BTreeMap::new(),
+            |_| async { Ok(()) }
+        )
+        .await
+        .is_err());
+        assert!(store::list_records(home.path()).unwrap().is_empty());
+        let (_dir2, _, sealed) = fixture("1.0.0", false);
+        let error = install(
+            home.path(),
+            &sealed,
+            false,
+            None,
+            &BTreeMap::new(),
+            |_| async { Ok(()) },
+        )
+        .await
+        .unwrap();
+        let mut record = store::read_record(home.path(), "fixture", "native_echo").unwrap();
+        record.owner_pack_coordinate = Some("fixture/other".into());
+        store::write_record(home.path(), &record).unwrap();
+        assert!(install(
+            home.path(),
+            &sealed,
+            false,
+            None,
+            &BTreeMap::new(),
+            |_| async { Ok(()) }
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            store::read_record(home.path(), "fixture", "native_echo").unwrap(),
+            record
+        );
+    }
+}

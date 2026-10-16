@@ -20,6 +20,7 @@ use super::BoundDir;
 use crate::pack::BindAccess;
 
 /// One operator-allowed folder and the most access plugins get in it.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AllowedDir {
     pub path: PathBuf,
