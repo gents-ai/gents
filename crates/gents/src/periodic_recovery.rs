@@ -1,7 +1,3 @@
-//! Registry for recovery sweeps that must run on the live daemon tick.
-//!
-//! Lean owns the sweep vocabulary (`RecoverySweep.sweepId`, cadence, and
-//! `rustFunction`); Rust owns the executable registry the daemon iterates.
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
@@ -28,7 +24,6 @@ const TASK_HOOK_SWEEP_IDS: &[&str] = &["task_hook_recover_interrupted_cleanup"];
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PeriodicRecoverySweepMetadata {
     pub sweep_ids: &'static [&'static str],
-    /// Fully-qualified Rust function name emitted in the Lean contract.
     pub rust_function: &'static str,
 }
 
@@ -40,7 +35,6 @@ pub enum PeriodicRecoverySweepOutcome {
     BackgroundCompletionSideEffects(BackgroundCompletionSideEffectReport),
     InferenceCalls(InferenceCallRecoveryReport),
     SessionMessageRows(usize),
-    /// Task hook records whose recovered cleanup started.
     TaskHookRecords(usize),
 }
 

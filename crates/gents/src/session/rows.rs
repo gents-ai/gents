@@ -15,9 +15,6 @@ pub(super) struct CompactionEntryRow {
     pub(super) created_at: String,
 }
 
-/// Reader envelope for the single durable session document: the canonical
-/// `AgentSession` plus the physical `_docID`; writers patch through
-/// `AgentSession` fields only.
 #[derive(Debug, Clone)]
 pub struct SessionOwnerRow {
     pub doc_id: String,

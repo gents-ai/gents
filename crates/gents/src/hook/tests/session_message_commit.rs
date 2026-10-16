@@ -1,5 +1,3 @@
-//! A session-message commit whose embedded receipt is lost after it
-//! committed, driven through the real hook dispatch.
 
 use super::*;
 use crate::config_client::ConfigApplyTxn;

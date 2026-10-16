@@ -37,7 +37,6 @@ def cases : List Case :=
   , ⟨"title_cannot_supersede_parent", [root, {child with purpose := .titleAudit}], some root⟩
   ]
 
--- Not a realizable signed-row fixture; not emitted as consumer coverage.
 example : select scope [{child with parentDoc := some 30, parentRequest := some 300}, grandchild] = none := by decide
 
 theorem cases_replay_explicit_expectations : ∀ c ∈ cases, select scope c.rows = c.expected := by decide

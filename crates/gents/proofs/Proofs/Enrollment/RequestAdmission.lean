@@ -127,8 +127,6 @@ theorem purpose_change_changes_signed_fields
     hpurpose, RequestPurpose.toWire] at hsecond
   exact (by decide : stringBytes "normal" ≠ stringBytes "title-audit") hsecond
 
-/-- The hop is signed: a request cannot keep its signature while claiming a
-different causal hop, so no holder can reset a chain's depth. -/
 theorem hop_change_changes_signed_fields
     (request : AgentRequestSemantics) (admission : AgentRequestAdmission) (hop : Nat)
     (hne : hop ≠ request.hop) :
@@ -338,9 +336,6 @@ def requestGoalInputAllowed (request : AgentRequestSemantics)
   goalContinuationAllowed request.input admission.kind admission.runtimeSourceKind
     (evidence.bind RuntimeInternalEvidence.verifiedGoalContinuation)
 
-/-- Blank/mismatched agent selection cannot be repaired by falling back to the
-node name. New-session creation passes its selected agent through the same
-boundary. -/
 def agentRequestClaimable
     (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
     (enrollmentRequest : Option Request) (decision : Option Decision)
@@ -423,7 +418,6 @@ theorem goal_input_requires_runtime_control (input : RequestInput)
       verified = some facts := by
   simpa [goalContinuationAllowed, hpresent, Bool.and_eq_true, and_assoc] using h
 
-/-- Explicit observations used by generated implementation conformance cases. -/
 structure AgentRequestAdmissionObservation where
   kind : AgentRequestAdmissionKind
   signatureValid : Bool

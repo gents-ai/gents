@@ -6,7 +6,6 @@ namespace Recovery
 
 open ToolExecution
 
-/-- An `agent_new`/`agent_message` row. -/
 def isSessionMessageCall (call : ToolCallContext) : Prop :=
   call.operation = .sessionMessage
 
@@ -157,8 +156,6 @@ def toolCallRecoverySweep : RecoverySweep :=
   toolCallRecoverySweepFor false
     "tool_call_lifecycle_recover_all_running_calls" "ToolCallLifecycle::recover_all" .startup
 
-/-! Periodic native-background ownership repair. -/
-
 structure OrphanedBackgroundToolRow where
   call : ToolCallContext
   deadlineExpired : Bool
@@ -305,10 +302,9 @@ def orphanedBackgroundToolSweep : RecoverySweep :=
   , h_recover_zero := orphanedBackgroundToolRecover_zero
   }
 
-/-! Retryable native-background completion side effects: the persisted
-`completionPending` cursor stays outstanding until both idempotent side
-effects converge, making a transient write failure periodically discoverable
-after the lifecycle row is already terminal. -/
+/-! The persisted `completionPending` cursor stays outstanding until both
+idempotent side effects converge, keeping transient write failures discoverable
+after the lifecycle row is terminal. -/
 
 structure BackgroundCompletionSideEffectRow where
   call : ToolCallContext

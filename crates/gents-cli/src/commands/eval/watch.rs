@@ -14,11 +14,8 @@ use super::frame::{self, Heading, Screen};
 use super::{render, EvalContext};
 use crate::cli::EvalWatchArgs;
 
-/// The home's documents at one render.
 pub(crate) enum Documents<'a> {
     Open(&'a EvalContext),
-    /// Dropped before the watch waits, so it never holds the node from a
-    /// process that wants it.
     Reopened(EvalContext),
     Locked(String),
 }
@@ -66,8 +63,6 @@ fn runner_alive(dir: &Path) -> bool {
     gents::eval::runner::running_elsewhere(dir)
 }
 
-/// Only `finished` returns `Ok`: a stopped run is an error, so a script
-/// never reads a cancelled run as a success.
 pub(crate) async fn watch<'a, F, Fut>(
     runs_dir: &Path,
     args: &EvalWatchArgs,
@@ -173,8 +168,6 @@ where
             None => open().await?,
         };
         if !runner_alive(&dir) {
-            // A holder can lapse for a moment when one call over the run
-            // hands it to the next; look once more before ending.
             if let Documents::Open(_) = &documents {
                 tokio::time::sleep(args.interval.min(STALE_WINDOW)).await;
                 if runner_alive(&dir) {
@@ -185,9 +178,6 @@ where
                 Documents::Locked(_) => open().await?,
                 opened => opened,
             };
-            // `parse_interval` caps the interval; saturating here is the
-            // backstop, and a deadline past what an instant can hold ends
-            // the grace at once rather than panicking.
             let grace = STALE_WINDOW.max(args.interval.saturating_mul(3));
             let deadline = tokio::time::Instant::now().checked_add(grace);
             let mut held_again = false;
@@ -223,7 +213,6 @@ pub(crate) fn frame_screen() -> Screen {
     Screen::of_stdout()
 }
 
-/// The run directory froze this; the report verifies it, a frame does not.
 fn frozen_definition(dir: &Path) -> Option<(String, i64)> {
     let bytes = std::fs::read(dir.join(gents::eval::runner::DEFINITION_FILE)).ok()?;
     let definition: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
@@ -233,10 +222,8 @@ fn frozen_definition(dir: &Path) -> Option<(String, i64)> {
     ))
 }
 
-/// How many finished slots a frame shows.
 const FINISHED_SHOWN: usize = 10;
 
-/// A report refusal is shown, not fatal: the in-flight slots stay visible.
 async fn view(
     ctx: &EvalContext,
     runs_dir: &Path,
@@ -252,7 +239,6 @@ async fn view(
     }
 }
 
-/// The error is `stopped: N slots owed (…)`.
 async fn ending(
     ctx: &EvalContext,
     run_id: &str,

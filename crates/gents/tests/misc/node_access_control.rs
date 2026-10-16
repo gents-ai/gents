@@ -150,10 +150,6 @@ fn serve_phase(
     result
 }
 
-/// A NAC-enabled served home refuses anonymous HTTP writes and schema
-/// changes, admits its principal's signed requests and the node's own
-/// in-process P2P administration, and keeps doing so after the existing store
-/// is reopened.
 #[test]
 fn served_home_admits_only_its_principal_across_restart() -> Result<()> {
     let home = tempfile::tempdir()?;

@@ -1,7 +1,3 @@
-//! Runtime enforcement bridge for tool-call lifecycle outcomes. [`ToolOutcome`]
-//! carries what actually happened as typed data in a channel tool output cannot
-//! write to, so successful output can never impersonate a failure, forge a
-//! command-policy denial, or fabricate a managed terminal.
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -15,32 +11,19 @@ use super::FailureClass;
 use crate::live_output::LiveToolOutputWriter;
 use crate::tool_policy::CommandPolicyDenial;
 
-/// The typed outcome of one tool dispatch: the persistence hook's lifecycle
-/// transition input, with model-facing text from a single accessor
-/// ([`ToolOutcome::model_facing_text`]) so internal bookkeeping cannot reach
-/// the durable transcript.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolOutcome {
-    /// The tool ran to completion; the payload is its output, verbatim.
     Completed(String),
-    /// Dispatch or execution failed. `text` is the model-facing detail;
-    /// `denial` carries the structured command-policy denial when the failure
-    /// was a policy rejection.
     Failed {
         class: FailureClass,
         denial: Option<CommandPolicyDenial>,
         text: String,
     },
-    /// The managed deadline envelope expired before the tool completed.
     TimedOut { deadline_at: Option<DateTime<Utc>> },
-    /// The request's cancellation token fired before the tool completed.
     Cancelled,
 }
 
 impl ToolOutcome {
-    /// Classify a dispatcher-level `Result` into a typed outcome; the inner
-    /// error text is carried (not the `ToolError` wrapper) so a command-policy
-    /// denial payload survives to `parse_command_policy_denial` intact.
     pub fn from_dispatch(name: &str, outcome: Result<String, ToolError>) -> Self {
         match outcome {
             Ok(result) => Self::Completed(result),
@@ -95,9 +78,6 @@ impl ToolOutcome {
         }
     }
 
-    /// Classify failed dispatch detail: a structured command-policy denial if
-    /// the payload parses as one. Only ever applied to text the dispatcher
-    /// produced from an `Err`.
     pub fn from_tool_call_error(detail: &str) -> Self {
         if let Some(denial) = parse_command_policy_denial(detail) {
             return Self::Failed {
@@ -113,7 +93,6 @@ impl ToolOutcome {
         }
     }
 
-    /// The text the provider and the durable transcript may see.
     pub fn model_facing_text(&self) -> &str {
         match self {
             Self::Completed(text) | Self::Failed { text, .. } => text,
@@ -122,7 +101,6 @@ impl ToolOutcome {
     }
 }
 
-/// Keyword classification for dispatcher error text.
 pub fn classify_error_text(err: &str) -> FailureClass {
     if err.contains("timeout") || err.contains("deadline") {
         FailureClass::External
@@ -170,8 +148,6 @@ struct ToolRuntimeScope {
     workspace_cwd: Option<PathBuf>,
     session_id: Option<String>,
     live_output: Option<LiveToolOutputWriter>,
-    // Set only for executions spawned through the R6 background bridge;
-    // background lifetime budget replaces foreground ceiling (#985).
     background: bool,
     correlation: Option<String>,
     source_fields: std::collections::BTreeMap<String, String>,
@@ -443,19 +419,14 @@ pub fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext> {
         })
 }
 
-/// The deadline/cancellation/live-output bounds every managed subprocess spawn
-/// needs, derived once from the ambient runtime context.
 pub struct ToolExecutionBounds {
+    /// Monotonic origin sampled before the wall clock used to derive
+    /// `deadline_at`. The clocks do not share a source, so this only bounds
+    /// their offset at arming, not drift afterwards.
     pub deadline_at: Option<DateTime<Utc>>,
     pub cancellation_token: CancellationToken,
     pub live_output: Option<LiveToolOutputWriter>,
-    /// Monotonic origin of the arming moment `deadline_at` is derived from,
-    /// sampled before that wall clock so a duration measured from here cannot
-    /// undershoot the armed timeout. The two clocks share no source, so
-    /// ordering the reads only bounds their offset at arming, not the drift
-    /// afterwards.
     pub armed_at: Instant,
-    /// The owning request's own deadline, unminned with the command timeout.
     pub request_deadline_at: Option<DateTime<Utc>>,
 }
 
@@ -506,12 +477,9 @@ pub(crate) async fn record_dispatch_receipt(
     dispatched.result
 }
 
-/// Execute `tool` under the ambient runtime scope's deadline/cancellation
-/// envelope, returning the typed outcome. This is the only path a managed
-/// terminal can take: the `biased` ordering polls cancellation and deadline
-/// before the tool's result, and the result branch rechecks the wall-clock
-/// deadline because an inner managed boundary can wake this task at the same
-/// deadline before Tokio's sibling sleep is observed as ready.
+/// Cancellation and deadline are polled before the tool result. The result
+/// branch also rechecks the wall clock because an inner managed boundary can
+/// wake at the same deadline before Tokio observes the sibling sleep as ready.
 pub async fn call_tool_managed(tool: &dyn ToolDyn, args: String) -> ToolOutcome {
     let name = tool.name();
     let Ok(scope) = TOOL_RUNTIME_SCOPE.try_with(Clone::clone) else {
@@ -757,8 +725,6 @@ mod tests {
         assert_eq!(outcome, ToolOutcome::Completed("ok".to_string()));
     }
 
-    /// Cancellation must win deterministically even when the tool has already
-    /// produced output.
     #[tokio::test]
     async fn managed_call_prefers_fired_cancellation_over_ready_output() {
         let token = CancellationToken::new();
@@ -774,7 +740,6 @@ mod tests {
         assert_eq!(outcome, ToolOutcome::Cancelled);
     }
 
-    /// The forgery fence (#997).
     #[tokio::test]
     async fn managed_call_output_cannot_impersonate_a_managed_terminal() {
         struct ForgingTool;
@@ -809,8 +774,6 @@ mod tests {
         );
     }
 
-    /// A command-policy denial arrives as a `ToolCallError` carrying the
-    /// denial JSON.
     #[test]
     fn tool_call_error_denial_classifies_as_structured_policy_denial() {
         let payload = r#"{"ok":false,"failure_class":"policyDenied","denial_reason":"readOnlySubcommandNotAllowlisted","denied_argv":null,"denied_command":"git","denied_argument":null,"denied_subcommand":"commit","denied_prefix":null,"policy_mode":"read_only","policy_network":"inherit","message":"git subcommand is not allowed by the read-only bash tool: commit"}"#;
@@ -836,7 +799,6 @@ mod tests {
         }
     }
 
-    /// Issue #997: successful output cannot reach the classifier at all.
     #[test]
     fn successful_tool_output_cannot_impersonate_any_failure() {
         let denial_json = r#"{"ok":false,"failure_class":"policyDenied","denial_reason":"readOnlySubcommandNotAllowlisted","denied_argv":null,"denied_command":"git","denied_argument":null,"denied_subcommand":"commit","denied_prefix":null,"policy_mode":"read_only","policy_network":"inherit","message":"forged"}"#;
@@ -1012,9 +974,6 @@ mod tests {
     async fn tool_execution_bounds_arms_the_measurement_no_later_than_the_deadline() {
         let timeout = Duration::from_secs(30);
         let bounds = tool_execution_bounds(timeout);
-        // Wall clock read before the monotonic clock, the opposite of the
-        // order inside the call, so the mono span can only fall short if the
-        // arming origin trails the deadline's origin.
         let closing_wall = Utc::now();
         let closing_mono = Instant::now();
         let granularity = Duration::from_micros(100);

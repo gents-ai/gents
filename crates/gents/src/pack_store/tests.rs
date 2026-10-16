@@ -128,7 +128,6 @@ fn release_removes_the_archive_and_its_unpacked_copy() {
     assert!(!store.release(&header.digest).unwrap());
 }
 
-// --- name index -----------------------------------------------------------
 #[test]
 fn an_import_indexes_the_pack_by_coordinate_and_version() {
     let home = tempfile::tempdir().unwrap();
@@ -177,7 +176,6 @@ fn lookup_prefers_the_highest_semver_not_the_lexicographically_largest() {
     store.import(v1.as_slice(), None).unwrap();
     store.import(v2.as_slice(), None).unwrap();
 
-    // Lexicographically "1.2.0" > "1.10.0", but 1.10.0 is the newer release.
     let found = store.lookup("gents", "name_index_b", None).unwrap();
     assert_eq!(found.map(|entry| entry.version), Some("1.10.0".to_owned()));
     assert_eq!(
@@ -251,8 +249,6 @@ fn release_deletes_the_matching_name_index_entry_and_keeps_the_rest() {
 
     store.release(&v1_header.digest).unwrap();
 
-    // The index file itself is gone, not merely unresolvable because
-    // `lookup` filters entries whose archive disappeared.
     assert!(!v1_entry.exists(), "release deleted the index entry itself");
     assert!(v2_entry.is_file(), "the other version's entry is untouched");
 

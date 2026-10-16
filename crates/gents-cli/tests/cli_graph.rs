@@ -1,8 +1,3 @@
-//! Checkout-independent binary acceptance for pack resolution, install, and
-//! revision-backed graph running. Every case resolves a fixture pack from its
-//! own directory; an unroutable registry keeps accidental network fallback
-//! from hanging instead of failing fast.
-
 mod support;
 
 use anyhow::{Context, Result};
@@ -14,7 +9,6 @@ use support::{
     spawn_server_with_ready_json,
 };
 
-/// Unroutable: connections fail immediately rather than timing out.
 const UNROUTABLE_REGISTRY: &str = "http://127.0.0.1:9";
 
 fn required_str<'a>(value: &'a Value, path: &[&str]) -> Result<&'a str> {
@@ -597,8 +591,6 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
         "{denial}"
     );
 
-    // An explicit install of the (now-removed) dependency survives a later
-    // removal of the dependent that names it again.
     let explicit_review_graph = [
         "pack",
         "install",

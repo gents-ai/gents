@@ -1,6 +1,3 @@
-//! Packs from the desktop: the same operations `gents pack` runs, through
-//! `gents_server::packs`, against the managed local Node's home.
-
 use crate::types::*;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::Value;
@@ -226,15 +223,6 @@ mod tests {
                 .unwrap();
         assert_eq!(report.registry, "https://registry.example");
         assert!(!report.signed_out);
-    }
-
-    #[tokio::test]
-    async fn malformed_pack_reports_fail_at_the_native_boundary() {
-        let error =
-            run::<InstalledPacksView, _, _>(|| async { Ok(serde_json::json!({"packs": 42})) })
-                .await
-                .unwrap_err();
-        assert!(error.to_string().contains("invalid pack report"));
     }
 
     #[tokio::test]

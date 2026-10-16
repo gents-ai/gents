@@ -1,5 +1,3 @@
-//! Refinement of CompletionRetry.InvalidToolProgress: an execution-local
-//! dispatch budget.
 
 use crate::tool_call_lifecycle::{FailureClass, ToolOutcome};
 

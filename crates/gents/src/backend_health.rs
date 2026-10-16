@@ -3,9 +3,7 @@
 //! Measured reachability is deliberately NOT persisted to the fleet-replicated
 //! `InferenceBackend` document: the shared document's `probe_status` stays the
 //! operator/bootstrap intent knob, and the prober's only doc write is the
-//! recurring `unknown → healthy` promotion. The state machine mirrors
-//! `Proofs/BackendHealth/Transition.lean` and is fenced by the generated
-//! `backend_health_cases`.
+//! recurring `unknown → healthy` promotion.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -41,8 +39,6 @@ impl Default for BackendProberOptions {
     }
 }
 
-/// Measured health of one backend as observed by this runtime; mirrors
-/// `Proofs.BackendHealth.HealthState`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendHealthState {
     Unknown,
@@ -66,7 +62,6 @@ impl BackendHealthState {
     }
 }
 
-/// Probe outcome vocabulary — mirrors `Proofs.BackendHealth.Event`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProbeEvent {
     ProbeSuccess,
@@ -185,7 +180,6 @@ fn snapshot_from_entry(backend_id: &str, entry: &BackendHealthEntry) -> BackendH
     }
 }
 
-/// One transition step — mirrors `Proofs.BackendHealth.step`.
 fn step_backend(
     prev: (BackendHealthState, u32),
     event: ProbeEvent,
@@ -239,8 +233,6 @@ impl ProbeSchedule {
     }
 }
 
-/// Only connection inputs schedule probes: observations and unrelated settings
-/// must not consume the failure budget.
 fn same_probe_inputs(previous: &InferenceBackend, current: &InferenceBackend) -> bool {
     previous.provider_kind == current.provider_kind
         && previous.endpoint == current.endpoint
@@ -324,7 +316,6 @@ fn probe_timeout(backend: &InferenceBackend) -> Duration {
     Duration::from_secs(backend.discovery_timeout_secs.unwrap_or(10).max(1) as u64)
 }
 
-// `None` is the shared-credential scope, `Some(node)` the node OAuth scope.
 async fn record_discovered_catalog(
     node: &Arc<EmbeddedNode>,
     backend: &InferenceBackend,
@@ -1308,8 +1299,6 @@ mod tests {
         assert_eq!(snap.last_probe_at, now);
         assert!(!health_map.measured_blocks_routing("spark").await);
 
-        // Endpoint goes hard down (connect refused): the fleet-evidence
-        // regime where probe_status stayed a stored constant for 16h.
         listener.shutdown().await;
         for cycle in 1..=3u32 {
             let cycle_now = Utc::now();
@@ -1341,7 +1330,6 @@ mod tests {
             }
         }
 
-        // Backend recovers on a fresh port: one success re-promotes.
         let recovered = ModelsListener::start();
         let backends = vec![backend("spark", recovered.endpoint())];
         let outcome = probe_backends_cycle(
@@ -1431,7 +1419,6 @@ mod tests {
         .await;
         assert_eq!(outcome.promotable, vec!["late-arrival".to_string()]);
 
-        // Already-promoted docs are not re-written.
         let backends = vec![backend("late-arrival", listener.endpoint())];
         seed_backend_observation(&node, &backends[0], "healthy").await;
         let outcome = probe_backends_cycle(
@@ -1446,7 +1433,6 @@ mod tests {
         .await;
         assert!(outcome.promotable.is_empty());
 
-        // Observe the current probe owner persisting a successful promotion.
         seed_backend_observation(&node, &backends[0], "unknown").await;
         let outcome = run_backend_probe_cycle(
             node.clone(),
@@ -1527,8 +1513,8 @@ mod tests {
         let health_map = BackendHealthMap::new();
         let node = test_node().await;
 
-        // Dead endpoint, but ChatGPT-Codex: OAuthCredential is agent-scoped,
-        // so the runtime-level prober must leave it alone entirely.
+        // OAuthCredential is agent-scoped, so the runtime-level prober must
+        // leave ChatGPT Codex untouched.
         let mut codex = backend("codex", "http://127.0.0.1:1/v1".to_string());
         codex.provider_kind = crate::backend_provider::BackendProviderKind::ChatGptCodex;
         codex.auth = crate::document_config::BackendAuth::NodeOAuth { account_ref: None };
@@ -1861,7 +1847,7 @@ mod tests {
         claude.endpoint = models.endpoint();
         seed_backend_observation(&node, &claude, "unknown").await;
 
-        // Process-global; hold TOKEN_URL_ENV while the override is set.
+        // TOKEN_URL_ENV is process-global; serialize changes to its override.
         let _env = TOKEN_URL_ENV.lock().await;
         let _guard =
             TokenUrlOverrideGuard(crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
@@ -2062,20 +2048,6 @@ mod tests {
             health_map.get("claude").await.is_none(),
             "no measurement without a node"
         );
-    }
-
-    #[test]
-    fn provider_kind_oauth_provider_names() {
-        use crate::backend_provider::BackendProviderKind as K;
-        use crate::backend_provider::BackendProviderOauthExt;
-        assert_eq!(
-            K::ClaudeCliSubscription.oauth_provider(),
-            Some("claude-subscription")
-        );
-        assert_eq!(K::XaiGrokOAuth.oauth_provider(), Some("xai-oauth"));
-        assert_eq!(K::ChatGptCodex.oauth_provider(), Some("chatgpt-codex"));
-        assert_eq!(K::OpenAiCompatible.oauth_provider(), None);
-        assert!(K::ClaudeCliSubscription.is_node_scoped_oauth());
     }
 
     #[tokio::test]

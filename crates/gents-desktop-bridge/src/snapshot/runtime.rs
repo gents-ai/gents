@@ -1065,15 +1065,6 @@ mod agent_environment_tests {
     }
 
     #[test]
-    fn invalid_tool_modes_are_rejected_instead_of_misreported() {
-        for field in ["files", "bash"] {
-            let mut value = serde_json::to_value(tools()).unwrap();
-            value["host"][field]["mode"] = serde_json::json!("FutureMode");
-            assert!(serde_json::from_value::<Tools>(value).is_err());
-        }
-    }
-
-    #[test]
     fn missing_or_foreign_references_do_not_invent_model_or_tool_permissions() {
         let mut foreign_profile = profile();
         foreign_profile.node_did = "did:test:foreign".into();

@@ -69,8 +69,6 @@ fn resolve<'a>(
     if fuel == 0 {
         return row;
     }
-    // A repeated physical row ends this walk at the first repeat. Row
-    // references also distinguish optimistic rows without a persisted physical ID.
     let identity = row
         .doc_id
         .as_deref()

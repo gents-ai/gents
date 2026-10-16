@@ -608,7 +608,6 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
         ],
     )?;
 
-    // Export the freshly initialized home as a self-contained pack.
     run_cli_text(
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
@@ -866,7 +865,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             .context("seeding self-view fixtures")?;
     }
 
-    // Keep the fixture under the canonical header/source contract.
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -955,8 +953,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     )
     .await?;
 
-    // Foreign-principal rows on the same node; every projection is scoped to
-    // this server's own node DID.
     let foreign_readiness_snapshot = serde_json::json!({
         "format_version": gents_protocol::row::NODE_READINESS_FORMAT_VERSION,
         "process_state": "ready",
@@ -1065,7 +1061,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "expected /status context current_estimate from latest compacted tokens: {status}"
     );
 
-    // Foreign-principal seeds must not leak into any local projection.
     assert!(
         status
             .pointer("/liveness/active_request_ids")
@@ -1122,7 +1117,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "foreign rows must not leave /status degraded: {status}"
     );
 
-    // /healthz must select readiness by this server's own DID.
     let health_response = client
         .get(format!("http://127.0.0.1:{port}/healthz"))
         .send()
@@ -1305,8 +1299,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             })),
         "expected /mcp/pool to include the seeded service and tool count: {mcp_pool}"
     );
-    // The /mcp/pool join must select the local agent's health row for a
-    // shared registry service, not the foreign one.
     assert!(
         !mcp_pool
             .get("services")
@@ -1329,7 +1321,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         Some(0),
         "the foreign health row must not add a fleet-wide unreachable count: {mcp_pool}"
     );
-    // "unreachable" is not a persisted raw state.
     assert_eq!(
         mcp_pool.pointer("/totals/unknown").and_then(Value::as_i64),
         Some(0),
@@ -1392,8 +1383,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "expected backend metrics in metrics body:\n{body}"
     );
 
-    // The readiness series is a fleet inventory projected per DID; neither
-    // row may borrow the other's identity.
     assert!(
         body.contains(&format!(
             r#"gents_runtime_runnable_agents{{node_did="did:test:foreign-cli"}} 1"#
@@ -2213,7 +2202,6 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     .await
     .context("seeding trace tool call")?;
 
-    // Canonical durable output fixture.
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -2304,7 +2292,6 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let message_doc_id =
         gents_protocol::graphql::extract_mutation_doc_id(&header_response, "AgentMessage")?;
 
-    // Stamp the terminalization selection onto the request.
     let selection = serde_json::to_value(TerminalOutput::Message {
         message_doc_id: message_doc_id.clone(),
     })?;

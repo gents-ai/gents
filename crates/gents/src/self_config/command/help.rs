@@ -2,26 +2,22 @@ use std::fmt::Write as _;
 
 use super::*;
 
-/// The mailbox identity choice, stated wherever a mailbox policy is written.
 macro_rules! mailbox_identity_choice {
     () => {
         "condition identity: one open item per stable finding, updated across requests; event identity: a new item for every request."
     };
 }
 
-/// A recipe step: a native call plus an optional carry-over note.
 type Step = (Value, Option<&'static str>);
 
 pub(super) struct Page {
     pub(super) what: &'static str,
-    /// Commands as argv words.
     pub(super) commands: &'static [&'static str],
     pub(super) notes: &'static str,
     pub(super) next: &'static str,
 }
 
 impl ConfigCommandTool {
-    /// Plain text with no envelope: recipes read as native JSON without escaping.
     pub(super) fn help(&self, resource: Option<&str>, command: Vec<&str>) -> Result<String> {
         let enabled = model_resources(&self.categories, self.core.held_grants().pack_install);
         let Some(requested) = resource else {

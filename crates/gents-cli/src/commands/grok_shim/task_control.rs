@@ -111,7 +111,6 @@ pub(super) async fn kill(
     } else {
         "not_found"
     };
-    // Both stock kill sources are operator cancellation.
     let _source = request.source;
     Ok(json!({"taskId":request.task_id, "outcome":outcome}))
 }

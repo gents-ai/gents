@@ -65,7 +65,6 @@ pub(crate) struct CanonicalReplayScope<'a> {
 pub(crate) struct CanonicalAssistantCandidate {
     pub(crate) header_doc_id: String,
     pub(crate) request_doc_id: String,
-    /// Read only by tests that pin the candidate's transcript position.
     #[cfg(test)]
     pub(crate) sequence: u32,
     pub(crate) message: gents_protocol::message::Message,
@@ -153,8 +152,6 @@ tokio::task_local! {
     static CAPTURE_ROW_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
-/// Run `future`, counting the batched replay capture-row statements canonical
-/// replay resolution issues on this task.
 #[cfg(test)]
 pub(crate) async fn count_capture_row_queries<F: std::future::Future>(
     future: F,
@@ -365,12 +362,6 @@ pub(crate) async fn load_canonical_message_in_txn(
     .await
 }
 
-/// Exact reconstruction of many headers of one scope in one authoritative
-/// transaction. Each request-wide segment scan and resolved header is read
-/// once per reader: terminalization holds the process-wide write gate while
-/// it validates every accepted tool reply, and a fresh read per header scans
-/// the request's whole output once per tool, starving lease renewal.
-///
 /// Its cache is a transaction snapshot. A publication that appends exactly
 /// one segment and header may consume it through `load_created_message`,
 /// which reads the two new rows under ACP and invalidates coordinate checks.
@@ -572,7 +563,6 @@ pub async fn load_canonical_message(
     .await
 }
 
-/// Borrowed-node form of the same exact, scoped reconstruction boundary.
 pub async fn load_canonical_message_from_node(
     node: &EmbeddedNode,
     header_doc_id: &str,
@@ -827,9 +817,7 @@ async fn load_header(
     }
 }
 
-/// Scoped headers sharing `header`'s key or sequence in its session. A
-/// bulk transaction reader reads its session once: validating each of a request's
-/// headers by its own query costs the session size per header.
+/// Scoped headers sharing `header`'s key or sequence in its session.
 async fn coordinate_twins(
     access: ReadAccess<'_, '_>,
     header: &super::canonical_rows::TranscriptMessageRow,
@@ -932,7 +920,6 @@ async fn validate_origin_chain(
     }
 }
 
-/// Scoped segments of one request, read once per reader in a transaction.
 async fn request_rows(
     access: ReadAccess<'_, '_>,
     request_doc_id: &str,

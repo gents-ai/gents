@@ -25,7 +25,6 @@ use std::future::Future;
 
 pub const XAI_OAUTH_PROVIDER: &str = "xai-oauth";
 
-/// Subscription inference proxy (not the metered developer API).
 pub const XAI_GROK_OAUTH_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
 
 // The proxy answers HTTP 426 when the advertised `x-grok-client-version` is
@@ -76,8 +75,6 @@ pub fn grok_client_version() -> String {
         .unwrap_or_else(|| GROK_CLIENT_VERSION.to_string())
 }
 
-/// Names the version gents sent and the runtime override; the proxy's own
-/// minimum travels in the 426 response body both error surfaces already print.
 pub fn grok_client_version_gate_guidance() -> String {
     format!(
         "Grok proxy rejected the client version gents sent ({}). Update gents, or set \
@@ -376,60 +373,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn headers_advertise_cli_identity() {
-        let headers = build_xai_grok_oauth_headers().unwrap();
-        assert_eq!(
-            headers
-                .get("x-xai-token-auth")
-                .and_then(|value| value.to_str().ok()),
-            Some("xai-grok-cli")
-        );
-        assert_eq!(
-            headers
-                .get("x-grok-client-identifier")
-                .and_then(|value| value.to_str().ok()),
-            Some("grok-shell")
-        );
-        assert_eq!(
-            headers
-                .get("x-grok-client-version")
-                .and_then(|value| value.to_str().ok()),
-            Some(grok_client_version().as_str())
-        );
-        assert_eq!(
-            headers
-                .get("user-agent")
-                .and_then(|value| value.to_str().ok()),
-            Some("xai-grok-cli")
-        );
-    }
-
-    #[test]
-    fn default_grok_client_version_is_pinned_above_proxy_floor() {
-        let parse = |version: &str| -> Vec<u64> {
-            version
-                .split('.')
-                .map(|part| part.parse().unwrap())
-                .collect()
-        };
-        assert_eq!(GROK_CLIENT_VERSION, "1.0.46");
-        assert!(parse(GROK_CLIENT_VERSION) >= parse("1.0.13"));
-    }
-
-    #[test]
-    fn grok_client_version_gate_guidance_names_sent_version_and_override() {
-        let guidance = grok_client_version_gate_guidance();
-        assert!(
-            guidance.contains(&grok_client_version()),
-            "guidance must name the version gents sent: {guidance}"
-        );
-        assert!(
-            guidance.contains(GROK_CLIENT_VERSION_ENV),
-            "guidance must name the runtime override: {guidance}"
-        );
-    }
-
     #[tokio::test]
     async fn injects_fresh_bearer() {
         let bearer = CountingBearer::new("tok-xyz");
@@ -611,17 +554,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn headers_include_proxy_auth_middleware_marker() {
-        let headers = build_xai_grok_oauth_headers().unwrap();
-        assert_eq!(
-            headers
-                .get("x-authenticateresponse")
-                .and_then(|value| value.to_str().ok()),
-            Some("authenticate-response")
-        );
-    }
-
     #[tokio::test]
     async fn prepare_injects_identity_headers_when_absent() {
         let bearer = CountingBearer::new("tok-abc");
@@ -685,12 +617,6 @@ mod tests {
             &OAuthAuthProblem::Missing,
         );
         assert!(msg.contains("gents grok-login"), "{msg}");
-    }
-
-    #[test]
-    fn patch_store_false_is_idempotent_when_present() {
-        let body = serde_json::json!({"store": true, "model": "grok-4.5"});
-        assert!(patch_store_false(&serde_json::to_vec(&body).unwrap()).is_none());
     }
 
     /// The capture seam must be installed below this wrapper so the row

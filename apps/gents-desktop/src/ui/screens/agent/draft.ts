@@ -3,20 +3,10 @@ import { toast } from "sonner";
 import { toastFailure } from "@/lib/failure";
 import { errorText } from "../../../lib/errorText";
 
-/**
- * A reviewable draft. Nothing crosses the bridge until the user saves;
- * `save` resolves true only once the bridge accepted the write, so a
- * caller that closes or navigates on success never does so after a
- * failure; the error stays on the draft. A new document (`isNew`) is
- * saveable as it stands: prefilled is not the same as saved.
- */
-
-/** A draft's problems, each at its field; a field with none is absent. */
 export type Problems<T> = Partial<Record<keyof T & string, string>>;
 
 const NO_PROBLEMS = {};
 
-/** The message a parse throws, or undefined when it passes. */
 export function problemOf(parse: () => unknown): string | undefined {
   try {
     parse();
@@ -28,10 +18,6 @@ export function problemOf(parse: () => unknown): string | undefined {
 
 const hasProblems = (problems: object) => Object.values(problems).some(Boolean);
 
-/**
- * Focuses the first field with a problem, in `fields` order. True when the
- * draft has problems, so the save does not go ahead.
- */
 export function focusFirstProblem(
   problems: Partial<Record<string, string>>,
   fields: Partial<Record<string, string>> = {},
@@ -71,8 +57,6 @@ export function useDraft<T extends object>(
     );
     baselineRef.current = saved;
     setBaseline(saved);
-    // Object identity changes on every projected snapshot; semantic content is
-    // the bridge-confirmed generation this draft needs to observe.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savedKey]);
   const dirty =

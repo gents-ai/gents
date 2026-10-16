@@ -246,9 +246,6 @@ async fn insert_raw_queue_request(
         .expect("raw queue create returns _docID")
 }
 
-/// Queue notification tests must not manufacture an `AgentToolCall` authority
-/// row; this fixture goes through provider publication, accepted-tool
-/// adoption, running CAS, and terminal output closure.
 struct CanonicalBackgroundFixture {
     node: Arc<EmbeddedNode>,
     parent: AgentRequest,
@@ -431,9 +428,6 @@ async fn request_doc_lookup_rejects_duplicate_logical_request_ids() {
     assert!(error.to_string().contains("ambiguous across 2 documents"));
 }
 
-/// Replace the admission signature field (owned and pinned by the protocol
-/// crate's canonical encoder tests) with a placeholder so the runtime pin
-/// stays stable while still asserting the exact field set.
 fn normalize_pin_fields(fields: &str) -> String {
     let start = fields
         .find("admission_signature: \"")
@@ -451,9 +445,6 @@ mod background_completion;
 mod coalescing;
 mod input;
 
-/// Pin signed GraphQL fields through the production preparation functions.
-/// Fixed timestamps and a deterministic signing identity keep these wire
-/// compatibility checks stable without duplicating request construction.
 mod pin_tests {
     use super::*;
     use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
@@ -468,7 +459,6 @@ mod pin_tests {
         parent
     }
 
-    // --- Site 3: `lifecycle::queue::mutation::session_request_create_mutation` ---
     #[tokio::test]
     async fn pin_session_request_create_mutation() {
         let tempdir = tempfile::tempdir().unwrap();

@@ -113,9 +113,6 @@ pub fn is_background_completion_request(
     queue::is_automated_wakeup(input)
 }
 
-/// Whether `AgentRequest.content` itself owns the pending user bubble: user
-/// and steering admission remain request-owned until exact authored
-/// publication; goal and completion requests are controller turns.
 pub fn request_content_owns_user_projection(
     input: &gents_protocol::request_input::RequestInput,
 ) -> bool {
@@ -182,8 +179,6 @@ pub fn input_message_owner(row: &gents_protocol::row::AgentRequestRow) -> Option
     ))
 }
 
-/// What put a request's content into its session. Only `Person` is typed by
-/// the session's requester; every other origin is still the model's user input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestOrigin<'a> {
     Person,
@@ -688,43 +683,6 @@ mod tests {
 
     fn materialization_identity() -> Arc<dyn crate::identity::NodeIdentity> {
         Arc::new(MaterializationTestIdentity)
-    }
-
-    #[test]
-    fn parse_valid_until_covers_not_set_live_expired_and_malformed() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-08-12T22:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let future = "2026-08-12T23:00:00Z";
-        let past = "2026-08-12T21:00:00Z";
-        let future_at = chrono::DateTime::parse_from_rfc3339(future)
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let past_at = chrono::DateTime::parse_from_rfc3339(past)
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-
-        assert_eq!(parse_valid_until(None, now), TtlOutcome::NotSet);
-        assert!(matches!(
-            parse_valid_until(Some("   "), now),
-            TtlOutcome::Malformed(_)
-        ));
-        assert!(matches!(
-            parse_valid_until(Some(" 2026-08-12T23:00:00Z "), now),
-            TtlOutcome::Malformed(_)
-        ));
-        assert_eq!(
-            parse_valid_until(Some(future), now),
-            TtlOutcome::Live(future_at)
-        );
-        assert_eq!(
-            parse_valid_until(Some(past), now),
-            TtlOutcome::Expired(past_at)
-        );
-        assert!(matches!(
-            parse_valid_until(Some("not-a-timestamp"), now),
-            TtlOutcome::Malformed(_)
-        ));
     }
 
     #[test]

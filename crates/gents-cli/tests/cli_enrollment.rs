@@ -46,8 +46,6 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-enroll-{}", Uuid::new_v4().simple());
-    // A live model may decline to echo a token, so replication is asserted
-    // against the runtime's own terminal output, not reply content.
     let prompt = format!(
         "Enrollment check {}: in one short sentence, say hello to the newly paired desktop.",
         Uuid::new_v4().simple()
@@ -522,8 +520,6 @@ struct RuntimeTerminalReply {
     text: String,
 }
 
-/// Only the runtime-selected header of the completed request counts; the reply
-/// text may also appear in the user prompt or an earlier assistant turn.
 fn client_selected_reply(
     requests: &[AgentRequestRow],
     messages: &[TranscriptMessageRow],
@@ -720,8 +716,6 @@ async fn query_collection_dids(
         .collect())
 }
 
-/// Negative control: reply text also present in the user prompt or an earlier
-/// assistant turn does not satisfy the client wait.
 #[test]
 fn client_reply_requires_the_runtime_selected_terminal_header() {
     use gents_protocol::output::{

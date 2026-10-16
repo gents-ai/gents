@@ -50,7 +50,6 @@ def certified (committed : State) (mode : ConcurrencyMode) (busy : Bool)
   | .excluded | .legacySerialBusy => true
   | .receiptRequired => admitted committed entry.identity
 
-/-- Every intervening arrival is checked: a later receipt cannot certify a gap. -/
 def prefixCertified (cursor : Cursor) (committed : State) (journal : Journal)
     (through : Nat) (mode : ConcurrencyMode) (busy : Bool)
     (eligible : Arrival → Bool) : Bool :=
@@ -73,8 +72,6 @@ def acknowledge (cursor : Cursor) (committed : State) (journal : Journal)
     { cursor with after := through }
   else cursor
 
-/-- A callback binding admits like a parallel trigger; it is enabled only while
-both its binding and its callback are. -/
 inductive Consumer where
   | trigger (mode : ConcurrencyMode) (enabled : Bool)
   | callbackBinding (bindingEnabled callbackEnabled : Bool)
@@ -88,8 +85,6 @@ def Consumer.mode : Consumer → ConcurrencyMode
   | .trigger mode _ => mode
   | .callbackBinding _ _ => .parallel
 
-/-- A disabled consumer excludes nothing: unadmitted arrivals stay pending until
-it is enabled again. -/
 def Consumer.eligible (consumer : Consumer) (eligible : Arrival → Bool) : Arrival → Bool :=
   if consumer.enabled then eligible else fun _ => true
 
@@ -108,7 +103,6 @@ def CallbackAdmission.fire (admission : CallbackAdmission) : Fire :=
 def admitCallback (state : State) (admission : CallbackAdmission) : State :=
   admit state admission.fire
 
-/-- Only history at/before the initial registration seed is exempt. -/
 def DeliveredPrefix (initialSeed : Nat) (cursor : Cursor) (committed : State)
     (journal : Journal) (eligible : Arrival → Bool) : Prop :=
   ∀ entry ∈ journal.entries, initialSeed < entry.position →

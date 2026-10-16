@@ -1,8 +1,3 @@
-//! Pure `AgentRequest` admission projection shared by conformance and runtime.
-//!
-//! This projector never treats a caller-authored tag or lineage field as
-//! evidence.
-
 use crate::canonical::{
     parse_utc_seconds, require_enum, require_identifier, require_optional_identifier,
 };
@@ -28,10 +23,8 @@ impl RequestPurpose {
         }
     }
 
-    /// The one purpose user-facing request readers present.
     pub const PUBLIC: Self = Self::Normal;
 
-    /// A row with no decodable purpose is not public.
     pub fn is_public(purpose: Option<Self>) -> bool {
         purpose == Some(Self::PUBLIC)
     }
@@ -222,7 +215,6 @@ pub fn project_agent_request_admission_disposition(
     }
 }
 
-/// Immutable request semantics.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentRequestSigningFields<'a> {
     pub request_id: &'a str,
@@ -678,7 +670,6 @@ fn push_u64(fields: &mut Vec<Vec<u8>>, value: Option<u64>) {
     );
 }
 
-/// Title provenance wire names shared by the canonical session title owner.
 fn title_source_wire_name(source: crate::session::SessionTitleSource) -> &'static str {
     match source {
         crate::session::SessionTitleSource::Placeholder => "placeholder",
@@ -688,7 +679,6 @@ fn title_source_wire_name(source: crate::session::SessionTitleSource) -> &'stati
     }
 }
 
-/// Queue enum wire names matching the canonical queue owners.
 fn queue_source_wire_name(source: crate::request_input::QueueSource) -> &'static str {
     match source {
         crate::request_input::QueueSource::User => "user",
@@ -837,9 +827,6 @@ pub struct AgentRequestCreate {
 }
 
 impl AgentRequestCreate {
-    // Bundling these independent identity/admission fields into a second
-    // parameter object would recreate an owner for the wire contract just to
-    // satisfy an argument-count heuristic.
     #[allow(clippy::too_many_arguments)]
     pub fn base(
         purpose: RequestPurpose,

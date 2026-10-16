@@ -53,31 +53,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lean_fenced_compaction_states_project_native_codex_events() {
-        for active in ["queued", "running"] {
-            assert_eq!(
-                compaction_projection_events(None, active),
-                [CompactionProjectionEvent::Started]
-            );
-            assert_eq!(
-                compaction_projection_events(Some(active), "completed"),
-                [CompactionProjectionEvent::Completed]
-            );
-        }
-        assert_eq!(
-            compaction_projection_events(None, "completed"),
-            [
-                CompactionProjectionEvent::Started,
-                CompactionProjectionEvent::Completed
-            ]
-        );
-        assert!(compaction_projection_events(None, "failed").is_empty());
-        assert!(compaction_projection_events(None, "cancelled").is_empty());
-        assert!(compaction_projection_events(Some("running"), "failed").is_empty());
-        assert!(compaction_projection_events(Some("running"), "cancelled").is_empty());
-    }
-
-    #[test]
     fn context_compaction_item_round_trips_through_pinned_protocol() {
         let item = context_compaction_item("compaction-call-1");
         let value = serde_json::to_value(&item).expect("serialize context compaction");

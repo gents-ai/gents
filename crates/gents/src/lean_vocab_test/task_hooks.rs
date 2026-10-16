@@ -1,6 +1,5 @@
 use serde::Deserialize;
 
-/// A host executor must consume `effective_timeout_secs`, not re-derive the default.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanTaskHook {

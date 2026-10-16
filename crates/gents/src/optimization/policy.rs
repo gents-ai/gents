@@ -1,7 +1,3 @@
-//! The pure promotion policy `PolicyV2`, mirroring `Proofs/Optimization.lean`:
-//! the integer gates, the paired sign-flip permutation test, and `decide`.
-//! Nothing here performs I/O or reads a clock; running the trials and acting
-//! on the decision belong to the driver.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -12,15 +8,12 @@ use crate::eval::PairedEvidence;
 
 pub const POLICY_VERSION: &str = "v2";
 
-/// Cases at or below this count are tested by exact enumeration.
 pub(crate) const EXACT_CASE_LIMIT: usize = 20;
 
 const _: () = assert!(EXACT_CASE_LIMIT < 64);
 
-/// Frozen into a job at start. A rule change is a new version, never an edit.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyV2 {
-    /// At least 1 (`check_policy`): a case with no pairs is not evidence.
     pub min_pairs: u64,
     pub max_not_evidence_bp: u64,
     pub max_asymmetry_bp: u64,
@@ -29,19 +22,12 @@ pub struct PolicyV2 {
     pub alpha_ppm: u64,
     pub max_rounds: u32,
     pub max_token_increase_bp: u64,
-    /// Share of trials with null usage above which the caller passes
-    /// `tokens: None` and the cost sub-gate is skipped. Consumed by the driver,
-    /// not by `decide`.
     pub max_missing_usage_bp: u64,
     pub max_reruns: u32,
-    /// Above `EXACT_CASE_LIMIT` cases the p-value is sampled; `check_policy`
-    /// refuses a resolution too coarse to reach the effective alpha.
     pub monte_carlo_samples: u32,
 }
 
 impl PolicyV2 {
-    /// Placeholder defaults; NOT calibrated. The A/A calibration run sets
-    /// defensible values for a given definition and model.
     pub fn uncalibrated() -> Self {
         Self {
             min_pairs: 2,
@@ -58,8 +44,6 @@ impl PolicyV2 {
         }
     }
 
-    /// Whether this is the placeholder defaults with any `max_rounds`, which
-    /// sizes a job's budget (the Bonferroni divisor), not a calibrated value.
     pub fn is_placeholder(&self) -> bool {
         *self
             == Self {
@@ -72,9 +56,7 @@ impl PolicyV2 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
-    /// All gates, on a validation run.
     Improve,
-    /// Sufficiency and non-regression only, once, on the held-out run.
     Confirm,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,10 +71,7 @@ pub enum RejectReason {
 #[serde(rename_all = "snake_case")]
 pub enum InconclusiveReason {
     Insufficient,
-    /// `2^-n_cases` exceeds the effective significance level.
     TooFewCases,
-    /// The per-case differences could not be placed on a common integer scale
-    /// within the integer width.
     UnscalableEvidence,
 }
 
@@ -127,13 +106,9 @@ pub struct Evidence {
     pub keys: u64,
     pub dropped_baseline: u64,
     pub dropped_candidate: u64,
-    /// `None` when too many trials lack usage; the cost gate is then skipped.
     pub tokens: Option<TokenTotals>,
 }
 
-/// One entry per expected case, in the given order. A case with no pairs stays
-/// with `pairs: 0` and fails gate 1; a pair for an unexpected case clears
-/// `cases_match`.
 pub fn evidence_from_pairs(
     paired: &PairedEvidence,
     expected_cases: &[String],
@@ -177,7 +152,6 @@ pub fn evidence_from_pairs(
     }
 }
 
-/// `Optimization.alphaEffectivePpm`: Bonferroni over the job's rounds.
 pub fn alpha_effective_ppm(policy: &PolicyV2) -> u64 {
     policy.alpha_ppm / policy.max_rounds.max(1) as u64
 }
@@ -212,8 +186,6 @@ pub fn no_case_regression(policy: &PolicyV2, evidence: &Evidence) -> bool {
     })
 }
 
-/// Gate 2b, `Optimization.costOk`; over naturals, a product past the integer
-/// width is not ok rather than wrapped.
 pub fn cost_ok(policy: &PolicyV2, tokens: &TokenTotals) -> bool {
     let candidate = (tokens.candidate_tokens as u128)
         .checked_mul(tokens.baseline_trials as u128)
@@ -236,10 +208,6 @@ fn gcd(a: u128, b: u128) -> u128 {
     }
 }
 
-/// Per-case mean differences on a common integer scale: `diff_c * (L / pairs_c)`
-/// where `L` is the least common multiple of the pair counts, or `None` when
-/// that scale does not exist within the integer width. Every step is checked,
-/// because `decide` is total.
 fn scaled_case_differences(evidence: &Evidence) -> Option<(Vec<i128>, i128)> {
     let counted = || evidence.cases.iter().filter(|case| case.pairs > 0);
     let mut lcm = 1u128;
@@ -271,10 +239,6 @@ fn splitmix64(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// One-sided paired sign-flip permutation test, in parts per million, rounded up.
-/// The share of sign vectors whose signed sum is at least the observed sum. Exact
-/// by enumeration up to `EXACT_CASE_LIMIT` cases; a seeded Monte Carlo above it,
-/// with the usual `(count + 1) / (samples + 1)` correction.
 pub fn permutation_p_ppm(diffs: &[i128], samples: u32, seed: u64) -> u64 {
     if diffs.is_empty() {
         return 1_000_000;
@@ -299,7 +263,6 @@ pub fn permutation_p_ppm(diffs: &[i128], samples: u32, seed: u64) -> u64 {
         let mut state = seed;
         let mut count = 1u128;
         for _ in 0..samples {
-            // More than 64 cases need more than one word of sign bits.
             let sum: i128 = diffs
                 .chunks(64)
                 .map(|chunk| {
@@ -328,7 +291,6 @@ pub struct Gates {
     pub improves: bool,
 }
 
-/// `Optimization.decideGates`. The first failing gate decides.
 pub fn decide_gates(mode: Mode, gates: Gates, insufficient: InconclusiveReason) -> Decision {
     if !gates.sufficient {
         Decision::Inconclusive(insufficient)
@@ -343,7 +305,6 @@ pub fn decide_gates(mode: Mode, gates: Gates, insufficient: InconclusiveReason) 
     }
 }
 
-/// A decision and the numbers behind it, for the journal and for `show`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecisionReport {
     pub decision: Decision,
@@ -351,15 +312,12 @@ pub struct DecisionReport {
     pub improved: u32,
     pub tied: u32,
     pub worsened: u32,
-    /// Mean per-case difference in basis points, rounded toward zero.
     pub mean_diff_bp: Option<i64>,
     pub p_ppm: Option<u64>,
     pub alpha_effective_ppm: u64,
     pub cost_skipped: bool,
 }
 
-/// `seed` feeds the Monte Carlo branch only. The driver derives it from the run
-/// id, so a recomputed decision is identical.
 pub fn decide(mode: Mode, policy: &PolicyV2, evidence: &Evidence, seed: u64) -> DecisionReport {
     let Some((diffs, lcm)) = scaled_case_differences(evidence) else {
         let signs = |ordering: Ordering| {

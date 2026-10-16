@@ -1,5 +1,3 @@
-//! Env-overridable reconciler intervals.
-
 use std::time::Duration;
 
 pub const DEFAULT_HEARTBEAT: Duration = Duration::from_secs(30);

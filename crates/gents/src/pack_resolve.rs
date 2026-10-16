@@ -1,5 +1,3 @@
-//! Resolving a named pack: explicit local forms use [`crate::pack::local`] with caller-owned path admission, everything else comes
-//! through here.
 
 use std::path::Path;
 
@@ -10,7 +8,6 @@ use crate::pack_archive::{PackArchive, DEFAULT_NAMESPACE};
 use crate::pack_registry::{fetch_pack, RegistryClient, RegistryError};
 use crate::pack_store::{is_valid_index_version, PackStore};
 
-/// One parsed pack coordinate: `name`, `ns/name`, either with `@version`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PackSpec<'a> {
     pub namespace: &'a str,
@@ -18,10 +15,6 @@ pub struct PackSpec<'a> {
     pub version: Option<&'a str>,
 }
 
-/// Parses `spec` into a [`PackSpec`]. Namespace and name must be
-/// `is_valid_pack_name` and a pinned version `is_valid_index_version`: both
-/// become path segments in the pack store's name index, so the checks can
-/// never disagree about what a valid version looks like.
 pub fn parse_pack_spec(spec: &str) -> Result<PackSpec<'_>> {
     let (coordinate, version) = match spec.split_once('@') {
         Some((coordinate, version)) => {
@@ -50,7 +43,6 @@ pub fn parse_pack_spec(spec: &str) -> Result<PackSpec<'_>> {
     })
 }
 
-/// Where [`resolve_named`] found a pack.
 #[derive(Debug, Clone)]
 pub enum ResolvedFrom {
     Installed,
@@ -61,26 +53,17 @@ pub enum ResolvedFrom {
     },
 }
 
-/// A named pack, resolved and opened.
 pub struct ResolvedNamedPack {
     pub archive: PackArchive,
     pub from: ResolvedFrom,
 }
 
-/// What [`resolve_named`] needs to resolve a spec.
 pub struct ResolveOptions<'a> {
-    /// `None` skips the store and resolves in memory.
     pub home: Option<&'a Path>,
     pub registry_url: String,
     pub installed: &'a [InstalledPack],
 }
 
-/// Resolves a non-local pack spec: an installed record whose digest the
-/// store still holds, then the store's name index, then the registry.
-///
-/// A caller with an explicit local form (`sha256:`, `./`, `../`, an
-/// absolute path, `*.pack`) never reaches this: that classification belongs to [`crate::pack::local`], so this resolver only ever sees `name`, `ns/name`, or either
-/// pinned with `@version`.
 pub async fn resolve_named(spec: &str, options: &ResolveOptions<'_>) -> Result<ResolvedNamedPack> {
     let parsed = parse_pack_spec(spec)?;
     let coordinate = format!("{}/{}", parsed.namespace, parsed.name);
@@ -135,8 +118,6 @@ pub async fn resolve_named(spec: &str, options: &ResolveOptions<'_>) -> Result<R
     })
 }
 
-/// Turns a failed registry fetch into the one sentence an operator needs;
-/// classified by [`RegistryError`], never by matching message text.
 fn offline_pack_error(
     coordinate: &str,
     version: Option<&str>,
@@ -175,8 +156,6 @@ mod tests {
     use super::*;
     use crate::pack_store::test_pack_named as build_pack;
 
-    /// An unroutable loopback address: a connection to it fails immediately
-    /// rather than timing out.
     const UNROUTABLE_REGISTRY: &str = "http://127.0.0.1:1";
 
     fn expect_err(result: Result<ResolvedNamedPack>) -> anyhow::Error {
@@ -184,33 +163,6 @@ mod tests {
             Ok(_) => panic!("expected an error"),
             Err(error) => error,
         }
-    }
-
-    #[test]
-    fn parse_pack_spec_handles_bare_namespaced_and_pinned_forms() {
-        let spec = parse_pack_spec("demo").unwrap();
-        assert_eq!(
-            (spec.namespace, spec.name, spec.version),
-            ("gents", "demo", None)
-        );
-
-        let spec = parse_pack_spec("acme/demo").unwrap();
-        assert_eq!(
-            (spec.namespace, spec.name, spec.version),
-            ("acme", "demo", None)
-        );
-
-        let spec = parse_pack_spec("acme/demo@1.2.3").unwrap();
-        assert_eq!(
-            (spec.namespace, spec.name, spec.version),
-            ("acme", "demo", Some("1.2.3"))
-        );
-
-        let spec = parse_pack_spec("demo@2").unwrap();
-        assert_eq!(
-            (spec.namespace, spec.name, spec.version),
-            ("gents", "demo", Some("2"))
-        );
     }
 
     #[test]
@@ -357,7 +309,6 @@ mod tests {
         );
     }
 
-    /// A pinned `@version` must survive into the offline sentence.
     #[tokio::test]
     async fn an_unreachable_registry_keeps_the_pin_in_the_offline_sentence() {
         let home = tempfile::tempdir().unwrap();

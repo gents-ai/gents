@@ -47,22 +47,16 @@ use super::protocol::{
     LEADER_PROTOCOL_VERSION,
 };
 
-/// Tracing target for every log line this module emits.
 const LOG_TARGET: &str = "gents_cli::commands::grok_shim::server";
 
-/// Envelope error code for a frame that violates the leader protocol.
 const ENVELOPE_ERROR_INVALID_REQUEST: i32 = -32600;
 
-/// Envelope error code for a leader method this shim does not implement.
 const ENVELOPE_ERROR_METHOD_NOT_FOUND: i32 = -32601;
 
-/// JSON-RPC internal-error code used when ACP dispatch itself fails.
 const JSONRPC_INTERNAL_ERROR: i64 = -32603;
 
-/// Mode forced on the lock file and on the published socket.
 const PRIVATE_FILE_MODE: u32 = 0o600;
 
-/// Mode of the private staging ancestor directory.
 const STAGING_DIR_MODE: u32 = 0o700;
 
 /// Mode of every socket-parent directory the shim creates itself; existing
@@ -75,21 +69,16 @@ const STAGED_SOCKET_NAME: &str = "s";
 
 const STAGING_DIR_PREFIX: &str = ".gents-grok-";
 
-/// Naming attempts per staging ancestor before falling back to a deeper one.
 const STAGING_ATTEMPTS: usize = 8;
 
-/// Upper bound on one per-connection dispatch/writer cleanup operation.
 const MAX_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
 /// Internal bound for joining live connection tasks during leader shutdown,
 /// independent of the pager-facing shutdown envelope whose delay remains zero.
 const CONNECTION_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 
-/// Grok's audited shutdown envelope is immediate; this is a wire value, not
-/// the server's internal cleanup deadline.
 const WIRE_SHUTDOWN_DELAY_MS: u64 = 0;
 
-/// Maximum number of complete outbound envelopes waiting behind a slow pager.
 const OUTBOUND_FRAME_CAPACITY: usize = 256;
 
 /// One decoded inbound envelope may wait while the connection loop services a
@@ -101,7 +90,6 @@ const INBOUND_FRAME_CAPACITY: usize = 1;
 /// may overlap without an unbounded task fanout.
 const MAX_ACP_DISPATCH_TASKS: usize = 64;
 
-/// Attempts to acquire and revalidate one stable lock-file inode.
 const LOCK_ACQUIRE_ATTEMPTS: usize = 8;
 
 /// Published socket path length exercised by the near-limit tests; `sun_path`
@@ -119,10 +107,6 @@ compile_error!("the grok shim leader lock needs this target's O_NOFOLLOW value; 
 const O_NOFOLLOW: i32 = 0x0000_8000;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const O_NOFOLLOW: i32 = 0x0000_0040;
-
-// ---------------------------------------------------------------------------
-// ACP delegate seam
-// ---------------------------------------------------------------------------
 
 /// Connection-scoped outbound handle for ACP payloads: the leader owns frame
 /// writing; the delegate only hands it finished JSON-RPC lines. Cheap to
@@ -257,10 +241,6 @@ where
     }
 }
 
-// ---------------------------------------------------------------------------
-// Configuration and handle
-// ---------------------------------------------------------------------------
-
 /// Configuration for one spawned leader.
 #[derive(Debug, Clone)]
 pub(crate) struct LeaderServerConfig {
@@ -302,7 +282,6 @@ impl LeaderHandle {
         self.join().await
     }
 
-    /// Wait for the listener task to finish without requesting a stop.
     pub(crate) async fn join(&mut self) -> Result<()> {
         match self.task.take() {
             None => Ok(()),
@@ -432,10 +411,6 @@ fn normalize_platform_temp_root(path: &Path) -> Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
-// ---------------------------------------------------------------------------
-// Accept loop
-// ---------------------------------------------------------------------------
-
 #[allow(clippy::too_many_arguments)]
 async fn accept_loop(
     listener: UnixListener,
@@ -546,10 +521,6 @@ fn remove_published_socket(socket_path: &Path) {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Per-connection handling
-// ---------------------------------------------------------------------------
 
 async fn handle_connection(
     stream: UnixStream,
@@ -937,10 +908,6 @@ fn leader_capabilities() -> LeaderCapabilities {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Socket-parent creation
-// ---------------------------------------------------------------------------
-
 /// Ensure every component of `parent` exists as a plain directory.
 ///
 /// Deliberately not `create_dir_all`, which walks the path through symlinks:
@@ -1010,10 +977,6 @@ fn ensure_socket_parent(parent: &Path) -> Result<()> {
     }
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Exclusive leader lock
-// ---------------------------------------------------------------------------
 
 /// The exclusive sibling leader lock at `socket_path.with_extension("lock")`:
 /// opened `O_NOFOLLOW`, forced `0600`, locked nonblocking-exclusive with
@@ -1209,10 +1172,6 @@ fn remove_stale_socket(socket_path: &Path) -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Atomic socket publication
-// ---------------------------------------------------------------------------
-
 /// Publish the leader socket atomically: bind inside a private `0700` short
 /// same-device staging ancestor (so binding never depends on the published
 /// path length), force the socket `0600` while it is still unreachable, then
@@ -1354,8 +1313,6 @@ impl StagingDir {
         )
     }
 
-    /// Remove the (now empty) staging directory; best effort, since a leftover
-    /// empty directory is harmless unlike a leftover socket.
     fn cleanup(self) {
         if let Err(error) = std::fs::remove_dir(&self.path) {
             tracing::warn!(
@@ -1601,7 +1558,6 @@ mod tests {
         }
     }
 
-    // -- fixtures and helpers ------------------------------------------------
 
     /// Canonicalize the chosen short test root: on macOS `/tmp` is a symlink
     /// to `/private/tmp` and the socket-parent walk refuses symlinked
@@ -1670,8 +1626,6 @@ mod tests {
         root
     }
 
-    /// Falls back to a plain short filename when the test root alone already
-    /// reaches the target, so the helper never underflows.
     fn long_filename_socket_path(root: &Path, target_bytes: usize) -> PathBuf {
         let file_name_len = target_bytes.saturating_sub(root.as_os_str().len() + 1);
         let stem_len = file_name_len.saturating_sub(".sock".len());
@@ -1681,7 +1635,6 @@ mod tests {
         root.join(format!("{}.sock", "f".repeat(stem_len)))
     }
 
-    /// A socket path whose *parent chain* is near the `sun_path` limit.
     fn long_parent_socket_path(root: &Path, target_bytes: usize) -> PathBuf {
         let file_name = "s.sock";
         let component = "d".repeat(12);
@@ -1805,8 +1758,6 @@ mod tests {
         assert_eq!(lock.permissions().mode() & 0o777, PRIVATE_FILE_MODE);
     }
 
-    /// Drive one full pager exchange through the production leader: register,
-    /// ping/pong, ACP round trip, disconnect, and disconnect observation.
     async fn exercise_leader(socket: &Path, factory: &RecordingFactory) {
         let (mut reader, mut writer, _client_id) = register(socket).await;
 
@@ -1856,8 +1807,6 @@ mod tests {
         );
     }
 
-    /// Spawn a leader, retrying while a just-aborted previous leader is still
-    /// releasing its lock (task abort is asynchronous by nature).
     async fn spawn_with_retry(socket: &Path, factory: Arc<RecordingFactory>) -> LeaderHandle {
         let deadline = Instant::now() + TEST_TIMEOUT;
         loop {
@@ -1877,8 +1826,6 @@ mod tests {
         }
     }
 
-    /// The default recording factory for tests that need a functioning
-    /// per-connection delegate.
     fn recording_factory() -> Arc<RecordingFactory> {
         Arc::new(RecordingFactory::default())
     }
@@ -2130,7 +2077,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    // -- spawn lifetime, election, and cleanup -------------------------------
 
     #[tokio::test]
     async fn the_production_spawn_lifetime_publishes_serves_and_cleans_up() {

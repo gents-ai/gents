@@ -1,6 +1,3 @@
-//! Inference retry with exponential backoff and jitter. Only transient
-//! error classes are retried; permanent errors fail immediately.
-
 use std::time::Duration;
 
 use rand::Rng;

@@ -113,7 +113,6 @@ fn collection_schema_contract(version: &Value) -> Result<CollectionSchemaContrac
     })
 }
 
-/// Canonical semantic digest of a DefraDB collection contract, shared by package installation and runtime replay readiness.
 pub(crate) fn collection_schema_contract_digest(version: &Value) -> Result<String> {
     let contract = collection_schema_contract(version)?;
     Ok(format!(
@@ -128,7 +127,6 @@ pub struct SchemaFieldDelta {
     pub extra: BTreeSet<String>,
 }
 
-/// Additive differences only; shared fields and collection-level constraints must match exactly.
 pub(crate) fn collection_schema_field_delta(
     expected: &Value,
     live: &Value,

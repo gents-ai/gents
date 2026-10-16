@@ -113,8 +113,6 @@ pub const AGENT_INTERRUPT_TOOL_NAME: &str = "agent_interrupt";
 pub const AGENT_LIST_TOOL_NAME: &str = "agent_list";
 pub const AGENT_SESSION_LIST_TOOL_NAME: &str = "agent_session_list";
 pub const AGENT_SESSION_READ_TOOL_NAME: &str = "agent_session_read";
-/// The agents tool group (`AgentTools.enabled`), in the order they are
-/// offered.
 pub const AGENT_TOOL_NAMES: [&str; 6] = [
     AGENT_NEW_TOOL_NAME,
     AGENT_MESSAGE_TOOL_NAME,

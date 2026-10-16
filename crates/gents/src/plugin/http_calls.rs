@@ -1,11 +1,3 @@
-//! HTTP for a plugin that holds no socket: the host performs the requests a
-//! granted `OutboundHttp` allow-list admits and resumes the plugin with the
-//! responses through the same round loop as model calls. Allow-list entries
-//! are `host`, `*.domain` (strict subdomains), an IP literal, optionally
-//! prefixed `http://` and suffixed `:port`; an entry without a port admits
-//! only the scheme's default port; `OutboundHttp(null)` admits any public
-//! host over HTTPS on port 443. Admission is `ToolPolicy.PluginNetwork.allowed`.
-//! The host never follows a redirect and carries no credentials of its own.
 
 use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -22,7 +14,6 @@ use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::{Method, Url};
 use serde_json::{json, Map, Value};
 
-/// Requests one round may carry.
 pub const MAX_REQUESTS_PER_ROUND: usize = 16;
 pub const MAX_IN_FLIGHT: usize = 8;
 pub const MAX_REQUESTS_PER_CALL: usize = 256;
@@ -32,7 +23,6 @@ pub const MAX_RESPONSE_BYTES_PER_CALL: usize = 16 * 1024 * 1024;
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Headers the host owns: framing, connection management and proxying.
 const HOST_HEADERS: &[&str] = &[
     "host",
     "content-length",
@@ -74,7 +64,6 @@ pub(crate) struct Entry {
     port: Option<u16>,
 }
 
-/// What a granted `net` axis lets the host reach for a plugin.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum NetGrant {
     Sealed,
@@ -150,7 +139,6 @@ fn parse_entry(text: &str) -> Result<Entry, String> {
     })
 }
 
-/// Refuses, at manifest load, a declared network axis the host cannot serve.
 pub(crate) fn validate_declared(manifold: &Manifold) -> Result<(), String> {
     if manifold.http_timeout_ms == Some(0) {
         return Err("http_timeout_ms must be at least 1; omit it for the default".to_owned());
@@ -159,8 +147,6 @@ pub(crate) fn validate_declared(manifold: &Manifold) -> Result<(), String> {
 }
 
 fn target_host(url: &Url) -> Option<TargetHost> {
-    // `Url` serialises an IP host canonically (IPv6 bracketed), so the
-    // string form is the parsed address, not the authored spelling.
     let host = url.host_str()?;
     if let Some(v6) = host
         .strip_prefix('[')
@@ -210,15 +196,12 @@ fn v6_public(ip: &Ipv6Addr) -> bool {
             && (segments[1] == 0 || segments[1] == 0x0db8 || (0x10..0x30).contains(&segments[1])))
 }
 
-/// How a target was admitted and the IP literal itself when the URL names one.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Admission {
     explicit: bool,
     literal: Option<IpAddr>,
 }
 
-/// Admits `url` under `grant`, before any address is known; `Err` is why
-/// not, as a sentence that names the next step.
 pub(crate) fn admit(grant: &NetGrant, url: &Url, coordinate: &str) -> Result<Admission, String> {
     let https = match url.scheme() {
         "https" => true,
@@ -271,14 +254,10 @@ pub(crate) fn admit(grant: &NetGrant, url: &Url, coordinate: &str) -> Result<Adm
         })
 }
 
-/// Whether one connection may use `addrs`: every address must be public
-/// unless an entry naming the IP literal itself admitted the target.
 pub(crate) fn addresses_allowed(explicit: bool, addrs: &[IpAddr]) -> bool {
     !addrs.is_empty() && (explicit || addrs.iter().all(ip_public))
 }
 
-/// The refusal of `ip` as the target `host` names; `host` is `None` when
-/// the URL names `ip` itself.
 fn internal_refusal(host: Option<&str>, ip: &IpAddr) -> String {
     match host {
         Some(host) => format!(
@@ -296,7 +275,6 @@ fn internal_refusal(host: Option<&str>, ip: &IpAddr) -> String {
     }
 }
 
-/// Resolves a host name for the client.
 pub(super) trait Lookup: Send + Sync {
     fn lookup(&self, host: String) -> BoxFuture<'static, std::io::Result<Vec<IpAddr>>>;
 }
@@ -318,9 +296,6 @@ impl Lookup for SystemLookup {
 #[error("{0}")]
 struct InternalAddress(String);
 
-/// The client's only resolver: the addresses it returns are the ones the
-/// connection uses, so checking them here leaves no second resolution for a
-/// rebinding name to answer differently.
 struct Guarded(Arc<dyn Lookup>);
 
 impl reqwest::dns::Resolve for Guarded {
@@ -328,6 +303,7 @@ impl reqwest::dns::Resolve for Guarded {
         let lookup = self.0.clone();
         let host = name.as_str().to_owned();
         Box::pin(async move {
+            // The checked addresses must also be the ones used by this connection, preventing DNS rebinding.
             let addrs = lookup.lookup(host.clone()).await?;
             if let Some(ip) = addrs.iter().find(|ip| !ip_public(ip)) {
                 return Err(Box::new(InternalAddress(internal_refusal(Some(&host), ip))) as _);
@@ -464,7 +440,6 @@ fn parse_request(id: &str, request: &Value) -> Result<Request, String> {
     })
 }
 
-/// Why a request is answered with an error without being sent.
 #[derive(Clone, Copy)]
 enum Refusal {
     RequestLimit,
@@ -484,7 +459,6 @@ impl Refusal {
     }
 }
 
-/// One plugin's network for the length of one call.
 pub(super) struct Session {
     coordinate: String,
     grant: NetGrant,
@@ -516,6 +490,7 @@ impl Session {
         if grant == NetGrant::Sealed {
             return Ok(None);
         }
+        // Do not follow redirects or attach host credentials to plugin requests.
         let client = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
@@ -538,8 +513,6 @@ impl Session {
         }))
     }
 
-    /// Answers every request of one round; one past the call's request or
-    /// response-byte budget gets an error result without being sent.
     pub(super) async fn serve(
         &mut self,
         requests: Vec<Request>,
@@ -679,8 +652,6 @@ impl Session {
     }
 }
 
-/// One sentence for a failed send: the guard's own refusal when it refused
-/// the resolved addresses.
 fn send_error(url: &Url, error: &reqwest::Error) -> String {
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(cause) = source {

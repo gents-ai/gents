@@ -439,9 +439,6 @@ async fn native_schema_and_receipts_preserve_lists_json_and_null() {
     assert!(super::input::literal("JSON", &json!({"nested": [1, []]})).is_err());
 }
 
-// A type `parameters` accepts still resolves an argument schema (tool
-// registers; the obligation fails after the write); a relation-typed or
-// absent field resolves none, so the tool never registers.
 #[tokio::test]
 async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
     use crate::document_config::{WriteToolOutputObligation, WriteToolOutputObligationScope};

@@ -139,8 +139,6 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
             other => panic!("unsupported native restart parent observation {other}"),
         }
 
-        // The crashed runtime left a durable record for a surviving
-        // test-owned group; the restarted runtime's owner reads it.
         let records = tempfile::tempdir().unwrap();
         let registry = crate::hook::BackgroundExecutionRegistry::default()
             .with_process_records(records.path().to_path_buf());
@@ -274,7 +272,6 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
     for case in cases {
         let name = case.name.as_str();
         assert_eq!(case.await_mode, "background", "{name}");
-        // A running session-message row always has its caused request.
         let admission = crate::tool_call_lifecycle::admission_fixture::published_session_message(
             PublishedAdmissionOptions {
                 name: format!("restart-{name}"),
@@ -312,7 +309,6 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
                 &format!(r#"lifecycle_state: "{state}""#),
             )
             .await;
-            // The periodic terminal-parent sweep never ends a background row.
             let periodic = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
                 &admission.node,
                 &admission.node_did,

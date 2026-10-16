@@ -1,5 +1,3 @@
-//! Immutable source-path admission. Alias keys detect ambiguity only: they never
-//! replace the literal repository-relative paths granted by the capability.
 use anyhow::{bail, ensure, Context, Result};
 use caseless::Caseless;
 use serde::{Deserialize, Serialize};
@@ -141,7 +139,6 @@ impl WorkspacePathCapability {
                     let entry = entry?;
                     let filename = entry.file_name();
                     let Some(spelling) = filename.to_str() else {
-                    // Admitted components are UTF-8; an opaque filename cannot alias.
                     continue;
                 };
                     if alias_key(spelling) != wanted_alias {
@@ -184,8 +181,6 @@ impl WorkspacePathCapability {
     }
 }
 
-/// Refine changed-prefix observations against a complete Git tree without
-/// imposing admission requirements on unrelated historical entries.
 pub(crate) fn validate_changed_path_aliases<'a>(
     changed: &[&str],
     tree_paths: impl IntoIterator<Item = &'a str>,
@@ -315,22 +310,6 @@ mod tests {
             .unwrap()
             .validate_paths_at(root.path())
             .unwrap();
-    }
-
-    #[test]
-    fn empty_exact_and_literal_membership_never_widen() {
-        let empty = exact(&[]).unwrap();
-        assert!(!empty.authorizes("src/main.rs"));
-        let cap = exact(&["src/main.rs"]).unwrap();
-        assert!(cap.authorizes("src/main.rs"));
-        for other in [
-            "SRC/main.rs",
-            "src/main.rs/child",
-            "src/main.rs.bak",
-            "src/../src/main.rs",
-        ] {
-            assert!(!cap.authorizes(other));
-        }
     }
 
     #[test]

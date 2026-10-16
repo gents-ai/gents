@@ -1,7 +1,3 @@
-//! Native extension of the loop's tool-runtime scope (`gents-loop`, G-1): a
-//! nested task-local workspace overlay (cwd, root, authority, artifact grant)
-//! merged into the loop's own scope by [`current_tool_runtime_context`]; the
-//! loop's own dispatch never sees the overlay half.
 
 use std::path::PathBuf;
 
@@ -34,8 +30,6 @@ tokio::task_local! {
     static WORKSPACE_OVERLAY: ToolWorkspaceScope;
 }
 
-/// The merged native context: the loop's own scope plus the workspace
-/// binding only native tools observe.
 #[derive(Clone)]
 pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) deadline_at: Option<DateTime<Utc>>,
@@ -54,8 +48,6 @@ pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) request_id: Option<String>,
 }
 
-/// Establish the workspace overlay around `future`, nesting the loop's own
-/// scope inside it.
 pub(crate) async fn scope_request_tool_execution_with_workspace_overlay<F, T>(
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
@@ -166,7 +158,6 @@ where
     .await
 }
 
-/// Scope for executions spawned through the R6 background bridge.
 #[cfg(test)]
 pub(crate) async fn scope_background_tool_execution<F, T>(
     deadline_at: Option<DateTime<Utc>>,

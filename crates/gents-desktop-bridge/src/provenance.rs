@@ -1,8 +1,3 @@
-// The desktop's view of one session's lineage. `gents::session_origin` owns
-// the rule (`lineage` for the session links, `caused_requests` for the
-// request each call caused); this module maps its answers onto the view and
-// reads only the rows those answers name. It confers no hierarchy, cascade
-// or authority.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -20,8 +15,6 @@ use crate::types::{
     SessionProvenanceView, TurnSenderView,
 };
 
-/// `desktop_session_provenance`: the requested session scope, under the
-/// selected node when the request names none.
 pub async fn session_provenance_request(
     core: &Arc<ClientCore>,
     request: DesktopSessionProvenanceRequest,
@@ -94,8 +87,6 @@ fn text(row: &Value, field: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// This session's `agent_new`/`agent_message` calls, each with the request
-/// the lineage owner says it caused and that request's state.
 async fn caused_calls(
     access: &ConfigAccess,
     scope: &SessionScope,
@@ -122,8 +113,6 @@ async fn caused_calls(
     if caused.is_empty() {
         return Ok(Vec::new());
     }
-    // The state of exactly the requests the owner named: each is the one
-    // public request carrying its call's physical edge.
     let states = rows(
         access,
         &format!(
@@ -162,11 +151,6 @@ async fn caused_calls(
         .collect())
 }
 
-/// Which lineage session sent each of this session's requests. A request
-/// names its causing request document; that document is either the link's
-/// own cause or belongs to one of the linked sessions. Request and cause
-/// scopes come from the canonical lineage read, independent of bounded cache
-/// retention. A cause neither names stays unattributed.
 fn turn_senders<'a>(
     lineage: &'a gents::session_origin::SessionLineage,
 ) -> Vec<(String, &'a SessionLink)> {

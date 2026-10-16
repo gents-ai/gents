@@ -1,6 +1,3 @@
-//! `show`: a job as its journal states it, with every decision recomputed
-//! from the `EvalVerdict` rows of the runs it names — the authority; the
-//! journal's summary is only a convenience (spec section 5, ruling R1).
 
 use anyhow::Result;
 use serde::Serialize;
@@ -20,8 +17,6 @@ pub struct DecisionView {
     pub mode: Mode,
     pub run_ids: Vec<String>,
     pub journaled: Decision,
-    /// `None` when the job's definition was deleted or no longer validates;
-    /// the journaled decision stands unchecked.
     pub recomputed: Option<Decision>,
     pub mismatch: bool,
     pub invalidated: bool,
@@ -33,22 +28,15 @@ pub struct JobView {
     pub state: JobState,
     pub checkpoint: Option<Checkpoint>,
     pub rounds_used: u32,
-    /// The installed definition no longer matches the one the job froze, or
-    /// was deleted / no longer validates (ruling T34-4: such a job is
-    /// finalized as `Failed(definition_changed)`).
     pub definition_changed: bool,
     pub decisions: Vec<DecisionView>,
 }
 
-/// Project `job_id`'s journal. Only `Decided` entries are recomputed.
 pub async fn show(access: &ConfigAccess, owner: &str, job_id: &str) -> Result<JobView> {
     let job = load_job(access, owner, job_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("no optimization job {job_id:?} for {owner}"))?;
     let origin = &job.origin;
-    // Ruling T34-4: a definition that was deleted or no longer validates has
-    // changed; any other error is not a fact about the definition and
-    // propagates.
     let definition = match load_definition(access, owner, &origin.definition.definition_id).await {
         Ok(definition) => Some(definition),
         Err(error) if freeze_refused(&error).is_some() => {

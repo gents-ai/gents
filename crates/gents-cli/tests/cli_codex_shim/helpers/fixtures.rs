@@ -36,9 +36,6 @@ async fn exact_request_binding(
     ))
 }
 
-/// Choose a sequence only after the runtime has appended its prompt header;
-/// seeding earlier makes both headers take the same sequence, which canonical
-/// header lookup rejects as a conflict.
 async fn next_session_message_sequence(
     graphql: &str,
     node_did: &str,

@@ -138,7 +138,6 @@ struct ImportedMessage {
     request_id: Option<String>,
 }
 
-/// Interpret an external capture as a derived export view.
 pub fn import_external_adapter_capture_to_derived_view(
     capture: &ExternalAdapterCapture,
 ) -> Result<ExternalAdapterImport> {

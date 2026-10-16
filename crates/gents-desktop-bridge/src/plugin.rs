@@ -207,8 +207,7 @@ fn register_window<R: Runtime>(webview: tauri::Webview<R>) {
         .register_window(window.label());
 }
 
-/// Takes the desktop process lock through the reset reservation so a waiting
-/// reset is never overtaken, and holds it for the app's lifetime.
+/// Holds the process lock across the reset reservation for the app lifetime.
 fn hold_desktop_process<R: Runtime>(
     app: &tauri::AppHandle<R>,
     paths: &gents_desktop_core::client::DesktopPaths,

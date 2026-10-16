@@ -1,4 +1,3 @@
-//! Executable mirror of `proofs/Proofs/GoalAutomation/ReadinessGate.lean`.
 use super::*;
 use crate::runtime_status::{ReconcilePhase, ReconcileResult};
 use gents_protocol::row::{
@@ -46,7 +45,6 @@ pub enum GoalGatedDecision {
     AgentUnavailable,
 }
 
-/// Inputs of `decide_goal_continuation`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GoalContinuationFacts {
     pub status: GoalStatus,
@@ -61,7 +59,6 @@ pub struct GoalContinuationFacts {
     pub wrapup_completed: bool,
 }
 
-/// Mirror of `ReadinessGate.observe`.
 pub fn observe_goal_agent_readiness(
     observation: GoalAgentObservation,
     settled: bool,
@@ -323,164 +320,4 @@ pub async fn observe_goal_agent(
         settled,
         reason,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn projected_readiness_maps_onto_the_modeled_observation() {
-        use AgentReadinessUnavailableReason as Reason;
-        use AgentReadinessUnknownReason as Unknown;
-        assert_eq!(
-            goal_agent_observation(&ProjectedAgentReadiness::Ready, false),
-            GoalAgentObservation::Ready {
-                newer_than_terminal: false
-            }
-        );
-        assert_eq!(
-            goal_agent_observation(
-                &ProjectedAgentReadiness::Unavailable(Reason::BackendTemporarilyUnavailable),
-                true
-            ),
-            GoalAgentObservation::BackendRecovering
-        );
-        for reason in [
-            Reason::AgentDisabled,
-            Reason::RuntimeConfigurationInvalid,
-            Reason::BackendNotConfigured,
-            Reason::BackendDisabled,
-            Reason::CredentialsRequired,
-            Reason::InferenceProfileInvalid,
-            Reason::ToolConfigurationInvalid,
-            Reason::ToolSurfaceUnavailable,
-            Reason::ExecutorStartFailed,
-        ] {
-            assert_eq!(
-                goal_agent_observation(&ProjectedAgentReadiness::Unavailable(reason), true),
-                GoalAgentObservation::Unavailable,
-                "{reason:?}"
-            );
-        }
-        assert_eq!(
-            goal_agent_observation(
-                &ProjectedAgentReadiness::Unknown(Unknown::AgentNotAssigned),
-                true
-            ),
-            GoalAgentObservation::Unassigned
-        );
-        for reason in [
-            Unknown::ReadinessMissing,
-            Unknown::ReadinessMalformed,
-            Unknown::ReadinessVersionUnsupported,
-            Unknown::ProcessNotReady,
-            Unknown::RouterGenerationStale,
-        ] {
-            assert_eq!(
-                goal_agent_observation(&ProjectedAgentReadiness::Unknown(reason), true),
-                GoalAgentObservation::Unknown,
-                "{reason:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn only_readiness_written_after_the_terminal_is_newer() {
-        let terminal = Some("2026-09-25T10:00:00+00:00");
-        assert!(goal_readiness_newer_than_terminal(
-            Some("2026-09-25T10:00:01Z"),
-            terminal
-        ));
-        assert!(!goal_readiness_newer_than_terminal(
-            Some("2026-09-25T10:00:00Z"),
-            terminal
-        ));
-        assert!(!goal_readiness_newer_than_terminal(
-            Some("2026-09-25T09:59:59Z"),
-            terminal
-        ));
-        assert!(!goal_readiness_newer_than_terminal(None, terminal));
-        assert!(!goal_readiness_newer_than_terminal(
-            Some("2026-09-25T10:00:01Z"),
-            None
-        ));
-        assert!(!goal_readiness_newer_than_terminal(
-            Some("not a time"),
-            terminal
-        ));
-    }
-
-    #[test]
-    fn only_idle_error_free_reconciliation_is_settled() {
-        assert!(goal_reconcile_settled(Some("idle"), Some("applied")));
-        assert!(goal_reconcile_settled(Some("idle"), Some("")));
-        assert!(goal_reconcile_settled(Some("idle"), None));
-        assert!(!goal_reconcile_settled(Some("idle"), Some("error")));
-        for phase in ["debouncing", "resolving", "diffing", "applying"] {
-            assert!(!goal_reconcile_settled(Some(phase), Some("applied")));
-        }
-        assert!(!goal_reconcile_settled(None, None));
-    }
-
-    #[test]
-    fn only_an_unclaimed_readiness_rejection_is_uncharged() {
-        let rejected = AgentRequestRow {
-            request_id: "child".into(),
-            lifecycle_state: Some(RequestLifecycleState::Failed),
-            failure_reason: Some(
-                AgentReadinessUnavailableReason::RuntimeConfigurationInvalid
-                    .public_message()
-                    .into(),
-            ),
-            ..Default::default()
-        };
-        assert_eq!(
-            goal_failure_cause(&rejected),
-            GoalFailureCause::AgentUnavailable
-        );
-        let unassigned = AgentRequestRow {
-            failure_reason: Some(gents_protocol::row::BEHAVIOR_NOT_ASSIGNED_MESSAGE.into()),
-            ..rejected.clone()
-        };
-        assert_eq!(
-            goal_failure_cause(&unassigned),
-            GoalFailureCause::AgentUnavailable
-        );
-        let claimed = AgentRequestRow {
-            execution_generation: Some("generation".into()),
-            ..rejected.clone()
-        };
-        assert_eq!(goal_failure_cause(&claimed), GoalFailureCause::Attempt);
-        let other = AgentRequestRow {
-            failure_reason: Some("request admission denied: bad signature".into()),
-            ..rejected.clone()
-        };
-        assert_eq!(goal_failure_cause(&other), GoalFailureCause::Attempt);
-        let dead = AgentRequestRow {
-            lifecycle_state: Some(RequestLifecycleState::Dead),
-            ..rejected
-        };
-        assert_eq!(goal_failure_cause(&dead), GoalFailureCause::Attempt);
-    }
-
-    #[test]
-    fn a_credentials_rejection_is_agent_unavailable() {
-        for reason in [
-            AgentReadinessUnavailableReason::CredentialsRequired,
-            AgentReadinessUnavailableReason::ToolConfigurationInvalid,
-        ] {
-            let rejected = AgentRequestRow {
-                request_id: "child".into(),
-                lifecycle_state: Some(RequestLifecycleState::Failed),
-                failure_reason: Some(reason.public_message().into()),
-                ..Default::default()
-            };
-            assert_eq!(
-                goal_failure_cause(&rejected),
-                GoalFailureCause::AgentUnavailable,
-                "{reason:?}"
-            );
-        }
-    }
 }

@@ -1,5 +1,3 @@
-//! Signed P2P replication fences canonical context/inference dependencies and excludes credentials.
-
 use std::time::{Duration, Instant};
 
 use gents::agent::p2p_reconcile::templates::single_string_eq;
@@ -69,8 +67,6 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
         .await;
     assert!(!response.has_errors(), "seed config: {:?}", response.errors);
 
-    // Seed the transcript plane scoped by requester_did: one row for the
-    // granted peer, one for a foreign requester.
     for (request_id, requester_did) in [
         ("req-phone-owned", PEER_DID),
         ("req-foreign-owned", FOREIGN_DID),
@@ -129,8 +125,6 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
             "config collection {collection} must cross the signed grant unfiltered"
         );
     }
-    // The seeded plane must be requester-scoped by the owner template, or the
-    // exclusion below would pass against an unfiltered transport.
     let request_filter = filters
         .get("AgentRequest")
         .expect("conversation template scopes AgentRequest");
@@ -171,8 +165,6 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
         );
     }
 
-    // Converged snapshot observed below, not proof of transport ordering or
-    // permanent absence; the filter owner is asserted separately.
     let requests = data
         .get("AgentRequest")
         .and_then(Value::as_array)

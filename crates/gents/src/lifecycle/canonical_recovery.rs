@@ -1,5 +1,3 @@
-//! Atomic recovery of output owned by an expired request generation.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};

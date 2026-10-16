@@ -1,12 +1,3 @@
-//! LIVE qualification for sampling-seed propagation through the complete
-//! request path and a real OpenAI-compatible provider.
-//!
-//! ```bash
-//! GENTS_EVAL_TARGET=workstation-1 cargo test -p gents --features live-e2e --test e2e_live \
-//!   live_seeds_reach_the_provider \
-//!   -- --ignored --test-threads=1 --nocapture
-//! ```
-
 use std::sync::Arc;
 use std::time::Duration;
 

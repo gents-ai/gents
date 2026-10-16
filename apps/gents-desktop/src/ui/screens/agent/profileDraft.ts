@@ -49,7 +49,6 @@ export type ProfileDraft = ReturnType<typeof profileDraftFrom>;
 
 type NumberSpec = { label: string; integer: boolean; min?: number; max?: number };
 
-/** Each number a profile draft holds, labelled as its field is. */
 export const PROFILE_NUMBERS = {
   contextWindow: { label: "Context window", integer: true, min: 1 },
   maxOutputTokens: { label: "Max output tokens", integer: true, min: 1 },
@@ -90,7 +89,6 @@ export type ProfileContext = {
   limitsShown: { contextWindow: boolean; maxOutputTokens: boolean };
 };
 
-/** A number of the draft; throws its problem. */
 export function profileNumber(
   draft: ProfileDraft,
   field: ProfileNumber,
@@ -106,7 +104,6 @@ export function profileNumber(
     : optionalNumber(spec.label, draft[field], bounds);
 }
 
-/** Every number of the draft; throws the first problem. */
 export function profileNumbers(
   draft: ProfileDraft,
   context: Pick<ProfileContext, "contextMax">,
@@ -119,11 +116,6 @@ export function profileNumbers(
   ) as Record<ProfileNumber, number | null>;
 }
 
-/**
- * What is wrong with a profile draft, at the fields the editor draws.
- * Sampling values beyond temperature and top-p, and model-aware settings
- * (checked at save), have no field here.
- */
 export function profileProblems(
   draft: ProfileDraft,
   context: ProfileContext,

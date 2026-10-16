@@ -1,7 +1,5 @@
 use super::*;
 
-/// Only the actual conversation turn may hold this fixture's streaming
-/// barrier; title generation embeds the prompt in a different user message.
 pub(super) fn latest_user_text(request: &Value) -> Option<String> {
     let content = request
         .get("messages")?
@@ -106,8 +104,6 @@ pub(super) async fn wait_for_visible_content(
         budget_ms = visibility_budget.as_millis(),
         "canonical live visibility deadline started"
     );
-    // Measured from the first emitted frame, not provider startup; the
-    // completion gate stays closed so terminal persistence cannot satisfy this.
     tokio::time::timeout_at(deadline, async {
         loop {
             let content = canonical_live_content(core, request).await?;
@@ -131,8 +127,6 @@ pub(super) async fn wait_for_visible_content(
     Ok(())
 }
 
-/// OutputSegment payloads are append-only deltas; a paced reply need not occur
-/// whole in any one physical row.
 async fn canonical_live_content(core: &ClientCore, request_id: &str) -> Result<Option<String>> {
     use gents_protocol::output::live::{
         observed_request_execution_owner, select_live_target, LiveTargetSelection, LiveView,

@@ -8,13 +8,6 @@ import {
 } from "react";
 import { createSpring } from "./spring";
 
-// The divider between the pane and the dock, as one continuous number: the
-// dock's width in pixels. Closed, the narrowest open width and the full
-// width are rest points on that axis; a drag moves the value freely between
-// and past them while the cards clip rather than reflow. On release it
-// settles to the nearest rest, with the gesture's velocity projected
-// forward. What is remembered is the last open width; whether the dock is
-// open belongs to the workspace store, which this follows.
 export function useDivider({
   key,
   initial,
@@ -86,7 +79,6 @@ export function useDivider({
       try {
         localStorage.setItem(key, String(Math.round(w)));
       } catch {
-        // Storage unavailable.
       }
     },
     [key],
@@ -161,7 +153,6 @@ export function useDivider({
     const first = d.samples[0]!;
     const last = d.samples[d.samples.length - 1]!;
     const dt = (last.t - first.t) / 1000;
-    // A pause before letting go means the gesture had stopped.
     const paused = performance.now() - last.t > 80;
     const velocity = !paused && dt > 0 ? (first.x - last.x) / dt : 0;
     const projected = posRef.current + Math.max(-240, Math.min(240, velocity * 0.12));

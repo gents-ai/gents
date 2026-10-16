@@ -1,22 +1,3 @@
-//! Where an installed plugin lives under the home directory, and why.
-//!
-//! Two concerns that must not be conflated: a plugin's own bytes (an
-//! immutable `.afb`, safe to keep two versions of side by side) and which
-//! version is "the" installed one for a bare name (mutable, one pointer
-//! per namespace/name). Splitting them into a content-addressed store plus
-//! a small per-name record is what makes both true at once: installing a
-//! second version never disturbs the first, `gents plugin run`/`list` still
-//! have exactly one place to look up which version a name is today, and
-//! removing a name never has to reason about whether another installed name
-//! needs the same bytes — they are left in the store until
-//! [`release_unreferenced_bytes`] finds no record references them.
-//!
-//! Layout, under `<home>/plugins/`:
-//! ```text
-//! store/<sha256-hex>.afb              content-addressed plugin bytes
-//! installed/<namespace>/<name>.json   the installed record for one name
-//! .store.lock                         guards store_bytes+write_record against release
-//! ```
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -44,9 +25,7 @@ fn store_path(home: &Path, digest_hex: &str) -> Result<PathBuf> {
     Ok(store_dir(home).join(format!("{digest_hex}.afb")))
 }
 
-/// A registry coordinate becomes two path components here, so it is
-/// checked before it is joined rather than trusted: a separator, `..` or
-/// empty half would be a filesystem escape.
+/// Rejects coordinates that could escape their namespace/name path components.
 fn checked_component(kind: &str, value: &str) -> Result<()> {
     anyhow::ensure!(
         !value.is_empty()
@@ -75,31 +54,22 @@ fn record_path(home: &Path, namespace: &str, name: &str) -> Result<PathBuf> {
         .join(format!("{name}.json")))
 }
 
-/// One installed plugin's identity: enough to find its bytes in the
-/// content store and to show `gents plugin list` what is installed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstalledPlugin {
     pub namespace: String,
     pub name: String,
     pub version: String,
-    /// `sha256:<hex>` of the artifact this record points at.
     pub digest: String,
     pub language: String,
     pub declaration: crate::pack::PackPlugin,
-    /// The authority the operator granted at install; `None` means sealed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub granted: Option<crate::plugin::Manifold>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
-    /// `{namespace}/{name}` of the pack install owning this record; `None`
-    /// records (written before this field existed) are unowned and never
-    /// refuse a reinstall.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_pack_coordinate: Option<String>,
-    /// Operator visibility only; ownership is decided by coordinate alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_pack_digest: Option<String>,
-    /// The profile `model_slot` is bound to for this installation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_binding: Option<super::model_calls::ModelBinding>,
 }
@@ -112,8 +82,6 @@ impl InstalledPlugin {
     }
 }
 
-/// Refuses installing over a record another pack's coordinate owns;
-/// an unowned record or one owned by the same coordinate is not refused.
 pub fn check_plugin_ownership(
     home: &Path,
     namespace: &str,
@@ -142,9 +110,6 @@ pub(crate) fn is_not_found(error: &anyhow::Error) -> bool {
     })
 }
 
-/// Whether `namespace/name`'s installed record is owned by `pack_coordinate`:
-/// its `owner_pack_coordinate` matches, or it has no owner on record and
-/// still holds the artifact `digest` that pack installed.
 pub fn owns_plugin_record(
     home: &Path,
     namespace: &str,
@@ -160,10 +125,6 @@ pub fn owns_plugin_record(
     })
 }
 
-/// Removes a plugin record only when its current owner still matches the
-/// pack being removed. The ownership read and deletion share the store's
-/// nonblocking exclusive lock, so a concurrent reinstall cannot be deleted
-/// after a stale ownership check.
 pub fn remove_record_if_owned(
     home: &Path,
     namespace: &str,
@@ -201,8 +162,6 @@ pub(crate) fn remove_record_if_owned_locked(
     Ok(true)
 }
 
-/// The grant to record when `plugin` is installed as `namespace/name`,
-/// asking for consent only when it wants more than was granted before.
 pub fn grant_on_install(
     home: &Path,
     namespace: &str,
@@ -228,10 +187,6 @@ pub fn grant_on_install(
     Ok((granted != super::Manifold::sealed() || plugin.limits.is_some()).then_some(granted))
 }
 
-/// Writes `bytes` into the content-addressed store under `digest_hex`,
-/// reusing the pack registry's stage-then-persist-noclobber helper so
-/// concurrent installs of the same content race safely and re-installing
-/// present content is a no-op, never a partial file.
 pub fn store_bytes(home: &Path, digest_hex: &str, bytes: &[u8]) -> Result<()> {
     let path = store_path(home, digest_hex)?;
     let dir = store_dir(home);
@@ -239,7 +194,6 @@ pub fn store_bytes(home: &Path, digest_hex: &str, bytes: &[u8]) -> Result<()> {
     crate::pack_registry::stage_and_persist(&dir, &path, bytes)
 }
 
-/// The hex SHA-256 the store addresses `bytes` by.
 pub fn content_digest_hex(bytes: &[u8]) -> String {
     format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes))
 }
@@ -250,17 +204,14 @@ pub fn read_bytes(home: &Path, digest_hex: &str) -> Result<Vec<u8>> {
         .with_context(|| format!("reading the installed plugin bytes at {}", path.display()))
 }
 
-/// A held plugin store lock, tied to the `home` it was taken for. A
-/// lock-aware mutation path takes `&StoreGuard` rather than a bare lock so
-/// a caller holding a guard for one home cannot hand it to a mutation of
-/// another home and run unlocked.
+/// The guard is tied to the home whose store lock it holds.
 pub struct StoreGuard {
     home: PathBuf,
     lock: crate::file_lock::FileLock,
 }
 
 impl StoreGuard {
-    /// Refuses a guard that does not belong to `home`'s store.
+    /// Prevents a held lock for one home from authorizing mutations in another.
     pub fn for_home(&self, home: &Path) -> Result<()> {
         anyhow::ensure!(
             self.home.as_path() == home,
@@ -272,12 +223,8 @@ impl StoreGuard {
     }
 }
 
-/// Takes the plugin byte store's lock: shared while an install writes bytes
-/// and its record, exclusive while [`release_unreferenced_bytes`] scans and
-/// deletes. Without this, a concurrent install's `store_bytes` (bytes
-/// written) racing `release_unreferenced_bytes`'s scan (bytes still
-/// unreferenced) then `write_record` (record now pointing at them) could end
-/// with a record pointing at bytes release just deleted.
+/// The shared install lock and exclusive release lock prevent deleting bytes
+/// after a concurrent install writes them but before its record is visible.
 pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
     let path = plugins_root(home).join(".store.lock");
     if let Some(parent) = path.parent() {
@@ -303,9 +250,7 @@ pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
     })
 }
 
-/// Takes an exclusive store lock without blocking the calling thread. Async
-/// pack commands use this entry point so another install holding the lock
-/// cannot park a Tokio worker while it awaits its node transaction.
+/// Async mutation owners use a nonblocking lock attempt to avoid parking a Tokio worker.
 pub(crate) fn try_lock_store(home: &Path) -> Result<StoreGuard> {
     let path = plugins_root(home).join(".store.lock");
     if let Some(parent) = path.parent() {
@@ -334,9 +279,6 @@ pub(crate) fn try_lock_store(home: &Path) -> Result<StoreGuard> {
     })
 }
 
-/// Removes every store byte named in `digests` that no installed-plugin
-/// record in `home` references any more. Takes the exclusive store lock
-/// ([`lock_store`]) around the whole scan and delete.
 pub fn release_unreferenced_bytes(home: &Path, digests: &BTreeSet<String>) -> Result<Vec<String>> {
     let _lock = try_lock_store(home)?;
     let referenced: BTreeSet<String> = list_records(home)?
@@ -364,8 +306,6 @@ pub fn release_unreferenced_bytes(home: &Path, digests: &BTreeSet<String>) -> Re
     Ok(released)
 }
 
-/// Points `namespace/name` at `record`. The content the old pointer named
-/// is left in the store until [`release_unreferenced_bytes`].
 pub fn write_record(home: &Path, record: &InstalledPlugin) -> Result<()> {
     let path = record_path(home, &record.namespace, &record.name)?;
     let parent = path
@@ -376,6 +316,7 @@ pub fn write_record(home: &Path, record: &InstalledPlugin) -> Result<()> {
         serde_json::to_vec_pretty(record).context("encoding the installed-plugin record")?;
     // Readers take no lock: each write stages a temporary file and renames
     // it into place, so a reader only ever observes a complete record.
+    // Atomic replacement keeps unlocked readers from observing a partial record.
     let mut staged = tempfile::NamedTempFile::new_in(parent)
         .with_context(|| format!("staging a plugin record in {}", parent.display()))?;
     std::io::Write::write_all(&mut staged, &bytes).context("writing the staged record")?;
@@ -397,8 +338,6 @@ pub fn read_record(home: &Path, namespace: &str, name: &str) -> Result<Installed
     serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
 }
 
-/// Removes `namespace/name`'s installed record, returning it. The content
-/// store is untouched (see [`release_unreferenced_bytes`]).
 pub fn remove_record(home: &Path, namespace: &str, name: &str) -> Result<InstalledPlugin> {
     let record = read_record(home, namespace, name)?;
     let path = record_path(home, namespace, name)?;
@@ -406,8 +345,6 @@ pub fn remove_record(home: &Path, namespace: &str, name: &str) -> Result<Install
     Ok(record)
 }
 
-/// Every installed plugin under `home`, across every namespace, sorted by
-/// namespace then name.
 pub fn list_records(home: &Path) -> Result<Vec<InstalledPlugin>> {
     let root = installed_dir(home);
     if !root.is_dir() {
@@ -440,8 +377,6 @@ pub fn list_records(home: &Path) -> Result<Vec<InstalledPlugin>> {
     Ok(records)
 }
 
-/// `namespace/name` of each plugin under `home` whose model slot `node_did`
-/// bound to `profile_id`.
 pub fn bound_to_profile(home: &Path, node_did: &str, profile_id: &str) -> Result<Vec<String>> {
     Ok(list_records(home)?
         .into_iter()
@@ -652,8 +587,6 @@ mod tests {
         assert_eq!(std::fs::read(path).unwrap(), malformed);
     }
 
-    /// `gents pack remove` releases bytes no remaining record references,
-    /// and keeps bytes another record still points at.
     #[test]
     fn release_keeps_bytes_another_record_references_and_frees_the_rest() {
         let home = tempfile::tempdir().unwrap();

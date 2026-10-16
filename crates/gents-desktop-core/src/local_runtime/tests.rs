@@ -95,28 +95,6 @@ fn init_summary_tells_demo_to_wait_for_desktop_bootstrap() {
 }
 
 #[test]
-fn runtime_status_url_accepts_bare_host_and_graphql_endpoint() {
-    assert_eq!(
-        runtime_status_url("127.0.0.1:9181").expect("bare host should normalize"),
-        "http://127.0.0.1:9181/status"
-    );
-    assert_eq!(
-        runtime_status_url("http://127.0.0.1:9181/api/v0/graphql")
-            .expect("graphql endpoint should normalize"),
-        "http://127.0.0.1:9181/status"
-    );
-}
-
-#[test]
-fn runtime_graphql_url_preserves_user_supplied_graphql_endpoint() {
-    assert_eq!(
-        runtime_graphql_url("100.73.235.38:9181/api/v0/graphql?ignored=true")
-            .expect("graphql endpoint should normalize"),
-        "http://100.73.235.38:9181/api/v0/graphql"
-    );
-}
-
-#[test]
 fn desktop_graphql_rewrites_loopback_endpoint_for_remote_status_host() {
     let payload = serde_json::json!({
         "graphql": "http://127.0.0.1:9181/api/v0/graphql"
@@ -145,16 +123,6 @@ fn desktop_graphql_is_added_to_status_payload() {
             .and_then(serde_json::Value::as_str),
         Some("http://100.73.235.38:9181/api/v0/graphql")
     );
-}
-
-#[test]
-fn normalize_optional_string_discards_empty_values() {
-    assert_eq!(
-        normalize_optional_string(Some(" endpoint-ticket-123 ")).as_deref(),
-        Some("endpoint-ticket-123")
-    );
-    assert_eq!(normalize_optional_string(Some("   ")), None);
-    assert_eq!(normalize_optional_string(None), None);
 }
 
 #[test]

@@ -1,14 +1,3 @@
-/-!
-# Background completion publication
-
-A background row (a native process or an `agent_new`/`agent_message` row,
-whose terminal is its caused request's terminal output) is terminalized with a
-compare-and-set that a concurrent recovery or cancellation may win first. The
-losing executor must not publish the outcome it observed locally, because it
-can contradict the durable winner; publication is keyed and idempotent so
-retrying the winning delivery cannot duplicate the notification.
--/
-
 namespace Background.CompletionDelivery
 
 inductive TerminalizationResult where

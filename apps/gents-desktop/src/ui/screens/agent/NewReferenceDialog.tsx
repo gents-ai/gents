@@ -1,7 +1,4 @@
-/* Drafts a task, schedule or event source for a trigger. Nothing is written
- * here: the trigger's own Save writes the new document and the trigger
- * together. An event source has no default collection (watching AgentRequest
- * would let a task trigger itself). */
+/* No default collection: AgentRequest events could trigger the task itself. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
 import type { EventSource, Schedule } from "@source-inc/gents-desktop-client";

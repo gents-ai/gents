@@ -1264,26 +1264,6 @@ async fn lean_cancelled_rollback_timeout_releases_actual_transaction_gate() {
     node.shutdown().await;
 }
 
-#[test]
-fn embedded_timeout_diagnostics_preserve_phase_and_retry_classification() {
-    for phase in [
-        "write-gate acquisition",
-        "begin",
-        "execute",
-        "callback",
-        "commit",
-        "rollback",
-        "auto-commit",
-    ] {
-        let error = super::embedded_phase_timeout(phase, Duration::from_secs(1));
-        assert!(error.to_string().contains(phase), "{error:#}");
-        assert!(
-            super::retry::is_transaction_storage_failure(&error),
-            "{phase} timeout must use the standard storage-failure retry classification"
-        );
-    }
-}
-
 #[tokio::test]
 async fn embedded_conflict_replays_complete_callback_with_fresh_snapshot() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());

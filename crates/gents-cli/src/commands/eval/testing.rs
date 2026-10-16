@@ -1,11 +1,3 @@
-//! A launching home for the `gents eval` and `gents optimization` command
-//! tests.
-//!
-//! This file duplicates `write_fixture_pack` and `Launching` in
-//! `crates/gents/src/eval/runner/freeze.rs` (its `tests` module) and the
-//! definition shape of `crates/gents/src/optimization/driver/matrix.rs`.
-//! Those files and this one move together: a change to the fixture pack's
-//! layout or the definition's case shape there is made here in the same PR.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

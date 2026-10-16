@@ -37,10 +37,6 @@ pub enum ConfigLayerSource {
     /// Session-layer overrides supplied via `-c`/`--config`.
     SessionFlags,
 
-    /// `managed_config.toml` was designed to be a config that was loaded
-    /// as the last layer on top of everything else. This scheme did not quite
-    /// work out as intended, but we keep this variant as a "best effort" while
-    /// we phase out `managed_config.toml` in favor of `requirements.toml`.
     #[serde(rename_all = "camelCase")]
     LegacyManagedConfigTomlFromFile {
         file: AbsolutePathBuf,
@@ -156,7 +152,6 @@ pub struct AppsConfig {
     pub apps: HashMap<String, AppConfig>,
 }
 
-/// Backward-compatible API shape for ChatGPT workspace login restrictions.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum ForcedChatgptWorkspaceIds {

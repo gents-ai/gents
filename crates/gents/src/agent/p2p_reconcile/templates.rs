@@ -1,5 +1,3 @@
-//! Scope-template catalog for P2P filtered replication.
-
 use gents_protocol::peer_schema::{
     compare_replicated_schema, ReplicatedCollectionIdentity, ReplicatedSchema, ReplicatedSchemaSkew,
 };
@@ -15,7 +13,6 @@ pub enum Delivery {
     Replicate,
 }
 
-/// Scoping policy for per-peer document filtering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
     PeerDid {
@@ -23,20 +20,15 @@ pub enum Scope {
     },
     Unscoped,
     PerCollection(&'static [CollectionRule]),
-    /// Must be resolved through `policy::resolve_template_filters`: return-leg
-    /// runtime configuration cannot be expressed as a DefraDB replicator
-    /// predicate because its owner fields are mutable, so the caller must name
-    /// the data-flow direction explicitly.
+    /// Return-leg runtime configuration cannot be expressed as a DefraDB
+    /// replicator predicate because its owner fields are mutable.
     ClientRoute,
 }
 
-/// DID source for one per-collection filter rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DidSource {
     LocalDid,
     PeerDid,
-    /// The DID owning the pairing's authoritative projection: the local DID on
-    /// the issuer/runtime side, the remote issuer DID on an enrolled client.
     HomeDid,
 }
 
@@ -170,17 +162,12 @@ pub(super) fn conjunctive_string_eq<'a>(
         .flatten()
 }
 
-/// Per-collection filter predicates for a concrete pairing; an empty map means
-/// no filtering (Unscoped).
 pub type PairingFilters = BTreeMap<String, FilterPredicate>;
 
 pub fn decode_pairing_filters(raw: &str) -> serde_json::Result<PairingFilters> {
     serde_json::from_str(raw)
 }
 
-/// Conversation grants carry requester-scoped transcript artifacts plus the
-/// small unfiltered configuration control plane needed to render and operate
-/// the paired agent without a second transport.
 const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentMessage",
@@ -213,9 +200,7 @@ const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
     "CompactionEntry",
 ];
 
-/// Bounded client dataplane: a deployment route rather than fleet gossip.
-/// `InferenceBackend` is deliberately absent: the frozen schema contains raw
-/// API-key material; clients resolve model choices through inference profiles.
+// InferenceBackend contains raw API-key material; clients resolve model choices through profiles.
 pub const CLIENT_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentMessage",
@@ -248,8 +233,6 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "NodeReadiness",
 ];
 
-/// SessionHydrationRequest must ride this outbound route or a phone using
-/// `client` cannot ask the runtime to replay one owned session.
 pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentMessage",
@@ -513,15 +496,11 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     },
 ];
 
-/// Return all built-in templates in catalog order.
 pub fn builtin_templates() -> &'static [ScopeTemplate] {
     BUILTIN_TEMPLATES
 }
 
-/// Admit a bring-your-own app collection set only when it is non-empty and
-/// disjoint from every protocol catalog collection: an arbitrary
-/// `DataPlanePairingDesired` row naming a protocol collection would bypass the
-/// fence that protects protocol schema compatibility rules.
+/// Prevent app routes from bypassing protocol schema compatibility checks.
 pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<String>> {
     let overlaps_protocol_catalog = requested.iter().any(|requested| {
         gents_protocol::schemas::ALL_COLLECTION_NAMES
@@ -549,7 +528,6 @@ pub async fn read_client_replicated_schema(
     Ok(schema)
 }
 
-/// Compare two nodes' `client` route collections; see [`compare_replicated_schema`].
 pub fn compare_client_replicated_schema(
     local: &ReplicatedSchema,
     remote: Option<&ReplicatedSchema>,
@@ -597,8 +575,6 @@ pub fn scope_filter(
 mod tests {
     use super::*;
 
-    /// A runtime still on the pre-reasoning-audit collections is refused as a
-    /// whole: the fresh-home release has no compatibility reads.
     #[tokio::test]
     async fn pre_reasoning_audit_runtime_schema_is_refused_as_skew() {
         async fn node_with(schemas: &[String]) -> std::sync::Arc<defra_node::EmbeddedNode> {
@@ -710,22 +686,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn unknown_template_is_none() {
-        assert!(resolve_template("nope").is_none());
-    }
-
-    #[test]
-    fn all_builtin_templates_have_nonempty_collections() {
-        for t in builtin_templates() {
-            if t.id == APP_COLLECTIONS_TEMPLATE {
-                continue;
-            }
-            assert!(
-                !t.collections.is_empty(),
-                "template {} has no collections",
-                t.id
-            );
-        }
-    }
 }

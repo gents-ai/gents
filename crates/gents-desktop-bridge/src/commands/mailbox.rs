@@ -34,9 +34,7 @@ pub fn start_mailbox_request(core: &ClientCore, item_id: &str) -> Result<Mailbox
     Ok(MailboxItemView::from(row))
 }
 
-/// Render the reply to an open question item; the reply must address its
-/// session and agent, and the runtime's reply claim re-checks provenance when
-/// it consumes it.
+/// Render a reply addressed to the question's session and agent.
 pub(crate) fn question_reply_content(
     core: &ClientCore,
     item_id: Option<&str>,

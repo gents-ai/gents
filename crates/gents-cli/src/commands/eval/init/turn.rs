@@ -1,5 +1,3 @@
-//! One turn with the author: a user message on the author's session, and
-//! the text it answered with.
 
 use anyhow::{Context, Result};
 
@@ -80,7 +78,6 @@ impl Turn for LiveTurn {
     }
 }
 
-/// Replies stated up front, and every turn sent, for the loop's tests.
 #[cfg(test)]
 pub(crate) struct ScriptedTurn {
     replies: std::collections::VecDeque<String>,

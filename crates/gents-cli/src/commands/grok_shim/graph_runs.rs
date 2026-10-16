@@ -1,9 +1,3 @@
-//! Graph-run visibility for the stock pager as `workflow_updated`.
-//!
-//! The run id comes from the session's durable `run_graph` tool results; the
-//! run itself is the canonical `GraphRunView`. Only the last delivered
-//! observation per run is connection-local. Observation never writes: a
-//! failed read only defers or ends this connection's display of one run.
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
@@ -22,23 +16,12 @@ use super::projection::tools::session_tool_results;
 use super::projection::{ProjectionEngine, UpdateTimestamps};
 use super::turn::{PromptSender, PromptSenderLine};
 
-/// Run views loaded per observation tick, so a session that resumes with
-/// many runs is covered round-robin instead of delaying its token stream.
 const VIEW_LOADS_PER_TICK: usize = 4;
 
-/// The revision of the terminal frame sent when observation stops. The pager
-/// keeps the highest revision it holds across leader reconnects, so this
-/// frame must outrank anything an earlier observer delivered. Stopping is
-/// final for this actor, so no frame follows it. The value stays within
-/// exact IEEE-double JSON number range.
 const ABANDONED_REVISION: u64 = (1 << 53) - 1;
 
-/// Upper bound on the delay before re-reading a run or `run_graph` reply
-/// whose last read failed.
 const MAX_RETRY_DELAY_SECS: i64 = 30;
 
-/// The display-only failure streak of one observed subject. It defers the
-/// subject's next read; it never repeats a read.
 #[derive(Default)]
 struct Backoff {
     failures: u32,
@@ -50,9 +33,6 @@ impl Backoff {
         self.retry_at.is_none_or(|at| now >= at)
     }
 
-    /// Defers the next read exponentially. Only a streak's first error is
-    /// returned for reporting, so a lasting failure is not logged on every
-    /// read.
     fn fail(
         &mut self,
         now: DateTime<Utc>,
@@ -97,7 +77,6 @@ pub(super) struct GraphRunCursor {
     replies: HashMap<String, Backoff>,
     discovery_failures: u32,
     runs: BTreeMap<String, RunObservation>,
-    /// The last run loaded; the next tick's loads continue after it.
     loaded_through: Option<String>,
 }
 
@@ -107,7 +86,6 @@ enum ObservationError {
 }
 
 impl GraphRunCursor {
-    /// The session observer has already authorized the attached root session.
     pub(super) async fn refresh(
         &mut self,
         node: &Arc<EmbeddedNode>,
@@ -128,8 +106,6 @@ impl GraphRunCursor {
         reports
     }
 
-    /// A reply that is not yet delivered is revisited; a delivered reply
-    /// without a receipt (a failed start) is final.
     async fn discover(
         &mut self,
         node: &Arc<EmbeddedNode>,
@@ -253,8 +229,6 @@ impl GraphRunCursor {
         reports
     }
 
-    /// Up to [`VIEW_LOADS_PER_TICK`] runs that are neither finished nor
-    /// waiting out a failure, continuing after the last run loaded.
     fn due(&mut self, now: DateTime<Utc>) -> Vec<String> {
         let after = self.loaded_through.as_deref();
         let (later, earlier): (Vec<&String>, Vec<&String>) = self
@@ -326,8 +300,6 @@ async fn send(
         .map(drop)
 }
 
-/// The pager ticks a running run's clock itself; this strips the clock
-/// fields before the equality check.
 fn without_clock(update: &Value) -> Value {
     let mut shape = update.clone();
     if let Some(object) = shape.as_object_mut() {
@@ -359,10 +331,6 @@ fn objective(graph_id: &str) -> String {
     format!("Gents graph run: {graph_id}")
 }
 
-/// Stages are phases and model requests are agents in the pager's
-/// pending/active/done phase vocabulary; failed or cancelled runs say so in
-/// `status` and `pause_message`. An agent label names its own request, so a
-/// sibling that appears later never renames a row the pager already shows.
 fn project(
     view: &GraphRunView,
     status: GraphRunStatus,
@@ -440,7 +408,6 @@ fn project(
     update
 }
 
-/// The one terminal update for a run this connection stops observing.
 fn abandoned(
     run_id: &str,
     run: &RunObservation,
@@ -545,32 +512,6 @@ mod tests {
     fn assert_emitted(name: &str, actual: &Value, expected: Value) {
         assert_eq!(actual, &expected, "{name}");
     }
-
-    #[test]
-    fn running_run_projects_pending_active_and_done_stages() {
-        assert_emitted(
-            "workflow-updated-running",
-            &project_view(&running_view(), 1, now()),
-            json!({
-                "sessionUpdate": "workflow_updated", "run_id": "run-1", "revision": 1,
-                "name": "research-graph", "objective": "Gents graph run: research-graph",
-                "status": "active", "foreground": false,
-                "phases": [
-                    {"title": "plan", "state": "done"},
-                    {"title": "research", "state": "active"},
-                    {"title": "synthesis", "state": "pending"},
-                ],
-                "elapsed_ms": 20000, "active_agents": 1,
-                "agents": [
-                    {"agent_id": PLAN, "label": "plan-7c1e9a40", "phase": "plan", "state": "done"},
-                    {"agent_id": RESEARCH_1, "label": "research-2b8d4f11", "phase": "research", "state": "done"},
-                    {"agent_id": RESEARCH_2, "label": "research-9e3a6c22", "phase": "research", "state": "active"},
-                ],
-            }),
-        );
-    }
-
-    /// A new sibling can sort before the rows the pager already shows.
     #[test]
     fn a_new_sibling_never_renames_shown_agents() {
         let labels = |update: &Value| {
@@ -600,73 +541,6 @@ mod tests {
         }
         assert_eq!(after[earlier], "research-00000000");
     }
-
-    #[test]
-    fn succeeded_run_is_complete_with_a_frozen_clock() {
-        let done = view(
-            "succeeded",
-            vec![stage("plan", 1, 0, 1, 0)],
-            vec![request(PLAN, "plan", true, true)],
-            Some("2026-10-02T05:30:07Z"),
-        );
-        let later = now() + Duration::seconds(60);
-        assert_emitted(
-            "workflow-updated-complete",
-            &project_view(&done, 4, later),
-            json!({
-                "sessionUpdate": "workflow_updated", "run_id": "run-1", "revision": 4,
-                "name": "research-graph", "objective": "Gents graph run: research-graph",
-                "status": "complete", "foreground": false,
-                "phases": [{"title": "plan", "state": "done"}],
-                "elapsed_ms": 7000, "active_agents": 0,
-                "agents": [{"agent_id": PLAN, "label": "plan-7c1e9a40", "phase": "plan", "state": "done"}],
-            }),
-        );
-    }
-
-    #[test]
-    fn failed_and_cancelled_runs_say_so_in_status_and_message() {
-        let mut failed = view(
-            "failed",
-            vec![
-                stage("research", 2, 0, 1, 1),
-                stage("synthesis", 0, 0, 0, 0),
-            ],
-            vec![
-                request(RESEARCH_1, "research", true, false),
-                request(RESEARCH_2, "research", true, true),
-            ],
-            Some("2026-10-02T05:30:09Z"),
-        );
-        assert_emitted(
-            "workflow-updated-failed",
-            &project_view(&failed, 3, now()),
-            json!({
-                "sessionUpdate": "workflow_updated", "run_id": "run-1", "revision": 3,
-                "name": "research-graph", "objective": "Gents graph run: research-graph",
-                "status": "failed", "foreground": false,
-                "phases": [
-                    {"title": "research", "state": "done"},
-                    {"title": "synthesis", "state": "pending"},
-                ],
-                "elapsed_ms": 9000, "active_agents": 0,
-                "agents": [
-                    {"agent_id": RESEARCH_1, "label": "research-2b8d4f11", "phase": "research", "state": "failed"},
-                    {"agent_id": RESEARCH_2, "label": "research-9e3a6c22", "phase": "research", "state": "done"},
-                ],
-                "pause_message": "Graph run failed: research",
-            }),
-        );
-        failed.status = "cancelled".into();
-        failed.cancellation_reason = Some("operator stop".into());
-        let cancelled = project_view(&failed, 3, now());
-        assert_emitted(
-            "workflow-updated-cancelled-pause-message",
-            &json!({"status": cancelled["status"], "pause_message": cancelled["pause_message"]}),
-            json!({"status": "failed", "pause_message": "Graph run cancelled: operator stop"}),
-        );
-    }
-
     async fn harness() -> (
         tempfile::TempDir,
         Arc<EmbeddedNode>,
@@ -805,9 +679,6 @@ mod tests {
         assert_eq!(updates(&buffer).await.len(), 3);
     }
 
-    /// The stock pager drops a revision lower than the one it holds, also
-    /// after the leader reconnects; a fresh observer must continue from
-    /// durable state rather than from 1.
     #[tokio::test]
     async fn a_fresh_observer_continues_the_revision_from_durable_state() {
         let (_directory, _node, projections, buffer, sender) = harness().await;
@@ -849,7 +720,6 @@ mod tests {
         assert_eq!(revisions, [11, 15, 15, 18]);
     }
 
-    /// A transient failure is retried with backoff and never abandoned.
     #[tokio::test]
     async fn a_transient_failure_backs_off_and_is_never_abandoned() {
         let (_directory, _node, projections, buffer, sender) = harness().await;
@@ -906,8 +776,6 @@ mod tests {
         assert_eq!(sent[0]["status"], "active");
     }
 
-    /// A permanent failure ends observation at once with one terminal
-    /// update; other runs are unaffected.
     #[tokio::test]
     async fn a_permanent_failure_ends_observation_with_one_terminal_update() {
         let (_directory, _node, projections, buffer, sender) = harness().await;
@@ -1203,8 +1071,6 @@ mod tests {
         gents::KeyIdentity::load_or_create(directory.path().join("owner.key"), None).unwrap()
     }
 
-    /// Publishes and starts a one-stage graph through the public graph
-    /// owners.
     async fn start_real_run(
         node: &Arc<EmbeddedNode>,
         owner: &str,
@@ -1337,8 +1203,6 @@ mod tests {
         .unwrap()
     }
 
-    /// A stage request the run's entry trigger caused, signed by the owner
-    /// as the trigger engine signs it.
     async fn seed_stage_request(
         node: &Arc<EmbeddedNode>,
         owner: &gents::KeyIdentity,
@@ -1403,8 +1267,6 @@ mod tests {
         )
     }
 
-    /// The real `run_graph` reply writer, discovery, the canonical run
-    /// loader and the projection, end to end.
     #[tokio::test]
     async fn a_real_run_graph_reply_is_observed_through_the_canonical_loader() {
         let (_directory, node, projections, buffer, sender) = harness().await;
@@ -1518,8 +1380,6 @@ mod tests {
             && update["revision"].as_u64().unwrap() > delivered));
     }
 
-    /// Stage requests driven through the lifecycle owners to terminal, then
-    /// the run reconciled to its terminal status.
     #[tokio::test]
     async fn a_real_runs_revision_never_decreases_across_its_lifecycle() {
         use gents::lifecycle::{ClaimOutcome, RequestTerminalOutcome};

@@ -1,5 +1,3 @@
-//! Interactive (a human waiting) or scheduled (a trigger, cron, or background
-//! wakeup) execution origin.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionOrigin {

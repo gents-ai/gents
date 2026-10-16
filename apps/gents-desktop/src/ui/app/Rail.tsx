@@ -93,8 +93,6 @@ function RailNode({ route }: { route: Route }) {
   );
 }
 
-// One element for both rail states, so nothing swaps under a pointer that
-// opened the flyout on its way to it.
 function RailSyncDot() {
   const flyoutOpen = useContext(FlyoutOpenContext);
   const syncHealth = useSyncHealth();
@@ -112,8 +110,6 @@ function RailSyncDot() {
   );
 }
 
-/** The collapsed side nav: the selected node, new session, mailbox and
-    sessions, with sync, nodes and settings at the foot. */
 export function Rail({ route, settings }: { route: Route; settings: ReactNode }) {
   const mailboxCount = useMailboxCount();
   return (

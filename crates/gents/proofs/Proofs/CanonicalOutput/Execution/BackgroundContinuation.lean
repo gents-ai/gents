@@ -1,15 +1,5 @@
 import Proofs.CanonicalOutput.Execution.ToolDelivery
 import Proofs.Background.CompletionContinuation
-
-/-!
-# Shared background-notification continuation
-
-This adapter does not publish another transcript row. It accepts only the
-ordinary notification already committed by the shared canonical tool-delivery
-owner and requires exact equality with the committed shared transcript before
-invoking the existing queue owner.
--/
-
 namespace CanonicalOutput.Execution.BackgroundContinuation
 
 def publishNotification (binding : WakeDocumentBinding) (world : World)

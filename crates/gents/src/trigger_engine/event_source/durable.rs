@@ -14,28 +14,12 @@ struct CheckpointArrival {
     collection: String,
     position: String,
     source_doc_id: String,
-    /// The hydrated source document the fire was built from.
     source_document: Option<serde_json::Value>,
     generation: u64,
 }
 
-/// Retries of one unacknowledged transient failure back off from the rescan
-/// interval to this multiple of it.
 const MAX_RETRY_BACKOFF_INTERVALS: u32 = 64;
 
-/// An arrival whose fire was not acknowledged. Its cursor stays before it, so
-/// the arrival remains pending and is never skipped. Every source event (the
-/// fire's own `Trigger` runtime-field write included) re-arms durable delivery,
-/// so an unconditional re-drive would fire the same arrival without bound
-/// (#2094). A parked trigger is therefore re-driven only when the runtime
-/// snapshot generation changes or, for a transient failure, after a capped
-/// exponential backoff. A refusal (`FireResult::Rejected`) is decided by the
-/// configuration and source document, so it waits for a configuration change,
-/// an update of that source document, or a restart; other triggers keep
-/// delivering meanwhile. Update notifications of `Trigger` documents never
-/// release a park: the fire's own runtime-field write is one. Notifications
-/// are lossy, so each rescan also re-reads a refused document and releases the
-/// park when its hydrated content differs from the refused fire's.
 pub(super) struct ParkedArrival {
     position: String,
     collection: String,
@@ -47,8 +31,6 @@ pub(super) struct ParkedArrival {
 }
 
 impl EventSource {
-    /// A park releases only on changed source content (the notification may
-    /// be the document's own late creation event).
     pub(super) async fn release_parked_document(&mut self, collection: &str, doc_id: &str) {
         if collection == crate::Collection::Trigger.graphql_type() {
             return;
@@ -84,8 +66,6 @@ impl EventSource {
 }
 
 impl EventSource {
-    /// Runs at most once per rescan interval; durable passes also follow
-    /// every notification.
     async fn release_changed_refusals(&mut self) {
         let now = Instant::now();
         if self
@@ -108,8 +88,6 @@ impl EventSource {
             })
             .collect::<Vec<_>>();
         for (trigger_id, collection, doc_id) in refused {
-            // A document this reader no longer sees (deleted or ACP-hidden)
-            // releases too; a failed read keeps the park.
             let Ok(current) = self.read_source_doc(&collection, &doc_id).await else {
                 continue;
             };
@@ -410,8 +388,6 @@ impl EventSource {
         if next != record.cursor.after {
             self.advance_arrival(&owner, trigger, next).await?;
         }
-        // The existing source timer bounds paging; a source with no matching
-        // documents cannot monopolize the trigger driver.
         Ok(None)
     }
 

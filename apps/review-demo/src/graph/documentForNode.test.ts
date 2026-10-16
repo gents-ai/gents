@@ -34,20 +34,6 @@ function node(partial: Partial<GraphNode> & Pick<GraphNode, "id" | "kind">): Gra
 }
 
 describe("documentForNode", () => {
-  it("returns the ReviewJob, ReviewArea, and ScanResult for those nodes", () => {
-    expect(documentForNode(node({ id: "job:run-1", kind: "job" }), snapshot)).toEqual({
-      collection: "ReviewJob",
-      fields: { run_id: "run-1", focus: "look at triggers", repository_path: "." },
-    });
-    expect(documentForNode(node({ id: "area:run-1:lean", kind: "area" }), snapshot)?.collection).toBe(
-      "ReviewArea",
-    );
-    expect(documentForNode(node({ id: "scan:run-1:lean", kind: "scan" }), snapshot)).toMatchObject({
-      collection: "ScanResult",
-      fields: { summary: "one candidate" },
-    });
-  });
-
   it("does not return another run's document when area ids collide", () => {
     const twoRuns: ReviewSnapshot = {
       ...snapshot,

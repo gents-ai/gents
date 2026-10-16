@@ -41,7 +41,6 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             .collect::<Vec<_>>();
         let selected =
             &originals[(*offset).min(originals.len())..(offset + count).min(originals.len())];
-        // The native API generates fresh identities and derives positions itself.
         if replacements.iter().any(|replacement| {
             originals
                 .iter()

@@ -4,8 +4,6 @@ import { createStore } from "zustand/vanilla";
 export type Registry<T extends { id: string }> = ReturnType<typeof createRegistry<T>>;
 
 export function createRegistry<T extends { id: string }>() {
-  // In registration order; a later contribution with an id replaces the
-  // earlier one in place.
   const store = createStore<readonly T[]>(() => []);
   return {
     register(item: T): () => void {
@@ -23,7 +21,6 @@ export function createRegistry<T extends { id: string }>() {
     useList: (): readonly T[] => useStore(store),
     useItem: (id: string | null | undefined): T | null =>
       useStore(store, (items) => (id && items.find((x) => x.id === id)) || null),
-    // Tests only.
     clear: () => store.setState([], true),
   };
 }

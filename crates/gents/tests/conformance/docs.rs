@@ -213,7 +213,6 @@ fn visit_rust(
     }
 }
 
-/// Fence the AGENTS.md rig-free rule on the protocol crate.
 #[test]
 fn protocol_crate_runtime_is_rig_free() {
     let root = repo_root();

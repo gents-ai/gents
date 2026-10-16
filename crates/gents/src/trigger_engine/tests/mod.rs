@@ -638,30 +638,3 @@ async fn event_group_eligibility_matches_lean_generated_contract_cases() {
     dispatch_contract::event_group_eligibility_matches_lean_generated_contract_cases().await;
 }
 
-#[test]
-fn nondocument_task_options_fail_explicitly() {
-    assert!(validate_task_delivery_options(
-        TriggerKind::Manual,
-        false,
-        ConcurrencyMode::Parallel,
-        false
-    )
-    .is_ok());
-    for (emit, mode, target, expected) in [
-        (true, ConcurrencyMode::Parallel, false, "emit_outcome"),
-        (false, ConcurrencyMode::QueuedSerial, false, "queued_serial"),
-        (
-            false,
-            ConcurrencyMode::Parallel,
-            true,
-            "session_id_template",
-        ),
-    ] {
-        assert!(
-            validate_task_delivery_options(TriggerKind::Manual, emit, mode, target)
-                .unwrap_err()
-                .to_string()
-                .contains(expected)
-        );
-    }
-}

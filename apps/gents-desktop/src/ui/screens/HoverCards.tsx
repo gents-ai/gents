@@ -157,7 +157,6 @@ export function AgentHoverCard({
           </Line>
           <Line label="Runs on">
             {env?.modelName ? (
-              /* the provider's mark, by the rule the inference settings use */
               <span className="flex min-w-0 items-center gap-1.5">
                 {backend && (
                   <ProviderLogo

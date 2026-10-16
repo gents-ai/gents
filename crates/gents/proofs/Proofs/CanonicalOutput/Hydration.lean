@@ -284,7 +284,6 @@ def observedEffects (scope : AuthorizationScope) (provenance : List ProvenanceAc
     | .ok _ => true
     | .error _ => false
 
-/-- Distinct rows may not share a physical identity or a `(parent, ordinal)` slot. -/
 def childrenCoherent (children : List EffectRow) : Bool :=
   decide (children.map decodeEffect).Nodup && decide (children.map (·.id)).Nodup
 
@@ -377,8 +376,6 @@ theorem decoded_ordinal_bounded (row : EffectRow) (parent ordinal : Nat)
     · contradiction
   · contradiction
 
-/-- Coherent children of one parent occupy distinct bounded ordinals
-(`ToolPolicy.PluginCalls.maxEffects`). -/
 theorem children_per_parent_bounded (children : List EffectRow) (parent : DocId)
     (h : childrenCoherent children = true) :
     (children.filter fun row => (decodeEffect row).map Prod.fst == some parent).length ≤

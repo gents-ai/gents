@@ -1,9 +1,3 @@
-//! One shared axum-based fake OpenAI-compatible endpoint for every CLI mock.
-//! The server runs on its own current-thread tokio runtime in a background
-//! thread, so it works whether the consuming test is `#[tokio::test]` or a
-//! blocking CLI-subprocess test. The responder closure is supplied per
-//! construction so the thin mock wrappers keep their public APIs.
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

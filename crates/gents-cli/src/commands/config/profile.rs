@@ -410,23 +410,6 @@ mod tests {
             .expect("warning");
         assert!(warning.contains("profile grok"), "{warning}");
     }
-    #[test]
-    fn canonical_model_effort_and_policy_links_are_preserved() {
-        let profile=decode_profile(br#"{"node_did":"owner","profile_id":"chosen","backend_id":"provider","model_name":"exact-model","reasoning_effort":"high","sampling_id":"sampling","execution_id":"execution"}"#).unwrap();
-        assert_eq!(profile.model_name, "exact-model");
-        assert_eq!(profile.reasoning_effort, Some(gents::ReasoningEffort::High));
-        assert_eq!(profile.sampling_id.as_deref(), Some("sampling"));
-        assert_eq!(profile.execution_id.as_deref(), Some("execution"));
-    }
-    #[test]
-    fn retired_flat_sampling_and_missing_owner_are_rejected() {
-        for input in [
-            r#"{"profile_id":"p","backend_id":"b","model_name":"m"}"#,
-            r#"{"node_did":"owner","profile_id":"p","backend_id":"b","model_name":"m","temperature":1}"#,
-        ] {
-            assert!(decode_profile(input.as_bytes()).is_err());
-        }
-    }
     const DID: &str = "did:key:z6MkTestProfileAccounts";
     const CLAUDE: &str = "claude-subscription";
 

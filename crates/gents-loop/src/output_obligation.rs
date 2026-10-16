@@ -1,8 +1,3 @@
-//! The output-obligation gate seam: the check reads completed `AgentToolCall`
-//! rows from DefraDB, so it cannot live in the guest;
-//! [`OutputObligationCheck`] is the seam and `gents`'s `OutputObligationGate`
-//! implements it.
-
 use std::future::Future;
 use std::pin::Pin;
 

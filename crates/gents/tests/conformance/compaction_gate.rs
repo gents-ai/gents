@@ -1,5 +1,3 @@
-//! Runtime wiring fence for request-local canonical transcript compaction.
-
 use super::*;
 use std::{sync::Arc, time::Duration};
 

@@ -141,7 +141,6 @@ impl Fixture {
         gents::ensure_node(&home.node, &owner).await.unwrap();
         let dirs = tempfile::tempdir().unwrap();
 
-        // The pack carries both the subject and the definition.
         let golden = materialize_pack(
             &pack,
             &owner,

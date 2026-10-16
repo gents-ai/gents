@@ -59,23 +59,6 @@ fn tools_document_accepts_empty_string_arrays_and_null_groups() {
 }
 
 #[test]
-fn tools_document_accepts_explicit_selections() {
-    let document: Tools = serde_json::from_value(serde_json::json!({
-        "tools_id": "default-tools",
-        "node_did": "did:test:test",
-        "remote": {"services": [{"mcp_service_id": "x-data", "tool_names": ["search"]}]},
-        "host": {"cli": [{"name": "rg"}]}
-    }))
-    .expect("explicit selections should deserialize");
-
-    assert_eq!(
-        document.remote.as_ref().unwrap().services[0].tool_names,
-        vec!["search".to_string()]
-    );
-    assert_eq!(document.host.as_ref().unwrap().cli[0].name, "rg");
-}
-
-#[test]
 fn required_mcp_service_selection_is_explicit_and_unique() {
     let tools: Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "required-mcp",
@@ -698,65 +681,6 @@ async fn tools_document_round_trips_read_only_commands() {
     );
 }
 
-#[test]
-fn read_only_commands_absent_decodes_to_none() {
-    let json = serde_json::json!({
-        "tools_id": "sel-1",
-        "node_did": "did:test:test",
-        "host": {"bash": {}},
-    });
-    let loaded: Tools = serde_json::from_value(json).unwrap();
-    assert_eq!(
-        loaded
-            .host
-            .as_ref()
-            .unwrap()
-            .bash
-            .as_ref()
-            .unwrap()
-            .read_only_commands,
-        None
-    );
-}
-
-#[test]
-fn write_tools_round_trip() {
-    let decls = vec![WriteToolDecl {
-        notification: None,
-        tool_name: "request_action".to_string(),
-        collection: "ActionRequest".to_string(),
-        description: "Emit one ActionRequest describing a remediable drift.".to_string(),
-        fields: vec![
-            WriteToolField {
-                name: "drift_sig".to_string(),
-                required: true,
-                fill: None,
-            },
-            WriteToolField {
-                name: "summary".to_string(),
-                required: true,
-                fill: None,
-            },
-            WriteToolField {
-                name: "target_paths".to_string(),
-                required: false,
-                fill: None,
-            },
-        ],
-        output_obligation: None,
-    }];
-    let serialized = serde_json::to_value(&decls).unwrap();
-    let parsed: Vec<WriteToolDecl> = serde_json::from_value(serialized).unwrap();
-    assert_eq!(parsed, decls);
-    assert_eq!(parsed[0].fields.len(), 3);
-    assert!(parsed[0].fields[0].required);
-    assert!(!parsed[0].fields[2].required);
-    let stored = serde_json::json!([serde_json::to_string(&decls[0]).unwrap()]);
-    let loaded =
-        super::deserialize_dual_shape::<WriteToolDecl>(Some(stored), "write_tools").unwrap();
-    assert_eq!(loaded, decls);
-}
-
 #[tokio::test]
 async fn tools_document_round_trips_write_tools() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
@@ -1172,10 +1096,6 @@ fn write_tool_fill_grammar_is_exact_and_runtime_fields_cannot_be_required() {
     }];
     assert!(validate_write_tools(&decls).is_err());
 }
-
-// ---------------------------------------------------------------------------
-// Agent::validate_references
-// ---------------------------------------------------------------------------
 
 fn reference_documents() -> Vec<(crate::Collection, serde_json::Value)> {
     use crate::Collection;

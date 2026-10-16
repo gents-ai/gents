@@ -1,6 +1,3 @@
-//! Provider-input budget policy: the Rust owner of `PromptAssembly.Budget`,
-//! gating every provider dispatch whether or not reduction is available.
-
 #[derive(Debug, thiserror::Error)]
 pub enum ContextBudgetError {
     #[error(
@@ -14,9 +11,6 @@ pub enum ContextBudgetError {
     },
 }
 
-/// A fractional threshold as integer basis points; rounding recovers
-/// percentage/basis-point configuration values such as 57%, whose binary
-/// floating-point representation lies just below the exact value.
 pub fn threshold_basis_points(threshold: f64) -> u64 {
     if !threshold.is_finite() || threshold <= 0.0 {
         return 0;
@@ -24,14 +18,11 @@ pub fn threshold_basis_points(threshold: f64) -> u64 {
     (threshold * 10_000.0).round().min(10_000.0) as u64
 }
 
-/// Exact configured input threshold for a context window.
 pub fn threshold_budget(context_window: usize, threshold: f64) -> usize {
     let basis_points = u128::from(threshold_basis_points(threshold));
     ((context_window as u128 * basis_points) / 10_000) as usize
 }
 
-/// Provider input available before reduction; output stays a dynamic
-/// per-dispatch ceiling rather than an up-front reservation.
 pub fn effective_input_budget(context_window: usize, threshold: f64) -> usize {
     threshold_budget(context_window, threshold).min(context_window)
 }

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-/// Wait past this threshold before reporting a stuck delivery.
 pub(crate) const DEFERRAL_WARN_AFTER: Duration = Duration::from_secs(300);
 
 struct Deferral {

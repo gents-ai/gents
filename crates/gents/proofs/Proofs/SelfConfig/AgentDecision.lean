@@ -64,8 +64,6 @@ theorem unprotected_edit_accepted (c : AgentCatalog) (target : String)
     agentEditDecision c target = true := by
   simp [agentEditDecision, AgentCatalog.mutable, hpresent, hp]
 
-/-! ## Create input -/
-
 structure AgentCreateInput where
   name : String
   systemPrompt : String
@@ -104,8 +102,6 @@ theorem clone_requires_enabled_source (profiles : List String) (c : AgentCatalog
     (h : c.enabled i.cloneFrom = false) :
     agentCreateInputOk profiles c i = false := by
   simp [agentCreateInputOk, hclone, h]
-
-/-! ## Edit patches -/
 
 def editNameOk : Option PatchOp → Bool
   | some (.set n) => n != ""
@@ -149,8 +145,6 @@ theorem single_field_edit_preserves_others (t : Target) (doc : Doc) (e : PatchEn
   show applyEntry t doc e k = doc k
   unfold applyEntry
   split <;> simp [h]
-
-/-! ## Operation admission -/
 
 structure AgentEditFields where
   name : Option PatchOp := none
@@ -216,8 +210,6 @@ theorem name_only_edit_does_not_require_profile (profiles : List String)
   simp [agentOperationAdmitted, agentOperationInputOk, AgentOperation.op, agentDecision,
     agentEditFieldsOk, editNameOk, editPromptOk, editProfileOk,
     unprotected_edit_accepted c target hpresent hp, hname]
-
-/-! ## Default selection and materialization -/
 
 /-- Default selection is part of the same admitted create/edit publication. -/
 def defaultAgentAfter (preDefault applied : String) (op : AgentOp)

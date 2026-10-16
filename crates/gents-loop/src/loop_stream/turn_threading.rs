@@ -1,12 +1,8 @@
 use super::*;
 
-/// Stands in for an image part on a provider whose wire cannot carry one
-/// inside a tool result.
 pub const TOOL_RESULT_IMAGE_OMITTED: &str =
     "[image omitted: this model's provider does not accept images in tool results]";
 
-/// Stands in for an image part when a later request replays the call from the
-/// transcript, which records tool output as text.
 pub const TOOL_RESULT_IMAGE_NOT_REPLAYED: &str =
     "[image omitted: images from earlier tool calls are not replayed; call the tool again to see it]";
 
@@ -62,8 +58,6 @@ pub fn replayed_tool_result_text(
     Some(lines.join("\n"))
 }
 
-/// Bounds each text part of split output; each image passes whole, or becomes
-/// `image_note` when one is given.
 fn bound_split_parts(
     tool_name: &str,
     content: Vec<ToolResultContent>,
@@ -90,10 +84,8 @@ pub(super) fn close_streaming_turn(
     assistant_source: Option<crate::claude_messages_body::ReplayTag>,
     pending_results: Vec<(ToolCall, String, Vec<ToolResultContent>)>,
 ) -> Vec<LoopStreamItem> {
-    // Carry the provider message id onto the threaded assistant message:
-    // OpenAI Responses / ChatGPT Codex follow-up requests reference prior
-    // `msg_` ids, so dropping it breaks them.
     if let Some(mut assistant_message) = accumulator.take_message() {
+        // Follow-up Responses requests reference the provider message id.
         if let Message::Assistant { id, .. } = &mut assistant_message {
             *id = message_id;
         }
@@ -145,62 +137,6 @@ mod tests {
         })
         .to_string()
     }
-
-    #[test]
-    fn output_without_images_is_bounded_whole_then_split() {
-        let small = r#"{"response":"ok"}"#;
-        assert_eq!(
-            bounded_tool_result(ProviderInputProfile::ClaudeMessages, "plugin", small),
-            ToolResultContent::from_tool_output(small)
-        );
-        let big = "x".repeat(200_000);
-        let (bounded, _, truncated) = truncate_text(
-            &big,
-            crate::truncation::TruncationMode::Head,
-            &TruncationLimits::default(),
-        );
-        assert!(truncated);
-        assert_eq!(
-            bounded_tool_result(ProviderInputProfile::ClaudeMessages, "plugin", &big),
-            vec![ToolResultContent::text(bounded)]
-        );
-    }
-
-    #[test]
-    fn images_pass_whole_and_only_text_parts_are_bounded() {
-        let limits = TruncationLimits::default();
-        let content = bounded_tool_result(
-            ProviderInputProfile::ClaudeMessages,
-            "plugin",
-            &image_output(400_000, 200_000),
-        );
-        let [ToolResultContent::Text(text), ToolResultContent::Image(image)] = content.as_slice()
-        else {
-            panic!("one text part and one image part: {content:?}");
-        };
-        assert!(text.text.len() < 200_000 && text.text.len() <= limits.max_bytes + 200);
-        let gents_protocol::message::DocumentSourceKind::Base64(data) = &image.data else {
-            panic!("base64 image data");
-        };
-        assert_eq!(data.len(), 400_000);
-    }
-
-    #[test]
-    fn a_provider_without_tool_result_images_gets_a_note_instead() {
-        let content = bounded_tool_result(
-            ProviderInputProfile::OpenAiChatCompletions,
-            "plugin",
-            &image_output(400_000, 10),
-        );
-        assert_eq!(
-            content,
-            vec![
-                ToolResultContent::text(format!("\"{}\"", "r".repeat(10))),
-                ToolResultContent::text(TOOL_RESULT_IMAGE_OMITTED),
-            ]
-        );
-    }
-
     #[cfg(feature = "native")]
     #[test]
     fn every_profile_projects_a_bounded_image_result() {

@@ -16,7 +16,6 @@ use super::lean_vocab_test::{
 };
 
 const RECOVERY_AGENT_ID: &str = "amy-code";
-// A failed claim observation, deliberately absent from retry successor input.
 const FAILED_CLAIM_BACKEND: &str = "old-claim-backend";
 
 #[derive(Debug)]
@@ -1497,9 +1496,6 @@ async fn interactive_retry_ignores_newer_foreign_requester_row() -> Result<()> {
         .find(|case| case.legal)
         .context("legal retry witness")?;
     let pre = seed_session_recovery_pre_state(&core, case).await?;
-    // A newer row in another requester scope is not this interactive retry's
-    // head, even when visible locally. Background wake recovery deliberately
-    // uses the broader all-requester query instead.
     let node = escape_graphql_string(core.node_identity().did());
     let session = escape_graphql_string(&pre.session_id);
     let request_id = escape_graphql_string(&format!("foreign-{}", Uuid::new_v4()));

@@ -1,7 +1,3 @@
-//! Runnable-gated binding for the Codex shim; modeled in
-//! `proofs/Proofs/CodexShim/Binding.lean`, fenced by
-//! `conformance::generated_codex_shim_binding_cases_pin_runnable_gated_binding`.
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShimUnboundReason {
     DependencyMissing,

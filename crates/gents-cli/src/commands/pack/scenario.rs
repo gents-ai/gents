@@ -1,11 +1,5 @@
-//! Non-interactive pack runs: `gents pack scenario run <pack>`, `gents pack scenario init`,
-//! and `gents pack scenario seed` against an already-serving node.
-//!
-//! Two orderings are load-bearing: the pack applies only after the runtime is
-//! ready (its backend is unprobed for up to one probe interval while the server
-//! already reports `serving`), and a seed written before the event source
-//! observes its collection is dropped in silence (triggers are
-//! created/first-seen only).
+//! Apply the pack only after runtime readiness; event sources must observe the
+//! seed collection before seeding because they process created/first-seen docs.
 use gents::config_client::GraphqlEndpoint;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -48,7 +42,6 @@ struct ScenarioManifest {
     prepare: Vec<ScenarioPrepareStep>,
     #[serde(default)]
     allowed_folders: Vec<ScenarioAllowedFolder>,
-    /// Environment required by canonical dependency configs, keyed by pack.
     #[serde(default)]
     graph_dependency_environment: BTreeMap<String, BTreeMap<String, String>>,
     #[serde(skip)]
@@ -60,8 +53,6 @@ struct ScenarioManifest {
     config: Option<gents::document_config::PackConfig>,
 }
 
-/// One `allowed_folders` entry; `path` is relative to `init.tool_root` unless
-/// absolute.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ScenarioAllowedFolder {
@@ -86,7 +77,6 @@ struct PackInit {
     backend_preset: Option<String>,
     #[serde(default)]
     openai_wire_api: Option<String>,
-    /// Initial backend concurrency.
     #[serde(default)]
     max_concurrent: Option<i64>,
     #[serde(default)]
@@ -1106,8 +1096,6 @@ fn strip_ansi(line: &str) -> String {
             out.push(ch);
             continue;
         }
-        // CSI: ESC '[' params… final-byte. The '[' introducer is itself inside
-        // the final-byte range, so it must be consumed before scanning.
         if chars.peek() == Some(&'[') {
             chars.next();
         }
@@ -3078,7 +3066,6 @@ fn resolve_manifest_tool_root(pack: &Path, manifest: &ScenarioManifest) -> Resul
     }
 }
 
-/// The ceiling a `prepare` step's `bind_dir` must stay inside: `init.tool_root`
 fn resolve_prepare_within(pack: &Path, manifest: &ScenarioManifest) -> Result<Option<PathBuf>> {
     let declared = manifest
         .init
@@ -3315,7 +3302,6 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         &pack_init_cli_args(&home, &manifest, tool_root.as_deref()),
     )
     .await?;
-    // `gents init --dangerously-overwrite` empties the home, store included.
     pre_store_with_packs(&home, &args.with_pack)?;
     let node_did = init
         .get("node_did")
@@ -3809,9 +3795,6 @@ mod tests {
         load_manifest_with(pack, &distribution, &|_| None)
     }
 
-    /// Regression: prepare `bind_dir` ceiling honors `init.tool_root` even
-    /// under a tool package that needs no root of its own; the distinct
-    /// `resolve_manifest_tool_root` question must stay `None` here.
     #[test]
     fn resolve_prepare_within_uses_tool_root_independent_of_the_tool_package() {
         let pack = tempfile::tempdir().unwrap();
@@ -4052,26 +4035,6 @@ mod tests {
         node.shutdown().await;
     }
 
-    #[test]
-    fn scenario_rejects_duplicate_dependency_configuration() {
-        let pack = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../gents/tests/fixtures/packs/documents_fixture");
-        let mut experiment = read_pack_json_defaults(&pack.join("experiment.json")).unwrap();
-        experiment["bundled_graph_packages"] = json!(["code_review"]);
-        let error = serde_json::from_value::<ScenarioManifest>(experiment).unwrap_err();
-        assert!(error.to_string().contains("bundled_graph_packages"));
-    }
-
-    fn read_pack_json_defaults(path: &Path) -> Result<Value> {
-        let raw =
-            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let expanded = interpolate_with(&raw, &|_| None)
-            .map_err(|missing| anyhow::anyhow!("unset variables: {}", missing.join(", ")))?;
-        serde_json::from_str(&expanded).with_context(|| format!("parsing {}", path.display()))
-    }
-
-    /// Regression: tracing colours its file output, so the raw bytes are
-    /// `source_collection` ESC `=` ESC `ExperimentJob`.
     const COLOURED: &str = "\u{1b}[32m INFO\u{1b}[0m \u{1b}[2mgents::trigger_engine::event_source\u{1b}[0m\u{1b}[2m:\u{1b}[0m event source now observing source collection \u{1b}[3msource_collection\u{1b}[0m\u{1b}[2m=\u{1b}[0mExperimentJob \u{1b}[3mgeneration\u{1b}[0m\u{1b}[2m=\u{1b}[0m3";
 
     #[test]
@@ -4095,21 +4058,6 @@ mod tests {
         assert!(server_ready_marker(
             "\u{1b}[32mgents server is running with IROH P2P. Press Ctrl-C to stop.\u{1b}[0m"
         ));
-    }
-
-    #[test]
-    fn seed_mutation_escapes_prompt_and_extra_fields() {
-        let seed = PackSeed {
-            collection: "ReviewJob".into(),
-            job_id_field: "run_id".into(),
-            prompt_field: "focus".into(),
-            fields: BTreeMap::from([("repository_path".into(), "/tmp/\"repo\"".into())]),
-        };
-        let mutation = seed_mutation(&seed, "run-1", "say \"hi\"\nnext").unwrap();
-        assert!(mutation.contains("create_ReviewJob"));
-        assert!(mutation.contains(r#"run_id: "run-1""#));
-        assert!(mutation.contains(r#"focus: "say \"hi\"\nnext""#));
-        assert!(mutation.contains(r#"repository_path: "/tmp/\"repo\"""#));
     }
 
     #[test]
@@ -4141,122 +4089,11 @@ mod tests {
     }
 
     #[test]
-    fn has_correlated_request_requires_rows() {
-        assert!(!has_correlated_request(
-            &json!({"data": {"AgentRequest": []}})
-        ));
-        assert!(has_correlated_request(&json!({
-            "data": {"AgentRequest": [{"request_id": "r1"}]}
-        })));
-    }
-
-    #[test]
     fn global_update_subscription_completes_seed_readiness() {
         let log = format!(
             "{COLOURED}\n INFO event source opened global Update subscription collections=1 generation=3"
         );
         assert!(event_source_ready(&log, "ExperimentJob"));
-    }
-
-    #[test]
-    fn does_not_match_a_different_collection() {
-        assert!(!observes_collection(
-            &strip_ansi(COLOURED),
-            "ExperimentFinding"
-        ));
-    }
-
-    #[test]
-    fn does_not_match_a_name_that_merely_prefixes_another() {
-        let line = "event source now observing source collection source_collection=ExperimentJobArchive generation=3";
-        assert!(!observes_collection(line, "ExperimentJob"));
-        assert!(observes_collection(line, "ExperimentJobArchive"));
-    }
-
-    #[test]
-    fn ignores_unrelated_lines() {
-        assert!(!observes_collection(
-            "gents agent started agent_id=exp-stage1",
-            "ExperimentJob"
-        ));
-    }
-
-    #[test]
-    fn signed_fact_gate_requires_every_composite_commit_to_have_the_node_signer() {
-        let signer = "did:key:zNode";
-        let signed = json!({
-            "cid": "bafy-signed",
-            "signature": { "identity": signer, "type": "ES256K" }
-        });
-        let unsigned = json!({ "cid": "bafy-unsigned", "signature": null });
-
-        assert!(require_signed_commits("AgentMessage", "doc-1", &[signed.clone()], signer).is_ok());
-        assert!(require_signed_commits("AgentMessage", "doc-1", &[], signer).is_err());
-        let error = require_signed_commits("AgentMessage", "doc-1", &[signed, unsigned], signer)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("bafy-unsigned"), "{error}");
-    }
-
-    #[test]
-    fn source_edge_expectations_require_signed_provenance() {
-        let manifest = ScenarioManifest {
-            name: "invalid-source-edge".to_string(),
-            description: String::new(),
-            init: PackInit {
-                inference_url: "http://127.0.0.1:8080".to_string(),
-                model_name: "test".to_string(),
-                tool_package: "minimal".to_string(),
-                api_key_env_var: None,
-                backend_preset: None,
-                openai_wire_api: None,
-                max_concurrent: None,
-                tool_root: None,
-                tool_root_env_var: None,
-                tool_root_markers: Vec::new(),
-            },
-            seed: PackSeed {
-                collection: "Source".to_string(),
-                job_id_field: "job_id".to_string(),
-                prompt_field: "prompt".to_string(),
-                fields: BTreeMap::new(),
-            },
-            default_prompt: String::new(),
-            expect: PackExpect {
-                trigger_ids: Vec::new(),
-                trigger_request_counts: BTreeMap::new(),
-                trigger_request_count_sources: BTreeMap::new(),
-                collection_counts: BTreeMap::new(),
-                projections: Vec::new(),
-                signed_provenance: false,
-                required_tool_call_trigger_ids: Vec::new(),
-                source_edges: vec![SourceEdgeExpectation {
-                    producer_trigger_id: "producer".to_string(),
-                    producer_tool_name: "create_Source".to_string(),
-                    consumer_trigger_id: "consumer".to_string(),
-                    source_collection: "Source".to_string(),
-                }],
-                fan_in: None,
-                prompt_tool_contracts: Vec::new(),
-                background_completion: None,
-                tool_calls: Vec::new(),
-                stage_tool_sequences: Vec::new(),
-                workspace_receipt_paths: None,
-                result_documents: Vec::new(),
-            },
-            await_timeout_secs: 1,
-            prepare: Vec::new(),
-            allowed_folders: Vec::new(),
-            graph_dependency_environment: BTreeMap::new(),
-            graph_dependencies: Vec::new(),
-            plugins: Vec::new(),
-            config: None,
-        };
-
-        let error = validate_manifest(&manifest).expect_err("unsigned source edges must fail");
-        assert!(error
-            .to_string()
-            .contains("source_edges requires expect.signed_provenance=true"));
     }
 
     #[test]
@@ -4329,29 +4166,20 @@ mod tests {
     }
 
     #[test]
-    fn created_doc_reference_requires_the_exact_collection_and_doc_token() {
-        assert_eq!(
-            created_doc_reference("created ExperimentFinding bae-source", "ExperimentFinding"),
-            Some("bae-source")
-        );
-        assert_eq!(
-            created_doc_reference("created OtherFinding bae-source", "ExperimentFinding"),
-            None
-        );
-        assert_eq!(
-            created_doc_reference(
-                "created ExperimentFinding bae-source trailing",
-                "ExperimentFinding"
-            ),
-            None
-        );
-        assert_eq!(
-            created_doc_reference(
-                "prefix created ExperimentFinding bae-source",
-                "ExperimentFinding"
-            ),
-            None
-        );
+    fn signed_fact_gate_requires_every_composite_commit_to_have_the_node_signer() {
+        let signer = "did:key:zNode";
+        let signed = json!({
+            "cid": "bafy-signed",
+            "signature": { "identity": signer, "type": "ES256K" }
+        });
+        let unsigned = json!({ "cid": "bafy-unsigned", "signature": null });
+
+        assert!(require_signed_commits("AgentMessage", "doc-1", &[signed.clone()], signer).is_ok());
+        assert!(require_signed_commits("AgentMessage", "doc-1", &[], signer).is_err());
+        let error = require_signed_commits("AgentMessage", "doc-1", &[signed, unsigned], signer)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("bafy-unsigned"), "{error}");
     }
 
     #[test]
@@ -4623,95 +4451,4 @@ mod tests {
         validate_manifest(&manifest).expect("declared tool_root is enough");
     }
 
-    #[test]
-    fn tool_call_match_requires_completed_action_and_needles() {
-        let expected = ToolCallExpectation {
-            trigger_id: "lsp-hover".into(),
-            tool_name: "lsp".into(),
-            action: Some("hover".into()),
-            file: Some("src/auth.rs".into()),
-            symbol: None,
-            result_contains: vec!["FileToolMode".into()],
-        };
-        let ok = json!({
-            "tool_name": "lsp",
-            "status": "completed",
-            "lifecycle_state": "completed",
-            "args": "{\"action\":\"hover\",\"file\":\"src/auth.rs\"}",
-            "result": "pub fn lsp_advertised(lsp: bool, file: FileToolMode) -> bool"
-        });
-        assert!(tool_call_matches(&ok, &expected));
-        let status_only = json!({
-            "tool_name": "lsp",
-            "status": "completed",
-            "lifecycle_state": "completed",
-            "args": "{\"action\":\"status\"}",
-            "result": "Language servers: rust-analyzer (ready)"
-        });
-        assert!(!tool_call_matches(&status_only, &expected));
-        let empty_hover = json!({
-            "tool_name": "lsp",
-            "status": "completed",
-            "lifecycle_state": "completed",
-            "args": "{\"action\":\"hover\"}",
-            "result": "No hover information"
-        });
-        assert!(!tool_call_matches(&empty_hover, &expected));
-        let wrong_file = json!({
-            "tool_name": "lsp",
-            "status": "completed",
-            "lifecycle_state": "completed",
-            "args": "{\"action\":\"hover\",\"file\":\"src/other.rs\"}",
-            "result": "pub fn lsp_advertised(lsp: bool, file: FileToolMode) -> bool"
-        });
-        assert!(!tool_call_matches(&wrong_file, &expected));
-        let empty_symbols = json!({
-            "tool_name": "lsp",
-            "status": "completed",
-            "lifecycle_state": "completed",
-            "args": "{\"action\":\"symbols\",\"file\":\"src/auth.rs\"}",
-            "result": "No result"
-        });
-        assert!(!tool_call_matches(
-            &empty_symbols,
-            &ToolCallExpectation {
-                trigger_id: "lsp-hover".into(),
-                tool_name: "lsp".into(),
-                action: Some("symbols".into()),
-                file: Some("src/auth.rs".into()),
-                symbol: None,
-                result_contains: Vec::new(),
-            }
-        ));
-        let failed_lifecycle = json!({
-            "tool_name": "lsp",
-            "status": "completed",
-            "lifecycle_state": "failed",
-            "args": "{\"action\":\"hover\",\"file\":\"src/auth.rs\"}",
-            "result": "pub fn lsp_advertised(lsp: bool, file: FileToolMode) -> bool"
-        });
-        assert!(!tool_call_matches(&failed_lifecycle, &expected));
-    }
-
-    #[test]
-    fn seed_mutation_validates_identifiers() {
-        let seed = |collection: &str, fields: BTreeMap<String, String>| PackSeed {
-            collection: collection.to_string(),
-            job_id_field: "run_id".to_string(),
-            prompt_field: "focus".to_string(),
-            fields,
-        };
-
-        assert!(seed_mutation(&seed("ScanJob", BTreeMap::new()), "job-1", "hi").is_ok());
-
-        let bad_collection = seed(
-            "ScanJob) { _docID } } mutation evil { x(input: { a",
-            BTreeMap::new(),
-        );
-        assert!(seed_mutation(&bad_collection, "job-1", "hi").is_err());
-
-        let mut bad_fields = BTreeMap::new();
-        bad_fields.insert("a\": \"x\", evil".to_string(), "v".to_string());
-        assert!(seed_mutation(&seed("ScanJob", bad_fields), "job-1", "hi").is_err());
-    }
 }

@@ -1,7 +1,3 @@
-//! Serves the vendored DefraDB Explorer; the embedded build pins its
-//! connection to the serving origin, so no CORS setup is needed.
-//! See `third_party/defradb-explorer/README.md` for the pin and refresh workflow.
-
 use axum::extract::Path;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};

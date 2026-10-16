@@ -1,5 +1,3 @@
-//! Migration conformance: baseline registration, idempotence, single-version DAG.
-
 use std::collections::BTreeSet;
 
 use gents_migration::{
@@ -31,9 +29,6 @@ fn default_baseline_matches_ordered_protocol_catalog() {
 
     assert_eq!(actual, expected, "baseline must use the canonical live SDL");
     assert!(gents_migration::DEFAULT_STEPS.is_empty());
-    // Client-authored collections (#1123/#1125) must stay fresh-apply
-    // compatible; the guard is deliberately step-kind-agnostic because
-    // PatchInPlace diverges state without moving the version CID.
     let stepped_client_collections = gents_migration::DEFAULT_STEPS
         .iter()
         .filter_map(MigrationStep::collection)
@@ -141,7 +136,6 @@ async fn ensure_migrations_registers_baseline_and_is_idempotent() {
         "re-run should be cheap/idempotent: {report2:?}"
     );
 
-    // Every managed collection is present and active.
     for entry in gents_migration::DEFAULT_BASELINE {
         let cv = node
             .get_collection(entry.name)
@@ -188,7 +182,6 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
         .await
         .expect("apply production migrations");
 
-    // Single-version DAG: the baseline root is still the active version.
     let cv = node
         .get_collection(gents_protocol::schemas::AGENT_REQUEST_NAME)
         .expect("get_collection")
@@ -320,7 +313,6 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
         .expect("RenderedRequest baseline pin");
     assert_eq!(rendered.version_id, pin);
 
-    // Pre-upgrade data is untouched.
     let response = node
         .execute(r#"{ AgentSession(filter: {session_id: {_eq: "pre-upgrade-session"}}) { session_id } }"#)
         .await;
@@ -384,7 +376,6 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
         .expect("RenderedRequest rows");
     assert_eq!(rows.len(), 1, "one capture per key, ever");
 
-    // Every field is @immutable.
     let overwrite = node
         .execute(
             r#"mutation {
@@ -409,7 +400,6 @@ async fn multi_version_lineage_is_rejected() {
     let node = fresh_node().await;
     ensure_migrations(node.as_ref()).await.expect("baseline");
 
-    // Apply a field patch outside the registry.
     let patch = r#"[{"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"__foreign_test_field","Kind":"String"}}]"#;
     let _ = node
         .patch_collection("AgentRequest", patch)
@@ -489,7 +479,6 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
         .version_id;
     authoring_node.shutdown().await;
 
-    // A store written by an older build.
     let node = fresh_node().await;
     node.add_schema(OLD_SDL).await.expect("register old root");
     let before = node

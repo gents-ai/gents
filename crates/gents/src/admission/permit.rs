@@ -269,8 +269,6 @@ impl Drop for AdmissionPermit {
     }
 }
 
-/// The Goal reclassifies usage limits from this record, so it carries the
-/// rendered limit rather than the transport's header marker.
 fn recorded_failure_reason(reason: &str) -> String {
     gents_loop::provider_limit::persisted_failure_reason(reason, chrono::Utc::now())
 }

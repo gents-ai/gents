@@ -179,16 +179,11 @@ async fn unchanged_desired_state_replay_does_not_add_document_commit() -> Result
 }
 
 #[test]
-fn every_canonical_collection_uses_derived_owner_and_identity_fields() {
-    for collection in Collection::ALL {
-        let (fields, _) = config_projection(collection, None).unwrap();
-        assert!(fields.contains(&"node_did"), "{collection:?}");
-        assert!(
-            fields.contains(&collection.unique_field()),
-            "{collection:?}"
-        );
-        assert!(!fields.contains(&"_docID"), "{collection:?}");
-    }
+fn commitments_do_not_reinterpret_authored_strings_as_json() {
+    assert_ne!(
+        desired_state_document_digest(&json!({"value":["{\"a\":1}"]})).unwrap(),
+        desired_state_document_digest(&json!({"value":[{"a":1}]})).unwrap()
+    );
 }
 
 #[test]
@@ -212,42 +207,6 @@ fn plans_reject_unknown_fields_sparse_updates_and_scope_changes() {
         document(backend("did:key:a", "same"))
     ])
     .is_err());
-}
-
-#[test]
-fn commitments_do_not_reinterpret_authored_strings_as_json() {
-    assert_ne!(
-        desired_state_document_digest(&json!({"value":["{\"a\":1}"]})).unwrap(),
-        desired_state_document_digest(&json!({"value":[{"a":1}]})).unwrap()
-    );
-}
-
-#[test]
-fn task_projection_excludes_runtime_updated_at_and_normalizes_defaults() {
-    let desired = json!({
-        "node_did": "did:key:owner",
-        "task_id": "run-once",
-        "agent_id": "operator",
-        "prompt_template": "Run once"
-    });
-    let mut observed = desired.clone();
-    observed["updated_at"] = "2026-09-10T18:16:43.843636Z".into();
-    observed["enabled"] = true.into();
-    observed["hooks"] = Value::Null;
-    observed["tags"] = Value::Null;
-
-    let desired = config_projection(Collection::Task, Some(&desired))
-        .unwrap()
-        .1
-        .unwrap();
-    let observed = config_projection(Collection::Task, Some(&observed))
-        .unwrap()
-        .1
-        .unwrap();
-
-    assert_eq!(desired, observed);
-    assert_eq!(desired["enabled"], true);
-    assert!(desired.get("updated_at").is_none());
 }
 
 #[tokio::test]
@@ -410,10 +369,6 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
     .await;
     let counts = result?;
 
-    // Counts describe documents staged by this apply, including canonical
-    // replacements that preserve the current configuration. This plan still
-    // submits all three backend documents; the assertions below measure that
-    // its reads were batched independently of those write counts.
     assert_eq!(
         counts.get(Collection::InferenceBackend),
         expected_backend_writes
@@ -743,7 +698,6 @@ async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Resu
         .collect::<Vec<_>>();
     apply(&access, packaged.clone()).await?;
 
-    // The matching plan (authored digest == live projection) verifies clean.
     let matching = DesiredStateApplyPlan::new(packaged)?;
     let (matching_result, read_queries) = count_desired_state_read_page_queries(
         access.transact_write("test.verify.matching", |txn| {

@@ -1,14 +1,8 @@
-//! The loop's slice of tool-call lifecycle vocabulary: failure classification
-//! and typed dispatch outcome shared with the loop (`gents::tool_call_lifecycle`
-//! owns the full persisted state machine and re-exports these natively).
-
 use serde::{Deserialize, Serialize};
 
 pub mod runtime;
 pub use runtime::ToolOutcome;
 
-/// Retry-relevant classification of why a tool call failed; mirrors the
-/// persisted `AgentToolCall.failure_class` vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FailureClass {

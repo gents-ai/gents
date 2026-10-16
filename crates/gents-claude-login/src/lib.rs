@@ -1,8 +1,3 @@
-//! Claude subscription OAuth login (PKCE) used by `gents claude-login`.
-//!
-//! Client constants mirror `gents::claude_oauth`; keep both in sync (a
-//! gents-cli unit test pins it).
-
 use std::collections::HashMap;
 use std::fmt;
 use std::io;

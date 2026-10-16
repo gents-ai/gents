@@ -363,8 +363,6 @@ async fn corrupt_installation_field(
     );
 }
 
-/// A malformed `plugins`/`documents`/`history` field must fail loudly, not
-/// read as an empty list.
 #[tokio::test]
 async fn a_malformed_plugins_field_fails_loudly_instead_of_reading_as_empty() {
     let access = access().await;
@@ -437,8 +435,6 @@ async fn read_installed_pack_fails_loudly_on_a_malformed_record() {
     );
 }
 
-/// A DefraDB unique index is a single-node guarantee; `read_installed_pack`
-/// must fail loudly on the duplicate records a replicated home can produce.
 #[tokio::test]
 async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
@@ -544,7 +540,6 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
     .await
     .unwrap();
 
-    // Removing the dependency directly is refused.
     let error = remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
         .await
         .unwrap_err();
@@ -685,7 +680,6 @@ async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
     .unwrap();
     activate(&access, &receipt.graph_id, &receipt.revision_digest).await;
 
-    // Simulate a record written before `explicit` existed.
     let doc_id = installation_doc_id(&access).await;
     corrupt_installation_field(&access, &doc_id, "explicit", Value::Null).await;
 
@@ -702,8 +696,6 @@ async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
         .await
         .unwrap();
 
-    // required_by is now empty, but a legacy `explicit: null` reads as
-    // `true`, so the dependency is never auto-released.
     let remaining = access
         .execute("{ PackInstallation { coordinate } }")
         .await

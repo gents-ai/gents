@@ -126,8 +126,6 @@ async fn live_path_without_fixture_asks_the_bearer_and_fails_closed_on_bearer_er
     assert_eq!(client.bearer.bearer_calls(), 1);
 }
 
-/// The queue serves one body per call; once drained the live path runs and
-/// asks the bearer, which here refuses so no network is touched.
 #[tokio::test]
 async fn fixture_queue_serves_one_body_per_call_then_asks_the_bearer() {
     let _guard = crate::claude_messages::lock_fixtures_for_test();
@@ -193,7 +191,6 @@ async fn build_with_a_seeded_credential_yields_a_shared_bearer() {
     );
 }
 
-/// Spec §6: a stale credential triggers exactly one refresh before the send.
 #[tokio::test]
 async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
     let node = test_node().await;
@@ -209,7 +206,6 @@ async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
         r#"{"access_token":"access-NEW","refresh_token":"refresh-NEW","expires_in":28800}"#,
     )
     .await;
-    // Process-global override; serialized via TOKEN_URL_ENV.
     let _env = crate::oauth_credential::test_support::TOKEN_URL_ENV
         .lock()
         .await;

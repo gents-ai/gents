@@ -1,21 +1,13 @@
 import Proofs.Basic
 
-/-!
-# RenderedCapture — persist-before-send at the provider boundary (#840, #523)
-
-Every provider, the Claude subscription included, posts through the one HTTP
-transport, so `CaptureSeam::TransportBody` is the only seam version 1 emits: the
-capture fact is persisted after the body rewrites and immediately before the
-network client is called (`crates/gents/src/rendered_request/transport.rs`),
-and the fenced order below is the only legal send order.
--/
+/-! Providers share one HTTP transport. It persists the capture after body
+rewrites and immediately before the network call; this is the provider-boundary
+ordering modeled below. -/
 
 namespace RenderedCapture
 
 /-- The permission and audit boundary the capture is attributed to. -/
 abbrev NodeDid := Nat
-
-/-! ## Capture key -/
 
 /-- Identity of exactly one provider attempt: node, session, request `_docID`
 (DefraDB document identity, not the non-unique `AgentRequest.request_id` field),
@@ -31,19 +23,14 @@ structure CaptureKey where
   attempt : Nat
   deriving DecidableEq, Repr
 
-/-- Opaque: the only operation the model performs on it is equality. -/
 structure CanonicalRequest where
   value : Nat
   deriving DecidableEq, Repr
 
-/-! ## Lossless bounded storage encoding
-
-The model treats equality of commit witnesses as input supplied by DefraDB;
-proving CID computation and collision resistance is an external database
-boundary. A capture is durable only when bounded decoding, including every
-pinned base witness, recovers the exact canonical request; production's splice
-encoder must refine `splice` with bounds, Unicode-boundary, field-removal, and
-round-trip tests, which `splice_roundtrip` does not prove. -/
+/-! Commit witness equality is supplied by DefraDB; CID computation and
+collision resistance are external database guarantees. Production's splice
+encoder must also enforce bounds, Unicode boundaries, field removal, and byte
+round trips; `splice_roundtrip` alone does not establish those properties. -/
 
 abbrev FieldCommitWitness := Nat
 abbrev ArtifactRef := Nat
@@ -77,10 +64,7 @@ inductive StoredRequest where
   | full (bytes : CanonicalBytes)
   | delta (baseRef : ArtifactRef) (baseWitness : FieldCommitWitness)
       (prefixLen suffixLen : Nat) (middle : CanonicalBytes)
-  /-- A capture stored as ordered per-block references: resolution
-  concatenates the named blocks' bytes in list order, fail-closed if any
-  reference is absent, any pinned witness mismatches, or fuel runs out.
-  Integrity rides on the database's commit identity, never on a self-attested
+  /-- Integrity uses the database commit identity, never a self-attested
   digest. -/
   | manifest (blocks : List (ArtifactRef × FieldCommitWitness))
   deriving DecidableEq, Repr
@@ -145,8 +129,6 @@ theorem no_fuel_fails_closed (store : ArtifactStore) (ref witness : Nat) :
     resolveRequest store 0 ref witness = none := by
   rfl
 
-/-! ### Ordered block manifests (#2333) -/
-
 /-- `blocks` is stored, in list order aligned with `chunks`, as full documents
 whose commits are exactly the pinned witnesses. -/
 inductive FullBlocks (store : ArtifactStore) :
@@ -196,8 +178,6 @@ theorem resolveBlocks_of_full (store : ArtifactStore) :
               simp only [resolveBlocks]
               simp [hHead, hRest]
 
-/-- No fuel left before the last entry is passed fails closed, independent of
-what the store holds. -/
 theorem resolveBlocks_insufficient_fuel (store : ArtifactStore) :
     ∀ (blocks : List (ArtifactRef × FieldCommitWitness)) (fuel : Nat),
       fuel ≤ blocks.length → resolveBlocks store fuel blocks = none := by
@@ -238,7 +218,6 @@ theorem resolveBytes_absent (store : ArtifactStore) :
               rw [← hEq])
           simp [resolveBytes, hStore, hNe]
 
-/-- One unresolvable entry sinks the whole manifest. -/
 theorem resolveBlocks_unresolvable (store : ArtifactStore) :
     ∀ (blocks : List (ArtifactRef × FieldCommitWitness)) (fuel : Nat)
       (blockRef : ArtifactRef) (blockWitness : FieldCommitWitness),
@@ -270,8 +249,6 @@ theorem resolveBlocks_unresolvable (store : ArtifactStore) :
               simp only [resolveBlocks]
               cases h : resolveBytes store m headRef headWitness <;> simp [hRestNone]
 
-/-- A manifest of full blocks resolves to exactly the concatenation of their
-bytes; the decomposition is a premise, as in `splice_roundtrip`. -/
 theorem manifest_of_fulls_resolves_exactly (store : ArtifactStore) (ref witness : Nat)
     (blocks : List (ArtifactRef × FieldCommitWitness)) (chunks : List CanonicalBytes)
     (request : CanonicalRequest)
@@ -285,8 +262,6 @@ theorem manifest_of_fulls_resolves_exactly (store : ArtifactStore) (ref witness 
   show resolveRequest store (blocks.length + 1 + 1) ref witness = some request
   simp [resolveRequest, resolveBytes, hStore, hBlocks', hConcat]
 
-/-- A block stored under a commit other than the witness the manifest pins
-makes the whole manifest unresolvable, at any fuel. -/
 theorem manifest_witness_mismatch_fails_closed (store : ArtifactStore)
     (fuel ref witness : Nat) (blocks : List (ArtifactRef × FieldCommitWitness))
     (blockRef blockWitness : Nat) (version : StoredVersion)
@@ -307,7 +282,6 @@ theorem manifest_witness_mismatch_fails_closed (store : ArtifactStore)
         resolveBlocks_unresolvable store blocks m blockRef blockWitness hListed hAbsent
       simp [resolveRequest, resolveBytes, hStored, hNone]
 
-/-- A manifest naming an absent block is unresolvable, at any fuel. -/
 theorem manifest_missing_ref_fails_closed (store : ArtifactStore)
     (fuel ref witness : Nat) (blocks : List (ArtifactRef × FieldCommitWitness))
     (blockRef blockWitness : Nat)
@@ -326,8 +300,6 @@ theorem manifest_missing_ref_fails_closed (store : ArtifactStore)
         resolveBlocks_unresolvable store blocks m blockRef blockWitness hListed hAbsent
       simp [resolveRequest, resolveBytes, hStored, hNone]
 
-/-- Fuel `0` is the base instance; the sharp bound is
-`manifest_of_fulls_resolves_exactly`'s `blocks.length + 2`. -/
 theorem manifest_no_fuel_fails_closed (store : ArtifactStore) (ref witness : Nat)
     (blocks : List (ArtifactRef × FieldCommitWitness))
     (hStored : store ref = some { commit := witness, encoded := .manifest blocks }) :
@@ -340,8 +312,6 @@ theorem manifest_no_fuel_fails_closed (store : ArtifactStore) (ref witness : Nat
         resolveBlocks_insufficient_fuel store blocks m (by omega)
       simp [resolveRequest, resolveBytes, hStored, hNone]
 
-/-! ## Durable capture table -/
-
 /-- The durable `RenderedRequest` collection as a partial map from capture key
 to canonical request. -/
 abbrev Store := CaptureKey → Option CanonicalRequest
@@ -350,8 +320,6 @@ namespace Store
 
 def empty : Store := fun _ => none
 
-/-- Only ever applied to a key the writer just observed to be unbound;
-`capture` is the only caller. -/
 def bind (s : Store) (k : CaptureKey) (r : CanonicalRequest) : Store :=
   fun probe => if probe = k then some r else s probe
 
@@ -367,15 +335,9 @@ def bind (s : Store) (k : CaptureKey) (r : CanonicalRequest) : Store :=
 
 end Store
 
-/-! ## The capture decision -/
-
 inductive CaptureOutcome where
-  /-- The key was unbound; the fact is now durable. -/
   | fresh
-  /-- The key already held exactly this request. Success without a write. -/
   | idempotent
-  /-- The key already held a *different* request: an integrity violation,
-  never an update. -/
   | rejected
   deriving DecidableEq, Repr
 
@@ -386,7 +348,6 @@ def toContract : CaptureOutcome → String
   | .idempotent => "idempotent"
   | .rejected => "rejected"
 
-/-- Exactly the outcomes that leave the fact durable. -/
 def durable : CaptureOutcome → Bool
   | .fresh => true
   | .idempotent => true
@@ -394,14 +355,12 @@ def durable : CaptureOutcome → Bool
 
 end CaptureOutcome
 
-/-- The sink's decision procedure: never overwrites a prior capture. -/
 def capture (s : Store) (k : CaptureKey) (r : CanonicalRequest) :
     CaptureOutcome × Store :=
   match s k with
   | none => (.fresh, Store.bind s k r)
   | some stored => if stored = r then (.idempotent, s) else (.rejected, s)
 
-/-- Failure to resolve an exact semantic request yields no capture transition. -/
 def captureEncoded (artifacts : ArtifactStore) (fuel ref witness : Nat)
     (s : Store) (k : CaptureKey) : Option (CaptureOutcome × Store) := do
   let request ← resolveRequest artifacts fuel ref witness
@@ -413,9 +372,6 @@ theorem encoded_decode_failure_blocks_capture (artifacts : ArtifactStore)
     captureEncoded artifacts fuel ref witness s k = none := by
   simp [captureEncoded, h]
 
-/-- Manifest closure failure is capture failure: an unresolvable manifest
-yields no capture step, so `send` stays unreachable through
-`encoded_decode_failure_blocks_capture` and P3. -/
 theorem manifest_resolution_failure_blocks_capture (artifacts : ArtifactStore)
     (fuel ref witness : Nat) (blocks : List (ArtifactRef × FieldCommitWitness))
     (s : Store) (k : CaptureKey)
@@ -449,7 +405,6 @@ theorem capture_fresh (s : Store) (k : CaptureKey) (r : CanonicalRequest)
     capture s k r = (.fresh, Store.bind s k r) := by
   simp [capture, h]
 
-/-- Redelivering the identical canonical request succeeds and writes nothing. -/
 theorem capture_idempotent (s : Store) (k : CaptureKey) (r : CanonicalRequest)
     (h : s k = some r) :
     capture s k r = (.idempotent, s) := by
@@ -460,7 +415,6 @@ theorem capture_rejects_rebinding (s : Store) (k : CaptureKey)
     capture s k r = (.rejected, s) := by
   simp [capture, h, h_conflict]
 
-/-- Capture is total and its three outcomes are mutually exclusive. -/
 theorem capture_outcome_classified (s : Store) (k : CaptureKey) (r : CanonicalRequest) :
     ((capture s k r).1 = .fresh ↔ s k = none) ∧
       ((capture s k r).1 = .idempotent ↔ s k = some r) ∧
@@ -472,8 +426,6 @@ theorem capture_outcome_classified (s : Store) (k : CaptureKey) (r : CanonicalRe
       · subst h_eq; simp [capture, h]
       · simp [capture, h, h_eq]
 
-/-- The fact is durable after capture exactly when the outcome says it is; a
-`rejected` outcome may never be reported as durable. -/
 theorem capture_durable_iff (s : Store) (k : CaptureKey) (r : CanonicalRequest) :
     (capture s k r).1.durable = true ↔ (capture s k r).2 k = some r := by
   cases h : s k with
@@ -523,14 +475,9 @@ theorem attempt_distinguishes_facts (k : CaptureKey) {a b : Nat} (h : a ≠ b) :
   intro h_eq
   exact h (congrArg CaptureKey.attempt h_eq)
 
-/-! ## Stages and the transition relation -/
-
 inductive Stage where
-  /-- Nothing durable, nothing sent. -/
   | assembled
-  /-- The capture is durable under this attempt's key. -/
   | durablyCaptured
-  /-- The provider call has been issued. -/
   | sent
   deriving DecidableEq, Repr
 
@@ -548,15 +495,12 @@ theorem all_complete (stage : Stage) : stage ∈ all := by
 
 end Stage
 
-/-- One in-flight provider attempt against the whole durable store; no
-transition may change `key` or `request`. -/
 structure Machine where
   store : Store
   stage : Stage
   key : CaptureKey
   request : CanonicalRequest
 
-/-- `send` has exactly one precondition and it is the durable one. -/
 inductive Step : Machine → Machine → Prop where
   | captureFresh {pre post : Machine}
       (h_stage : pre.stage = .assembled)
@@ -646,8 +590,6 @@ theorem store_monotone {a b : Machine} (h : Trace a b) :
   | step h_step _ ih => intro _ _ h_bound; exact ih (h_step.store_monotone h_bound)
 
 end Trace
-
-/-! ## The durability invariant -/
 
 def Machine.durable (m : Machine) : Prop :=
   m.store m.key = some m.request
@@ -759,9 +701,6 @@ theorem capture_key_determines_request {init final : Machine} (h_trace : Trace i
   rw [h_carried] at h_final
   exact Option.some.inj h_final
 
-/-- **P3 — fail-closed.** A key already bound to a conflicting request makes
-`sent` unreachable permanently: the rejected capture writes nothing and no
-later transition can rebind the key. -/
 theorem capture_failure_blocks_send {init final : Machine} {stored : CanonicalRequest}
     (h_start : init.stage = Stage.assembled)
     (h_bound : init.store init.key = some stored)
@@ -776,10 +715,6 @@ theorem capture_failure_blocks_send {init final : Machine} {stored : CanonicalRe
   rw [h_carried] at h_durable
   exact h_conflict (Option.some.inj h_durable)
 
-/-! ## Executable scenarios (the emitted conformance rows) -/
-
-/-- One capture delivery evaluated against a store that already holds
-`priorBinding` (if anything) under the same key. -/
 structure Scenario where
   key : CaptureKey
   request : CanonicalRequest
@@ -811,7 +746,6 @@ def postStage (sc : Scenario) : Stage :=
 def sendPermitted (sc : Scenario) : Bool :=
   decide (durableAfter sc = some sc.request)
 
-/-- How many requests the provider is allowed to observe for this attempt. -/
 def providerRequests (sc : Scenario) : Nat :=
   if sendPermitted sc then 1 else 0
 
@@ -839,7 +773,6 @@ theorem rejected_blocks_send (sc : Scenario) (h : outcome sc = .rejected) :
   · simp [sendPermitted, durableAfter, postStore, h_capture, h_bound, h_conflict]
   · simp [postStore, h_capture]
 
-/-- `providerRequests` is 1 exactly when the modeled trace reaches `sent`. -/
 theorem providerRequests_iff_sent (sc : Scenario) :
     providerRequests sc = 1 ↔ finalStage sc = Stage.sent := by
   cases h : sendPermitted sc <;> simp [providerRequests, finalStage, h, postStage] <;>

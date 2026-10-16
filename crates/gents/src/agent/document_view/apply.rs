@@ -17,9 +17,7 @@ pub(crate) async fn apply_control_update(
     if Collection::ALL
         .iter()
         .any(|c| c.graphql_type() == collection_name)
-        // PackInstallation changes only this record, but the plugin-store
-        // change it carries reaches change detection only through the
-        // reconciler wake.
+        // Pack installation also changes plugin-store state observed on the reconciler wake.
         || matches!(
             collection_name,
             "OAuthCredential" | "ToolServiceHealthState" | "GraphRevision" | "GraphRun"
@@ -28,8 +26,7 @@ pub(crate) async fn apply_control_update(
     {
         Ok(ControlUpdateOutcome::FullReload)
     } else if node.get_collection(collection_name)?.is_none() {
-        // Watchers may carry a physical collection ID before name resolution;
-        // do not drop the notification.
+        // Watch events may arrive before a physical collection ID resolves to its name.
         Ok(ControlUpdateOutcome::FullReload)
     } else {
         Ok(ControlUpdateOutcome::Irrelevant)

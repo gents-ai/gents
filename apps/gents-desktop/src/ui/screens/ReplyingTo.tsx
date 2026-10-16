@@ -94,7 +94,6 @@ export function ReplyingTo() {
 }
 
 function Details({ item }: { item: MailboxItemView }) {
-  // fixed when the popover opens: a deadline does not tick over mid-read
   const [now] = useState(() => Date.now());
   const deadline = deadlineOf(item);
   const soon = dueSoon(deadline, now);

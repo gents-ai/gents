@@ -6,8 +6,6 @@ use gents::session::canonical_rows::{
 use gents_protocol::output::MessagePublication;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-// A malformed header must never turn an interactive page render into an
-// unbounded request scan; hitting a cap is an honest query failure.
 const MAX_FORK_ORIGIN_DEPTH: usize = 32;
 const MAX_CANONICAL_DEPENDENCY_ROWS: usize = 2_048;
 
@@ -90,8 +88,6 @@ fn insert_exact_segment(
     Ok(())
 }
 
-// Fork origins are addressed by physical document id and may live in another
-// session; never substitute a latest/parent-session header.
 async fn load_page_canonical_dependencies(
     access: TranscriptAccess<'_>,
     page_headers: &[TranscriptMessageRow],
@@ -144,8 +140,6 @@ async fn load_page_canonical_dependencies(
         queried_rows = queried_rows.saturating_add(rows.len());
         match rows.len() {
             0 => {
-                // Filtered absence is not denial evidence; reconstruction
-                // must remain Loading.
             }
             1 => {
                 let origin = rows.into_iter().next().expect("one row checked");
@@ -233,8 +227,6 @@ async fn load_page_canonical_dependencies(
         }
     }
 
-    // The schema indexes request identity, not the JSON source value; the
-    // hard limit makes a malformed/high-volume request fail visibly.
     let mut sources_by_request = BTreeMap::new();
     for closure in &closures {
         sources_by_request
@@ -392,9 +384,6 @@ pub fn session_transcript_requester_scope(
     requester_scope.map(str::to_owned)
 }
 
-/// `None` when the session is readable; hydration for unreadable sessions is
-/// refused server-side (`SessionHydration.canStart`), so the reason is
-/// presented instead of requested.
 pub fn session_unreadable_reason(
     session: &AgentSession,
     requester_scope: Option<&str>,
@@ -418,9 +407,6 @@ pub fn session_unreadable_reason(
     })
 }
 
-/// Query a bounded transcript window directly from DefraDB. The cursor is
-/// resolved to the durable sequence space before the page query so inserts at
-/// the tip cannot shift an older page.
 pub async fn load_session_transcript_page(
     node: &EmbeddedNode,
     session_id: &str,
@@ -548,9 +534,6 @@ async fn load_session_transcript_page_with_access(
             "session transcript contains legacy tool calls without a message sequence; bounded pagination cannot represent that schema state losslessly"
         );
     }
-    // DESC ordering proves the tool window is complete only if the query
-    // exhausted all tools or crossed the message lookahead boundary known
-    // after parsing the atomic response.
     let crossed_message_boundary = deferred_message_sequence.is_some_and(|boundary| {
         queried_tool_calls
             .last()
@@ -575,8 +558,6 @@ async fn load_session_transcript_page_with_access(
             .and_then(|row| row.message_sequence)
             .expect("null tool sequences rejected above");
         tool_calls.retain(|row| row.message_sequence != Some(deferred_sequence));
-        // Defer truncated-window messages so the bridge never renders a
-        // message whose tools were truncated.
         messages.retain(|row| i64::from(row.message.sequence) > deferred_sequence);
         if tool_calls.is_empty() {
             bail!(
@@ -623,9 +604,6 @@ async fn load_session_transcript_page_with_access(
     })
 }
 
-/// Load the durable rows for the session context meter. Short-lived and read
-/// per selected session; transcript content must never be merged into the
-/// process-wide observed store.
 pub async fn load_session_context_store(
     node: &EmbeddedNode,
     session_id: &str,
@@ -713,7 +691,6 @@ async fn load_session_context_store_with_access(
     }))
 }
 
-/// Unbounded diagnostic read; must never feed React or the observer.
 pub async fn load_session_diagnostics_store(
     node: &EmbeddedNode,
     session_id: &str,

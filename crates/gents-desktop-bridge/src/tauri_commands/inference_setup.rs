@@ -37,9 +37,6 @@ fn provider_label(provider: &str) -> &'static str {
     }
 }
 
-/// The probe reads the node's credentials through the same access the save
-/// will use, so a runtime that is not serving is reported before the user
-/// completes an OAuth flow whose tokens could not be stored.
 async fn require_reachable_configuration(
     access: anyhow::Result<gents::ConfigAccess>,
     node_did: &str,
@@ -69,8 +66,6 @@ async fn require_reachable_configuration(
     })
 }
 
-/// The account is stored before its label is set, so a label that fails keeps
-/// the default one rather than reporting a stored account as unsaved.
 async fn upsert_through(
     access: anyhow::Result<gents::ConfigAccess>,
     credential: OAuthCredential,
@@ -101,8 +96,6 @@ async fn upsert_through(
     Ok(signed)
 }
 
-/// The account a sign-in request names: empty is none; checked before the
-/// browser opens so a bad label never costs a sign-in.
 fn sign_in_label(label: Option<&str>) -> Result<Option<String>, BridgeError> {
     label
         .map(str::trim)
@@ -129,9 +122,6 @@ fn credential_not_saved(credential: &OAuthCredential, error: &anyhow::Error) -> 
     )
 }
 
-/// A failed save keeps the credential in the bridge's in-memory pending set
-/// so `desktop_provider_account_retry_save` can store it without another
-/// browser login.
 async fn save_issued_credential(
     pending: &PendingOAuthCredentials,
     access: anyhow::Result<gents::ConfigAccess>,
@@ -151,7 +141,6 @@ async fn save_issued_credential(
     }
 }
 
-/// Retries the save of a held credential for exactly this node and provider.
 async fn retry_pending_credential(
     pending: &PendingOAuthCredentials,
     access: anyhow::Result<gents::ConfigAccess>,
@@ -514,8 +503,6 @@ pub async fn discover_inference_models_for_core(
     })
 }
 
-/// The account a discovery for a backend naming `account_ref` reads, and the
-/// auth its catalog is published under.
 async fn discovery_account(
     access: &gents::ConfigAccess,
     node_did: &str,
@@ -754,8 +741,6 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
     )
     .await?;
 
-    // Storing the credential is the signal the runtime reconciles on to mark
-    // the ChatGptCodex agent available.
     notify_config_changed(&app, &core).await;
 
     Ok(CodexLoginResult::redacted(&signed))
@@ -1019,7 +1004,6 @@ pub(crate) async fn desktop_provider_account_rename<R: Runtime>(
     Ok(())
 }
 
-/// Removes the account as `gents accounts remove --yes` does.
 #[tauri::command]
 pub(crate) async fn desktop_provider_account_remove<R: Runtime>(
     app: AppHandle<R>,
@@ -1113,8 +1097,6 @@ async fn backend_usage_views(
     Ok(views)
 }
 
-/// A failed read on open still returns what is stored; a failed Refresh is
-/// an error.
 #[tauri::command]
 pub(crate) async fn desktop_provider_usage_read(
     request: ProviderUsageReadRequest,
@@ -1170,8 +1152,6 @@ pub(crate) struct ProviderAccountRetrySaveRequest {
     pub provider: String,
 }
 
-/// Saves a credential that a completed sign-in issued but could not store,
-/// without repeating the browser login.
 #[tauri::command]
 pub(crate) async fn desktop_provider_account_retry_save<R: Runtime>(
     app: AppHandle<R>,

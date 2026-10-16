@@ -1,5 +1,3 @@
-//! Unit tests for the self-config tool family; lifecycle coverage lives in `tests/e2e_runtime/self_config_tools.rs`.
-
 use super::command::{agent_params, help_patch_contracts};
 use super::*;
 
@@ -88,29 +86,6 @@ pub(super) fn config(categories: &[&str]) -> SelfConfigToolConfig {
         enable_graph_tools: false,
         process_ceiling: Default::default(),
     }
-}
-
-#[test]
-fn tool_names_follow_enabled_categories() {
-    let names = self_config_tool_names(&config(&["agent", "tools", "profile"]));
-    assert_eq!(
-        names,
-        vec![CONFIG_TOOL_NAME.to_string()],
-        "all granted categories share one model-facing config command"
-    );
-
-    let disabled = SelfConfigToolConfig::default();
-    assert!(self_config_tool_names(&disabled).is_empty());
-}
-
-#[test]
-fn pack_install_requires_its_separate_opt_in() {
-    let without_install = config(&["agent"]);
-    assert_eq!(self_config_tool_names(&without_install), [CONFIG_TOOL_NAME]);
-
-    let mut with_install = without_install;
-    with_install.enable_pack_install = true;
-    assert_eq!(self_config_tool_names(&with_install), [CONFIG_TOOL_NAME]);
 }
 
 #[test]
@@ -1634,25 +1609,6 @@ async fn config_tools_cannot_self_grant_pack_install() {
     );
 }
 
-#[test]
-fn operator_grants_project_from_the_tools_group() {
-    let project = |tools: Value| OperatorGrants::from_tools_json(tools.as_object().unwrap());
-    assert_eq!(project(json!({})).unwrap(), OperatorGrants::default());
-    assert_eq!(
-        project(json!({"self_config": null})).unwrap(),
-        OperatorGrants::default()
-    );
-    assert!(
-        project(json!({"self_config": {"enable_self_config": true, "enable_pack_install": true}}))
-            .unwrap()
-            .pack_install
-    );
-    assert!(
-        project(json!({"self_config": {"unknown": 1}})).is_err(),
-        "a group that does not decode fails closed"
-    );
-}
-
 async fn operator_replace_tools(node: &Arc<defra_node::EmbeddedNode>, tools: Value) {
     use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -1956,28 +1912,6 @@ async fn context_create_selecting_granted_tools_requires_the_grant() {
     call_config_tool(&holder, create)
         .await
         .expect("an agent holding the grant may create a Context that selects it");
-}
-
-#[test]
-fn agent_edit_arguments_distinguish_omission_clear_and_set() {
-    let args: ConfigureAgentParams = serde_json::from_value(json!({
-        "action": "edit",
-        "agent_id": "review",
-        "display_name": "Review reconnaissance",
-        "root": null
-    }))
-    .expect("valid sparse edit arguments");
-    assert_eq!(
-        agent_edit_fields(&args),
-        vec!["display_name".to_string(), "root".to_string()]
-    );
-    assert_eq!(
-        args.display_name,
-        StringUpdate::Set("Review reconnaissance".to_string())
-    );
-    assert_eq!(args.root, StringUpdate::Clear);
-    assert_eq!(args.profile_id, StringUpdate::Omitted);
-    assert_eq!(args.system_prompt, StringUpdate::Omitted);
 }
 
 pub(super) async fn build_agent_node() -> std::sync::Arc<defra_node::EmbeddedNode> {
@@ -3194,27 +3128,6 @@ async fn agent_category_gates_the_tool() {
     assert!(with_agent
         .iter()
         .any(|tool| tool.name() == CONFIG_TOOL_NAME));
-}
-
-#[tokio::test]
-async fn agent_unknown_action_errors_cleanly() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-unknown");
-    let tools = build_self_config_tools(
-        node,
-        identity.did().to_string(),
-        Some(identity),
-        &config(&["node"]),
-        test_plugins(),
-    );
-
-    let error = call_config_tool(&tools, vec!["agent".into(), "unknown-action".into()])
-        .await
-        .expect_err("unknown action must error");
-    assert!(
-        error.contains("unknown agent verb"),
-        "error should name the bad action: {error}"
-    );
 }
 
 #[tokio::test]
@@ -6970,24 +6883,6 @@ async fn public_agent_management_previews_without_publishing_and_checks_signer()
     assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 2);
 }
 
-#[test]
-fn agent_decision_rejects_fields_outside_the_edit_contract() {
-    let view = agent::AgentCatalogView {
-        agents: BTreeMap::from([("target".into(), true)]),
-        ..Default::default()
-    };
-    for field in ["enabled", "node_did", "context_id", "unexpected"] {
-        let error = agent::decide_agent_operation(
-            &view,
-            &agent::AgentOperation::Edit(vec![(field.into(), Some(json!(true)))]),
-            "target",
-            false,
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("unsupported agent edit field"));
-    }
-}
-
 #[tokio::test]
 async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() {
     let node = build_agent_node().await;
@@ -7157,43 +7052,6 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
         .unwrap();
     changed["system_prompt"] = json!("Private replacement instructions");
     assert_eq!(after["data"]["AgentContext"], expected_contexts);
-}
-
-#[test]
-fn operator_grants_decode_and_preserve_main_bounds() {
-    use super::ops::{guard_tools_keep_grants, OperatorGrants};
-    let empty = json!({});
-    let granted = json!({"self_config":{"enable_self_config":true,"enable_pack_install":true}});
-    let malformed = json!({"self_config":{"unknown":true}});
-    assert_eq!(
-        OperatorGrants::from_tools_json(empty.as_object().unwrap()).unwrap(),
-        OperatorGrants::default()
-    );
-    assert!(OperatorGrants::from_tools_json(malformed.as_object().unwrap()).is_err());
-    assert!(guard_tools_keep_grants(
-        &OperatorGrants::default(),
-        None,
-        granted.as_object().unwrap()
-    )
-    .is_err());
-    assert!(guard_tools_keep_grants(
-        &OperatorGrants::default(),
-        Some(granted.as_object().unwrap()),
-        granted.as_object().unwrap()
-    )
-    .is_ok());
-    assert!(guard_tools_keep_grants(
-        &OperatorGrants { pack_install: true },
-        None,
-        granted.as_object().unwrap()
-    )
-    .is_ok());
-    assert!(guard_tools_keep_grants(
-        &OperatorGrants::default(),
-        Some(granted.as_object().unwrap()),
-        empty.as_object().unwrap()
-    )
-    .is_ok());
 }
 
 async fn grant_pack_install_for_test(

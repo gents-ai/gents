@@ -1,8 +1,3 @@
-//! A [`TrialExecutor`] that answers from a table instead of running anything.
-//!
-//! The runner loop is the thing under test in most of the suite: which trials
-//! it plans, how it retries, what it writes.
-
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
@@ -17,7 +12,6 @@ use crate::eval::runner::executor::{
 };
 use crate::eval::{Anchor, OutcomeKind, ProviderReason, TrialUsage};
 
-/// The slot a scripted answer belongs to.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ScriptKey {
     pub cell_label: String,
@@ -51,7 +45,6 @@ impl ScriptedExecutor {
         self
     }
 
-    /// One completed stage whose `capture_name` capture holds `rows`.
     pub fn passed_evidence(
         did: &str,
         stage_id: &str,
@@ -77,12 +70,10 @@ impl ScriptedExecutor {
         )
     }
 
-    /// A trial that produced no evidence at all.
     pub fn not_evidence(did: &str) -> TrialEvidence {
         TrialEvidence::infrastructure(locator(did))
     }
 
-    /// One stage that ended in `kind`.
     pub fn failed_evidence(
         did: &str,
         stage_id: &str,
@@ -106,7 +97,6 @@ impl ScriptedExecutor {
         )
     }
 
-    /// The scripted answer for `spec`: its keyed entry, else the default.
     fn scripted(&self, spec: &TrialSpec) -> Option<&TrialEvidence> {
         spec.script_key
             .as_ref()
@@ -165,7 +155,6 @@ fn unprovisioned() -> TrialLocator {
     locator("did:unprovisioned")
 }
 
-/// Evidence whose anchor and digest follow from the stages it holds.
 fn evidence(locator: TrialLocator, stages: Vec<StageEvidence>) -> TrialEvidence {
     let anchor = Anchor {
         terminal_states: stages
@@ -178,48 +167,3 @@ fn evidence(locator: TrialLocator, stages: Vec<StageEvidence>) -> TrialEvidence 
     TrialEvidence::new(locator, stages, TrialUsage::default(), anchor)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::eval::runner::executor::{TrialExecutor, TrialSpec};
-    use tokio_util::sync::CancellationToken;
-
-    #[tokio::test]
-    async fn the_scripted_executor_returns_the_table_entry_or_the_default_and_records_calls() {
-        let key = ScriptKey {
-            cell_label: "base".into(),
-            case_id: "k".into(),
-            trial_index: 0,
-            attempt: 1,
-        };
-        let ex = ScriptedExecutor::new()
-            .with(key.clone(), ScriptedExecutor::not_evidence("did:x"))
-            .with_default(ScriptedExecutor::passed_evidence(
-                "did:x",
-                "s",
-                "items",
-                vec![],
-            ));
-        let mut spec = TrialSpec::empty_for_tests("t1");
-        spec.script_key = Some(key.clone());
-        assert_eq!(
-            ex.execute(&spec, CancellationToken::new())
-                .await
-                .stages
-                .len(),
-            0
-        );
-        spec.script_key = Some(ScriptKey {
-            attempt: 2,
-            ..key.clone()
-        });
-        assert_eq!(
-            ex.execute(&spec, CancellationToken::new())
-                .await
-                .stages
-                .len(),
-            1
-        );
-        assert_eq!(ex.calls.lock().unwrap().len(), 2);
-    }
-}

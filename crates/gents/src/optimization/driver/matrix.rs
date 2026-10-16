@@ -1,20 +1,3 @@
-//! The scripted end-to-end matrix: no model, no network. Each case assembles
-//! a job the way `tests/eval_runner_canary.rs` assembles a run and replaces
-//! only the provider, with the runner's `ScriptedExecutor`. Nothing here
-//! mocks the driver, the policy or the journal: a failure is a defect in the
-//! stack.
-//!
-//! Resume twins interrupt a job mid-flow and compare the resumed journal with
-//! an uninterrupted twin's (R9, T35-3). A token cancelled inside `propose`
-//! ([`CancellingProposer`]) stops the pass after that round's train run and
-//! before its next run; a token cancelled inside a run's first trial
-//! ([`CancellingExecutor`]) leaves the run journaled and undecided, and its
-//! abandoned slot is replanned at attempt 2, which spends no infrastructure
-//! retry (spec 4b §9). Those twins run with `max_infra_retries: 1` and script
-//! attempt 2 as attempt 1. One point is out of the token's reach — after a
-//! validation run completes and before its re-run is journaled, no seam is
-//! called — so a resume's re-run budget check there is covered by the driver
-//! unit tests instead.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,7 +36,6 @@ pub(crate) const BASELINE_PROMPT: &str = "Watch the mailbox.\n";
 pub(crate) const CANDIDATE_PROMPT: &str = "Watch the mailbox, and name the collection.\n";
 
 pub(crate) const DEFINITION: &str = "monitor-findings";
-/// Five validation cases: nothing can pass.
 const SMALL_DEFINITION: &str = "monitor-small";
 const FEEDBACK_DEFINITION: &str = "monitor-feedback";
 const FEEDBACK: &str = "name the collection";
@@ -135,7 +117,6 @@ fn tools() -> (Collection, Value) {
     )
 }
 
-/// A stage whose `findings` capture holds one row (10000) / nothing (0).
 pub(crate) fn pass() -> TrialEvidence {
     ScriptedExecutor::passed_evidence("did:key:trial", "check", "findings", vec![json!({})])
 }
@@ -224,8 +205,6 @@ impl Proposer for ErroringProposer {
     }
 }
 
-/// Cancels `token` when asked for round `at`, after that round's train run
-/// completed (R9).
 struct CancellingProposer {
     inner: ScriptedProposer,
     at: u32,
@@ -242,8 +221,6 @@ impl Proposer for CancellingProposer {
     }
 }
 
-/// Advances the test clock past `deadline` when asked for round 1 (FW-4).
-/// Must run inside a `TEST_CLOCK_OFFSET` scope.
 struct DeadlineProposer {
     inner: ScriptedProposer,
     deadline: u64,
@@ -263,9 +240,6 @@ impl Proposer for DeadlineProposer {
     }
 }
 
-/// Cancels `token` inside the first trial of `run_id`, after the run was
-/// journaled as started; the abandoned slot is replanned at attempt 2 with no
-/// infrastructure retry (spec 4b §9).
 struct CancellingExecutor<'a> {
     inner: &'a ScriptedExecutor,
     run_id: String,
@@ -311,8 +285,6 @@ impl TrialExecutor for CancellingExecutor<'_> {
     }
 }
 
-/// Writes its run's cancel marker on the first candidate trial: an operator's
-/// `gents eval cancel` on the job's first validation run.
 struct CancelsFirstValidationRun<'a> {
     inner: &'a ScriptedExecutor,
     marked: AtomicBool,
@@ -423,7 +395,6 @@ impl Harness {
             ])
             .await;
         let pack = launching.pack("subject", "Off");
-        // `<launching home>/eval/jobs`, beside `eval/runs` (ruling R8).
         let jobs_dir = launching
             .runs_dir()
             .parent()
@@ -642,7 +613,6 @@ async fn cancel_while_proposing(
     stopped
 }
 
-/// A harness whose job accepted a candidate and reached `ReadyToPromote`.
 pub(crate) async fn accepting_harness(job_id: &str) -> (Harness, JobRequest) {
     let harness = Harness::new().await;
     let executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
@@ -913,8 +883,6 @@ async fn a_candidate_that_wins_every_case_is_accepted_and_reaches_ready_to_promo
         (retained.round, retained.text.as_str()),
         (1, CANDIDATE_PROMPT)
     );
-    // C1: every run the job asked for froze the job's capture list, which is
-    // what an executor reads stage evidence from.
     let mut started = 0;
     for split in [EvalSplit::Train, EvalSplit::Validation, EvalSplit::HeldOut] {
         for run_id in runs_started(&journal, split) {
@@ -931,12 +899,10 @@ async fn a_candidate_that_wins_every_case_is_accepted_and_reaches_ready_to_promo
     );
 }
 
-/// Ruling F-3: the deadline ends the rounds but never the confirmation.
 #[tokio::test]
 async fn a_deadline_that_passes_after_an_accept_still_runs_the_held_out_confirmation() {
     let harness = Harness::new().await;
     let executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
-    // An hour away: only the proposer's clock advance can pass it.
     let deadline = crate::optimization::driver::now_unix_secs() + 3_600;
     let mut request = harness.request("deadline", DEFINITION, budgets(1_000));
     request.budgets.deadline_unix_secs = Some(deadline);
@@ -978,8 +944,6 @@ async fn a_deadline_that_passes_after_an_accept_still_runs_the_held_out_confirma
     );
 }
 
-/// C1 (constraint 15): a resume naming another capture list is refused and
-/// writes nothing.
 #[tokio::test]
 async fn a_resume_with_another_capture_list_is_refused() {
     let (harness, request) = accepting_harness("captures-resume").await;
@@ -993,9 +957,6 @@ async fn a_resume_with_another_capture_list_is_refused() {
     assert_eq!(journal(&harness, &request.job_id).await, before);
 }
 
-/// #1455: a pack whose prompt matches but whose other configuration differs
-/// is refused at freeze with nothing written; a pack that differs only where a
-/// trial remaps it freezes.
 #[tokio::test]
 async fn a_pack_that_is_not_the_live_configuration_is_refused_at_freeze() {
     let harness = Harness::new().await;
@@ -1202,7 +1163,8 @@ async fn an_inconclusive_round_is_rerun_on_a_new_seed_and_ends_inconclusive() {
     );
     assert_eq!(
         decided.2,
-        Decision::Inconclusive(InconclusiveReason::Insufficient)
+            *decision,
+                Decision::Inconclusive(InconclusiveReason::Insufficient)
     );
     let mut seeds = Vec::new();
     for run_id in &decided.1 {
@@ -1214,7 +1176,6 @@ async fn an_inconclusive_round_is_rerun_on_a_new_seed_and_ends_inconclusive() {
     }
     assert_ne!(seeds[0], seeds[1], "the re-run draws a new seed base");
 
-    // Finding F1: the decision read both runs' pairs, added.
     let definition =
         crate::optimization::driver::load_definition(harness.access(), OWNER, DEFINITION)
             .await
@@ -1337,7 +1298,6 @@ async fn a_baseline_edited_after_the_freeze_fails_the_job_before_any_further_spe
     let request = harness.request("drifted", DEFINITION, budgets(1_000));
     let (before, spent) = stopped_after_round_one_train(&harness, &request, &executor).await;
 
-    // An operator edits a closure document the job does not target.
     harness.install(vec![behavior("Monitor, renamed")]).await;
     let outcome = settle(
         &harness,
@@ -1360,7 +1320,6 @@ async fn a_definition_edited_after_the_freeze_fails_the_job_as_definition_change
     let request = harness.request("definition-drift", DEFINITION, budgets(1_000));
     let (before, spent) = stopped_after_round_one_train(&harness, &request, &executor).await;
 
-    // Finding F5: the definition is not in the closure, so this is not drift.
     harness
         .install(vec![(
             Collection::EvalDefinition,
@@ -1429,8 +1388,6 @@ async fn assert_nothing_after_drift(
     );
 }
 
-/// R9: interrupt twice and the resumed job reaches its uninterrupted twin's
-/// journal.
 #[tokio::test]
 async fn a_resumed_job_reaches_the_journal_of_its_uninterrupted_twin() {
     let harness = Harness::new().await;
@@ -1509,8 +1466,6 @@ async fn a_resumed_job_reaches_the_journal_of_its_uninterrupted_twin() {
     );
 }
 
-/// R9 with no slack in the budget: a twice-interrupted job passes and fails
-/// each budget check as its twin does.
 #[tokio::test]
 async fn a_resumed_job_with_no_budget_slack_reaches_the_journal_of_its_twin() {
     let harness = Harness::new().await;
@@ -1535,9 +1490,6 @@ async fn a_resumed_job_with_no_budget_slack_reaches_the_journal_of_its_twin() {
         .iter()
         .any(|entry| matches!(entry, JournalEntry::BudgetExhausted { round: Some(3), .. })));
 
-    // Stopped after round 1's train run, before its validation run. Round 1 is
-    // already proposed, so the next ask is round 2, which this proposer cannot
-    // answer.
     let resumed = harness.request("tight-b", DEFINITION, budgets(76));
     cancel_while_proposing(&harness, &resumed, &executor, 1).await;
     let round_one_only = ScriptedProposer::new(vec![(
@@ -1567,8 +1519,6 @@ async fn a_resumed_job_with_no_budget_slack_reaches_the_journal_of_its_twin() {
     );
 }
 
-/// T35-3: a pass cancelled inside round 3's proposal of a structural duplicate
-/// stops after the rounds end, before the held-out run is journaled.
 #[tokio::test]
 async fn a_job_stopped_before_its_held_out_run_resumes_to_the_journal_of_its_twin() {
     let harness = Harness::new().await;
@@ -1621,8 +1571,6 @@ fn accepting_executor_with_retry() -> ScriptedExecutor {
     )
 }
 
-/// T35-3: cancel inside a run the driver journaled as started and has not
-/// decided, then resume and compare with the uninterrupted twin.
 async fn assert_twin_after_cancel_inside(
     executor: &ScriptedExecutor,
     job: &str,
@@ -1731,8 +1679,6 @@ fn normalized(journal: Vec<JournalEntry>, job_id: &str) -> Vec<String> {
         .collect()
 }
 
-/// T34-3: a crash between `create_job` and `Frozen` leaves a row with an
-/// empty journal, and its resume reaches the twin's journal.
 #[tokio::test]
 async fn a_job_created_without_frozen_resumes_to_the_journal_of_its_twin() {
     let harness = Harness::new().await;
@@ -1748,8 +1694,6 @@ async fn a_job_created_without_frozen_resumes_to_the_journal_of_its_twin() {
         .unwrap()
         .origin;
 
-    // Everything the freeze wrote before the crash: the baseline copy, then
-    // the row. The origin names no job id, so the twin's is this job's.
     let resumed = harness.request("unfrozen-b", DEFINITION, budgets(1_000));
     let source = materialize_pack(
         &resumed.baseline_pack,
@@ -1781,7 +1725,6 @@ async fn a_job_created_without_frozen_resumes_to_the_journal_of_its_twin() {
     );
 }
 
-/// Freeze a job and stop before any run: a pre-cancelled token.
 pub(crate) async fn frozen_job(harness: &Harness, job_id: &str) -> JobRequest {
     let request = harness.request(job_id, DEFINITION, budgets(1_000));
     let cancelled = CancellationToken::new();
@@ -1800,8 +1743,6 @@ pub(crate) async fn frozen_job(harness: &Harness, job_id: &str) -> JobRequest {
     request
 }
 
-/// T34-4: a definition deleted after the freeze has changed; the job ends
-/// instead of erroring on every resume.
 #[tokio::test]
 async fn a_definition_deleted_after_the_freeze_fails_the_job_as_definition_changed() {
     let harness = Harness::new().await;
@@ -1829,7 +1770,6 @@ async fn a_definition_deleted_after_the_freeze_fails_the_job_as_definition_chang
 async fn a_definition_that_no_longer_validates_fails_the_job_as_definition_changed() {
     let harness = Harness::new().await;
     let request = frozen_job(&harness, "definition-invalid").await;
-    // A writer that skips desired-state validation, as this edit does.
     harness
         .access()
         .transact_write("matrix.invalidate_definition", |txn| {
@@ -1867,8 +1807,6 @@ async fn a_definition_that_no_longer_validates_fails_the_job_as_definition_chang
     );
 }
 
-/// P-N3 (T35-2): attempt 0 is inconclusive and the re-run does not fit; the
-/// round keeps its decision and the rounds end.
 #[tokio::test]
 async fn an_inconclusive_round_whose_rerun_is_unaffordable_keeps_its_decision_and_ends_the_rounds()
 {
@@ -1930,7 +1868,6 @@ async fn an_inconclusive_round_whose_rerun_is_unaffordable_keeps_its_decision_an
     ));
 }
 
-/// The cancel marker stops only the run's own child token.
 #[tokio::test]
 async fn a_cancelled_validation_run_journals_no_decision_and_the_job_resumes() {
     let harness = Harness::new().await;

@@ -10,8 +10,6 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 
-// A row comes back while still this many views away, and goes only once
-// twice as far, so a row near the edge does not flicker between the two.
 const NEAR = "200% 0px";
 const FAR = "400% 0px";
 

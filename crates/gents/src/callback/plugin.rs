@@ -38,7 +38,6 @@ fn writable_output_collection(collection: &str) -> Result<()> {
     crate::document_config::reject_protected_collection_name(collection)
 }
 
-/// Refuses a plugin handler that could never run or write its outputs.
 pub fn validate_handler(
     plugin: &str,
     digest: &str,
@@ -152,7 +151,6 @@ pub(super) struct PluginHandler<'a> {
     pub outputs: &'a [PortSpec],
 }
 
-/// Runs a claimed, running invocation whose callback is a plugin.
 pub(super) async fn execute(
     node: &std::sync::Arc<EmbeddedNode>,
     invocation: &mut CallbackInvocationDoc,

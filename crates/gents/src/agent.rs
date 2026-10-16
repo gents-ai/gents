@@ -168,7 +168,6 @@ pub struct DocumentRuntimeOptions {
     pub startup_build_failure_observer:
         Option<Arc<dyn crate::startup_readiness::StartupBuildFailureObserver>>,
     pub startup_readiness: crate::startup_readiness::StartupReadinessOptions,
-    /// The gents home whose installed plugins this runtime's tools can call.
     pub plugin_home: Option<PathBuf>,
     #[cfg(test)]
     pub(crate) router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
@@ -183,7 +182,6 @@ pub(crate) struct DocumentResolveContext {
 }
 
 impl DocumentResolveContext {
-    /// A context over a host with no plugins installed; test construction only.
     #[cfg(test)]
     pub(crate) fn for_tests(
         identity: Arc<dyn NodeIdentity>,
@@ -229,8 +227,6 @@ pub struct Gents {
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
 }
 
-/// The executor answering the model calls of a plugin whose slot is bound
-/// through this node's inference profiles.
 pub(crate) fn plugin_executor(
     home: Option<PathBuf>,
     models: crate::plugin::model_calls::AccessModels<crate::config_client::ConfigAccess>,
@@ -311,8 +307,7 @@ impl Gents {
             startup_readiness: options.startup_readiness,
             #[cfg(test)]
             router_dispatch_probe: options.router_dispatch_probe,
-            // Capture is mandatory (#840): a provider call with no durable
-            // rendered input is a log entry, not a fact record.
+            // Provider calls require durable rendered input to be fact records.
             rendered_request_capture_factory: Some(rendered_request_capture_factory),
             manual_trigger_handle: Arc::new(OnceCell::new()),
             operator_tool_root: options.tool_ceiling.root().map(PathBuf::from),
@@ -320,8 +315,6 @@ impl Gents {
         })
     }
 
-    /// The local prober's measured backend health; the completion-retry path
-    /// (#631) uses it for fail-fast-vs-backoff decisions.
     pub fn backend_health(&self) -> BackendHealthMap {
         self.backend_health.clone()
     }
@@ -345,7 +338,6 @@ impl Gents {
         &self.runtime_node.node_did
     }
 
-    /// Reads this runtime node's account usage from its providers.
     pub async fn read_usage(
         &self,
         trigger: crate::usage_observation::UsageTrigger,

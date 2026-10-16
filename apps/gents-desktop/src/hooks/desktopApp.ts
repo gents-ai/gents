@@ -55,7 +55,6 @@ export function createDesktopApp({
     localServer: createLocalServerStore(),
     provenance: createProvenanceStore(),
   };
-  /** what the shell decides, kept in step with the stores */
   const view = createShellView(stores);
   const project = () => view.getState();
   followTranscript(stores, view);

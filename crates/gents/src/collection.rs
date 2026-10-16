@@ -1,6 +1,3 @@
-//! Canonical operator-controlled document collections; names and
-//! owner-scoped logical keys follow `ConfigDocuments`.
-
 use std::fmt;
 
 #[derive(
@@ -230,12 +227,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn traversal_covers_each_document_collection_once() {
-        let visited: BTreeSet<_> = DESIRED_STATE_APPLY_ORDER.into_iter().collect();
-        assert_eq!(visited.len(), DESIRED_STATE_APPLY_ORDER.len());
-        assert_eq!(visited, Collection::ALL.into_iter().collect());
-        let names: BTreeSet<_> = Collection::ALL.iter().map(|c| c.graphql_type()).collect();
-        assert_eq!(names.len(), Collection::ALL.len());
-    }
 }

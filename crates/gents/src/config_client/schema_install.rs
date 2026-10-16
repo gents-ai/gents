@@ -1,6 +1,3 @@
-//! Additive schema publication shared by package installation and configuration.
-//! Schema contracts are node-wide; this does not grant document read/write ACP.
-
 use std::collections::BTreeMap;
 
 use anyhow::{ensure, Context, Result};
@@ -16,6 +13,7 @@ pub(crate) struct SchemaInstallMismatch {
     pub collection: String,
 }
 
+/// Schema publication is node-wide and does not grant document read/write ACP.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SchemaInstallPlan {
     pub artifact_digest: String,
@@ -25,7 +23,6 @@ pub struct SchemaInstallPlan {
 }
 
 impl SchemaInstallPlan {
-    /// An SDL-plus-patch series must supply every declared field before reporting convergence.
     pub fn require_satisfied(&self) -> Result<()> {
         ensure!(
             !self.requires_publication,
@@ -42,13 +39,10 @@ impl SchemaInstallPlan {
     }
 }
 
-/// Read-only compatibility check; existing collections must match exactly.
 pub async fn preview_schema_install(access: &ConfigAccess, sdl: &str) -> Result<SchemaInstallPlan> {
     preview_schema(access, sdl, false).await
 }
 
-/// Plan an SDL phase of an additive patch series. The caller must finish its
-/// patches and re-preview with `require_satisfied` before claiming convergence.
 pub async fn preview_additive_schema_install(
     access: &ConfigAccess,
     sdl: &str,

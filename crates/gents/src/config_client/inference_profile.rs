@@ -6,7 +6,6 @@ use crate::oauth_credential::ServingAccount;
 
 use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 
-/// Every profile of `node_did` in this transaction's snapshot.
 pub async fn list_inference_profiles_in_txn(
     txn: &super::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -26,7 +25,6 @@ pub async fn list_inference_profiles_in_txn(
         .collect()
 }
 
-/// Replace a complete inference profile; sparse patches remain owned by the patch API.
 pub async fn write_inference_profile_document(
     access: &ConfigAccess,
     profile: &InferenceProfile,
@@ -56,7 +54,6 @@ pub async fn write_inference_profile_document(
         .await
 }
 
-/// Accounts for `agent_id`'s profile and compaction profile; missing profiles or backends are skipped.
 pub async fn agent_accounts(
     access: &ConfigAccess,
     node_did: &str,

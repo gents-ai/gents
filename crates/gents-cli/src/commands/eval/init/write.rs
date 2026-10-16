@@ -1,6 +1,3 @@
-//! A validated draft as a definition pack: written to a temporary directory,
-//! loaded back through the real pack loader and installed into a scratch
-//! embedded home (validation step 7), and only then moved to `--out`.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -27,30 +24,22 @@ pub(crate) use recovery::recover_output;
 
 const CONFIG: &str = "pack_config.json";
 const README: &str = "README.md";
-/// The manifest author of every pack `write_files` writes; `--force`
-/// replaces only such a pack.
 const GENERATED_BY: &str = "gents eval init";
 
-/// What a pilot left for the README to record: one run per populated split,
-/// and whether the draft was revised after it.
 pub(crate) struct PilotNote {
     pub(crate) run_ids: Vec<String>,
     pub(crate) revised: bool,
 }
 
-/// A definition pack that landed at `out`.
 #[derive(Debug)]
 pub(crate) struct Written {
     pub(crate) out: PathBuf,
     pub(crate) pack_name: String,
 }
 
-/// A definition pack that passed the round trip, still in its temporary
-/// directory.
 pub(crate) struct Staged {
     dir: TempDir,
     pack_name: String,
-    /// The definition as the loader read it back.
     #[cfg_attr(not(test), allow(dead_code))]
     definition: EvalDefinition,
 }
@@ -62,9 +51,6 @@ impl Staged {
     }
 }
 
-/// Validation step 7: write the pack to a temporary directory, load it
-/// through the real loader and install it into a scratch embedded home.
-/// Every failure is a message for the author.
 pub(crate) async fn stage(
     assembled: &Assembled,
     interview_summary: &str,
@@ -98,8 +84,6 @@ pub(crate) async fn stage(
     })
 }
 
-/// Move a staged pack to `out`. An existing `out` is refused unless `force`,
-/// which replaces it.
 pub(crate) fn commit(
     staged: Staged,
     out: &Path,
@@ -212,9 +196,6 @@ fn replaceable_destination(out: &Path, force: bool, gents_home: &Path) -> Result
     replaceable_out(out, user_home.as_deref(), gents_home, &cwd).map(Some)
 }
 
-/// Move the pack set aside in `holder` back to `existing`. If that fails the
-/// holder is kept, never removed, so the old pack survives where the error
-/// names it.
 fn restore(existing: &Path, holder: TempDir, old_pack: &Path, why: &str) -> Result<()> {
     std::fs::rename(old_pack, existing).map_err(|error| {
         let kept = holder.keep();
@@ -226,8 +207,6 @@ fn restore(existing: &Path, holder: TempDir, old_pack: &Path, why: &str) -> Resu
     })
 }
 
-/// A hidden directory beside `path`, created exclusively for one step of
-/// replacing it and removed with everything in it when dropped.
 fn private_sibling(path: &Path, step: &str) -> Result<TempDir> {
     let parent = path
         .parent()
@@ -240,11 +219,6 @@ fn private_sibling(path: &Path, step: &str) -> Result<TempDir> {
         .with_context(|| format!("creating a directory beside {}", path.display()))
 }
 
-/// The directory `--force` may replace at `out`, resolved canonically: never
-/// the filesystem root, the user home or an ancestor of it (refused as
-/// `gents init --dangerously-overwrite` refuses them, and when the user home
-/// cannot be resolved), a Gents home or an ancestor of one, or an ancestor of
-/// the working directory; and only a pack `gents eval init` wrote.
 fn replaceable_out(
     out: &Path,
     user_home: Option<&Path>,
@@ -286,10 +260,6 @@ fn replaceable_out(
     Ok(resolved)
 }
 
-/// The first entry under `dir` that is neither a declared pack path nor a
-/// directory leading to one; a symbolic link always counts. Replacing
-/// `--out` removes the whole tree, so anything placed in a generated pack
-/// afterwards (notes, another Gents home) must stop the replacement.
 fn undeclared_entry(dir: &Path) -> Result<Option<PathBuf>> {
     let manifest: PackManifest = serde_json::from_slice(
         &std::fs::read(dir.join("manifest.json")).context("reading the pack manifest")?,
@@ -318,9 +288,6 @@ fn undeclared_entry(dir: &Path) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
-/// Whether `dir` loads through the pack loader as a pack `write_files`
-/// wrote: its manifest names `gents eval init` as the author and its
-/// configuration holds an eval definition.
 fn is_generated_eval_pack(dir: &Path) -> bool {
     let Ok((manifest, assets)) = read_pack(dir) else {
         return false;
@@ -346,11 +313,6 @@ fn is_generated_eval_pack(dir: &Path) -> bool {
         .is_ok_and(|config| !config.eval_definitions.is_empty())
 }
 
-/// Refuses an `--out` that is the subject's directory, lies inside it, or
-/// contains it: `--force` replaces `--out` wholesale, and the pack goes into
-/// it, so either way the subject would be overwritten. Both paths are
-/// compared canonically; a `--out` that does not exist yet is resolved
-/// through its nearest existing ancestor.
 pub(crate) fn refuse_subject_overlap(out: &Path, subject_dir: &Path) -> Result<()> {
     let subject = subject_dir
         .canonicalize()
@@ -366,8 +328,6 @@ pub(crate) fn refuse_subject_overlap(out: &Path, subject_dir: &Path) -> Result<(
     Ok(())
 }
 
-/// `path` made absolute and canonical as far as it exists; the missing tail
-/// is appended with `.` dropped and `..` popped.
 fn resolve_through_existing_ancestor(path: &Path) -> std::io::Result<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -385,7 +345,6 @@ fn resolve_through_existing_ancestor(path: &Path) -> std::io::Result<PathBuf> {
                 missing.push(name.to_owned());
                 existing = parent;
             }
-            // `..` or the root: nothing left to strip.
             _ => break,
         }
     }
@@ -404,8 +363,6 @@ fn resolve_through_existing_ancestor(path: &Path) -> std::io::Result<PathBuf> {
 
 
 
-/// The pack's README: what was drafted, for which subject, from what
-/// interview, which cases, and the pilot when there was one.
 pub(crate) fn readme(
     assembled: &Assembled,
     interview_summary: &str,
@@ -464,8 +421,6 @@ pub(crate) fn readme(
     text
 }
 
-/// The definition's cases as a markdown table: id, split, stage count and
-/// the checks they name. The README holds it; the command prints it.
 pub(crate) fn case_table(definition: &EvalDefinition) -> String {
     let mut text = String::from("| case | split | stages | checks |\n|---|---|---|---|\n");
     for case in &definition.cases {
@@ -488,8 +443,6 @@ pub(crate) fn case_table(definition: &EvalDefinition) -> String {
     text
 }
 
-/// Replace the README of the pack at `out` with one that records `pilot`.
-/// The manifest already lists README.md, so nothing else changes.
 pub(crate) fn rewrite_readme(
     out: &Path,
     assembled: &Assembled,
@@ -505,8 +458,6 @@ pub(crate) fn rewrite_readme(
     .with_context(|| format!("writing {}", path.display()))
 }
 
-/// The pack name a definition id gives: `-` becomes `_`, and the result
-/// must be a pack name.
 fn pack_name(definition_id: &str) -> Result<String, String> {
     let name = definition_id.replace('-', "_");
     if is_valid_pack_name(&name) {
@@ -518,8 +469,6 @@ fn pack_name(definition_id: &str) -> Result<String, String> {
     }
 }
 
-/// The sidecar a case is written to. Pack asset names are snake_case, so a
-/// kebab-case id's `-` becomes `_`.
 fn case_asset(case_id: &str) -> String {
     format!("cases/{}.json", case_id.replace('-', "_"))
 }
@@ -554,8 +503,6 @@ fn write_files(
         files.insert(path.clone(), bytes);
         references.push(format!("./{path}"));
     }
-    // The config's strings are interpolated at install; the author's text
-    // is escaped so it installs as written. Sidecars are never interpolated.
     let mut entry = json!({
         "definition_id": definition.definition_id,
         "comparability_version": definition.comparability_version,
@@ -620,21 +567,14 @@ fn escape_strings(value: &mut Value) {
     }
 }
 
-/// Load the pack at `dir` as any directory pack loads, check it holds
-/// exactly `expected`, install it into a scratch embedded home and read the
-/// definition back from there. Returns the definition as loaded.
 async fn round_trip(dir: &Path, expected: &EvalDefinition) -> Result<EvalDefinition> {
     let (manifest, assets) = read_pack(dir)?;
     let home = EmbeddedHome::create_temp("eval-init-roundtrip").await?;
     let result = install_and_read_back(&home, &manifest, &assets, expected).await;
-    // A dropped node tears itself down unawaited; close the store cleanly on
-    // every path before its directory goes. Shutdown reports no error, so
-    // the body's result is what returns.
     home.node.shutdown().await;
     result
 }
 
-/// [`round_trip`]'s work inside the scratch `home`.
 async fn install_and_read_back(
     home: &EmbeddedHome,
     manifest: &PackManifest,

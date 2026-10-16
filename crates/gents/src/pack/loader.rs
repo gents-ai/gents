@@ -28,7 +28,6 @@ pub fn load_pack_config(
     Ok(config)
 }
 
-/// A pack must not choose the default agent; the user does.
 pub fn ensure_pack_leaves_default_unselected(config: &PackConfig) -> Result<()> {
     if let Some(default) = &config.node.default_agent_id {
         anyhow::bail!(
@@ -41,8 +40,6 @@ pub fn ensure_pack_leaves_default_unselected(config: &PackConfig) -> Result<()> 
     Ok(())
 }
 
-/// The one place that decides how a pack's own plugin nodes run the artifact
-/// the pack ships.
 pub fn pin_pack_plugins(
     manifest: &PackManifest,
     read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
@@ -62,8 +59,6 @@ pub fn pin_pack_plugins(
     Ok(())
 }
 
-/// Decode canonical authoring for both distributed packs and local
-/// configuration; sidecar contents are never interpolated.
 pub fn decode_pack_config(
     mut value: Value,
     options: Option<&PackInstallOptions>,
@@ -221,9 +216,6 @@ fn pin_entry_prepare_plugin(
     Ok(())
 }
 
-/// The qualified name and `sha256:` digest of the pack's own plugin `plugin`,
-/// or `None` when `plugin` is already `namespace/name`. `authored`, when
-/// given, must be the digest the pack ships.
 fn own_plugin(
     manifest: &PackManifest,
     read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,

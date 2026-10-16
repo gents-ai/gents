@@ -1,16 +1,3 @@
-//! What a data-chosen plugin path may reach.
-//!
-//! A path that comes from data is untrusted; reachable without a question
-//! when, symlinks resolved, it lies inside the session's working folder
-//! (read-only) or inside a folder or file in the operator's list. The working
-//! folder is never `/`, the user's home or a folder holding either it or the
-//! gents home: a server started from a launcher has one of those as its
-//! current directory and that must not make everything readable. The list is
-//! one operator-owned file in the gents home, written by `gents plugin dirs`
-//! and the desktop "Allowed folders" panel; the file tools refuse to write it
-//! (see [`protect`]), though a shell run as the same user can. Anything else
-//! needs the operator's approval for that call (see [`super::approval`]) or
-//! is refused. The gents home is never reachable.
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -19,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use super::BoundDir;
 use crate::pack::BindAccess;
 
-/// One operator-allowed folder and the most access plugins get in it.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AllowedDir {
@@ -37,7 +23,6 @@ fn file(home: &Path) -> PathBuf {
     home.join(crate::home::ALLOWED_DIRS_FILE_NAME)
 }
 
-/// The operator's configured folders, sorted by path; empty means the default.
 pub fn list(home: &Path) -> Result<Vec<AllowedDir>> {
     let path = file(home);
     let bytes = match std::fs::read(&path) {
@@ -62,8 +47,6 @@ fn save(home: &Path, dirs: Vec<AllowedDir>) -> Result<()> {
     Ok(())
 }
 
-/// Allows `path` (an existing folder or one file, stored in canonical form)
-/// with `access`.
 pub fn add(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
     let path = path
         .canonicalize()
@@ -82,8 +65,6 @@ pub fn add(home: &Path, path: &Path, access: BindAccess) -> Result<AllowedDir> {
     Ok(entry)
 }
 
-/// Stops allowing `path`; false when it was not in the list. The path is
-/// matched as given and, when it still exists, in canonical form.
 pub fn remove(home: &Path, path: &Path) -> Result<bool> {
     let canonical = path.canonicalize().ok();
     let mut dirs = list(home)?;
@@ -96,12 +77,10 @@ pub fn remove(home: &Path, path: &Path) -> Result<bool> {
     Ok(removed)
 }
 
-/// The operator's own home folder, resolved the same way on macOS and Linux.
 pub fn user_home() -> Option<PathBuf> {
     dirs::home_dir().and_then(|home| home.canonicalize().ok())
 }
 
-/// A path resolved to the canonical file or folder it names.
 #[derive(Clone, Debug)]
 pub struct Resolved {
     pub target: PathBuf,
@@ -109,8 +88,6 @@ pub struct Resolved {
 }
 
 impl Resolved {
-    /// The folder an "always allow" remembers: the folder itself, or the
-    /// folder holding the file.
     pub fn folder(&self) -> &Path {
         if self.is_dir {
             &self.target
@@ -120,9 +97,6 @@ impl Resolved {
     }
 }
 
-/// Canonicalizes `requested` (`~` expanded, a relative path taken from
-/// `workdir`) and refuses the gents home and anything containing it. The
-/// error is one sentence for the model or the invocation record.
 pub fn resolve(
     requested: &str,
     workdir: Option<&Path>,
@@ -154,8 +128,6 @@ pub fn resolve(
     })
 }
 
-/// Whether `dir` is too wide to be a working folder: the filesystem root, the
-/// user's home or a folder that holds it, or a folder that holds the gents home.
 fn too_broad(dir: &Path, user_home: Option<&Path>, gents_home: &Path) -> bool {
     dir.parent().is_none()
         || user_home.is_some_and(|home| home.starts_with(dir))
@@ -164,7 +136,6 @@ fn too_broad(dir: &Path, user_home: Option<&Path>, gents_home: &Path) -> bool {
             .is_ok_and(|home| home.starts_with(dir))
 }
 
-/// A working-folder root may not be the gents home or hold it.
 fn ensure_scope_path(path: &Path, user_home: Option<&Path>, gents_home: &Path) -> Result<()> {
     anyhow::ensure!(
         !too_broad(path, user_home, gents_home)
@@ -177,8 +148,6 @@ fn ensure_scope_path(path: &Path, user_home: Option<&Path>, gents_home: &Path) -
     Ok(())
 }
 
-/// What a session reaches without asking: its working folder read-only and
-/// the operator's list.
 #[derive(Clone, Debug)]
 pub struct Scope {
     entries: Vec<AllowedDir>,
@@ -210,7 +179,6 @@ impl Scope {
         Ok(Self { entries })
     }
 
-    /// The most access `target` is allowed, or `None` outside every folder.
     pub fn granted(&self, target: &Path) -> Option<BindAccess> {
         self.entries
             .iter()
@@ -225,10 +193,6 @@ impl Scope {
     }
 }
 
-/// Binds `resolved` for one call with `access` of it: the folder itself, or
-/// the one file alone. A file that cannot be linked is bound through its own
-/// folder (read-only) when `folder_allowed`, which holds only when the
-/// working folder or an allowed folder already covers it.
 pub fn bind(
     resolved: &Resolved,
     access: BindAccess,
@@ -263,10 +227,6 @@ pub fn bind(
 // vertexia: a plain mutex over a handful of paths read once per file-tool call; a lock-free set if that ever shows in a profile
 static PROTECTED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
 
-/// Registers `home`'s allowed-folders file and approval queue as paths the
-/// agent's file tools must not write, so a model cannot answer its own
-/// question or widen its own access through them. A shell run as the same
-/// user is outside this guard, as it is outside every file the operator owns.
 pub fn protect(home: &Path) {
     let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
     let paths = [
@@ -282,8 +242,6 @@ pub fn protect(home: &Path) {
     }
 }
 
-/// Whether the file tools must refuse `path` (a registered file, or anything
-/// inside a registered folder).
 pub fn is_protected(path: &Path) -> bool {
     PROTECTED
         .lock()

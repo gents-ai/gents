@@ -1,6 +1,3 @@
-//! Compile the actual production helpers while the larger runtime migration is
-//! red. These checks do not substitute a Rust simulation for the native owner,
-//! and do not claim database/gate/timer conformance.
 #[path = "../../gents/src/session/canonical_rows.rs"]
 mod canonical_rows;
 #[path = "../../gents-loop/src/execution_policy.rs"]

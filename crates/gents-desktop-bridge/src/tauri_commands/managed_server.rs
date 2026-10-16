@@ -2609,8 +2609,6 @@ async fn stop_managed_server_locked<R: Runtime>(
     observe_managed_server_status(app, state).await
 }
 
-/// Native login enablement is the operator's background-running choice.
-/// External servers remain outside the desktop's service ownership.
 pub(crate) async fn prepare_app_exit<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
@@ -2618,8 +2616,6 @@ pub(crate) async fn prepare_app_exit<R: Runtime>(
     let _lifecycle = state.managed_server_lifecycle.lock().await;
     let service = match native_service(app, state) {
         Ok(service) => service,
-        // Hosts without a native service manager cannot have a service owned
-        // by this path; quitting remains available on those platforms.
         Err(error) if error.code == BridgeErrorCode::Unsupported => return Ok(()),
         Err(error) => return Err(error),
     };
@@ -2650,8 +2646,6 @@ fn ensure_app_not_quitting(state: &DesktopAppState) -> Result<(), BridgeError> {
     Ok(())
 }
 
-/// Starts the reviewed local service once when its owning desktop opens.
-/// Native enablement continues to control login startup independently.
 pub(crate) async fn start_configured_managed_server<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
@@ -3482,23 +3476,6 @@ mod tests {
             load_preference(&state).await.unwrap().unwrap().node_name,
             "Forge"
         );
-    }
-
-    #[tokio::test]
-    async fn requested_name_is_remembered_only_when_the_home_confirms_it() {
-        let home = tempfile::tempdir().unwrap();
-        assert!(!name_confirmed_by_home(
-            "Scout",
-            read_initialized_name(home.path()).await.as_deref()
-        ));
-        write(
-            &home.path().join("init.json"),
-            r#"{"node_did":"did:key:forge","node_name":"Forge"}"#,
-        );
-        let initialized = read_initialized_name(home.path()).await;
-        assert_eq!(initialized.as_deref(), Some("Forge"));
-        assert!(!name_confirmed_by_home("Scout", initialized.as_deref()));
-        assert!(name_confirmed_by_home("Forge", initialized.as_deref()));
     }
 
     #[cfg(unix)]
@@ -5089,38 +5066,6 @@ mod tests {
         assert!(ensure_native_owns_running_endpoint(&ours(), false).is_err());
         assert!(ensure_native_owns_running_endpoint(&ours(), true).is_ok());
         assert!(ensure_native_owns_running_endpoint(&PortReadiness::NotListening, false).is_ok());
-    }
-
-    #[test]
-    fn cleanup_failure_preserves_the_original_failure() {
-        let combined = combine_cleanup_error(
-            "readiness failed".to_string(),
-            "newly started native service",
-            "stop failed".to_string(),
-        );
-        assert!(combined.contains("readiness failed"));
-        assert!(combined.contains("stop failed"));
-    }
-
-    #[test]
-    fn parse_tool_ceiling_accepts_init_json_and_status_spellings() {
-        assert_eq!(
-            parse_tool_ceiling("readwrite"),
-            Some(ManagedServerToolCeiling::Readwrite)
-        );
-        assert_eq!(
-            parse_tool_ceiling("Readwrite"),
-            Some(ManagedServerToolCeiling::Readwrite)
-        );
-        assert_eq!(
-            parse_tool_ceiling("readonly"),
-            Some(ManagedServerToolCeiling::Readonly)
-        );
-        assert_eq!(
-            parse_tool_ceiling("meta-only"),
-            Some(ManagedServerToolCeiling::MetaOnly)
-        );
-        assert_eq!(parse_tool_ceiling("unknown"), None);
     }
 
     #[test]

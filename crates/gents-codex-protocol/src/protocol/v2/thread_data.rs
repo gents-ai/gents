@@ -91,7 +91,6 @@ pub struct Thread {
 pub struct Turn {
     pub id: String,
     pub items: Vec<ThreadItem>,
-    /// Describes how much of `items` has been loaded for this turn.
     #[serde(default)]
     pub items_view: TurnItemsView,
     pub status: TurnStatus,

@@ -1,4 +1,3 @@
-//! Generated field tables and patch results checked against the existing patch owner.
 use crate::lean_vocab_test::{
     lean_agent_decision_cases, lean_agent_materialization_cases, lean_self_config_cases,
     lean_self_config_field_tables, lean_self_config_selection_cases, lean_sibling_tools_cases,

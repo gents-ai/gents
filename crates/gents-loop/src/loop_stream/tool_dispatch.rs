@@ -4,7 +4,7 @@ pub(super) struct EffectDispatcher<H> {
     pub(super) tools: Arc<Vec<Box<dyn ToolDyn>>>,
     pub(super) hook: Arc<H>,
     pub(super) parent_internal_id: String,
-    // Guest error conversion cannot clear a hook termination before parent settlement.
+    // Hook termination remains fatal through guest error conversion and parent settlement.
     pub(super) fatal: tokio::sync::Mutex<Option<String>>,
 }
 
@@ -81,8 +81,6 @@ impl<H: SessionHook + 'static> crate::tool_effects::ToolEffectDispatcher for Eff
                                 .map_err(Fatal)?;
                             return result;
                         }
-                        // Awaited like the provider path: an effect the before hook
-                        // commits is never recorded as interrupted.
                         let result = match self
                             .hook
                             .on_tool_call(name, None, &internal_id, arguments)
@@ -93,6 +91,7 @@ impl<H: SessionHook + 'static> crate::tool_effects::ToolEffectDispatcher for Eff
                                 Ok(ToolOutcome::Completed(reason))
                             }
                             ToolCallHookAction::Continue => {
+                                // Once the before hook commits, await the effect to preserve ordering.
                                 let writer =
                                     self.hook.foreground_live_output_writer(&internal_id).await;
                                 let session = self.hook.session_id().await;
@@ -146,8 +145,6 @@ pub fn value_to_json_string(value: &serde_json::Value) -> String {
     }
 }
 
-/// Tool-policy admission before the dispatch election; `Some` settles the
-/// still-Pending call and the tool is never invoked.
 pub(super) fn admit_tool(
     tools: &[Box<dyn ToolDyn>],
     name: &str,
@@ -191,7 +188,6 @@ pub(super) async fn dispatch_provider_tool(
     token_limit: bool,
 ) -> ToolOutcome {
     let Some(tool) = tools.iter().find(|tool| tool.name() == name) else {
-        // An unresolved name is a typed dispatch failure, not completed output.
         return ToolOutcome::from_dispatch(
             name,
             Err(crate::tool::ToolError::ReportedFailure {

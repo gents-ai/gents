@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Collect production lens bytes from Cargo's emitted paths without rebuilding."""
 import hashlib
 import json
 import mmap

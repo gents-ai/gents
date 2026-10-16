@@ -1,5 +1,3 @@
-/* The transcript's activity, placed once: an item's place is decided by
-   what came before it, never by what comes after. */
 import type {
   RenderedTimelineItem,
   RenderedToolCallView,
@@ -15,7 +13,6 @@ export type TranscriptEntry =
       kind: "group";
       key: string;
       members: GroupMember[];
-      /* something after it has ended it; a settled group takes no more calls */
       settled: boolean;
     };
 
@@ -31,9 +28,6 @@ function says(item: RenderedTimelineItem): boolean {
   }
 }
 
-/* The calls of one assistant message, in the order they were made: the
-   transcript query sorts tool_call_key as text, so "…:10" sorts before
-   "…:2". Remove once the query sorts numerically. */
 const inCallOrder = (tools: RenderedToolCallView[]) =>
   [...tools].sort((a, b) =>
     a.itemKey.localeCompare(b.itemKey, undefined, { numeric: true }),
@@ -53,13 +47,11 @@ export function groupTranscript(items: RenderedTimelineItem[]): TranscriptEntry[
         open.members.push({ kind: "tool", key: tool.itemKey, tool });
       continue;
     }
-    /* reasoning with nothing said: a step of the group */
     if (open && !says(item) && item.kind === "assistantMessage") {
       if (item.reasoning?.trim())
         open.members.push({ kind: "thought", key: item.itemKey, text: item.reasoning });
       continue;
     }
-    /* the live tail with nothing in it yet is a status line, not speech */
     if (item.kind === "liveAssistant" && !says(item)) {
       out.push({ kind: "item", key: item.itemKey, item });
       continue;

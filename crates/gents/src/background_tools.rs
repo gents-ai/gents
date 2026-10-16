@@ -57,8 +57,6 @@ pub(crate) struct BackgroundToolArgs {
 /// Default wait when neither the call nor the Tools group sets one; the
 /// timeout reports the process as still running without cancelling it (#985).
 pub(crate) const DEFAULT_WAIT_PROCESS_TIMEOUT_SECS: u64 = 30;
-/// Ceiling on any wait; longer work is delivered by completion notification
-/// (grok-build caps blocking waits at 10 minutes).
 pub(crate) const MAX_WAIT_PROCESS_TIMEOUT_SECS: u64 = 600;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -323,10 +321,6 @@ pub(crate) async fn read_tool_output_slice(
     }))
 }
 
-/// Resolve one physical tool source through canonical segment reconstruction;
-/// there is deliberately no mutable result-column or ring-buffer fallback.
-/// An open source is explicit: callers must retry after a segment close is
-/// visible rather than treating absence as an empty result.
 pub(crate) async fn canonical_tool_output(
     node: &EmbeddedNode,
     tool_doc_id: &str,
@@ -468,8 +462,6 @@ struct CombinedOutputSlice {
     has_more: bool,
 }
 
-/// Read a contiguous byte slice capped at `max_bytes`; `next_offset =
-/// offset + bytes_returned`, `has_more` iff `next_offset < total_bytes`.
 fn read_combined_output_slice(
     combined: &str,
     offset: u64,
@@ -491,7 +483,6 @@ fn read_retained_output_slice(
     let start_offset = offset.clamp(first_offset, retained_end);
     let start = start_offset.saturating_sub(first_offset) as usize;
     let mut start = start;
-    // Snap forward to a UTF-8 char boundary so slicing never splits a codepoint.
     while start < bytes.len() && !combined.is_char_boundary(start) {
         start += 1;
     }
@@ -499,9 +490,6 @@ fn read_retained_output_slice(
     while end > start && !combined.is_char_boundary(end) {
         end -= 1;
     }
-    // Progress guard: if snapping back a multi-byte codepoint collapses the
-    // slice to empty yet more bytes remain, advance past that codepoint so
-    // every read makes progress (unreachable today with the 256-byte floor).
     if end == start && start < bytes.len() {
         end = start + 1;
         while end < bytes.len() && !combined.is_char_boundary(end) {

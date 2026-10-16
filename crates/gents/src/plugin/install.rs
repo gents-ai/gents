@@ -1,7 +1,3 @@
-//! Installing a pack's plugins into the home's plugin store. Lives in the
-//! runtime crate, not `gents-cli`, so graph installs driven by `self_config`
-//! can install pack plugins without the CLI; `gents-cli`'s `commands::pack`
-//! forwards here.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -14,26 +10,6 @@ use super::store::{self, InstalledPlugin};
 use super::{Manifold, PluginRunner};
 use crate::pack::{PackManifest, PackPlugin};
 
-/// Installs one plugin a pack carries into the same content-addressed
-/// store `gents plugin install` uses, so a plugin that arrived inside a
-/// pack runs by name (`gents plugin run <name>`) just like one installed on
-/// its own.
-///
-/// Takes the store's shared lock around bytes+record publication itself and
-/// delegates to [`install_from_pack_locked`], which takes `&store::StoreGuard`
-/// so a caller already holding the store lock (e.g. the pack lifecycle, which
-/// holds it exclusively across snapshot/mutation/notification/rollback)
-/// composes without re-locking and deadlocking on itself.
-///
-/// A plugin declared inline in a pack manifest carries neither a namespace
-/// nor a version of its own, so it takes its pack's: two packs from
-/// different namespaces may each carry a `format_check`, and recording both
-/// under one default namespace would have the second silently replace the
-/// first.
-///
-/// `pack_coordinate` (`{namespace}/{name}` of the pack this plugin ships in)
-/// is refused when the record already belongs to a different pack: see
-/// [`store::check_plugin_ownership`].
 #[allow(clippy::too_many_arguments)]
 pub fn install_from_pack(
     home: &Path,
@@ -61,14 +37,6 @@ pub fn install_from_pack(
     )
 }
 
-/// Same as [`install_from_pack`] but assumes the caller already holds the
-/// plugin store lock for `home`, as `pack::plugin_lifecycle::install` does
-/// exclusively for its whole snapshot/mutation/notification/rollback window.
-/// flock does not re-enter across open file descriptions, so re-locking
-/// inside would deadlock against that outer exclusive holder; this path
-/// therefore takes no lock of its own and refuses a [`store::StoreGuard`]
-/// tied to a different home, so a caller cannot hand it the wrong store's
-/// guard and run unlocked.
 #[allow(clippy::too_many_arguments)]
 fn install_from_pack_locked(
     lock: &store::StoreGuard,
@@ -82,6 +50,7 @@ fn install_from_pack_locked(
     instructions: Option<String>,
     consent: bool,
 ) -> Result<InstalledPlugin> {
+    // The pack lifecycle already holds this lock across its transaction window; flock does not re-enter.
     lock.for_home(home)?;
     store::check_plugin_ownership(home, pack_namespace, &plugin.name, pack_coordinate)?;
     let granted = store::grant_on_install(home, pack_namespace, plugin, consent)?;
@@ -129,7 +98,6 @@ fn install_from_pack_locked(
     Ok(record)
 }
 
-/// Admits and stores every plugin a pack ships in `home`'s plugin store.
 pub fn install_pack_plugins<'a>(
     home: &Path,
     manifest: &PackManifest,
@@ -149,11 +117,6 @@ pub fn install_pack_plugins<'a>(
     )
 }
 
-/// Performs a pack's synchronous local publication under one nonblocking
-/// exclusive store lock. The callback is local-only and synchronous, so the
-/// lock and rollback snapshot never cross an await. A caller that later
-/// notifies the node must preserve this local install if that notification
-/// fails or is cancelled.
 pub fn install_pack_plugins_with_bindings<'a>(
     home: &Path,
     manifest: &PackManifest,
@@ -165,8 +128,6 @@ pub fn install_pack_plugins_with_bindings<'a>(
     publish_local: impl FnOnce(&[InstalledPlugin]) -> Result<()>,
 ) -> Result<Vec<InstalledPlugin>> {
     let lock = store::try_lock_store(home)?;
-    // A malformed record is not absence and cannot become a rollback snapshot
-    // or be overwritten as an unowned plugin.
     store::list_records(home)?;
     let previous = snapshot_pack_plugin_records(home, manifest)?;
     let result = (|| {
@@ -190,9 +151,6 @@ pub fn install_pack_plugins_with_bindings<'a>(
     result
 }
 
-/// Installs each declared plugin while the enclosing pack-install owner holds
-/// the store guard. The guard is checked against `home` so a caller cannot
-/// apply this mutation under another home's lock.
 fn install_pack_plugins_locked<'a>(
     lock: &store::StoreGuard,
     home: &Path,
@@ -229,10 +187,6 @@ fn install_pack_plugins_locked<'a>(
         .collect()
 }
 
-/// Points each plugin of `manifest` that names a model slot at the profile
-/// `bindings` selects for that slot, for `owner`. A slot with no entry keeps
-/// whatever it was bound to (nothing, on a first install). Returns the
-/// coordinates of the plugins it bound.
 pub fn bind_plugin_slots(
     home: &Path,
     manifest: &PackManifest,
@@ -275,7 +229,6 @@ fn bind_plugin_slots_locked(
     Ok(bound)
 }
 
-/// Whether `error` is a plain file-not-found (first install).
 fn is_not_found(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
@@ -284,8 +237,6 @@ fn is_not_found(error: &anyhow::Error) -> bool {
     })
 }
 
-/// Binds (`Some`) or unbinds (`None`) the model slot of the installed plugin
-/// `coordinate`; refused when the plugin names no slot.
 pub fn set_model_binding(
     home: &Path,
     coordinate: &str,
@@ -314,10 +265,6 @@ fn set_model_binding_locked(
     Ok(record)
 }
 
-/// Every plugin `manifest` would install and its plugin-store record before
-/// any write, so a failure later in the same pack install can restore
-/// exactly what was there (or remove what was not) instead of leaving an
-/// orphaned plugin record behind. `None` means the name was not installed.
 fn snapshot_pack_plugin_records(
     home: &Path,
     manifest: &PackManifest,
@@ -349,12 +296,6 @@ fn snapshot_pack_plugin_records(
         .collect()
 }
 
-/// Restores each `(namespace, name)` plugin record to what
-/// [`snapshot_pack_plugin_records`] observed before the install that must
-/// now be undone: the previous record is put back, or removed if there was
-/// none. Best-effort and never fails the caller: a restore that cannot
-/// complete is logged loudly rather than masking the original error that
-/// triggered the rollback.
 fn rollback_pack_plugin_records(
     home: &Path,
     previous: &[(String, String, Option<InstalledPlugin>)],

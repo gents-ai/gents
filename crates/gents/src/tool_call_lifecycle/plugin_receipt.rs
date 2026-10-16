@@ -2,7 +2,6 @@ use gents_protocol::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
 
 use super::ToolCallState;
 
-/// Lean `ToolPolicy.PluginReceipt.Decision`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ReceiptDecision {
     Commit,
@@ -11,7 +10,6 @@ pub(super) enum ReceiptDecision {
     Conflict,
 }
 
-/// Lean `ToolPolicy.PluginReceipt.published`.
 pub(super) fn published(
     terminal: ToolCallState,
     receipt: &PluginExecutionReceipt,
@@ -30,7 +28,6 @@ pub(super) fn published(
     receipt
 }
 
-/// Lean `ToolPolicy.PluginReceipt.decide`.
 pub(super) fn decide<T: PartialEq + ?Sized>(
     terminal: bool,
     existing: Option<&T>,

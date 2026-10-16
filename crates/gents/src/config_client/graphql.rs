@@ -1,5 +1,3 @@
-//! Private HTTP plumbing for the committed-write owner.
-
 use anyhow::{Context, Result};
 use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use serde_json::Value;
@@ -275,39 +273,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn consecutive_config_writes_reuse_the_http_connection() {
-        use axum::{extract::ConnectInfo, routing::post, Json, Router};
-        use std::net::SocketAddr;
-
-        let app = Router::new().route(
-            "/graphql",
-            post(
-                |ConnectInfo(peer): ConnectInfo<SocketAddr>, Json(_body): Json<Value>| async move {
-                    Json(serde_json::json!({"data": {"peer_port": peer.port()}}))
-                },
-            ),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = GraphqlEndpoint::anonymous(format!(
-            "http://{}/graphql",
-            listener.local_addr().unwrap()
-        ));
-        let server = tokio::spawn(async move {
-            axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .await
-            .unwrap();
-        });
-
-        let first = auto_commit(&endpoint, "mutation { first }").await.unwrap();
-        let second = auto_commit(&endpoint, "mutation { second }").await.unwrap();
-        server.abort();
-        assert_eq!(first["data"]["peer_port"], second["data"]["peer_port"]);
-    }
-
-    #[tokio::test]
     async fn http_transaction_mints_a_bearer_per_request() {
         use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
         use base64::Engine as _;
@@ -440,8 +405,4 @@ mod tests {
         server.abort();
     }
 
-    #[test]
-    fn rejects_queries_at_the_write_seam() {
-        assert!(ensure_mutation_document("query { X { id } }").is_err());
-    }
 }

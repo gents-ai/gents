@@ -1,16 +1,8 @@
 import Proofs.PromptAssembly.State
 
-/-!
-# Provider input budgeting
-
-The provider must fit the assembled input and the requested output inside one
-context window; the configured output value is a ceiling clamped per turn to the
-space left after its assembled input, preserving provider safety while the
-configured history threshold governs compaction. The configured threshold
-arrives as an already-computed exact integer budget: production owns the
-floating-point percentage conversion in `provider_input::budget::threshold_budget`,
-and this model is exact for every threshold rather than only binary-representable ones.
--/
+/-! The configured threshold arrives as an exact integer budget; production
+owns the floating-point percentage conversion in
+`provider_input::budget::threshold_budget`. -/
 
 namespace PromptAssembly.Budget
 
@@ -32,8 +24,6 @@ instance (inputTokens contextWindow configuredMaxOutputTokens : Nat) :
   unfold CanDispatch
   infer_instance
 
-/-- Exact integer arithmetic over basis points; computing it in floating point
-and truncating disagrees for e.g. 57% of 10,000 — 5,699 rather than 5,700 (#1008). -/
 def configuredThresholdBudget (contextWindow basisPoints : Nat) : Nat :=
   contextWindow * basisPoints / 10000
 
@@ -49,16 +39,10 @@ def compactionRetentionTarget
     (configuredKeepRecent effectiveInputBudget fixedInput : Nat) : Nat :=
   min configuredKeepRecent (3 * (effectiveInputBudget - fixedInput) / 4)
 
-/-- The one-token floor keeps the configured ceiling positive for tiny
-contexts. -/
 def summaryOutputCeiling
     (configuredMaxOutputTokens contextWindow : Nat) : Nat :=
   min configuredMaxOutputTokens (max 1 ((contextWindow + 3) / 4))
 
-/-- Chunk-sizing policy only: final provider dispatch still uses
-`effectiveOutputBudget`. A ceiling equal to the entire tiny context cannot
-coexist with nonempty summary input, so that degenerate case falls back to the
-ordinary dynamic dispatch rule. -/
 def rollingSummaryInputBudget
     (contextWindow effectiveMaxOutputTokens : Nat) : Nat :=
   if effectiveMaxOutputTokens < contextWindow
@@ -105,7 +89,6 @@ theorem rolling_summary_preserves_configured_output
   apply Nat.min_eq_left
   omega
 
-/-- The sole threshold decision used by prompt assembly and reduction. -/
 inductive ThresholdDecision where
   | notNeeded
   | reduceEligible
@@ -114,7 +97,6 @@ inductive ThresholdDecision where
 def decideThreshold (inputTokens effectiveInputBudget : Nat) : ThresholdDecision :=
   if inputTokens ≤ effectiveInputBudget then .notNeeded else .reduceEligible
 
-/-- A view of the canonical decision, not a second threshold formula. -/
 def ExceedsInputBudget
     (promptTokens requestTokens configuredThresholdBudget contextWindow : Nat) : Prop :=
   decideThreshold (promptTokens + requestTokens)

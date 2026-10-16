@@ -13,15 +13,12 @@ use anyhow::{Context, Result};
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 
-/// The field-commit witness for a stored rendered-request field value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestJsonCommit {
     pub cid: String,
     pub height: i64,
 }
 
-/// Read the current `request_json` field-commit CID for one `RenderedRequest`
-/// document; `Ok(None)` is explicit *Unavailable*.
 pub async fn request_json_commit(
     access: &ConfigAccess,
     doc_id: &str,
@@ -50,9 +47,6 @@ pub async fn field_commit(
 /// further statements.
 pub const FIELD_COMMIT_ALIAS_BATCH: usize = 32;
 
-/// Read the field commits of many documents, one aliased `_commits` field per
-/// document and at most [`FIELD_COMMIT_ALIAS_BATCH`] aliases per statement.
-/// Results answer one-for-one in `doc_ids` order.
 pub(crate) async fn field_commits<F, Fut>(
     doc_ids: &[String],
     field_name: &str,
@@ -86,7 +80,6 @@ tokio::task_local! {
     static FIELD_COMMIT_STATEMENTS: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
-/// Run `future`, counting the batched `_commits` statements issued on this task.
 #[cfg(test)]
 pub(crate) async fn count_field_commit_statements<F: std::future::Future>(
     future: F,
@@ -101,7 +94,6 @@ pub(crate) async fn count_field_commit_statements<F: std::future::Future>(
     )
 }
 
-/// [`field_commits`] inside the caller's transaction.
 pub(crate) async fn field_commits_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     doc_ids: &[String],
@@ -115,9 +107,6 @@ pub(crate) async fn field_commits_in_txn(
     .await
 }
 
-/// Pure selection over one batched `_commits` response: for every document of
-/// the batch, in order, the highest commit for `field_name`. An omitted or
-/// non-array alias is an error.
 fn select_batched_field_commits(
     response: &serde_json::Value,
     batch: &[String],
@@ -159,9 +148,6 @@ pub(super) fn select_field_commit(
     Ok(highest_field_commit(commits, field_name))
 }
 
-/// Pick the highest commit for the field in Rust rather than in a query
-/// filter; a commit without the named field, a `cid` or a `height` is not a
-/// candidate.
 fn highest_field_commit(
     commits: &[serde_json::Value],
     field_name: &str,
@@ -207,8 +193,6 @@ mod tests {
         );
     }
 
-    /// Unavailable, not "take whichever commit came back" — the in-memory
-    /// filter failure mode this helper rules out.
     #[test]
     fn commits_without_a_request_json_field_are_unavailable() {
         let response = json!({
@@ -227,7 +211,6 @@ mod tests {
         assert_eq!(select_request_json_commit(&response).unwrap(), None);
     }
 
-    /// A missing `data` field is not the same statement as "no rows".
     #[test]
     fn a_shapeless_response_is_an_error() {
         assert!(select_request_json_commit(&json!({})).is_err());
@@ -238,7 +221,6 @@ mod tests {
         doc_ids.iter().map(|doc_id| doc_id.to_string()).collect()
     }
 
-    /// The batched read must not silently drop a document.
     #[test]
     fn batched_selection_answers_per_document_in_order() {
         let response = json!({
@@ -273,8 +255,6 @@ mod tests {
         );
     }
 
-    /// An alias the response dropped is an error, never a silently skipped
-    /// entry.
     #[test]
     fn a_dropped_alias_is_an_error_for_its_document() {
         let response = json!({ "data": { "w0": [], "w2": [] } });

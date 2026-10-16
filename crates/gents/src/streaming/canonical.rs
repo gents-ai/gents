@@ -1,7 +1,4 @@
-//! Request-owned immutable output appends, under the existing mutation gate.
-//! The supplied record is a prepared fact: retries retain its timestamp and
-//! bytes. No caller buffer or ordinal advances inside the transaction. A caller
-//! acknowledges its batch only after this owner returns a committed document ID.
+//! Retries reuse prepared output facts; callers acknowledge only committed batches.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -29,7 +26,6 @@ pub(crate) struct ProviderPublicationPlan {
     pub(crate) encoded: std::sync::Arc<super::native_encoding::EncodedNativeMessage>,
     pub(crate) expected: std::sync::Arc<gents_protocol::message::Message>,
     pub(crate) tool_deadline_at: String,
-    /// Provider-native ids of the calls this turn accepts as background rows.
     pub(crate) background_calls: Vec<String>,
     pub(crate) consumes_folded: Option<crate::lifecycle::queue::FoldedConsumption>,
 }
@@ -731,8 +727,6 @@ async fn partial_header_in_txn(
 
 use crate::graphql::created_doc_id;
 
-/// Publishes executable intent only with its lifecycle documents; tool-bearing
-/// turns go through the extended path that also creates pending tool rows.
 pub(crate) async fn publish_provider_turn(
     node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,

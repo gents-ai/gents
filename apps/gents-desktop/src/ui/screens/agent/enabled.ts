@@ -6,10 +6,6 @@ type Switchable = Extract<
   "Agent" | "InferenceBackend" | "Task" | "Schedule" | "Trigger" | "EventSource"
 >;
 
-/**
- * Patches `enabled` alone; a full rewrite from the view would lose
- * concurrent edits and save fields the view fills in.
- */
 export function setEnabled(
   changeConfig: ShellActions["changeConfig"],
   nodeDid: string,

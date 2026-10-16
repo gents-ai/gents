@@ -9,8 +9,6 @@ import { dockView } from "./dock-scope";
 import { useSurfaces } from "./surfaces";
 import { dockScope, useDockFor } from "./workspace";
 
-/** The shell's columns for the window it is in: the rail, the pane and the
-    dock, each a length the divider drives, and the person's nav choice. */
 export function useShellLayout(route: Route) {
   const nav = useNavMode();
   const { dock, scope: dockOwner, closeDock } = useDockFor(dockScope(route));

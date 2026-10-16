@@ -1,5 +1,3 @@
-/* Markdown that is still arriving, revealed at a steady pace. The pacing
-   and the reasons for it are in stream-reveal.ts. */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "./Markdown";
 import {
@@ -10,7 +8,6 @@ import {
   type RevealState,
 } from "./stream-reveal";
 
-/* a person who asked for less motion sees text as it lands */
 function smoothingOn() {
   try {
     return !matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -21,10 +18,6 @@ function smoothingOn() {
 
 export function StreamText({ text }: { text: string }) {
   const [enabled] = useState(smoothingOn);
-  /* The pace advances every frame, in a ref; React hears about it only when
-     a frame reaches the next word boundary and the drawn text changes. A
-     state update per frame kept React committing about sixty times a
-     second while a reply streamed, which every keystroke had to wait on. */
   const [initial] = useState(() =>
     initialReveal(enabled ? 0 : text.length, text.length),
   );
@@ -44,9 +37,6 @@ export function StreamText({ text }: { text: string }) {
     const tick = (now: number) => {
       const dt = now - last;
       last = now;
-      /* every frame's result is kept, fractions included: at the slowest
-         pace a frame is worth less than one character, and a frame that
-         dropped its fraction would never reach the next one */
       const next = stepReveal(reveal.current, target.current.length, now, dt);
       reveal.current = next;
       const length = revealedText(target.current, next.shown).length;
@@ -62,6 +52,5 @@ export function StreamText({ text }: { text: string }) {
 
   const shown = !enabled || visible >= text.length ? text : text.slice(0, visible);
   const display = shown.length < text.length ? closeOpenFence(shown) : shown;
-  // returned bare: a wrapper here takes the spacing off every block inside it
   return useMemo(() => (display ? <Markdown>{display}</Markdown> : null), [display]);
 }

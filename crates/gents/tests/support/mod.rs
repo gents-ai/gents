@@ -925,7 +925,6 @@ where
         })
 }
 
-/// Fixtures that write streamed content must retain their own writer instead.
 pub async fn begin_owned_execution(
     lifecycle: &mut gents::RequestLifecycle,
     node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,

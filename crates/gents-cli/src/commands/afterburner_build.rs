@@ -1,15 +1,3 @@
-//! One canonical way to compile an Afterburner package source directory into
-//! a `.afb`, shared by `gents pack build` and `gents plugin build`. Languages
-//! are validated against the real compiler and then against
-//! [`gents::pack::SUPPORTED_PLUGIN_LANGUAGES`], so the languages this CLI
-//! builds and the languages a pack may declare can never drift apart.
-//! Runnability of a built artifact is a separate question, answered against
-//! the artifact itself by `PluginRunner::compile_within` (see
-//! `afterburner::afb_run`): one language compiles to more than one shape
-//! (Ruby to an ordinary WASI command, Python to an emscripten-pyodide
-//! bundle), and the shape, not the name, is what decides what can be
-//! enforced.
-
 use std::path::Path;
 use std::str::FromStr;
 
@@ -78,8 +66,7 @@ pub(crate) fn compile(
         .with_context(|| format!("compiling {owner} from {}", dir.display()))
 }
 
-/// While alive, compiler progress on stdout goes to stderr so a gents
-/// command's stdout carries only its JSON report.
+/// Redirects compiler progress so command stdout remains available for JSON output.
 struct StdoutToStderr {
     #[cfg(unix)]
     saved: libc::c_int,
@@ -149,11 +136,8 @@ impl Drop for StdoutToStderr {
     }
 }
 
-/// Serializes `dispatch_compile` calls across tests: concurrent external
-/// toolchains raced on their shared scratch files. Module-level and
-/// `pub(crate)` because `commands::plugin`'s fixtures compile through the
-/// same toolchains.
 #[cfg(test)]
+/// Serializes external compiler calls because their toolchains share scratch files.
 pub(crate) fn compile_lock() -> &'static std::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| std::sync::Mutex::new(()))

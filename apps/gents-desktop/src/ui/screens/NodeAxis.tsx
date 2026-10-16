@@ -21,7 +21,6 @@ export function NodeAxis({
   onChange,
 }: {
   nodes: readonly NodeView[];
-  /** the home's node DID, which marks the working node */
   homeDid: string | null | undefined;
   counts: Record<string, number>;
   value: string[];

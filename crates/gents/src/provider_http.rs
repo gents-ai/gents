@@ -1,5 +1,3 @@
-//! The network terminal beneath every provider completion stack.
-
 use std::future::Future;
 use std::sync::Arc;
 
@@ -48,8 +46,6 @@ fn observe(usage: &Option<Arc<UsageReporter>>, headers: &HeaderMap, source: Usag
     }
 }
 
-/// The rejected-response error: Rig's variant, body plus rate-limit header
-/// marker.
 pub(crate) fn rejected_response_error(
     status: StatusCode,
     headers: &HeaderMap,

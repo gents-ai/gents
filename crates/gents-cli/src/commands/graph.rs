@@ -49,7 +49,6 @@ pub(crate) async fn install(
     install_with_access(&access, &owner_did, source, args, emit_report).await
 }
 
-/// Keeps the caller's one claim on the home's store for the whole install.
 pub(crate) async fn install_with_access(
     access: &ConfigAccess,
     owner_did: &str,
@@ -633,8 +632,6 @@ fn print_result_text(view: &GraphRunView) -> Result<()> {
     write_result_text(&mut io::stdout().lock(), view)
 }
 
-/// NDJSON is one compact object per line; the last line's `run.status` and
-/// the exit code mark the end.
 fn emit_progress(out: &mut impl io::Write, format: OutputFormat, value: &Value) -> Result<()> {
     let line = match format {
         OutputFormat::Json => serde_json::to_string_pretty(value)?,

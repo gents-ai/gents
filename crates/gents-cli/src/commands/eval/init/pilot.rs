@@ -1,7 +1,3 @@
-//! `--pilot`: the written draft runs once against its subject, one trial per
-//! case and one run per populated split, and the author reads the evidence
-//! and either keeps the pack or revises it once. A pilot's runs carry
-//! purpose `pilot`, so they are not exposure.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -29,7 +25,6 @@ const PILOT_CELL: &str = "pilot";
 
 const ROWS_BUDGET_BYTES: usize = 2048;
 
-/// What the author is told to make of the digest.
 const INSTRUCTION: &str = "A failing check may mean a wrong case (the case expects what the agent should not do, or its capture or params miss what the agent did: a matcher miss, empty versus absent rows, a keyword that did not survive) or a wrong subject (the agent really fails it). One trial per case cannot tell noise from either; judge each failure from its rows.";
 
 pub(crate) struct PilotOutcome {
@@ -37,8 +32,6 @@ pub(crate) struct PilotOutcome {
     pub(crate) revised: bool,
 }
 
-/// Pilot what `drafted` wrote. `confirm` is asked with the case count
-/// before anything is spent; a refusal is an error and nothing runs.
 pub(crate) async fn pilot(
     ctx: &EvalContext,
     deps: &Deps<'_>,
@@ -60,8 +53,6 @@ pub(crate) async fn pilot(
     install_definition(ctx, &written.out).await?;
 
     let unix_ms = chrono::Utc::now().timestamp_millis();
-    // Every run is named here as it is created, a stopped one included, so
-    // the README names it whatever happens after.
     let mut run_ids = Vec::new();
     let result = run_and_answer(ctx, deps, init, turn, drafted, unix_ms, &mut run_ids, out).await;
     let revised = match result {
@@ -206,7 +197,6 @@ async fn run_split(
         profiles: vec![(PILOT_CELL.to_owned(), init.profile.clone())],
         split,
         trials: 1,
-        // `gents eval run`'s defaults.
         seed_base: 1000,
         concurrency: 1,
         purpose: PILOT_PURPOSE.to_owned(),
@@ -216,7 +206,6 @@ async fn run_split(
         json: false,
         scope: EvalScopeArgs::default(),
     };
-    // The packs are held until the run ends: a cache entry stays locked.
     let (request, _packs) = run_request(ctx, &args).await?;
     let outcome = follow(
         ctx,
@@ -398,8 +387,6 @@ async fn revise(
         run_ids: run_ids.to_vec(),
         revised: true,
     };
-    // The revision keeps the first draft's id: the home, `--out` and the
-    // pilot's run ids already carry it.
     let definition_id = drafted
         .assembled
         .as_ref()

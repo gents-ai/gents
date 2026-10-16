@@ -2,13 +2,6 @@ import Proofs.PromptAssembly.CurrentInput
 import Proofs.CanonicalOutput.Execution
 import Proofs.Request.Executable
 
-/-! The selected-turn projection may omit an ordinary completed input only
-when the canonical authored prompt is durable. This composes the existing
-canonical publication and request completion owners; the Rust daemon adapter
-binds their order by awaiting authored-input publication before it may return
-successful request processing. Resumed retries are excluded because they can
-complete without publishing a prompt under their own request document. -/
-
 namespace ClientShell.FreshPromptCompletion
 
 open CanonicalOutput CanonicalOutput.Execution RequestContext

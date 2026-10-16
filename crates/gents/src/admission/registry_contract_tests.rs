@@ -74,8 +74,6 @@ fn slot_connection(backend_id: &str, connection: u64) -> Result<String> {
 }
 
 fn config_from_case(backend_id: &str, desired: &Desired) -> Result<BackendAdmissionConfig> {
-    // Use the real backend mapping so a test-only fingerprint cannot hide
-    // metadata-triggered controller replacement.
     let backend = backend_document(
         backend_id,
         desired.connection,
@@ -167,7 +165,6 @@ impl Harness {
                     pool.available_permits_for_test(),
                 )
             });
-            // Parked calls fail when admission closes.
             let open = self.registry.active_for_test(&self.backend_id).is_some();
             let parked_only = waiters == 0 || (open && available == 0);
             if self.calls.len() == waiters && transit == 0 && parked_only {
@@ -277,9 +274,6 @@ async fn generated_inference_registry_cases_drive_real_permits() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// The restored configuration is a distinct incarnation on the same pool, so
-/// the replaced incarnation's permit still counts against capacity until its
-/// release frees the shared slot.
 #[tokio::test]
 async fn rollback_reuses_epoch_with_distinct_controller_on_shared_pool() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());

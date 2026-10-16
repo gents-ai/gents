@@ -40,8 +40,6 @@ impl OpenAiWireApi {
             BackendProviderKind::OpenRouter => Self::ChatCompletions,
             BackendProviderKind::ChatGptCodex => Self::Responses,
             BackendProviderKind::XaiGrokOAuth => configured.unwrap_or(Self::Responses),
-            // Claude is not an OpenAI wire provider; the Messages HTTP wire
-            // (`claude_messages`) ignores openai_wire_api.
             BackendProviderKind::ClaudeCliSubscription | BackendProviderKind::AnthropicApiKey => {
                 Self::ChatCompletions
             }

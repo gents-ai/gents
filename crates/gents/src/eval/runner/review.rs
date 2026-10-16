@@ -6,8 +6,6 @@ use super::StageEvidence;
 use crate::document_config::{EvalCase, EvalCheckRef};
 use crate::eval::checks::CheckRegistry;
 
-/// Harness-owned checks. This handle is omitted from the serialized subject
-/// spec. Feedback is delivered only when the following stage opts into review.
 #[derive(Clone, Default, PartialEq)]
 pub struct StageReview(BTreeMap<String, Vec<EvalCheckRef>>);
 

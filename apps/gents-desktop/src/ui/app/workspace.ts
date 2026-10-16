@@ -72,7 +72,6 @@ const store = createStore<WorkspaceState>()(
     version: 1,
     storage: createJSONStorage(() => browserStorage),
     partialize: ({ docks, visited }) => ({
-      // The tabs are remembered, not that the dock was open: it opens when asked.
       docks: Object.fromEntries(
         Object.entries(docks).map(([scope, dock]) => [scope, { ...dock, open: false }]),
       ),
@@ -150,7 +149,6 @@ export const workspace = {
   reopenDock(scope: string) {
     change(scope, (dock) => (dock.tabs.length > 0 ? { ...dock, open: true } : null));
   },
-  // Tests only.
   reset() {
     store.setState({ docks: {}, visited: [] });
   },

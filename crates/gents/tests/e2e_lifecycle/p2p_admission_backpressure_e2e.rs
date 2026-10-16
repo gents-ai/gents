@@ -1,8 +1,3 @@
-//! Multi-node e2e for #630 hub admission under a constrained push-worker bound:
-//! both nodes run `max_concurrent_push_tasks = 1` and a real AgentRequest still
-//! converges owner → peer over PushLog, so tight fan-out does not permanently
-//! stall healthy delivery.
-
 use std::time::{Duration, Instant};
 
 use gents::defra_node::EmbeddedNode;

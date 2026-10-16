@@ -47,7 +47,6 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   );
 }
 
-// a wide table scrolls rather than squeezing its columns
 function Table({ children }: { children?: ReactNode }) {
   return (
     <div className="max-w-full overflow-x-auto">
@@ -58,7 +57,6 @@ function Table({ children }: { children?: ReactNode }) {
 
 type MdNode = { type: string; value?: string; children?: MdNode[] };
 
-// code keeps its own newlines: its value is not a text node
 function softBreaks(node: MdNode) {
   if (!node.children) return;
   node.children = node.children.flatMap((child) => {

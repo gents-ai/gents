@@ -33,8 +33,6 @@ fn rendered_timeline_durable_sequence(
     }
 }
 
-/// Window only the IPC-materialized timeline; the full database-backed snapshot
-/// remains authoritative inside the bridge.
 pub fn apply_session_timeline_page(
     snapshot: &mut DesktopSessionSnapshot,
     before_item_key: Option<&str>,

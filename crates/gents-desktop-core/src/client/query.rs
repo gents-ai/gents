@@ -63,8 +63,6 @@ pub(super) const SESSION_TRANSCRIPT_TOOL_CALL_ROW_BUDGET: usize = 320;
 #[derive(Debug)]
 pub struct SessionTranscriptQueryPage {
     pub store: ClientStore,
-    // Fork origins may belong to a parent session; keeping them out of the
-    // transcript rows prevents a parent message rendering as a child.
     pub canonical_dependencies: CanonicalTranscriptDependencies,
     pub query_count: u64,
     pub queried_rows: usize,
@@ -74,8 +72,6 @@ pub struct SessionTranscriptQueryPage {
     pub has_newer: bool,
 }
 
-/// Empty denial lists mean *no denial was received*: absence is a
-/// replication/loading condition, not a denial.
 #[derive(Debug, Default)]
 pub struct CanonicalTranscriptDependencies {
     pub origin_headers: Vec<gents::session::canonical_rows::TranscriptMessageRow>,
@@ -127,9 +123,6 @@ pub(super) const CHAIN_KEY_BINDING_FIELDS: &str =
     "binding_id node_did address key_backend attestation created_at revoked_at tags";
 pub(super) const MAILBOX_ITEM_FIELDS: &str = "_docID item_key requester_did node_did status kind action title summary payload source_kind source_id session_id request_id graph_run_id cause_doc_id target_node_did target_agent_id expected_collection parent_item_id deadline_at created_at updated_at resolved_at resolved_doc_id";
 
-/// Load the selected request, exact session owner, and only request rows needed
-/// by the selected page and its physical/logical canonical dependencies.
-/// This is the bounded polling fallback for a dropped/coalesced observer event.
 pub async fn load_chat_patch(
     access: &gents::config_client::ConfigAccess,
     node_did: &str,
@@ -622,8 +615,6 @@ where
     parse_row_array(rows, root)
 }
 
-// A malformed immutable fact is an integrity observation and must not be
-// silently skipped.
 pub(super) fn parse_canonical_rows<T>(
     data: &Value,
     root: &str,

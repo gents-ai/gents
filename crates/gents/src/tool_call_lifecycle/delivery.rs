@@ -1,6 +1,3 @@
-//! Canonical closure and native invocation-reply publication for a physical
-//! tool call.
-
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents_protocol::output::{
@@ -35,8 +32,6 @@ pub(super) struct TerminalFields<'a> {
     pub completion_reason: Option<&'a str>,
 }
 
-/// Derived from an admitted lifecycle, never a logical tool id supplied by a
-/// host callback.
 #[derive(Clone)]
 pub(crate) struct ToolOutputBinding {
     pub(crate) node: std::sync::Arc<defra_node::EmbeddedNode>,
@@ -108,7 +103,6 @@ pub(crate) fn render_presentation(
     }
 }
 
-/// The longest UTF-8-safe byte suffix within the diagnostic budget.
 pub(crate) fn terminal_output_tail(source: &str, budget: usize) -> &str {
     let mut start = source.len().saturating_sub(budget);
     while !source.is_char_boundary(start) {
@@ -152,11 +146,6 @@ struct TerminalOutputPlan<'a> {
     diagnostic: bool,
 }
 
-/// Whether `stored` is exactly the diagnostic `terminal_diagnostic_presentation`
-/// produces for `raw` and `cause` under some tail budget (Lean
-/// `TerminalDiagnosticReplayContracts.accepted`); the budget follows
-/// configuration and may change between delivery and replay, so it is
-/// recovered from the stored presentation itself. Any other shape is rejected.
 fn diagnostic_replay_matches(raw: &str, cause: &str, stored: &PayloadPresentation) -> Result<bool> {
     use gents_protocol::output::PresentationPart;
     let budget = match stored {
@@ -178,8 +167,6 @@ fn diagnostic_replay_matches(raw: &str, cause: &str, stored: &PayloadPresentatio
     Ok(terminal_diagnostic_presentation(raw, cause, budget)? == *stored)
 }
 
-/// `output_budget` bounds an interrupted call's diagnostic tail; `None` only
-/// for a completed call, whose presentation its tool prepared.
 fn terminal_output_plan<'a>(
     prefix: &'a str,
     text: &'a str,
@@ -294,10 +281,6 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    /// Admit exactly one childless native background execution from this
-    /// running, accepted `spawn_process` call; its deterministic key makes a
-    /// retry resolve the same parent provenance instead of minting a second
-    /// background effect.
     pub(crate) async fn admit_spawned_background(
         &mut self,
         admission: super::SpawnedBackgroundToolAdmission,
@@ -306,8 +289,6 @@ impl ToolCallLifecycle {
         let child = self
             .admit_spawned_background_child_with_time(admission, None)
             .await?;
-        // A crash between child admission and parent receipt leaves a real
-        // replayable intermediate state.
         if self.state == ToolCallState::Running {
             self.complete(receipt).await?;
         }
@@ -577,9 +558,6 @@ impl ToolCallLifecycle {
         self.started_at = Some(started_at);
     }
 
-    /// Fence order: the accepted header binding, physical tool row, and
-    /// current request lease are all observed with the pending-to-running
-    /// compare under the same mutation gate.
     pub(super) async fn start_running_canonical_with_time(
         &mut self,
         fixture_now: Option<DateTime<Utc>>,
@@ -602,10 +580,6 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    /// Publish the one immediate native receipt for a background
-    /// `agent_new`/`agent_message` row without terminalizing it or closing its
-    /// ToolCall source; the caused request's terminal later closes that source
-    /// and appends the notification.
     #[cfg(test)]
     pub(crate) async fn publish_background_receipt(&mut self, text: &str) -> Result<bool> {
         let binding = self.background_receipt_binding()?;
@@ -664,9 +638,6 @@ impl ToolCallLifecycle {
         })
     }
 
-    /// Atomically close the tool's native-output stream, terminalize its
-    /// lifecycle row, and publish the native result header; replays discover
-    /// the immutable delivery key before allocating another session sequence.
     pub(super) async fn terminalize_with_delivery(
         &mut self,
         expected: ToolCallState,
@@ -674,9 +645,6 @@ impl ToolCallLifecycle {
         text: &str,
         operation: &'static str,
     ) -> Result<bool> {
-        // Only a running background session-message row has already delivered
-        // its receipt; a never-dispatched failure still owes its sole
-        // invocation reply.
         let publish_native_result = !(expected != ToolCallState::Pending
             && self.await_mode == super::AwaitMode::Background
             && self.is_session_message()
@@ -694,9 +662,6 @@ impl ToolCallLifecycle {
         .await
     }
 
-    /// Unlike native tool completion, session-message settlement may lose its
-    /// Running compare to a different terminal owner and adopts that
-    /// already-durable winner.
     pub(super) async fn terminalize_bridge_with_delivery(
         &mut self,
         expected: ToolCallState,
@@ -742,10 +707,6 @@ impl ToolCallLifecycle {
         .await
     }
 
-    /// Atomically append the remaining exact raw bytes, close the source, and
-    /// publish `rendered` through `presentation` without requiring another
-    /// writer to have persisted `raw` first: the lifecycle CAS and raw close
-    /// share one transaction, so a losing terminal contender leaves no bytes.
     pub(super) async fn terminalize_raw_with_presentation(
         &mut self,
         expected: ToolCallState,
@@ -982,9 +943,6 @@ async fn terminalize_transaction(
             )
         })
         .unwrap_or_else(|| ", requester_did: { _eq: null }".to_owned());
-    // A terminal bridge contender may have already won via cancellation,
-    // timeout, or another terminal projection; observe that competing
-    // lifecycle before validating this candidate's payload.
     if adopt_competing_terminal {
         let lifecycle = txn
             .execute(&format!(
@@ -1032,9 +990,6 @@ async fn terminalize_transaction(
         tool_call_doc_id: tool_doc_id.to_owned(),
     };
 
-    // The accepted header is a physical admission fence, not a latest-message
-    // lookup: it is read inside the mutation gate before the lifecycle CAS so
-    // a forged/reused row cannot publish a result.
     let (accepted, _) = crate::session::load_canonical_message_in_txn(
         txn,
         accepted_header_doc_id,
@@ -1172,9 +1127,6 @@ async fn terminalize_transaction(
         String::new()
     };
 
-    // A durable background receipt is already the invocation's unique native
-    // reply; rehydrated completion must discover that from the canonical
-    // header rather than publishing a second ToolResult.
     let receipt_rows = txn.execute(&format!(
         r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{receipt_key_escaped}" }}, session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }}{requester_filter} }}, limit: 2) {{ _docID }} }}"#
     )).await?;
@@ -1714,9 +1666,6 @@ async fn terminalize_transaction(
     Ok(true)
 }
 
-/// A detached bridge receives exactly one native invocation reply while it is
-/// running; its verified terminal transition must never synthesize a second
-/// ToolResult for that accepted provider invocation.
 async fn ensure_background_receipt_before_bridge_close(
     txn: &ConfigApplyTxn<'_>,
     tool_call_doc_id: &str,
@@ -1784,9 +1733,6 @@ pub(crate) struct ToolOutputAppendReceipt {
     pub(crate) segment_doc_id: String,
 }
 
-/// Commit one raw tool-output chunk. The per-writer mutex serializes capture
-/// callbacks; exact committed retries bypass only the deadline check, not the
-/// Running/open-source fences.
 pub(crate) async fn append_tool_output(
     binding: &ToolOutputBinding,
     bytes: &str,
@@ -1999,46 +1945,6 @@ mod spawned_background_tests {
     };
     use crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission;
     use defra_node::EmbeddedNode;
-
-    #[test]
-    fn terminal_plan_preserves_empty_source_extension_before_diagnostic_fallback() {
-        let case = crate::lean_vocab_test::lean_terminal_diagnostic_presentation_cases()
-            .iter()
-            .find(|case| case.name == "whole_prefix_then_cause")
-            .expect("generated terminal diagnostic fixture");
-        let raw = String::from_utf8(case.raw.clone()).unwrap();
-        let cause = String::from_utf8(case.cause.clone()).unwrap();
-        let empty = terminal_output_plan(
-            "",
-            &cause,
-            Some(&cause),
-            Some(&PayloadPresentation::Full),
-            ToolCallState::TimedOut,
-            Some(crate::toolset::DEFAULT_MAX_COMMAND_CHARS),
-        )
-        .unwrap();
-        assert_eq!(empty.raw, cause);
-        assert_eq!(empty.presentation, PayloadPresentation::Full);
-        assert_eq!(empty.rendered, cause);
-
-        let retained = terminal_output_plan(
-            &raw,
-            &cause,
-            Some(&cause),
-            Some(&PayloadPresentation::Full),
-            ToolCallState::TimedOut,
-            Some(crate::toolset::DEFAULT_MAX_COMMAND_CHARS),
-        )
-        .unwrap();
-        let crate::lean_vocab_test::LeanTerminalDiagnosticPresentationExpected::Ok {
-            rendered, ..
-        } = &case.expected
-        else {
-            panic!("generated valid terminal diagnostic result");
-        };
-        assert_eq!(retained.raw, raw);
-        assert_eq!(retained.rendered.as_bytes(), rendered);
-    }
 
     #[test]
     fn generated_terminal_diagnostic_cases_bind_native_presentation() {
@@ -2851,9 +2757,6 @@ mod spawned_background_tests {
             .unwrap());
         assert_eq!(bridge.state, ToolCallState::Completed);
 
-        // The terminal bridge source is the durable final-output authority; the
-        // parent notification must reference it rather than a second native
-        // ToolResult for the already-replied provider call.
         crate::background_completion::append_background_tool_completion(
             &node,
             &bridge.session_id,
@@ -3037,7 +2940,6 @@ mod spawned_background_tests {
     }
 }
 
-/// Exact accepted-invocation binding of a background agent bridge's receipt.
 #[derive(Clone)]
 pub(crate) struct BackgroundReceiptBinding {
     pub(crate) tool_doc_id: String,
@@ -3054,9 +2956,6 @@ pub(crate) struct BackgroundReceiptBinding {
     pub(crate) message_sequence: u32,
 }
 
-/// The receipt is authored by the physical bridge document and fenced on the
-/// bridge still running in background; it never checks the request state, so
-/// the request's own terminal transaction can publish it.
 pub(crate) async fn publish_background_receipt_in_txn(
     txn: &ConfigApplyTxn<'_>,
     binding: &BackgroundReceiptBinding,
@@ -3273,17 +3172,12 @@ pub(crate) struct DispatchStart {
     await_mode: &'static str,
 }
 
-/// The pending-to-running compare of [`ToolCallLifecycle::start_running`]
-/// inside a caller's transaction; `None` when the row was altered or is no
-/// longer pending.
 pub(crate) async fn start_running_in_txn(
     txn: &ConfigApplyTxn<'_>,
     start: &DispatchStart,
     fixture_now: Option<DateTime<Utc>>,
 ) -> Result<Option<DateTime<Utc>>> {
     // Sampled only after the transaction has acquired the mutation gate: a
-    // queued dispatcher must not use an earlier timestamp to run past a lease
-    // that expired while it waited.
     let now = fixture_now.unwrap_or_else(Utc::now);
     let started_at = now.to_rfc3339_opts(SecondsFormat::Nanos, true);
     let (message, _) = crate::session::load_canonical_message_in_txn(

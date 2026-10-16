@@ -25,8 +25,6 @@ pub struct ResolvedBridgePolicy {
     pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
 }
 
-/// Concurrent start callers share one in-flight open of the embedded node so a
-/// second `NodeBuilder` cannot race the first for the persistent store.
 #[derive(Debug, Clone)]
 pub enum ClientStartProgress {
     Pending,
@@ -37,20 +35,13 @@ pub enum ClientStartProgress {
 pub struct DesktopAppState {
     pub(crate) app_exit: Arc<crate::app_exit::AppExitState>,
     pub bridge: Mutex<DesktopBridge>,
-    /// Owns the desktop store for install, shutdown, init and reset; the
-    /// detached starter holds it until the core is installed.
     pub client_lifecycle: Arc<tokio::sync::Mutex<()>>,
-    /// Serializes managed server start/stop so two callers cannot race the
-    /// port bind across provisioning and server readiness.
     pub managed_server_lifecycle: tokio::sync::Mutex<()>,
     pub policy: ResolvedBridgePolicy,
     pub managed_server: tokio::sync::Mutex<ManagedServerState>,
-    /// OAuth credentials issued by a completed sign-in whose save failed; held
-    /// only in memory so the user can retry the save without repeating login.
     pub pending_oauth_credentials: PendingOAuthCredentials,
 }
 
-/// Node DID, credential provider and the sign-in's account identity.
 type CredentialKey = (String, String, String);
 
 pub struct IssuedOAuthCredential {
@@ -63,7 +54,6 @@ impl IssuedOAuthCredential {
         &self.credential
     }
 
-    /// Sign-ins of different accounts are ordered and held apart.
     fn key(&self) -> CredentialKey {
         let identity = [
             &self.credential.provider_account_key,
@@ -136,8 +126,6 @@ impl PendingOAuthCredentials {
             .clone()
     }
 
-    /// Writes `issued` unless a newer credential for its key was already
-    /// saved or held; a failed write holds it for retry.
     pub async fn save<T, F, Fut>(
         &self,
         issued: IssuedOAuthCredential,
@@ -173,7 +161,6 @@ impl PendingOAuthCredentials {
         }
     }
 
-    /// Writes the newest held credential for this node and provider, if any.
     pub async fn retry<T, F, Fut>(
         &self,
         node_did: &str,
@@ -231,12 +218,8 @@ pub struct ManagedServerState {
     pub last_error: Option<String>,
     /// Cancels a start that is waiting outside the lifecycle lock.
     pub start_wait: Option<crate::tauri_commands::managed_server::StartWait>,
-    /// Crash-loop evidence carried across status reads.
     pub crash_loop: crate::tauri_commands::managed_server::CrashLoopWatch,
-    /// launchd refused this start because macOS has not approved an
-    /// unregistered background item.
     pub approval_refused: bool,
-    /// The managed runtime refused its store as incompatible; scopes a home reset.
     pub incompatible_store: Option<gents::storage_backend::IncompatibleStore>,
 }
 
@@ -248,16 +231,12 @@ pub struct DesktopBridge {
     pub updates_task: Option<JoinHandle<()>>,
     pub approvals_watch_task: Option<JoinHandle<()>>,
     pub(crate) approvals_prompt_subscriptions: crate::approvals_watch::PromptSubscriptions,
-    /// Cancel handle for an in-flight ChatGPT/Codex login server.
     pub codex_login_cancel: Option<gents_chatgpt_login::ShutdownHandle>,
-    /// Cancel handle for an in-flight Claude subscription login server.
     pub claude_login_cancel: Option<gents_claude_login::ShutdownHandle>,
-    /// Cancel flag for an in-flight Grok device-code login poll.
     pub grok_login_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Shared progress for an in-flight client start; waiters must not open a
     /// second node.
     pub start_inflight: Option<watch::Sender<ClientStartProgress>>,
-    /// The last client start refused the client store as incompatible.
     pub incompatible_client_store: Option<gents::storage_backend::IncompatibleStore>,
 }
 

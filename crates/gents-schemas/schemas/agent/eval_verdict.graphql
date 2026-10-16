@@ -1,7 +1,3 @@
-# One check's result for one trial (#1515). Append-only: a re-grade appends a
-# row naming the verdict it supersedes. Local-audit: `feedback` can quote
-# transcripts. `score_bp` is basis points in 0..=10000, null for a
-# non-evidence verdict.
 type EvalVerdict @branchable @index(fields: ["owner_node_did", "verdict_id"], unique: true) {
     verdict_id: String @immutable
     owner_node_did: String @index @immutable

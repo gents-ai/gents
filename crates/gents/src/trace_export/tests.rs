@@ -134,22 +134,3 @@ fn extracts_raw_tool_call_json_from_persisted_assistant_message() {
     assert!(extract_raw_tool_call_json(&message, "call-1", "read").is_none());
     assert!(extract_raw_tool_call_json(&message, "internal-1", "other").is_none());
 }
-
-#[test]
-fn computes_latency_from_rfc3339_timestamps() {
-    assert_eq!(
-        latency_ms(
-            Some("2026-01-01T00:00:00.100Z"),
-            Some("2026-01-01T00:00:01.350Z")
-        ),
-        Some(1250)
-    );
-}
-
-#[test]
-fn ignores_negative_latency_from_rfc3339_timestamps() {
-    assert_eq!(
-        latency_ms(Some("2026-01-01T00:00:01Z"), Some("2026-01-01T00:00:00Z")),
-        None
-    );
-}

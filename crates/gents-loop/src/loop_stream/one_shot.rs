@@ -20,8 +20,6 @@ pub struct OneShotProviderFailure {
     source: Option<anyhow::Error>,
 }
 
-/// The owned loop ended a tool-free turn without visible text (e.g. reasoning
-/// only) after its resample budget.
 #[derive(Debug, thiserror::Error)]
 #[error("one-shot completion produced no visible output")]
 pub struct OneShotNoVisibleOutput {
@@ -151,9 +149,6 @@ where
     (flushed, item)
 }
 
-/// Runs a text completion through the owned stream. A request-scoped auxiliary
-/// sink, when installed, owns its canonical output without publishing a
-/// session transcript; otherwise this remains a nonpersistent one-shot.
 pub async fn run_loop_to_text<M>(
     model: M,
     prompt: Message,
@@ -480,9 +475,6 @@ where
     final_text.ok_or_else(|| missing_final_failure(last_attempt_error))
 }
 
-/// Runs a typed completion without surrendering the runtime's owned-loop
-/// chokepoint to Rig's `Agent` orchestration; the owned loop validates the
-/// schema before accepting a final turn.
 pub async fn run_loop_to_typed<M, T>(
     model: M,
     prompt: Message,

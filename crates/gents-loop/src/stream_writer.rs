@@ -1,6 +1,3 @@
-//! The live-stream sink seam: durable writes of streamed tokens, reasoning,
-//! and steering, generic over the native writer implementation.
-
 use gents_protocol::message::Message;
 use gents_protocol::rendered_request::CaptureScope;
 
@@ -17,7 +14,6 @@ pub struct CanonicalPublishedTurn<Accepted> {
     pub accepted_tools: Vec<Accepted>,
 }
 
-/// Native durable publication supplied to the generic stream processor.
 pub trait CanonicalStreamWriter<L: RequestLifecycleControl>: StreamWriter {
     type AcceptedToolCall: Send;
 
@@ -86,7 +82,6 @@ pub trait CanonicalStreamWriter<L: RequestLifecycleControl>: StreamWriter {
 }
 
 pub trait StreamWriter: Send + Sync {
-    /// Schedule private metadata without exposing it as visible reasoning.
     fn mark_pending_output(
         &self,
         _doc_id: &str,

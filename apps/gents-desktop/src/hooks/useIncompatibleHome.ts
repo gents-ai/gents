@@ -123,8 +123,6 @@ export function createIncompatibleHomeOps({
       setReport(result);
     } catch (error) {
       setError(errorText(error));
-      // The bridge refuses a confirmation whose home changed since review;
-      // show the current plan so the user reviews what would change now.
       if (error instanceof BridgeInvokeError && error.code === "invalidArgument") {
         try {
           setReport(

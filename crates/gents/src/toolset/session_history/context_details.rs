@@ -1,4 +1,3 @@
-//! Prompt-free UI details derived from an authorized durable provider capture.
 use super::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

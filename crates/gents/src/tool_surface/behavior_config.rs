@@ -694,8 +694,6 @@ impl Default for AgentToolSurfaceConfig {
     }
 }
 
-/// A plugin that does not resolve, for any reason, records `None`: tool
-/// building stays the fail-closed gate.
 fn resolve_plugin_identities(
     plugins: &crate::plugin::executor::PluginExecutor,
     plugin_tools: &[crate::document_config::PluginToolRef],

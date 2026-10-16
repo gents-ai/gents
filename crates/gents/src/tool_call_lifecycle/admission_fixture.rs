@@ -1,14 +1,3 @@
-//! Shared canonical admission fixtures for tool-call transition tests.
-//!
-//! Drives only real runtime surfaces: a claimed `RequestLifecycle` (real
-//! `claim()`/`begin_owned_execution`), a `DefraStreamWriter` native turn
-//! publication (`publish_native_turn`), and tool-call lifecycles built with
-//! `ToolCallLifecycle::from_accepted` from the publication's accepted calls.
-//! No hand-built `AcceptedToolCall` values, headers, or fixture policy
-//! machines.
-//!
-//! This module is `cfg(test)`-only shared scaffolding: it defines no public
-//! production API and no alternate policy.
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
@@ -19,30 +8,13 @@ use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::streaming::DefraStreamWriter;
 use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
 
-/// Options for the published admission fixtures.
 pub struct PublishedAdmissionOptions {
-    /// Logical name seeded into the physical `request-{name}` /
-    /// `session-{name}` IDs.
     pub name: String,
-    /// When true, the fixture loads or creates a real
-    /// `KeyIdentity::load_or_create(<node data path>/test-agent.key, None)`
-    /// and uses its DID for the request, writer, plan target, and tool-call
-    /// lifecycle. When false, the fixture pins `"did:test:test"`.
     pub real_identity: bool,
-    /// Awaiting mode handed to `ToolCallLifecycle::from_accepted`. Only a
-    /// `agent_new`/`agent_message` call publishes in background.
     pub await_mode: AwaitMode,
-    /// Whether the fixture starts the tool call running before returning;
-    /// when false, the lifecycle is left in canonical `Pending` state.
     pub start_running: bool,
-    /// Optional immutable request creation time for modeled historical-head
-    /// fixtures. The default keeps the ordinary real-time admission shape.
     pub request_created_at: Option<String>,
-    /// Native tool name; `None` publishes `SPAWN_PROCESS_TOOL_NAME`. Only a
-    /// `agent_new`/`agent_message` name publishes in background.
     pub tool_name: Option<String>,
-    /// With `real_identity`, the calling request is an enrolled request of a
-    /// paired client DID, in a session that client owns.
     pub paired_client: bool,
 }
 
@@ -60,9 +32,6 @@ impl Default for PublishedAdmissionOptions {
     }
 }
 
-/// Publish one accepted native tool call onto an existing claimed request,
-/// delegating all header, segment, and tool-row creation to the production
-/// publication owner.
 pub(crate) async fn publish_accepted_on_claimed_request(
     node: Arc<EmbeddedNode>,
     request: &mut RequestLifecycle,
@@ -128,19 +97,10 @@ pub(crate) async fn publish_accepted_on_claimed_request(
     Ok(tool)
 }
 
-/// Physical artifacts of one published admission.
 pub struct PublishedAdmission {
-    /// Embedded node holding the durable documents.
     pub node: Arc<EmbeddedNode>,
-    /// Tempdir backing the node (and, with `real_identity`, the node key).
-    /// The caller owns cleanup (`std::fs::remove_dir_all(path)` after
-    /// `node.shutdown().await`).
     pub path: PathBuf,
-    /// Tool-call lifecycle built via `from_accepted` from the canonical
-    /// publication's accepted call.
     pub tool: ToolCallLifecycle,
-    /// Node DID actually used (derived from a real `KeyIdentity` when
-    /// `real_identity`, else `"did:test:test"`).
     pub node_did: String,
 }
 
@@ -236,7 +196,6 @@ async fn ensure_fixture_session(
     assert!(!response.has_errors(), "{:#?}", response.errors);
 }
 
-/// A claimed `RequestLifecycle` on a real durable AgentRequest document.
 pub async fn claimed_request(
     node: &Arc<EmbeddedNode>,
     request_id: &str,
@@ -282,7 +241,6 @@ pub(crate) async fn claimed_signed_request(
         .await
 }
 
-/// [`claimed_signed_request`] started by the scheduled trigger `trigger_id`.
 pub(crate) async fn claimed_signed_request_with_trigger(
     node: &Arc<EmbeddedNode>,
     request_id: &str,
@@ -353,8 +311,6 @@ pub(crate) async fn claimed_signed_request_with_trigger_correlation(
     lifecycle
 }
 
-/// A claimed enrolled request of a paired client (`paired-client.key`) in a
-/// session that client owns on `agent`.
 async fn claimed_paired_client_request(
     node: &Arc<EmbeddedNode>,
     request_id: &str,
@@ -411,11 +367,6 @@ async fn claimed_paired_client_request(
     lifecycle
 }
 
-/// Generalized publication fixture: an embedded node under a fresh tempdir
-/// with runtime schemas, a claimed request, a real `DefraStreamWriter`
-/// publication of one canonical native turn, and the tool-call lifecycle
-/// built via `ToolCallLifecycle::from_accepted`. On success the caller owns
-/// teardown: `node.shutdown().await` then `std::fs::remove_dir_all(path)`.
 pub async fn published_admission(
     options: PublishedAdmissionOptions,
 ) -> anyhow::Result<PublishedAdmission> {
@@ -423,8 +374,6 @@ pub async fn published_admission(
     Ok(admission)
 }
 
-/// [`published_admission`], keeping the actual claimed owner alive when a
-/// test exercises its subsequent terminal transition.
 pub async fn published_admission_with_owner(
     options: PublishedAdmissionOptions,
 ) -> anyhow::Result<(PublishedAdmission, RequestLifecycle)> {
@@ -540,7 +489,6 @@ pub async fn published_admission_with_owner(
     ))
 }
 
-/// Native `spawn_process` parent fixture.
 pub async fn published_spawn_parent(name: &str) -> (Arc<EmbeddedNode>, PathBuf, ToolCallLifecycle) {
     let PublishedAdmission {
         node, path, tool, ..
@@ -553,7 +501,6 @@ pub async fn published_spawn_parent(name: &str) -> (Arc<EmbeddedNode>, PathBuf, 
     (node, path, tool)
 }
 
-/// A running background `agent_new` row with a real `KeyIdentity`.
 pub async fn published_background_bridge(
     name: &str,
 ) -> (Arc<EmbeddedNode>, PathBuf, ToolCallLifecycle) {
@@ -571,9 +518,6 @@ pub async fn published_background_bridge(
     (node, path, tool)
 }
 
-/// Dispatch a pending accepted `agent_new` row and materialize its
-/// request on `target_node_did`'s `general` agent through the
-/// session-message owner, publishing the row's receipt.
 pub(crate) async fn materialize_session_message(
     node: &Arc<EmbeddedNode>,
     request: &RequestLifecycle,
@@ -615,24 +559,18 @@ pub(crate) async fn materialize_session_message(
     crate::session_message::commit(node, &cause, tool, plan, false).await
 }
 
-/// An accepted `agent_new` call and the request it caused.
 pub struct PublishedSessionMessage {
     pub admission: PublishedAdmission,
     pub caused_request_id: String,
     pub caused_request_doc_id: String,
 }
 
-/// Publish an accepted background `agent_new` call on this node's `general`
-/// agent and materialize its caused request, with the row's receipt, through
-/// the session-message owner.
 pub async fn published_session_message(
     options: PublishedAdmissionOptions,
 ) -> anyhow::Result<PublishedSessionMessage> {
     Ok(published_session_message_with_owner(options).await?.0)
 }
 
-/// [`published_session_message`], keeping the calling request's owner alive
-/// for later turns on the same request.
 pub async fn published_session_message_with_owner(
     options: PublishedAdmissionOptions,
 ) -> anyhow::Result<(PublishedSessionMessage, RequestLifecycle)> {
@@ -664,8 +602,6 @@ pub async fn published_session_message_with_owner(
     ))
 }
 
-/// A `Pending` native parent — `from_accepted` without `start_running` — for
-/// tests that drive the pending→running transition themselves.
 pub async fn pending_spawn_parent(name: &str) -> (Arc<EmbeddedNode>, PathBuf, ToolCallLifecycle) {
     let PublishedAdmission {
         node, path, tool, ..

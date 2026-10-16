@@ -1,6 +1,3 @@
-//! Durable request-local provider-context reductions (#1127): the immutable
-//! exact provider projection, persisted before the owned loop may activate it.
-
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
@@ -893,10 +890,6 @@ pub(crate) fn validate_replay_associations(
     Ok(())
 }
 
-/// The rendered summary is immutable provider input: rebuilding it using a
-/// newer prompt renderer can change recovery. The suffix already has its own
-/// immutable field. Version 1 stores only the exact rendered prefix; the array
-/// representation remains readable for facts written before this codec.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CheckpointPrefix {

@@ -1,4 +1,3 @@
-//! Shared registry resolution for CLI and runtime pack consumers.
 
 use std::path::{Path, PathBuf};
 
@@ -12,7 +11,6 @@ use crate::pack_store::PackStore;
 pub const DEFAULT_REGISTRY_URL: &str = "https://registry.dev.gents.xyz";
 pub const REGISTRY_ENV_VAR: &str = "GENTS_REGISTRY";
 
-/// A registry failure a caller needs to react to, not just report.
 #[derive(Debug, thiserror::Error)]
 pub enum RegistryError {
     #[error(
@@ -44,7 +42,6 @@ pub fn resolve_registry_url(explicit: Option<&str>) -> String {
     DEFAULT_REGISTRY_URL.to_owned()
 }
 
-/// A client for the packs registry.
 pub struct RegistryClient {
     base_url: String,
     http: reqwest::Client,
@@ -65,7 +62,6 @@ impl RegistryClient {
         }
     }
 
-    /// Percent-encodes every segment, so a `/` or space is never spliced in.
     fn api_url(&self, segments: &[&str]) -> Result<reqwest::Url> {
         let mut url = reqwest::Url::parse(&self.base_url)
             .with_context(|| format!("{} is not a valid registry URL", self.base_url))?;
@@ -91,8 +87,7 @@ impl RegistryClient {
             .is_ok_and(|address| address.is_loopback())
     }
 
-    /// Refuses a registry that is neither `https` nor loopback, so tokens are
-    /// never sent in cleartext.
+    /// Passwords and registry tokens may only travel over HTTPS or loopback HTTP.
     fn require_secure(url: &reqwest::Url) -> Result<()> {
         anyhow::ensure!(
             url.scheme() == "https" || Self::host_is_loopback(url),
@@ -391,8 +386,6 @@ pub async fn download_verified_pack(
     Ok(bytes)
 }
 
-/// Resolve the latest registry coordinate and fetch that pack. `cache_home`
-/// of `None` resolves entirely in memory.
 pub async fn fetch_pack(
     client: &RegistryClient,
     cache_home: Option<&Path>,
@@ -405,8 +398,6 @@ pub async fn fetch_pack(
         "{}/{}@{}",
         coordinate.namespace, coordinate.name, coordinate.version
     );
-    // The registry names a download by the digest of its bytes, not the pack
-    // digest; delete this index once it advertises pack digests directly.
     let advertised = format!("sha256:{}", coordinate.artifact_digest);
     let index = cache_home
         .map(|home| -> Result<PathBuf> {
@@ -430,8 +421,6 @@ pub async fn fetch_pack(
                 store.index(archive.header())?;
                 Some(archive)
             } else {
-                // The entry named a digest released from the store; treat it
-                // as a miss so the download refreshes the mapping.
                 None
             }
         }
@@ -509,7 +498,6 @@ pub async fn fetch_pack(
     })
 }
 
-/// Registry tokens saved by `gents pack login`, one per registry URL.
 pub mod credentials {
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
@@ -526,7 +514,7 @@ pub mod credentials {
             .join("credentials.json.lock")
     }
 
-    /// Held across a read-modify-write of the credentials file.
+    /// Held across the credentials read-modify-write to prevent concurrent updates from overwriting.
     fn exclusive_lock(home: &Path) -> Result<std::fs::File> {
         let path = lock_path(home);
         let dir = path
@@ -697,9 +685,6 @@ mod tests {
             "the uncached fetch indexes the pack through `import_accepting`"
         );
 
-        // Simulate a pack the store already held before it ever had a name
-        // index entry: the by-download cache stays untouched, but the name
-        // index has nothing for it.
         let index_entry = home
             .path()
             .join(crate::home::PACKS_DIR_NAME)

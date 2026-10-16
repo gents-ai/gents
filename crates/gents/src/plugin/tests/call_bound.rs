@@ -1,4 +1,3 @@
-//! `BoundDir` and `PluginRunner::call_bound`.
 
 use super::*;
 

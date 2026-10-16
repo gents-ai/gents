@@ -1,5 +1,3 @@
-//! Lean `PromptAssembly.ReplayFrontier` over flat provider input.
-
 use anyhow::{Context, Result};
 use serde_json::Value;
 
@@ -21,7 +19,6 @@ pub fn ords(items: &[FlatItem]) -> Vec<&[u8]> {
         .collect()
 }
 
-/// Each reasoning item with the number of ordinary items before it.
 pub fn anchored(items: &[FlatItem]) -> Vec<(usize, &[u8])> {
     let mut ordinary = 0;
     let mut anchored = Vec::new();
@@ -73,9 +70,6 @@ pub fn admissible_turn_drop(turns: &[Turn]) -> usize {
     dropped
 }
 
-/// The smallest drop count `d ≤ index` for which the items of `turns[d..index]`
-/// form a suffix of this turn's anchored capture reasoning, or `None` when the
-/// turn fails its own checks.
 fn minimum_drop(turns: &[Turn], index: usize) -> Option<usize> {
     let turn = &turns[index];
     let captured = turn.captured.as_ref()?;
@@ -109,10 +103,6 @@ fn minimum_drop(turns: &[Turn], index: usize) -> Option<usize> {
     Some(minimum)
 }
 
-/// Fields outside the replay-bound prefix: generation controls, output and
-/// transport settings. Everything else in the request context is compared,
-/// including `model`: reasoning is bound to the model that produced it, so a
-/// model switch on the same route ends the replayable run.
 const NON_PREFIX_FIELDS: &[&str] = &[
     "max_tokens",
     "max_output_tokens",

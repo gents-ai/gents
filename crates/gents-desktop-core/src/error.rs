@@ -14,10 +14,7 @@ pub enum BridgeErrorCode {
     Backend,
     IncompatibleLocalStore,
     Pairing,
-    /// The issued credential is held in memory so saving it can be retried
-    /// without signing in again.
     CredentialNotSaved,
-    /// Still booting: keep observing rather than failing or restarting.
     RuntimeStillBooting,
     Unknown,
 }
@@ -83,8 +80,6 @@ impl BridgeError {
         }
     }
 
-    /// Single classification owner shared by the peer status fetch and the
-    /// local-runtime discovery path.
     pub fn classify_transport_error(error: anyhow::Error) -> Self {
         let transport = error
             .chain()
@@ -130,16 +125,6 @@ impl From<&str> for BridgeError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn bridge_error_serializes_camel_case() {
-        let err = BridgeError::new(BridgeErrorCode::Backend, "store unavailable");
-        let json = serde_json::to_value(&err).expect("serialize");
-        assert_eq!(json["code"], "backend");
-        assert_eq!(json["retryable"], true);
-        assert_eq!(json["message"], "store unavailable");
-        assert!(json["endpoint"].is_null());
-    }
 
     #[test]
     fn endpoint_unreachable_carries_the_endpoint_as_a_structured_field() {

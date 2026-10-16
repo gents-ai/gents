@@ -35,8 +35,6 @@ import {
 import { useComposerEdit } from "./session/composerEdit";
 import { AutomatedInput } from "./TranscriptInputs";
 
-/** The selected session's waiting messages and the edit that changes them;
-    the tray and the composer's editing share it. */
 export function useSessionQueue() {
   const { actions } = useApp();
   const pending = useSelectedSessionFields((session) =>
@@ -60,7 +58,6 @@ export function useSessionQueue() {
   return { pending, queue: pending?.pendingQueue ?? null, onEdit };
 }
 
-/** The selected session's tray, reading its own queue. */
 export function SelectedPendingTray() {
   const { pending, queue, onEdit } = useSessionQueue();
   const edit = useComposerEdit();
@@ -87,9 +84,7 @@ export function PendingTray({
   queued: readonly PendingTurnView[];
   queue?: readonly PendingQueueEntryView[] | null;
   onEdit?: (edit: QueueEdit) => Promise<void>;
-  /** the message the composer is editing: the tray holds still around it */
   editingDocId?: string | null;
-  /** hands a message to the composer to edit; without it there is no Edit */
   onBeginEdit?: (entry: PendingQueueEntryView) => void;
 }) {
   const rows = useMemo(() => pendingRows(queued, queue), [queued, queue]);
@@ -107,7 +102,7 @@ export function PendingTray({
       await onEdit(edit);
       return true;
     } catch {
-      // The action owner reports why; the queue stays as the runtime holds it.
+      // The action owner reports the failure; the runtime retains the queue.
       return false;
     } finally {
       setBusy(false);
@@ -244,7 +239,6 @@ export function PendingTray({
 
 const NO_TURNS: readonly PendingTurnView[] = [];
 
-// listed before but no longer: the agent has taken it, the transcript has yet to show it
 function useTaken(
   queue: readonly PendingQueueEntryView[] | null,
   edited: ReadonlySet<string>,
@@ -261,7 +255,6 @@ function useTaken(
 
 const LEAVE_MS = 200;
 
-// only a plain departure is drawn: an arriving row means an edit is landing
 function useLeavingRows(rows: PendingRow[], edited: ReadonlySet<string>): PendingRow[] {
   const previous = useRef(rows);
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
@@ -292,7 +285,6 @@ function useLeavingRows(rows: PendingRow[], edited: ReadonlySet<string>): Pendin
   );
 }
 
-// taken: still drawn here until the transcript shows it
 function TakenRow({ row }: { row: PendingRow }) {
   return (
     <div className="flex min-w-0 items-center gap-2" data-taken>
@@ -308,7 +300,6 @@ function TakenRow({ row }: { row: PendingRow }) {
   );
 }
 
-// the row's controls keep their own presses; only a press on the row itself starts a drag
 function rowDrag(handle: ReturnType<ReturnType<typeof useDragReorder>["handle"]>) {
   return {
     ...handle,
@@ -321,7 +312,6 @@ function rowDrag(handle: ReturnType<ReturnType<typeof useDragReorder>["handle"]>
   };
 }
 
-// dim only if the wait is long enough to see
 const SLOW_DIM = "disabled:delay-300";
 
 function MessageRow({
@@ -332,10 +322,8 @@ function MessageRow({
   actions,
 }: {
   row: Extract<PendingRow, { kind: "message" }>;
-  /** the person's own message: it shows the grip, dimmed while it cannot move */
   own: boolean;
   draggable: boolean;
-  /** in the composer right now: the row says so in place of its controls */
   editing: boolean;
   actions: {
     locked: boolean;
@@ -343,7 +331,6 @@ function MessageRow({
     onRemove: () => void;
     up: (() => void) | null;
     down: (() => void) | null;
-    /** a neighbour was sent with different settings */
     separated: boolean;
   } | null;
 }) {

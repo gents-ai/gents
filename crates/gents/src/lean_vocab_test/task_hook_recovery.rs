@@ -66,7 +66,6 @@ impl Fixture {
         lifecycle
     }
 
-    /// An abandoned request with an expired lease.
     async fn abandoned_request(&self, interrupt_requested: bool) -> String {
         let mut lifecycle = self.claimed(Duration::from_secs(1)).await;
         let writer =
@@ -162,8 +161,6 @@ fn log_lines(log: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Drives every generated recovery case through the production startup
-/// sequence.
 #[tokio::test]
 async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_records() {
     let cases = lean_task_hook_recovery_cases();
@@ -268,8 +265,6 @@ async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_reco
     }
 }
 
-/// Drives the task hook sweep's generated witnesses through the production
-/// sweep.
 #[tokio::test]
 async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
     let cases = lean_recovery_sweep_cases()
@@ -340,8 +335,6 @@ fn generated(hook_id: &str, phase: &str) -> LeanTaskHook {
     }
 }
 
-/// A restart while a hook command survives stops that command through its
-/// recorded identity before running the remaining cleanup.
 #[cfg(unix)]
 #[tokio::test]
 async fn recovery_stops_a_surviving_hook_command_before_cleanup() {

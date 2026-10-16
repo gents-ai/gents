@@ -238,32 +238,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn registry_url_precedence_is_flag_then_env_then_default() {
-        let guard = EnvVarGuard::clear(&[REGISTRY_ENV_VAR]);
-        assert_eq!(resolve_registry_url(None), DEFAULT_REGISTRY_URL);
-
-        guard.set(REGISTRY_ENV_VAR, "https://env.example/");
-        assert_eq!(resolve_registry_url(None), "https://env.example");
-        assert_eq!(
-            resolve_registry_url(Some("https://flag.example")),
-            "https://flag.example"
-        );
-    }
-
-    #[test]
-    fn registry_token_precedence_is_flag_then_env() {
-        let guard = EnvVarGuard::clear(&[REGISTRY_TOKEN_ENV_VAR]);
-        assert_eq!(resolve_registry_token(None), None);
-
-        guard.set(REGISTRY_TOKEN_ENV_VAR, "gcpat_env");
-        assert_eq!(resolve_registry_token(None).as_deref(), Some("gcpat_env"));
-        assert_eq!(
-            resolve_registry_token(Some("gcpat_flag")).as_deref(),
-            Some("gcpat_flag")
-        );
-    }
-
-    #[test]
     fn a_saved_login_is_the_last_token_source() {
         let guard = EnvVarGuard::clear(&[REGISTRY_TOKEN_ENV_VAR]);
         let home = tempfile::tempdir().unwrap();

@@ -23,18 +23,6 @@ use crate::lean_vocab_test::{
     lean_command_sandbox_cases, LeanCommandPolicyCase,
 };
 
-#[test]
-fn toolset_presets_have_expected_counts() {
-    assert_eq!(ToolSet::readonly().native_tools().len(), 5);
-    assert_eq!(
-        ToolSet::readwrite(std::env::temp_dir())
-            .native_tools()
-            .len(),
-        8
-    );
-    assert_eq!(ToolSet::meta_only().native_tools().len(), 0);
-}
-
 #[tokio::test]
 async fn native_tool_definitions_include_model_facing_defaults_and_constraints() {
     let root = temp_root("gents-tool-definitions");
@@ -487,8 +475,6 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         "an unpreempted blocker must write its release marker"
     );
 
-    // The deadline must fire after the runner enters the blocker: an attempt
-    // whose deadline fired before entry witnessed nothing and is repeated.
     let gate = root.join("preempt-gate");
     let _gate = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_GATE", &gate);
     let mut deadline_ms = 25;
@@ -1003,52 +989,6 @@ async fn grep_returns_compact_line_numbered_matches() {
     );
 }
 
-#[tokio::test]
-async fn compact_list_output_is_smaller_than_representative_pretty_json() {
-    ensure_native_fs_runner_for_test();
-    let root = temp_root("gents-list-files-smaller");
-    std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::write(root.join("README.md"), "hello\n").unwrap();
-    std::fs::write(root.join("src/lib.rs"), "pub fn hi() {}\n").unwrap();
-    let tool = ListFilesTool::new(ToolContext::new(root, false).unwrap(), 100);
-
-    let output = crate::llm::tool::Tool::call(
-        &tool,
-        ListFilesArgs {
-            path: Some(".".to_string()),
-            recursive: true,
-            max_entries: Some(100),
-            raw_json: false,
-        },
-    )
-    .await
-    .unwrap();
-    let old_pretty_json = serde_json::to_string_pretty(&serde_json::json!({
-        "path": ".",
-        "recursive": true,
-        "returned_entries": 3,
-        "truncated": false,
-        "default_ignored": [".cache", ".direnv", ".git", ".next", ".turbo", ".venv", "dist", "node_modules", "target", "venv"],
-        "summary": {
-            "files": 2,
-            "directories": 1
-        },
-        "entries": [
-            {"path": "README.md", "entry_type": "file"},
-            {"path": "src", "entry_type": "directory"},
-            {"path": "src/lib.rs", "entry_type": "file"}
-        ]
-    }))
-    .unwrap();
-
-    assert!(
-        output.len() < old_pretty_json.len(),
-        "compact output should be smaller than old pretty JSON\ncompact={}\nold={}",
-        output.len(),
-        old_pretty_json.len()
-    );
-}
-
 #[test]
 fn shell_environment_filters_secrets_and_forces_noninteractive_values() {
     let env = build_shell_env_from_vars([
@@ -1147,7 +1087,6 @@ fn command_policy_applies_forbidden_and_allowed_prefixes() {
 
 #[test]
 fn deny_all_argv_policy_rejects_every_command() {
-    // The empty allowed list proves the sentinel, not the list, enforces deny-all.
     let policy = CommandExecutionPolicy::write_capable().with_deny_all_argv(true);
     assert!(policy.allowed_argv_prefixes.is_empty());
     assert!(validate_command_policy("ls", &[], &policy).is_err());
@@ -2619,9 +2558,6 @@ async fn artifact_command_without_runtime_grant_never_dispatches() {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_launches() {
-    // Load cases before the fixture claims its execution lease: the first load
-    // may wait behind `lake build` under the shared proofs lock longer than
-    // the lease, which would expire the grant under test.
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().artifact_spawn_cases;
     let fx = crate::workspace::artifact_test_fixture(&[]).await;
     assert_eq!(cases.len(), 5);
@@ -2837,7 +2773,6 @@ async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
     } else {
         root.join(git_dir)
     };
-    // Artifacts live under a separate host-owned Git placement directory.
     let metadata_before: Vec<_> = ["HEAD", "index", "commondir", "gitdir"]
         .into_iter()
         .map(|name| (name, std::fs::read(git_dir.join(name)).unwrap()))

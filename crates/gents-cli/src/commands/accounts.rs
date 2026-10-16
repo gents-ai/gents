@@ -32,7 +32,6 @@ pub(crate) struct AccountRow {
     pub(crate) read: Option<UsageRead>,
 }
 
-/// A usage read request for the runtime, signed by the operator identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UsageReadCommand {
@@ -84,7 +83,6 @@ impl UsageReadCommand {
         )
     }
 
-    /// Freshness window matching the enrollment operator commands.
     pub(crate) fn validate_at(&self, now: chrono::DateTime<chrono::Utc>) -> Result<()> {
         anyhow::ensure!(self.sig.len() == 64, "invalid usage read signature length");
         let issued = chrono::DateTime::parse_from_rfc3339(&self.issued_at)
@@ -204,7 +202,6 @@ async fn target_access(
     Ok((access, did))
 }
 
-/// The node's accounts and the configuration that uses them.
 pub(crate) struct Snapshot {
     pub(crate) accounts: Vec<AccountSummary>,
     pub(crate) backends: Vec<InferenceBackend>,

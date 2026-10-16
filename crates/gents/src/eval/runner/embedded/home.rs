@@ -320,7 +320,6 @@ async fn wait_for_runtime_ready_within(
     }
 }
 
-/// Fields the readiness condition reads from the runtime and agent-readiness rows.
 #[derive(Debug)]
 struct RuntimeSnapshot {
     process_state: String,

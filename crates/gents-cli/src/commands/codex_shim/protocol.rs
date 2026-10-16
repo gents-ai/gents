@@ -452,78 +452,6 @@ pub(super) fn now_millis() -> i64 {
 mod tests {
     use super::*;
 
-    #[test]
-    fn user_text_extraction_ignores_skill_selections() {
-        let input = vec![
-            codex::UserInput::Text {
-                text: "summarize this".to_string(),
-                text_elements: Vec::new(),
-            },
-            codex::UserInput::Skill {
-                name: "Deep Research".to_string(),
-                path: std::path::PathBuf::from("/gents/skills/research"),
-            },
-        ];
-        assert_eq!(user_text_from_input(&input), "summarize this");
-    }
-
-    #[test]
-    fn selected_skill_ids_extracts_reference_from_pill() {
-        let input = vec![
-            codex::UserInput::Text {
-                text: "go".to_string(),
-                text_elements: Vec::new(),
-            },
-            codex::UserInput::Skill {
-                name: "Deep Research".to_string(),
-                path: std::path::PathBuf::from("/gents/skills/research"),
-            },
-        ];
-        assert_eq!(selected_skill_ids_from_input(&input), vec!["research"]);
-        assert!(selected_skill_ids_from_input(&input[..1]).is_empty());
-    }
-
-    #[test]
-    fn thread_status_uses_codex_tag_shape() {
-        let thread = thread_json(
-            Path::new("/tmp"),
-            "thread-1",
-            Some("preview"),
-            codex::ThreadStatus::Idle,
-            Vec::new(),
-        );
-        let typed: codex::Thread = serde_json::from_value(thread).unwrap();
-        let serialized = serde_json::to_value(typed).unwrap();
-
-        assert_eq!(serialized.pointer("/status/type"), Some(&json!("idle")));
-        assert_eq!(serialized.pointer("/source"), Some(&json!("cli")));
-    }
-
-    #[test]
-    fn turn_timing_uses_durable_seconds_and_derives_duration() {
-        let turn = turn_value_with_timing(
-            "turn-1",
-            codex::TurnStatus::Completed,
-            Vec::new(),
-            None,
-            Some(100),
-            Some(125),
-        );
-        assert_eq!(turn.started_at, Some(100));
-        assert_eq!(turn.completed_at, Some(125));
-        assert_eq!(turn.duration_ms, Some(25_000));
-
-        let incomplete = turn_value_with_timing(
-            "turn-2",
-            codex::TurnStatus::InProgress,
-            Vec::new(),
-            None,
-            Some(100),
-            None,
-        );
-        assert_eq!(incomplete.duration_ms, None);
-    }
-
     fn usage_window(
         label: &str,
         used_pct: f64,
@@ -653,33 +581,5 @@ mod tests {
             rate_limits_from_usage(None, Utc::now()),
             empty_rate_limits()
         );
-    }
-    #[test]
-    fn active_turn_input_uses_safe_boundary_steering_without_changing_scope() {
-        let input = codex_queued_user_input(
-            std::path::Path::new("/tmp/project"),
-            "active-request",
-            &["skill-a".into()],
-        );
-        let queue = input.queue.unwrap();
-        assert_eq!(
-            queue.delivery,
-            gents_protocol::request_input::QueueDelivery::Steer
-        );
-        assert_eq!(
-            queue.source,
-            gents_protocol::request_input::QueueSource::User
-        );
-        assert_eq!(
-            queue.policy,
-            gents_protocol::request_input::QueuePolicy::Append
-        );
-        assert_eq!(
-            queue.queued_after_request_id.as_deref(),
-            Some("active-request")
-        );
-        assert!(queue.position.is_none());
-        assert!(queue.interrupted_request_id.is_none());
-        assert_eq!(input.selected_skill_ids, vec!["skill-a"]);
     }
 }

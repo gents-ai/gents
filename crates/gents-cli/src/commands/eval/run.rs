@@ -59,7 +59,6 @@ pub(super) async fn run_prepared(
     finish(ctx, &run_id, args.json, result, out).await
 }
 
-/// The attempts of `run_id` that already landed; none for a new run.
 async fn landed_attempts(ctx: &EvalContext, run_id: &str) -> Result<BTreeSet<String>> {
     Ok(load_trials(&ctx.access, &ctx.owner, run_id)
         .await?
@@ -102,7 +101,6 @@ pub(super) async fn resume(
     finish(ctx, &args.run_id, args.json, result, out).await
 }
 
-/// Each `--profile` by the cell it names.
 pub(super) fn profiles_by_cell(args: &EvalRunArgs) -> Result<BTreeMap<&str, &str>, String> {
     let mut cells = BTreeSet::new();
     for cell in &args.cells {
@@ -180,7 +178,6 @@ pub(super) async fn run_request(
     Ok((request, packs))
 }
 
-/// Drive `running` to its end, printing a line for each slot that lands.
 pub(super) async fn follow<F>(
     ctx: &EvalContext,
     run_id: &str,
@@ -201,7 +198,6 @@ where
     follow_progress(print, &mut progress, running).await
 }
 
-/// The run's slots that landed, printed once each.
 struct LandedTrials<'a> {
     ctx: &'a EvalContext,
     run_id: &'a str,
@@ -215,8 +211,6 @@ impl Progress for LandedTrials<'_> {
     }
 }
 
-/// Print every completed attempt not printed yet. A failed read only delays
-/// the lines; it never stops the run.
 async fn report_landed(
     ctx: &EvalContext,
     run_id: &str,

@@ -17,7 +17,6 @@ use super::{
 };
 use crate::message::Message;
 
-/// Lean `OpenError` over protocol types.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DensePrefixError {
     Loading,
@@ -39,7 +38,6 @@ impl std::fmt::Display for DensePrefixError {
 
 impl std::error::Error for DensePrefixError {}
 
-/// The contiguous prefix of one source, plus evidence for the classifier.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DensePrefix {
     pub segments: u32,
@@ -47,7 +45,6 @@ pub struct DensePrefix {
     pub highest_visible_ordinal: Option<u32>,
 }
 
-/// Same predicate as Lean's `writerMatchesSource` and `extent::writer_matches`.
 pub(crate) fn writer_matches_source(source: &OutputSource, writer: &OutputWriter) -> bool {
     match (source, writer) {
         (
@@ -73,7 +70,6 @@ fn invalid(detail: impl std::fmt::Display) -> DensePrefixError {
     }
 }
 
-/// Reconstruct the tolerant dense prefix of one source scope.
 pub fn reconstruct_dense_prefix(
     records: &[ObservedSegment<'_>],
     request_doc_id: &str,
@@ -135,7 +131,6 @@ pub fn reconstruct_dense_prefix(
         }
     }
 
-    // One immutable identity cannot carry conflicting facts.
     let mut identities: BTreeMap<&str, ObservedSegment<'_>> = BTreeMap::new();
     let mut slots: BTreeMap<u32, Vec<ObservedSegment<'_>>> = BTreeMap::new();
     for record in &data {
@@ -151,8 +146,6 @@ pub fn reconstruct_dense_prefix(
             slots.entry(ordinal).or_default().push(*record);
         }
     }
-    // Any duplicate ordinal anywhere in the visible data is a conflict, before
-    // any bytes are consumed.
     for (ordinal, slot) in &slots {
         let first = &slot[0];
         if slot.iter().any(|other| other != first) {
@@ -160,8 +153,6 @@ pub fn reconstruct_dense_prefix(
         }
     }
 
-    // Walk from ordinal zero and stop at the first missing ordinal; strict
-    // run shape applies only to the ordinals actually consumed.
     let mut streams: Vec<ReconstructedStream> = Vec::new();
     let mut positions: BTreeSet<(u32, u32, bool)> = BTreeSet::new();
     let mut consumed: u32 = 0;
@@ -226,29 +217,17 @@ pub fn reconstruct_dense_prefix(
     })
 }
 
-/// The live eligibility classifier: the Rust projection of Lean's
-/// `StreamingResponse.project`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LiveView {
-    /// Lean `View.absent`.
     Absent,
-    /// Lean `View.live`.
     Live { streams: Vec<LiveStream> },
-    /// Lean `View.settling`.
     Settling { streams: Vec<LiveStream> },
-    /// Lean `View.loading`.
     Loading,
-    /// Lean `View.denied`.
     Denied,
-    /// Lean `View.conflicted`.
     Conflicted,
-    /// Lean `View.invalid`.
     Invalid,
-    /// Lean `View.retracted`.
     Retracted,
-    /// Lean `View.retainedPartial`.
     RetainedPartial { streams: Vec<LiveStream> },
-    /// Lean `View.published`.
     Published {
         message: TranscriptMessage,
         native: Message,
@@ -273,7 +252,6 @@ impl LiveView {
     }
 }
 
-/// The exact target coordinate for the classifier.
 pub struct LiveTarget<'a> {
     pub request_doc_id: &'a str,
     pub source: &'a OutputSource,
@@ -281,7 +259,6 @@ pub struct LiveTarget<'a> {
     pub message_id: Option<&'a str>,
 }
 
-/// Identity-only selection result for [`project_live`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LiveTargetSelection {
     Absent,
@@ -359,7 +336,6 @@ pub fn select_live_target(
     }
 }
 
-/// Observation supplied to [`project_live`].
 pub struct LiveObservation<'a> {
     pub request_doc_id: &'a str,
     pub session_id: &'a str,
@@ -380,7 +356,6 @@ pub struct LiveObservation<'a> {
     pub terminal_selection: Option<TerminalOutput>,
 }
 
-/// Durable owner-liveness observation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OwnerLiveness<'a> {
     pub current_request: Option<(&'a str, &'a str)>,
@@ -431,7 +406,6 @@ fn owner_live(observation: &LiveObservation<'_>) -> bool {
     }
 }
 
-/// Any visible record of the target source denied.
 fn source_denied(observation: &LiveObservation<'_>) -> bool {
     observation.records.iter().any(|record| {
         record.segment.request_doc_id == observation.request_doc_id
@@ -443,12 +417,10 @@ fn source_denied(observation: &LiveObservation<'_>) -> bool {
     })
 }
 
-/// Lean `targetScoped`.
 fn target_scoped(observation: &LiveObservation<'_>) -> bool {
     observation.target.request_doc_id == observation.request_doc_id
 }
 
-/// One header lookup through the shared origin owner.
 fn lookup_observed<'a>(
     observation: &'a LiveObservation<'a>,
     doc_id: &str,
@@ -487,7 +459,6 @@ enum CloseObservation_ {
     Conflict,
 }
 
-/// Lean `observeClose`.
 fn observe_close<'a>(
     observation: &'a LiveObservation<'a>,
 ) -> Result<(Option<&'a ObservedSegment<'a>>, CloseObservation_), ()> {
@@ -499,7 +470,6 @@ fn observe_close<'a>(
         {
             continue;
         }
-        // `uniqueRecord` dedups exact facts before deciding.
         if !closures
             .iter()
             .any(|existing| existing.doc_id == record.doc_id && existing.segment == record.segment)
@@ -521,7 +491,6 @@ fn observe_close<'a>(
     }
 }
 
-/// How a stream's bytes will be surfaced in a message header.
 fn stream_referenced(message: &TranscriptMessage, close_doc_id: &str, stream: u32) -> bool {
     message
         .payload_references()
@@ -529,7 +498,6 @@ fn stream_referenced(message: &TranscriptMessage, close_doc_id: &str, stream: u3
         .any(|reference| reference.close_doc_id == close_doc_id && reference.stream == stream)
 }
 
-/// Lean `classifyMessageError`.
 fn classify_message_error(error: &ReconstructionError) -> LiveView {
     match error {
         ReconstructionError::UnresolvedClose { .. }
@@ -548,8 +516,6 @@ fn classify_message_error(error: &ReconstructionError) -> LiveView {
     }
 }
 
-/// Lean `Terminal.resolveTerminal`; returns the selected message or `Ok(None)`
-/// for explicit `NoMessage`.
 fn resolve_terminal<'a>(
     observation: &'a LiveObservation<'a>,
 ) -> Result<Option<&'a TranscriptMessage>, LiveView> {
@@ -578,7 +544,6 @@ fn resolve_terminal<'a>(
     Ok(Some(message))
 }
 
-/// Lean `TerminalPayload.resolveTerminalPayload`.
 fn resolve_terminal_payload(
     observation: &LiveObservation<'_>,
 ) -> Result<Option<Message>, LiveView> {
@@ -603,8 +568,6 @@ fn resolve_terminal_payload(
     .map_err(|error| classify_message_error(&error))
 }
 
-/// The classifier entry point: returns the `LiveView` for the one target
-/// coordinate in the observation.
 pub fn project_live(observation: &LiveObservation<'_>) -> LiveView {
     if observation.target.source.is_auxiliary_audit() {
         return LiveView::Absent;
@@ -644,14 +607,12 @@ pub fn project_live(observation: &LiveObservation<'_>) -> LiveView {
     }
 }
 
-/// Lean `reconstructOpen` over protocol types.
 fn reconstruct_open(
     observation: &LiveObservation<'_>,
 ) -> Result<Vec<LiveStream>, DensePrefixError> {
     reconstruct_prefix(observation, None)
 }
 
-/// Lean `reconstructPrefix` over protocol types.
 fn reconstruct_prefix(
     observation: &LiveObservation<'_>,
     limit: Option<u32>,
@@ -679,7 +640,6 @@ fn reconstruct_prefix(
     ))
 }
 
-/// Lean `reconstructBeforeClose`.
 fn reconstruct_before_close(
     observation: &LiveObservation<'_>,
     closing: &ObservedSegment<'_>,
@@ -694,7 +654,6 @@ fn reconstruct_before_close(
     }
 }
 
-/// Lean `loadingOrSettling`/`loadingOrSettlingBeforeClose`.
 fn loading_or_settling(
     observation: &LiveObservation<'_>,
     closing: Option<&ObservedSegment<'_>>,
@@ -724,7 +683,6 @@ fn loading_or_settling(
     }
 }
 
-/// Lean `referencedTargetClose?`.
 fn referenced_target_close<'a>(
     observation: &LiveObservation<'a>,
     message: &TranscriptMessage,
@@ -785,7 +743,6 @@ fn resolve_close_reference<'a>(
     }
 }
 
-/// Lean `settlingForReferencedTarget`.
 fn settling_for_referenced_target(
     observation: &LiveObservation<'_>,
     message: &TranscriptMessage,
@@ -799,8 +756,6 @@ fn settling_for_referenced_target(
     }
 }
 
-/// Resolve a header's closure references without exposing bytes (Lean
-/// `resolvedReferencingHeaders`).
 #[derive(Clone, Debug, PartialEq)]
 pub enum ReferencedHeaderResolution<'a> {
     Resolved { headers: Vec<&'a TranscriptMessage> },
@@ -872,7 +827,6 @@ fn resolved_referencing_headers<'a>(
     ReferencedHeaderResolution::Resolved { headers }
 }
 
-/// Lean `retainedStreams` over `visibleStreams`.
 fn retained_streams(
     observation: &LiveObservation<'_>,
     closing: &ObservedSegment<'_>,
@@ -899,7 +853,6 @@ fn retained_streams(
     )
 }
 
-/// Lean `projectUnheadedClosed`.
 fn project_unheaded_closed(
     observation: &LiveObservation<'_>,
     closing: &ObservedSegment<'_>,
@@ -952,8 +905,6 @@ fn project_unheaded_closed(
     }
 }
 
-/// Reconstruct every stream declared by one sealed extent through the shared
-/// strict extent owner.
 fn reconstruct_extent_streams(
     observation: &LiveObservation<'_>,
     closing: ObservedSegment<'_>,
@@ -977,7 +928,6 @@ fn reconstruct_extent_streams(
     )
 }
 
-/// Lean `projectPublished`.
 fn project_published<'a>(observation: &'a LiveObservation<'a>) -> LiveView {
     let Some(target_doc_id) = observation.target.message_id else {
         return LiveView::Loading;
@@ -1038,7 +988,6 @@ fn project_published<'a>(observation: &'a LiveObservation<'a>) -> LiveView {
     }
 }
 
-/// Lean `messageScopeResult`'s fork path over protocol types.
 fn project_fork(
     observation: &LiveObservation<'_>,
     fork: ObservedMessage<'_>,

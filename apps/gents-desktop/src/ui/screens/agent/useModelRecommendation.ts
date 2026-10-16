@@ -10,13 +10,6 @@ import { errorText } from "../../../lib/errorText";
 
 type AdvertisedModel = NonNullable<InferenceBackendView["advertisedModels"]>[number];
 
-/**
- * The settings a backend recommends for a model, asked for 150ms after the
- * backend, model or advertised facts last change; an answer shows only
- * while what it was asked about is still current. `choose` marks a model
- * the person just picked; when its recommendation lands, `onChosen`
- * applies it.
- */
 export function useModelRecommendation({
   recommend,
   backendId,
@@ -66,7 +59,6 @@ export function useModelRecommendation({
         endpoint,
         modelName: model,
         displayName: advertised?.display_name ?? null,
-        // Only the backend's advertised facts describe the model.
         contextWindow: advertised?.context_window ?? null,
         maxContextWindow: advertised?.max_context_window ?? null,
         maxOutputTokens: advertised?.max_output_tokens ?? null,

@@ -1291,7 +1291,6 @@ async fn queued_persist_failure_releases_queue_capacity() {
         "persist failure leaked a queue-waiter unit (#1001)"
     );
 
-    // Queue capacity must be intact for the next caller.
     let queued = tokio::spawn(controller.clone().acquire(
         node.clone(),
         pending_call("req-leak-c", "backend-queue-leak"),
@@ -1360,7 +1359,6 @@ async fn backend_rewrite_admits_new_calls_while_in_flight_call_drains() {
         .expect("a rewritten backend must admit new calls while old calls drain");
     assert_eq!(admitted.controller_generation_for_test(), 2);
 
-    // The draining call still occupies one of the two slots.
     let error = match acquire_on(&registry, "req-rewrite-over", backend).await {
         Ok(_) => panic!("capacity must count the in-flight call admitted before the rewrite"),
         Err(error) => error,
@@ -1422,7 +1420,6 @@ async fn queued_call_survives_capacity_only_rewrite() {
     waiter.finish_success(None).await.unwrap();
 }
 
-/// The excess held permit is paid before the queued call is admitted.
 #[tokio::test]
 async fn shrinking_rewrite_admits_queued_call_after_excess_releases() {
     let node = test_node().await;
@@ -1553,9 +1550,6 @@ async fn abandoned_assigned_waiter_cannot_admit_over_capacity() {
 
     first.finish_success(None).await.unwrap();
     drop(first);
-    // Occupy the newly released semaphore permit, then queue a real Tokio
-    // waiter. Releasing the held permit assigns it to that waiter without
-    // involving database polling or the admission ledger.
     let parked = pool.take_unregistered_for_test();
     let mut waiting = Box::pin(parked.0.clone().acquire_owned());
     let waker = futures::task::noop_waker();
@@ -1568,7 +1562,6 @@ async fn abandoned_assigned_waiter_cannot_admit_over_capacity() {
         "the permit is assigned, not registered"
     );
 
-    // Shrink to one while that permit is in transit.
     registry.reconcile(
         2,
         &HashMap::from([(backend.to_string(), config(backend, 1, 2))]),
@@ -1581,7 +1574,6 @@ async fn abandoned_assigned_waiter_cannot_admit_over_capacity() {
         "Tokio returned the abandoned permit around the ledger"
     );
 
-    // The next caller must pay the debt with that permit.
     let over_registry = registry.clone();
     let over =
         tokio::spawn(async move { acquire_on(&over_registry, "req-abandon-over", backend).await });
@@ -1607,7 +1599,6 @@ async fn abandoned_assigned_waiter_cannot_admit_over_capacity() {
     next.finish_success(None).await.unwrap();
 }
 
-/// Deleting a backend fails queued and new calls with `BackendGone`.
 #[tokio::test]
 async fn backend_removal_fails_queued_and_new_calls_clearly() {
     let node = test_node().await;
@@ -1713,7 +1704,6 @@ async fn recovered_backend_admits_within_capacity_left_by_pre_outage_calls() {
     after.finish_success(None).await.unwrap();
 }
 
-/// F5: calls admitted before a removal still count against the re-added pool.
 #[tokio::test]
 async fn rollback_re_adding_removed_backend_carries_held_permits() {
     let node = test_node().await;
@@ -1889,7 +1879,6 @@ type ParkedCall = std::pin::Pin<
     >,
 >;
 
-/// Parks a queued call whose task is never woken.
 async fn park_with_assigned_permit(
     node: &EmbeddedNode,
     registry: &AdmissionRegistry,
@@ -2017,8 +2006,6 @@ async fn registration_rechecks_open_pool_and_current_semaphore() {
     assert!(pool.register_for_test(taken).is_err());
     assert_eq!(pool.held_for_test(), 0);
 
-    // Reopened with one free slot that a new call takes before the old
-    // registration resumes.
     let available_two = HashMap::from([(backend.to_string(), config(backend, 2, 1))]);
     registry.reconcile(3, &available_two);
     let pool = registry.pool_for_test(backend).unwrap();

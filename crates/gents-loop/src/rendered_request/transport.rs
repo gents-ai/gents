@@ -1,20 +1,3 @@
-//! The capture seam: the last `HttpClientExt` before the network client.
-//!
-//! Installed innermost so it observes the body after every provider-kind
-//! rewrite (Codex, Grok OAuth, Responses normalization) and immediately before
-//! the network client, so `request_json` is what the provider was sent. There
-//! is no code path to the provider that skips capture.
-//!
-//! Fail-closed (`capture_failure_blocks_send` in `Proofs/RenderedCapture.lean`):
-//! when a capture is armed, the durable write happens before the send and a
-//! failure refuses it. Inside a capture scope, a completion body with nothing
-//! armed and nothing claimed is also refused; only a non-completion path
-//! (`/models`, `/key`, multipart) or a send outside any scope forwards without
-//! a row.
-//!
-//! One armed attempt may legitimately produce several outbound bodies (rig's
-//! SSE reconnect re-posts the request): once the first body is durable, an
-//! exact resend reuses that result; changed bytes go back through the sink.
 
 use std::fmt;
 use std::future::Future;
@@ -29,8 +12,8 @@ use sha2::{Digest, Sha256};
 use super::scope::{self, CaptureClaim, PendingCapture, RequestCaptureScope};
 use super::RenderedRequestSource;
 
-/// Transport wrapper that persists the outbound completion body before it is
-/// sent. Install it as the innermost wrapper of every provider stack.
+/// Persist the exact provider body before sending; a failed capture refuses
+/// the request (`capture_failure_blocks_send` in `Proofs/RenderedCapture.lean`).
 #[derive(Clone, Debug, Default)]
 pub struct RenderedRequestCapturingHttpClient<H> {
     inner: H,
@@ -42,33 +25,23 @@ impl<H> RenderedRequestCapturingHttpClient<H> {
     }
 }
 
-/// What a send should do with the request it is holding.
 enum CaptureDecision {
-    /// Not a completion body, or no capture scope installed. Forward unchanged.
     Forward,
-    /// Capture first; forward only on success.
     Capture {
         scope: std::sync::Arc<RequestCaptureScope>,
         pending: Box<PendingCapture>,
         source: RenderedRequestSource,
         durable_body_fingerprint: Option<[u8; 32]>,
-        /// Scheme and authority of the URI this body was actually posted to,
-        /// observed at the seam rather than read from configuration (a backend
-        /// document can be edited between reconcile and send). Deliberately
-        /// not the full URI: proxies prepend distinct paths and some query
-        /// strings carry credentials.
         provider_endpoint: Option<String>,
         provider_route_path_sha256: Option<String>,
         destination_fingerprint: [u8; 32],
     },
-    /// A completion body inside a request that armed nothing. Refuse.
     Refuse {
         scope: std::sync::Arc<RequestCaptureScope>,
         path: String,
     },
 }
 
-/// Scheme and host authority only — never userinfo, path, or query.
 fn provider_endpoint_of(scheme: Option<&str>, authority: Option<&str>) -> Option<String> {
     let authority = authority?;
     let authority = authority
@@ -84,9 +57,6 @@ fn provider_route_path_sha256(path: &str, has_query: bool) -> Option<String> {
     (!has_query).then(|| format!("{:x}", Sha256::digest(path.as_bytes())))
 }
 
-/// Uses the same non-secret destination identity as durable capture. A query
-/// can select a different proxy route, so an unrecorded query cannot authorize
-/// reasoning replay on the strength of its path alone.
 pub fn replay_issuer_for_destination(
     family: &str,
     destination: &rig::http_client::Uri,
@@ -156,7 +126,6 @@ fn decide(
     }
 }
 
-/// Persist the body, or produce the transport error that refuses the send.
 async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_client::Result<()> {
     let (
         scope,
@@ -373,11 +342,6 @@ where
     }
 }
 
-/// Terminal transport for capture-seam tests: counts and records every body it
-/// is asked to send, and answers with an empty success. Not `#[cfg(test)]`:
-/// gents' own native test code builds real provider transport stacks over this
-/// double, and a cfg(test) item in this crate is invisible to a dependent
-/// crate's own test build.
 #[derive(Clone, Debug, Default)]
 pub struct CountingInner {
     pub sends: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -698,8 +662,6 @@ mod tests {
         assert_eq!(manifest.provider_family, None);
     }
 
-    /// The fail-closed property: a sink error terminates the send with the
-    /// inner transport untouched.
     #[tokio::test]
     async fn a_failed_capture_issues_no_http_call() {
         let inner = CountingInner::default();
@@ -792,8 +754,6 @@ mod tests {
         assert_eq!(inner.sends.load(Ordering::SeqCst), 1);
     }
 
-    /// The positive half of fail-closed: a completion loop inside a request
-    /// without arming a capture must not reach the provider.
     #[tokio::test]
     async fn a_completion_inside_a_scope_that_never_armed_is_refused() {
         let inner = CountingInner::default();

@@ -105,7 +105,6 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
         >
           <Fact mono>{agent.nodeDid}</Fact>
         </Row>
-        {/* this machine's install describes only its own node */}
         {reach.local && (
           <>
             <Row label="Install name">

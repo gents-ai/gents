@@ -127,19 +127,15 @@ pub(crate) const ECHO_WAT: &str = r#"
           (func $fd_write (param i32 i32 i32 i32) (result i32)))
         (memory (export "memory") 1)
         (func (export "_start")
-          ;; iovec at 256: buf=0, buf_len=256
           i32.const 256  i32.const 0    i32.store
           i32.const 260  i32.const 256  i32.store
-          ;; fd_read(fd=0, iovs_ptr=256, iovs_len=1, nread_ptr=264)
           i32.const 0
           i32.const 256
           i32.const 1
           i32.const 264
           call $fd_read
           drop
-          ;; reuse the iovec, buf_len = bytes actually read
           i32.const 260  i32.const 264 i32.load  i32.store
-          ;; fd_write(fd=1, iovs_ptr=256, iovs_len=1, nwritten_ptr=268)
           i32.const 1
           i32.const 256
           i32.const 1

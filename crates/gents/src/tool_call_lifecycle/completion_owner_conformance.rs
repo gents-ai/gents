@@ -1,6 +1,3 @@
-//! R6 completion-continuation owner: accepted native output, canonical
-//! notification reconstruction, and the independent failed-wake redrive.
-
 use super::{
     admission_fixture::{published_admission, PublishedAdmission, PublishedAdmissionOptions},
     AwaitMode, ToolCallLifecycle,
@@ -74,8 +71,6 @@ async fn admitted_parent(case: &LeanR6BackgroundingCase, branch: &str) -> Publis
     .await
     .expect("publish accepted background invocation on claimed request");
     let parent_doc = admission.tool.request_doc_id().unwrap();
-    // Import the terminal-parent observation only after the real claimed
-    // request has published its immutable accepted header.
     update(
         &admission.node,
         "AgentRequest",
@@ -436,8 +431,6 @@ async fn generated_r6_completion_owner_cases_use_accepted_native_output() {
     }
 }
 
-/// The watcher-selected request is deliberately still pending; the daemon
-/// integration test hands it to `process_request`, which owns its claim.
 pub(crate) struct SelectedBackgroundWake {
     pub admission: PublishedAdmission,
     pub wake: crate::watcher::AgentRequest,
@@ -447,8 +440,6 @@ pub(crate) struct SelectedBackgroundWake {
     notifications: Vec<(Value, String)>,
 }
 
-/// Compose the signed session-message owners through watcher selection,
-/// leaving the wake claim to the caller.
 pub(crate) async fn selected_background_wake() -> SelectedBackgroundWake {
     selected_background_wake_with_successor(false).await.0
 }
@@ -591,7 +582,6 @@ pub(crate) async fn selected_background_wake_with_successor(
     );
     let queue = wake.input.as_ref().unwrap().queue.as_ref().unwrap();
     assert_eq!(queue.policy, QueuePolicy::Coalesce);
-    // The caused request ran at hop 1; its result returns at the caller's hop.
     assert_eq!(wake.request_hop, Some(0));
     assert_eq!(
         queue.key.as_deref(),
@@ -645,8 +635,6 @@ pub(crate) async fn selected_background_wake_with_successor(
     )
 }
 
-/// The composed continuation witness goes through publication and the real
-/// child-completion projector before the watcher can expose the queued wake.
 #[tokio::test]
 async fn generated_r6_notification_precedes_continuation_claim() {
     let SelectedBackgroundWake {
@@ -690,9 +678,6 @@ async fn generated_r6_notification_precedes_continuation_claim() {
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
-/// Lean `CausalHop.continuation_preserves_admission` over
-/// `CausalHop.sessionCurrentHop`: a recovery retry of a wake the hop bound
-/// refused copies the session's current hop, so it is refused too.
 #[tokio::test]
 async fn a_retried_over_bound_wake_is_refused_again() {
     let case = lean_r6_backgrounding_case("failed_background_wake_with_budget_redrives");
@@ -713,8 +698,6 @@ async fn a_retried_over_bound_wake_is_refused_again() {
         .as_str()
         .unwrap()
         .to_owned();
-    // The principal's effective bound, and the hop a completion caused at it
-    // is written with (Lean `CausalHop.nextHop`).
     let bound = crate::document_config::load_node(node, did)
         .await
         .unwrap()

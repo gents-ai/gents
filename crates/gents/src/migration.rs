@@ -1,5 +1,3 @@
-//! Schema migration entry points — thin re-export of `gents-migration`.
-
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -13,7 +11,6 @@ pub use gents_migration::{
     MigrationStepOwned, Registry, DEFAULT_BASELINE, DEFAULT_REGISTRY, DEFAULT_STEPS,
 };
 
-/// Production bootstrap entry used by CLI, desktop, and runtime startup.
 pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
     crate::config_client::ConfigAccess::local(node)
         .run_local_owned(|node| async move { ensure_migrations_borrowed(node.as_ref()).await })

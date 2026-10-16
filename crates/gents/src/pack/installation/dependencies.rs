@@ -1,7 +1,3 @@
-//! Dependency bookkeeping on [`super::Record`]: which installed coordinates a
-//! pack is required by, and whether it was installed for its own sake. Only a
-//! graph pack may be named as a dependency, so releasing one never recurses
-//! into another release.
 
 use std::collections::BTreeSet;
 
@@ -42,10 +38,6 @@ async fn update_required_by(
     Ok(())
 }
 
-/// Adds `dependent` to each of `dependencies`'s `required_by`, dropping
-/// stale claims; releases a dependency outright when that empties its
-/// `required_by` and it was not installed explicitly, the same rule
-/// [`release_in_txn`] applies on an explicit removal.
 pub(super) async fn claim_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -104,9 +96,6 @@ pub(super) async fn claim_in_txn(
     Ok(())
 }
 
-/// Removes `dependent` from every installed record's `required_by`, removing
-/// the dependency itself when it becomes empty and it was not installed
-/// explicitly. Returns a [`RemoveReport`] for each dependency removed.
 pub(super) async fn release_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,

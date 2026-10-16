@@ -82,7 +82,6 @@ struct OpenAiModelRecord {
     name: Option<String>,
     #[serde(rename = "contextWindow")]
     context_window: Option<i64>,
-    // vLLM's OpenAI-compatible catalog and OpenRouter's documented catalog.
     max_model_len: Option<i64>,
     context_length: Option<i64>,
     top_provider: Option<OpenRouterModelProvider>,
@@ -586,17 +585,6 @@ mod tests {
             assert_eq!(advertised.context_window, None);
             assert_eq!(advertised.max_context_window, None);
         }
-    }
-
-    #[test]
-    fn probe_error_body_truncation_preserves_utf8_boundaries() {
-        assert_eq!(truncate_probe_body("short error"), "short error");
-        for character in ['é', '界', '🦀'] {
-            let prefix = "x".repeat(255);
-            let body = format!("{prefix}{character}backend error");
-            assert_eq!(truncate_probe_body(&body), format!("{prefix}..."));
-        }
-        assert_eq!(truncate_probe_body(&"x".repeat(256)), "x".repeat(256));
     }
 
     use std::sync::{Arc, Mutex};

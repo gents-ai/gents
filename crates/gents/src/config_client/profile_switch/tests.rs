@@ -40,9 +40,6 @@ fn claude_sign_in(did: &str, who: &str) -> OAuthCredential {
     )
 }
 
-/// Accounts A, B and D added, C added and disabled, and a Grok backend G.
-/// Profiles `p`, `summ` and `q` on A; agents `x` (compaction profile `summ`)
-/// and `y` on `p`. A, B, C and G list their models; D's catalog was never read.
 struct Fixture {
     node: Arc<EmbeddedNode>,
     access: ConfigAccess,

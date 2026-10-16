@@ -18,7 +18,6 @@ pub struct Schedule {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub updated_at: Option<String>,
-    /// Optional UI/discovery labels.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -28,7 +27,6 @@ pub struct Schedule {
     pub tags: Vec<String>,
 }
 
-/// An interval or a timezone-qualified cron expression, never both.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

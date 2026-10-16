@@ -207,8 +207,6 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
         );
     }
 
-    // Leak 2: the exact tool-result content threaded to the model, which
-    // persistence cannot re-derive.
     let repaired_trace = &captures[3].3;
     let threaded = repaired_trace
         .threaded_tool_results
@@ -290,7 +288,6 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
 async fn a_turn_after_a_repair_still_carries_the_effective_message_list() {
     let poison = format!("bad{}value", '\u{0007}');
     let model = ScriptedModel::new_calls(vec![
-        // Turn 0 — a tool call carrying the argument that will need repair.
         ScriptedCall::Turn(vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
                 "call-1".to_string(),
@@ -299,8 +296,6 @@ async fn a_turn_after_a_repair_still_carries_the_effective_message_list() {
             )),
             RawStreamingChoice::FinalResponse(()),
         ]),
-        // Turn 1 — rejected twice, then repaired and answered with another tool
-        // call so the loop runs at least one more turn.
         ScriptedCall::FailStream(parse_400_error("same")),
         ScriptedCall::FailStream(parse_400_error("same")),
         ScriptedCall::Turn(vec![
@@ -311,7 +306,6 @@ async fn a_turn_after_a_repair_still_carries_the_effective_message_list() {
             )),
             RawStreamingChoice::FinalResponse(()),
         ]),
-        // Turn 2 — the turn after the repair. This is the one under test.
         ScriptedCall::Turn(vec![
             RawStreamingChoice::Message("after repair".to_string()),
             RawStreamingChoice::FinalResponse(()),
@@ -496,8 +490,6 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
         let scope = test_scope(context, sink);
 
         let mut loop_config = config(0);
-        // The production arming sink: it arms the ambient scope and leaves the
-        // write to the transport, which in this stack does not exist.
         loop_config.on_rendered_request = Some(
             crate::rendered_request::scope::ambient_arming_sink(CaptureScopeKind::Inference),
         );
@@ -530,7 +522,6 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
     }
 }
 
-// Exercise fresh, idempotent, and conflicting captures at the durable sink.
 #[tokio::test]
 async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
     use crate::graphql::escape_graphql_string;
@@ -563,9 +554,6 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let sink = DefraRenderedRequestSink::new(node.clone());
 
-        // The model's canonical request is opaque; equal values mean equal
-        // canonical JSON, so one witness value per modeled request keeps
-        // equality exact.
         let rendered_for_witness =
             |witness: u64| -> crate::rendered_request::RenderedCompletionRequest {
                 let node_did = format!("did:key:z6Mk-sink-{}", case.node_did);
@@ -617,7 +605,6 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
                 }
             };
 
-        // Seed the prior binding through the same sink, never by fixture writes.
         if let Some(prior) = case.prior_binding {
             sink.capture(rendered_for_witness(prior))
                 .await

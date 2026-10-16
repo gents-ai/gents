@@ -62,7 +62,6 @@ inductive Host where
 
 inductive Pattern where
   | exact (host : Host)
-  /-- `*.domain`: strict subdomains only, never the apex. -/
   | suffix (domain : String)
   deriving DecidableEq, Repr
 
@@ -149,7 +148,6 @@ theorem internal_needs_literal (g : Grant) (t : Target) (addrs : List Addr)
       · simp [addressesAllowed, hl, notAll] at haddr
       · rfl
 
-/-- Admission never depends on a hostname resolving the same way twice. -/
 theorem hostname_entry_public_only (es : List Entry) (t : Target) (addrs : List Addr)
     (h : allowed (.hosts es) t addrs = true)
     (hnolit : ∀ e ∈ es, explicitLiteral e = false) : addrs.all ipPublic = true := by

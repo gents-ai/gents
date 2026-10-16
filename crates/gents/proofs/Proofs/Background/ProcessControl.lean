@@ -1,12 +1,4 @@
 import Proofs.ToolExecution.State
-
-/-!
-# Background Process Control
-
-A process handle remains manageable across request turns in the same session,
-but never crosses the session, node, or requester boundary.
--/
-
 namespace Background.ProcessControl
 
 structure Scope where

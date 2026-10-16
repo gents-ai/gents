@@ -1,8 +1,4 @@
 #!/bin/sh
-# Usage: scripts/worktree-bootstrap.sh <branch> [dest-dir] [base-ref]
-#   branch    branch to check out; created from base-ref if it does not exist
-#   dest-dir  defaults to $WORKTREE_DIR, then a sibling gents-<slug> directory
-#   base-ref  defaults to $WORKTREE_BASE, then HEAD; used when creating the branch
 set -eu
 
 branch="${1:?usage: worktree-bootstrap.sh <branch> [dest-dir] [base-ref]}"
@@ -20,6 +16,7 @@ fi
 if git show-ref --verify --quiet "refs/heads/$branch"; then
     git worktree add "$dest" "$branch"
 elif git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+    # Remote-only branches need an explicit local tracking branch.
     # worktree add does not DWIM remote-only branches unless worktree.guessRemote is set
     git worktree add -b "$branch" "$dest" "origin/$branch"
 else
@@ -50,10 +47,9 @@ clone_dir() {
 }
 
 clone_dir "$repo_root/target" "$dest/target" "cargo target/"
-# workspace builds with incremental=false; stale incremental state is worthless here
 rm -rf "$dest/target/debug/incremental" "$dest/target/release/incremental"
 
-# Lean caches are only valid against an identical lake-manifest.json
+# Reuse Lean build artifacts only when their dependency manifest matches.
 proofs="crates/gents/proofs"
 if cmp -s "$repo_root/$proofs/lake-manifest.json" "$dest/$proofs/lake-manifest.json" 2>/dev/null; then
     clone_dir "$repo_root/$proofs/.lake" "$dest/$proofs/.lake" "Lean proofs .lake/"

@@ -1,6 +1,3 @@
-/* How much work a session handed out, beside its menu: the number of
-   sessions it started, marked while any of them is still running.
-   Pressing it shows them in the dock, as the menu's Started sessions does. */
 import { SquareStack } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@gents/ui/components/button";

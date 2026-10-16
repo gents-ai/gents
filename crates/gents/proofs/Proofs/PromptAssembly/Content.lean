@@ -1,16 +1,5 @@
 import Proofs.PromptAssembly.State
 
-/-!
-# Assistant content ordering
-
-`Proofs.PromptAssembly.Executable` models a message as a single `MessageKind`
-row; the Rust `normalize_assistant_content_order` composition reorders assistant
-content for grouped-order providers, while Claude's native replay preserves the
-original block order because moving a signed thinking block changes the exact
-continuation witness. Both order modes leave announced tool calls unchanged, so
-the row abstraction is invariant under them (`callsOf_normalizeFor`).
--/
-
 namespace PromptAssembly.Content
 
 inductive Item where
@@ -54,12 +43,9 @@ def callId? : Item → Option ToolExecution.ToolCallId
 
 end Item
 
-/-- Mirrors Rust `normalize_assistant_content_order`. -/
 def normalize (items : List Item) : List Item :=
   items.filter Item.isText ++ items.filter Item.isOther ++ items.filter Item.isCall
 
-/-- The selected provider-input order, not an inference from message contents.
-Claude uses `nativePreserved`; grouped-order providers use `grouped`. -/
 inductive OrderMode where
   | grouped
   | nativePreserved
@@ -72,12 +58,9 @@ def normalizeFor : OrderMode → List Item → List Item
 @[simp] theorem normalizeFor_grouped (items : List Item) :
     normalizeFor .grouped items = normalize items := rfl
 
-/-- Claude's native content order, including each reasoning block's position,
-is unchanged by the ordering stage. -/
 @[simp] theorem normalizeFor_nativePreserved (items : List Item) :
     normalizeFor .nativePreserved items = items := rfl
 
-/-- The tool calls a content list announces. -/
 def callsOf (items : List Item) : Finset ToolExecution.ToolCallId :=
   items.foldr
     (fun item acc =>

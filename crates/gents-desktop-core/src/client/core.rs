@@ -88,8 +88,6 @@ impl Default for ClientCoreOptions {
 }
 
 impl ClientCoreOptions {
-    /// The loopback-only profile tests and fixtures run: no relay or
-    /// discovery, and a file store key so no login-keychain item is written.
     pub fn local_only() -> Self {
         Self {
             bind_addr: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
@@ -100,8 +98,6 @@ impl ClientCoreOptions {
         }
     }
 
-    // Supervisor route reconciliation would dial the unreachable simulated
-    // address and revoke the fixture's readiness at a load-dependent moment.
     #[doc(hidden)]
     pub fn local_simulated_route() -> Self {
         Self {
@@ -335,8 +331,6 @@ impl ClientCore {
         &self.p2p
     }
 
-    // Test-fixture seam; product callers must establish readiness through the
-    // signed route owner.
     #[doc(hidden)]
     pub async fn add_local_standard_peer_for_test(&self, node_did: &str) -> Result<()> {
         anyhow::ensure!(
@@ -370,8 +364,6 @@ impl ClientCore {
         Ok(())
     }
 
-    // Test-fixture seam; product callers must establish enrollment through the
-    // signed owner.
     #[cfg(any(test, feature = "test-fixtures"))]
     #[doc(hidden)]
     pub async fn add_managed_enrollment_peer_for_test(

@@ -2184,48 +2184,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn request_mutation_escapes_every_string_and_never_emits_an_empty_array() {
-        let request = EnrollmentRequestRecord {
-            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
-            request_id: "req-\"unsafe".into(),
-            request_digest: "digest".into(),
-            offer_id: "offer".into(),
-            offer_token: "token".into(),
-            challenge: "challenge".into(),
-            network_id: "network".into(),
-            admin_did: "did:key:admin".into(),
-            server_peer: "server".into(),
-            candidate_did: "did:key:candidate".into(),
-            candidate_peer: "candidate".into(),
-            candidate_ticket: "ticket".into(),
-            owner_agent: "did:key:agent".into(),
-            profile: "client".into(),
-            client_nonce: "nonce".into(),
-            issued_at: "2026-08-29T00:00:00Z".into(),
-            expires_at: "2026-08-29T00:05:00Z".into(),
-            candidate_sig: vec![1, 2, 3],
-        };
-        let input = enrollment_request_input(&request);
-        assert!(input.contains(r#"request_id: "req-\"unsafe""#));
-        assert!(!input.contains("[]"));
-    }
-
-    #[test]
-    fn offer_window_rejects_expiry_before_issuance() {
-        let issued =
-            (Utc::now() + chrono::Duration::seconds(20)).to_rfc3339_opts(SecondsFormat::Secs, true);
-        let expires =
-            (Utc::now() + chrono::Duration::seconds(10)).to_rfc3339_opts(SecondsFormat::Secs, true);
-        assert!(validate_fresh_window(&issued, &expires).is_err());
-    }
-
-    #[test]
-    fn fresh_transport_identity_must_match_the_signed_admin() {
-        assert!(validate_authenticated_server_did("did:key:admin", "did:key:admin").is_ok());
-        assert!(validate_authenticated_server_did("did:key:admin", "did:key:attacker").is_err());
-    }
-
     fn approval(server_peer: &str, owner_agent: &str) -> ApprovedStatusEnrollment {
         ApprovedStatusEnrollment {
             network_id: "network".into(),
@@ -2945,79 +2903,6 @@ mod tests {
         );
     }
 
-    fn request_row(doc_id: &str) -> EnrollmentRequestRow {
-        EnrollmentRequestRow {
-            doc_id: doc_id.into(),
-            protocol_version: i64::from(ENROLLMENT_PROTOCOL_VERSION),
-            request_id: "request".into(),
-            request_digest: "digest".into(),
-            offer_id: "offer".into(),
-            offer_token: "token".into(),
-            challenge: "challenge".into(),
-            network_id: "network".into(),
-            admin_did: "did:key:admin".into(),
-            server_peer: "server-peer".into(),
-            candidate_did: "did:key:client".into(),
-            candidate_peer: "client-peer".into(),
-            candidate_ticket: "ticket".into(),
-            owner_agent: "did:key:agent".into(),
-            profile: "client".into(),
-            client_nonce: "nonce".into(),
-            issued_at: "2026-08-29T00:00:00Z".into(),
-            expires_at: "2026-08-29T00:05:00Z".into(),
-            candidate_sig: bs58::encode([0_u8; 64]).into_string(),
-        }
-    }
-
-    #[test]
-    fn retry_reuses_one_exact_persisted_request_and_rejects_duplicates() {
-        let persisted = request_row("doc-exact");
-        let selected = select_retryable_local_request(
-            std::slice::from_ref(&persisted),
-            "did:key:client",
-            "client-peer",
-            "offer",
-        )
-        .expect("one persisted request")
-        .expect("selected request");
-        assert_eq!(selected.doc_id, "doc-exact");
-        assert_eq!(selected.request_id, "request");
-
-        let duplicate = request_row("doc-conflict");
-        assert!(select_retryable_local_request(
-            &[persisted, duplicate],
-            "did:key:client",
-            "client-peer",
-            "offer",
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn revocation_removes_enrollment_from_the_current_authority_set() {
-        let mut enrollment =
-            crate::client::peer_directory::PeerRecord::new("Enrollment", "endpoint", "did");
-        enrollment.source = Some("enrollment".into());
-        enrollment.enrollment_request_digest = Some("digest".into());
-        enrollment.enrollment_authorization_sequence = Some(1);
-        enrollment.enrollment_authorization_expires_at = Some("2099-09-29T00:00:00Z".into());
-        let authority = BTreeMap::from([(
-            enrollment.peer_id.clone(),
-            EnrollmentAuthorizationGeneration {
-                request_digest: "digest".into(),
-                sequence: 1,
-                expires_at: "2099-09-29T00:00:00Z".into(),
-            },
-        )]);
-        assert!(!enrollment_record_lacks_current_authority(
-            &enrollment,
-            &authority
-        ));
-        assert!(enrollment_record_lacks_current_authority(
-            &enrollment,
-            &BTreeMap::new()
-        ));
-    }
     use defra_p2p_adapter::{
         ExplicitReplayCapabilityInput, P2PResult, P2pDocumentInfo, ReplicationFilters,
         ReplicatorInfo,

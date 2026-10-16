@@ -1,7 +1,3 @@
-//! Generated-case structs for the Lean `SelfConfig` model: per-target field
-//! tables and patch-merge witness cases consumed by
-//! `tests/conformance/self_config.rs`.
-
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -23,7 +19,6 @@ pub(crate) struct LeanSelfConfigFieldValue {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanSelfConfigPatchEntry {
     pub(crate) field: String,
-    /// `"set"` or `"clear"`.
     pub(crate) action: String,
     pub(crate) value: Option<String>,
 }

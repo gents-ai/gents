@@ -13,8 +13,6 @@ pub struct SchemaField {
 }
 
 impl SchemaField {
-    // Introspection reports a non-nillable field as a NON_NULL wrapper; rules
-    // stated over type names must compare against the name with `!` stripped.
     pub fn named_type(&self) -> &str {
         self.type_name.trim_end_matches('!')
     }
@@ -30,8 +28,6 @@ impl CollectionSchema {
         self.fields.iter().map(|f| f.name.as_str()).collect()
     }
 
-    // Display set: excludes restricted sensitive fields, aggregate
-    // pseudo-fields and `_`-prefixed internals except `_docID`.
     pub(crate) fn visible_fields(&self, collection: &str) -> Vec<&SchemaField> {
         self.fields
             .iter()
@@ -42,8 +38,6 @@ impl CollectionSchema {
     }
 }
 
-// An application field may itself be uppercase (URL), so aggregate
-// pseudo-fields are named rather than inferred from case.
 pub(crate) fn is_aggregate_pseudo_field(name: &str) -> bool {
     matches!(
         name,
@@ -61,9 +55,6 @@ pub fn introspection_query(collection: &str) -> Result<String> {
     ))
 }
 
-// DefraDB builds its whole introspection schema for every introspection
-// query, so asking once for many collections costs one build, not one per
-// collection.
 pub fn introspection_query_many(collections: &[&str]) -> Result<String> {
     let mut query = String::from("{");
     for (index, collection) in collections.iter().enumerate() {
@@ -245,8 +236,6 @@ mod tests {
 
     #[test]
     fn suggestions_never_include_restricted_fields() {
-        // Candidates come from the visible set, so a near-miss on a secret
-        // field must not resurrect it.
         let schema = CollectionSchema {
             fields: vec![
                 SchemaField { name: "backend_id".into(), type_name: "String".into() },

@@ -46,7 +46,7 @@ pub(crate) fn backend_connection_fingerprint(fields: &BackendFields) -> String {
 }
 
 /// Only the current non-secret attribution format may leave the timeline.
-/// Legacy Debug values contain inline credentials. Repair is tracked in #1394.
+/// Legacy Debug values contain inline credentials.
 pub(crate) fn exportable_backend_fingerprint(value: Option<&str>) -> Option<String> {
     let value = value?;
     let digest = value.strip_prefix(PUBLIC_FINGERPRINT_PREFIX)?;

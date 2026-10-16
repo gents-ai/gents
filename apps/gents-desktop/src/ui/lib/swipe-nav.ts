@@ -11,7 +11,6 @@ import { SWIPE_HANDLE_ATTR } from "../app/SwipeHandles";
 
 type SwipeProgress = { amount: number; phase: "moving" | "ended" | "cancelled" };
 
-// In AppKit's units; Chrome commits at about this distance.
 export const COMMIT = 0.4;
 const TRAVEL_PX = 96;
 
@@ -37,7 +36,6 @@ function hide(el: HTMLElement) {
   delete el.dataset.armed;
 }
 
-/** Whether anything under `start` can still scroll left or right. */
 export function scrollRoom(start: Element | null): { left: boolean; right: boolean } {
   let left = false;
   let right = false;

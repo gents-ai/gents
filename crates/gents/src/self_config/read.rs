@@ -1,4 +1,3 @@
-//! Read the canonical config graph under the invoking node's identity.
 use super::ops::{read_owned_doc, AgentAnchor, SelfConfigCore, EFFECT_TIMING_NOTE};
 use crate::config_client::patch::SelfConfigTarget;
 use crate::config_client::{config_projection, ConfigAccess, ConfigApplyTxn};

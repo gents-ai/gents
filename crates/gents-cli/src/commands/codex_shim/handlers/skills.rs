@@ -57,7 +57,7 @@ pub(super) async fn load_skill_metadata(state: &ShimState) -> Result<Vec<codex::
             interface: None,
             dependencies: None,
             path: skill_doc_path(skill_id),
-            scope: codex::SkillScope::System, // node-owned docs project as system scope
+            scope: codex::SkillScope::System,
             enabled,
         });
     }

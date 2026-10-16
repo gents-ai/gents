@@ -1,7 +1,3 @@
-//! `cancel`, `invalidate`, `rm` and `gc`: the operator's acts on a run.
-//! Documents stay in every case: a marker is not a document, invalidation is
-//! the run's one write-once mutation, and `rm` and `gc` delete only
-//! directories.
 
 use std::future::Future;
 use std::io::Write;
@@ -17,8 +13,6 @@ use super::render::human_bytes;
 use super::EvalContext;
 use crate::cli::{EvalGcArgs, EvalInvalidateArgs, EvalRmArgs, EvalRunIdArgs};
 
-/// Write the marker, then look up the run's purpose for the job note.
-///
 /// The marker needs no database, so it is written first: the process
 /// hosting the run may hold the home's embedded node, and `purpose` (which
 /// opens it) is awaited only afterwards.
@@ -59,8 +53,6 @@ where
     Ok(())
 }
 
-/// Write the marker and say what it does: a live process stops launching at
-/// its next check; with none, the next run or resume of the id clears it.
 pub(crate) fn write_marker(runs_dir: &Path, run_id: &str, out: &mut dyn Write) -> Result<()> {
     let marker = request_cancel(runs_dir, run_id)?;
     if marker.parent().is_some_and(running_elsewhere) {
@@ -79,7 +71,6 @@ pub(crate) fn write_marker(runs_dir: &Path, run_id: &str, out: &mut dyn Write) -
     Ok(())
 }
 
-/// The run's origin purpose, `None` when the home has no such run.
 pub(crate) async fn run_purpose(
     access: &ConfigAccess,
     owner: &str,
@@ -145,7 +136,6 @@ pub(super) async fn rm(ctx: &EvalContext, args: &EvalRmArgs, out: &mut dyn Write
             .await?
             .with_context(|| format!("no eval run {:?} for {}", args.run_id, ctx.owner))?;
         let trials = load_trials(&ctx.access, &ctx.owner, &args.run_id).await?;
-        // Finished means nothing owed and no live process on it.
         let owed = slots_owed(&record, &trials);
         anyhow::ensure!(
             owed == 0,
@@ -156,7 +146,6 @@ pub(super) async fn rm(ctx: &EvalContext, args: &EvalRmArgs, out: &mut dyn Write
         if running_elsewhere(&dir) {
             return Err(live());
         }
-        // A job that still needs the run keeps it.
         if let Some((job_id, state)) = gents::optimization::held_runs(&ctx.access, &ctx.owner)
             .await?
             .get(&args.run_id)
@@ -169,8 +158,6 @@ pub(super) async fn rm(ctx: &EvalContext, args: &EvalRmArgs, out: &mut dyn Write
         }
     }
     let bytes = dir_size(&dir)?;
-    // A process may have started on the run while the checks above read the
-    // database and sized the directory: look again right before deleting.
     if !args.force && running_elsewhere(&dir) {
         return Err(live());
     }
@@ -184,21 +171,11 @@ pub(super) async fn rm(ctx: &EvalContext, args: &EvalRmArgs, out: &mut dyn Write
     Ok(())
 }
 
-/// Delete the directories of runs created before the threshold that no
-/// optimization job references and that are finished (nothing owed, no live
-/// process on them); with `--jobs`, also the directories of settled jobs last
-/// modified before it. Each kept old run or job is printed with why. Nothing
-/// is deleted on its own and no time-to-live is stored. A directory that
-/// cannot be removed is reported and the rest still go; the command then
-/// fails.
 pub(super) async fn gc(ctx: &EvalContext, args: &EvalGcArgs, out: &mut dyn Write) -> Result<()> {
     let cutoff = chrono::Duration::from_std(args.older_than)
         .ok()
         .and_then(|age| chrono::Utc::now().checked_sub_signed(age))
         .context("--older-than reaches before the earliest representable time")?;
-    // Runs first, references second: a job's driver journals RunStarted
-    // before it freezes the run, so any run in this list that a job is
-    // starting is already referenced when the references are read.
     let records = load_runs(&ctx.access, &ctx.owner).await?;
     let referenced = gents::optimization::referenced_run_ids(&ctx.access, &ctx.owner).await?;
     let mut runs: Vec<Doomed> = Vec::new();
@@ -356,7 +333,6 @@ pub(super) async fn gc(ctx: &EvalContext, args: &EvalGcArgs, out: &mut dyn Write
     Ok(())
 }
 
-/// A directory `gc` chose, with what it frees.
 struct Doomed {
     label: String,
     dir: PathBuf,
@@ -470,8 +446,6 @@ pub(crate) fn job_dir_in_this_home(
     ))
 }
 
-/// Bytes under `path`, not following symbolic links. An entry that vanishes
-/// during the walk counts as nothing; any other failure is the caller's.
 pub(crate) fn dir_size(path: &Path) -> Result<u64> {
     let metadata =
         std::fs::symlink_metadata(path).with_context(|| format!("reading {}", path.display()))?;

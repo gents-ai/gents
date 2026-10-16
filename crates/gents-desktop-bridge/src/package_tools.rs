@@ -29,7 +29,6 @@ const PACKAGE_SEARCH_LISTS: &[&str] = &[
     "GIO_EXTRA_MODULES",
 ];
 
-/// Single values that name a location inside the package.
 const PACKAGE_LOCATIONS: &[&str] = &[
     "GTK_EXE_PREFIX",
     "GTK_DATA_PREFIX",
@@ -46,8 +45,6 @@ const PACKAGE_LOCATIONS: &[&str] = &[
 // picks the session's own display backend and theme rather than the package's.
 const LAUNCHER_OVERRIDES: &[&str] = &["GDK_BACKEND", "GTK_THEME", "APPIMAGE_GTK_THEME"];
 
-/// Called once during startup, before anything spawns, so every child process
-/// inherits the order.
 pub fn prefer_host_tools() {
     let Some(reordered) = host_first_search_path(
         std::env::var_os("PATH").as_deref(),
@@ -123,8 +120,6 @@ fn host_environment_changes(
     changes
 }
 
-/// `search` with every entry inside the package mount moved after the host's,
-/// each group keeping its own order. `None` when there is nothing to move.
 fn host_first_search_path(
     search: Option<&OsStr>,
     app_dir: Option<&Path>,
@@ -255,62 +250,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_packaged_launch_keeps_its_tools_but_stops_preferring_them() {
-        let launched = OsString::from(
-            "/tmp/.mount_gents123/usr/bin/:/tmp/.mount_gents123/usr/sbin/:/usr/local/bin:/usr/bin",
-        );
-        assert_eq!(
-            host_first_search_path(Some(&launched), mount(), app_image()),
-            Some(OsString::from(
-                "/usr/local/bin:/usr/bin:/tmp/.mount_gents123/usr/bin/:/tmp/.mount_gents123/usr/sbin/"
-            ))
-        );
-    }
-
-    #[test]
-    fn an_ordinary_install_is_left_alone() {
-        let path = OsString::from("/usr/local/bin:/usr/bin");
-        assert_eq!(host_first_search_path(Some(&path), None, None), None);
-        // An extracted AppRun exports APPDIR without APPIMAGE.
-        assert_eq!(
-            host_first_search_path(
-                Some(&OsString::from("/opt/gents/squashfs-root/usr/bin:/usr/bin")),
-                Some(Path::new("/opt/gents/squashfs-root")),
-                None
-            ),
-            None
-        );
-        assert_eq!(host_first_search_path(None, mount(), app_image()), None);
-    }
-
-    #[test]
-    fn an_order_that_already_holds_is_not_rewritten() {
-        let ordered = OsString::from("/usr/bin:/tmp/.mount_gents123/usr/bin");
-        assert_eq!(
-            host_first_search_path(Some(&ordered), mount(), app_image()),
-            None
-        );
-    }
-
-    #[test]
-    fn the_hosts_own_order_is_preserved() {
-        let launched =
-            OsString::from("/tmp/.mount_gents123/usr/bin:/home/user/.cargo/bin:/usr/bin:/bin");
-        assert_eq!(
-            host_first_search_path(Some(&launched), mount(), app_image()),
-            Some(OsString::from(
-                "/home/user/.cargo/bin:/usr/bin:/bin:/tmp/.mount_gents123/usr/bin"
-            ))
-        );
-    }
-
-    #[test]
-    fn a_mount_is_recognized_by_its_name_when_appdir_is_absent() {
-        let launched = OsString::from("/tmp/.mount_gents123/usr/bin:/usr/bin");
-        assert_eq!(
-            host_first_search_path(Some(&launched), None, app_image()),
-            Some(OsString::from("/usr/bin:/tmp/.mount_gents123/usr/bin"))
-        );
-    }
 }

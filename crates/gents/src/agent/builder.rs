@@ -48,8 +48,6 @@ pub struct GentsBuilder {
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     agents: Vec<PendingAgent>,
-    /// Measured probe health (#640); empty by default so build paths running
-    /// before the prober has an opinion never veto on measured health.
     backend_health: crate::backend_health::BackendHealthMap,
     plugin_home: Option<std::path::PathBuf>,
 }
@@ -88,7 +86,6 @@ impl GentsBuilder {
         self
     }
 
-    /// The gents home whose installed plugins this runtime's tools can call.
     pub fn plugin_home(mut self, home: impl Into<std::path::PathBuf>) -> Self {
         self.plugin_home = Some(home.into());
         self
@@ -258,7 +255,6 @@ impl GentsBuilder {
             startup_readiness: Default::default(),
             #[cfg(test)]
             router_dispatch_probe: None,
-            // Durable DefraDB sink, same default as `Gents::from_default_agent_documents`.
             rendered_request_capture_factory: Some(
                 self.rendered_request_capture_factory.unwrap_or_else(|| {
                     crate::rendered_request::defra_rendered_request_capture_factory(capture_node)
@@ -559,8 +555,6 @@ impl PendingAgent {
                     backend_id
                 )
             })?;
-        // `BackendAdmissionConfig::is_available` is the single owner of the
-        // enabled/probe_status/measured_unhealthy comparison (#1332).
         let observation =
             crate::backend_registry::lookup_backend_observation(node, node_did, &backend_id)
                 .await?

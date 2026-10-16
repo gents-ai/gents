@@ -1,5 +1,3 @@
-//! Runtime pairing reconcile engine.
-
 mod desired;
 mod enrollment;
 mod reconcile;
@@ -82,7 +80,6 @@ pub struct PairingTickOutcome {
     pub replayed_replicators: Vec<String>,
     pub desired_read_failed: bool,
     pub peer_active: bool,
-    /// True when a post-reconcile live read matches the owned desired state.
     pub live_route_matches: bool,
 }
 
@@ -116,8 +113,6 @@ pub trait PairingStateStore: Send + Sync {
 
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>>;
 
-    /// Lets a store amortize per-sweep work across the sweep instead of per
-    /// peer. Default is a no-op.
     async fn begin_sweep(&self) -> Result<()> {
         Ok(())
     }

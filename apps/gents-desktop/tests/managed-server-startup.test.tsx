@@ -515,7 +515,6 @@ describe("first-run local node startup", () => {
 
     run.finishStart();
     await screen.findByRole("heading", { name: "Gents is ready" }, { timeout: 4_000 });
-    /* the finished card names the node that is up, and where it lives */
     const summary = screen.getByTestId("startup-step");
     expect(summary).toHaveTextContent(`${deployment.label} is running`);
     expect(summary).toHaveTextContent("Identitydid:key:z6MkFo");
@@ -605,7 +604,6 @@ describe("first-run local node startup", () => {
     run.finishStart();
 
     await screen.findByText("saved connections could not be written");
-    /* a failure is shown at once, not paced behind the steps before it */
     const failed = screen.getByTestId("startup-step");
     expect(failed.querySelector('[data-state="error"]')).not.toBeNull();
     expect(screen.getByRole("heading", { name: "Startup paused" })).toBeInTheDocument();

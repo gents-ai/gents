@@ -5,18 +5,12 @@ use crate::model::{FilesystemEntry, WalkStats, DEFAULT_IGNORED_NAMES};
 
 const DEFAULT_GREP_PREVIEW_CHARS: usize = 240;
 
-/// Hosts read at most 2 MiB of runner stdout (`MAX_NATIVE_RUNNER_OUTPUT_BYTES`);
-/// a longer response fails to decode rather than truncate, so results are cut
-/// to this bound (measured on the encoded response, both JSON encodings).
 pub const MAX_RESPONSE_BYTES: usize = 1536 * 1024;
 
-/// A larger request is refused, not truncated.
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 const MAX_ECHOED_PATTERN_CHARS: usize = 1024;
 
-/// Escaping can grow each character to six bytes; keep the error envelope far
-/// below `MAX_RESPONSE_BYTES`.
 const MAX_ERROR_CHARS: usize = 64 * 1024;
 
 pub(crate) fn echoed_pattern(pattern: &str) -> String {
@@ -35,7 +29,6 @@ pub fn error_response_line(error: &anyhow::Error) -> String {
     line
 }
 
-/// Bytes of the `NativeFsRunnerResponse` line the runner writes for `output`.
 pub(crate) fn encoded_response_len(output: &str) -> Result<usize> {
     let response = crate::protocol::NativeFsRunnerResponse {
         ok: true,

@@ -243,8 +243,6 @@ fn validate_reference_source(
     }
 }
 
-/// A successfully reconstructed sealed extent with its reasoning signature
-/// streams indexed by native (block, part) position, in stream order.
 struct SealedExtent {
     streams: Vec<ReconstructedStream>,
     signatures: HashMap<(u32, u32), Vec<usize>>,
@@ -274,10 +272,6 @@ impl SealedExtent {
     }
 }
 
-/// The observations grouped once, each group in observation order: by exact
-/// document identity (closing lookup) and by (request, source) (extent sweep).
-/// Both owners filter on exactly these keys, so a group is the subsequence
-/// they would select from the whole observation set.
 struct ObservationIndex<'a> {
     by_doc: HashMap<&'a str, Vec<ObservedSegment<'a>>>,
     by_source: HashMap<(&'a str, &'a OutputSource), Vec<ObservedSegment<'a>>>,
@@ -301,17 +295,10 @@ impl<'a> ObservationIndex<'a> {
     }
 }
 
-/// One reconstruction invocation over a fixed observation set. Closing lookup
-/// and extent reconstruction depend on a reference only through its close
-/// document, except for the stream bound and error attribution, so a success
-/// is reused for every reference through the same close. Failures are never
-/// retained: each failing reference re-runs the per-reference definition and
-/// reports its own error. Nothing outlives the invocation.
 struct Extents<'s, 'a> {
     records: &'s [ObservedSegment<'a>],
     denied: &'s [String],
     dependency_denials: &'s [DependencyDenial],
-    /// Tests disable reuse to evaluate the per-reference definition.
     #[cfg(test)]
     reuse: bool,
     index: OnceCell<ObservationIndex<'a>>,

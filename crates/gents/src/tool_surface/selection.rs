@@ -20,9 +20,6 @@ pub(crate) struct AgentToolConfig {
 }
 
 impl AgentToolConfig {
-    /// `AgentTools.target_ids` reference AgentTarget documents, resolved and
-    /// pushed by the runtime snapshot owner; selecting targets never
-    /// implicitly enables the tools.
     pub(crate) fn from_document(tools: &crate::document_config::Tools) -> Result<Self> {
         tools.validate()?;
         Ok(Self {
@@ -218,7 +215,6 @@ impl Default for ResolvedToolSelection {
 }
 
 impl ResolvedToolSelection {
-    /// Whether the selected host-facing capabilities need the shared cwd/root.
     pub(crate) fn requires_filesystem_root(&self) -> bool {
         self.file_tools != FileToolMode::Off
             || self.bash != BashMode::Off
@@ -228,8 +224,6 @@ impl ResolvedToolSelection {
 
     /// Project the canonical `document_config::Tools` nested groups.
     ///
-    /// Disabled-by-absence: an omitted group or unset flag grants nothing, and
-    /// there is no policy version or historical re-interpretation contract.
     pub(crate) fn from_document(tools: &crate::document_config::Tools) -> anyhow::Result<Self> {
         tools.validate()?;
         let host = tools.host.as_ref();
@@ -283,8 +277,6 @@ impl ResolvedToolSelection {
             if service.required {
                 required_mcp_service_ids.push(service_id.to_string());
             }
-            // Background capability is per-service; the generic dispatch wrapper
-            // is the surface entry for background MCP calls.
             if !service.background_tool_names.is_empty() {
                 match service.style {
                     crate::document_config::RemoteToolStyle::Discovery => {
@@ -475,8 +467,6 @@ fn command_policy_from_document(
         };
     }
 
-    // Canonical bash.mode owns the exposed bash tool; execution_mode can only
-    // narrow within it.
     let mode = match bash {
         BashMode::Off | BashMode::ReadOnly => CommandExecutionMode::ReadOnly,
         BashMode::Unrestricted => execution_mode.unwrap_or(CommandExecutionMode::Unrestricted),

@@ -1,10 +1,3 @@
-//! Live end-to-end interrupt test against an OpenAI-compatible streaming backend.
-//!
-//! ```bash
-//! GENTS_LIVE_OPENAI=1 GENTS_EVAL_TARGET=workstation-1 \
-//! cargo test -p gents --test e2e_live -- live_interrupt_mid_stream_on_openai_compatible -- --ignored --nocapture
-//! ```
-
 use std::sync::Arc;
 use std::time::Duration;
 

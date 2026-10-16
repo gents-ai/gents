@@ -1,4 +1,3 @@
-//! Publish an already claimed continuation through the existing Goal transaction.
 mod wait_observation;
 
 use super::*;
@@ -117,7 +116,6 @@ async fn stage_claimed_continuation(
     wrapup: bool,
     stopped: &StoppedReason,
 ) -> Result<Option<GoalResumeReceipt>> {
-    // A conflicted attempt's stop never committed.
     *stopped.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
     anyhow::ensure!(
         identity.did() == observed.node_did,

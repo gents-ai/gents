@@ -10,8 +10,6 @@ use crate::ensure_runtime_schemas;
 use crate::tool_surface::ToolCeiling;
 use crate::toolset::ToolSet;
 
-/// Installs the canonical agent/context/tools/profile/backend chain and binds
-/// it as the node's explicit default.
 async fn install_default_behavior_chain(node: &Arc<EmbeddedNode>, did: &str, agent_id: &str) {
     crate::test_support::install_test_agent(node, did, agent_id).await;
     crate::document_config::ensure_node(node, did)

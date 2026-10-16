@@ -166,8 +166,6 @@ async fn a_non_terminal_graph_run_refuses_removal_and_names_it() {
     assert!(message.contains("code-review"), "{message}");
     assert!(message.contains("gents graph cancel"), "{message}");
 
-    // Reaching "cancelled" legally needs a live provider this test lacks;
-    // force the terminal status directly.
     let query = access
         .execute(&format!(
             r#"{{ GraphRun(filter: {{ run_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
@@ -258,9 +256,6 @@ async fn remove_deletes_retired_revisions_too() {
 
 #[tokio::test]
 async fn an_untracked_graph_is_adopted_on_reinstall_and_survives_removal() {
-    // Regression: an install that adopted a pre-existing (untracked or
-    // import-carried) graph must record it as adopted, not created, or
-    // removing the install deletes the operator's graph.
     let (node, access, options) = fixture().await;
     let first = install_test_graph_package(&access, OWNER, "review_graph", &options)
         .await
@@ -276,7 +271,6 @@ async fn an_untracked_graph_is_adopted_on_reinstall_and_survives_removal() {
     .await
     .unwrap();
 
-    // Forget the record, leaving the graph live as an untracked graph would be.
     let doc_id = access
         .execute(&format!(
             r#"{{ PackInstallation(filter: {{ node_did: {{ _eq: "{OWNER}" }} }}) {{ _docID }} }}"#

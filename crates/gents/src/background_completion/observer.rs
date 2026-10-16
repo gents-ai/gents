@@ -161,9 +161,7 @@ impl BackgroundCompletionObserver {
                 "redrove failed background-completion wakes"
             );
         }
-        // Owner-scoped terminal-convergence re-drive (#664): re-assert the
-        // terminal state of recently-terminalized own-requests so the terminal
-        // delta reaches replicas that missed the one-shot PushLog.
+        // Reassert terminal state so replicas that missed the one-shot push receive the delta.
         let redrive =
             crate::RequestLifecycle::redrive_terminal_convergence(&self.node, &self.local_did)
                 .await?;

@@ -1,10 +1,3 @@
-//! The persistence-hook seam. The owned loop threads every durable effect
-//! through a [`SessionHook`] instead of writing DefraDB itself; `gents`'s
-//! `DefraSessionHook` (native) implements it.
-//!
-//! `run_loop_stream` and `StreamProcessor` take `H: SessionHook` as a type
-//! parameter rather than `Arc<dyn SessionHook>`; the trait stays object-safe
-//! for a caller that needs a trait object.
 
 use async_trait::async_trait;
 use gents_protocol::message::Message;
@@ -13,7 +6,6 @@ use crate::live_output::LiveToolOutputWriter;
 use crate::tool_call_lifecycle::ToolOutcome;
 use crate::{HookAction, ToolCallHookAction};
 
-/// Canonical publication hooks supplied by the native session owner.
 #[async_trait]
 pub trait CanonicalSessionHook<Accepted: Send>: SessionHook {
     async fn adopt_accepted_tool_calls(&self, calls: Vec<(String, Accepted)>)
@@ -22,9 +14,8 @@ pub trait CanonicalSessionHook<Accepted: Send>: SessionHook {
 
 #[async_trait]
 pub trait SessionHook: Send + Sync {
-    /// Admit one child under an already running plugin call. Implementations
-    /// must bind its canonical arguments and physical parent before returning
-    /// the internal identity consumed by the dispatch hooks.
+    /// Bind canonical arguments and the physical parent before exposing the
+    /// derived child's internal identity to dispatch hooks.
     async fn admit_tool_effect(
         &self,
         _parent_internal_id: &str,
@@ -35,8 +26,7 @@ pub trait SessionHook: Send + Sync {
         Err("tool effects require a durable session owner".to_owned())
     }
 
-    /// Release a derived-call admission, settling its exact durable child if
-    /// cancellation or deadline interrupted the before hook.
+    /// Settle the exact durable child if cancellation interrupts admission.
     async fn finish_tool_effect(
         &self,
         _internal_id: &str,
@@ -45,8 +35,7 @@ pub trait SessionHook: Send + Sync {
         Ok(())
     }
 
-    /// Supplies admitted candidates; only the writer acknowledgment admits
-    /// them into the provider projection.
+    /// Only writer-acknowledged candidates may enter the provider projection.
     async fn pending_steering_inputs(
         &self,
     ) -> anyhow::Result<Vec<crate::loop_stream::FoldedPrompt>> {
@@ -59,9 +48,7 @@ pub trait SessionHook: Send + Sync {
         Ok(None)
     }
 
-    /// Called once per completion turn, before the provider is dispatched:
-    /// persists the prompt (and the per-request context message on turn 1)
-    /// and gives the hook a chance to terminate the loop early.
+    /// Persist the prompt before dispatching the provider turn.
     async fn on_completion_call_with_context(
         &self,
         prompt: &Message,
@@ -69,8 +56,7 @@ pub trait SessionHook: Send + Sync {
         context: Option<&Message>,
     ) -> HookAction;
 
-    /// Called when the model emits a tool call, before dispatch: persists the
-    /// call and returns whether to run, skip, or terminate.
+    /// Persist and decide a tool call before dispatch.
     async fn on_tool_call(
         &self,
         tool_name: &str,
@@ -79,9 +65,7 @@ pub trait SessionHook: Send + Sync {
         args: &str,
     ) -> ToolCallHookAction;
 
-    /// Called instead of `on_tool_call` when tool-policy admission rejects the
-    /// call; the call must be settled from Pending with `outcome` as its
-    /// pre-dispatch failure result.
+    /// Settle rejected calls from Pending with their pre-dispatch failure.
     async fn on_tool_admission_rejected(
         &self,
         tool_name: &str,
@@ -91,8 +75,7 @@ pub trait SessionHook: Send + Sync {
         outcome: &ToolOutcome,
     ) -> HookAction;
 
-    /// Called after a tool has run (or timed out, or been cancelled):
-    /// persists the outcome and returns whether to continue or terminate.
+    /// Persist a tool's outcome before continuing the loop.
     async fn on_tool_result(
         &self,
         tool_name: &str,
@@ -102,15 +85,10 @@ pub trait SessionHook: Send + Sync {
         outcome: &ToolOutcome,
     ) -> HookAction;
 
-    /// A live-output sink for one tool call, so a long-running tool's partial
-    /// output is observable before it completes.
     async fn foreground_live_output_writer(&self, internal_call_id: &str) -> LiveToolOutputWriter;
 
-    /// The session this hook is bound to, if any.
     async fn session_id(&self) -> Option<String>;
 
-    /// Bind a streamed tool call's internal id to its provider-assigned
-    /// result id.
     async fn register_stream_tool_call_identity(
         &self,
         internal_call_id: &str,
@@ -119,8 +97,6 @@ pub trait SessionHook: Send + Sync {
     );
 }
 
-/// A hook that persists nothing and never terminates the loop, used by
-/// internal sub-loop callers with no session to persist into.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoopSessionHook;
 

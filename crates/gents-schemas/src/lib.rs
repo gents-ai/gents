@@ -1,6 +1,3 @@
-//! Static GraphQL schema strings for gents agent collections. Dependency-free
-//! so external document-peer consumers can depend on the agent collection
-//! contract without pulling in the runtime dependency graph.
 
 pub const NODE_NAME: &str = "Node";
 pub const NODE: &str = include_str!("../schemas/agent/node.graphql");
@@ -161,7 +158,6 @@ pub const AGENT_SESSION_INPUT_EDIT_NAME: &str = "AgentSessionInputEdit";
 pub const AGENT_SESSION_INPUT_EDIT: &str =
     include_str!("../schemas/agent/agent_session_input_edit.graphql");
 
-/// Every agent-domain schema in registration order.
 pub const ALL: &[&str] = &[
     NODE,
     AGENT,
@@ -235,7 +231,6 @@ pub const ALL: &[&str] = &[
     PACK_INSTALLATION,
 ];
 
-/// Collection names matching [`ALL`] order.
 pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NODE_NAME,
     AGENT_NAME,
@@ -309,10 +304,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     PACK_INSTALLATION_NAME,
 ];
 
-/// Agent-domain collections the desktop bulk-syncs after pairing: a curated
-/// subset of the `@branchable` collections, deliberately excluding
-/// `WorkspaceRoot`, `Network`, `PeerEndpoint`, `RenderedRequest`,
-/// `ProviderContextReduction`, and Callback planner/journal rows.
 pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     NODE_DIRECTORY_ENTRY_NAME,
     NODE_MEMORY_NAME,

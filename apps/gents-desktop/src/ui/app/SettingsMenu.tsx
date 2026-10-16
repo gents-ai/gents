@@ -18,7 +18,6 @@ import { useApp } from "./AppContext";
 import { inNativeShell } from "../../lib/nativeShell";
 import { isMacTauriShell } from "../../lib/shellPlatform";
 
-/** Settings menu: theme, side nav, runtime reset, DB explorer. */
 export function SettingsMenu({
   variant,
   showNav,

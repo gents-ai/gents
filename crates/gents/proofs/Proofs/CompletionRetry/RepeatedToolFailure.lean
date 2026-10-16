@@ -1,27 +1,12 @@
 import Proofs.CompletionRetry.InvalidToolProgress
 
-/-! Repetition guard of the owned completion loop (#1734), composed with the
-invalid-tool allowance.
-
-A model can reissue one call whose arguments the tool rejects until the turn
-cap: the observed failure was 234 dispatches of one call returning the same
-tool error. Those were ordinary tool failures, which `InvalidToolProgress`
-deliberately does not charge.
-
-The guard is a fold over the execution's own dispatch record, over the loop's
-real outcome vocabulary (`InvalidToolProgress.Outcome`). It is execution-local,
-is not persisted, and owns no request lifecycle; either ending asks the
-existing stream error path and execution lease owner to terminalize. Dispatch
-is serialized, so a provider turn with several calls decides before each.
-
-A call is identified by its tool name and argument text. Only an ordinary
-failure whose error identity the native adapter can derive is counted; the
-identity excludes volatile execution metadata. Everything else restarts the
-streak: success, a call with other arguments or another error, an outcome the
-invalid allowance charges, a call the persistence hook handles itself (unless
-the guard already decided to stop it, which happens before the hook runs), and
-an ordinary failure without a derivable identity. Interleaved repeats are left to
-the turn cap and other budgets. -/
+/-! The guard folds the execution's dispatch record and is execution-local; it is
+not persisted and owns no request lifecycle. Either ending asks the existing
+stream error path and execution lease owner to terminalize. Dispatch is
+serialized, so eligibility is decided before each call. Only ordinary failures
+with a stable owner-derived error identity are counted; the runtime identifies a
+call by tool name and argument text, and the native adapter excludes volatile
+execution metadata from the error identity. Other outcomes restart the streak. -/
 
 namespace CompletionRetry.RepeatedToolFailure
 
@@ -51,7 +36,6 @@ structure Event where
 def countedError (e : Event) : Option Nat :=
   if e.outcome = .ordinaryFailure then e.error else none
 
-/-- Outcomes the invalid allowance charges never count here. -/
 theorem charged_outcomes_do_not_count (e : Event)
     (h : InvalidToolProgress.invalid e.outcome = true) : countedError e = none := by
   cases e with
@@ -59,7 +43,6 @@ theorem charged_outcomes_do_not_count (e : Event)
       cases outcome <;> simp_all [countedError, InvalidToolProgress.invalid]
 
 structure State where
-  /-- The call and error of the current streak of identical failures. -/
   streak : Option (Nat × Nat) := none
   failures : Nat := 0
   suppressed : Nat := 0
@@ -140,10 +123,6 @@ theorem different_call_dispatches (s : State) (call streakCall error : Nat)
     (hstreak : s.streak = some (streakCall, error)) (hne : streakCall ≠ call) :
     decide s call = .dispatch := by
   simp [decide, repeatsStreak, hstreak, hne]
-
-/-! ### Composition with `InvalidToolProgress`
-
-A hook-handled call is not charged and restarts the streak. -/
 
 structure Composed where
   invalid : InvalidToolProgress.State := {}

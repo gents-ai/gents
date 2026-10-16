@@ -65,5 +65,4 @@ export function usePreferences<T>(select: (preferences: Preferences) => T): T {
 export const useTheme = () => usePreferences((p) => p.theme);
 export const useNavMode = () => usePreferences((p) => p.nav);
 
-// Tests only: back to a first run's preferences.
 export const resetPreferences = () => store.setState(initial(), true);

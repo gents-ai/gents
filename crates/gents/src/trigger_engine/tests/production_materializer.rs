@@ -1429,7 +1429,6 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
                     claim_owners.push(lifecycle);
                 }
             }
-            // Simulate losing the cursor acknowledgement and removing config.
             tx.send(snapshot_with_agent_and_schedules(
                 behavior.clone(),
                 HashMap::new(),

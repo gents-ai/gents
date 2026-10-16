@@ -77,8 +77,6 @@ def projectTransportRecovery (connected : Bool) : RecoveryStatus :=
 def projectRouteRecovery (routeReady : Bool) (_pairingPending : Bool) : RecoveryStatus :=
   { kind := if routeReady then .ready else .waiting, action := none }
 
-/-- Failed P2P observations remain visible blockers. Recovery is automatic;
-operator remediation for credentials or configuration belongs to its own action. -/
 def projectConnectionFailure : RecoveryStatus :=
   { kind := .blocked, action := none }
 
@@ -217,8 +215,6 @@ theorem projectActiveOverlay_terminal_hides
   cases liveOutputAvailable <;> cases hasDurableOwner <;>
     simp [projectActiveOverlay, h]
 
-/-- A live preview is hidden once the same request already has a durable
-assistant turn owning that content. -/
 theorem projectActiveOverlay_durable_owner_hides
     (liveOutputAvailable : Bool)
     (turn : Option ClientTurnState)

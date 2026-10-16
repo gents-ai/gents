@@ -1767,9 +1767,6 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-/// A streamed tool call whose `arguments` the wire parser left as a raw
-/// corrupt string must persist object-shaped into `AgentMessage`, never as a
-/// `Value::String` that would jam every subsequent render of the session (#589).
 #[tokio::test]
 async fn corrupt_tool_call_arguments_persist_object_shaped() {
     let data_path = std::env::temp_dir().join(format!(

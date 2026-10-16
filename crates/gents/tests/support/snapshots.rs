@@ -68,8 +68,6 @@ pub struct RuntimeSnapshot {
     pub last_reconcile_error: String,
 }
 
-/// Judged by generation, never by the last reconcile label, which a later
-/// no-op reconcile overwrites.
 pub fn is_routed_ready_after(snapshot: &RuntimeSnapshot, generation: i64) -> bool {
     snapshot.process_state == "ready"
         && snapshot.reconcile_phase == "idle"
@@ -394,7 +392,6 @@ pub struct ToolCallSnapshot {
     pub message_sequence: u32,
     pub tool_name: String,
     pub tool_call_id: String,
-    /// Retired compatibility status is nullable on canonically accepted rows.
     #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
@@ -470,7 +467,6 @@ impl ToolCallSnapshot {
     }
 }
 
-/// `arguments`/`result` are `None` until the owner can reconstruct them.
 #[derive(Debug, Clone)]
 pub struct ToolCallPayload {
     pub tool_call_id: String,

@@ -16,8 +16,6 @@ where
         .with_context(|| format!("decoding {collection} rows"))
 }
 
-/// A missing collection is a hard error, not a silently empty section; only a
-/// genuinely empty result set returns `Ok(vec![])`.
 pub(super) async fn required_rows(
     access: &ConfigAccess,
     collection_name: &str,

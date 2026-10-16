@@ -5,8 +5,6 @@ import type {
 import type { createDesktopInvoker } from "./invoke.js";
 import type { DesktopApiAdapter, HostAccessCommand } from "./types.js";
 
-/* the host folders the agent's tools may use, and plugin calls asking for
-   more; each folder command answers with the list as it now stands */
 export function createHostAccessCommands(
   invokeDesktop: ReturnType<typeof createDesktopInvoker>,
 ): Pick<DesktopApiAdapter, HostAccessCommand> {

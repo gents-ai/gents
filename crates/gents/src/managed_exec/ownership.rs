@@ -1,14 +1,10 @@
-// Lean: `ManagedExec.Ownership`. A managed child leads its own session and
-// process group, so it survives the runtime. After a runtime loss the only
-// ownership evidence is a durable host record of the leader pid, its group
-// and its OS start identity. A bare pid, or a group whose recorded leader is
-// gone, proves nothing: the OS reuses both ids.
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+// Process-group ids are reused; termination requires the recorded leader's OS start identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProcessObservation {
     Running,
@@ -118,8 +114,6 @@ impl ProcessIdentity {
         })
     }
 
-    /// A leaderless group with live members is `Unowned` because its id may
-    /// have been reused.
     pub(crate) fn observe(&self) -> ProcessObservation {
         if self.pid <= 0 || self.pgid <= 0 {
             return ProcessObservation::Unowned;
@@ -195,7 +189,6 @@ pub(crate) struct ProcessRecord {
     pub(crate) identity: ProcessIdentity,
 }
 
-/// A durable host record, stored under its own key.
 pub(crate) trait HostRecord:
     Serialize + serde::de::DeserializeOwned + Clone + Send + 'static
 {
@@ -208,7 +201,6 @@ impl HostRecord for ProcessRecord {
     }
 }
 
-// Without a directory, records are volatile and a restart finds none.
 #[derive(Debug, Clone)]
 pub(crate) enum HostRecordStore<R> {
     Volatile(Arc<std::sync::Mutex<std::collections::HashMap<String, R>>>),
@@ -241,8 +233,7 @@ impl<R: HostRecord> HostRecordStore<R> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// The record must survive the crash it exists for, so the file and its
-    /// directory entry are synced before returning.
+    // Sync the record and its directory entry before claiming durable ownership.
     pub(crate) fn write(&self, record: &R) -> std::io::Result<()> {
         let dir = match self {
             Self::Volatile(records) => {
@@ -374,7 +365,6 @@ struct ProcessInfo {
 mod platform {
     use super::ProcessInfo;
 
-    // <libproc.h> PROC_PGRP_ONLY; not exported by the libc crate.
     const PROC_PGRP_ONLY: u32 = 2;
 
     pub(super) fn process_info(pid: i32) -> Option<ProcessInfo> {
@@ -452,8 +442,6 @@ mod platform {
 
     fn stat(pid: i32) -> Option<Stat> {
         let raw = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-        // The command name may contain spaces and parentheses; fields resume
-        // after its last ')'.
         let rest = raw.get(raw.rfind(')')? + 2..)?;
         let fields = rest.split_whitespace().collect::<Vec<_>>();
         Some(Stat {
@@ -597,7 +585,6 @@ pub(crate) mod test_support {
         }
     }
 
-    /// Uses only a test-owned group recorded under `registry`.
     pub(crate) async fn process_for_generated_outcome(
         registry: &crate::hook::BackgroundExecutionRegistry,
         tool_call_id: &str,

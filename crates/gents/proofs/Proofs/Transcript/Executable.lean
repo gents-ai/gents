@@ -64,7 +64,7 @@ private def observedCase (name group action : String)
     (pre post : TranscriptState)
     (key : ToolResultKey) (_trace : Trace pre post) : TranscriptCase :=
   { name, group, action, actionCallIds, actionLogicalResultIds, actionPayloadHashes
-  , legal := true -- backed by the required transition trace, not a fixture assertion
+  , legal := true
   , preMessageCount := pre.messages.length
   , postMessageCount := post.messages.length
   , preToolCallCount := pre.toolCalls.length

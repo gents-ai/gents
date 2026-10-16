@@ -1,9 +1,3 @@
-//! Signed wire records for authenticated status-first enrollment.
-//!
-//! A status offer and candidate request are invitations to an operator-owned
-//! decision, never grants. The append-only authorization revision with the
-//! unique maximal sequence is the sole membership authority.
-
 use std::io::Cursor;
 
 use anyhow::{Context, Result};
@@ -90,7 +84,6 @@ impl EnrollmentRequestRecord {
         canonical_enrollment_digest(self.canonical_text_fields())
     }
 
-    /// Validate the immutable request against the exact signed offer it embeds.
     pub fn validate_against_offer(&self, offer: &EnrollmentOfferRecord) -> Result<()> {
         anyhow::ensure!(
             self.protocol_version == ENROLLMENT_PROTOCOL_VERSION,
@@ -303,8 +296,7 @@ impl EnrollmentOperatorDecisionCommand {
     }
 }
 
-/// Short-lived, admin-signed read invocation; pending enrollment identities
-/// are operator data and are never exposed by an unauthenticated GET.
+/// Short-lived signed reads keep pending enrollment identities off unauthenticated endpoints.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnrollmentOperatorQueryCommand {

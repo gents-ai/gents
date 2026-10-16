@@ -1,9 +1,6 @@
 import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
 
-/** The official four-block symbol, in currentColor. Size it with a height
-    and a width together (h-5 w-7 keeps its 810:579 shape): WebKit sizes an
-    SVG given only a height to its container, and draws it in the middle. */
 export function Mark({ className }: { className?: string }) {
   return (
     <svg
@@ -20,7 +17,6 @@ export function Mark({ className }: { className?: string }) {
   );
 }
 
-/** The mark as the shell draws it: a link to the agents list. */
 export function MarkLink({ className }: { className?: string }) {
   return (
     <a

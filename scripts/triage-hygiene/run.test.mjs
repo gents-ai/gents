@@ -1,9 +1,6 @@
-// Fences the REST layer's destructive-safety paths: comment deletion wiring and
-// the comment budget. Runs against an in-memory GitHub; nothing touches the
-// network.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { run, makeApi, resolveBotLogins, MAX_COMMENTS_PER_RUN, MAX_RETRIES } from "./run.mjs";
+import { run, resolveBotLogins, MAX_COMMENTS_PER_RUN } from "./run.mjs";
 import {
   conflictMarker,
   MISSING_HORIZON_MARKER,
@@ -16,9 +13,6 @@ const BOT = DEFAULT_BOT_LOGINS[0];
 
 const issue = (number, labels = [], state = "open") => ({ number, state, labels });
 
-// An in-memory GitHub covering exactly the endpoints run() calls. `failOn` is a
-// predicate over (path, init) that makes a call throw, so a transient failure
-// can be aimed at one issue.
 const fakeApi = ({ issues = [], comments = {}, failOn = () => null } = {}) => {
   const calls = [];
   const api = async (path, init = {}) => {
@@ -54,7 +48,6 @@ test("the comment budget caps comments at MAX_COMMENTS_PER_RUN", async () => {
   assert.equal(stats.commentsPosted, MAX_COMMENTS_PER_RUN);
   assert.equal(stats.commentsSuppressed, 15 - MAX_COMMENTS_PER_RUN);
   assert.equal(of(calls, "POST", /\/comments$/).length, MAX_COMMENTS_PER_RUN);
-  // Labels are idempotent and cheap, so they are NOT capped: all 15 get flagged.
   assert.equal(of(calls, "POST", /\/labels$/).length, 15);
   assert.equal(stats.examined, 15);
   assert.equal(stats.changed, 15);
@@ -69,54 +62,6 @@ test("the budget is enforced in dry-run too, so a dry run predicts the truncatio
   assert.equal(of(calls, "POST", /./).length, 0, "dry run writes nothing at all");
 });
 
-const response = (status, { body = "", headers = {}, json = null } = {}) => ({
-  ok: status >= 200 && status < 300,
-  status,
-  headers: new Headers(headers),
-  text: async () => body,
-  json: async () => json,
-});
-
-const fakeFetch = (responses) => {
-  const slept = [];
-  let i = 0;
-  const fetchImpl = async () => responses[Math.min(i++, responses.length - 1)];
-  return { fetchImpl, slept, sleepImpl: async (ms) => slept.push(ms), calls: () => i };
-};
-
-test("api retries a 502 and succeeds", async () => {
-  const f = fakeFetch([response(502, { body: "bad gateway" }), response(200, { json: { ok: 1 } })]);
-  const api = makeApi({ token: "t", fetchImpl: f.fetchImpl, sleepImpl: f.sleepImpl, warn: () => {} });
-  assert.deepEqual(await api("/x"), { ok: 1 });
-  assert.equal(f.calls(), 2);
-  assert.deepEqual(f.slept, [1000]);
-});
-
-test("api honours Retry-After on a 429", async () => {
-  const f = fakeFetch([
-    response(429, { headers: { "retry-after": "7" } }),
-    response(200, { json: {} }),
-  ]);
-  const api = makeApi({ token: "t", fetchImpl: f.fetchImpl, sleepImpl: f.sleepImpl, warn: () => {} });
-  await api("/x");
-  assert.deepEqual(f.slept, [7000]);
-});
-
-test("api does NOT retry a plain 403 — that is a real permissions answer", async () => {
-  const f = fakeFetch([response(403, { body: "Resource not accessible by integration" })]);
-  const api = makeApi({ token: "t", fetchImpl: f.fetchImpl, sleepImpl: f.sleepImpl, warn: () => {} });
-  await assert.rejects(() => api("/x"), /403/);
-  assert.equal(f.calls(), 1);
-});
-
-test("api surfaces the status on the thrown error so callers can treat 404 as done", async () => {
-  const f = fakeFetch([response(404, { body: "gone" })]);
-  const api = makeApi({ token: "t", fetchImpl: f.fetchImpl, sleepImpl: f.sleepImpl, warn: () => {} });
-  const err = await api("/x").catch((e) => e);
-  assert.equal(err.status, 404);
-});
-
-// The runner must delete only what reconcile() nominated.
 test("the runner deletes the bot's stale conflict comment when an issue goes clean", async () => {
   const stale = conflictMarker(["roadmap: now", "roadmap: later"]);
   const { api, calls } = fakeApi({

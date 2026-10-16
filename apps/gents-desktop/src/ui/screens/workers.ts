@@ -1,5 +1,3 @@
-/* The sessions this one's calls reached. Where the bridge contract is
-   silent the state says so instead of guessing. */
 import { useEffect, useMemo, useState } from "react";
 import type {
   BackgroundedToolView,
@@ -42,8 +40,6 @@ export const NO_WORKERS: Workers = {
   loaded: false,
 };
 
-/* A session is identified by its whole scope (node, label, requester),
-   never by its label alone. */
 export const scopeKey = (r: {
   nodeDid: string | null;
   sessionId: string | null;

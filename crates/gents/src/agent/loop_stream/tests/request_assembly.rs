@@ -232,8 +232,6 @@ async fn loop_entry_sanitizes_a_recovered_checkpoint_as_one_projection() {
     ));
 }
 
-/// Provider-request invariants every emitted request must satisfy, mirroring
-/// the provider-side contract `sanitize_history_for_provider` enforces.
 fn assert_provider_request_invariants(turn: usize, history: &[Message]) {
     let mut pending_call_keys: Vec<String> = Vec::new();
     for message in history {
@@ -243,7 +241,6 @@ fn assert_provider_request_invariants(turn: usize, history: &[Message]) {
                     pending_call_keys.is_empty(),
                     "turn {turn}: assistant message before prior turn's tool calls were resolved"
                 );
-                // Ordering: no text or reasoning after a tool call.
                 let mut seen_tool_call = false;
                 for item in content.iter() {
                     match item {
@@ -301,7 +298,6 @@ fn assert_provider_request_invariants(turn: usize, history: &[Message]) {
 #[tokio::test]
 async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
     let model = ScriptedModel::new_turns(vec![
-        // Turn 1: text + reasoning + two tool calls in one assistant turn.
         vec![
             RawStreamingChoice::Message("let me check".to_string()),
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
@@ -316,9 +312,7 @@ async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
             )),
             RawStreamingChoice::FinalResponse(()),
         ],
-        // Turn 2: one more tool call.
         echo_tool_turn(),
-        // Turn 3: final text.
         vec![
             RawStreamingChoice::Message("done".to_string()),
             RawStreamingChoice::FinalResponse(()),
@@ -370,14 +364,12 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
         additional_params: None,
     };
     let dirty_history = vec![
-        // Orphaned result: its call was compacted away.
         Message::User {
             content: vec![UserContent::tool_result(
                 "call-gone".to_string(),
                 vec![crate::llm::message::ToolResultContent::text("orphaned")],
             )],
         },
-        // Misordered assistant turn (text AFTER calls) with one unpaired call.
         Message::Assistant {
             id: None,
             content: vec![
@@ -417,7 +409,6 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
     let histories = model.seen_histories().await;
     assert_eq!(histories.len(), 1);
     assert_provider_request_invariants(1, &histories[0]);
-    // The unpaired call is gone but the paired exchange survives.
     let kept_calls: Vec<String> = histories[0]
         .iter()
         .filter_map(|message| match message {
@@ -690,7 +681,6 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
     assert_all_history_tool_args_object_shaped(&histories[1]);
 }
 
-/// Provider-render precondition (#590).
 fn assert_all_history_tool_args_object_shaped(history: &[Message]) {
     for message in history {
         if let Message::Assistant { content, .. } = message {
@@ -784,11 +774,7 @@ async fn repair_sanitizes_poisoned_tool_args_in_loaded_history() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Generated PromptAssembly contract consumers.
-// ---------------------------------------------------------------------------
 
-/// Text of a single-item user text message, for slot classification.
 fn sole_user_text(message: &Message) -> String {
     match message {
         Message::User { content } => match content.as_slice() {
@@ -799,7 +785,6 @@ fn sole_user_text(message: &Message) -> String {
     }
 }
 
-/// Name the `PromptAssembly.Slot` a message occupies.
 fn classify_slot(message: &Message, is_last: bool, conversation_index: &mut usize) -> String {
     if super::is_request_context_message(message) {
         return "contextPreamble".to_string();
@@ -825,10 +810,6 @@ fn classify_slot(message: &Message, is_last: bool, conversation_index: &mut usiz
     slot
 }
 
-/// Fences the fixed layer order of the assembled request against Lean
-/// `PromptAssembly.assemble`. The skill-reminder prepend is *mirrored* from
-/// `agent/daemon/request.rs` rather than driven, because it happens inline in
-/// that function's async request flow.
 #[tokio::test]
 async fn generated_layer_cases_pin_the_assembled_request_order() {
     use crate::lean_vocab_test::lean_prompt_assembly_layer_cases;
@@ -894,8 +875,6 @@ async fn generated_layer_cases_pin_the_assembled_request_order() {
     }
 }
 
-/// Concrete tool-call arguments denoting each abstract `PromptAssembly.ToolArgs`
-/// shape the contract emits.
 fn repair_vector(name: &str) -> serde_json::Value {
     match name {
         "object:raw" => serde_json::json!({"k": "line\nbreak"}),
@@ -934,8 +913,6 @@ fn has_raw_leaf(value: &serde_json::Value) -> bool {
 }
 
 fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
-    // `repair_provider_input` re-sanitizes after rewriting arguments, so the
-    // call must be paired or the whole turn is dropped.
     let mut history = vec![
         Message::Assistant {
             id: None,
@@ -1046,8 +1023,6 @@ fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
     );
 }
 
-/// Fences Lean `PromptAssembly.repairArgs` (`repair_is_payload_only`,
-/// `repair_idempotent`).
 #[test]
 fn generated_repair_cases_drive_tool_argument_repair() {
     use crate::lean_vocab_test::lean_prompt_assembly_repair_cases;
@@ -1263,7 +1238,6 @@ async fn drive_generated_turn_input(
         .all(|row| !matches!(&row.message, Message::User { .. })));
 }
 
-/// Lean `SessionQueue.TurnInput.providerInput_eq_authored`.
 #[tokio::test]
 async fn folded_prompts_publish_and_send_in_queue_order() {
     let cases = crate::lean_vocab_test::lean_fold_turn_input_cases();

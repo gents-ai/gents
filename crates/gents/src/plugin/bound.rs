@@ -1,9 +1,3 @@
-//! One directory, or one file alone, admitted for one plugin call.
-//!
-//! Binding is authority for exactly one call and is never recorded in an
-//! install's `granted` manifold. A single file is exposed alone through a
-//! private folder holding a hard link to it (WASI preopens directories, not
-//! files); the folder lives on the file's own filesystem.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -14,38 +8,20 @@ use anyhow::{Context, Result};
 
 use crate::pack::BindAccess;
 
-/// The folder, inside a candidate root, that holds the per-call private folders.
 const PRIVATE_ROOT: &str = ".gents-bind";
 
-/// Age after which a private folder is a leftover of a call that died.
 const STALE: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// A single directory, or one file, admitted for one plugin call, never wider
-/// than the ceiling [`Self::new`]'s `within` names or what
-/// [`super::allowed::bind`] was granted. Operator call sites (`gents plugin
-/// run --bind-dir`, a `gents pack test` case's own `bind` field, a scenario
-/// `prepare` step) name the directory themselves. A path that comes from data
-/// (a graph node's source document, a model's tool arguments) is bound only
-/// through [`super::allowed::bind`]: it must resolve inside the working folder
-/// or an allowed folder, or be approved by the operator for that one call.
 #[derive(Debug, Clone)]
 pub struct BoundDir {
     dir: PathBuf,
     target: PathBuf,
-    /// The canonical file or folder the caller named, whatever `target` is.
     original: PathBuf,
     access: BindAccess,
-    /// Keeps the private folder of a single-file binding alive.
     _private: Option<Arc<tempfile::TempDir>>,
 }
 
 impl BoundDir {
-    /// Canonicalizes `requested` and requires it to be a directory. The
-    /// operator named it, so it permits whatever access the plugin declares.
-    /// A `within` prefix mismatch (through `..` or a symlink) is refused here,
-    /// before any plugin runs, rather than left to WASI's preopen resolution;
-    /// `within` is canonicalized independently so a host-specific symlink in
-    /// its own path resolves the same way on both sides.
     pub fn new(requested: &Path, within: Option<&Path>) -> Result<Self> {
         let canonical = requested
             .canonicalize()
@@ -75,8 +51,6 @@ impl BoundDir {
         })
     }
 
-    /// Opens the directory once and reads its path back from that handle,
-    /// so a component swapped since `dir` was resolved is refused here.
     pub(crate) fn folder(dir: &Path, access: BindAccess) -> Result<Self> {
         pin(dir, PinKind::Folder)?;
         Ok(Self {
@@ -98,11 +72,6 @@ impl BoundDir {
         Ok(bound)
     }
 
-    /// Exposes the canonical regular file `file` alone through a private
-    /// folder holding a hard link to it. The file is opened once; its path
-    /// read back from that handle and the link's inode are both checked
-    /// against it, so a path swapped between the scope check and here is
-    /// refused.
     pub(crate) fn for_file(file: &Path, access: BindAccess) -> Result<Self> {
         let name = file
             .file_name()
@@ -145,10 +114,7 @@ impl BoundDir {
         .into())
     }
 
-    /// Refuses when the directory or target no longer canonicalizes to the
-    /// path it was validated as. Run immediately before the preopen; a swap
-    /// between this check and the guest's first read remains possible for a
-    /// folder and is only contained by WASI's own preopen resolution.
+    // A swap after this check and before the guest's first read is contained by WASI preopen resolution.
     pub fn recheck(&self) -> Result<()> {
         for path in [&self.dir, &self.target] {
             let now = path.canonicalize().with_context(|| {
@@ -172,8 +138,6 @@ impl BoundDir {
         &self.target
     }
 
-    /// The canonical file or folder the caller named; `target` of a single
-    /// file is a link in a private folder that is gone when the call ends.
     pub fn original(&self) -> &Path {
         &self.original
     }
@@ -183,9 +147,6 @@ impl BoundDir {
     }
 }
 
-/// A file no hard link could be made to (no writable ancestor on its
-/// filesystem, read-only mount), as opposed to a path that changed under
-/// the call.
 #[derive(Debug)]
 pub(crate) struct NotLinkable(String);
 
@@ -197,8 +158,6 @@ impl std::fmt::Display for NotLinkable {
 
 impl std::error::Error for NotLinkable {}
 
-/// The device and inode of an open file or folder; `None` where the platform
-/// has neither.
 type Identity = Option<(u64, u64)>;
 
 #[cfg(unix)]
@@ -225,7 +184,6 @@ fn handle_identity(_: &File) -> Identity {
     None
 }
 
-/// The path the kernel reports for `file`'s open handle.
 #[cfg(target_os = "linux")]
 fn opened_path(file: &File) -> Option<PathBuf> {
     use std::os::fd::AsRawFd;
@@ -238,7 +196,6 @@ fn opened_path(file: &File) -> Option<PathBuf> {
     use std::os::unix::ffi::OsStrExt;
     let mut buffer = [0u8; libc::PATH_MAX as usize];
     // SAFETY: F_GETPATH writes a NUL-terminated path of at most PATH_MAX
-    // bytes into the buffer, which is exactly that long.
     let status = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buffer.as_mut_ptr()) };
     if status == -1 {
         return None;
@@ -257,9 +214,7 @@ enum PinKind {
     Folder,
 }
 
-/// Opens `path` once and requires the handle's own path to be the canonical
-/// path checked against the scope. Opening a FIFO for reading blocks until a
-/// writer appears, so on unix the open is nonblocking.
+// Nonblocking open prevents a swapped FIFO from hanging admission.
 fn pin(path: &Path, kind: PinKind) -> Result<Identity> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
@@ -290,10 +245,6 @@ fn pin(path: &Path, kind: PinKind) -> Result<Identity> {
     Ok(identity)
 }
 
-/// Whether `path`'s folder, itself pinned, names the regular file `identity`
-/// under `path`'s file name without following a symlink. macOS's F_GETPATH
-/// reports any one of a hard-linked file's names, not the one it was opened
-/// by, so a file with a second link is checked through its folder instead.
 #[cfg(unix)]
 fn named_in_pinned_folder(path: &Path, identity: Identity) -> bool {
     use std::os::fd::{AsRawFd, FromRawFd};
@@ -302,7 +253,6 @@ fn named_in_pinned_folder(path: &Path, identity: Identity) -> bool {
     let (Some(folder), Some(name), Some(_)) = (path.parent(), path.file_name(), identity) else {
         return false;
     };
-    // O_NONBLOCK keeps a FIFO swapped into the folder from parking this check.
     let Ok(dir) = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK)
@@ -337,9 +287,6 @@ fn named_in_pinned_folder(_: &Path, _: Identity) -> bool {
     false
 }
 
-/// Folders a link to `file` can be made under, best first: the system temp
-/// folder when it is on the file's filesystem, then its ancestors (a link
-/// cannot cross filesystems).
 fn link_roots(file: &Path) -> Vec<PathBuf> {
     let Some(device) = identity_of(file).map(|(device, _)| device) else {
         return vec![std::env::temp_dir()];
@@ -353,8 +300,6 @@ fn link_roots(file: &Path) -> Vec<PathBuf> {
     roots
 }
 
-/// A fresh private folder under `root`'s `.gents-bind` folder, which must be
-/// ours alone; stale siblings are removed.
 fn private_folder(root: &Path) -> Result<tempfile::TempDir> {
     let shared = root.join(PRIVATE_ROOT);
     let mut builder = std::fs::DirBuilder::new();
@@ -386,8 +331,6 @@ fn private_folder(root: &Path) -> Result<tempfile::TempDir> {
         .with_context(|| format!("creating a private folder in {}", shared.display()))
 }
 
-/// Removes private folders older than [`STALE`]; a failure leaves the
-/// leftover for the next sweep.
 fn sweep(shared: &Path) {
     let Ok(entries) = std::fs::read_dir(shared) else {
         return;

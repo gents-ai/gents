@@ -500,7 +500,6 @@ mod tests {
         .is_some());
         let preset = classify_preset(&access, &tools_row).await?;
         assert_eq!(preset, Some("write"));
-        // The source chain is untouched by the clone.
         let source_tools = read_canonical(&node, "Tools", "tools_id", owner, &tools_id, "host")
             .await?
             .expect("source tools unchanged");
@@ -531,13 +530,10 @@ mod tests {
             tags: Vec::new(),
             created_at: None,
         };
-        // The shared writer agent_set drives owns the reference validation;
-        // a dangling profile rejects inside its transaction.
         assert!(
             format!("{:#}", upsert_agent(&node, &agent).await.unwrap_err())
                 .contains("missing-profile")
         );
-        // Nothing was published: the canonical chain stays empty.
         let response = node
             .execute("{ Agent {agent_id} AgentContext {context_id} Tools {tools_id} }")
             .await;

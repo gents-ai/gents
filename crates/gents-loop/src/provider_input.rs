@@ -1,7 +1,3 @@
-//! Provider-shaped preflight accounting: budget decisions must use the same
-//! provider wire projection the client sends, not serialization of rig's core
-//! request.
-
 use anyhow::{Context, Result};
 use rig::completion::CompletionRequest;
 #[cfg(feature = "native")]
@@ -81,8 +77,6 @@ pub struct ProviderInputCounter {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderInputProjection {
     pub components: gents_protocol::rendered_request::ContextInputComponents,
-    /// One authoritative estimate over the composed provider projection, not a
-    /// sum of independently floored component estimates.
     pub estimated_input_tokens: usize,
     pub estimator: &'static str,
 }
@@ -172,10 +166,8 @@ impl ProviderInputCounter {
         Ok(body)
     }
 
-    /// Guest fallback (no `native` feature): serialize the core
-    /// `CompletionRequest` directly. This undercounts relative to the
-    /// wire-exact projection, so it is honest, not precise.
     #[cfg(not(feature = "native"))]
+    /// Guest fallback serializes Rig core requests and undercounts wire input.
     pub fn project_body(&self, request: &CompletionRequest) -> Result<Value> {
         if self.profile == ProviderInputProfile::ClaudeMessages {
             return crate::claude_messages_body::build_messages_body(&self.model, request);
@@ -202,8 +194,6 @@ impl ProviderInputCounter {
         }
         #[cfg(feature = "native")]
         if self.profile == ProviderInputProfile::OpenAiChatCompletions {
-            // Skip the provider call when nothing would actually render
-            // (Chat Completions drops bare reasoning entirely).
             let has_visible_message = crate::rig_compat::to_rig_messages(messages)
                 .into_iter()
                 .map(Vec::<rig::providers::openai::completion::Message>::try_from)
@@ -242,9 +232,6 @@ impl ProviderInputCounter {
         serde_json::to_value(dto).context("serializing OpenAI Responses request")
     }
 
-    /// Rig keeps its OpenRouter DTO crate-private; build the same shape from
-    /// Rig's public converters so accounting follows the actual wire
-    /// representation.
     #[cfg(feature = "native")]
     fn openrouter_body(&self, request: &CompletionRequest) -> Result<Value> {
         use rig::providers::openrouter::completion::Message as OpenRouterMessage;
@@ -313,9 +300,7 @@ impl ProviderInputCounter {
     }
 }
 
-/// The most visual tokens one image costs on current Claude models; one
-/// ceiling for every model, since an overcount only compacts earlier while an
-/// undercount admits a request over the context window.
+/// Conservative ceiling: undercounting could admit a request over provider context.
 pub const CLAUDE_IMAGE_TOKENS: usize = 4_784;
 
 fn charge_claude_images(value: &mut Value) {
@@ -383,9 +368,6 @@ fn projected_accounting(
         .and_then(|total| total.checked_add(tool_schemas))
         .and_then(|total| total.checked_add(output_schema))
         .context("provider input component estimate overflow")?;
-    // Framing, model, and provider parameters occupy the remainder, making
-    // the diagnostic partition agree exactly with the one-shot total despite
-    // `/4` remainders.
     let additional_parameters = estimated_input_tokens.checked_sub(classified).ok_or_else(|| {
         anyhow::anyhow!(
             "provider input component partition exceeded total: classified={classified}, total={estimated_input_tokens}"
@@ -412,8 +394,6 @@ pub fn estimate_input_body(mut body: Value) -> Result<usize> {
 }
 
 fn remove_output_limits(body: &mut Value) {
-    // Output limits are dispatch parameters, not provider input; excluding
-    // them avoids circular accounting when the clamp changes the field itself.
     if let Some(object) = body.as_object_mut() {
         object.remove("max_tokens");
         object.remove("max_output_tokens");

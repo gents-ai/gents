@@ -356,7 +356,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                             "files referenced in stripped history"
                         );
                     }
-                    // `messages_compacted` is measured against this same list.
                     let replay = crate::provider_input::replay::owned_replay_input(
                         self.node.clone(), request.clone(), request_commit_cid.clone(),
                         gents_protocol::rendered_request::CaptureScopeKind::Inference,
@@ -454,8 +453,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                         )
                         .await?;
 
-                        // The reducer exposes an exact split of its input; carry
-                        // associations through that split, never a byte search.
                         history = if let Some(exact) = result.exact_reduction() {
                             anyhow::ensure!(projected_native == exact.compacted_prefix.iter().chain(exact.retained_suffix).cloned().collect::<Vec<_>>(),
                                 "session reduction changed its exact provider source");

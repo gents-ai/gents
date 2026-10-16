@@ -270,7 +270,6 @@ impl ModeledQueue {
         .await
     }
 
-    /// Maps model time monotonically onto wall time around the processing instants.
     fn instant(&self, model: u64) -> DateTime<Utc> {
         let offset = i64::try_from(model).unwrap();
         if self.nows.iter().all(|now| model <= *now) {
@@ -353,7 +352,6 @@ impl ModeledQueue {
         )
         .await
         .unwrap();
-        // Presigning requires the observed queue; the signed intent carries the modeled one.
         edit.expected_request_doc_ids = model
             .expected
             .iter()

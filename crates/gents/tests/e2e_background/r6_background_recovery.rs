@@ -1,5 +1,3 @@
-//! R6 background-tool recovery tests.
-
 use serde::{Deserialize, Serialize};
 
 use crate::support::accepted_turn::{boot_prepared_accepted_turn, AcceptedTurnSpec};

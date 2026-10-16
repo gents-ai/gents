@@ -74,11 +74,6 @@ pub(crate) async fn ensure_session_with_agent_id_and_requester_did(
     .await
 }
 
-/// Create-or-preserve the single durable session document inside the caller's
-/// transaction. Scope is exact: agent, session label, requester and the agent
-/// binding must agree with any existing document; duplicate rows under one
-/// label fail. An existing matching document is preserved untouched. Does not
-/// reopen a closed session; the claim-time resume owner does that.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn ensure_session_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
@@ -209,12 +204,6 @@ pub(crate) async fn ensure_session_in_txn(
     Ok(true)
 }
 
-/// Claim-time resume owner for a reused session inside the caller's
-/// transaction. Reopening clears `closed_at` without resetting creation time,
-/// title, tags or provenance, and advances the observation activity
-/// monotonically. An open session is left unwritten: the claim's observation
-/// write carries its activity (see [`touch_session_in_txn`]). Returns whether
-/// a closed session was actually reopened.
 pub(crate) async fn reopen_session_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     session_id: &str,
@@ -266,7 +255,6 @@ pub(crate) async fn reopen_session_in_txn(
     Ok(was_closed)
 }
 
-/// Advance a session's observation activity to `max(now, old)`.
 pub(crate) async fn touch_session_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     row: &super::rows::SessionOwnerRow,
@@ -280,8 +268,6 @@ pub(crate) async fn touch_session_in_txn(
     .await
 }
 
-/// Close the session through its existing owner; preserve identity,
-/// creation time, title, provenance, tags and the current observation.
 pub async fn close_session(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
@@ -322,7 +308,6 @@ pub async fn close_session(
     .await
 }
 
-/// Bare scope/identity fields plus `_docID` for in-transaction reads.
 pub(super) const SESSION_SCOPE_FIELDS: &str = "session_id node_did requester_did agent_id \
 created_at closed_at title provenance observation tags _docID";
 
@@ -354,8 +339,6 @@ pub async fn load_agent_session_row_in_txn(
     rows.first().map(decode_session_row).transpose()
 }
 
-/// `max(now, old)` activity value; an absent observation falls back to the
-/// session's creation time.
 pub(super) fn touch_activity_value(row: &super::rows::SessionOwnerRow, now: &str) -> String {
     let old = row
         .session

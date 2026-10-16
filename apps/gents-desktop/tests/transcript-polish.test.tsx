@@ -22,7 +22,6 @@ import { NO_PARENT } from "../src/ui/screens/parentWork";
 import { renderIn, testApp } from "./app-fixture";
 import { liveAssistant } from "./timeline-fixture";
 
-/* Rows read the selected node from the app. */
 const render = (ui: ReactElement) => renderIn(testApp(), ui);
 
 function tool(

@@ -323,7 +323,6 @@ async fn codex_shim_thread_list_projects_canonical_gents_sessions() -> Result<()
     let _: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
     send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
 
-    // An empty shim-created thread is visible from the process-local adapter.
     send_client_request(
         &mut ws,
         codex::ClientRequest::ThreadStart {

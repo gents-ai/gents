@@ -1,6 +1,3 @@
-//! Keeps the factory-setup eval packs loadable and their definition valid
-//! against the shipped check registry.
-
 use std::path::{Path, PathBuf};
 
 use gents::document_config::{EvalDefinition, PackConfig, SurfaceToolDecl};
@@ -15,7 +12,6 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/configurator_evals/factory_setup")
 }
 
-/// Subject pack directories under the fixture root.
 fn subjects() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(root())
         .unwrap()
@@ -180,7 +176,6 @@ fn the_definition_validates_and_every_check_accepts_its_params() {
         .checks
         .iter()
         .all(|c| c.tier == gents::document_config::EvalTier::Acceptance));
-    // Empty captures must still reach a verdict, never reject their params.
     let mut evidence =
         ScriptedExecutor::passed_evidence(OWNER, &stage.stage_id, "unused", Vec::new())
             .stages

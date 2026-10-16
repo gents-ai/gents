@@ -26,7 +26,6 @@ pub struct PortSpec {
     pub required: bool,
 }
 
-/// What runs a graph node: an agent turn, or a plugin with no model.
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
 )]
@@ -104,8 +103,6 @@ pub struct StageCapability {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub allowed_callers: Vec<String>,
-    /// Optional graph execution ceiling; does not select a different agent or
-    /// inference profile from the referenced task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub workspace_authority: Option<WorkspaceAuthority>,
@@ -128,8 +125,6 @@ pub struct PortRef {
     pub port: String,
 }
 
-// Graph edges compile into the same event-group configuration used by ordinary
-// triggers; no graph-only count or delivery-policy model.
 pub type GroupCount = crate::document_config::EventGroupCount;
 pub type DeliveryMode = Option<crate::document_config::EventGroup>;
 /// Trigger concurrency on a graph edge. Compilation refuses `latest_only` on
@@ -194,19 +189,14 @@ pub struct EntryBinding {
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub input_contract: Option<String>,
     pub to: PortRef,
-    /// Absent means the entry takes an unvalidated JSON object.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(type = "unknown", optional = nullable))]
     pub input_schema: Option<serde_json::Value>,
-    /// Absent means the admitted operator input is the entry input directly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub prepare: Option<EntryPrepare>,
 }
 
-/// Host facts collected before a prepare plugin runs, and the plugin that
-/// turns them plus the admitted operator input into this entry's seed and
-/// any evidence documents.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -221,7 +211,6 @@ pub struct EntryPrepare {
     pub writes: Vec<String>,
 }
 
-/// One host-computed fact a prepare step hands to the plugin.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
@@ -369,8 +358,6 @@ pub struct PlannedNode {
     pub target: StageTarget,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<GraphSessionSelection>,
-    /// Empty for an agent node, whose model writes its outputs through its own
-    /// tools.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub output_ports: Vec<PortSpec>,
 }
@@ -430,8 +417,6 @@ pub use crate::toolset::WorkspaceAuthority;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlannedPackageArtifact {
-    /// Canonical collection and owner-scoped authored identity; resolve the
-    /// physical Defra document through the shared configuration owner.
     pub collection: crate::Collection,
     pub logical_id: String,
     pub content_digest: String,

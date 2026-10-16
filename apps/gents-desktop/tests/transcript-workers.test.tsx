@@ -50,7 +50,6 @@ const group = (...tools: RenderedToolCallView[]): RenderedTimelineItem =>
     tools,
   }) as RenderedTimelineItem;
 
-/* byRequest/byToolCall caused requestId in sessionId */
 const caused = (
   requestId: string,
   sessionId: string,
@@ -78,7 +77,6 @@ const link = (sessionId: string): LinkedSessionView => ({
   causeRequestDocId: "doc-req-1",
 });
 
-/* `started` lists only sessions this one began */
 const view = (
   calls: CausedCallView[],
   started: string[] = calls.map((c) => c.caused.sessionId),
@@ -94,7 +92,6 @@ const view = (
 
 const nodeListing = (sessions: unknown[]) => [node({ nodeDid: AGENT, sessions })];
 
-/* An app selecting `sessionId` on the agent's node, listing `sessions`. */
 const apps = new WeakMap<RenderedTimelineItem[], Map<string, DesktopApp>>();
 function appFor(
   api: object,
@@ -142,7 +139,6 @@ function useBoth() {
   return useWorkers(useSessionProvenance());
 }
 
-/* the workers of the session `app` selects */
 function renderWorkers(app: DesktopApp) {
   return renderHook(() => useBoth(), { wrapper: withApp(app) });
 }
@@ -156,7 +152,6 @@ describe("agents of a session", () => {
         requesterDid: null,
         title: "Explorer",
       },
-      /* the same label under another requester is another session */
       { nodeDid: AGENT, sessionId: "session-a", requesterDid: PERSON, title: "Other" },
     ] as never);
     expect(all.map((s) => s.sessionId)).toEqual(["session-a"]);

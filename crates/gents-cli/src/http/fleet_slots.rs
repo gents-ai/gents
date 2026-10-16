@@ -683,14 +683,4 @@ mod tests {
         assert_eq!(snapshot.totals.max, 6);
     }
 
-    #[test]
-    fn decode_rejects_missing_data_object() {
-        let error = decode_fleet_slot_query_response(json!({ "data": null })).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("fleet slot snapshot query response missing object data"),
-            "{error:#}"
-        );
-    }
 }

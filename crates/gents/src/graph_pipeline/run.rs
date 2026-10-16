@@ -688,7 +688,6 @@ async fn load_graph_run_view_with(
             return Err(GraphRunUnobservable::InvalidFailureEvidence.into());
         }
     }
-    // The first committed failure is durable even while siblings drain.
     let failure_evidence = error.clone().or(failure_evidence);
 
     Ok(GraphRunView {

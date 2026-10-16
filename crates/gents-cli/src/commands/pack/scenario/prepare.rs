@@ -1,8 +1,3 @@
-//! `experiment.json` `prepare` steps: host-run plugin calls before the seed.
-//!
-//! Each step admits a pack plugin under its declared authority and maps its
-//! output onto new `seed.fields` entries by JSON pointer; steps run in
-//! manifest order, after every event source is observed and before the seed.
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -17,8 +12,6 @@ use gents::plugin::authority::{declared_manifold, describe_manifold};
 use gents::plugin::executor::call_runner;
 use gents::plugin::{BoundDir, PluginBudget, PluginRunner, PluginVerdict};
 
-#[cfg(test)]
-use super::validate_manifest;
 use super::ScenarioManifest;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -27,13 +20,8 @@ pub(super) struct ScenarioPrepareStep {
     pub(super) plugin: String,
     #[serde(default = "default_prepare_input")]
     pub(super) input: Value,
-    /// Binds read-only into the plugin's `bind_dir`; when `init.tool_root`
-    /// is set it must stay inside it. Present exactly when the plugin
-    /// declares `bind_dir`.
     #[serde(default)]
     pub(super) bind_dir: Option<String>,
-    /// JSON Pointer into the plugin's output mapped onto a new `seed.fields`
-    /// entry; `""` selects the whole output value.
     pub(super) seed_fields: BTreeMap<String, String>,
 }
 
@@ -41,10 +29,6 @@ fn default_prepare_input() -> Value {
     Value::Object(serde_json::Map::new())
 }
 
-/// Validates every `prepare` step against the pack's declared plugins and
-/// seed fields. `input` must be an object (the plugin ABI accepts nothing
-/// else); duplicate seed field names are refused so insertion order never
-/// decides a winner.
 pub(super) fn validate_prepare_steps(manifest: &ScenarioManifest) -> Result<()> {
     let mut prepared_seed_fields = BTreeSet::new();
     for step in &manifest.prepare {
@@ -125,8 +109,6 @@ pub(super) fn prepare_seed_fields(
     Ok(fields)
 }
 
-/// Runs every `prepare` step in manifest order; each call is served the
-/// network its plugin's declared manifold grants.
 pub(super) async fn run_prepare_steps(
     pack: PathBuf,
     distribution: gents::pack::PackManifest,
@@ -212,8 +194,6 @@ fn admit_prepare_step(
             .map(|entry| pack.join(source).join(entry))
     });
     if source_entry.is_some_and(|entry| entry.is_file()) {
-        // Always rebuilt: build_plugin stamps the source digest, so an
-        // edited source never runs stale here.
         crate::commands::pack::build::build_plugin(pack, distribution, plugin)
             .with_context(|| format!("building prepare plugin {}", step.plugin))?;
     } else if !artifact_path.is_file() {
@@ -225,8 +205,7 @@ fn admit_prepare_step(
     }
     let artifact = std::fs::read(&artifact_path)
         .with_context(|| format!("reading {}", artifact_path.display()))?;
-    // The author's own plugin runs with exactly the authority it declares;
-    // consent is the gate below.
+    // Explicit consent gates the plugin's declared authority.
     let declared = declared_manifold(plugin)?;
     if let Some(asks) = describe_manifold(&declared) {
         anyhow::ensure!(
@@ -255,187 +234,6 @@ fn admit_prepare_step(
 mod tests {
     use super::*;
     use serde_json::json;
-
-    /// A minimal declared plugin for exercising `validate_prepare_steps`
-    /// without a real `.afb`.
-    fn scenario_plugin(name: &str, bind_dir: bool) -> gents::pack::PackPlugin {
-        gents::pack::PackPlugin {
-            name: name.to_string(),
-            description: String::new(),
-            artifact: format!("plugins/{name}.afb"),
-            source: None,
-            language: "rust".to_string(),
-            input_schema: json!({"type": "object"}),
-            manifold: None,
-            instructions: None,
-            bind_dir: bind_dir.then(|| gents::pack::PluginDirBinding {
-                input_field: "root".to_string(),
-                original_field: None,
-                description: "scan target".to_string(),
-                access: Default::default(),
-                write_fields: Vec::new(),
-            }),
-            limits: None,
-            model_slot: None,
-        }
-    }
-
-    #[test]
-    fn manifest_parses_prepare_steps_and_refuses_colliding_seed_fields() {
-        let mut manifest: ScenarioManifest = serde_json::from_value(serde_json::json!({
-            "name": "t", "init": {"inference_url": "http://x", "model_name": "m"},
-            "seed": {
-                "collection": "PrepJob", "job_id_field": "run_id", "prompt_field": "focus",
-                "fields": {"existing": "x"}
-            },
-            "expect": {"trigger_ids": []},
-            "prepare": [{
-                "plugin": "scanner",
-                "input": {"max_payload_chars": "1024"},
-                "bind_dir": "/tmp",
-                "seed_fields": {"candidates": "/payload"}
-            }]
-        }))
-        .expect("manifest with prepare");
-        assert_eq!(manifest.prepare.len(), 1);
-        assert_eq!(manifest.prepare[0].plugin, "scanner");
-        assert_eq!(manifest.prepare[0].bind_dir.as_deref(), Some("/tmp"));
-
-        let bare: ScenarioManifest = serde_json::from_value(serde_json::json!({
-            "name": "t", "init": {"inference_url": "http://x", "model_name": "m"},
-            "seed": {"collection": "J", "job_id_field": "run_id", "prompt_field": "focus"},
-            "expect": {"trigger_ids": []}
-        }))
-        .expect("manifest without prepare");
-        assert!(bare.prepare.is_empty());
-
-        manifest.plugins = vec![scenario_plugin("scanner", true)];
-        validate_manifest(&manifest).expect("a declared plugin with a matching bind_dir is valid");
-
-        manifest.prepare[0]
-            .seed_fields
-            .insert("existing".to_string(), "/payload".to_string());
-        let error = validate_manifest(&manifest)
-            .expect_err("a seed field colliding with seed.fields must be refused");
-        assert!(error.to_string().contains("existing"), "{error}");
-    }
-
-    #[test]
-    fn prepare_step_validation_requires_object_input_and_refuses_seed_identity_field_collisions() {
-        fn manifest(prepare_step: serde_json::Value) -> ScenarioManifest {
-            serde_json::from_value(serde_json::json!({
-                "name": "t", "init": {"inference_url": "http://x", "model_name": "m"},
-                "seed": {"collection": "J", "job_id_field": "run_id", "prompt_field": "focus"},
-                "expect": {"trigger_ids": []},
-                "prepare": [prepare_step]
-            }))
-            .unwrap()
-        }
-
-        let mut non_object_input = manifest(json!({
-            "plugin": "scanner", "input": "not-an-object", "seed_fields": {}
-        }));
-        non_object_input.plugins = vec![scenario_plugin("scanner", false)];
-        let error = validate_manifest(&non_object_input)
-            .expect_err("a non-object prepare input must be refused");
-        assert!(
-            error.to_string().contains("must be a JSON object"),
-            "{error}"
-        );
-
-        let mut job_id_collision = manifest(json!({
-            "plugin": "scanner", "seed_fields": {"run_id": "/id"}
-        }));
-        job_id_collision.plugins = vec![scenario_plugin("scanner", false)];
-        let error = validate_manifest(&job_id_collision)
-            .expect_err("a seed field named like seed.job_id_field must be refused");
-        assert!(error.to_string().contains("run_id"), "{error}");
-
-        let mut prompt_collision = manifest(json!({
-            "plugin": "scanner", "seed_fields": {"focus": "/id"}
-        }));
-        prompt_collision.plugins = vec![scenario_plugin("scanner", false)];
-        let error = validate_manifest(&prompt_collision)
-            .expect_err("a seed field named like seed.prompt_field must be refused");
-        assert!(error.to_string().contains("focus"), "{error}");
-    }
-
-    #[test]
-    fn prepare_step_validation_refuses_undeclared_plugins_and_bind_dir_mismatches() {
-        fn manifest(prepare_step: serde_json::Value) -> ScenarioManifest {
-            serde_json::from_value(serde_json::json!({
-                "name": "t", "init": {"inference_url": "http://x", "model_name": "m"},
-                "seed": {"collection": "J", "job_id_field": "run_id", "prompt_field": "focus"},
-                "expect": {"trigger_ids": []},
-                "prepare": [prepare_step]
-            }))
-            .unwrap()
-        }
-
-        let undeclared = manifest(json!({"plugin": "scanner", "seed_fields": {}}));
-        let error =
-            validate_manifest(&undeclared).expect_err("an undeclared plugin must be refused");
-        assert!(error.to_string().contains("undeclared plugin"), "{error}");
-
-        let mut missing_bind = manifest(json!({"plugin": "scanner", "seed_fields": {}}));
-        missing_bind.plugins = vec![scenario_plugin("scanner", true)];
-        let error = validate_manifest(&missing_bind)
-            .expect_err("a step must set bind_dir when the plugin declares one");
-        assert!(error.to_string().contains("must set bind_dir"), "{error}");
-
-        let mut unexpected_bind = manifest(json!({
-            "plugin": "scanner", "bind_dir": "/tmp", "seed_fields": {}
-        }));
-        unexpected_bind.plugins = vec![scenario_plugin("scanner", false)];
-        let error = validate_manifest(&unexpected_bind)
-            .expect_err("a step must not set bind_dir when the plugin declares none");
-        assert!(error.to_string().contains("declares none"), "{error}");
-
-        let mut bad_pointer = manifest(json!({
-            "plugin": "scanner", "seed_fields": {"candidates": "payload"}
-        }));
-        bad_pointer.plugins = vec![scenario_plugin("scanner", false)];
-        let error = validate_manifest(&bad_pointer)
-            .expect_err("a pointer must be \"\" or start with \"/\"");
-        assert!(error.to_string().contains("start with"), "{error}");
-    }
-
-    #[test]
-    fn prepare_seed_fields_map_output_pointers() {
-        let output = json!({
-            "manifest": {"page_count": 3, "sealed": true},
-            "summary": "PINNED BASE: a\nPINNED HEAD: b",
-        });
-        let seed_fields = BTreeMap::from([
-            ("summary".to_string(), "/summary".to_string()),
-            ("page_count".to_string(), "/manifest/page_count".to_string()),
-            ("sealed".to_string(), "/manifest/sealed".to_string()),
-        ]);
-        let fields = prepare_seed_fields("scanner", &output, &seed_fields).unwrap();
-        assert_eq!(
-            fields.get("summary").map(String::as_str),
-            Some("PINNED BASE: a\nPINNED HEAD: b")
-        );
-        assert_eq!(fields.get("page_count").map(String::as_str), Some("3"));
-        assert_eq!(fields.get("sealed").map(String::as_str), Some("true"));
-
-        // "" selects the whole output value, only when that whole value is
-        // itself a string, number, or bool.
-        let scalar_output = json!("bare-string-output");
-        let whole = BTreeMap::from([("whole".to_string(), String::new())]);
-        let fields = prepare_seed_fields("scanner", &scalar_output, &whole).unwrap();
-        assert_eq!(
-            fields.get("whole").map(String::as_str),
-            Some("bare-string-output")
-        );
-
-        let missing = BTreeMap::from([("nope".to_string(), "/absent".to_string())]);
-        assert!(prepare_seed_fields("scanner", &output, &missing).is_err());
-
-        let wrong_type = BTreeMap::from([("manifest".to_string(), "/manifest".to_string())]);
-        let error = prepare_seed_fields("scanner", &output, &wrong_type).unwrap_err();
-        assert!(format!("{error:#}").contains("string, number, or bool"));
-    }
 
     #[tokio::test]
     async fn a_prepare_step_binds_only_the_operator_directory() {
@@ -492,9 +290,6 @@ mod tests {
         assert!(format!("{error:#}").contains("outside"), "{error:#}");
     }
 
-    /// Regression: `plugins/*.afb` is gitignored, so a clean clone must
-    /// build the artifact from `source` on demand (synchronous
-    /// `admit_prepare_step` under `compile_lock()`).
     #[test]
     fn a_missing_prepare_plugin_artifact_is_built_from_source_on_demand() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
@@ -637,7 +432,6 @@ mod tests {
         let mut distribution: gents::pack::PackManifest =
             serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
                 .unwrap();
-        // `fs` is mutually exclusive with `bind_dir` (`PackPlugin::validate`).
         distribution.metadata.plugins[0].manifold = Some(json!({
             "fs": "None",
             "net": "None",

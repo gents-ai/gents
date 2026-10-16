@@ -1,10 +1,3 @@
-//! Provider-reported usage of one provider account, normalized across the
-//! passive channel (response headers) and the on-demand reads. Values are what
-//! the provider reported, never derived from local token counts: a missing or
-//! malformed value drops its window, so "unknown" stays unknown. Window labels
-//! are identities: every source names the same window alike, so
-//! [`UsageReport::merge`] joins a header window and an endpoint window.
-
 use chrono::{DateTime, Datelike, Duration, NaiveTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -142,10 +135,6 @@ pub fn visible_windows(report: &UsageReport, now: DateTime<Utc>) -> Vec<(&UsageW
         .collect()
 }
 
-/// Claude subscription `anthropic-ratelimit-unified-<window>-{utilization,reset}`
-/// for `5h`, `7d`, `7d_<model>` (overage headers are not usage windows);
-/// Codex `x-codex-{primary,secondary}-*` and `x-codex-credits-*`;
-/// OpenAI `x-ratelimit-{limit,remaining,reset}-{requests,tokens}`.
 pub fn usage_from_headers<'a>(
     headers: impl IntoIterator<Item = (&'a str, &'a str)>,
     source: UsageSource,
@@ -239,7 +228,6 @@ pub fn usage_from_headers<'a>(
     report
 }
 
-/// ChatGPT `GET /wham/usage` (codex-rs/backend-client).
 pub fn codex_usage(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
     let rate_limit = body.get("rate_limit").filter(|value| value.is_object())?;
     let mut report = UsageReport::default();
@@ -285,9 +273,6 @@ pub fn codex_usage(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
     Some(report)
 }
 
-/// Grok `GET {cli-chat-proxy}/billing?format=credits`
-/// (xai-org/grok-build `extensions/billing.rs`). Proto3 JSON omits a zero
-/// percent, so a period without `creditUsagePercent` is 0 used.
 pub fn grok_billing(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
     let config = body
         .get("config")
@@ -324,7 +309,6 @@ pub fn grok_billing(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
     })
 }
 
-/// OpenRouter `GET /api/v1/key`; an uncapped key gives an empty report.
 pub fn openrouter_key(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
     let data = body.get("data").filter(|value| value.is_object())?;
     let mut report = UsageReport::default();
@@ -352,8 +336,6 @@ pub fn openrouter_key(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
     Some(report)
 }
 
-/// Claude `GET /api/oauth/usage`; utilization read as a percent (verified
-/// live on 2026-10-02: a 7d utilization of 72).
 pub fn claude_oauth_usage(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
     let mut report = UsageReport::default();
     for (key, window) in body.as_object()? {

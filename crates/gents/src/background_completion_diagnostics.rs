@@ -62,10 +62,6 @@ struct NotificationRow {
     request_doc_id: Option<String>,
 }
 
-/// Load the durable completion-delivery state shown by operator status
-/// surfaces. Each epoch is one canonical coalescing wake plus its bounded
-/// retry descendants; notifications are considered acknowledged only after
-/// one attempt in that epoch completes successfully.
 pub async fn load_background_completion_diagnostics(
     access: &ConfigAccess,
     node_did: &str,
@@ -792,9 +788,6 @@ mod tests {
         node.add_schema(gents_protocol::schemas::AGENT_MESSAGE)
             .await?;
         let access = ConfigAccess::local(node.clone());
-        // An escaped owner exercises the distinction between raw lookup scope
-        // and GraphQL spelling. Diagnostics read authoritative documents
-        // directly and maintain no session cache.
         let owner = "did:test:diagnostics\"owner";
         let mut failed = serde_json::json!({
             "node_did":owner, "requester_did":"requester-a", "request_id":"wake", "session_id":"shared-session",

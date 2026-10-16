@@ -91,7 +91,6 @@ pub(crate) async fn grok_auth_probe(args: GrokAuthProbeArgs) -> Result<()> {
     Ok(())
 }
 
-/// Probe one account and render its block (after the label).
 async fn probe_account(
     credential: gents::oauth_credential::OAuthCredential,
     node_did: &str,
@@ -101,7 +100,6 @@ async fn probe_account(
     use std::fmt::Write;
     let mut out = String::new();
     let backend_url = gents::xai_grok_oauth::default_backend_endpoint();
-    // `/models-v2` is the catalog path the official Grok CLI queries.
     let models_url = format!("{}/models-v2", backend_url.trim_end_matches('/'));
     let mut request = reqwest::Client::new()
         .get(&models_url)

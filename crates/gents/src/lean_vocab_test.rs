@@ -3,8 +3,6 @@ mod support;
 
 pub(crate) use support::*;
 
-/// The native queue of one session: claimed request, pending selection, rest
-/// of the user queue, terminal requests. Every session request is exactly one.
 pub(crate) async fn native_queue_image(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     node_did: &str,

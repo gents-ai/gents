@@ -102,8 +102,6 @@ pub(crate) struct CanonicalToolCallRead {
     pub(crate) lifecycle_state: ToolCallState,
     pub(crate) arguments: String,
     pub(crate) result: Option<Message>,
-    /// Direct invocation replies populate this only in transaction reads;
-    /// plugin effects expose their canonical source to both read paths.
     pub(crate) raw_result: Option<String>,
 }
 

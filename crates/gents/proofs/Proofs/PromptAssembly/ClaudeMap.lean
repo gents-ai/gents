@@ -36,7 +36,6 @@ theorem supported_effort_preserved :
 open ToolExecution (ToolCallId)
 open Transcript (MessageKind)
 
-/-- One Claude content block. `name` is the on-the-wire tool name. -/
 inductive Block where
   | text
   | toolUse (id : ToolCallId) (name : String)
@@ -207,8 +206,6 @@ theorem mappedKind_text : mappedKind ∅ = .ordinary := by
 theorem mappedKind_calls (id : ToolCallId) :
     mappedKind {id} = .assistantToolCalls {id} := by
   simp [mappedKind]
-
-/-! ## System assembly (single-wire Messages HTTP) -/
 
 inductive Msg where
   | system (text : String)
@@ -434,7 +431,6 @@ private def foldContentTrace (surface : Surface) (events : List StreamEvent) :
     let next ← step surface state event
     return (next, observations ++ [contentStep next])) (StreamState.init, [])
 
-/-- Only fully decoded stream events enter this prefix. -/
 def runDecodedPrefixTrace (surface : Surface) (events : List StreamEvent) :
     Except MapError (List ContentStep × List StreamBlock) := do
   let (state, observations) ← foldContentTrace surface events
@@ -1203,7 +1199,6 @@ theorem replayed_turns_admissible
       (ReplayFrontier.maxAdmissibleSuffix ReplayFrontier.turnOk turns) = true :=
   ReplayFrontier.maxAdmissibleSuffix_admissible _ turns
 
-/-- Claude's strict replay codec over already selected rows. -/
 def restoreContiguousReplay (checkpoint : ReplayCheckpoint) :
     Except MapError (List (List ReplayBlock)) := do
   let _ ← prepareReplayCheckpoint []
@@ -1237,7 +1232,6 @@ theorem replay_assistant_media_fails_closed :
       .error .unsupportedReplayBlock := by
   rfl
 
-/-- `Except` ships no `DecidableEq`. -/
 local instance instDecidableEqExcept {ε α : Type} [DecidableEq ε] [DecidableEq α] :
     DecidableEq (Except ε α)
   | .error a, .error b =>

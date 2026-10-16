@@ -35,8 +35,6 @@ pub(crate) fn goal_continuation_identity(
     })
 }
 
-/// Original issuance facts are signed typed input; goal/parent identities stay
-/// on the signed request lineage (trigger edge and parent linkage).
 pub(crate) fn prepare_goal_continuation(
     parent: &AgentRequest,
     agent_id: String,

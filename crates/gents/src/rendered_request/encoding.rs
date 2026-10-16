@@ -128,8 +128,7 @@ pub(crate) enum FieldDelta {
     },
 }
 
-/// One ordered block reference inside a manifest record; integrity rides on
-/// `field_commit_cid`, never the writer-computed `content_key`.
+/// Integrity comes from the field commit witness, never the writer-computed key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ManifestEntry {
     pub(crate) doc_id: String,
@@ -296,13 +295,11 @@ fn encode_envelope(payload: Payload) -> Result<String> {
     })?)
 }
 
-/// One content-defined block of a capture body, as the write path produces it.
 pub(crate) struct ChunkedBlock {
     pub(crate) content_key: String,
     pub(crate) bytes: Vec<u8>,
 }
 
-/// Provider message lists and the assembly trace's per-turn lists.
 const APPEND_GROWING_FIELDS: [&str; 5] = [
     "assistant_message_ids",
     "effective_messages",
@@ -311,9 +308,6 @@ const APPEND_GROWING_FIELDS: [&str; 5] = [
     "threaded_tool_results",
 ];
 
-/// Canonical JSON with append-growing top-level fields moved last, confining
-/// each new capture's fresh bytes to the tail so stable fields stay in
-/// unchanged leading blocks.
 pub(crate) fn capture_block_layout(value: &Value) -> Result<String> {
     let Value::Object(map) = super::canonical_json(value) else {
         return super::canonical_json_string(value);
@@ -334,9 +328,6 @@ pub(crate) fn capture_block_layout(value: &Value) -> Result<String> {
     Ok(layout)
 }
 
-/// Split encoded capture bytes into content-defined blocks; every cut lands on
-/// a UTF-8 character boundary, boundaries resynchronize after a mid-body edit,
-/// and identical bytes chunk identically on every platform.
 pub(crate) fn chunk_capture_body(encoded: &str) -> Vec<ChunkedBlock> {
     let bytes = encoded.as_bytes();
     let mut blocks = Vec::new();
@@ -353,9 +344,6 @@ pub(crate) fn chunk_capture_body(encoded: &str) -> Vec<ChunkedBlock> {
     blocks
 }
 
-/// Repeated JSON strings must start at the same chunk boundary to share their
-/// leading and trailing bytes across the wire body and native provenance.
-/// The manifest still restores each original byte stream by concatenation.
 pub(crate) fn chunk_capture_payloads(payloads: [&str; 2]) -> [Vec<ChunkedBlock>; 2] {
     let ranges = payloads.map(long_json_strings);
     let mut occurrences = std::collections::HashMap::<&str, usize>::new();
@@ -377,8 +365,6 @@ pub(crate) fn chunk_capture_payloads(payloads: [&str; 2]) -> [Vec<ChunkedBlock>;
             start = value_end;
         }
         blocks.extend(chunk_capture_body(&payload[start..]));
-        // Aligning strings can introduce short framing blocks. Preserve the
-        // existing reader's reference limit for otherwise admissible bodies.
         if blocks.len() > MAX_MANIFEST_BLOCKS {
             chunk_capture_body(payload)
         } else {
@@ -409,14 +395,6 @@ fn long_json_strings(encoded: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
-/// Length of the first chunk cut from `chunk`: a content-defined boundary
-/// after [`CHUNK_MIN_SIZE`] bytes, a forced cut at [`CHUNK_MAX_SIZE`], or the
-/// end of the body. A final block may be shorter than the minimum.
-///
-/// Cuts are advanced to the next UTF-8 character boundary, so a block carved
-/// out of a valid UTF-8 body is itself valid UTF-8 and stores byte for byte in
-/// the block document's String payload; a cut may therefore exceed its nominal
-/// limit by at most three bytes.
 fn next_chunk_end(chunk: &[u8]) -> usize {
     let limit = CHUNK_MAX_SIZE.min(chunk.len());
     if limit <= CHUNK_MIN_SIZE {
@@ -463,16 +441,10 @@ pub(crate) fn block_content_key(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// Reader ceiling on one manifest's block count, mirroring the Lean owner's
-/// shared resolution fuel (`RenderedCapture.resolveBytes`); the writer refuses
-/// to produce more.
 pub(crate) const MAX_MANIFEST_BLOCKS: usize = 10_000;
 
 pub(crate) const MANIFEST_RESOLUTION_FUEL: usize = MAX_MANIFEST_BLOCKS + 2;
 
-/// Encode the manifest record for already-stored blocks; the entries' document
-/// ids and field-commit witnesses come from the block writes that precede this
-/// call.
 pub(crate) fn encode_manifest(blocks: &[ManifestEntry]) -> Result<EncodedJson> {
     anyhow::ensure!(
         blocks.len() <= MAX_MANIFEST_BLOCKS,
@@ -486,12 +458,6 @@ pub(crate) fn encode_manifest(blocks: &[ManifestEntry]) -> Result<EncodedJson> {
     })
 }
 
-/// Resolve a manifest record through a block source. `fetch_block` supplies
-/// the block's bytes and *actual* field commit; resolution fails closed on a
-/// missing source, changed commit, length mismatch, or exhausted fuel. `fuel`
-/// mirrors the Lean owner's one shared budget (`RenderedCapture.resolveBytes`):
-/// the manifest document, every entry, and the terminal list frame each consume
-/// one unit.
 pub(crate) fn resolve_manifest_with_limit<F>(
     fuel: usize,
     stored: &str,
@@ -1082,7 +1048,6 @@ mod tests {
                         ))
                     })
                 }
-                // The row's Lean store, rebuilt around the real v3 codec.
                 "manifest" => {
                     let chunks = if case.manifest_blocks.is_empty() {
                         Vec::new()
@@ -1134,7 +1099,6 @@ mod tests {
         }
     }
 
-    /// Fixed-seed xorshift64 stream mapped onto `a..z`.
     fn deterministic_capture_text(len: usize) -> String {
         let mut state = 0x243F_6A88_85A3_08D3_u64;
         let mut out = String::with_capacity(len);

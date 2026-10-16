@@ -1,7 +1,3 @@
-//! Resolves the principal's canonical view maps into the derived runtime
-//! projections consumed by the existing trigger engine. `Task.agent_id` is the
-//! only model selection path; no graph model override exists.
-
 use super::DocumentRuntimeView;
 use crate::runtime_snapshot::{
     ConcurrencyMode, EventTriggerFireMode, ResolvedAutomation, ResolvedEventTrigger,
@@ -9,8 +5,6 @@ use crate::runtime_snapshot::{
 };
 use std::collections::{HashMap, HashSet};
 
-/// Resolves automation documents into the runtime projection
-/// installed via `ResolvedRuntimeSnapshot::with_automation`.
 pub(super) fn resolve_automation(
     view: &DocumentRuntimeView,
     unavailable_agents: &HashMap<String, UnavailableAgent>,
@@ -80,7 +74,6 @@ pub(super) fn resolve_automation(
             continue;
         };
 
-        // Canonical concurrency vocabulary; omitted/null is parallel.
         let concurrency = trigger.concurrency.unwrap_or_default();
 
         match &trigger.source {
@@ -265,7 +258,7 @@ fn resolve_event_trigger(
         .filter(|value| !value.is_empty())
         .unwrap_or("created")
         .to_string();
-    // Replicated documents must pass the same matching admission as authored ones.
+    // Replicated source documents must pass the same validation as authored ones.
     if let Err(error) = source.validate() {
         tracing::warn!(trigger_id = %trigger_id, %error,
             "event trigger quarantined: invalid event source configuration");
@@ -323,7 +316,6 @@ fn resolve_event_trigger(
     );
 }
 
-/// Projects `EventGroup` configuration onto the runtime per-group fields.
 fn group_projection(
     source: &crate::document_config::EventSource,
 ) -> (Option<usize>, Option<String>, Option<u64>, usize) {

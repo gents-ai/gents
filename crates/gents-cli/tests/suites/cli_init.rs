@@ -1055,7 +1055,6 @@ async fn serve_service_mode_writes_the_startup_diagnostic_to_stderr() -> Result<
     Ok(())
 }
 
-/// `--tool-root` must admit the live `Tools.host.root`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn serve_admits_a_narrower_tool_root_after_the_live_root_moved() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -1171,7 +1170,6 @@ async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Re
     let init = run_init_json(&home_dir, &init_args)?;
     let node_did = node_did_from_init(&init)?;
 
-    // Author the explicit policy, then re-run init on the configured home.
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;

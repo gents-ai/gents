@@ -1,7 +1,3 @@
-/* The folders plugins may read or write when an agent or a graph names a
-   path (for example "read ~/Documents/x.pdf"). The session's working folder
-   is always readable; a path elsewhere is asked about, or refused in a
-   graph, unless its folder is listed here. */
 import { shortPath } from "@/lib/paths";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { useCallback, useEffect, useState } from "react";
@@ -24,7 +20,6 @@ const ACCESS_LABEL: Record<AllowedFolderAccess, string> = {
 
 export function AllowedFoldersPanel() {
   const { actions } = useApp();
-  /* the desktop's own approvals: paths on this computer */
   const home = useHomeFolder();
   const [folders, setFolders] = useState<AllowedFolders | null>(null);
   const [typed, setTyped] = useState("");

@@ -1,4 +1,3 @@
-//! Request-owned compiler output, separate from the sealed source capability.
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

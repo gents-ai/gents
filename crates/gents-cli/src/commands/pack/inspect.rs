@@ -3,10 +3,6 @@ use serde_json::json;
 
 use crate::cli::{PackDiffArgs, PackShowArgs, PackVerifyArgs};
 
-/// `gents pack show`: the manifest, the pack digest and every file with its
-/// size and sha256, for any pack `install` accepts; with `--config`, instead
-/// prints `{config, scenario}` as an install would load them, at their
-/// declared `${VAR:-default}` defaults (the environment is never read).
 pub(super) async fn show(args: PackShowArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let pack = super::resolve_pack_source(&args.package, args.registry.as_deref(), &home).await?;
@@ -48,9 +44,6 @@ pub(super) async fn show(args: PackShowArgs) -> Result<()> {
     }))
 }
 
-/// Loads the pack's canonical configuration like an install would (for a
-/// placeholder owner) and its `experiment.json` interpolated at declared
-/// defaults; the environment is never read (a missing default is refused).
 fn show_config(pack: &super::PackSource) -> Result<()> {
     let preview = gents::pack::authoring::preview_config(pack.manifest(), &|path| {
         pack.asset(path).map(Vec::from)
@@ -58,7 +51,6 @@ fn show_config(pack: &super::PackSource) -> Result<()> {
     crate::print_json(&preview)
 }
 
-/// `gents pack verify`: checks a `.pack` file or a store pack, streaming.
 pub(super) fn verify(args: PackVerifyArgs) -> Result<()> {
     let header = if args.target.starts_with("sha256:") {
         let home = crate::home_state::resolve_home_dir(args.home.as_deref());
@@ -70,10 +62,8 @@ pub(super) fn verify(args: PackVerifyArgs) -> Result<()> {
     crate::print_json(&json!({ "verified": true, "pack": header }))
 }
 
-/// The owner a compared pack's documents are bound to. Never written.
 const COMPARED_OWNER: &str = "did:key:zPackDiffPlaceholderOwner";
 
-/// `gents pack diff`: files and config documents differing between two packs.
 pub(super) async fn diff(args: PackDiffArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let a = super::resolve_pack_source(&args.a, args.registry.as_deref(), &home).await?;

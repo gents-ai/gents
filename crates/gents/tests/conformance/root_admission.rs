@@ -1,5 +1,3 @@
-//! Canonical descendant-root admission conformance against
-//! `proofs/Proofs/PeerRegistryDiscovery/RootAdmission.lean`.
 
 use std::collections::BTreeSet;
 

@@ -1,5 +1,3 @@
-//! Test-only adapter from a real accepted provider turn to the existing hook
-//! (publication-owner reuse; never constructs an AcceptedToolCall).
 use super::*;
 
 pub(super) async fn bind_accepted_request(

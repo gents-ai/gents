@@ -52,7 +52,6 @@ fn started_marker(dir: &Path, hook_id: &str) -> PathBuf {
     dir.join(format!("started-{hook_id}"))
 }
 
-/// A launch failure is an absolute path that does not exist, so it cannot log.
 fn real_command(dir: &Path, log: &Path, hook_id: &str, result: &LeanCommandResult) -> Vec<String> {
     let record = format!(
         "printf 'hook:%s\\n' {hook_id} >> {log}",

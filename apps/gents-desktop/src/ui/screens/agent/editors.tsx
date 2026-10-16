@@ -40,7 +40,6 @@ type Common = {
   disabled?: boolean;
 };
 
-/** What DraftActions reads of a draft. */
 type DraftLike = {
   dirty: boolean;
   saving: boolean;
@@ -50,7 +49,6 @@ type DraftLike = {
   reset: () => void;
 };
 
-/** A draft's Save and Cancel, and its error. */
 export function DraftActions({
   draft,
   fields,
@@ -278,8 +276,6 @@ export function ChoiceRow({
   );
 }
 
-/* a directory: typed, or chosen with the OS picker where
-   the app has one (the desktop shell). The button appears only then. */
 export function PathRow({
   id,
   label,
@@ -336,10 +332,6 @@ export function PathRow({
   );
 }
 
-/* a field that points at another document. Three affordances, always: pick
-   one, create a new one without leaving the page, open the chosen one.
-   `onCreate` makes the document (a dialog or a direct save) and resolves
-   with its id, or null if the user backed out. */
 export function RefRow({
   id,
   label,

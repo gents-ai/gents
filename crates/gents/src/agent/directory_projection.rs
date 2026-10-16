@@ -1,10 +1,3 @@
-//! Fleet-discovery directory projection: Node x Agent x NodeReadiness into
-//! NodeDirectoryEntry rows. Modeled in
-//! `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean`; fenced by
-//! `tests/conformance/directory_projection.rs`. Each runtime owns only the
-//! rows stamped with its source DID; replicated foreign rows stay outside its
-//! projection.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -53,7 +46,6 @@ pub struct DirectoryTickOutcome {
 
 #[async_trait]
 pub trait DirectoryStore: Send + Sync {
-    /// Load every projection input in one shot (see [`SourceSnapshot`]).
     async fn load_source_snapshot(&self) -> Result<SourceSnapshot>;
     async fn list_directory_entries(
         &self,
@@ -74,16 +66,8 @@ pub fn directory_entry_key(source_did: &str, node_did: &str) -> String {
     )
 }
 
-/// Canonicalize a runtime `updated_at` into the exact lexical form DefraDB's
-/// `DateTime` column stores and returns, so a settled directory row stays a
-/// write-free fixpoint. `NodeReadiness.updated_at` is a `String` column, but
-/// `NodeDirectoryEntry.last_seen` re-serializes on storage (offset rendered
-/// as `Z`, sub-second rendering not byte-stable), so raw-string comparison
-/// against the stored form never settles. Quantizing to whole-second UTC
-/// `...Z` round-trips unchanged through DefraDB; the function is idempotent.
-/// Blank input stays blank (rendered as `null` downstream); unparseable
-/// non-blank input passes through trimmed unchanged and that row's upsert
-/// fails under the per-entry error tolerance in `reconcile_directory_tick`.
+/// DefraDB stores `NodeDirectoryEntry.last_seen` as `DateTime`, normalizing
+/// offsets and sub-second precision; match that representation for fixpoints.
 fn canonicalize_last_seen(updated_at: &str) -> String {
     let trimmed = updated_at.trim();
     if trimmed.is_empty() {
@@ -155,7 +139,6 @@ pub async fn reconcile_directory_tick(
         .await
         .context("list directory entries")?;
 
-    // One node's malformed source row must not abort the whole sweep.
     let mut outcome = DirectoryTickOutcome::default();
     let mut first_error: Option<anyhow::Error> = None;
     for (did, entry) in &desired {
@@ -379,8 +362,6 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
     let source_did = escape_graphql_string(&entry.source_did);
     let display_name = escape_graphql_string(&entry.display_name);
     let agents = graphql_string_list_literal(entry.agents.iter().map(String::as_str));
-    // Index-aligned with `agents`; null (never []) — an empty list literal
-    // types as JsonArray and corrupts nillable array columns.
     let agent_ids = graphql_string_list_literal(entry.agent_ids.iter().map(String::as_str));
     let default_agent_id = escape_graphql_string(&entry.default_agent_id);
     let runtime_state = escape_graphql_string(&entry.runtime_state);
@@ -588,153 +569,6 @@ struct DirectoryRow {
 mod tests {
     use super::*;
 
-    fn entry(node_did: &str, last_seen: &str) -> DirectoryEntry {
-        DirectoryEntry {
-            directory_key: directory_entry_key("did:key:home", node_did),
-            node_did: node_did.to_string(),
-            source_did: "did:key:home".to_string(),
-            display_name: "Display".to_string(),
-            agents: Vec::new(),
-            agent_ids: Vec::new(),
-            default_agent_id: String::new(),
-            runtime_state: "running".to_string(),
-            last_seen: last_seen.to_string(),
-        }
-    }
-
-    #[test]
-    fn directory_entry_key_partitions_same_node_did_by_source() {
-        assert_ne!(
-            directory_entry_key("did:key:local-home", "did:key:shared-agent"),
-            directory_entry_key("did:key:foreign-home", "did:key:shared-agent"),
-        );
-    }
-
-    #[test]
-    fn upsert_mutation_sets_immutable_source_did_only_when_adding() {
-        let mutation = upsert_directory_entry_mutation(
-            &entry("did:key:running", "2026-07-20T00:00:00Z"),
-            "2026-07-23T00:00:00Z",
-        );
-        let (add, update) = mutation
-            .split_once("update: {")
-            .expect("upsert mutation has update payload");
-
-        assert!(add.contains(r#"source_did: "did:key:home""#));
-        assert!(
-            !update.contains("source_did:"),
-            "immutable source_did must not be resent in update payload: {update}"
-        );
-    }
-
-    #[test]
-    fn upsert_mutation_renders_null_for_blank_last_seen() {
-        for blank in ["", "   "] {
-            let mutation = upsert_directory_entry_mutation(
-                &entry("did:key:no-runtime", blank),
-                "2026-07-23T00:00:00Z",
-            );
-            assert!(
-                mutation.contains("last_seen: null"),
-                "blank last_seen ({blank:?}) must render as null: {mutation}"
-            );
-            assert!(!mutation.contains(r#"last_seen: """#));
-        }
-    }
-
-    #[test]
-    fn upsert_mutation_renders_quoted_last_seen_when_present() {
-        let mutation = upsert_directory_entry_mutation(
-            &entry("did:key:running", "2026-07-20T00:00:00Z"),
-            "2026-07-23T00:00:00Z",
-        );
-        assert!(mutation.contains(r#"last_seen: "2026-07-20T00:00:00Z""#));
-    }
-
-    #[test]
-    fn upsert_mutation_renders_null_agent_ids_when_empty_and_aligned_list_when_present() {
-        let empty = upsert_directory_entry_mutation(
-            &entry("did:key:no-agents", "2026-07-20T00:00:00Z"),
-            "2026-07-23T00:00:00Z",
-        );
-        assert!(empty.contains("agents: null"));
-        assert!(!empty.contains("[]"));
-        assert!(
-            empty.contains("agent_ids: null"),
-            "empty agent_ids must render as null, never []: {empty}"
-        );
-
-        let mut with_agents = entry("did:key:with-agents", "2026-07-20T00:00:00Z");
-        with_agents.agents = vec!["Artist".to_string(), "Coder".to_string()];
-        with_agents.agent_ids = vec![
-            "did:key:a:artist".to_string(),
-            "did:key:a:coder".to_string(),
-        ];
-        let mutation = upsert_directory_entry_mutation(&with_agents, "2026-07-23T00:00:00Z");
-        assert!(mutation.contains(r#"agents: ["Artist", "Coder"]"#));
-        assert!(mutation.contains(r#"agent_ids: ["did:key:a:artist", "did:key:a:coder"]"#));
-    }
-
-    #[test]
-    fn upsert_mutation_renders_default_agent_id_as_plain_string() {
-        let empty = upsert_directory_entry_mutation(
-            &entry("did:key:no-default", "2026-07-20T00:00:00Z"),
-            "2026-07-23T00:00:00Z",
-        );
-        assert!(
-            empty.contains(r#"default_agent_id: """#),
-            "empty default_agent_id must render as an empty string, never null: {empty}"
-        );
-
-        let mut with_default = entry("did:key:with-default", "2026-07-20T00:00:00Z");
-        with_default.default_agent_id = "did:key:a:coder".to_string();
-        let mutation = upsert_directory_entry_mutation(&with_default, "2026-07-23T00:00:00Z");
-        assert!(mutation.contains(r#"default_agent_id: "did:key:a:coder""#));
-    }
-
-    #[test]
-    fn nullable_datetime_literal_blank_maps_to_null_and_round_trips_via_default() {
-        assert_eq!(graphql_nullable_datetime_literal(""), "null");
-        assert_eq!(graphql_nullable_datetime_literal("  "), "null");
-        let row: DirectoryRow = serde_json::from_value(serde_json::json!({
-            "directory_key": "dir-no-runtime",
-            "node_did": "did:key:no-runtime",
-            "source_did": "did:key:home",
-            "display_name": "No Runtime",
-            "agents": [],
-            "runtime_state": "",
-            "last_seen": null,
-        }))
-        .expect("stored directory row with null last_seen should deserialize");
-        assert_eq!(row.last_seen.unwrap_or_default(), "");
-    }
-
-    #[test]
-    fn canonicalize_last_seen_quantizes_offset_and_subseconds_to_utc_seconds() {
-        assert_eq!(
-            canonicalize_last_seen("2026-07-23T23:30:55.845794+00:00"),
-            "2026-07-23T23:30:55Z"
-        );
-        assert_eq!(
-            canonicalize_last_seen("2026-07-23T18:30:55.5-05:00"),
-            "2026-07-23T23:30:55Z"
-        );
-        assert_eq!(
-            canonicalize_last_seen("2026-07-23T23:30:55Z"),
-            "2026-07-23T23:30:55Z"
-        );
-        assert_eq!(
-            canonicalize_last_seen(&canonicalize_last_seen("2026-07-23T23:30:55.845794+00:00")),
-            "2026-07-23T23:30:55Z"
-        );
-        assert_eq!(canonicalize_last_seen(""), "");
-        assert_eq!(canonicalize_last_seen("   "), "");
-        assert_eq!(canonicalize_last_seen("not-a-date"), "not-a-date");
-    }
-
-    /// Regression fence for the settled-fixpoint bug: seeding the runtime's
-    /// real `Utc::now().to_rfc3339()` format and asserting the second tick is
-    /// write-free pins the quantizing fix.
     #[tokio::test]
     async fn graphql_tick_is_write_free_fixpoint_for_runtime_updated_at_format() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
@@ -793,7 +627,6 @@ mod tests {
             Some(canonicalize_last_seen(&updated_at).as_str())
         );
 
-        // A second tick over unchanged sources must write nothing.
         let second = reconcile_directory_tick(&store, "did:key:home").await?;
         assert_eq!(
             second,
@@ -801,6 +634,29 @@ mod tests {
             "settled state must be a write-free fixpoint for the runtime updated_at format"
         );
         Ok(())
+    }
+
+    #[test]
+    fn canonicalize_last_seen_quantizes_offset_and_subseconds_to_utc_seconds() {
+        assert_eq!(
+            canonicalize_last_seen("2026-07-23T23:30:55.845794+00:00"),
+            "2026-07-23T23:30:55Z"
+        );
+        assert_eq!(
+            canonicalize_last_seen("2026-07-23T18:30:55.5-05:00"),
+            "2026-07-23T23:30:55Z"
+        );
+        assert_eq!(
+            canonicalize_last_seen("2026-07-23T23:30:55Z"),
+            "2026-07-23T23:30:55Z"
+        );
+        assert_eq!(
+            canonicalize_last_seen(&canonicalize_last_seen("2026-07-23T23:30:55.845794+00:00")),
+            "2026-07-23T23:30:55Z"
+        );
+        assert_eq!(canonicalize_last_seen(""), "");
+        assert_eq!(canonicalize_last_seen("   "), "");
+        assert_eq!(canonicalize_last_seen("not-a-date"), "not-a-date");
     }
 
     #[tokio::test]

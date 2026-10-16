@@ -1,13 +1,4 @@
 import Proofs.ToolExecution.Transition
-
-/-!
-# Foreground Interrupt Scope
-
-An interrupt stops one thread's foreground turn: a pending intent is cancelled,
-a running foreground call is cancelled with cause `interrupted`, and running
-background work and terminal rows are untouched.
--/
-
 namespace Background
 namespace Interrupt
 

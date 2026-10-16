@@ -1,5 +1,3 @@
-//! Runtime backgrounding model metadata and shared vocabulary checks.
-
 use super::*;
 
 pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
@@ -70,7 +68,6 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
             "{}",
             case.name
         );
-        // Foreground wait callers are a modeled input, not a background default.
     }
 
     let admit = lean_r6_backgrounding_case("background_tool_budget_count_7_admits_spawn");
@@ -228,9 +225,6 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     );
     assert_eq!(during_ack.reason.as_deref(), Some("atomic_ack_projection"));
 
-    // Completion-owner and continuation witnesses bind through canonical
-    // publication in the registered native owner tests.
-
     for action in [
         "list_processes",
         "read_process",
@@ -288,6 +282,3 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     );
 }
 
-// The retired volatile-registry dispatch witness replacement must export
-// modeled segment inputs and exercise durable reads, missing/twin rejection,
-// and late-suffix stability; CoverageLedger tracks that binding.

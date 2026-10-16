@@ -177,8 +177,6 @@ structure PromptAssemblyRetentionCase where
   rollingSummaryInputBudget : Nat
   deriving Repr
 
-/-! ## Building witness rows -/
-
 private def itemCase : Item → PromptAssemblyItemCase
   | .text index => { item := "text", value := index }
   | .other index => { item := "other", value := index }

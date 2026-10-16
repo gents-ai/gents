@@ -1,4 +1,3 @@
-//! Domain-specific error types for the Gents runtime.
 
 use thiserror::Error;
 
@@ -126,15 +125,10 @@ pub enum HookError {
     SessionNotInitialized,
 }
 
-/// HTTP statuses an identical retry cannot fix (426 means the provider demands
-/// a newer client).
 const PERMANENT_HTTP_STATUSES: &[u16] = &[400, 401, 403, 404, 422, 426];
 
-/// What failed in an owned-loop stream, read from the provider client's error
-/// at the `rig_compat` boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoopFailureCause {
-    /// A provider call failed; `reason` renders the call error alone.
     Completion {
         failure: CompletionFailure,
         reason: String,
@@ -144,7 +138,6 @@ pub enum LoopFailureCause {
     Tool,
 }
 
-/// The kind of a failed provider call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompletionFailure {
     Http,
@@ -153,7 +146,6 @@ pub enum CompletionFailure {
     Response,
 }
 
-/// A terminal failure of the owned loop's stream.
 #[derive(Debug)]
 pub struct LoopStreamError {
     cause: LoopFailureCause,
@@ -175,7 +167,6 @@ impl LoopStreamError {
         &self.cause
     }
 
-    /// The provider-reported message, if the provider call reported one.
     pub fn provider_message(&self) -> Option<&str> {
         match &self.cause {
             LoopFailureCause::Completion {
@@ -203,7 +194,6 @@ impl std::error::Error for LoopStreamError {
     }
 }
 
-/// Classify a loop failure whose full rendering is `message`.
 pub fn classify_loop_failure(cause: &LoopFailureCause, message: &str) -> InferenceError {
     let msg = strip_provider_limit_marker(message).to_string();
 
@@ -277,10 +267,6 @@ fn message_has_any_status(message: &str, statuses: &[u16]) -> bool {
         .any(|status| error_message_has_status(message, *status))
 }
 
-/// vLLM's intermittent 400 when its tool-call parser cannot `json.loads` the
-/// model's streamed tool arguments; the Python `JSONDecodeError` always renders
-/// `"... line L column C (char N)"` inside a `"BadRequestError"` envelope, so
-/// keying off that signature covers every decode variant.
 pub(crate) fn provider_message_is_tool_call_json_parse_failure(message: &str) -> bool {
     message.contains("BadRequestError")
         && message.contains(" line ")
@@ -288,16 +274,10 @@ pub(crate) fn provider_message_is_tool_call_json_parse_failure(message: &str) ->
         && message.contains("(char ")
 }
 
-/// The Claude Messages parser fails closed on any `tool_use` block it cannot
-/// map onto the surface: bad model output, not transport.
 pub(crate) fn provider_message_is_fail_closed_tool_use(message: &str) -> bool {
     message.contains("fail-closed: ") && message.contains("tool_use")
 }
 
-/// A provider rejected replayed reasoning (invalid/unverified `thinking`
-/// signatures, a tool-loop assistant turn sent without its thinking, or
-/// undecryptable `encrypted_content`); resending the same body fails the same
-/// way.
 pub(crate) fn provider_message_is_reasoning_rejection(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("expected `thinking`")

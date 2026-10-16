@@ -138,7 +138,6 @@ pub fn run_desktop_init_json(node_home: &Path, desktop_home: &Path, label: &str)
 }
 
 pub fn run_init_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
-    // Test homes keep their store key in a file, never the login keychain.
     let mut command_args = vec!["init", "--store-key-custody", "file"];
     command_args.extend_from_slice(args);
     run_cli_json(home_dir, &command_args)
@@ -197,8 +196,6 @@ pub fn spawn_server_with_ready_json_recovering(
     spawn_server_with_ready_json_inner(home_dir, port, extra_args, envs, true, None)
 }
 
-/// Single owner of the readiness wait and the port-replacement policy; the
-/// non-recovering caller keeps reporting the child's own bind failure.
 fn spawn_server_with_ready_json_inner(
     home_dir: &Path,
     port: u16,
@@ -338,7 +335,6 @@ pub fn spawn_server_with_env(
     Ok(ServeProcess::with_logs(child, stdout_log, stderr_log))
 }
 
-/// The home a spawned `gents server` resolves.
 fn served_home_dir(home_dir: &Path, extra_args: &[&str], envs: &[(&str, &str)]) -> PathBuf {
     if let Some(index) = extra_args.iter().position(|arg| *arg == "--home") {
         if let Some(home) = extra_args.get(index + 1) {

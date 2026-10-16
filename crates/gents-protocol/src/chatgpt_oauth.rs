@@ -1,7 +1,3 @@
-//! ChatGPT OAuth vocabulary shared by the login/token flows and the runtime
-//! refresh path: one owner for the client id, refresh-endpoint override
-//! variable, and token-endpoint construction rule.
-
 /// Codex-compatible OAuth client id.
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 

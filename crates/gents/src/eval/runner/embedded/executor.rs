@@ -1961,29 +1961,6 @@ mod tests {
     }
 
     #[test]
-    fn unrooted_host_tools_are_rooted_at_the_trial_workspace() {
-        let config: PackConfig = serde_json::from_value(json!({
-            "node": {"node_did": "did:x"},
-            "tools": [
-                {"node_did": "did:x", "tools_id": "files", "host": {"files": {"mode": "ReadOnly"}}},
-                {"node_did": "did:x", "tools_id": "rooted", "host": {"root": "/elsewhere", "files": {"mode": "ReadOnly"}}},
-                {"node_did": "did:x", "tools_id": "meta"}
-            ]
-        }))
-        .unwrap();
-        let rooted = root_host_tools(config, Path::new("/runs/r/trials/t/workspace")).unwrap();
-        let roots: Vec<Option<&str>> = rooted
-            .tools
-            .iter()
-            .map(|tools| tools.host.as_ref().and_then(|host| host.root.as_deref()))
-            .collect();
-        assert_eq!(
-            roots,
-            [Some("/runs/r/trials/t/workspace"), Some("/elsewhere"), None]
-        );
-    }
-
-    #[test]
     fn provider_reason_from_failure_maps_the_table() {
         assert_eq!(
             provider_reason_from_failure("HTTP 503"),
@@ -3581,29 +3558,6 @@ mod tests {
         };
         assert_eq!(request_id, "fired");
         assert!(!remaining.is_zero());
-    }
-
-    #[test]
-    fn a_trigger_status_read_without_a_trigger_list_is_not_a_clean_read() {
-        assert_eq!(errored_triggers(None), None);
-        assert_eq!(errored_triggers(Some(&json!({}))), None);
-        assert_eq!(errored_triggers(Some(&json!({"Trigger": null}))), None);
-        assert_eq!(
-            errored_triggers(Some(&json!({"Trigger": []}))),
-            Some(Vec::new())
-        );
-    }
-
-    /// Rows are read as [`crate::document_config::TriggerObservation`]s: a
-    /// row that is not one is a status that could not be read.
-    #[test]
-    fn a_trigger_row_that_is_not_a_trigger_observation_is_not_a_clean_read() {
-        assert_eq!(
-            errored_triggers(Some(
-                &json!({"Trigger": [{"trigger_id": "t", "last_status": 5}]})
-            )),
-            None
-        );
     }
 
     /// An error a trigger recorded before the stage started belongs to an

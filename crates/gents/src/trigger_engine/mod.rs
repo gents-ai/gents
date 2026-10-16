@@ -1,5 +1,3 @@
-//! Trigger engine scaffold.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -63,8 +61,6 @@ pub struct FireIntent {
     pub group_vars: Option<serde_json::Value>,
     pub trigger_context: Option<String>,
     pub args_vars: Option<serde_json::Value>,
-    /// Stable identity of this logical source delivery. Goal-backed Tasks use
-    /// it with `task_id` to recover the same session/request after retries.
     pub durable_fire_key: String,
     pub pre_materialized_request_id: Option<String>,
     pub on_result: Box<dyn FnOnce(FireResult) + Send>,
@@ -129,9 +125,6 @@ pub(crate) fn fire_result_from_materialize(result: anyhow::Result<String>) -> Fi
 
 pub(crate) const SERIAL_BUSY: &str = "serial: prior fire still in-flight";
 
-/// Recorded when a fire's result never reaches the acknowledgment channel,
-/// so the eval runner classes the slot as a harness fault rather than waiting
-/// out the stage deadline on no evidence.
 pub(crate) const UNACKNOWLEDGED_STATUS: &str = "unacknowledged";
 
 #[derive(Debug, Clone)]
@@ -150,11 +143,6 @@ pub enum FireResult {
     Errored {
         error: String,
     },
-    /// The intent cannot be admitted under the configuration snapshot it was
-    /// dispatched against: the refusal is config/source-bound and repeating it
-    /// under the same snapshot repeats it. Nothing was admitted; an event
-    /// arrival stays pending and its source retries only after the
-    /// configuration changes.
     Rejected {
         error: String,
     },
@@ -203,11 +191,6 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         Box::pin(async { Ok(None) })
     }
 
-    /// Check whether any active runtime `AgentRequest` of `node_did` is
-    /// currently bound to this trigger. The DID scope is load-bearing: on a
-    /// replicated fleet the store also holds other agents' requests for the
-    /// same human-chosen trigger id, and those must never gate this agent's
-    /// fires (#605).
     fn has_active_runtime_request_for_trigger(
         &self,
         node_did: &str,
@@ -282,7 +265,6 @@ impl TriggerEngine {
                 }
             });
         }
-        // Individual source-failure panics must not bring down the engine.
         while let Some(joined) = join_set.join_next().await {
             if let Err(error) = joined {
                 if !error.is_cancelled() {
@@ -309,8 +291,6 @@ impl TriggerEngine {
         }
 
         let delivery_identity = if intent.trigger_kind == TriggerKind::Schedule {
-            // Probe every scheduled occurrence, even if its destination was
-            // removed after admission but before the cursor was persisted.
             let snapshot = self.snapshot_rx.borrow().clone();
             intent.trigger_id.as_ref().map(|trigger| {
                 gents_protocol::trigger_delivery::FireIdentity {
@@ -379,8 +359,6 @@ impl TriggerEngine {
             }
         }
 
-        // Recovery is keyed by the durable Task/fire identity, not the Task's
-        // current declaration: it may recover after operator removal.
         match self
             .materializer
             .recover_goal_task_fire(&intent.task, &intent.durable_fire_key)

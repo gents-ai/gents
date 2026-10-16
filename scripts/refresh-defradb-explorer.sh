@@ -1,5 +1,4 @@
 #!/bin/sh
-# Refresh third_party/defradb-explorer from gents-ai/defradb-explorer (branch gents-embed); the vendored dist is what `gents serve` embeds at /explorer/.
 set -eu
 root="$(cd "$(dirname "$0")/.." && pwd)"
 explorer="${DEFRADB_EXPLORER:-$root/../defradb-explorer}"

@@ -1,10 +1,3 @@
-//! Capture mechanism for the durable fact record of one provider call:
-//! the per-request arm/claim scope (`scope`) the loop consults before it lets
-//! a completion body reach the network, the capturing transport wrapper
-//! (`transport`), and the pure DTO-building step
-//! (`build_rendered_completion_request`). `gents`'s own `rendered_request`
-//! module keeps the DefraDB-backed sink and the admission-controller
-//! provenance lookup, since neither belongs in a guest.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -28,8 +21,6 @@ pub use gents_protocol::rendered_request::{
 };
 pub use transport::RenderedRequestCapturingHttpClient;
 
-/// Prefix on every capture key, bound to the key derivation, not to
-/// `CAPTURE_VERSION`: adding a column must not silently re-key existing facts.
 const CAPTURE_KEY_PREFIX: &str = "rendered:v1";
 
 pub type RenderedRequestCaptureSink = Arc<
@@ -41,41 +32,20 @@ pub type RenderedRequestCaptureSink = Arc<
 pub type RenderedRequestCaptureFactory =
     Arc<dyn Fn(RenderedRequestContext) -> RenderedRequestCaptureSink + Send + Sync>;
 
-/// Identity and routing for every capture belonging to one request.
-///
-/// Carries no provider-wire information: which wire shape was used and which
-/// model the body named are read back off the captured body itself, because
-/// configuration describes intent and this record describes what happened.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderedRequestContext {
-    /// Exact DefraDB document identity for the request being served.
-    /// Empty only for a one-shot run, which does not author an
-    /// `AgentRequest` document.
     pub request_doc_id: String,
-    /// Exact composite DefraDB commit returned by the mutation that claimed
-    /// this request. Empty only for a one-shot run.
     pub request_commit_cid: String,
     pub request_id: String,
     pub node_did: String,
-    /// The requesting principal. Empty when the request has none — an empty
-    /// DID is never a participant, so downstream authorization must treat
-    /// `""` as "owner only" rather than as a DID.
     pub requester_did: String,
     pub agent_id: String,
     pub session_id: String,
-    /// The behavior's configured model. Used only when the captured body
-    /// names no `model`.
     pub model_name: String,
-    /// Canonical family of the client branch already built for this run.
-    /// None only for a supplied synthetic CompletionModel with no built client.
     pub provider_family: Option<String>,
 }
 
-/// The JSON pieces extracted from one captured provider body, grouped so the
-/// DTO builder keeps a readable arity.
 pub struct RenderedRequestComponents {
-    /// The complete provider request; the other fields are typed views used
-    /// while validating transport conversion.
     pub request_json: Value,
     pub messages_json: Value,
     pub tools_json: Value,
@@ -84,11 +54,6 @@ pub struct RenderedRequestComponents {
 }
 
 impl RenderedRequestComponents {
-    /// Split a captured provider body into the payload plus derived views.
-    /// Every view is read out of the body, never re-derived from the assembled
-    /// `CompletionRequest`: on the Codex path the transport deleted fields the
-    /// assembled request still carries, and a row that reported those would
-    /// describe a request nobody sent.
     pub fn from_provider_body(request_json: Value, source: RenderedRequestSource) -> Self {
         let field = |name: &str| request_json.get(name).cloned();
         let messages_json =
@@ -116,20 +81,11 @@ impl RenderedRequestComponents {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderedCompletionRequest {
-    /// `capture_key(node_did, session_id, request_doc_id, capture_scope,
-    /// turn_index, attempt)`; the unique index on the durable row and the
-    /// idempotency key of the sink.
     pub capture_key: String,
     pub capture_version: u32,
-    /// Exact `_docID` of the durable `AgentRequest`; the logical `request_id`
-    /// remains alongside it for user-facing correlation.
     pub request_doc_id: String,
-    /// Exact composite version of `request_doc_id` that supplied the runtime
-    /// input; DefraDB's native time-travel and integrity reference.
     pub request_commit_cid: String,
     pub request_id: String,
-    /// Which completion loop inside the request issued this call, e.g.
-    /// `inference.1` or `compaction.2`. See [`CaptureScopeKind`].
     pub capture_scope: String,
     pub turn_index: usize,
     pub attempt: u32,
@@ -139,27 +95,16 @@ pub struct RenderedCompletionRequest {
     pub session_id: String,
     pub model_name: String,
     pub source: RenderedRequestSource,
-    /// The complete rendered provider request retained as the durable payload.
     pub request_json: Value,
     pub messages_json: Value,
     pub tools_json: Value,
     pub tool_choice_json: Value,
     pub sampling_json: Value,
     pub assembly_trace: AssemblyTrace,
-    /// Canonical JSON of the `ProvenanceManifest` built from `assembly_trace`,
-    /// derived by the builder so the column and the typed value cannot
-    /// disagree.
     pub provenance_json: Value,
-    /// Lossless heavy provenance payload, encoded independently from the
-    /// compact searchable manifest.
     pub provenance_payload_json: Value,
 }
 
-/// Build the durable capture record from a captured body's components.
-///
-/// `admission_join` is the admission-controller provenance stamp, computed by
-/// the caller rather than looked up here, so this function stays free of the
-/// admission-controller dependency.
 #[allow(clippy::too_many_arguments)]
 pub fn build_rendered_completion_request(
     context: &RenderedRequestContext,
@@ -235,18 +180,8 @@ pub fn build_rendered_completion_request(
     })
 }
 
-/// Derive the durable capture key from the five-component identity tuple,
-/// encoded as a canonical JSON array — never as a delimited concatenation,
-/// because JSON string escaping keeps the encoding injective: `session_id` is
-/// caller-controlled and unvalidated, and a `"{a}:{b}"` format would let
-/// `("x:y", "z")` and `("x", "y:z")` collide into one fact.
-///
-/// The Lean model's `requestId` names the provider-call scope inside a
-/// request, and one request runs more than one completion loop whose turn and
-/// attempt counters start at zero, so the scope rides inside the third
-/// component as the nested JSON array `[request_doc_id, capture_scope]`; a
-/// `"{request_doc_id}#{scope}"` string would reintroduce the delimiter
-/// collision the array encoding exists to rule out.
+/// Encode the unvalidated identity tuple as a JSON array so delimiters in IDs
+/// cannot make distinct captures share a key.
 pub fn capture_key(
     node_did: &str,
     session_id: &str,
@@ -266,13 +201,8 @@ pub fn capture_key(
     Ok(format!("{CAPTURE_KEY_PREFIX}:{digest}"))
 }
 
-/// The one canonical JSON encoder; there is deliberately no second
-/// implementation in the sink or the reconstructor.
-///
-/// Key order is not free: `serde_json::Map` becomes an insertion-ordered map
-/// for the whole build whenever any crate in the graph enables
-/// `serde_json/preserve_order`, so without an imposed order the "same" request
-/// would hash differently depending on which workspace members were compiled.
+/// Sort keys explicitly because workspace `serde_json/preserve_order` changes
+/// map iteration order and therefore would otherwise change persisted hashes.
 pub fn canonical_json(value: &Value) -> Value {
     match value {
         Value::Array(values) => Value::Array(values.iter().map(canonical_json).collect()),
@@ -287,13 +217,10 @@ pub fn canonical_json(value: &Value) -> Value {
     }
 }
 
-/// The exact UTF-8 bytes to persist for a canonical JSON column, and the exact
-/// bytes `sha256_canonical_json` digests.
 pub fn canonical_json_string(value: &Value) -> Result<String> {
     serde_json::to_string(&canonical_json(value)).context("encoding canonical JSON")
 }
 
-/// SHA-256 of `canonical_json_string`, lowercase hex.
 pub fn sha256_canonical_json(value: &Value) -> Result<String> {
     let digest = Sha256::digest(canonical_json_string(value)?.as_bytes());
     Ok(format!("{digest:x}"))

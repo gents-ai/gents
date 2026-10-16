@@ -1,17 +1,9 @@
-//! Provider rate-limit classification shared by the owned loop's retry
-//! boundary and the Goal usage-limit transition. Only error text survives
-//! Rig's error boundary, so the native transport appends the relevant response
-//! headers to the rejected body as a marker
-//! ([`ProviderLimitHeaders::annotate`]) and this classifier reads the marker
-//! and the provider body together.
 
 use std::fmt;
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
 
-/// A requested wait beyond this is a usage window, not a throttle; matches
-/// oh-my-pi's `LONG_RATE_LIMIT_DELAY_MS`.
 pub const LONG_RATE_LIMIT_WAIT: Duration = Duration::from_secs(5 * 60);
 
 const MARKER_OPEN: &str = " [provider-limit";
@@ -20,12 +12,6 @@ const NEUTRALIZED_TOKEN: &str = "[provider limit";
 const USAGE_LIMIT_PREFIX: &str = "provider usage limit reached";
 const DETAIL_MAX_CHARS: usize = 300;
 
-/// Case-insensitive body evidence of an exhausted account window, by source:
-/// Codex (`usage_limit_reached`, `usage_not_included`, `insufficient_quota`),
-/// xAI (`subscription:free-usage-exhausted` on a 429), Anthropic "credit
-/// balance" billing rejections. Anthropic's 429 wording is the same for
-/// throttles and capped subscription seats, so a subscription cap is
-/// recognized only from the unified-limit headers.
 const USAGE_NEEDLES: &[&str] = &[
     "usage limit",
     "usage_limit",
@@ -40,8 +26,6 @@ const USAGE_NEEDLES: &[&str] = &[
 
 const THROTTLE_NEEDLES: &[&str] = &["rate_limit", "rate limit", "too many requests"];
 
-/// Status renderings of Rig's `InvalidStatusCodeWithMessage` and the Claude
-/// Messages error, each followed by the code.
 const STATUS_PREFIXES: &[&str] = &[
     "invalid status code ",
     "invalid status code: ",
@@ -51,24 +35,14 @@ const STATUS_PREFIXES: &[&str] = &[
     "http ",
 ];
 
-/// Rate-limit facts read from a rejected response's headers, as absolute
-/// times so a later reader interprets them against the response rather than
-/// its own clock.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderLimitHeaders {
-    /// Earliest retry the provider allows (`retry-after-ms`, then
-    /// `retry-after`).
     pub retry_at: Option<DateTime<Utc>>,
-    /// Latest reset among the exhausted usage windows.
     pub reset_at: Option<DateTime<Utc>>,
-    /// A usage window, not a throttle, rejected the request.
     pub usage_exhausted: bool,
 }
 
 impl ProviderLimitHeaders {
-    /// Reads `retry-after`, Anthropic subscription unified-limit headers
-    /// (`-overage-status` excluded), and Codex `x-codex-*` percent/reset
-    /// headers.
     pub fn from_headers<'a>(
         headers: impl IntoIterator<Item = (&'a str, &'a str)>,
         now: DateTime<Utc>,
@@ -126,8 +100,6 @@ impl ProviderLimitHeaders {
         self.reset_at = self.reset_at.max(reset);
     }
 
-    /// A rejected response body with the marker token neutralized, followed by
-    /// this marker.
     pub fn annotate(&self, body: &str) -> String {
         format!(
             "{}{}",
@@ -136,7 +108,6 @@ impl ProviderLimitHeaders {
         )
     }
 
-    /// Suffix for a rejected response body; empty when no header applied.
     fn marker(&self) -> String {
         if *self == Self::default() {
             return String::new();
@@ -158,7 +129,6 @@ impl ProviderLimitHeaders {
         marker
     }
 
-    /// `None` unless `marker` is exactly one well-formed marker.
     fn parse_marker(marker: &str) -> Option<Self> {
         let fields = marker.strip_prefix(MARKER_OPEN)?.strip_suffix(']')?;
         let mut limits = Self::default();
@@ -174,9 +144,6 @@ impl ProviderLimitHeaders {
     }
 }
 
-/// Splits `text` into the provider body and the transport's header marker.
-/// The marker is recognized only as the well-formed suffix of a rejected-status
-/// rendering; anywhere else it is provider text.
 pub fn split_provider_limit_marker(text: &str) -> (&str, &str) {
     match split_annotated_body(text) {
         (body, marker) if has_status(&body.to_ascii_lowercase(), None) => (body, marker),
@@ -204,11 +171,9 @@ pub fn persisted_failure_reason(text: &str, now: DateTime<Utc>) -> String {
     }
 }
 
-/// An exhausted provider usage window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageLimit {
     pub resets_at: Option<DateTime<Utc>>,
-    /// The provider's own explanation, bounded.
     pub detail: String,
 }
 
@@ -227,14 +192,10 @@ impl fmt::Display for UsageLimit {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderLimit {
-    /// Retry after the hint, or the ladder delay when none was given.
     Throttled { retry_after: Option<Duration> },
-    /// Retrying before the reset cannot succeed.
     UsageExhausted(UsageLimit),
 }
 
-/// Classifies a provider error text; `None` when it is not a rate limit.
-/// A bare 429 is a throttle; usage headers on any other status are ignored.
 pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<ProviderLimit> {
     let (body, marker) = split_provider_limit_marker(text);
     let headers = ProviderLimitHeaders::parse_marker(marker).unwrap_or_default();
@@ -280,17 +241,12 @@ pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<Provide
     Some(ProviderLimit::Throttled { retry_after })
 }
 
-/// OpenRouter's 402 cases, branch on `error.metadata.limit_source`.
 #[derive(PartialEq)]
 enum PaymentRequired {
-    /// A key cap or the credit balance: no wait helps.
     Exhausted,
-    /// The in-flight spending budget: transient, retry after `Retry-After`.
     InFlight,
 }
 
-/// Without a documented `limit_source` only the "Insufficient credits"
-/// wording counts; an unknown source keeps the generic rules.
 fn openrouter_payment_required(
     lower: &str,
     json: Option<&serde_json::Value>,
@@ -311,7 +267,6 @@ fn openrouter_payment_required(
     }
 }
 
-/// A status rendering followed by a three-digit code (`code` when given).
 fn has_status(lower: &str, code: Option<&str>) -> bool {
     STATUS_PREFIXES.iter().any(|prefix| {
         lower.match_indices(prefix).any(|(at, _)| {
@@ -324,7 +279,6 @@ fn has_status(lower: &str, code: Option<&str>) -> bool {
     })
 }
 
-/// The first `{` through the last `}` of `text`, when that parses as JSON.
 fn embedded_json(text: &str) -> Option<serde_json::Value> {
     let start = text.find('{')?;
     let end = text.rfind('}')?;

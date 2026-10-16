@@ -302,8 +302,6 @@ pub(crate) async fn resolve_graph_workspace(
     }
 }
 
-/// Revalidate the signed tuple and share the loaded run with its
-/// generation-write owner. The caller stages request writes in txn.
 pub(crate) async fn fence_root_workspace_in_txn(
     txn: &ConfigApplyTxn<'_>,
     request: &gents_protocol::request_admission::AgentRequestCreate,

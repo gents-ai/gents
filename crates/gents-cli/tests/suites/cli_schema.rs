@@ -120,7 +120,6 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
             )?;
             let did = node_did_from_init(&init)?;
             if upgrade {
-                // The actual shipped predecessor SDL; do not invent a fixture.
                 let predecessor = sdl.replace("  owned_files: String @immutable\n", "");
                 assert_ne!(
                     predecessor, sdl,
@@ -170,7 +169,6 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
                 Some("owned_files")
             );
 
-            // Reopen the same CLI-created store only after those processes exit.
             let key_path = init
                 .get("key_path")
                 .and_then(Value::as_str)

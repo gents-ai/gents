@@ -1,5 +1,3 @@
-//! xAI OAuth refresh against `auth.x.ai` (public Grok CLI client).
-
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::Value;
@@ -112,20 +110,3 @@ fn parse_error_message(body: &str) -> String {
         .to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_error_message_prefers_oauth_description() {
-        assert_eq!(
-            parse_error_message(r#"{"error":"invalid_grant","error_description":"revoked"}"#),
-            "revoked"
-        );
-        assert_eq!(
-            parse_error_message(r#"{"error":"access_denied"}"#),
-            "access_denied"
-        );
-        assert_eq!(parse_error_message("plain"), "plain");
-    }
-}

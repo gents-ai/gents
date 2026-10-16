@@ -1,16 +1,3 @@
-//! Promotion and revert: the operator's two verbs.
-//!
-//! Both run in one transaction that writes only the target document. There is
-//! no force flag: on drift the transaction rolls back with the live node
-//! untouched, a second transaction journals the refusal, and the job is
-//! `Stale`. Nothing reverts on its own, and a revert ends the job.
-//!
-//! Spec section 7 rebuilds the patch from the live target and checks it
-//! against the journal. Here the retained checkpoint pack is verified in place
-//! (`verified_checkpoint`) and must read back the journaled text, the patch is
-//! built from the live target document, and the digest the write leaves on
-//! the live target is asserted equal to the one the patch predicts before it
-//! is journaled (ruling P-N8). Nothing is materialized on disk.
 use anyhow::Result;
 
 use crate::config_client::{
@@ -27,7 +14,6 @@ use crate::optimization::target::{
     Closure, FrozenDocument,
 };
 
-/// What a promotion did, and what it replaced.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Promotion {
     pub target_digest: String,
@@ -35,7 +21,6 @@ pub struct Promotion {
     pub previous_digest: String,
 }
 
-/// Why an operator's verb did not run. `reason` is a closed vocabulary.
 #[derive(Debug)]
 pub struct PromoteRefused {
     pub reason: &'static str,
@@ -61,7 +46,6 @@ fn refused(reason: &'static str, detail: impl Into<String>) -> anyhow::Error {
     })
 }
 
-/// The closure moved under the job.
 #[derive(Debug)]
 struct ClosureDrift(Vec<DriftedRef>);
 
@@ -144,9 +128,6 @@ fn promotion_plan(
     Ok((plan, promotion))
 }
 
-/// Load the job and check what both verbs require. `by` is the launching
-/// home's DID as its caller states it; an enforced, authenticated boundary is
-/// spec 2b's.
 async fn job_in_state(
     access: &ConfigAccess,
     owner: &str,
@@ -180,13 +161,9 @@ async fn job_in_state(
 
 #[cfg(test)]
 tokio::task_local! {
-    /// Test seam between the closure's digest check and the target write:
-    /// signals the first `Notify`, then waits on the second, once.
     static BETWEEN_CHECK_AND_WRITE: std::sync::Arc<(tokio::sync::Notify, tokio::sync::Notify)>;
 }
 
-/// Write the retained checkpoint's text onto the live target, guarded by the
-/// whole frozen closure.
 pub async fn promote(
     access: &ConfigAccess,
     owner: &str,
@@ -245,7 +222,6 @@ pub async fn promote(
                     gate.0.notify_one();
                     gate.1.notified().await;
                 }
-                // Writes only the target; expects the entire frozen closure.
                 let (plan, promotion) = promotion_plan(&job.origin, &live, text)?;
                 apply_desired_state_plan(txn, &plan).await?;
                 let written =
@@ -261,7 +237,6 @@ pub async fn promote(
                     previous_text: promotion.previous_text.clone(),
                     previous_digest: promotion.previous_digest.clone(),
                 };
-                // Length-guarded on the journal the state checks read.
                 append_in_txn(txn, job, &entry).await?;
                 Ok(promotion)            })
         })
@@ -276,7 +251,6 @@ pub async fn promote(
             let Some(drifted) = drift_of(&error) else {
                 return Err(error);
             };
-            // The write rolled back; a second transaction records why.
             let entry = JournalEntry::PromotionRefused {
                 drifted: drifted.clone(),
             };
@@ -287,8 +261,6 @@ pub async fn promote(
     }
 }
 
-/// Write `previous_text` back, expecting the target to still hold exactly what
-/// the promotion wrote. Terminal.
 pub async fn revert(
     access: &ConfigAccess,
     owner: &str,
@@ -386,7 +358,6 @@ mod tests {
             .unwrap()
     }
 
-    /// The live target's text, read the way an operator would.
     async fn live_prompt(access: &ConfigAccess) -> Option<String> {
         read_closure(access)
             .await
@@ -491,7 +462,6 @@ mod tests {
         )
     }
 
-    /// Every path under `dir`, relative to it.
     fn tree(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         let mut paths = Vec::new();
         let mut pending = vec![dir.to_path_buf()];
@@ -526,7 +496,6 @@ mod tests {
         );
         assert_eq!(state(&harness, &request.job_id).await, JobState::Promoted);
 
-        // Only the target document moved.
         let after = read_closure(harness.access()).await;
         let job = load_job(harness.access(), OWNER, &request.job_id)
             .await
@@ -538,8 +507,6 @@ mod tests {
             apply_text(&before, target, CANDIDATE_PROMPT).unwrap()
         );
 
-        // Ruling P-N8: the journaled digest is the live target's, and the one
-        // the patch of the live document predicts.
         let Some(JournalEntry::Promoted {
             by,
             target_digest: journaled,
@@ -599,7 +566,6 @@ mod tests {
             Some(baseline_digest.as_str())
         );
 
-        // The operator edits the target between the read and the write.
         harness.install(vec![operator_edit()]).await;
         let error = apply(harness.access(), &plan).await.unwrap_err();
         let stale = stale_expectation(&error).unwrap_or_else(|| panic!("{error:#}"));
@@ -977,8 +943,6 @@ mod tests {
             "expected the agent tool surfaces under {}",
             root.display()
         );
-        // Qualified where a bare name is ordinary tool vocabulary: the
-        // toolset's own processes have a `request_cancel`.
         for path in files {
             let source = std::fs::read_to_string(&path).unwrap();
             for word in [

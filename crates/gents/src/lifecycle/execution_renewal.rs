@@ -1,4 +1,3 @@
-//! Explicit request liveness, independent of provider/tool reads and output.
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,8 +9,6 @@ use gents_protocol::row::AgentRequestRow;
 use super::execution_policy::{authorize_renewal, is_live, renewable_lifecycle, LeaseObservation};
 use crate::graphql::{escape_graphql_string, response_has_documents};
 
-/// Dropping the owner aborts the heartbeat task: abandoned work may not stay
-/// alive indefinitely.
 pub(super) struct RenewalTask {
     task: tokio::task::JoinHandle<()>,
     lost: tokio_util::sync::CancellationToken,
@@ -74,8 +71,6 @@ impl RenewalTask {
         Self { task, lost }
     }
 
-    /// Cancelled when a renewal poll observes this generation no longer owns its
-    /// request (revoked, superseded, terminal, or expired).
     pub(super) fn ownership_lost(&self) -> tokio_util::sync::CancellationToken {
         self.lost.clone()
     }
@@ -92,7 +87,6 @@ pub(crate) enum RenewalAttemptOutcome {
     Lost,
 }
 
-/// Return false when this generation is no longer an active owner.
 async fn renew_once(
     node: &std::sync::Arc<EmbeddedNode>,
     request_doc_id: &str,
@@ -104,8 +98,6 @@ async fn renew_once(
     ))
 }
 
-/// Explicit-time form used by model-driven conformance fixtures; the wall-clock
-/// read stays owned here so no test clock affects siblings.
 #[cfg(test)]
 pub(crate) async fn renew_once_at(
     node: &std::sync::Arc<EmbeddedNode>,

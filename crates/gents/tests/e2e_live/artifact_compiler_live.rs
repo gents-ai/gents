@@ -1,4 +1,3 @@
-//! Run the built e2e_live executable directly, with no parent Cargo process.
 use crate::support::live_inference::wait_for_request_terminal;
 use crate::support::snapshots::fetch_tool_call_payloads_for_request;
 use crate::support::{

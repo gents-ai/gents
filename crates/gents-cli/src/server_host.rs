@@ -1,5 +1,3 @@
-//! Shared provisioning and operator helpers for the Gents server.
-
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
@@ -40,7 +38,6 @@ pub struct ProvisionOptions {
     pub node_name: String,
     pub tool_ceiling: ManagedToolCeiling,
     pub tool_root: Option<PathBuf>,
-    /// Custody of a new home's store key; tests request a file key.
     pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
 }
 

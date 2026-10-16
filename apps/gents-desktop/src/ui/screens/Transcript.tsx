@@ -1,5 +1,3 @@
-/* The session's transcript: its rows, the live reply, notices and the
-   actions on a response. */
 import {
   Fragment,
   createContext,
@@ -254,9 +252,6 @@ function Reply({
   );
 }
 
-/* A reply drawn while it was live reveals at a steady pace, on through the
-   message that replaces it; anything else — history, a message from
-   elsewhere — is simply there. */
 function ReplyText({ content, live }: { content: string; live: boolean }) {
   const [revealing] = useState(live);
   if (!revealing) return <Markdown>{content}</Markdown>;
@@ -288,7 +283,6 @@ function ResponseActions({ text }: { text: string }) {
   );
 }
 
-// A row in the transcript's window.
 const ItemRow = memo(function ItemRow({
   rowKey,
   timelineKey,
@@ -342,9 +336,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
 }: {
   inFlight: boolean;
   stopping?: boolean;
-  /** the transcript's scroller, once mounted */
   scroller: HTMLElement | null;
-  /** everything the scroller scrolls, once mounted */
   content: HTMLElement | null;
   session: DesktopSessionSnapshot | null;
   workers: Workers;
@@ -392,7 +384,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
       continuing
         ? { items: visible, held: null }
         : holdLive(visible, heldRef.current, sessionKey),
-    // heldExpiry: a hold that ran out re-derives without it
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [visible, continuing, heldExpiry, sessionKey],
   );

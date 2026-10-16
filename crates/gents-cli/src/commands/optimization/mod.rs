@@ -1,6 +1,3 @@
-//! `gents optimization`: thin commands over `gents::optimization`. The
-//! driver's and promotion's refusals are re-raised verbatim ([`surface_refusal`]);
-//! `main` prints them and exits 1. Clap exits 2 on a usage error.
 
 use std::io::Write;
 use std::path::Path;
@@ -39,7 +36,6 @@ mod render;
 #[cfg(test)]
 pub(crate) mod testing;
 
-/// The structural gate's cap on a proposed text, in bytes.
 pub(crate) const DEFAULT_MAX_TEXT_BYTES: usize = 32 * 1024;
 
 pub(crate) async fn dispatch(command: OptimizationCommand) -> Result<()> {
@@ -80,7 +76,6 @@ pub(crate) async fn execute(
     result.map_err(surface_refusal)
 }
 
-/// The driver's and the promotion's refusals verbatim, then the eval layer's.
 fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
     let verbatim = job_refused(&error)
         .map(ToString::to_string)
@@ -91,8 +86,6 @@ fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
     }
 }
 
-/// One proposal per round: a script shorter than `rounds` is refused before
-/// the job is frozen.
 fn scripted_proposer(path: &Path, rounds: u32) -> Result<ScriptedProposer> {
     let bytes = std::fs::read(path)
         .with_context(|| format!("reading proposer script {}", path.display()))?;
@@ -113,10 +106,6 @@ fn scripted_proposer(path: &Path, rounds: u32) -> Result<ScriptedProposer> {
     ))
 }
 
-/// The proposer agent of a pack (resolved like `gents pack install`),
-/// installed into the home with its one inference slot bound to
-/// `--proposer-profile` or the default profile, asked on a fresh session of
-/// the served home.
 async fn behavior_proposer(
     ctx: &EvalContext,
     args: &OptimizationRunArgs,
@@ -155,12 +144,6 @@ async fn behavior_proposer(
     ))
 }
 
-/// A proposer must be tool-less: a proposal draws only on the turns it is
-/// sent, so its tool surface (resolved by the runtime's owner) names no tool
-/// and its context names no skill. The readonly ceiling narrows a host tool
-/// without removing it and needs no root; the CLI tools it filters out are
-/// counted anyway, since a server started with `--cli-tool` adds them back;
-/// and a agent target counts whichever home agent it names.
 fn ensure_tool_less(
     config: &gents::document_config::PackConfig,
     owner: &str,
@@ -228,8 +211,6 @@ fn ensure_tool_less(
     Ok(())
 }
 
-/// The session's first user turn: the subject's dossier, so a proposal
-/// names the subject's real tools and surfaces rather than guessing them.
 fn subject_preamble(subject_dir: &Path, agent_id: &str, target: &JobTarget) -> Result<String> {
     let dossier = crate::commands::eval::init::dossier::render(subject_dir, Some(agent_id))?;
     let instruction = match target {
@@ -249,8 +230,6 @@ fn subject_preamble(subject_dir: &Path, agent_id: &str, target: &JobTarget) -> R
     ))
 }
 
-/// The agent `--proposer agent:<pack>[:<agent>]` asks: the named one, else
-/// the slot's only agent.
 fn proposer_agent_id(
     pack: &str,
     slot: &gents::pack::PackInferenceSlot,
@@ -292,10 +271,6 @@ async fn run(
         Some(agent) => agent.clone(),
         None => subject.default_agent()?,
     };
-    // Bonferroni: the divisor must be the number of candidates the budget
-    // allows. `defaults` is the uncalibrated policy sized to `--rounds`; a
-    // policy file is taken as written, and the driver refuses its
-    // `max_rounds` when it is not `--rounds`.
     let policy = match &args.policy {
         None | Some(PolicyArg::Defaults) => PolicyV2 {
             max_rounds: args.rounds,
@@ -338,8 +313,6 @@ async fn run(
         captures: Vec::new(),
         run_options: deps.options.clone(),
     };
-    // A agent proposer installs its pack, so a job refused on its request or
-    // policy is refused first and writes nothing.
     gents::optimization::check_request(&request, &policy)?;
     let proposer: Box<dyn Proposer> = match proposer_arg {
         ProposerArg::Scripted(script) => Box::new(scripted_proposer(script, args.rounds)?),
@@ -375,8 +348,6 @@ async fn run(
             _ => return Err(error),
         },
     };
-    // A job left running is not a success: the view still renders, then the
-    // command fails, so a script never reads it as done.
     let stopped = (outcome.state == JobState::Running).then_some(resume);
     let view = show_job(&ctx.access, &ctx.owner, &job_id).await?;
     if args.json {
@@ -390,7 +361,6 @@ async fn run(
     }
 }
 
-/// Drive the job, printing each journal entry as it lands.
 async fn follow<F>(
     ctx: &EvalContext,
     job_id: &str,
@@ -410,7 +380,6 @@ where
     follow_progress(print, &mut progress, running).await
 }
 
-/// The job's journal entries, printed once each in journal order.
 struct JournalProgress<'a> {
     ctx: &'a EvalContext,
     job_id: &'a str,
@@ -457,7 +426,6 @@ async fn show(ctx: &EvalContext, args: &OptimizationShowArgs, out: &mut dyn Writ
 }
 
 /// Read the job's policy first, so a promotion that lands is never followed
-/// by an error.
 async fn promote(
     ctx: &EvalContext,
     args: &OptimizationDigestArgs,
@@ -511,8 +479,6 @@ async fn revert(
     Ok(())
 }
 
-/// Delete the job's jobs directory when it is under this home; its documents
-/// and runs stay.
 async fn rm(ctx: &EvalContext, args: &OptimizationRmArgs, out: &mut dyn Write) -> Result<()> {
     validate_job_id(&args.job_id)?;
     let job = load_job(&ctx.access, &ctx.owner, &args.job_id)
@@ -526,7 +492,6 @@ async fn rm(ctx: &EvalContext, args: &OptimizationRmArgs, out: &mut dyn Write) -
         dir.display()
     );
     // Another home's directory is never this home's to delete, --force or
-    // not: the path comes from the job's document.
     let dir = crate::commands::eval::manage::job_dir_in_this_home(ctx, &job)?;
     let state = derive_state(&job.journal);
     if !args.force && !removable(&state) {

@@ -4,7 +4,6 @@ import type { DockState } from "./workspace";
 export const inScope = (s: Surface, routeName: string) =>
   !s.routes || s.routes.includes(routeName);
 
-/** The dock on a route, from `surfaces`, every one registered. */
 export function dockView(
   dock: DockState,
   routeName: string,

@@ -35,8 +35,6 @@ type Held = {
   awaiting?: boolean;
 };
 
-// A move the owner made but whose order never arrives is let go after this,
-// so the item does not wait in a slot nothing will fill.
 const ARRIVAL_WAIT_MS = 4000;
 
 const reducedMotion = () =>
@@ -63,8 +61,6 @@ export function useDragReorder<E extends HTMLElement = HTMLElement>({
   const pressed = useRef<Pressed | null>(null);
   const [phase, setPhase] = useState<Drag | Held | null>(null);
 
-  // A held move whose order has arrived is drawn settled at once: the new
-  // places are where the held items already stand.
   const current = phase?.kind === "held" && phase.order !== order ? null : phase;
   const arrived = phase?.kind === "held" && current === null ? phase : null;
   useLayoutEffect(() => {
@@ -171,7 +167,6 @@ export function useDragReorder<E extends HTMLElement = HTMLElement>({
       }
     }
     seen.current = new Map(now.map(({ key, at }) => [key, at]));
-    // a change of order is what moves items; the rest is read as it stands
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order]);
 
@@ -194,7 +189,6 @@ export function useDragReorder<E extends HTMLElement = HTMLElement>({
     };
     pressed.current = next;
     setPhase((now) => (now?.kind === "drag" ? dragAt(next) : now));
-    // the press is what changes here; the rest is read as it stands
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order]);
 

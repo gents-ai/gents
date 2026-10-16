@@ -19,8 +19,6 @@ pub async fn subscribe_all_collections(node: &EmbeddedNode) -> Result<()> {
 pub(crate) async fn subscribe_runtime_collections(
     p2p: &dyn defra_p2p_adapter::P2POperations,
 ) -> Result<()> {
-    // The DB handles existing subscriptions idempotently and persists the
-    // resulting list once per API call.
     p2p.add_collections(
         subscribed_collection_names()
             .into_iter()
@@ -46,9 +44,6 @@ mod tests {
     use super::subscribed_collection_names;
     use gents::agent::p2p_reconcile::templates::CLIENT_INDEX_COLLECTIONS;
 
-    // The subscription set is derived from a list that grows automatically,
-    // so credential and plaintext exclusions must be asserted rather than
-    // assumed; the Lean scope model keeps credentials off every client route.
     #[test]
     fn the_desktop_does_not_replicate_plaintext_provider_bodies_or_credentials() {
         let names = subscribed_collection_names();

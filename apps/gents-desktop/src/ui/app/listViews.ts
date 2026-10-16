@@ -1,5 +1,3 @@
-// Outlives the visit in this browser's storage; it names data (nodes,
-// agents) that can come and go, so it is read back leniently.
 import { useStore } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { createStore } from "zustand/vanilla";
@@ -49,7 +47,6 @@ const store = createStore<ListViews>()(
   }),
 );
 
-/** The person's changes to how the lists are narrowed. */
 export const listViews = {
   setSessionFilter(sessionFilter: SessionFilter) {
     store.setState({ sessionFilter });
@@ -65,10 +62,8 @@ export const listViews = {
   },
 };
 
-/** A value from the list views; re-renders when it changes. */
 export function useListViews<T>(select: (views: ListViews) => T): T {
   return useStore(store, select);
 }
 
-// Tests only: the lists as on a first run.
 export const resetListViews = () => store.setState(initial(), true);

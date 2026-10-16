@@ -1,5 +1,3 @@
-//! Why a request stopped, read from its durable rows.
-
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
@@ -18,7 +16,6 @@ use crate::oauth_credential::{
 use crate::request_admission::SIGNED_REQUEST_FIELDS;
 use crate::Collection;
 
-/// The failed inference call that ended a request.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct FailedCall {
     pub(crate) backend_id: Option<String>,
@@ -29,8 +26,6 @@ pub(crate) struct FailedCall {
     pub(crate) started_at: Option<String>,
 }
 
-/// Why a turn stopped where the operator can act: a usage limit, or an
-/// account that cannot serve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockedReason {
@@ -47,16 +42,12 @@ pub struct BlockedAccount {
     pub provider: String,
 }
 
-/// A stopped turn: the reason, the account and profile it ran on, the
-/// agents that profile serves, the reported reset and the command that
-/// moves the profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BlockedTurn {
     pub reason: BlockedReason,
     pub account: Option<BlockedAccount>,
     pub profile: Option<String>,
     pub agents_on_profile: Vec<String>,
-    /// `None` when the provider reported no reset.
     pub resets_at: Option<DateTime<Utc>>,
     pub switch_command: Option<String>,
 }

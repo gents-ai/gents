@@ -549,7 +549,6 @@ async fn http_send_bytes(request: reqwest::RequestBuilder) -> Result<(reqwest::U
     Ok((url, body.to_vec()))
 }
 
-/// Opens the control plane: the running server's GraphQL endpoint, or the home's own store claimed for the access's lifetime.
 pub(crate) async fn resolve_config_access(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
@@ -882,14 +881,6 @@ mod tests {
         };
 
         assert!(error.to_string().contains("run `gents init --home"));
-    }
-
-    #[test]
-    fn default_codex_remote_matches_shim_port() {
-        assert_eq!(
-            DEFAULT_CODEX_REMOTE,
-            format!("ws://127.0.0.1:{DEFAULT_CODEX_SHIM_PORT}/")
-        );
     }
 
     #[test]

@@ -34,11 +34,6 @@ pub fn targets_dir() -> PathBuf {
     workspace_root().join("scripts/evals/targets")
 }
 
-/// One inference target: a canonical configuration bundle (the
-/// `pack_config.json` shape) that authors exactly one `InferenceBackend` and
-/// one `InferenceProfile` selecting its model. Credentials are selected
-/// through `BackendAuth` (for example an environment variable name), never
-/// stored in the file.
 #[derive(Clone, Debug)]
 pub struct InferenceTarget {
     pub name: String,
@@ -120,8 +115,6 @@ impl InferenceTarget {
         })
     }
 
-    /// Every target named by `GENTS_EVAL_TARGET`, in order; each target's
-    /// environment credential must be present before any trial starts.
     pub fn selected_all() -> Result<Vec<Self>> {
         let value = std::env::var(EVAL_TARGET_VARIABLE).map_err(|_| {
             anyhow::anyhow!(
@@ -187,8 +180,6 @@ impl InferenceTarget {
         }
     }
 
-    /// Callers that install several profiles replace `profile_id` and their
-    /// own eval settings.
     pub fn profile(&self, node_did: &str) -> InferenceProfile {
         InferenceProfile {
             node_did: node_did.to_owned(),
@@ -246,8 +237,6 @@ fn resolve_selector(selector: &str) -> Result<(String, PathBuf)> {
     Ok((name, path))
 }
 
-/// A repeated file is selected once; two different files with one name would
-/// make report rows ambiguous.
 pub fn parse_selection(value: &str) -> Result<Vec<(String, PathBuf)>> {
     let mut selected: Vec<(String, PathBuf)> = Vec::new();
     for selector in value
@@ -276,8 +265,6 @@ pub fn live_target() -> InferenceTarget {
     InferenceTarget::selected().unwrap_or_else(|error| panic!("{error:#}"))
 }
 
-/// Bind one isolated live-test node to a target: its backend, its model
-/// selection as the default agent's profile, and that agent.
 pub async fn bind_target(
     node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
@@ -449,10 +436,6 @@ pub async fn wait_for_request_terminal(
     }
 }
 
-/// Resolve the one assistant message selected by a terminal request's physical
-/// canonical output reference, with no latest-message fallback: callers polling
-/// a still-running request observe an empty value, while a malformed terminal
-/// projection fails loudly.
 pub async fn terminal_assistant_answer(node: &EmbeddedNode, request_id: &str) -> String {
     let escaped = escape_graphql_string(request_id);
     let query = format!(

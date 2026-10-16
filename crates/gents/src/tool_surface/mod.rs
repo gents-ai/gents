@@ -110,8 +110,6 @@ pub struct SelfConfigToolConfig {
     pub preview: bool,
     pub enable_pack_install: bool,
     pub enable_graph_tools: bool,
-    /// Runtime-owned host ceiling captured when this Agent's tool surface
-    /// is resolved; observation data, never a writable configuration document.
     pub process_ceiling: SelfConfigProcessCeiling,
 }
 

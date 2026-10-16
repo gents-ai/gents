@@ -39,8 +39,6 @@ export function releaseOwnedSubmissionWorkflow(
   return current === owned ? READY : current;
 }
 
-/** A send's workflow and its sending flag change in one write, so no state
-    between them is seen. */
 export const chat = {
   beginSubmission(store: ChatStore, owned: ChatWorkflowState) {
     store.setState({ localWorkflow: owned, sending: true });

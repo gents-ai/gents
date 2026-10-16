@@ -142,19 +142,14 @@ pub struct SessionTokenUsage {
     pub fresh_input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub charged_tokens: Option<u64>,
-    /// Sum of observed provider execution durations, excluding queue time.
-    /// None if any call lacks a valid closed interval.
     #[serde(default)]
     pub api_duration_ms: Option<u64>,
     pub incomplete: bool,
 }
 
-/// Read-only accounting for one exact session/node/requester scope.
-/// Context occupancy and cumulative inference usage are distinct quantities.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionInferenceObservation {
     pub token_usage: SessionTokenUsage,
-    /// Distinct main-loop rounds, excluding summarizer calls and retry attempts.
     pub inference_turns: Option<u64>,
     pub latest_context: Option<super::context_budget::LastRequestContextSnapshot>,
     pub latest_completion_tokens: Option<u64>,
@@ -166,8 +161,6 @@ pub struct RequestContextObservation {
     pub completion_tokens: Option<u64>,
 }
 
-/// Bounded live observation. Unlike the session rollup, this reads only the
-/// newest inference call of one physically resolved, exactly scoped request.
 pub async fn load_request_context_observation(
     node: &EmbeddedNode,
     node_did: &str,
@@ -203,8 +196,6 @@ pub async fn load_request_context_observation(
     load_pinned_request_context_observation(node, owner).await
 }
 
-/// Read inference observations for the already-authorized physical request.
-/// The caller retains its canonical request row; no logical label is resolved again.
 pub async fn load_pinned_request_context_observation(
     node: &EmbeddedNode,
     owner: &AgentRequestRow,
@@ -282,8 +273,6 @@ pub async fn load_session_inference_observation(
 ) -> Result<SessionInferenceObservation> {
     let ids = load_session_request_doc_ids(node, node_did, requester_did, session_id).await?;
     let mut rows = Vec::new();
-    // Bounded predicates, without truncating session history or ever
-    // interpolating an empty list literal into a database operation.
     for batch in ids.chunks(128) {
         let response = graphql_with_transaction_retry(
             node,
@@ -310,8 +299,6 @@ pub async fn load_session_inference_observation(
     })
 }
 
-/// Physical requests visible in one exact session/requester scope. This is the
-/// shared request-selection owner for session summaries and inference accounting.
 pub async fn load_session_request_doc_ids(
     node: &EmbeddedNode,
     node_did: &str,
@@ -1362,9 +1349,6 @@ fn session_request_timestamps_query(
     )
 }
 
-/// Session summary timestamps are produced by the canonical RFC3339 row
-/// writers. Missing values stay absent; malformed non-empty values fail the
-/// read rather than silently changing which row appears latest.
 fn summary_timestamp(value: Option<&String>, label: &str) -> Result<Option<String>> {
     let Some(value) = value else {
         return Ok(None);
@@ -2576,8 +2560,6 @@ mod tests {
         let doc = response.data.as_ref().unwrap()["AgentRequest"][0]["_docID"]
             .as_str()
             .unwrap();
-        // Deliberately reuse an authorized logical alias: only the physical
-        // owner may contribute this call to usage.
         let response = node.execute(&format!(r#"mutation {{ create_InferenceCall(input: {{
             call_id: "foreign-usage", call_seq: 1, call_kind: "inference", node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", request_id: "request-a-new",
             request_doc_id: "{}", backend_id: "backend-a", call_state: "completed", prompt_tokens: 9000, completion_tokens: 1000, cached_input_tokens: 0,

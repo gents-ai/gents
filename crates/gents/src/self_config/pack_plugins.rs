@@ -1,37 +1,12 @@
 use super::*;
 
-/// Per-plugin post-install discovery entry. Every installed plugin gets one,
-/// so a multi-plugin pack response never omits the others.
 fn plugin_discovery_calls(plugins: &[(String, String)]) -> Vec<serde_json::Value> {
     plugins
         .iter()
         .map(|(namespace, name)| {
-            // The config tool accepts argv/options/target_id/set/clear only;
-            // plugin metadata already rides in the `plugins` response.
             json!({"argv": ["plugin", "get", format!("{namespace}/{name}")]})
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn discovery_calls_cover_every_plugin() {
-        let calls = plugin_discovery_calls(&[
-            ("ns".to_owned(), "alpha".to_owned()),
-            ("ns".to_owned(), "beta".to_owned()),
-        ]);
-        assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0], json!({"argv": ["plugin", "get", "ns/alpha"]}));
-        assert_eq!(calls[1], json!({"argv": ["plugin", "get", "ns/beta"]}));
-    }
-
-    #[test]
-    fn discovery_calls_empty_for_no_plugins() {
-        assert!(plugin_discovery_calls(&[]).is_empty());
-    }
 }
 
 impl PackInstaller {

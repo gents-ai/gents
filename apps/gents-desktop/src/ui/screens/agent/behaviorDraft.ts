@@ -110,7 +110,6 @@ export function newAgentView(deployment: NodeView): AgentView {
   };
 }
 
-/** A new agent drafted beside another page, before its first save. */
 export type DraftMode = {
   onSaved: (agentId: string) => void;
   onCancel: () => void;

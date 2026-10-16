@@ -1,5 +1,3 @@
-//! Lean transport projections use interned IDs and logical time. Runtime
-//! consumers map them to canonical documents; these are not storage models.
 use super::*;
 
 #[derive(Debug, Deserialize)]

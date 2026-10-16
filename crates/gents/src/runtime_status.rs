@@ -355,7 +355,6 @@ impl RuntimeStatusHandle {
     }
 }
 
-/// Mutable NodeRuntime fields as GraphQL input literals, in input order.
 fn runtime_status_fields(row: &RuntimeStatusRow) -> [(&'static str, String); 8] {
     let string = |value: &str| format!("\"{}\"", escape_graphql_string(value));
     [

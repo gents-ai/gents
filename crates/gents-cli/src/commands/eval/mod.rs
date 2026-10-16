@@ -1,6 +1,3 @@
-//! `gents eval`: thin commands over `gents::eval`. Refusals the library
-//! returns are re-raised with exactly their text ([`surface_refusal`]);
-//! `main` prints them and exits 1.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -14,7 +11,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::cli::{EvalCommand, EvalScopeArgs};
 
-/// The launching home a command acts for.
 pub(crate) struct EvalContext {
     pub(crate) access: gents::config_client::ConfigAccess,
     pub(crate) home_dir: PathBuf,
@@ -37,13 +33,11 @@ impl EvalContext {
         runs_dir(&self.home_dir)
     }
 
-    /// `<home>/eval/jobs`: each job owns `<jobs_dir>/<job_id>/`.
     pub(crate) fn jobs_dir(&self) -> PathBuf {
         self.home_dir.join(gents::home::EVAL_DIR_NAME).join("jobs")
     }
 }
 
-/// `<home>/eval/runs`, where the runner freezes every run.
 pub(crate) fn runs_dir(home_dir: &Path) -> PathBuf {
     home_dir.join(gents::home::EVAL_DIR_NAME).join("runs")
 }
@@ -228,8 +222,6 @@ pub(crate) fn cancel_on_ctrl_c(first_warning: &'static str) -> CancellationToken
     token
 }
 
-/// The first interrupt cancels `cancel`; the second calls `exit`. A failure
-/// to listen ends the handler: the token stays as it is.
 async fn on_interrupts<S>(
     mut next: impl FnMut() -> S,
     cancel: &CancellationToken,
@@ -250,10 +242,8 @@ async fn on_interrupts<S>(
     exit();
 }
 
-/// How often a command hosting a loop reads the documents for progress.
 const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// A progress read [`follow_progress`] repeats while a loop runs.
 pub(crate) trait Progress {
     /// A failed read only delays the lines; it never stops the loop.
     async fn report(&mut self);
@@ -285,8 +275,6 @@ pub(crate) async fn follow_progress<T>(
     result
 }
 
-/// A refusal the library returned, re-raised with exactly its own text
-/// whatever context was added above it; any other error unchanged.
 pub(crate) fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
     let verbatim = gents::eval::report::report_refused(&error)
         .map(ToString::to_string)
@@ -305,7 +293,6 @@ pub(crate) fn write_json<T: Serialize>(out: &mut dyn Write, value: &T) -> Result
     Ok(())
 }
 
-/// The commit this binary was built from, recorded on every run it freezes.
 pub(crate) fn source_commit() -> String {
     option_env!("GENTS_BUILD_GIT_SHA")
         .unwrap_or("unknown")
@@ -316,7 +303,6 @@ pub(crate) fn source_dirty() -> bool {
     option_env!("GENTS_BUILD_GIT_DIRTY") == Some("true")
 }
 
-/// `<definition>-<unix ms>-<4 random hex>`.
 pub(crate) fn default_id(definition_id: &str) -> String {
     let random = uuid::Uuid::new_v4().as_u128() as u16;
     format_default_id(definition_id, chrono::Utc::now().timestamp_millis(), random)
@@ -326,7 +312,6 @@ fn format_default_id(definition_id: &str, unix_ms: i64, random: u16) -> String {
     format!("{definition_id}-{unix_ms}-{random:04x}")
 }
 
-/// Printed above a policy verdict computed with the placeholder defaults.
 pub(crate) const UNCALIBRATED_BANNER: &str =
     "policy defaults are uncalibrated until an A/A calibration run has set them";
 

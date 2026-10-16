@@ -109,7 +109,6 @@ async fn colliding_logical_interrupt_fetch_rejects_ambiguity_and_binds_owner_phy
         None
     );
 
-    // Colliding logical id fails closed instead of reading one replica's row.
     assert!(
         fetch_interrupt_requested_at(&node, "shared").await.is_err(),
         "colliding logical id must be rejected, not resolved by limit 1"

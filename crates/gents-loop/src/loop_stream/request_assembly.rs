@@ -250,10 +250,6 @@ mod replay_error_tests {
         );
     }
 
-    /// A grouped-order wire persists GLM's native `[reasoning, text, call]`
-    /// turn; the daemon projects it once and the loop entry and repair
-    /// sanitize that projection again. Every pass must associate by the
-    /// persisted block identity and be a fixpoint of the first.
     #[test]
     fn grouped_projection_of_a_projected_row_keeps_persisted_block_identity() {
         use gents_protocol::message::{ToolCall, ToolFunction, ToolResult, ToolResultContent};
@@ -609,9 +605,6 @@ mod replay_error_tests {
         }
     }
 
-    /// The captured body of a turn is its producing request, derived through
-    /// the same builder that assembles the stage so the ordinary prefix the
-    /// replay frontier compares is byte-identical, not hand-fabricated.
     async fn producing_capture(
         model: &AssemblyOnlyModel,
         config: &LoopConfig,
@@ -663,8 +656,6 @@ mod replay_error_tests {
         ]
     }
 
-    /// The seeded dispatch and a fresh pass over the same canonical evidence
-    /// must assemble the byte-identical provider request.
     #[tokio::test]
     async fn a_seeded_dispatch_assembles_the_same_request_as_a_fresh_resolution() {
         let tag = provider_tag(0);
@@ -1093,12 +1084,6 @@ pub fn is_request_context_message(message: &Message) -> bool {
     trimmed.starts_with("<context>") && trimmed.ends_with("</context>")
 }
 
-/// Runs only after the provider REJECTED the request (the completion-retry
-/// `Repair` directive); deliberately more aggressive than the egress
-/// normalizer because it is lossy over every JSON string leaf in tool-call
-/// arguments, which is why it cannot live at egress. History repair is
-/// licensed by `PromptAssembly.repair_is_payload_only` and
-/// `repair_idempotent` (a second pass is a no-op).
 #[derive(Debug, thiserror::Error)]
 #[error("provider_input_repair_removed_complete_prompt")]
 struct ProviderInputRepairError;
@@ -1107,9 +1092,6 @@ pub fn repair_provider_input(
     history: &mut Vec<TaggedMessage>,
     new_messages: &mut Vec<TaggedMessage>,
 ) -> Result<(), StreamingError> {
-    // A restored checkpoint may split one closed tool-call/result pair across
-    // rig's history and prompt carriers; repair the joined projection and
-    // split only the final prompt back out.
     let mut provider_messages = std::mem::take(history);
     provider_messages.append(new_messages);
     repair_messages(&mut provider_messages);
@@ -1204,8 +1186,6 @@ fn completion_request_input_tokens(
     })
 }
 
-/// Capture and transport receive clones of this same request, so an estimate
-/// can never be paired with a different rebuilt request.
 #[derive(Clone, Debug)]
 pub(super) struct PreparedDispatch {
     request: CompletionRequest,
@@ -1222,9 +1202,6 @@ impl PreparedDispatch {
     }
 }
 
-/// Sole preparation path for an actual provider attempt: every retry starts
-/// from the unclamped assembled request and repeats the complete projection
-/// and both budget gates before capture or transport.
 pub(super) fn prepare_dispatch_attempt(
     assembled_request: &CompletionRequest,
     config: &LoopConfig,
@@ -1240,8 +1217,6 @@ pub(super) fn prepare_dispatch_attempt(
         aggregate_token_budget,
         input_tokens,
     )?;
-    // Projection of the exact post-clamp snapshot capture and transport
-    // receive; retains the scalar both guards use.
     let projection =
         completion_request_input_components(&request, config.provider_input_counter.as_ref())?;
     debug_assert_eq!(projection.estimated_input_tokens, input_tokens);
@@ -1290,15 +1265,11 @@ pub(super) fn context_accounting_for_request(
     }
 }
 
-/// Fits each completion to the context remaining after its fully assembled
-/// provider input, preserving `input + output <= context` on every dispatch.
 pub fn clamp_request_output_budget(
     request: &mut CompletionRequest,
     config: &LoopConfig,
     input_tokens: usize,
 ) {
-    // `None` historically delegated the output limit to the provider; make the
-    // remaining context explicit while preserving the unset surface.
     let configured_max =
         crate::provider_input::budget::configured_output_ceiling(request.max_tokens);
     let effective_max = crate::provider_input::budget::effective_output_budget(
@@ -1347,9 +1318,6 @@ pub fn ensure_context_can_dispatch(
     )))
 }
 
-/// Replays the model's own reasoning per Lean
-/// `ClaudeMap.restoreHistoricalReasoningSuffix`; without a proven issuer and
-/// wire, no reasoning is replayed.
 pub async fn assemble_provider_request<M: CompletionModel>(
     model: &M,
     history: &mut Vec<TaggedMessage>,
@@ -1402,9 +1370,6 @@ pub async fn assemble_provider_request<M: CompletionModel>(
             .map(|row| row.evidence.clone())
             .collect()
     };
-    // A turn accepted earlier in this loop carries its coordinate but not yet
-    // the physical header its consumer published; the unique canonical row for
-    // that coordinate supplies the sidecar.
     for row in rows
         .iter_mut()
         .filter(|row| row.physical_header.is_none() && row.block_indices.is_empty())
@@ -1573,9 +1538,6 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
         config.context_window,
         crate::provider_input::budget::configured_output_ceiling(rebuilt.max_tokens),
     );
-    // Preserve the threshold diagnostic for a fitting-but-over-policy result;
-    // a non-dispatchable result continues to the owned loop's typed error
-    // before capture or send.
     if rebuilt_can_dispatch
         && crate::compaction::ReductionAdmission::for_input(
             after_tokens,
@@ -1603,12 +1565,6 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
     ))
 }
 
-/// Apply the one lossy repair and rebuild the complete assembled request; the
-/// repair also removes every reasoning block for the rest of this request
-/// (edited arguments invalidate every later block), making the accepted
-/// retry's capture the durable replay frontier. The returned request is
-/// deliberately not projected or clamped here; the next provider-attempt
-/// iteration must pass through `prepare_dispatch_attempt`.
 pub(super) async fn repair_and_rebuild_request<M: CompletionModel>(
     model: &M,
     history: &mut Vec<TaggedMessage>,

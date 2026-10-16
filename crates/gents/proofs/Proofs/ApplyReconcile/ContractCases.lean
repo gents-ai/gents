@@ -1,8 +1,6 @@
 import Proofs.ApplyReconcile.Publication
 import Proofs.Conformance.ContractTypes
 import Mathlib.Data.Finset.Card
-
-/-! Executable publication witnesses; fixture rows call `publish` itself. -/
 namespace ApplyReconcile.ContractCases
 
 open Conformance.Contracts

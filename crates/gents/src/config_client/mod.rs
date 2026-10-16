@@ -31,7 +31,6 @@ mod schema_management;
 mod txn;
 pub(crate) mod write_telemetry;
 
-/// Whether the error is a retry-exhausted conflict, storage failure, or step timeout.
 pub(crate) fn is_transaction_step_unavailable(error: &anyhow::Error) -> bool {
     retry::classified_transaction_conflict(error).is_some()
         || retry::is_transaction_storage_failure(error)
@@ -97,7 +96,6 @@ use futures::future::BoxFuture;
 use gents_protocol::graphql::GraphqlRequestOptions;
 use serde_json::Value;
 
-/// A served node's HTTP GraphQL endpoint and the DID its requests act as.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GraphqlEndpoint {
     url: String,
@@ -122,7 +120,7 @@ impl GraphqlEndpoint {
         }
     }
 
-    /// Forward a caller's DefraDB bearer; no runtime node credential is minted.
+    /// Forward a caller's DefraDB bearer without minting a runtime node credential.
     pub fn with_delegated_authorization(
         url: impl Into<String>,
         authorization: &str,
@@ -203,7 +201,7 @@ pub enum ConfigAccess {
     Local(LocalConfigAccess),
 }
 
-/// Execute reads through the existing owner; adapters add no retry or authorization decision.
+/// Reads use the existing owner; adapters add no retry or authorization decision.
 #[async_trait::async_trait]
 pub trait ConfigRead: Send + Sync {
     async fn execute_read(&self, document: &str) -> Result<Value>;

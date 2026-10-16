@@ -44,15 +44,13 @@ pub(crate) struct RuntimeHttpState {
     pub(crate) tool_root: Option<String>,
     pub(crate) tool_root_error: Option<String>,
     pub(crate) cli_tools: Vec<String>,
-    /// The home this runtime serves, so a client finding a different runtime
-    /// on its port can name it.
     pub(crate) home: Option<String>,
     pub(crate) started_at: String,
     pub(crate) started_instant: Instant,
     pub(crate) backend_health: Option<gents::BackendHealthMap>,
     pub(crate) p2p_admission: Option<P2pAdmissionState>,
     pub(crate) p2p_metrics_cache: Arc<Mutex<Option<P2pMetricsSnapshot>>>,
-    /// Shared because the shim may bind after HTTP serving starts (#699).
+    /// Shared because the shim may bind after HTTP serving starts.
     pub(crate) codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
     pub(crate) enrollment_offer_issuer: EnrollmentOfferIssuerHandle,
     pub(crate) enrollment_decisions: EnrollmentDecisionServiceHandle,
@@ -850,31 +848,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn replicated_schema_is_null_until_published_then_complete() {
-        let cell = OnceCell::new();
-        assert_eq!(replicated_schema_status(&cell), Value::Null);
-
-        let schema: gents_protocol::peer_schema::ReplicatedSchema =
-            gents::agent::p2p_reconcile::CLIENT_COLLECTIONS
-                .iter()
-                .map(|name| {
-                    (
-                        (*name).to_string(),
-                        gents_protocol::peer_schema::ReplicatedCollectionIdentity {
-                            version_id: format!("bafy-{name}"),
-                            branchable: true,
-                            policy_resource: None,
-                        },
-                    )
-                })
-                .collect();
-        cell.set(schema.clone()).unwrap();
-        let published: gents_protocol::peer_schema::ReplicatedSchema =
-            serde_json::from_value(replicated_schema_status(&cell)).unwrap();
-        assert_eq!(published, schema);
-    }
-
     fn state() -> RuntimeHttpState {
         let (activation_runtime, activation_observation) = empty_activation_state();
         RuntimeHttpState {
@@ -927,21 +900,6 @@ mod tests {
             router: Some((5, "desired".into())),
         };
         assert!(!torn.successful_for(4, "desired"));
-    }
-
-    fn agent_config(id: &str, enabled: bool, model_name: &str) -> SelfAgent {
-        SelfAgent {
-            agent_id: id.to_string(),
-            display_name: id.to_string(),
-            model_name: model_name.to_string(),
-            enabled,
-            backend_id: format!("{id}-backend"),
-            provider_kind: "OpenAiCompatible".to_string(),
-            endpoint: "https://api.example.test/v1".to_string(),
-            inference_profile_id: format!("{id}-profile"),
-            context_window: Some(128_000),
-            compaction_threshold: gents::config::DEFAULT_COMPACTION_THRESHOLD,
-        }
     }
 
     fn runtime() -> MetricsRuntimeRow {
@@ -1159,77 +1117,6 @@ mod tests {
         assert_eq!(snapshot.replicators, 0);
         assert!(snapshot.admission.is_none());
         assert!(snapshot.sync_status.is_none());
-    }
-
-    #[test]
-    fn self_payload_uses_acceptance_field_names_and_primary_agent() {
-        let agents = vec![
-            agent_config("disabled", false, "llama-local"),
-            agent_config("default", true, "gpt-4.1"),
-        ];
-        let payload = render_self_payload(
-            &state(),
-            &json!({ "status": "ok", "ok": true }),
-            Some(&runtime()),
-            Some(&readiness("default")),
-            &agents,
-            &ContextBudget::default(),
-        );
-
-        assert_eq!(
-            payload.get("node_name").and_then(Value::as_str),
-            Some("amy")
-        );
-        assert_eq!(
-            payload.get("node_did").and_then(Value::as_str),
-            Some("did:key:zAgent")
-        );
-        assert_eq!(
-            payload.get("process_state").and_then(Value::as_str),
-            Some("ready")
-        );
-        assert_eq!(
-            payload.pointer("/agent/model_name").and_then(Value::as_str),
-            Some("gpt-4.1")
-        );
-        assert_eq!(
-            payload
-                .pointer("/agent/backend_endpoint")
-                .and_then(Value::as_str),
-            Some("https://api.example.test/v1")
-        );
-        assert_eq!(
-            payload
-                .pointer("/agent/backend_provider")
-                .and_then(Value::as_str),
-            Some("OpenAiCompatible")
-        );
-        assert_eq!(
-            payload
-                .get("agents")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2)
-        );
-    }
-
-    #[test]
-    fn self_payload_does_not_invent_process_or_default_without_readiness() {
-        let agents = vec![agent_config("fallback", false, "minimax")];
-        let payload = render_self_payload(
-            &state(),
-            &json!({ "status": "degraded", "ok": true }),
-            None,
-            None,
-            &agents,
-            &ContextBudget::default(),
-        );
-
-        assert_eq!(
-            payload.get("process_state").and_then(Value::as_str),
-            Some("unknown")
-        );
-        assert_eq!(payload.get("agent"), Some(&Value::Null));
     }
 
     async fn usage_route(

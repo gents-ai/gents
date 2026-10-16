@@ -35,8 +35,6 @@ pub async fn desktop_session_snapshot(
     .await
 }
 
-/// The bounded session read behind `desktop_session_snapshot` and its
-/// e2e/test callers.
 pub(crate) async fn session_snapshot(
     core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
     session_id: String,

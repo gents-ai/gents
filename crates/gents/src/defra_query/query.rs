@@ -17,8 +17,6 @@ pub(crate) const RESTRICTED_FIELDS: &[(&str, &str)] = &[
     ("OAuthCredential", "id_token"),
 ];
 
-/// Whether the canonical query owner treats a collection field as sensitive.
-/// Other read adapters use the same pairs when retaining selected document data.
 pub fn is_restricted_field(collection: &str, field: &str) -> bool {
     RESTRICTED_FIELDS
         .iter()
@@ -219,9 +217,6 @@ mod tests {
 
     #[test]
     fn no_scope_grants_a_protected_collection() {
-        // Unrestricted is the endpoint default for MCP and `gents query`, and
-        // an operator can name a collection explicitly. Neither may reach the
-        // eval or optimization material.
         for name in crate::document_config::PROTECTED_DATASTORE_COLLECTIONS {
             for scope in [
                 CollectionScope::all(),
@@ -237,8 +232,6 @@ mod tests {
 
     #[test]
     fn deny_all_scopes_reject_every_collection() {
-        // The `Only(∅) ≠ All` trap: an empty allowlist and `None` both DENY,
-        // never allow-all. `restricted([])` must NOT behave like `all()`.
         for scope in [
             CollectionScope::none(),
             CollectionScope::restricted(Vec::new()),
@@ -271,8 +264,6 @@ mod tests {
         assert!(err.to_string().contains("restricted"), "{err}");
     }
 
-    /// A stale pair guards nothing: every restricted field must exist on its
-    /// credential collection in the registered SDL.
     #[test]
     fn every_restricted_field_names_a_current_sdl_field() {
         for (collection, field) in RESTRICTED_FIELDS {

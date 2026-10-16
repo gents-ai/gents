@@ -1,20 +1,3 @@
-//! Rust decision mirror of the Lean `CompletionRetry` executable model
-//! (`crates/gents/proofs/Proofs/CompletionRetry/{State,Transition,Executable}.lean`,
-//! issue #631): the same decisions as Lean `step?` for the
-//! `preStreamFail` / `retract` / `closeTurn`+`continueAfterClose` transitions,
-//! expressed as directives the owned loop acts on directly. Pure decision
-//! function; it never sleeps, retries, or touches the network. Precedence
-//! mirrors `step?`: `Permanent` fails; `Transport` consumes the next ladder
-//! entry (bumped by a `RateLimited` hint) subject to the deadline fail-fast;
-//! a *fresh* parse-400 with resample budget takes a ladder-timed resample,
-//! otherwise repair if allowed and unused, else fail — a fresh parse-400
-//! whose resample delay misses the deadline fails immediately and never
-//! falls through to repair (Lean `parseExhaust`); `ReasoningRejected` goes
-//! to the one-shot repair; mid-stream failures consume a ladder entry,
-//! retracting when `effects_this_turn == false` and closing the turn when
-//! true. The ladder delay is jittered first, then checked against the
-//! deadline: never sleep into certain death.
-
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -31,8 +14,6 @@ pub struct CompletionRetryProfileFields {
     pub retry_interactive_max: Option<i64>,
 }
 
-/// Retry-relevant failure classification. Mirrors the Lean
-/// `CompletionRetry.FailureClass`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureClass {
     Transport,
@@ -41,11 +22,6 @@ pub enum FailureClass {
     Permanent,
 }
 
-/// Classifies an [`InferenceError`] into the retry-relevant [`FailureClass`].
-/// The parse-signature check takes precedence over the variant: vLLM's
-/// intermittent tool-call json-parse 400 is classified `TransientFailure` by
-/// `classify_completion_error`, so the signature check reclassifies it
-/// regardless of the carrying variant.
 pub fn failure_class(error: &InferenceError, error_text: &str) -> FailureClass {
     let is_parse_failure = |text: &str| {
         crate::error::provider_message_is_tool_call_json_parse_failure(text)
@@ -54,7 +30,6 @@ pub fn failure_class(error: &InferenceError, error_text: &str) -> FailureClass {
     if is_parse_failure(error_text) || is_parse_failure(&error.to_string()) {
         return FailureClass::ParseBadRequest;
     }
-    // A typed usage limit stays permanent whatever its provider text says.
     if !matches!(error, InferenceError::UsageLimited(_))
         && (crate::error::provider_message_is_reasoning_rejection(error_text)
             || crate::error::provider_message_is_reasoning_rejection(&error.to_string()))
@@ -74,15 +49,9 @@ pub fn failure_class(error: &InferenceError, error_text: &str) -> FailureClass {
     }
 }
 
-/// Per-request retry policy resolved from the `InferenceProfile` + execution
-/// origin; mirrors the Lean `Budget` structure plus the concrete ladder delays.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletionRetryPolicy {
-    /// `len()` IS the transport retry budget (`Budget.transportRetries` in
-    /// Lean); the same ladder is reused, indexed by the resample counter, for
-    /// parse-400 resample delays.
     pub transport_backoff: Vec<Duration>,
-    /// Resample retry budget (`Budget.resampleRetries` in Lean).
     pub max_resample: u32,
     pub allow_repair: bool,
 }
@@ -149,9 +118,6 @@ impl CompletionRetryPolicy {
         }
     }
 
-    /// No retry at all, for internal sub-completions that must not inherit
-    /// the scheduled ladder's minutes-scale, deadline-less backoff (#648):
-    /// title generation and compaction's non-guided JSON fallback.
     pub fn no_retry() -> Self {
         Self {
             transport_backoff: Vec::new(),
@@ -160,13 +126,6 @@ impl CompletionRetryPolicy {
         }
     }
 
-    /// Small, fixed, immediate, deadline-aware recovery budget for internal
-    /// tool-free sub-completions with no caller-level retry (compaction).
-    /// Never inherits an execution origin's ladder (#648) but keeps
-    /// retract-and-resample recovery: three attempts on a three-slot ladder,
-    /// the first immediate, before failing deterministically (#1016). No
-    /// resample or repair — those are parse-400 remedies for tool-calling
-    /// requests.
     pub fn internal_immediate() -> Self {
         Self {
             transport_backoff: vec![
@@ -257,8 +216,6 @@ impl CompletionRetryState {
         }
     }
 
-    /// Ladder-consuming retries taken so far; repair is a distinct one-shot
-    /// action and is not counted here.
     pub fn retry_count(&self) -> u32 {
         self.transport_used + self.resample_used
     }
@@ -332,8 +289,6 @@ impl CompletionRetryState {
                 if let Some(base_delay) =
                     resample_pacing.filter(|_| is_fresh && !resample_budget_spent)
                 {
-                    // A deadline overshoot fails immediately; it does not fall
-                    // through to repair (Lean `parseExhaust`).
                     let delay = jitter(base_delay, &mut rand::rng());
                     if exceeds_deadline(now, delay, deadline) {
                         return PreStreamDirective::Fail {
@@ -409,8 +364,6 @@ fn exceeds_deadline(now: DateTime<Utc>, delay: Duration, deadline: Option<DateTi
     }
 }
 
-/// Check the actual wake before reissuing a provider attempt; closes
-/// scheduler overshoot after the planned retry delay was admitted.
 pub fn retry_wake_fits_deadline(
     observed_at: DateTime<Utc>,
     deadline: Option<DateTime<Utc>>,

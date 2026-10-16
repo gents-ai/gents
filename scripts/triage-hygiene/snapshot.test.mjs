@@ -1,7 +1,3 @@
-// Fences the rollback tool's milestone deletion guards: restore() is the only
-// destructive thing in this directory, and its milestone step could previously
-// delete every milestone in the repository. Runs against an in-memory GitHub;
-// nothing touches the network or performs a live write.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -27,7 +23,6 @@ const baseSnapshot = (overrides = {}) => ({
   ...overrides,
 });
 
-// Serves the endpoints restore() reads and records everything it writes.
 const fakeApi = ({ milestones = [], labels = [] } = {}) => {
   const calls = [];
   const api = async (path, init = {}) => {
@@ -57,7 +52,6 @@ const deleted = (calls) =>
   calls.filter((c) => c.method === "DELETE" && /\/milestones\/\d+$/.test(c.path)).map((c) => c.path);
 
 test("restore refuses to delete a milestone it did not capture and does not create", async () => {
-  // The exact catastrophe: an empty `milestones` array in the snapshot.
   const { api, calls } = fakeApi({
     milestones: [
       { number: 1, title: "A maintainer's release", state: "open" },

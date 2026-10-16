@@ -79,7 +79,6 @@ pub struct CommandExecutionPolicy {
     pub network_mode: CommandNetworkMode,
     read_only_allowlist: Vec<String>,
     deny_all_argv: bool,
-    /// v1 `git_worktree_diff` links worktrees to trunk refs; writes stay denied under WorkspaceWrite.
     deny_git_metadata_writes: bool,
 }
 
@@ -155,7 +154,6 @@ impl CommandExecutionPolicy {
         self
     }
 
-    /// v1 `git_worktree_diff`: deny `git add`/`commit`/… metadata writes.
     pub fn with_git_worktree_diff(self) -> Self {
         self.with_deny_git_metadata_writes(true)
     }
@@ -182,15 +180,12 @@ impl CommandExecutionPolicy {
     }
 }
 
-/// Bash-independent spawn constraints projected from the effective policy meet.
-/// Ignores `bash.tool` and the read-only command allowlist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandConstraints {
     pub allowed_argv_prefixes: Vec<Vec<String>>,
     pub forbidden_argv_prefixes: Vec<Vec<String>>,
     pub network_mode: CommandNetworkMode,
     pub execution_mode: CommandExecutionMode,
-    /// Seatbelt vs none. Never `ReadOnly`. Hashed into the LSP config digest.
     pub sandbox: CommandExecutionMode,
     pub deny_all_argv: bool,
     pub deny_git_metadata_writes: bool,
@@ -210,7 +205,6 @@ impl CommandConstraints {
     }
 }
 
-/// Platform default for an omitted `lsp_config.network_mode`.
 pub fn default_lsp_network_mode() -> CommandNetworkMode {
     if workspace_write_sandbox_enforced() {
         CommandNetworkMode::Disabled
@@ -371,7 +365,6 @@ fn which_on_host_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-/// Shared PATH / prefix / network / sandbox preparation for bash and LSP.
 pub(crate) async fn prepare_managed_command(
     root: &Path,
     command: &str,
@@ -874,17 +867,11 @@ pub(crate) fn select_sandbox_for_policy(
     }
 }
 
-/// Whether this host can confine commands to a workspace's writable roots.
-/// When false, `workspace_write` bash and ReadWrite workspace bindings fail
-/// closed; there is no unconfined fallback.
 #[cfg(target_os = "macos")]
 pub fn workspace_write_sandbox_enforced() -> bool {
     Path::new(SANDBOX_EXEC).exists()
 }
 
-/// Whether this host can confine commands to a workspace's writable roots.
-/// This build has no WorkspaceWrite sandbox for this OS, so writable
-/// workspaces fail closed.
 #[cfg(not(target_os = "macos"))]
 pub fn workspace_write_sandbox_enforced() -> bool {
     false
@@ -1476,7 +1463,6 @@ struct CommandMetadata {
     stderr_capture_incomplete: bool,
     stdout_truncation: StreamTruncationMetadata,
     stderr_truncation: StreamTruncationMetadata,
-    /// Model-facing next step; present only on foreground timeout.
     #[serde(skip_serializing_if = "Option::is_none")]
     hint: Option<String>,
 }

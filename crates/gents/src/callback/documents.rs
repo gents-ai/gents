@@ -52,7 +52,6 @@ const PLACEMENT_FIELDS: &str = r#"
     observed_tree_hash
 "#;
 
-// Canonical event callback configuration is shared with packs.
 pub use crate::document_config::{
     CallbackBinding as CallbackBindingDoc, CallbackModule as CallbackModuleDoc,
 };
@@ -75,7 +74,6 @@ pub struct CallbackInvocationDoc {
     pub callback_id: String,
     pub origin: crate::document_config::CallbackInvocationOrigin,
     pub idempotency_key: String,
-    /// The source document's correlation, when its event source names one.
     #[serde(default)]
     pub caused_by_correlation: Option<String>,
     pub lifecycle_state: String,
@@ -674,7 +672,6 @@ pub async fn create_pending_invocation(
     }
 }
 
-/// Compare-and-set update of `invocation`, matched on `expected_state`.
 pub(super) fn update_invocation_mutation(
     invocation: &CallbackInvocationDoc,
     expected_state: Option<&str>,
@@ -717,7 +714,6 @@ pub(super) fn update_invocation_mutation(
     )
 }
 
-/// `name: "value",` when present, `name: null,` when absent.
 fn optional_graphql_string_field(name: &str, value: Option<&str>) -> String {
     value
         .map(|value| format!(r#"{name}: "{}","#, escape_graphql_string(value)))

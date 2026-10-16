@@ -188,8 +188,6 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
             .as_deref()
             .unwrap_or_else(|| panic!("{name}: session-message row carries its observed cause"));
         if cause == "causedRequestUnbound" {
-            // A running row that names no caused request: the state a crash
-            // left before start, receipt and request shared a transaction.
             let admission = published_admission(PublishedAdmissionOptions {
                 name: format!("recovery-closeout-{name}"),
                 real_identity: true,
@@ -482,7 +480,6 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     let did = message.admission.node_did.clone();
     let session_id = message.admission.tool.session_id().to_owned();
     let caller_doc_id = message.admission.tool.request_doc_id().unwrap().to_owned();
-    // The caused request runs at hop 1, the bound; its result returns at hop 0.
     crate::document_config::ensure_node(&node, &did)
         .await
         .unwrap();
@@ -565,7 +562,6 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     let wakes = pending_wakes(node.clone(), session_id.clone()).await;
     assert_eq!(wakes.len(), 1);
 
-    // A native process of the same turn completes afterwards and joins it.
     let caller = crate::request_binding::load_agent_request_by_doc_id(&node, &caller_doc_id)
         .await
         .unwrap()
@@ -658,7 +654,6 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     .unwrap();
     assert_eq!(wake.requester_did.as_deref(), Some(client.as_str()));
     assert_eq!(wake.request_hop, caller.request_hop);
-    // The calling turn ends; its session's queued result is next.
     calling
         .terminalize_owned(
             crate::lifecycle::RequestTerminalOutcome::Completed,
@@ -767,8 +762,6 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
             )
             .await;
         }
-        // The restarted runtime's owner reads the record a crashed runtime left
-        // for a surviving test-owned process group.
         let records = tempfile::tempdir().unwrap();
         let registry = crate::BackgroundExecutionRegistry::default()
             .with_process_records(records.path().to_path_buf());
@@ -907,8 +900,6 @@ async fn generated_registered_background_task_deletion_cases_use_live_worker() {
     let tool_doc_id = tool.doc_id().unwrap().to_owned();
     let tool_call_id = tool.tool_call_id().to_owned();
 
-    // The live worker: it owns a test process group until its token fires,
-    // then stops it, releases its record and its execution.
     let registry = crate::BackgroundExecutionRegistry::default();
     let token = tokio_util::sync::CancellationToken::new();
     let reservation = registry.reserve(tool_call_id.clone(), token.clone());

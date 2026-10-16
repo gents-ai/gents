@@ -1,14 +1,6 @@
 import Proofs.Client.Replacement
 import Proofs.StreamingResponse.Properties
 
-/-!
-# Client execution/output composition
-
-Request lifecycle determines `head`; canonical immutable facts determine
-`output`. This makes the three independence rules executable without recreating
-a response lifecycle.
--/
-
 namespace Client
 
 structure OutputProjection where
@@ -37,8 +29,6 @@ theorem active_request_projects_running {attempt : AttemptView}
   obtain ⟨⟨state, superseded⟩⟩ := attempt
   cases state <;> simp_all [activeRequestState, projectHead, deriveAttempt]
 
-/-- Missing or not-yet-reconstructible output does not demote terminal request
-execution; the output premise is computed by the shared canonical projection. -/
 theorem missing_output_cannot_demote_completed {attempt : AttemptView}
     {observation : StreamingResponse.Observation}
     (hcompleted : attempt.request.lifecycleState = .completed)

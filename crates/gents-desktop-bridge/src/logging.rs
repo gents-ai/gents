@@ -31,12 +31,10 @@ pub fn init_tracing_with_config(config: crate::config::TracingConfig) {
     );
 }
 
-/// Path of the managed runtime's error log for diagnostics output.
 pub fn runtime_error_log(desktop_root: &Path) -> PathBuf {
     desktop_root.join("logs").join("runtime-errors.log")
 }
 
-/// The platform log instructions plus the managed runtime's error log.
 pub fn diagnostics_hint(desktop_root: &Path) -> String {
     format!(
         "{}. Runtime startup errors: {}",

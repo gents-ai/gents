@@ -1,4 +1,3 @@
-//! The `.pack` file, format version 1.
 
 use std::io::{self, BufRead, Read, Write};
 use std::path::Path;
@@ -19,19 +18,15 @@ pub const FORMAT: &str = "gents-pack";
 pub const FORMAT_VERSION: u32 = 1;
 pub const MEDIA_TYPE: &str = "application/vnd.gents.pack";
 pub const EXTENSION: &str = "pack";
-/// The reserved first entry. It is not an asset and is not part of the digest.
 pub const HEADER_ENTRY: &str = "pack.json";
 const MAX_HEADER_BYTES: u64 = 64 * 1024;
 
-/// Every field is checked against the contents before the pack is accepted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackHeader {
     pub format: String,
     pub format_version: u32,
-    /// The pack digest, `sha256:{hex}`: the pack's identity.
     pub digest: String,
-    /// `{namespace}/{name}`.
     pub coordinate: String,
     pub version: String,
     pub kind: PackKind,
@@ -93,7 +88,6 @@ pub struct VerifiedPack {
     pub manifest_bytes: Vec<u8>,
 }
 
-/// Reads and verifies a `.pack` stream in one pass.
 pub fn read_pack(
     input: impl Read,
     bounds: Bounds,
@@ -172,8 +166,6 @@ pub fn read_pack(
         }
         paths.push(path);
     }
-    // Read to the end: the gzip trailer carries the CRC that proves the
-    // stream intact, and a copy of the input must hold every byte of it.
     let mut decompressed = archive.into_inner();
     io::copy(&mut decompressed, &mut io::sink()).context("reading the end of the pack")?;
     let mut compressed = decompressed.inner.into_inner();
@@ -231,7 +223,6 @@ pub fn read_pack(
     })
 }
 
-/// Reads just a `.pack`'s header, without verifying the rest of the archive.
 pub fn peek_header(input: impl Read, bounds: Bounds) -> Result<PackHeader> {
     let compressed = io::BufReader::new(BoundedReader::new(input, bounds.compressed, "compressed"));
     let decompressed = BoundedReader::new(
@@ -287,7 +278,6 @@ fn read_header(entry: &mut impl Read) -> Result<PackHeader> {
     serde_json::from_slice(&bytes).with_context(|| format!("{HEADER_ENTRY} is malformed"))
 }
 
-/// Packs the directory `dir` into `out` as a `.pack`, returning its header.
 pub fn write_pack(dir: &Path, out: impl Write) -> Result<PackHeader> {
     write_pack_bounded(dir, out, Bounds::default())
 }
@@ -461,7 +451,6 @@ impl<W: Write> Write for CountingWriter<W> {
     }
 }
 
-/// Fails once more than `limit` bytes come out of it.
 struct BoundedReader<R> {
     inner: R,
     limit: u64,

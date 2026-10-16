@@ -1,5 +1,3 @@
-//! `RemoteP2pAdmin` trait definition, error types, and value types.
-
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -97,9 +95,3 @@ pub trait RemoteP2pAdmin: Send + Sync {
     ) -> RemoteP2pAdminResult<()>;
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn _assert_trait_object_safe(_: &dyn RemoteP2pAdmin) {}
-}

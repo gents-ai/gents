@@ -192,8 +192,6 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
         .await
         .unwrap();
     let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    // Applied routes come only from the enrollment and pairing owners, so a
-    // withdrawn route is not reproducible here; revocation is.
     let cases = contract["session_input_edit_cases"]
         .as_array()
         .unwrap()
@@ -230,8 +228,6 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
     }
     edit_cancel.cancel();
     edit_task.await.unwrap().unwrap();
-    // The commands cross the live route before revocation. Application must
-    // re-read the current signed enrollment instead of trusting transport arrival.
     let mut prepared = Vec::new();
     for case in &revoked {
         prepared.push(remote.prepare(case).await);
@@ -253,7 +249,6 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
         runtime.node_identity.clone(),
         cancel.clone(),
     ));
-    // Revocation also withdraws the return route; observe the receipt at its writer.
     for (case, modeled) in revoked.iter().zip(&prepared) {
         remote.assert_modeled(case, modeled, &runtime).await;
     }
@@ -286,8 +281,6 @@ fn model_ids(values: &serde_json::Value) -> Vec<u64> {
         .collect()
 }
 
-/// A session queue in native request IDs: active, folding, pending in order,
-/// and the terminal set.
 type QueueImage = (
     Option<String>,
     Vec<String>,
@@ -369,8 +362,6 @@ impl ModeledEdit {
 }
 
 impl RemoteEdit<'_> {
-    /// Seeds the modeled initial queue on the runtime and replicates the client's
-    /// signed intent for the modeled command and authority.
     async fn prepare(&self, case: &serde_json::Value) -> ModeledEdit {
         let did = self.runtime.node_identity.did();
         let requester = self.client.node_identity.did();
@@ -387,7 +378,6 @@ impl RemoteEdit<'_> {
         let mut request_ids = std::collections::HashMap::new();
         let mut doc_ids = std::collections::HashMap::new();
         let initial = &case["initial"]["queue"];
-        // The public claim admits no folded run, so only an empty one is bound here.
         assert_eq!(initial["folding"], serde_json::json!([]), "{name}: folding");
         let active_id = initial["active"].as_u64().expect("modeled active request");
         let mut active = AgentRequestCreate::base(
@@ -525,7 +515,6 @@ impl RemoteEdit<'_> {
         )
         .await
         .unwrap();
-        // Presigning requires the observed queue; the signed intent carries the modeled one.
         edit.expected_request_doc_ids = model_ids(&model["expected"])
             .iter()
             .map(|id| doc_ids[id].clone())
@@ -599,7 +588,6 @@ impl RemoteEdit<'_> {
         modeled
     }
 
-    /// Compares the observed receipt and the runtime queue with the modeled result.
     async fn assert_modeled(
         &self,
         case: &serde_json::Value,
@@ -805,7 +793,6 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     db.simulate_process_crash().await.unwrap();
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
-    // A distinct intent signed against the superseded queue, with its own replacements.
     let mut stale = command.clone();
     stale.command_id = "edit-after-reopen-stale".into();
     stale.replacements = prepare_pending_user_edit(
@@ -1123,7 +1110,6 @@ async fn same_physical_edit_replicates_and_replays_once() {
         runtime.node_identity.clone(),
         cancel.clone(),
     ));
-    // The second acknowledgement requires a later sweep of the persisted command.
     for suffix in ["replay-barrier-one", "replay-barrier-two"] {
         let (barrier, _) = local_edit_command(&runtime, suffix).await;
         let id = write_command(&runtime, &barrier).await;
@@ -1263,9 +1249,6 @@ async fn conflicting_offline_edits_preserve_queue_and_prior_receipt(
         }
     }
     let model: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    // Identical and differing signed intents are both distinct physical documents;
-    // the model abstracts either as an observed command-identity collision. A late
-    // twin follows a prior receipt for the same command ID in another session.
     let case = model["session_input_edit_cases"]
         .as_array()
         .unwrap()
@@ -1311,8 +1294,6 @@ async fn conflicting_offline_edits_preserve_queue_and_prior_receipt(
         identity.clone(),
         cancel.clone(),
     ));
-    // A second acknowledged sentinel cannot belong to the sweep snapshot that
-    // acknowledged the first: both colliding documents have been visited.
     for suffix in ["collision-barrier-one", "collision-barrier-two"] {
         let (barrier, _) = local_edit_command_as(owner, identity.as_ref(), suffix).await;
         let id = write_command(owner, &barrier).await;

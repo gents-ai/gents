@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { holdRow, useFollowTail, useOlderPages } from "../src/ui/lib/scroll";
 
-/* jsdom has no ResizeObserver */
 const observers = new Set<() => void>();
 class FakeResizeObserver {
   constructor(private readonly callback: () => void) {}
@@ -233,7 +232,6 @@ describe("transcript streaming follow", () => {
   });
 });
 
-/* jsdom has no layout: each row reports its own place against the 200px view. */
 function readingFixture() {
   const fixture = transcriptFixture();
   const area = document.createElement("div");
@@ -271,7 +269,6 @@ function readingFixture() {
       above += by;
       fixture.growTo(1_000 + (above - 300));
     },
-    /* an animated scroll: one event per frame of its flight */
     async animate(from: number, to: number, ms: number) {
       for (let t = 0; t <= ms; t += 50) {
         act(() => {
@@ -942,8 +939,6 @@ describe("older transcript pages", () => {
     unmount();
   });
 
-  /* a load that resolves at once can have its start and end batched into
-     one commit */
   it("asks for the next page after a load that settled at once", async () => {
     const fixture = transcriptFixture();
     fixture.viewport.scrollTop = 0;

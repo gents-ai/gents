@@ -1,4 +1,3 @@
-//! Native goal-panel hydration from the runtime's canonical goal owner.
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
@@ -76,8 +75,6 @@ impl GoalCommand {
         Ok(None)
     }
 
-    /// Operator controls reuse the runtime transition/clear owners. The ACP
-    /// caller must authorize the exact attached session before invoking this.
     pub(super) async fn execute(
         &self,
         node: &Arc<EmbeddedNode>,
@@ -141,8 +138,7 @@ pub(super) struct GoalCursor {
 }
 
 impl GoalCursor {
-    /// The session observer has already authorized the attached root session.
-    /// No refresh_goal_usage/set_goal calls: observation must not mutate goals.
+    /// Observation must not mutate goals.
     pub(super) async fn refresh(
         &mut self,
         node: &Arc<EmbeddedNode>,
@@ -200,9 +196,6 @@ impl GoalCursor {
     }
 }
 
-/// Stock permanently suppresses a cleared wire ID. Gents logical goal IDs
-/// are reused across clear/create, so project the stable physical incarnation
-/// instead. No synthesized generation counter or second identity owner.
 fn wire_goal_id(doc_id: &str) -> String {
     format!("gents:{doc_id}")
 }
@@ -222,8 +215,6 @@ fn project(goal: &GoalDocument, now: DateTime<Utc>) -> Result<Value> {
         GoalStatus::Active => "active",
         GoalStatus::Paused => "user_paused",
         GoalStatus::Blocked => "blocked",
-        // Preserve the real cause rather than claiming an infrastructure
-        // failure or a token-budget limit; pause_message explains it.
         GoalStatus::UsageLimited => "usage_limited",
         GoalStatus::BudgetLimited => "budget_limited",
         GoalStatus::Complete => "complete",

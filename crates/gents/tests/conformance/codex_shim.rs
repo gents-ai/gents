@@ -283,7 +283,6 @@ pub(super) fn generated_codex_shim_binding_cases_pin_runnable_gated_binding() {
             case.witness
         );
 
-        // CodexShim.Binding.Shim.observePublish_idempotent.
         let settled = shim.clone();
         shim.observe_publish(runnable.iter().copied(), || host_can_listen);
         assert_eq!(

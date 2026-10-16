@@ -3,7 +3,6 @@
 
 use serde::Deserialize;
 
-/// One `(tool, collection) → fields` write/query grant in the emitted view.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanToolPolicyWriteGrant {
     pub(crate) tool: String,

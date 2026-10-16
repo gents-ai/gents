@@ -7,7 +7,6 @@ import type { ShellLayout } from "./useShellLayout";
 
 const sessionOf = (route: Route) => (route.name === "session" ? route.sessionId : null);
 
-/** The dock as a column beside the pane, where the window has the room. */
 export function DockColumn({ route, layout }: { route: Route; layout: ShellLayout }) {
   const { divider, dockVisible, dockWidth } = layout;
   return (
@@ -34,11 +33,6 @@ export function DockColumn({ route, layout }: { route: Route; layout: ShellLayou
   );
 }
 
-/** The dock as a bottom sheet showing one surface at a time where the window
- * is too narrow for the column. Takes its turn with the shell's popovers
- * like any other dialog (#1778): a dismissal or another popover taking the
- * turn closes it in the store; the window growing past the sheet only changes
- * how it is shown. Mounted in every layout so that change closes the sheet. */
 export function DockSheet({ route, layout }: { route: Route; layout: ShellLayout }) {
   const { docked, dockOpen, closeDock } = layout;
   const sheet = useExclusivePopover(docked ? undefined : closeDock);

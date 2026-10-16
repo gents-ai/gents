@@ -1,9 +1,3 @@
-//! Grok shim projection engine root: turns durable Gents rows into fresh Grok
-//! pager `session/update` notification payloads and stamps their per-connection
-//! event metadata. Projection is read-only and request-id-scoped: every helper
-//! queries only the rows that request can own plus the sessions it caused.
-//!
-//! Payload shapes live in [`messages`], [`tools`], and [`caused_sessions`].
 
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
@@ -19,9 +13,7 @@ mod context;
 pub(crate) mod messages;
 pub(crate) mod tools;
 
-/// Wire name of the ACP `session/update` notification.
 pub(crate) const SESSION_UPDATE_METHOD: &str = "session/update";
-/// Live xAI extension rail used by Grok for subagent lifecycle events.
 pub(crate) const SUBAGENT_NOTIFICATION_METHOD: &str = "x.ai/session_notification";
 pub(crate) const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = gents::DEFAULT_CONTEXT_WINDOW as u64;
 
@@ -38,16 +30,10 @@ pub(super) fn nonempty(value: &str) -> Option<&str> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
-/// Bound model/context configuration the shim was assembled with (from the
-/// bound `Agent` and its `InferenceProfile`, not from `AgentSession`).
 #[derive(Debug, Clone)]
 pub(crate) struct BoundModelContext {
-    /// Grok `modelId` the pager addresses: the bound profile's `model_name`.
     pub(crate) model_id: String,
-    /// Human display name; falls back to the raw model id when the catalog
-    /// has no friendlier entry.
     pub(crate) model_name: String,
-    /// `totalContextTokens` reported in the session/new model catalog.
     pub(crate) total_context_tokens: u64,
 }
 
@@ -60,19 +46,11 @@ impl BoundModelContext {
         }
     }
 
-    /// Fall back to the catalog default when the bound profile did not pin a
-    /// context window.
     pub(crate) fn effective_context_window(&self) -> u64 {
         effective_context_window_tokens(self.total_context_tokens)
     }
 }
 
-/// Connection-scoped, session-keyed projection sequencing. Event ids are
-/// monotonic per session, formatted `"{session_id}-{counter}"` and starting
-/// at 1, matching the pager's `NotificationMeta` dedup contract (a repeated
-/// id would silently drop a live update). `totalTokens` is current context
-/// occupancy; newer context may decrease after compaction.
-///
 /// Event ids are *reserved*, not simply allocated: a reservation commits only
 /// after the notification carrying it was successfully sent, and an
 /// uncommitted reservation rolls back on drop, so a failed send never
@@ -83,8 +61,6 @@ pub(crate) struct ProjectionSequencer {
     sessions: std::sync::Mutex<BTreeMap<String, SessionSequence>>,
 }
 
-/// Per-session counters: the committed event-id high-water mark and the
-/// most recent observed context occupancy (not cumulative token spend).
 #[derive(Debug, Default)]
 struct SessionSequence {
     event_counter: u64,
@@ -92,8 +68,6 @@ struct SessionSequence {
     context_order: Option<context::ContextOrder>,
 }
 
-/// One reserved event id; commits on [`EventIdReservation::commit`] or rolls
-/// back on drop.
 pub(crate) struct EventIdReservation {
     sequencer: Arc<ProjectionSequencer>,
     session_id: String,
@@ -106,8 +80,6 @@ impl EventIdReservation {
         format!("{}-{}", self.session_id, self.value)
     }
 
-    /// Keep the reserved id permanently. Called only after the notification
-    /// carrying it was successfully sent.
     pub(crate) fn commit(mut self) {
         self.committed = true;
     }
@@ -126,9 +98,6 @@ impl ProjectionSequencer {
         Self::default()
     }
 
-    /// Reserve the next monotonic event id for `session_id`; the reservation
-    /// must be committed after the send succeeds (otherwise it rolls back on
-    /// drop), so a failed send does not consume an id.
     pub(crate) fn reserve_event_id(sequencer: &Arc<Self>, session_id: &str) -> EventIdReservation {
         let value = {
             let mut sessions = sequencer
@@ -159,7 +128,6 @@ impl ProjectionSequencer {
         }
     }
 
-    /// The number of committed event ids for `session_id`.
     #[cfg(test)]
     pub(crate) fn event_counter(&self, session_id: &str) -> u64 {
         self.sessions
@@ -170,7 +138,6 @@ impl ProjectionSequencer {
             .unwrap_or(0)
     }
 
-    /// Last known current-context occupancy for `session_id`.
     pub(crate) fn session_total_tokens(&self, session_id: &str) -> u64 {
         self.sessions
             .lock()
@@ -180,7 +147,6 @@ impl ProjectionSequencer {
             .unwrap_or(0)
     }
 
-    /// Replace context only from the newest persisted inference generation.
     fn observe_context(&self, session_id: &str, sample: context::ContextSample) {
         let mut sessions = self
             .sessions
@@ -204,9 +170,6 @@ impl ProjectionSequencer {
     }
 }
 
-/// Build the `_meta` object stamped on one session/update notification,
-/// following the pager's `NotificationMeta` shape. `is_replay` is `None` for
-/// fresh updates (the key is omitted) and `Some(false)` for the user echo.
 pub(crate) fn stamp_update_meta(
     event_id: &str,
     total_tokens: u64,
@@ -235,24 +198,17 @@ pub(crate) fn stamp_update_meta(
     Value::Object(meta)
 }
 
-/// Server-side timestamps understood by the Grok pager. `streamStartMs` is
-/// also the pager's model-generation boundary key, so it must stay stable
-/// within one generation and change across tool-loop generations.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct UpdateTimestamps {
     pub(crate) agent_timestamp_ms: Option<i64>,
     pub(crate) stream_start_ms: Option<i64>,
     pub(crate) turn_start_ms: Option<i64>,
 }
-/// Wrap one projected update payload in a `session/update` notification
-/// envelope.
 #[cfg(test)]
 pub(crate) fn session_update_notification(session_id: &str, update: Value, meta: Value) -> Value {
     session_notification_for_method(SESSION_UPDATE_METHOD, session_id, update, meta)
 }
 
-/// Wrap a projected payload on its protocol rail. Live subagent lifecycle
-/// updates use Grok's `_x.ai/session_notification` wire extension rail.
 pub(crate) fn session_notification_for_method(
     method: &str,
     session_id: &str,
@@ -281,10 +237,7 @@ pub(crate) fn session_notification_for_method(
 /// out-of-order delivery would silently drop the real update.
 #[derive(Debug, Default)]
 pub(crate) struct SessionUpdateChannel {
-    /// The connection's projection sequencer: the shared per-session
-    /// event-id and token-total counters.
     sequencer: Arc<ProjectionSequencer>,
-    /// One async send lock per session id.
     send_locks: std::sync::Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
@@ -301,9 +254,6 @@ impl SessionUpdateChannel {
         &self.sequencer
     }
 
-    /// The per-session async send lock. Different sessions get independent
-    /// locks and stay fully concurrent; the caller acquires the guard itself
-    /// so the lock is held across the whole reserve → send → commit span.
     fn session_lock(&self, session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
         let mut send_locks = self
             .send_locks
@@ -315,16 +265,10 @@ impl SessionUpdateChannel {
             .clone()
     }
 
-    /// Acquire the session's send lock as an *owned* guard: the guard must be
-    /// a named binding held across reserve → send → commit. Returning the
-    /// plain `Arc` after `lock.lock().await` would drop the temporary guard
-    /// immediately and let a racing same-session send interleave.
     async fn session_send_guard(&self, session_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
         self.session_lock(session_id).lock_owned().await
     }
 
-    /// Send one `session/update` notification through the common path.
-    /// Returns the serialized notification line that was delivered.
     pub(crate) async fn send(
         &self,
         session_id: &str,
@@ -335,11 +279,6 @@ impl SessionUpdateChannel {
             .await
     }
 
-    /// Send one `session/update` notification with a state-commit hook that
-    /// runs while the session's send lock is still held, immediately after
-    /// the line was enqueued and the event-id reservation committed — so a
-    /// caller records state if and only if the notification was enqueued.
-    /// The hook is infallible (connection-local recording only).
     pub(crate) async fn send_with_commit(
         &self,
         session_id: &str,
@@ -354,16 +293,12 @@ impl SessionUpdateChannel {
         let line = serde_json::to_string(&notification)
             .context("serialize session/update notification")?;
         send_line.send_line(line.clone()).await?;
-        // Commit immediately after the successful enqueue — never after a
-        // further fallible operation — so the delivered id is never reused.
         reservation.commit();
         commit.commit().await;
         Ok(line)
     }
 }
 
-/// One infallible local state commit performed after a notification was
-/// successfully enqueued, while the session's send lock is still held.
 pub(crate) trait AsyncCommit: Send + Sync {
     async fn commit(&self);
 }
@@ -374,15 +309,12 @@ impl<T: AsyncCommit + ?Sized> AsyncCommit for &T {
     }
 }
 
-/// The no-op commit used by plain [`SessionUpdateChannel::send`].
 struct NoCommit;
 
 impl AsyncCommit for NoCommit {
     async fn commit(&self) {}
 }
 
-/// One fallible enqueue of an already-serialized JSON-RPC line; the exact
-/// commit point is the successful send itself.
 pub(crate) trait AsyncSendLine: Send + Sync {
     async fn send_line(&self, line: String) -> Result<()>;
 }
@@ -399,8 +331,6 @@ impl<T: AsyncSendLine + ?Sized> AsyncSendLine for Arc<T> {
     }
 }
 
-/// Connection-scoped projection engine: one instance serves one registered
-/// pager connection.
 pub(crate) struct ProjectionEngine {
     pub(crate) background_executions: gents::hook::BackgroundExecutionRegistry,
     node: Arc<EmbeddedNode>,
@@ -421,7 +351,6 @@ impl ProjectionEngine {
         }
     }
 
-    /// The connection's common session-update send path.
     pub(crate) fn session_updates(&self) -> &SessionUpdateChannel {
         &self.channel
     }
@@ -434,19 +363,11 @@ impl ProjectionEngine {
         self
     }
 
-    /// The connection's projection sequencer as a shared handle.
     #[cfg(test)]
     pub(crate) fn sequencer_arc(&self) -> Arc<ProjectionSequencer> {
         self.sequencer.clone()
     }
 
-    /// Poll the durable request-scoped projections and return only the
-    /// *novel* events this cursor has not emitted yet, merged across
-    /// families into durable transcript chronology. The caller records each
-    /// cursor advance only after the line was successfully sent; event ids
-    /// are likewise reserved and committed only after a successful send.
-    /// Each family projects against a *shadow copy* of the cursor state, so
-    /// a failed send re-plans the identical candidate next poll.
     pub(crate) async fn project_request_updates(
         &self,
         request: &gents_protocol::row::AgentRequestRow,
@@ -775,8 +696,6 @@ impl ProjectionEngine {
                     }
                     messages::MessageUpdate::UserMessageChunk { .. } => continue,
                 };
-                // Suppress live bytes only when a canonical payload reference
-                // proves this exact source closed into this exact durable row.
                 let live = match rail {
                     EvidenceRail::Reasoning => &planned_live.reasoning,
                     EvidenceRail::Content => &planned_live.content,
@@ -811,9 +730,6 @@ impl ProjectionEngine {
                 let mut sent_len = if text.starts_with(&planned.sent_text) {
                     planned.sent_text.len()
                 } else {
-                    // A replacement/shrink is not growth; project the new
-                    // authoritative value in full rather than slicing at a
-                    // stale (possibly non-char-boundary) offset.
                     0
                 };
                 if evidence_covered > sent_len
@@ -865,11 +781,6 @@ impl ProjectionEngine {
             }
         }
 
-        // Cross-family merge in durable transcript chronology: the position
-        // key is the transcript sequence each family shares; ties break by
-        // family rank, then by each family's stable durable identity, so
-        // wire order is a pure function of the durable rows. Positionless
-        // events sort after every positioned event of their family.
         merged.sort_by(|a, b| family_sort_key(a).cmp(&family_sort_key(b)));
         let events: Vec<NovelProjectionEvent> = merged.into_iter().map(|item| item.event).collect();
         let mut trailing_advances = durable_trailing;
@@ -883,14 +794,10 @@ impl ProjectionEngine {
     }
 }
 
-/// Family ranks for the cross-family merge at equal chronology: message
-/// chunks precede the tool call, which precedes the session it caused.
 const FAMILY_RANK_MESSAGE: u8 = 0;
 const FAMILY_RANK_TOOL: u8 = 1;
 const FAMILY_RANK_CAUSED_SESSION: u8 = 2;
 
-/// One novel event tagged with its durable chronology key and merge tiebreak
-/// data. Internal to [`ProjectionEngine::project_request_updates`].
 struct MergedEvent {
     event: NovelProjectionEvent,
     chronology: Option<i64>,
@@ -906,16 +813,10 @@ fn family_sort_key(event: &MergedEvent) -> (i64, u8, usize) {
     )
 }
 
-/// One novel projection event: the update payload to send plus the cursor
-/// advance that records its durable identity once the send succeeds.
 #[derive(Debug, Clone)]
 pub(crate) struct NovelProjectionEvent {
     pub(crate) method: &'static str,
     pub(crate) payload: Value,
-    /// Stable logical model-generation identity and its best durable start
-    /// candidate. The turn sender resolves this into one request-local,
-    /// strictly increasing `streamStartMs` and reuses it on every later
-    /// chunk/retry of the same segment.
     pub(crate) timing: Option<ProjectionEventTiming>,
     pub(crate) advance: CursorAdvance,
 }
@@ -927,12 +828,6 @@ pub(crate) struct ProjectionEventTiming {
     pub(crate) agent_timestamp_candidate_ms: Option<i64>,
 }
 
-/// One fully planned projection poll: byte-carrying advances travel with
-/// their outbound event; state changes which intentionally carry no wire
-/// bytes (for example a tail-reset snapshot) are held in `trailing_advances`
-/// and committed only after every event in this batch was sent
-/// successfully — an unsent earlier byte event must not be leapfrogged by a
-/// later reset/no-op observation.
 #[derive(Debug, Default)]
 pub(crate) struct ProjectionBatch {
     pub(crate) events: Vec<NovelProjectionEvent>,
@@ -947,8 +842,6 @@ impl std::ops::Deref for ProjectionBatch {
     }
 }
 
-/// The recorded identity of one novel projection event. Recorded only after
-/// the corresponding notification line was successfully sent.
 #[derive(Debug, Clone)]
 pub(crate) enum CursorAdvance {
     Many(Vec<CursorAdvance>),
@@ -956,9 +849,6 @@ pub(crate) enum CursorAdvance {
         tool_call_id: String,
         payload: Value,
     },
-    /// A terminal same-id tool update was delivered (needed separately from
-    /// the base registration so a first-observed-terminal task clears the
-    /// pager's foreground wait).
     ToolTerminal {
         tool_call_id: String,
         status: String,
@@ -981,34 +871,18 @@ pub(crate) enum CursorAdvance {
         message_key: String,
         sent_text: String,
     },
-    /// Inclusive durable transcript query cursor. This advances only after
-    /// the complete projection batch succeeds, so a leaf/send failure re-reads
-    /// every still-undelivered row.
     MessageHighWater { sequence: i64 },
 }
 
-/// The post-send state of one live tail cursor, carried inside a
-/// [`CursorAdvance`] so the send-success `record` path is the only mutator of
-/// the real cursor's *delivered* state.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LiveSegmentPlan {
     segment_key: Option<String>,
     observed: String,
     sent_len: usize,
-    /// The exact bytes of the current segment already sent, retained so the
-    /// durable reconciliation can prove a live prefix covers a durable row's
-    /// start even after the observed window rolls or the tail resets.
     sent_bytes: String,
-    /// Delivered closed segments awaiting (or carrying) an exact durable-row
-    /// binding. This queue is never arbitrarily capped: dropping an older
-    /// entry could make a later durable row duplicate bytes already sent.
     closed_evidence: Vec<ClosedEvidence>,
 }
 
-/// A request-local canonical live cursor for one logical byte stream.
-/// Exact `OutputSource` identity separates segments; within one source the
-/// protocol owner exposes only a validated contiguous prefix.
-///
 /// Append-only / no-loss contract: ACP chunks are append-only — bytes
 /// already sent can never be retracted. A divergence (the freshly observed
 /// tail no longer starts with the previously observed snapshot) never slices
@@ -1020,13 +894,9 @@ pub(crate) struct LiveSegmentCursor {
     segment_key: Option<String>,
     observed: String,
     sent_len: usize,
-    /// The exact already-sent bytes of the current segment (evidence for
-    /// live/durable reconciliation after a window roll or tail reset).
     sent_bytes: String,
-    /// Ordered delivered evidence for every closed logical segment.
     closed_evidence: Vec<ClosedEvidence>,
 }
-/// The request-local pair of live tail cursors: reasoning and content.
 #[derive(Clone, Debug, Default)]
 struct LiveCursorPair {
     reasoning: LiveSegmentCursor,
@@ -1224,41 +1094,24 @@ impl LiveSegmentCursor {
     }
 }
 
-/// Request-local dedup cursor for one live turn's projection poll. One
-/// cursor serves exactly one (session id, prompt id) turn and tracks the
-/// last-sent durable identity of every projection event family. The poll
-/// computes novel events against *shadow copies* of the live and durable
-/// chunk states (never mutating the cursor); each shadow advance is carried
-/// inside its [`CursorAdvance`] and the caller records it only after the
-/// corresponding send succeeded, so a send failure replays the identical
-/// candidates on the next poll instead of dropping or duplicating them.
 #[derive(Debug, Default)]
 pub(crate) struct RequestCursor {
-    /// Actual immutable request identity selected by a signed receipt or
-    /// scoped bridge read. Logical labels never rebind this cursor.
     pub(crate) request: Option<gents_protocol::row::AgentRequestRow>,
     tool_bases: BTreeMap<String, Value>,
     tool_terminal_states: BTreeMap<String, String>,
     commands_state: Option<u64>,
     subagent_states: BTreeMap<String, u64>,
-    /// Delivery receipts only; process lifecycle remains in AgentToolCall.
     background_task_events: std::collections::BTreeSet<String>,
     background_outputs: BTreeMap<String, u64>,
     child_outputs: BTreeMap<String, child_output::OutputReceipt>,
     live_cursors: LiveCursorPair,
     durable_chunks: BTreeMap<String, DurableChunkState>,
-    /// Last transcript sequence whose complete projection batch succeeded.
-    /// Queries include this row because the current assistant row may grow.
     message_sequence_high_water: Option<i64>,
-    /// Timestamp evidence is observation state, not delivery state. Retain
-    /// it across incremental pages so a growing current assistant row keeps
-    /// the same start derived from its preceding tool-result/input row.
     response_started_at_ms: Option<i64>,
     response_ended_at_ms: Option<i64>,
     message_timestamps: BTreeMap<i64, (String, Option<i64>)>,
 }
 
-/// The rail one row's live evidence streamed on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum EvidenceRail {
     Content,
@@ -1327,10 +1180,6 @@ impl RequestCursor {
         }
     }
 
-    /// The novel event for one tool call's base payload: the full
-    /// `tool_call` registration on first observation, or a
-    /// `tool_call_update` carrying exactly the tracked fields that changed
-    /// since the last sent base.
     fn tool_base_novel(
         &mut self,
         tool_call_id: &str,
@@ -1361,7 +1210,6 @@ impl RequestCursor {
         }
     }
 
-    /// Whether the visible tool list is novel.
     fn commands_changed(&mut self, fingerprint: u64) -> Option<CursorAdvance> {
         if self.commands_state == Some(fingerprint) {
             return None;
@@ -1385,7 +1233,6 @@ impl RequestCursor {
         })
     }
 
-    /// Whether the subagent payload is novel for its key.
     pub(super) fn subagent_spawn_was_delivered(&self, child_session_id: &str) -> bool {
         self.subagent_states
             .contains_key(&format!("subagent_spawned:{child_session_id}"))
@@ -1407,7 +1254,6 @@ impl RequestCursor {
         })
     }
 
-    /// Record one delivered event after its send succeeded.
     pub(crate) fn record(&mut self, advance: CursorAdvance) {
         match advance {
             CursorAdvance::Many(advances) => {
@@ -1469,19 +1315,11 @@ impl RequestCursor {
     }
 }
 
-/// A per durable chunk delivery state: how much of the chunk's logical
-/// text has already been *successfully sent*. A durable `AgentMessage` row
-/// can be upserted with growing content, so each chunk keeps the exact
-/// delivered length of its text and a re-projection emits only the newly
-/// proven suffix rather than marking the row seen forever.
 #[derive(Clone, Debug, Default)]
 struct DurableChunkState {
-    /// Exact logical text of this chunk already successfully sent. Prefix
-    /// equality, not length alone, proves a later observation is growth.
     sent_text: String,
 }
 
-/// The tool-call fields the live poll tracks for diffs.
 const TRACKED_TOOL_FIELDS: [&str; 7] = [
     "title",
     "kind",
@@ -1492,8 +1330,6 @@ const TRACKED_TOOL_FIELDS: [&str; 7] = [
     "_meta",
 ];
 
-/// The tracked tool-call fields that differ between the last-sent base and
-/// the freshly observed payload; `None` when nothing tracked changed.
 fn changed_tool_fields(last_sent: &Value, observed: &Value) -> Option<Value> {
     let last = last_sent.as_object()?;
     let fresh = observed.as_object()?;
@@ -1518,9 +1354,6 @@ fn changed_tool_fields(last_sent: &Value, observed: &Value) -> Option<Value> {
     }
 }
 
-/// A stable fingerprint of one projection payload: order-insensitive over
-/// JSON object keys while remaining sensitive to every value and array
-/// order.
 fn payload_fingerprint(payload: &Value) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     hash_value(&mut hasher, payload);
@@ -1558,8 +1391,6 @@ fn hash_value<H: Hasher>(hasher: &mut H, value: &Value) {
     }
 }
 
-/// Project the exact node's agent → profile → backend selection.
-/// Model identity is the provider model name; backend identity stays internal.
 pub(crate) async fn resolve_bound_model_context(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -1580,92 +1411,7 @@ mod tests {
     use super::*;
     use crate::commands::grok_shim::test_fixtures::seed_canonical_assistant_message;
     use gents::graphql::ensure_no_errors;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::Mutex as StdMutex;
 
-    async fn seed_bound_inference(node: &Arc<EmbeddedNode>, window: Option<i64>) {
-        use gents::config_client::{
-            apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
-            DesiredStateApplyPlan,
-        };
-        use gents::Collection;
-        let owner = "did:grok-binding-test";
-        gents::ensure_node(node, owner).await.unwrap();
-        let plan = DesiredStateApplyPlan::new([
-            (Collection::Agent, json!({"node_did":owner,"agent_id":"port-live","inference_profile_id":"profile"})),
-            (Collection::InferenceProfile, json!({"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"GLM-5.3-NVFP4","context_window":window})),
-            (Collection::InferenceBackend, json!({"node_did":owner,"backend_id":"backend","name":"Workstation","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}})),
-        ].into_iter().map(|(collection,value)| DesiredStateApplyDocument {collection,add:value.clone(),update:value}).collect()).unwrap();
-        ConfigAccess::transact_local_write(node, None, "grok.binding.fixture", |txn| {
-            let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
-        })
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn resolve_bound_model_context_projects_the_production_style_catalog() {
-        let dir = tempfile::tempdir().unwrap();
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .data_path(dir.path().join("node"))
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
-        seed_bound_inference(&node, Some(262_144)).await;
-        let bound = resolve_bound_model_context(&node, "did:grok-binding-test", "port-live")
-            .await
-            .unwrap();
-        assert_eq!(bound.model_id, "GLM-5.3-NVFP4");
-        assert_eq!(bound.model_name, "GLM-5.3-NVFP4");
-        assert_eq!(bound.total_context_tokens, 262_144);
-        assert_eq!(bound.effective_context_window(), 262_144);
-        assert!(
-            resolve_bound_model_context(&node, "did:foreign", "port-live")
-                .await
-                .is_err()
-        );
-        node.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn resolve_bound_model_context_uses_default_only_for_missing_window() {
-        let dir = tempfile::tempdir().unwrap();
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .data_path(dir.path().join("node"))
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
-        seed_bound_inference(&node, None).await;
-        let bound = resolve_bound_model_context(&node, "did:grok-binding-test", "port-live")
-            .await
-            .unwrap();
-        assert_eq!(bound.model_id, "GLM-5.3-NVFP4");
-        assert_eq!(
-            bound.total_context_tokens,
-            gents::DEFAULT_CONTEXT_WINDOW as u64
-        );
-        assert_eq!(
-            bound.effective_context_window(),
-            gents::DEFAULT_CONTEXT_WINDOW as u64
-        );
-        assert!(
-            resolve_bound_model_context(&node, "did:grok-binding-test", "missing")
-                .await
-                .is_err()
-        );
-        node.shutdown().await;
-    }
-
-    /// One durable assistant row carrying both a reasoning thought and body
-    /// text streams as two chunks; a cursor that only recorded the thought
-    /// still emits the text on the next poll (chunk-level retry recovery).
     #[tokio::test]
     async fn chunk_level_identity_recovers_a_partial_row_retry() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1702,7 +1448,6 @@ mod tests {
         );
         let mut cursor = RequestCursor::new();
 
-        // First poll: both chunks of the row are novel.
         let first = engine
             .project_request_updates(&request, &mut cursor, None)
             .await
@@ -1718,8 +1463,6 @@ mod tests {
             .collect();
         assert_eq!(kinds, vec!["agent_thought_chunk", "agent_message_chunk"]);
 
-        // Simulate a partial send failure: only the thought's advance is
-        // recorded.
         cursor.record(first[0].advance.clone());
         let second = engine
             .project_request_updates(&request, &mut cursor, None)
@@ -1743,8 +1486,6 @@ mod tests {
         assert!(third.is_empty());
     }
 
-    /// Seed the embedded node with runtime schemas and start a projection
-    /// engine.
     async fn embedded_engine() -> (tempfile::TempDir, Arc<ProjectionEngine>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let node = Arc::new(
@@ -1784,8 +1525,6 @@ mod tests {
         serde_json::from_value(json!({"_docID":doc,"request_id":request_id,"node_did":"did:test:grok-shim","requester_did":"did:test:grok-shim","session_id":session})).unwrap()
     }
 
-    /// Seed one durable `AgentToolCall` row with an explicit stable id and
-    /// transcript sequence.
     async fn seed_tool_call_row(
         engine: &ProjectionEngine,
         session_id: &str,
@@ -1836,8 +1575,6 @@ mod tests {
         .unwrap()
     }
 
-    /// Bind already-created physical tool rows to their one coordinator
-    /// admission header.
     async fn seed_canonical_tool_admission_header(
         node: &EmbeddedNode,
         request: &gents_protocol::row::AgentRequestRow,
@@ -1967,8 +1704,6 @@ mod tests {
         );
     }
 
-    /// Seed the first `AgentRequest` of a session caused by the parent
-    /// request, with an explicit equal-time `created_at`.
     async fn seed_child_request_row(
         engine: &ProjectionEngine,
         parent_request_id: &str,
@@ -2024,7 +1759,6 @@ mod tests {
         );
     }
 
-    /// The `sessionUpdate` kind of one novel event, for order assertions.
     fn update_kind(event: &NovelProjectionEvent) -> String {
         event.payload["sessionUpdate"]
             .as_str()
@@ -2117,8 +1851,6 @@ mod tests {
         let request = seed_projection_request(&engine.node, session_id, request_id).await;
         let parent_doc_id = request.doc_id.clone().unwrap();
 
-        // Two same-sequence tool calls seeded in reverse stable order; the
-        // first is the `agent_new` call that caused the child session.
         let message_key = gents::session::sequence_message_key(
             request.node_did.as_deref().unwrap(),
             request.session_id.as_deref().unwrap(),
@@ -2197,8 +1929,6 @@ mod tests {
                 "available_commands_update".to_string(),
             ]
         );
-        // The same-sequence tools emitted in stable-identity order, not
-        // insertion order.
         let tool_ids: Vec<&str> = first
             .iter()
             .filter(|event| event.payload["sessionUpdate"] == "tool_call")

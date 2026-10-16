@@ -511,8 +511,6 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
             )
         })?
         .to_string();
-    // The request's terminal_output names its canonical terminal message;
-    // projection order is by timestamp, not terminal selection.
     let request_row = graphql_query(
         &graphql,
         &format!(
@@ -919,9 +917,6 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     Ok(())
 }
 
-/// The endpoint, model and credential variable of the inference target named
-/// by `GENTS_EVAL_TARGET` (a file under `scripts/evals/targets/`), applied
-/// through `gents init` the way `scripts/evals/run-ladder.sh` applies it.
 fn live_eval_target() -> Result<(String, String, Option<String>)> {
     let name = std::env::var("GENTS_EVAL_TARGET").context("set GENTS_EVAL_TARGET")?;
     let target = read_json_file(
@@ -942,8 +937,6 @@ fn live_eval_target() -> Result<(String, String, Option<String>)> {
     Ok((endpoint.to_owned(), model.to_owned(), api_key_env))
 }
 
-/// Live counterpart of
-/// `cli_request::pending_message_commands_edit_reorder_and_remove_against_held_provider`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "live: requires GENTS_LIVE_OPENAI=1 and GENTS_EVAL_TARGET"]
 async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Result<()> {
@@ -1074,7 +1067,6 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         model,
         "--inference-url".to_owned(),
         endpoint,
-        // Unrestricted bash needs the yolo package's ceiling.
         "--yolo".to_owned(),
         "--tool-root".to_owned(),
         workspace
@@ -1220,7 +1212,6 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         }
     };
 
-    // 1. Start a turn and hold the live model inside its tool call.
     let mut first = ChildGuard(Some(spawn(submit(
         "Start now: call bash_unrestricted as instructed and wait for its result before answering.",
         true,
@@ -1267,7 +1258,6 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         .context("active request id")?
         .to_owned();
 
-    // 2. Safe-step steering: an ordinary message while the request runs.
     let steer_submit = run(submit(steer, false))?;
     let steer_request_id = steer_submit["request_id"]
         .as_str()
@@ -1275,7 +1265,6 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         .to_owned();
     wait_for_pending(vec![steer]).await?;
 
-    // 3. Queue, then edit, reorder and remove from observed snapshots.
     let mut waiter = ChildGuard(Some(spawn(submit(alpha, true))?));
     wait_for_pending(vec![steer, alpha]).await?;
     run(submit(beta, false))?;
@@ -1359,7 +1348,6 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     );
     assert_eq!(contents(&unchanged), [steer, gamma, alpha_edited]);
 
-    // Nothing reached the model while the tool held the request.
     assert_eq!(
         captures_for(&active_request_id).await?.len(),
         1,
@@ -1371,7 +1359,6 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         "submit --wait exited before the held tool was released"
     );
 
-    // 4. Release and check durable provider input, then the model's answer.
     fs::write(&release, "released")?;
     let first_result = wait_child(first.0.take().unwrap(), "first request submit --wait")?;
     let waited = wait_child(waiter.0.take().unwrap(), "edited message's submit --wait")?;

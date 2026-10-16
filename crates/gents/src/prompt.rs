@@ -1,8 +1,3 @@
-//! Layered prompt construction for KV cache reuse.
-//!
-//! The preamble (layers 1-2) is set once at daemon startup and locked for
-//! the session lifetime. Agent updates flow through `<system-reminder>` tags
-//! injected into conversation messages — never by mutating the preamble.
 
 use crate::llm::message::Message;
 #[cfg(test)]
@@ -45,9 +40,8 @@ pub struct BuiltPrompt {
 }
 
 impl BuiltPrompt {
-    /// Representation-only view for consumers that need native messages.
-    /// Continuation evidence remains on `messages` until the owned provider
-    /// boundary narrows one prepared request for estimate, capture and send.
+    /// Continuation evidence stays on `messages` until the owned provider boundary
+    /// narrows one prepared request for estimate, capture and send.
     pub fn native_messages(&self) -> Vec<Message> {
         self.messages
             .iter()

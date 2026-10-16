@@ -1,6 +1,3 @@
-//! Claude subscription backend over Anthropic Messages HTTP, authenticated
-//! with the agent's `OAuthCredential` through the shared single-flight bearer.
-
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
@@ -162,10 +159,6 @@ impl<S: BearerSource + 'static> CompletionModel for ClaudeSubscriptionModel<S> {
         }
     }
 
-    /// Non-streaming turn: drains the same Messages stream `stream` returns
-    /// and folds the text. Text-only by construction: the owned loop uses
-    /// `stream()`, so this path never maps `tool_use`; a tool-only turn here
-    /// surfaces as the empty-assistant-text error below.
     async fn completion(
         &self,
         request: CompletionRequest,
@@ -245,7 +238,6 @@ impl BearerSource for ApiKeyBearer {
     }
 }
 
-/// Test bearer: a fixed token, or a fixed error; counts calls and invalidations.
 #[cfg(test)]
 pub(crate) struct StaticBearer {
     token: std::result::Result<String, String>,

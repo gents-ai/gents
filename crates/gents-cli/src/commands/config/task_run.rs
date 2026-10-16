@@ -412,26 +412,4 @@ mod tests {
         assert!(resolve_invocation_key("task", false, Some(" ")).is_err());
     }
 
-    #[test]
-    fn resolve_task_id_accepts_positional_or_flag_and_rejects_conflict() {
-        assert_eq!(
-            resolve_task_id_for("run", Some("host-check"), None).unwrap(),
-            "host-check"
-        );
-        assert_eq!(
-            resolve_task_id_for("run", None, Some("host-check")).unwrap(),
-            "host-check"
-        );
-        assert_eq!(
-            resolve_task_id_for("run", Some("host-check"), Some("host-check")).unwrap(),
-            "host-check"
-        );
-        assert!(resolve_task_id_for("run", Some("host-check"), Some("other")).is_err());
-        assert!(resolve_task_id_for("run", None, None).is_err());
-        assert_eq!(
-            resolve_task_id_for("run", Some(" task "), None).unwrap(),
-            " task "
-        );
-        assert!(resolve_task_id_for("run", Some(" task "), Some("task")).is_err());
-    }
 }

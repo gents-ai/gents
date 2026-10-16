@@ -28,7 +28,6 @@ pub struct LiveToolOutputRegistry {
 
 #[derive(Debug, Default)]
 struct LiveToolOutputState {
-    /// Channel-to-canonical byte coordinates, never captured payload bytes.
     receipts: [Vec<OutputReceipt>; 2],
     prepared: Option<PreparedToolPresentation>,
     plugin_receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
@@ -48,7 +47,6 @@ pub struct PreparedToolPresentation {
     pub presentation: PayloadPresentation,
 }
 
-/// Native output append authority supplied by the host.
 pub trait CanonicalOutputAppender: std::fmt::Debug + Send + Sync {
     fn append<'a>(
         &'a self,
@@ -242,15 +240,12 @@ impl LiveToolOutputRegistry {
     }
 }
 
-/// How a finished command's text frames its two captured channels.
 #[derive(Debug, Clone, Copy)]
 pub enum CommandPresentationLayout<'a> {
     JsonObject { metadata_json: &'a str },
     Labeled { head: &'a str, json_string: bool },
 }
 
-/// One captured command channel: its complete raw text, the text shown for
-/// it, and the byte range of `raw` shown verbatim.
 #[derive(Debug, Clone)]
 pub struct CapturedChannel<'a> {
     pub raw: &'a str,
@@ -428,8 +423,6 @@ pub struct LiveToolOutputWriter {
     tool_call_id: String,
     canonical: Option<Arc<dyn CanonicalOutputAppender>>,
     append_gate: Arc<Mutex<()>>,
-    /// Pending bytes whose UTF-8 is split across OS reads; canonical segment
-    /// runs count UTF-8 bytes.
     pending_utf8: Arc<Mutex<[Vec<u8>; 2]>>,
 }
 
@@ -527,9 +520,6 @@ impl LiveToolOutputWriter {
     }
 }
 
-/// Decodes `pending` exactly as `String::from_utf8_lossy` decodes the whole
-/// stream: each invalid sequence becomes one U+FFFD, an incomplete tail stays
-/// pending unless the stream has ended.
 fn drain_utf8(pending: &mut Vec<u8>, end_of_stream: bool) -> String {
     let mut text = String::new();
     let mut consumed = 0;

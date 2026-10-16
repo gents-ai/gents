@@ -1,9 +1,3 @@
-//! Session lineage: how one session is linked to others by agent messages.
-//!
-//! A session was started by another request only when its stored
-//! `AgentSession.provenance.parent_request_doc_id` names that request; a
-//! message into an existing session never rewrites it. Every lineage reader
-//! goes through [`lineage`].
 
 use std::collections::BTreeSet;
 
@@ -17,7 +11,6 @@ use crate::session::{
 };
 use gents_protocol::session::AgentSession;
 
-/// The exact scope of one session label.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SessionScope {
     pub node_did: String,
@@ -46,15 +39,12 @@ impl SessionScope {
     }
 }
 
-/// Another session and the request that links it to this one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionLink {
     pub scope: SessionScope,
     pub cause_request_doc_id: String,
 }
 
-/// A request in the viewed session and the exact scope of its causing
-/// request, when that cause is outside this session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionRequestCause {
     pub request_id: String,
@@ -62,16 +52,12 @@ pub struct SessionRequestCause {
     pub cause_scope: Option<SessionScope>,
 }
 
-/// Every agent-message link of one session.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionLineage {
     pub started_by: Option<SessionLink>,
     pub started: Vec<SessionLink>,
     pub sent: Vec<SessionLink>,
     pub received: Vec<SessionLink>,
-    /// Exact-scope request causes used to attribute individual turns. These
-    /// facts come from the same canonical lineage read, independent of the
-    /// desktop's bounded global request cache.
     pub request_causes: Vec<SessionRequestCause>,
 }
 
@@ -121,7 +107,6 @@ impl From<&AgentSession> for SessionScope {
     }
 }
 
-/// The scopes of the given physical requests, keyed by document id.
 pub async fn request_scopes<'a, R: ConfigRead + ?Sized>(
     access: &R,
     doc_ids: impl IntoIterator<Item = &'a str>,
@@ -152,7 +137,6 @@ pub async fn request_scopes<'a, R: ConfigRead + ?Sized>(
     Ok(scopes)
 }
 
-/// The session stored under `session_id`, when exactly one is visible.
 pub async fn load_session(
     access: &ConfigAccess,
     session_id: &str,
@@ -173,7 +157,6 @@ pub async fn load_session(
     Ok(rows.pop())
 }
 
-/// The session that started `scope`.
 pub async fn started_by(
     access: &ConfigAccess,
     scope: &SessionScope,
@@ -200,7 +183,6 @@ pub async fn started_by(
         }))
 }
 
-/// The request each physical tool call caused, when exactly one names it.
 pub async fn caused_requests<'a>(
     access: &ConfigAccess,
     tool_call_doc_ids: impl IntoIterator<Item = &'a str>,
@@ -236,7 +218,6 @@ pub async fn caused_requests<'a>(
         .collect())
 }
 
-/// Every agent-message link of `scope`.
 pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<SessionLineage> {
     let own_filter = session_scope_filter(
         &scope.node_did,

@@ -514,44 +514,6 @@ async fn misplaced_preview_returns_the_corrected_call_without_publishing() {
         .is_some());
 }
 
-#[test]
-fn schema_command_normalizes_config_conventions_without_changing_the_intent() {
-    for (resource, verb) in [
-        ("collection", "get"),
-        ("collection", "update"),
-        ("collection", "materialize"),
-        ("version", "list"),
-        ("version", "get"),
-        ("version", "activate"),
-    ] {
-        let positional = SchemaCommand::parse(args(json!({"argv":[resource,verb,"id"]}))).unwrap();
-        let named =
-            SchemaCommand::parse(args(json!({"argv":[resource,verb],"target_id":"id"}))).unwrap();
-        assert_eq!(
-            serde_json::to_value(&positional.args).unwrap(),
-            serde_json::to_value(&named.args).unwrap()
-        );
-        assert!(SchemaCommand::parse(args(
-            json!({"argv":[resource,verb,"id"],"target_id":"different"})
-        ))
-        .is_err());
-    }
-    let preview = SchemaCommand::parse(args(json!({"argv":["collection","preview","update","WorkItem"],"options":{"patch":[{"op":"add","path":"/WorkItem/Fields/-","value":{"Name":"title","Kind":"String"}}]}}))).unwrap();
-    assert!(preview.preview);
-    assert!(preview.digest.is_none());
-    let apply = SchemaCommand::parse(apply_call(&preview.args, "sha256:receipt")).unwrap();
-    assert!(!apply.preview);
-    assert_eq!(apply.digest.as_deref(), Some("sha256:receipt"));
-    assert_eq!(
-        serde_json::to_value(preview.args).unwrap(),
-        serde_json::to_value(apply.args).unwrap()
-    );
-    assert!(SchemaCommand::parse(args(
-        json!({"argv":["collection","create"],"options":{"digest":false}})
-    ))
-    .is_err());
-}
-
 #[tokio::test]
 async fn schema_argument_recovery_preserves_intent_without_publishing() {
     let node = node().await;

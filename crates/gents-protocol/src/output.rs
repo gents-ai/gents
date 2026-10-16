@@ -1,20 +1,3 @@
-//! Canonical durable output (#1571): payloads are persisted once; small runtime
-//! presentation literals live in headers. Two immutable, create-only shapes:
-//! [`OutputSegment`] (flush, terminal closure, or both) and [`TranscriptMessage`]
-//! (a header mirroring the native [`crate::message::Message`] with every payload
-//! string replaced by a [`PayloadRef`], plus small presentation literals).
-//!
-//! Collections only grow, so replication is set union and every reader question is
-//! "which facts are visible": no visible closing record means closure is unknown,
-//! not proof that a producer is still running. A closing record with missing
-//! segments means the replica is incomplete. Live previews, streaming, completed
-//! transcripts, provider input, forks and exports are projections of these facts
-//! through one shared reconstruction; no second durable text copy exists.
-//!
-//! Distinct facts that remain: `AgentRequest.content` is the requester-signed
-//! admission input, not the transcript. `RenderedRequest` is what a provider
-//! received. Neither is a transcript source.
-
 use serde::{Deserialize, Serialize};
 
 use crate::message::{
@@ -22,18 +5,12 @@ use crate::message::{
 };
 use crate::rendered_request::{CaptureScope, CaptureScopeKind};
 
-/// Strict reconstruction of an unsealed source for recovery/closure planning.
 pub mod extent;
 pub mod live;
-/// Shared immutable fork-origin validation for runtime and replica readers.
 pub mod origin;
-/// Shared closed-source reconstruction; header and live-view owners build on it.
 pub mod reconstruction;
 pub mod recovery;
 
-/// What produced a run of content. Its identity is known before the first byte
-/// arrives, so segments never wait on the closing record or message that later
-/// names them.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OutputSource {
@@ -61,7 +38,6 @@ pub enum OutputSource {
 }
 
 impl OutputSource {
-    /// Auxiliary captures and plugin effect arguments are request-owned audit evidence.
     pub fn is_auxiliary_audit(&self) -> bool {
         matches!(
             self,
@@ -79,12 +55,6 @@ impl OutputSource {
     }
 }
 
-/// What a stream carries and where it sits in the native message. Carried by
-/// the run that opens the stream, so live views render unclosed output in
-/// native structure without any control document. It names no role. Authored
-/// content is committed with its header in one transaction, but a replica may
-/// receive the parts in any order, so the live projection never shows an
-/// Authored source until its header is visible.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamDeclaration {
@@ -192,13 +162,6 @@ pub struct OutputSegment {
     pub created_at: String,
 }
 
-/// The next `bytes` of `payload` belong to `stream`. Runs split only at UTF-8
-/// boundaries. The run that opens a stream carries its declaration; an empty
-/// native string is an opening run of zero bytes. A zero-byte continuation is
-/// not a flush: silent work uses explicit renewal. Runs cover the payload
-/// exactly; streams open densely from zero and declare exactly once per
-/// `(block_index, part_index, signature field)` position. Missing earlier
-/// flushes never permit inventing a declaration.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SegmentRun {
@@ -208,8 +171,6 @@ pub struct SegmentRun {
     pub declaration: Option<StreamDeclaration>,
 }
 
-/// The existing authority that produced a source; never a new lease or host
-/// identity. It never renews a lease.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OutputWriter {
@@ -220,10 +181,6 @@ pub enum OutputWriter {
     ToolExecution { tool_call_doc_id: String },
 }
 
-/// Whether content ends where its producer meant it to: completeness only.
-/// Partial output is kept and labelled, never presented as a complete source
-/// with silently shorter text. Why it was cut short and whether the producing
-/// operation succeeded are owned by the request and tool lifecycles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputOutcome {
@@ -260,13 +217,7 @@ pub enum SourceClose {
     Retracted,
 }
 
-/// One stream of a closed source, by the exact identity of the record that
-/// closed it. That record is immutable, so its identity pins the extent it
-/// states. A forked message carries the same references as its origin —
-/// payloads are never copied. Closing records, the flushes within their
-/// extents, and the request/tool provenance they name are retained across
-/// session close or removal; this stack introduces no payload GC. ACP applies
-/// to every dependency: a reference never broadens access.
+/// A reference preserves the origin payload and its ACP scope; it grants no new access.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PayloadRef {
@@ -282,7 +233,6 @@ pub enum MessageRole {
     Assistant,
 }
 
-/// Publication authority/provenance, checked atomically by the existing owner.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MessagePublication {
@@ -307,11 +257,7 @@ pub enum MessagePublication {
     },
 }
 
-/// Terminal lifecycle selection, set by the existing terminalization owner in
-/// the same transaction as terminal lifecycle state and any final header
-/// publication. It is absent before terminalization and never changed
-/// afterward, including by late background delivery. A terminal row missing
-/// this field is incomplete/invalid, not `NoMessage`.
+/// The terminal owner writes this with terminal state and final header publication.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TerminalOutput {

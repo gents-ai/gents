@@ -35,7 +35,6 @@ instance (w : World) : Decidable w.WellFormed := by
   unfold World.WellFormed
   infer_instance
 
-/-- Ambiguous keys fail closed. -/
 def findAgent? (agents : List Agent) (node : DID) (id : AgentId) : Option Agent :=
   match agents.filter (fun b => b.node == node && b.id == id) with
   | [agent] => some agent

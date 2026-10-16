@@ -27,8 +27,6 @@ theorem E1_event_source_delivery_convergence
     eventSourceSrc w₀ d h_persisted h_unprocessed
     eventSourceSrc_rescanBoundedBy_pos
 
-/-- EventSource models triggers on the same document as distinct delivery
-identities, so handling the ready identity leaves the pending identity eligible. -/
 theorem E2_ready_trigger_independent_of_pending_trigger
     (w : World) (ready pending : DocId)
     (h_ready_queued : ready ∈ w.subscriptionQueue)

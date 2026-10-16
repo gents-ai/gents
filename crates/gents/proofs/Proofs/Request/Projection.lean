@@ -2,7 +2,6 @@ import Proofs.Request.Transition
 
 namespace Request.Projection
 
-/-- Admission binds the node/agent, independent of how many replicated rows carry it. -/
 def agentCompatible (requested : String) (persisted : List String) : Bool :=
   persisted.all (· == requested)
 
@@ -15,7 +14,6 @@ theorem conflicting_binding_is_rejected (requested existing : String)
     agentCompatible requested [requested, existing] = false := by
   simp [agentCompatible, h]
 
-/-- Convergence write: missing projections repaired by one row, duplicates updated in place (not an admission failure). -/
 def projectAll {α : Type} (value : α) (rows : List α) : List α :=
   if rows.isEmpty then [value] else rows.map fun _ => value
 
@@ -27,7 +25,6 @@ theorem duplicate_projection_values_converge {α : Type} (oldA oldB value : α) 
     projectAll value [oldA, oldB] = [value, value] := by
   simp [projectAll]
 
-/-- Deterministic failure falls back to the authoritative request edge; retryable failure preserves atomic request+projection retry. -/
 inductive ProjectionAttempt where
   | committed
   | deterministicFailure

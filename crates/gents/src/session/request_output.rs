@@ -1,5 +1,3 @@
-//! Typed canonical output observation for one exact physical request.
-
 use anyhow::{Context, Result};
 use gents_protocol::output::live::{
     observed_request_execution_owner, project_live, select_live_target, LiveObservation,
@@ -25,7 +23,6 @@ use super::canonical_rows::{
 pub struct CanonicalPresentation {
     pub body_markdown: String,
     pub reasoning_markdown: Option<String>,
-    /// Exact live-target coordinate selected by the canonical owner.
     pub selected_source: Option<CanonicalSelectedSource>,
 }
 
@@ -46,7 +43,6 @@ pub enum CanonicalRequestOutput {
     Conflicted,
     Invalid,
     Retracted,
-    /// Diagnostic history only; never the current or terminal answer.
     RetainedPartial(Vec<LiveStream>),
     Published {
         header: gents_protocol::output::TranscriptMessage,
@@ -167,7 +163,6 @@ async fn load_facts(
     Ok((segments, messages))
 }
 
-/// Observe canonical output for one already-selected physical request row.
 pub async fn observe_request_output(
     access: &ConfigAccess,
     request: &AgentRequestRow,

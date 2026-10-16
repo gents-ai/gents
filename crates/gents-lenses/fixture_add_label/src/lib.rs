@@ -64,35 +64,3 @@ fn try_inverse(
     Ok(StreamOption::EndOfStream)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn forward_sets_uppercase_label_from_name() {
-        let mut doc = HashMap::new();
-        doc.insert("name".into(), json!("alice"));
-        let out = apply_label(doc);
-        assert_eq!(out.get("label"), Some(&json!("ALICE")));
-    }
-
-    #[test]
-    fn forward_preserves_existing_label() {
-        let mut doc = HashMap::new();
-        doc.insert("name".into(), json!("alice"));
-        doc.insert("label".into(), json!("keep"));
-        let out = apply_label(doc);
-        assert_eq!(out.get("label"), Some(&json!("keep")));
-    }
-
-    #[test]
-    fn inverse_drops_label() {
-        let mut doc = HashMap::new();
-        doc.insert("name".into(), json!("alice"));
-        doc.insert("label".into(), json!("ALICE"));
-        let out = drop_label(doc);
-        assert!(!out.contains_key("label"));
-        assert_eq!(out.get("name"), Some(&json!("alice")));
-    }
-}

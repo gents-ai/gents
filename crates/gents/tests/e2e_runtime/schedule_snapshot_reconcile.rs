@@ -274,9 +274,6 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
         disabled.last_reconcile_error
     );
 
-    // A due cursor can race the configuration reconcile. Once the disabled
-    // generation is published, however, the active schedule set must stop
-    // producing requests.
     let requests_after_reconcile =
         fetch_schedule_agent_requests(db.node.as_ref(), &node_did, "schedule-reconcile-alpha")
             .await

@@ -39,7 +39,6 @@ pub(crate) async fn run_grok_login(
     let provider = gents::xai_grok_oauth::normalize_provider(&opts.provider);
     let http = reqwest::Client::new();
 
-    // v1: device-code is the only login path (SSH/VPS safe; no loopback).
     let tokens = gents::xai_oauth_login::run_device_code_login(&http, true)
         .await
         .context("Grok / xAI device-code login failed")?;

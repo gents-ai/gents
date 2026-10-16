@@ -118,7 +118,6 @@ pub(crate) struct LeanApplyDesiredRow {
     pub(crate) refs: Vec<LeanApplyDocRef>,
 }
 
-/// Runtime observations are never written by a publication.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanApplyLiveRow {
     #[serde(rename = "ref")]
@@ -129,14 +128,12 @@ pub(crate) struct LeanApplyLiveRow {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanApplyReconcileCase {
     pub(crate) name: String,
-    /// Whether the candidate's references close (`referencesClosed`).
     pub(crate) accepted: bool,
     pub(crate) candidate: Vec<LeanApplyDesiredRow>,
     pub(crate) pre_desired: Vec<LeanApplyDesiredRow>,
     pub(crate) pre_live: Vec<LeanApplyLiveRow>,
     pub(crate) expected_after_live: Vec<LeanApplyLiveRow>,
     pub(crate) expected_after_desired: Vec<LeanApplyDesiredRow>,
-    /// Desired state after republishing the same candidate (idempotence).
     pub(crate) expected_retry_desired: Vec<LeanApplyDesiredRow>,
     pub(crate) observations_preserved: bool,
 }
@@ -147,7 +144,6 @@ pub(crate) struct LeanReadinessPublicationCase {
     pub(crate) publishes: Vec<bool>,
 }
 
-/// Bounded build-failure barrier vectors (#559).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanStartupReadinessCase {
     pub(crate) witness: String,

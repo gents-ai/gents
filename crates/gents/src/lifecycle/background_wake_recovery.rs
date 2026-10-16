@@ -28,12 +28,6 @@ enum RedriveOutcome {
 }
 
 impl RequestLifecycle {
-    /// Create bounded retry successors for failed canonical background wakes.
-    /// Narrower than interactive request retry: the source must be a failed
-    /// scheduled request carrying the versioned, coalesced `background_completion`
-    /// queue input, still the latest request across session requesters with retry
-    /// budget left; the unique per-source `retry_key` plus a private transaction
-    /// makes the sweep idempotent across concurrent ticks and process restarts.
     pub async fn redrive_failed_background_wakeups(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,

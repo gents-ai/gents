@@ -1,6 +1,3 @@
-//! Production `MaterializerHandle` used by the `TriggerEngine` at runtime:
-//! bridges the engine's trigger-neutral API to the lifecycle + DefraDB surface.
-
 use std::pin::Pin;
 use std::sync::Arc;
 

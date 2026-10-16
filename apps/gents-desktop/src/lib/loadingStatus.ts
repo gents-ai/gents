@@ -115,8 +115,6 @@ export function projectStartupLoadingStatus(
   }
 }
 
-/** One step of starting Gents, as both progress screens show it: what it
-    is, what is happening while it runs, and where it has got to. */
 export type StartupStep = {
   key: "node" | "connections" | "client";
   label: string;
@@ -124,9 +122,6 @@ export type StartupStep = {
   state: LoadingStepState;
 };
 
-/** The steps a startup status stands for, in order. The node step is
-    there only where this platform manages a node; a home that reaches a
-    remote server names that step for the server instead. */
 export function startupSteps(
   status: StartupLoadingStatus,
   options: { remote?: boolean } = {},

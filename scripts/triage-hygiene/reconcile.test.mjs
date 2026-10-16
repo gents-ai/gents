@@ -35,10 +35,6 @@ test("a comment with no author is never a deletion candidate", () => {
   assert.deepEqual(r.deleteComments, []);
 });
 
-// requiresCommentContext() is run.mjs's gate on fetching comments at all, so it
-// must be exactly the condition under which comments can change reconcile()'s
-// answer — the pair drifted apart once already. Five hand-picked examples
-// cannot fence an equivalence; enumerate the space instead.
 const ALPHABET = [
   "roadmap: now",
   "roadmap: next",
@@ -63,9 +59,6 @@ const labelSetsUpToSize = (alphabet, maxSize) => {
   return sets;
 };
 
-// A comment list that would change the answer if it were ever read: it carries
-// both marker families and is authored by the bot, so it is simultaneously a
-// dedup hit and a deletion candidate.
 const LOADED_COMMENTS = [
   botComment(101, `stale ${conflictMarker(["roadmap: now", "roadmap: later"])}`),
   botComment(102, `welcome ${MISSING_HORIZON_MARKER}`),

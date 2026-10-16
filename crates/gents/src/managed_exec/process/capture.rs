@@ -81,8 +81,6 @@ async fn read_capped<R>(
         let exited_before_read = child_exited.load(std::sync::atomic::Ordering::Acquire);
         let read_started = Instant::now();
         let next = if exited_before_read {
-            // A scheduling delay can exhaust the wait budget while bytes or
-            // EOF are already ready. The byte budget still bounds ready writers.
             match reader.read(&mut buf).now_or_never() {
                 Some(result) => result,
                 None => {

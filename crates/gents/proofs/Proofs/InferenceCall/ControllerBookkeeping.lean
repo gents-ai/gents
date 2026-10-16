@@ -1,17 +1,5 @@
 import Proofs.InferenceCall.SlotAccounting
 
-/-!
-Phases of one call's path through the in-memory admission controller
-(`crates/gents/src/admission/controller.rs`): each phase's waiter-unit and
-semaphore-permit contribution to `max_queue_depth` and the pool permits.
-`persist_error_releases_waiter` and `terminal_phase_releases_bookkeeping`
-state that every terminal outcome, including the queued-persist failure path
-(issue #1001), contributes zero to both. Every controller incarnation of a
-pool shares its permits (`InferenceCall.Registry`), so no controller-level
-drain count exists. The Rust fence is
-`crates/gents/src/admission/tests.rs::queued_persist_failure_releases_queue_capacity`.
--/
-
 namespace InferenceCall
 namespace ControllerBookkeeping
 

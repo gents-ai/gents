@@ -23,8 +23,6 @@ use crate::support::{
 const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);
 
-/// Bypasses provider publication; the explicit generation avoids an invented
-/// fallback during observation.
 async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, content: &str) {
     use gents::defra_node::{ExecuteRetryPolicy, QueryRequest};
     use gents::session::canonical_rows::{
@@ -3601,7 +3599,6 @@ async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
     );
 }
 
-/// Fixture-only mutation for constructing boundary states.
 async fn seed_goal_fields(
     node: &defra_node::EmbeddedNode,
     goal: &gents::goal::GoalDocument,
@@ -3831,7 +3828,6 @@ async fn canonical_goal_json(db: &TestDb) -> serde_json::Value {
     .unwrap()
 }
 
-/// Routing's pre-claim rejection: terminal without an execution generation.
 async fn reject_before_claim(db: &TestDb, doc_id: &str, reason: &str) {
     let doc_id = gents::graphql::escape_graphql_string(doc_id);
     let reason = gents::graphql::escape_graphql_string(reason);
@@ -4037,8 +4033,6 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
         publish_reconcile_phase(&db, "idle").await;
     }
 
-    // Readiness published before the rejection must not re-issue the child;
-    // only a later write can.
     tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("goal source timed out after the final race")

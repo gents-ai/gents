@@ -1,4 +1,3 @@
-//! Runtime-owned application of signed pending-input commands.
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -282,10 +281,9 @@ pub(crate) async fn process_command(
 #[derive(Clone, Copy)]
 enum Sweep {
     Unanswered,
-    /// A replica can overwrite a valid receipt, and only its change notification
-    /// names that command, so this also-sweep-unverified mode runs whenever
-    /// notifications may have been lost: at startup, on resync, and on every
-    /// tick once the subscription has closed.
+    /// Replication can overwrite a receipt without the command's notification
+    /// arriving, so this mode also runs at startup, on resync, and after the
+    /// subscription closes.
     Unverified,
 }
 
@@ -343,8 +341,6 @@ async fn unanswered_commands(
     Ok(unanswered)
 }
 
-/// Sweeps unanswered commands, processes each changed command, and retries each
-/// command deferred until its issuance at that instant.
 pub async fn run_session_input_edit_reconciler(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,

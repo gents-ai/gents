@@ -626,9 +626,6 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     .expect("failed wake did not retain canonical background completion notification with its successor wake in inference");
     runtime.shutdown().await;
 
-    // Freeze the exact physical candidate set before the sweep. The sweep may
-    // materialize a successor, so a post-sweep session query is not a stable
-    // measure of what this invocation scanned.
     let wake_rows_before = background_wake_retry_rows(&db.node, session_id).await;
     let failed_wake = wake_rows_before
         .iter()
@@ -1058,10 +1055,6 @@ async fn seed_expired_execution_lease(
     );
 }
 
-/// The exact provider-turn output coordinate the production writer allocates:
-/// one inference capture at the first per-request allocation, first turn,
-/// first attempt. Recovery enumerates sources from committed segments, so the
-/// fixture and recovery must name the identical coordinate.
 fn fixture_provider_turn_source() -> gents_protocol::output::OutputSource {
     gents_protocol::output::OutputSource::ProviderTurn {
         scope: gents_protocol::rendered_request::CaptureScope {
@@ -1073,8 +1066,6 @@ fn fixture_provider_turn_source() -> gents_protocol::output::OutputSource {
     }
 }
 
-/// Mirrors the production writer's provider-turn header identity, never the
-/// retired `provider-turn:` literal.
 fn fixture_provider_message_key(
     request_doc_id: &str,
     source: &gents_protocol::output::OutputSource,
@@ -1102,11 +1093,6 @@ fn canonical_created_doc_id(
         })
 }
 
-/// Seed one canonical, complete provider turn for an expired generation,
-/// exactly as the production writer publishes it: a fully-closed
-/// `OutputSegment` followed by an assistant transcript header whose text block
-/// references that closing record.
-/// Returns `(closing_segment_doc_id, header_message_doc_id)`.
 #[allow(clippy::too_many_arguments)]
 async fn seed_completed_canonical_output(
     node: &gents::defra_node::EmbeddedNode,
@@ -1199,9 +1185,6 @@ async fn seed_completed_canonical_output(
     (segment_doc_id, message_doc_id)
 }
 
-/// Seed one canonical, open (unclosed) provider-turn flush under the expired
-/// generation — the interrupted-mid-stream state recovery enumerates, closes
-/// Partial, and republishes under a fresh generation.
 #[allow(clippy::too_many_arguments)]
 async fn seed_open_canonical_flush(
     node: &gents::defra_node::EmbeddedNode,
@@ -1574,7 +1557,6 @@ async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
         "recovery must take ownership with a fresh generation"
     );
 
-    // The closing record: recovery committed the exact Partial closure.
     let segment_response = db
         .node
         .execute(&format!(
@@ -1784,9 +1766,6 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
     // Stop the live observer first or it may legitimately reconcile the
     // marker ahead of the explicit startup recovery call under test.
     runtime.shutdown().await;
-    // Simulate the durable pre-ack cursor: the immutable canonical notification
-    // remains present while the lifecycle row says its native side effects
-    // still need convergence.
     let response = db.node.execute(&format!(
         r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ status: "completionPending", completion_notification_delivered_at: null }}) {{ _docID }} }}"#,
         gents::graphql::escape_graphql_string(&tool_doc_id),

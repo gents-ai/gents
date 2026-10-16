@@ -1,9 +1,3 @@
-//! Per-user native service ownership for the foreground Gents runtime.
-//!
-//! A running service is not proof that the runtime is ready, healthy, or using
-//! a particular identity; callers must keep using the runtime status APIs for
-//! those checks.
-
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -33,7 +27,6 @@ pub const FOREIGN_STORE_EXIT_CODE: i32 = 67;
 /// wrote with unsafe permissions (sysexits `EX_NOINPUT`).
 pub const INSECURE_KEY_EXIT_CODE: i32 = 66;
 
-/// The exit status `gents` uses when it refuses a store of `kind`.
 pub fn incompatible_store_exit_code(kind: gents::storage_backend::IncompatibleStoreKind) -> i32 {
     use gents::storage_backend::IncompatibleStoreKind;
     match kind {
@@ -60,11 +53,8 @@ impl std::fmt::Display for BackgroundApprovalPending {
 
 impl std::error::Error for BackgroundApprovalPending {}
 
-/// macOS Background Task Management's record of the service definition
-/// (`SMAppService.statusForLegacyURL:`).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum BackgroundItemStatus {
-    /// Not macOS, or this macOS has no Background Task Management API.
     #[default]
     Unavailable,
     NotRegistered,
@@ -96,15 +86,8 @@ pub struct NativeServiceConfig {
     pub home: PathBuf,
     pub executable: PathBuf,
     pub user_home: PathBuf,
-    /// Fully resolved service-manager configuration directory. Keeping this
-    /// in the value makes injected managers independent of process-global env.
     pub service_config_dir: PathBuf,
-    /// The one non-secret environment value intentionally forwarded to the
-    /// service, so configured host tools remain discoverable after detaching
-    /// from a terminal.
     pub search_path: Option<OsString>,
-    /// Desktop bundle that owns this node runtime. macOS Login Items otherwise
-    /// names the background item after the code-signing identity.
     pub associated_bundle_id: Option<String>,
     /// Where the service manager appends the runtime's stderr. With the
     /// native log sink enabled that holds only what precedes or escapes
@@ -201,7 +184,6 @@ fn forwarded_search_path(
         .filter(|value| !value.is_empty())
 }
 
-/// Refuses an executable that would disappear with the AppImage mount.
 pub fn ensure_durable_service_executable(
     executable: &Path,
     app_dir: Option<&Path>,
@@ -347,8 +329,6 @@ impl CommandRunner for ProcessCommandRunner {
     }
 }
 
-/// Opens the Login Items pane where macOS lists background items awaiting
-/// approval.
 pub fn open_background_approval_settings() -> Result<()> {
     #[cfg(target_os = "macos")]
     {
@@ -394,7 +374,6 @@ mod macos_background {
             let path = NSString::from_str(&definition.to_string_lossy());
             let url = NSURL::fileURLWithPath(&path);
             let status: isize = unsafe { msg_send![class, statusForLegacyURL: &*url] };
-            // SMAppServiceStatus values.
             match status {
                 0 => BackgroundItemStatus::NotRegistered,
                 1 => BackgroundItemStatus::Enabled,
@@ -772,8 +751,6 @@ impl<R: CommandRunner> NativeServiceManager<R> {
         }
     }
 
-    /// Why a loaded or failed job is not running: the supervisor's record of
-    /// its last exit. `None` while the process runs or has never exited.
     pub fn last_exit(&self) -> Result<Option<ServiceExit>> {
         if !self.config.definition_path(self.platform).is_file() {
             return Ok(None);
@@ -811,8 +788,6 @@ impl<R: CommandRunner> NativeServiceManager<R> {
         }
     }
 
-    /// Whether the installed definition launches an executable other than
-    /// this configuration's, as it does after the application moved.
     pub fn installed_executable_differs(&self) -> Result<bool> {
         let path = self.config.definition_path(self.platform);
         if !path.is_file() {
@@ -831,8 +806,6 @@ impl<R: CommandRunner> NativeServiceManager<R> {
     }
 
     pub fn uninstall(&self) -> Result<()> {
-        // Service definitions are disposable; the configured Gents home and
-        // all runtime data deliberately remain untouched.
         let path = self.config.definition_path(self.platform);
         if !path.exists() {
             return Ok(());
@@ -892,10 +865,6 @@ impl<R: CommandRunner> NativeServiceManager<R> {
 
     fn ensure_owned_definition(&self, definition: &[u8]) -> Result<()> {
         let installed_home = normalize_absolute(&installed_home(self.platform, definition)?)?;
-        // `with_runner` deliberately accepts fully injected configs for tests
-        // and embedders, so normalize the caller side at the ownership
-        // boundary too. On macOS this notably makes /var and /private/var the
-        // same home without weakening the fixed-label cross-home check.
         let requested_home = normalize_absolute(&self.config.home)?;
         if installed_home != requested_home {
             bail!(
@@ -1338,15 +1307,11 @@ fn launchd_is_running(output: &str) -> bool {
     state_running && has_pid
 }
 
-/// An exit the supervisor recorded, with how many times it has restarted the
-/// job since it was loaded. A clean exit is not restarted.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServiceExit {
     pub reason: String,
     pub restarts: u64,
     pub clean: bool,
-    /// The recorded exit status, when the process exited rather than being
-    /// terminated by a signal.
     pub code: Option<i32>,
 }
 

@@ -651,8 +651,6 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
     Ok(())
 }
 
-// Serve one `/v1/models` response whose rows carry the request's bearer back
-// in unrelated fields, as a hostile or careless provider might.
 async fn spawn_echoing_models_server(secret: &'static str) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

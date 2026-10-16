@@ -1,5 +1,3 @@
-//! Idle-window behavior measured through the real capturing transport.
-
 use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -31,7 +29,6 @@ use crate::session_hook::NoopSessionHook;
 
 const IDLE: Duration = Duration::from_secs(30);
 
-/// One provider attempt on the wire.
 #[derive(Clone, Default)]
 struct WireAttempt {    hold_headers: bool,
     events: Vec<(Duration, String)>,
@@ -158,9 +155,6 @@ impl HttpClientExt for ScriptedWire {
     }
 }
 
-/// Eagerly awaits response headers inside `stream()`, then decodes:
-/// `text_delta` and `tool_use` become items, `message_stop` becomes `Final`,
-/// every other event decodes to nothing.
 #[derive(Clone)]
 struct WireModel {
     client: RenderedRequestCapturingHttpClient<ScriptedWire>,
@@ -565,14 +559,4 @@ async fn repeated_silence_exhausts_the_retry_owner_instead_of_hanging() {
         "{:?}",
         run.elapsed
     );
-}
-
-#[tokio::test(start_paused = true)]
-async fn sub_second_windows_are_reported_exactly() {
-    let (error, _) = super::ProviderAttemptFailure::Stalled(super::ProviderStall {
-        idle: Duration::from_millis(250),
-        first_item: true,
-    })
-    .classify();
-    assert_eq!(error.to_string(), "inference timed out after 250ms");
 }

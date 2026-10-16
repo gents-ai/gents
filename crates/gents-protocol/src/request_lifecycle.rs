@@ -1,8 +1,3 @@
-//! `RequestLifecycleState`: the single Rust owner of `AgentRequest` state.
-//!
-//! One column (`lifecycle_state`), one enum. Source of truth: the Lean
-//! `RequestState` model in `crates/gents/proofs/`.
-
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -153,10 +148,6 @@ impl Display for RequestLifecycleState {
     }
 }
 
-/// Strict: an unknown value is a hard deserialization error naming the
-/// offending value, not a silent `None`. Wire code that wants leniency
-/// should deserialize into `Option<RequestLifecycleState>` and rely on the
-/// field being absent/null, not on this succeeding for garbage strings.
 impl Serialize for RequestLifecycleState {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where

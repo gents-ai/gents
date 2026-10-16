@@ -1,5 +1,3 @@
-//! Task templates use the production renderer; LayeredPromptBuilder preserves
-//! literal system preambles. Hand-authored assembly/rendering cases.
 
 use gents::document_config::Task;
 use gents::prompt::LayeredPromptBuilder;
@@ -45,7 +43,6 @@ fn system_preamble_is_literal_template_syntax_is_inert() {
     );
 }
 
-/// Only the task slot substitutes bindings (Template.task_binding_preserves_context).
 #[test]
 fn task_template_substitutes_only_in_the_task_slot() {
     let literal = "Deploy {{ args.target }} now.";
@@ -158,7 +155,6 @@ fn task_render_fails_closed_on_unbound_variables() {
         "expected a render-time failure, got: {err:?}"
     );
 
-    // An absent scope root fails as well as an absent key.
     let task = task_with_template("Run {{ args.name }}");
     let mut scope = fire_scope("fence", "T1", serde_json::json!({}));
     scope.args = None;

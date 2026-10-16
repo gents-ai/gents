@@ -23,7 +23,6 @@ fn is_scheduled_automated_wakeup(row: &AgentRequestRow) -> bool {
 }
 
 // SAFETY (#664): `node_did` scopes both the pending-row scan and mutation.
-// A foreign-DID replica sharing `session_id` cannot be drained by this owner.
 async fn drain_pending_session_requests_where_in_txn(
     txn: &ConfigApplyTxn<'_>,
     session_id: &str,

@@ -1,9 +1,3 @@
-//! Model calls for a plugin that cannot reach the network itself: a plugin
-//! with a bound `model_slot` answers a call with a batch of model requests;
-//! the host sends them to the slot's inference backend and calls the plugin
-//! again with the answers, until the plugin returns a result. The endpoint
-//! and key live only in [`ModelEndpoint`]: a plugin sees answers, never
-//! where they came from.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, LazyLock};
@@ -21,25 +15,15 @@ use crate::document_config::{InferenceBackend, InferenceProfile};
 use crate::openai_wire::OpenAiWireApi;
 use crate::Collection;
 
-/// Requests one round may carry.
 pub const MAX_REQUESTS_PER_ROUND: usize = 64;
-/// Bytes of one model answer handed back to the plugin.
 pub const MAX_RESULT_BYTES: usize = 1024 * 1024;
-/// Requests one call may send over all its rounds.
 pub const MAX_REQUESTS_PER_CALL: usize = 512;
-/// Answer bytes one call may take in over all its rounds; this only stops
-/// abuse.
 pub const MAX_ANSWER_BYTES_PER_CALL: usize = 32 * 1024 * 1024;
-/// Output tokens asked for when neither the plugin nor the profile sets a cap.
 pub const DEFAULT_MAX_TOKENS: u64 = 8192;
-/// Consecutive failed rounds after which the endpoint is treated as dead.
 pub const DEAD_ENDPOINT_ROUNDS: u32 = 2;
 const DEFAULT_CONNECT_TIMEOUT_SECS: i64 = 10;
-/// Longest one request may take; a page-sized vision answer from a local
-/// server can take minutes.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// The profile an installation bound a plugin's model slot to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct ModelBinding {
@@ -47,13 +31,11 @@ pub struct ModelBinding {
     pub profile_id: String,
 }
 
-/// Where a bound slot's requests go. Held by the host only.
 pub struct ModelEndpoint {
     pub url: String,
     pub api_key: Option<String>,
     pub model: String,
     pub max_concurrent: usize,
-    /// Names the backend for the process-wide concurrency limit.
     pub backend_key: String,
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
@@ -69,7 +51,6 @@ impl std::fmt::Debug for ModelEndpoint {
     }
 }
 
-/// Turns an installation's slot binding into the endpoint to call.
 pub trait ModelResolver: Send + Sync {
     fn resolve<'a>(&'a self, binding: &'a ModelBinding) -> BoxFuture<'a, Result<ModelEndpoint>>;
 }
@@ -124,7 +105,6 @@ where
     }
 }
 
-/// The chat completions endpoint a profile and its backend describe.
 pub fn endpoint_for(
     profile: &InferenceProfile,
     backend: &InferenceBackend,
@@ -192,11 +172,7 @@ pub(super) struct Batch {
     pub(super) state: Option<Value>,
 }
 
-/// The requests a plugin's output asks for: `None` when the output is a
-/// final result, an error naming what is malformed otherwise.
 pub(super) fn parse_batch(output: &Value) -> Result<Option<Batch>, String> {
-    // A result that merely echoes the `"model_calls": true` it was given is
-    // a result, not a request.
     let Some(calls) = output
         .as_object()
         .and_then(|object| object.get("model_calls"))
@@ -273,9 +249,6 @@ pub(super) fn parse_batch(output: &Value) -> Result<Option<Batch>, String> {
     }))
 }
 
-/// In-flight limits by backend, shared by every call in the process. The cap
-/// is part of the key, so an edited `max_concurrent` starts a fresh limit
-/// while calls already running finish under the old one.
 static LIMITERS: LazyLock<kovan_map::HopscotchMap<String, Arc<Semaphore>>> =
     LazyLock::new(kovan_map::HopscotchMap::new);
 
@@ -286,8 +259,6 @@ fn limiter(endpoint: &ModelEndpoint) -> Arc<Semaphore> {
     )
 }
 
-/// The `max_tokens` one request is sent with: the smaller of what the plugin
-/// asked and the profile allows, else [`DEFAULT_MAX_TOKENS`].
 fn token_limit(asked: Option<u64>, cap: Option<u64>) -> u64 {
     match (asked, cap) {
         (Some(asked), Some(cap)) => asked.min(cap),
@@ -295,7 +266,6 @@ fn token_limit(asked: Option<u64>, cap: Option<u64>) -> u64 {
     }
 }
 
-/// Why a request is answered with an error without being sent.
 #[derive(Clone, Copy)]
 enum Refusal {
     Dead,
@@ -317,7 +287,6 @@ impl Refusal {
     }
 }
 
-/// One bound slot's connection for the length of one plugin call.
 pub(super) struct Session {
     endpoint: ModelEndpoint,
     client: reqwest::Client,
@@ -348,9 +317,6 @@ impl Session {
         })
     }
 
-    /// Answers every request of one round. At most `max_concurrent` are in
-    /// flight per backend across the process; a request past the call's
-    /// request or answer-byte budget gets an error result without being sent.
     pub(super) async fn serve(
         &mut self,
         requests: Vec<Request>,
@@ -419,8 +385,6 @@ impl Session {
         results
     }
 
-    /// One request; the error is a fixed sentence that names neither the
-    /// endpoint nor the key.
     async fn ask(&self, request: &Request, deadline: Instant) -> Result<String, String> {
         let endpoint = &self.endpoint;
         let mut content = vec![json!({"type": "text", "text": request.prompt})];
@@ -494,8 +458,6 @@ impl Session {
     }
 }
 
-/// The assistant text of a chat completions answer, whether `content` is a
-/// string or a list of text parts.
 fn answer_text(answer: &Value) -> Option<String> {
     let content = answer.pointer("/choices/0/message/content")?;
     match content {

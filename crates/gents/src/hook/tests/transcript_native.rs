@@ -193,8 +193,6 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
     );
 
     let dedupe = crate::lean_vocab_test::lean_transcript_case("dedupe_duplicate_reuses_sequence");
-    // Runtime re-entry after ToolCallLifecycle's idempotent terminal delivery
-    // is an illegal transition, not the modeled duplicate action.
     assert_eq!(dedupe.action, "observe_duplicate_tool_result");
     assert!(dedupe.expected_duplicate_reused_sequence);
 

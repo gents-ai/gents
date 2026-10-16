@@ -52,8 +52,7 @@ chmod +x "${images[0]}"
 appimage_path=$(realpath "${images[0]}")
 smoke appimage "$appimage_path"
 
-# The bundled CLI must run with no AppImage environment, because the user
-# service runs a copy of it that outlives the mount. No service is installed.
+# The user service runs a bundled CLI after the AppImage mount is gone.
 appimage_extract=$(mktemp -d /tmp/gents-appimage-extract.XXXXXX)
 (
   cd "$appimage_extract"

@@ -29,7 +29,6 @@ theorem changed_intent_ignores_completion (s : View α) (selected result : α) :
     finish (select s selected) s.epoch result = select s selected := by
   simp [finish, select, accepts]
 
-/-- Returning to the same selection does not revive work from the prior visit. -/
 theorem navigate_away_and_back_ignores_completion (s : View α) (other result : α) :
     finish (select (select s other) s.value) s.epoch result =
       select (select s other) s.value := by
@@ -41,14 +40,11 @@ theorem older_epoch_cannot_commit (s : View α) (captured : Nat) (result : α)
   have hne : s.epoch ≠ captured := by omega
   simp [finish, accepts, hne]
 
-/-- Passive observation / remote completion does not create a new intent. -/
 theorem completion_preserves_epoch (s : View α) (captured : Nat) (result : α) :
     (finish s captured result).epoch = s.epoch := by
   simp only [finish]
   split <;> rfl
 
-/-- Releasing this operation's pending marker is separate from publishing its
-result. A stale result still releases its own marker, but never another one's. -/
 def releaseOwned (current : Option Nat) (owned : Nat) : Option Nat :=
   if current = some owned then none else current
 
@@ -285,8 +281,6 @@ def unrelatedTraffic (s : State) (other : Nat) : Nat → State
   | 0 => s
   | n + 1 => dataChange (unrelatedTraffic s other n) (.nodes [other])
 
-/-- A classified stream outside the target cannot require global quiescence.
-Unknown/global events remain an explicit shared dependency. -/
 theorem arbitrarily_many_unrelated_changes_preserve_scoped_read
     (s : State) (node other count : Nat) (h : node ≠ other) :
     acceptsFor (unrelatedTraffic s other count) (beginRead s) (.nodes [node]) = true := by
@@ -357,26 +351,16 @@ def upsertObservationRows (rows : List ScopedObservationRow) :
   | [] => rows
   | incoming :: rest => upsertObservationRows (upsertObservationRow rows incoming) rest
 
-/-- The native scoped replacement removes every existing target-owned row before
-upserting incoming rows, and filters incoming rows to the target owner. Thus
-existing duplicate keys cannot reach the upsert stage; duplicate incoming keys
-are resolved in input order by the upsert fold. -/
 def replaceConfigScope (scope : Nat) (current incoming : List ScopedConfigRow) :
     List ScopedConfigRow :=
   upsertConfigRows (current.filter (fun row => row.owner != scope))
     (incoming.filter (fun row => row.owner == scope))
 
-/-- The native scoped replacement removes every existing target-sourced row
-before upserting incoming rows, and filters incoming rows to the target source.
-Thus existing duplicate keys cannot reach the upsert stage; duplicate incoming
-keys are resolved in input order by the upsert fold. -/
 def replaceObservationScope (scope : Nat)
     (current incoming : List ScopedObservationRow) : List ScopedObservationRow :=
   upsertObservationRows (current.filter (fun row => row.source != some scope))
     (incoming.filter (fun row => row.source == some scope))
 
-/-- Unknown provenance is retained in the store but cannot satisfy a
-node-scoped observation lookup. -/
 def scopedObservationFor (scope : Nat) (key : String)
     (rows : List ScopedObservationRow) : Option ScopedObservationRow :=
   rows.find? (fun row => row.key == key && row.source == some scope)
@@ -488,7 +472,6 @@ theorem scoped_observation_replacement_preserves_other_source
     (row : ScopedObservationRow) (h : row.source ≠ some scope) :
     row ∈ replaceObservationScope scope current incoming ↔ row ∈ current := by
   unfold replaceObservationScope
-  -- Exact-source observations are keyed by both parent owner and logical ID.
   have hIncoming : ∀ item ∈ incoming.filter (fun item => item.source == some scope),
       item.source = some scope := by
     intro item hitem

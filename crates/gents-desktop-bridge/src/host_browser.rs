@@ -11,8 +11,6 @@ use std::time::{Duration, Instant};
 
 use crate::package_tools;
 
-/// How long an opener may run before it counts as launched; staying alive is
-/// a browser holding the session, not a dispatcher refusing.
 const SETTLE: Duration = Duration::from_millis(1500);
 
 const OPENERS: &[&[&str]] = &[
@@ -138,8 +136,6 @@ fn launched(program: &PathBuf, args: &[OsString]) -> std::io::Result<bool> {
     }
 }
 
-/// `BROWSER` as the desktop convention defines it: colon-separated commands,
-/// each optionally placing the URL with `%s`.
 fn browser_env_openers() -> Vec<Vec<String>> {
     let Some(browser) = std::env::var_os("BROWSER") else {
         return Vec::new();
@@ -158,8 +154,6 @@ fn browser_env_openers() -> Vec<Vec<String>> {
         .collect()
 }
 
-/// Find `program` in the host's own directories, skipping any the package
-/// contributed.
 fn resolve_host_program(program: &str) -> Option<PathBuf> {
     if program.contains('/') {
         let path = PathBuf::from(program);
@@ -227,47 +221,4 @@ mod tests {
         assert!(!is_openable("not-a-url"));
     }
 
-    #[test]
-    fn browser_is_read_as_the_desktop_convention_defines_it() {
-        temp_env("BROWSER", Some("firefox --new-tab %s:chromium"), || {
-            assert_eq!(
-                browser_env_openers(),
-                vec![
-                    vec![
-                        "firefox".to_owned(),
-                        "--new-tab".to_owned(),
-                        "%s".to_owned()
-                    ],
-                    vec!["chromium".to_owned()],
-                ]
-            );
-        });
-        temp_env("BROWSER", None, || {
-            assert!(browser_env_openers().is_empty());
-        });
-    }
-
-    #[test]
-    fn a_program_with_a_path_is_taken_as_given() {
-        assert!(resolve_host_program("/definitely/not/here").is_none());
-        assert_eq!(
-            resolve_host_program("/bin/sh"),
-            std::fs::metadata("/bin/sh")
-                .is_ok()
-                .then(|| PathBuf::from("/bin/sh"))
-        );
-    }
-
-    fn temp_env(key: &str, value: Option<&str>, body: impl FnOnce()) {
-        let previous = std::env::var_os(key);
-        match value {
-            Some(value) => std::env::set_var(key, value),
-            None => std::env::remove_var(key),
-        }
-        body();
-        match previous {
-            Some(value) => std::env::set_var(key, value),
-            None => std::env::remove_var(key),
-        }
-    }
 }

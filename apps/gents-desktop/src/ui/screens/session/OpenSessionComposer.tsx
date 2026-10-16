@@ -152,8 +152,6 @@ export function OpenSessionComposer({
             }
             onKeyDown={onKeyDown}
             textareaRef={textarea}
-            /* while it holds an edit, the chip's X is the way out and the
-               button saves; an edit the agent already took sends as new */
             clearable={!editing}
             submitLabel={
               editing ? (editing.reached ? "Send as a new message" : "Save") : "Send"
@@ -172,8 +170,6 @@ export function OpenSessionComposer({
         </div>
         {covered && <LoadingStatus overlay />}
       </div>
-      {/* the placeholder already says why sending is off while the
-          box is empty; the hint is only for when typed text hides it */}
       <ComposerFooter
         folder={<SelectedChatFolder />}
         status={

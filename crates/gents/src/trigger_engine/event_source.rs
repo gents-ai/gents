@@ -1,20 +1,3 @@
-//! Event-trigger `TriggerSource`.
-//!
-//! Subscribes to DefraDB document events and emits `FireIntent`s whenever an
-//! event from a `source_collection` referenced by the active runtime
-//! snapshot's `active_event_triggers` lands. The subscription set is kept in
-//! sync with the snapshot generation — see `reconcile_subscriptions` (Task 19).
-//!
-//! This file lands in staged tasks:
-//! - Task 18: skeleton only — struct, constructor, no-op `next_fire` stub.
-//! - Task 19: `reconcile_subscriptions` drives the desired-collections set
-//!   from the snapshot at each generation bump.
-//! - Task 20: full `next_fire` loop (poll subscription, filter by desired
-//!   collections, build `FireIntent`).
-//! - Task 21 (this file): filter probe + doc-var hydration via an
-//!   introspected source-doc projection cached per source collection.
-//! - Task 22: `on_result` callback body for bookkeeping writes.
-
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};

@@ -54,7 +54,6 @@ pub(crate) enum EffectiveAgentAdmission<'a> {
     Unassigned,
 }
 
-/// Single agent-admission decision shared by routing and readiness publication.
 pub(crate) fn effective_agent_admission<'a>(
     dispatcher_present: bool,
     unavailable: Option<&'a UnavailableAgent>,

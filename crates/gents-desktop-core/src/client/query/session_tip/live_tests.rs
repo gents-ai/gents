@@ -28,8 +28,6 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
     let doc = escape_graphql_string(request.doc_id.as_deref().unwrap());
     let source = r#"{kind:"provider_turn", scope:"inference.0", turn_index:0, attempt:0}"#;
     let writer = r#"{kind:"request_execution", execution_generation:"generation"}"#;
-    // Distinct physical records at one coordinate must survive the read,
-    // including a closure without an ordinal.
     for (ordinal, text, requester) in [
         (2, "later", "reader"),
         (0, "first", "reader"),
@@ -80,8 +78,6 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
         .await
         .unwrap();
     }
-    // The node and request indexes exceed DefraDB's estimation cap: a
-    // broad-index tie must not scan unrelated history.
     const INERT_ROWS: usize = 1_030;
     for start in (0..INERT_ROWS).step_by(32) {
         let batch = (start..(start + 32).min(INERT_ROWS)).map(|i| {

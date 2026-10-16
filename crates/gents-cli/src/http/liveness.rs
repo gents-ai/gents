@@ -18,20 +18,13 @@ pub(crate) struct LivenessToolCallRow {
     pub(crate) await_mode: Option<String>,
 }
 
-/// Durable activity for one processing request: a tool call (`started_at`,
-/// `completed_at`) or an inference call (`started_at`, `ended_at`), including
-/// finished ones. The newest of these timestamps and `claimed_at` is the
-/// request's progress. Rows are never deleted and timestamps are written once,
-/// so while the activity reads succeed that maximum cannot move back in time.
-/// A failed activity read deliberately falls back to `claimed_at` for that
-/// sample, so monotonicity holds only across successful observations.
+/// Activity rows are append-only and timestamped once; including completed
+/// activity keeps progress monotonic across successful observations.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct LivenessActivityRow {
     #[serde(default)]
     pub(crate) request_doc_id: Option<String>,
-    /// Principal that wrote the row. Only rows written by the request's own
-    /// agent count: another principal's row can name the same request
-    /// document without being this request's progress.
+    /// Activity from another principal cannot establish this request's progress.
     #[serde(default)]
     pub(crate) node_did: Option<String>,
     #[serde(default)]
@@ -410,19 +403,12 @@ mod tests {
         );
     }
 
-    /// #1782: a tool call leaving the running set must not move progress
-    /// back to `claimed_at`. Across samples of an advancing request, progress
-    /// time never decreases and the age never exceeds the gap since the last
-    /// durable event.
     #[test]
     fn progress_never_moves_back_in_time_across_samples() {
         let running_read = || vec![tool_call("req-1", "tc-1", "read_file", -1, None, None)];
-        // (sample offset secs, running tool calls, durable activity)
         let samples = vec![
             (0, running_read(), vec![tool_activity("req-1", -1, None)]),
-            // tc-1 completed: it left the running set.
             (5, Vec::new(), vec![tool_activity("req-1", -1, Some(2))]),
-            // Waiting on the model between tool batches.
             (
                 10,
                 Vec::new(),

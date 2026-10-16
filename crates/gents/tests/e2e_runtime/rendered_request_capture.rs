@@ -681,8 +681,6 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
     );
 }
 
-/// Rows written as v2 delta chains are immutable history: the writer no longer
-/// produces them (#2333) but they must keep decoding through their own arm.
 #[tokio::test]
 async fn stored_v2_delta_rows_still_decode_through_their_own_arm() {
     let db = test_db("rendered-request-stored-v2-delta").await;
@@ -828,9 +826,6 @@ async fn capture_doc_id(node: &EmbeddedNode, capture_key: &str) -> String {
         .to_owned()
 }
 
-/// The current `request_json` field commit of one capture document, selected in
-/// Rust from the full commit list because the `_commits` fieldName filter is
-/// evaluated in memory and degrades to unfiltered when malformed.
 async fn request_json_commit_cid(node: &EmbeddedNode, doc_id: &str) -> String {
     let query = format!(
         r#"{{ _commits(docID:"{}") {{ cid fieldName }} }}"#,
@@ -1464,34 +1459,10 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
     agent.shutdown().await;
 }
 
-/// The post-compaction message list is captured, and later turns are assembled
-/// from it.
-///
-/// Per-turn compaction is a *sticky* mutation of the loop's own state
-/// (`*history = compacted; *new_messages = vec![compacted_prompt]`): one turn's
-/// narrowing governs every later turn of the request, and nothing durable
-/// records that it happened — no `AgentCompactionEntry` is written, and the
-/// `AgentMessage` rows still hold the full tool result. So the captured bodies
-/// are the only evidence of what the provider was actually shown from that turn
-/// onward.
-///
-/// The strategy is `StripToolResults`, which is deterministic and needs no
-/// provider call, so every completion body this test observes belongs to the
-/// inference loop.
-///
-/// Two assertions make this a *stickiness* fence rather than a compaction
-/// fence. The trace must agree with the captured body — a compaction that
-/// narrowed the request without rewriting the loop's own state would leave the
-/// two describing different conversations. And turn 2 must carry its own tool
-/// result verbatim: if the compacted list were not retained, turn 2 would
-/// reassemble from the full result, land over budget again, and be compacted a
-/// second time, stripping the second result too.
 #[tokio::test]
 async fn per_turn_compaction_is_captured_and_governs_later_turns() {
     const BIG_MARKER: &str = "COMPACTED_AWAY_PAYLOAD_5f1c";
     const SMALL_MARKER: &str = "SECOND_TOOL_RESULT_9a02";
-    // 40 000 chars: comfortably over the budget below, comfortably under the
-    // 50 KiB threading cap so the result is not truncated before compaction.
     const BIG_OUTPUT_CHARS: usize = 40_000;
     const CONTEXT_WINDOW: usize = 40_000;
     const COMPACTION_THRESHOLD: f64 = 0.25;
@@ -1644,38 +1615,12 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
     agent.shutdown().await;
 }
 
-/// The summarizer is a provider call too, and it runs *before* the request's
-/// own completion loop exists.
-///
-/// `AgentDaemon::handle_request` compacts while it is assembling the prompt,
-/// roughly ninety lines before `run_inference`. `StripThenSummarize` is the
-/// default strategy, so for any session over its threshold that pre-request
-/// compaction issues a real, model-backed provider call whose input is the
-/// entire pre-truncated transcript. While the capture scope was installed
-/// around `run_inference` only, that call had no ambient scope: its arming sink
-/// no-opped, the transport found nothing pending and forwarded, and the loop's
-/// backstop could not fire because nothing was armed. Zero rows, zero
-/// diagnostics, for the single largest provider input the runtime produces.
-///
-/// The other compaction test deliberately picks `StripToolResults` precisely so
-/// no summarizer runs, which is why that hole survived. This one forces the
-/// summarizer and states the invariant at its strongest: every completion body
-/// the backend was posted — inference, pre-request summarizer, and #988's
-/// per-turn budget guard alike — has exactly one durable row carrying exactly
-/// those bytes.
 #[tokio::test]
 async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
-    // 200 000-token window at a 0.25 threshold is a 50 000-token budget. The
-    // seeded assistant turn is ~65 000 tokens, so request 2 is over budget at
-    // prompt-assembly time and the daemon summarizes before it builds a loop.
     const CONTEXT_WINDOW: usize = 200_000;
     const COMPACTION_THRESHOLD: f64 = 0.25;
     const SEED_CHARS: usize = 260_000;
     const SEED_MARKER: &str = "capture-summarizer";
-    /// The summarizer's own user turn. Unique to the compaction loop, so the
-    /// mock can answer it with a checkpoint instead of prose — and matched
-    /// first, because the summarizer's body also carries the transcript and so
-    /// contains the inference marker too.
     const SUMMARIZER_MARKER: &str = "Produce the required structured continuation checkpoint now.";
 
     let checkpoint = serde_json::json!({
@@ -1755,10 +1700,6 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
         "the seeding request must be a single uncompacted completion"
     );
 
-    // Reproduce the incident's durable shape: the previous physical request
-    // has a successful request-local reduction but the session has no
-    // CompactionEntry. A continuation must ignore this checkpoint as session
-    // state and create a real session-prefix compaction entry instead.
     let seed_commit = gents::graphql::newest_document_composite_commit(
         db.node.as_ref(),
         &seed_doc,
@@ -1778,9 +1719,6 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     .await
     .unwrap();
     let request_local_checkpoint = vec![Message::user("REQUEST_LOCAL_ONLY_SENTINEL")];
-    // Seed the historical incident shape as a raw fixture. Production has no
-    // public scalar writer: all new request-local reductions must consume the
-    // shared exact reduction artifact.
     let reduction_key = gents::provider_context_reduction::reduction_key(
         &agent.node_did,
         session_id,
@@ -1867,10 +1805,6 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     )
     .await;
 
-    // The invariant, measured at the backend rather than at the loop: every
-    // body the provider was posted has one row, and the row carries those
-    // bytes. A summarizer call outside every capture scope fails here as a
-    // count mismatch, not as a missing assertion.
     assert_eq!(
         rows.len(),
         follow_up_bodies.len(),
@@ -1892,8 +1826,6 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
          same set of requests"
     );
 
-    // ...and the summarizer's row is its own fact, under its own capture scope,
-    // rather than a rebinding of the inference loop's `(turn 0, attempt 0)`.
     let summarizer_rows = rows
         .iter()
         .filter(|row| {
@@ -1919,9 +1851,6 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
         "the request's own completion loop must still be captured alongside it"
     );
 
-    // The summary reached the transcript, which is what makes the summarizer's
-    // input unrecoverable from anything but this row: the durable entry holds
-    // the model's words, never the request that produced them.
     let entries = compaction_entry_count(db.node.as_ref(), session_id).await;
     assert_eq!(
         entries, 1,
@@ -1999,8 +1928,6 @@ async fn run_serialized_threshold_probe(name: &str, threshold: f64) -> Threshold
             .compaction_strategy(CompactionStrategy::StripThenSummarize)
     })
     .await;
-    // Each probe has its own database, so keep authored identities identical
-    // when comparing the exact serialized provider requests across runs.
     let session_id = "session-threshold-boundary";
     let seed_request_id = "request-threshold-seed";
     let seed_doc = create_runtime_request(
@@ -2084,8 +2011,6 @@ async fn serialized_input_threshold_equality_and_one_over_select_actual_compacti
         "measured input {measured} must permit exact neighboring budgets and output capacity"
     );
 
-    // Select fixture thresholds through the production budget owner. With a
-    // window below 10,000, every integer input budget has a basis-point value.
     let threshold_for = |budget| {
         (1..=10_000_u64)
             .map(|basis_points| basis_points as f64 / 10_000.0)
@@ -2378,10 +2303,6 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     agent.shutdown().await;
 }
 
-/// `ToolDyn` is implemented directly rather than through `Tool` so the tool
-/// never parses its arguments. The repair fence deliberately streams a tool call
-/// whose arguments carry a raw control character, and a parsing tool would
-/// reject it before the loop ever assembled the turn that gets repaired.
 #[derive(Clone)]
 struct FixedOutputTool {
     name: String,
@@ -2421,7 +2342,6 @@ impl ToolDyn for FixedOutputTool {
     }
 }
 
-/// `(capture_scope, turn_index, attempt)` for each row, in query order.
 fn coordinates(rows: &[Value]) -> Vec<(&str, i64, i64)> {
     rows.iter()
         .map(|row| {
@@ -2498,8 +2418,6 @@ fn parse_json(value: &Value) -> Value {
 fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
     let node_did = "did:key:z6MkCaptureIdempotency".to_string();
     let session_id = "session-idem".to_string();
-    // This direct sink test exercises the explicit document-less one-shot
-    // path. Runtime-backed tests cover AgentRequest version pinning.
     let request_doc_id = String::new();
     let request_id = "req-idem".to_string();
     let capture_scope = "inference.1".to_string();
@@ -2549,9 +2467,6 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
     }
 }
 
-/// How many durable compaction entries a session has — the evidence that the
-/// pre-request summarizer actually summarized rather than being skipped by the
-/// gate.
 async fn compaction_entry_count(node: &EmbeddedNode, session_id: &str) -> usize {
     compaction_entries(node, session_id).await.len()
 }
@@ -2662,8 +2577,6 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> 
     rows
 }
 
-/// The persisted `InferenceCall` rows for one request — the other half of the
-/// provenance admission join.
 async fn inference_calls(node: &EmbeddedNode, request_id: &str) -> Vec<Value> {
     let query = format!(
         r#"query {{
@@ -2690,14 +2603,6 @@ async fn inference_calls(node: &EmbeddedNode, request_id: &str) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// Every `(field_name, cid)` DefraDB holds for the row under `capture_key`,
-/// sorted so two reads are comparable.
-///
-/// `_commits` takes exactly one document id — two or more is a parse error — so
-/// the document id is resolved first. No `fieldName` filter is used: that filter
-/// is applied in memory and a malformed one degrades to no filter at all, which
-/// would make a filtered assertion pass for the wrong reason. The field names
-/// come back and are checked in Rust instead.
 async fn commit_set(node: &EmbeddedNode, capture_key: &str) -> Vec<(String, String)> {
     let doc_id_query = format!(
         r#"query {{
@@ -2791,8 +2696,6 @@ async fn boot_capture_agent(
     .await
 }
 
-/// `customize` receives the behavior mid-build so a test can add tools or
-/// change the compaction budget without each test rebuilding the whole agent.
 async fn boot_capture_agent_with(
     db: &crate::support::TestDb,
     test_name: &str,

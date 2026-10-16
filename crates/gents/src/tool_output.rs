@@ -1,10 +1,6 @@
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
-/// A JSON object that keeps its keys in the order given, for model-facing
-/// results that must read top to bottom: the answer, then how to proceed, then
-/// metadata. Values are kept pre-serialized so a nested `Ordered` keeps its
-/// order too.
 pub(crate) struct Ordered(
     Vec<(
         std::borrow::Cow<'static, str>,
@@ -51,7 +47,6 @@ impl Ordered {
         Self(entries, true)
     }
 
-    /// An object's keys with `first` in that order, then the rest.
     pub(crate) fn reading_order(value: Value, first: &[&'static str]) -> Self {
         let Value::Object(mut object) = value else {
             return Self(vec![Self::entry("value", &value)], true);
@@ -89,8 +84,6 @@ impl Ordered {
     }
 }
 
-/// `ordered!{"key": expr, ...}`: each value is any `Serialize` expression
-/// (use `json!` for literal objects).
 macro_rules! ordered {
     ($($key:literal : $value:expr),* $(,)?) => {
         $crate::tool_output::Ordered::new(vec![$($crate::tool_output::Ordered::entry($key, &$value)),*])

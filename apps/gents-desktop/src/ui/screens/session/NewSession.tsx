@@ -148,8 +148,6 @@ function NewSessionComposer() {
           "Ask anything",
         )}
       />
-      {/* inside the composer's row, so the grid's gap is not paid twice
-          around the line under it */}
       <ComposerFooter
         folder={<SelectedChatFolder />}
         status={<SessionSubmissionStatus activityStatus={activityStatus} />}

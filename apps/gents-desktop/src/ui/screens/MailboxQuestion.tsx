@@ -10,8 +10,6 @@ import { Input } from "@gents/ui/components/input";
 import { useState } from "react";
 import { toastFailure } from "@/lib/failure";
 
-/* the question's shape, checked in full: any ask may carry an arbitrary
-   payload, and only a well-formed question gets the answer surface */
 const text = (value: unknown): value is string =>
   typeof value === "string" && value.trim() !== "";
 const flag = (value: unknown) => value === undefined || typeof value === "boolean";

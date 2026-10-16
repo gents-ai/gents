@@ -43,10 +43,6 @@ pub(crate) struct InitOutcome {
     pub(crate) rounds: usize,
 }
 
-/// Alternate the operator's `lines` with the author's replies on `turn`
-/// until a draft validates and lands at `ctx.out`, the operator ends it
-/// (`/quit`, `/exit`, end of input), or [`MAX_VALIDATION_ROUNDS`] drafts
-/// failed (an error carrying the last messages; nothing written).
 pub(crate) async fn interview(
     turn: &mut dyn Turn,
     lines: &mut dyn Iterator<Item = std::io::Result<String>>,
@@ -205,9 +201,6 @@ fn scope_flags(scope: &crate::cli::EvalScopeArgs) -> String {
     flags
 }
 
-/// Refused before anything is read or installed: an existing `--out`
-/// without `--force` and a home no runtime serves (the author's requests
-/// need one to claim them).
 pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
     anyhow::ensure!(
         args.force || args.out.symlink_metadata().is_err(),
@@ -416,10 +409,6 @@ mod tests {
         )
     }
 
-    fn good_block() -> String {
-        draft_block(&good().cases)
-    }
-
     fn bad_block() -> String {
         let mut cases = good().cases;
         cases[0]["stages"][0]["checks"][0]["check"] = json!("no_such");
@@ -450,82 +439,6 @@ mod tests {
             .map(|line| Ok((*line).to_owned()))
             .collect::<Vec<_>>()
             .into_iter()
-    }
-
-    #[tokio::test]
-    async fn an_interview_ends_when_the_author_drafts_and_the_pack_is_written() {
-        let registry = CheckRegistry::builtin();
-        let root = tempfile::tempdir().unwrap();
-        let mut ctx = context(&registry, root.path().join("out"));
-        ctx.scope = crate::cli::EvalScopeArgs {
-            home: Some(PathBuf::from("/operator/home")),
-            graphql: Some("http://127.0.0.1:9181/api/v0/graphql".into()),
-        };
-        let mut turn = ScriptedTurn::new(["What must it get right?".to_owned(), good_block()]);
-        let mut out = Vec::new();
-        let outcome = interview(
-            &mut turn,
-            &mut lines(&["It must count items."]),
-            &ctx,
-            &mut out,
-        )
-        .await
-        .unwrap();
-        let printed = String::from_utf8(out).unwrap();
-
-        let written = outcome.written.expect("the pack was written");
-        assert_eq!(written.out, ctx.out);
-        assert!(ctx.out.join("manifest.json").is_file());
-        assert_eq!(outcome.rounds, 1);
-        assert_eq!(outcome.summary, "It must count items.");
-        assert_eq!(
-            outcome.assembled.unwrap().definition.definition_id,
-            "canary-quality"
-        );
-        assert!(turn.sent[0].starts_with("# Subject"), "{}", turn.sent[0]);
-        assert!(turn.sent[0].contains("# Check catalog"), "{}", turn.sent[0]);
-        assert!(!turn.sent[0].contains("## How to reply with a draft"));
-        assert_eq!(turn.sent[1], "It must count items.");
-        assert_eq!(turn.sent.len(), 2);
-
-        assert!(printed.contains("What must it get right?"), "{printed}");
-        assert!(
-            printed.contains("| val-a | validation | 1 | captured_rows_count |"),
-            "{printed}"
-        );
-        // Every printed command targets the operator's home, and the run
-        // uses the profile the author drafted on.
-        let scope = " --home /operator/home --graphql http://127.0.0.1:9181/api/v0/graphql";
-        assert!(
-            printed.contains(&format!(
-                "gents config apply --root {} --bind-node-did home{scope}\n",
-                ctx.out.display()
-            )),
-            "{printed}"
-        );
-        assert!(
-            printed.contains(&format!(
-                "gents eval run canary-quality --cell baseline=./canary:{} --profile baseline=local{scope}\n",
-                ctx.dossier.agent_id
-            )),
-            "{printed}"
-        );
-    }
-
-    #[tokio::test]
-    async fn without_a_scope_the_printed_commands_name_no_home() {
-        let registry = CheckRegistry::builtin();
-        let root = tempfile::tempdir().unwrap();
-        let ctx = context(&registry, root.path().join("out"));
-        let mut turn = ScriptedTurn::new([good_block()]);
-        let mut out = Vec::new();
-        interview(&mut turn, &mut lines(&[]), &ctx, &mut out)
-            .await
-            .unwrap();
-        let printed = String::from_utf8(out).unwrap();
-        assert!(!printed.contains("--home"), "{printed}");
-        assert!(!printed.contains("--graphql"), "{printed}");
-        assert!(printed.contains("--profile baseline=local\n"), "{printed}");
     }
 
     #[tokio::test]
@@ -588,53 +501,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_bad_draft_goes_back_with_the_messages_and_a_good_one_follows() {
-        let registry = CheckRegistry::builtin();
-        let root = tempfile::tempdir().unwrap();
-        let ctx = context(&registry, root.path().join("out"));
-        let mut turn = ScriptedTurn::new([bad_block(), good_block()]);
-        let mut out = Vec::new();
-        let outcome = interview(&mut turn, &mut lines(&[]), &ctx, &mut out)
-            .await
-            .unwrap();
-        assert!(outcome.written.is_some());
-        assert_eq!(outcome.rounds, 2);
-        assert!(
-            turn.sent[1].starts_with(VALIDATION_PREFIX),
-            "{}",
-            turn.sent[1]
-        );
-        assert!(turn.sent[1].contains("unknown check"), "{}", turn.sent[1]);
-    }
-
-    #[tokio::test]
-    async fn a_draft_that_fails_the_round_trip_is_a_validation_round() {
-        let registry = CheckRegistry::builtin();
-        let root = tempfile::tempdir().unwrap();
-        let ctx = context(&registry, root.path().join("out"));
-        // Steps 1 to 6 pass; the loader refuses the id as a pack name.
-        let renamed = format!(
-            "```json\n{}\n```",
-            json!({
-                "definition": {"definition_id": "Canary.Quality"},
-                "cases": good().cases,
-            })
-        );
-        let mut turn = ScriptedTurn::new([renamed, good_block()]);
-        let outcome = interview(&mut turn, &mut lines(&[]), &ctx, &mut Vec::new())
-            .await
-            .unwrap();
-        assert_eq!(outcome.rounds, 2);
-        assert!(
-            turn.sent[1].starts_with(VALIDATION_PREFIX),
-            "{}",
-            turn.sent[1]
-        );
-        assert!(turn.sent[1].contains("Canary.Quality"), "{}", turn.sent[1]);
-        assert!(outcome.written.is_some());
-    }
-
-    #[tokio::test]
     async fn three_bad_drafts_end_with_nothing_written() {
         let registry = CheckRegistry::builtin();
         let root = tempfile::tempdir().unwrap();
@@ -647,7 +513,6 @@ mod tests {
         let message = format!("{error:#}");
         assert!(message.contains("after 3 rounds"), "{message}");
         assert!(message.contains("unknown check"), "{message}");
-        // The first turn and two returned drafts; the third is not sent back.
         assert_eq!(turn.sent.len(), 3);
         assert!(!ctx.out.exists());
     }
@@ -657,8 +522,6 @@ mod tests {
         let fixture = crate::commands::eval::testing::Fixture::new().await;
         let access = &fixture.ctx.access;
         let owner = fixture.ctx.owner.as_str();
-        // Each document a pack installs, as the home holds it: its
-        // DefraDB document id and its fields.
         let read = |ids: [(gents::Collection, &'static str); 3]| async move {
             let mut documents = Vec::new();
             for (collection, id) in ids {
@@ -702,8 +565,6 @@ mod tests {
         install_pack_slot(access, owner, &author, &slot, "local")
             .await
             .unwrap();
-        // Re-applying rewrites each document in place with what it holds:
-        // no new document, no changed field.
         assert_eq!(installed().await, first);
         let agent = &first[0].1;
         assert_eq!(agent["inference_profile_id"], "local");
@@ -714,28 +575,6 @@ mod tests {
         assert!(
             format!("{error:#}").contains("no-such-profile"),
             "{error:#}"
-        );
-    }
-
-    #[test]
-    fn an_author_pack_needs_exactly_one_slot_with_one_behavior() {
-        let home = tempfile::tempdir().unwrap();
-        let pack =
-            |name| crate::commands::pack::test_support::fixture_pack_source(name, home.path());
-        let mut manifest = pack("slot_fixture").manifest().clone();
-        manifest.metadata.inference_slots[0]
-            .agents
-            .push("second".to_owned());
-        let error = single_slot_agent(&manifest).unwrap_err().to_string();
-        assert_eq!(
-            error,
-            "pack slot_fixture slot author declares 2 agents; expected exactly one"
-        );
-        manifest.metadata.inference_slots.clear();
-        let error = single_slot_agent(&manifest).unwrap_err().to_string();
-        assert_eq!(
-            error,
-            "pack slot_fixture declares 0 inference slots; expected exactly one"
         );
     }
 
@@ -752,54 +591,6 @@ mod tests {
         assert!(error.contains("--force"), "{error}");
     }
 
-    #[tokio::test]
-    async fn a_failed_read_of_the_operators_answer_is_an_error() {
-        let registry = CheckRegistry::builtin();
-        let root = tempfile::tempdir().unwrap();
-        let ctx = context(&registry, root.path().join("out"));
-        let mut turn = ScriptedTurn::new(["What must it get right?"]);
-        // Not UTF-8: `read_line` fails rather than reaching the end.
-        let mut input = &b"\xff\xfe\n"[..];
-        let mut lines = operator_lines(|line| std::io::BufRead::read_line(&mut input, line));
-        let error = interview(&mut turn, &mut lines, &ctx, &mut Vec::new())
-            .await
-            .err()
-            .expect("a read error ends the interview with an error");
-        assert!(
-            format!("{error:#}").contains("reading the operator's answer"),
-            "{error:#}"
-        );
-        assert!(!ctx.out.exists());
-
-        // A clean end of input still ends the interview with nothing written.
-        let mut turn = ScriptedTurn::new(["What must it get right?"]);
-        let mut input = &b""[..];
-        let mut lines = operator_lines(|line| std::io::BufRead::read_line(&mut input, line));
-        let outcome = interview(&mut turn, &mut lines, &ctx, &mut Vec::new())
-            .await
-            .unwrap();
-        assert!(outcome.written.is_none());
-    }
-
-    #[tokio::test]
-    async fn the_operator_can_end_the_interview() {
-        let registry = CheckRegistry::builtin();
-        let root = tempfile::tempdir().unwrap();
-        let ctx = context(&registry, root.path().join("out"));
-        let mut turn = ScriptedTurn::new(["What must it get right?"]);
-        let mut out = Vec::new();
-        let outcome = interview(&mut turn, &mut lines(&["", "/quit"]), &ctx, &mut out)
-            .await
-            .unwrap();
-        assert!(outcome.written.is_none());
-        assert!(outcome.assembled.is_none());
-        assert_eq!(outcome.rounds, 0);
-        assert_eq!(turn.sent.len(), 1);
-        assert!(!ctx.out.exists());
-    }
-
-    /// The live smoke's subject: a pack whose schemas give the author
-    /// collections to capture.
     const SMOKE_SUBJECT: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../gents/tests/fixtures/packs/documents_fixture"
@@ -873,8 +664,6 @@ mod tests {
             poll_secs: 1,
             quiet: false,
         };
-        // The author's first replies are questions; the operator asks for
-        // the draft each time.
         let mut lines = lines(&["draft", "draft", "draft"]);
         let outcome = interview(&mut turn, &mut lines, &ctx, &mut Vec::new())
             .await

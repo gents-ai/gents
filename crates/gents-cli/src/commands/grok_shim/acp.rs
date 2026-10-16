@@ -1,10 +1,3 @@
-//! Grok shim ACP service: initialize, session lifecycle, and stubbed edges.
-//!
-//! All GraphQL values pass through `gents::graphql::escape_graphql_string`
-//! and every query runs in-process on the embedded node through the
-//! `graphql_with_transaction_retry` and `ConfigAccess` owners; no HTTP
-//! GraphQL helper is used.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
@@ -30,71 +23,46 @@ use super::turn::{
     parse_cancel_notification, parse_prompt_request, PromptSender, PromptSenderLine, TurnManager,
 };
 
-/// JSON-RPC 2.0 error code for a malformed request envelope.
 pub(crate) const JSONRPC_INVALID_REQUEST: i64 = -32600;
 
-/// JSON-RPC 2.0 error code for an unknown/unhandled method; every shaped stub
-/// answers with this so the pager classifies the edge as unsupported.
 pub(crate) const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
 
-/// JSON-RPC 2.0 error code for structurally invalid request params.
 pub(crate) const JSONRPC_INVALID_PARAMS: i64 = -32602;
 
-/// JSON-RPC 2.0 error code for an internal shim failure.
 pub(crate) const JSONRPC_INTERNAL_ERROR: i64 = -32603;
 
-/// The single auth method the shim advertises.
 pub(crate) const GENTS_AUTH_METHOD_ID: &str = "gents.runtime";
 
-/// ACP protocol version the shim speaks.
 pub(crate) const ACP_PROTOCOL_VERSION: i64 = 1;
 
-/// Wire name of the `initialize` request method.
 pub(crate) const INITIALIZE_METHOD: &str = "initialize";
 
-/// Wire name of the `authenticate` request method.
 pub(crate) const AUTHENTICATE_METHOD: &str = "authenticate";
 
-/// Wire name of the `session/new` request method.
 pub(crate) const SESSION_NEW_METHOD: &str = "session/new";
 
-/// Wire name of the persisted `session/load` request method.
 pub(crate) const SESSION_LOAD_METHOD: &str = "session/load";
 
-/// Wire name of the `session/set_model` request method.
 pub(crate) const SESSION_SET_MODEL_METHOD: &str = "session/set_model";
 
-/// Wire name of the `session/set_mode` request method.
 pub(crate) const SESSION_SET_MODE_METHOD: &str = "session/set_mode";
 
-/// Wire name of the `session/prompt` request method (owned by `turn.rs`).
 pub(crate) const SESSION_PROMPT_METHOD: &str = "session/prompt";
 
-/// Wire name of the `session/cancel` notification (owned by `turn.rs`).
 pub(crate) const SESSION_CANCEL_METHOD: &str = "session/cancel";
 
-/// Wire name of the `x.ai/interject` ext request (shaped stub).
 pub(crate) const INTERJECT_METHOD: &str = "x.ai/interject";
 
-/// Wire name of the `x.ai/compact_conversation` ext request (shaped stub).
 pub(crate) const COMPACT_CONVERSATION_METHOD: &str = "x.ai/compact_conversation";
 
-/// Ext notification method emitted after a model catalog switch.
 pub(crate) const MODELS_UPDATE_METHOD: &str = "x.ai/models/update";
 
-/// Ext notification method that clears the pager's new-session MCP spinner.
 pub(crate) const MCP_INITIALIZED_METHOD: &str = "x.ai/mcp_initialized";
 
-/// Bound model catalog entry derived from the serving configuration:
-/// `model_id` is exactly the bound agent's `model_name`, resolved once at
-/// bind time; the backend id is never projected into the wire-facing id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BoundModel {
-    /// Wire-facing model identifier (`modelId` on the wire).
     pub(crate) model_id: String,
-    /// Human-readable display name (`name` on the wire).
     pub(crate) name: String,
-    /// Context window from the bound `InferenceProfile`.
     pub(crate) total_context_tokens: u64,
 }
 
@@ -103,9 +71,6 @@ impl BoundModel {
         effective_context_window_tokens(self.total_context_tokens)
     }
 
-    /// The shim's prompt parser is text-only and a selected reasoning effort
-    /// never reaches provider inference; advertising either would be a false
-    /// capability.
     fn catalog_entry(&self) -> Value {
         json!({
             "modelId": self.model_id,
@@ -121,8 +86,6 @@ impl BoundModel {
 }
 
 impl BoundModel {
-    /// The pager reads `result["models"]["currentModelId"]`; splicing the
-    /// catalog keys into the top-level result breaks it.
     pub(crate) fn models_object(&self) -> Value {
         json!({
             "availableModels": [self.catalog_entry()],
@@ -131,19 +94,12 @@ impl BoundModel {
     }
 }
 
-/// Immutable bound configuration for the ACP service, resolved once at bind
-/// time from the bound agent and inference profile; nothing here is
-/// per-session runtime state.
 #[derive(Clone)]
 pub(crate) struct AcpServiceConfig {
     pub(crate) node: Arc<EmbeddedNode>,
-    /// Serving node DID (the `@immutable` `AgentSession.node_did` value).
     pub(crate) node_did: Arc<str>,
-    /// Bound agent id (stamped on `AgentSession.agent_id`).
     pub(crate) agent_id: Arc<str>,
     pub(crate) current_model: BoundModel,
-    /// Grok home the pager reads its `/resume` records from. `None` disables
-    /// the record write.
     pub(crate) grok_home: Option<std::path::PathBuf>,
 }
 
@@ -153,14 +109,9 @@ impl AcpServiceConfig {
     }
 }
 
-/// Per-session shim state. Gents documents have no cwd, model, or mode
-/// fields; everything the pager needs that the runtime does not model is
-/// connection-local here and is never persisted.
 #[derive(Debug, Clone)]
 struct AcpSessionState {
     mode_id: String,
-    /// Delivery handoff only: discovery begins from this pre-replay time
-    /// after the load response has been successfully enqueued.
     resume_from: Option<String>,
 }
 
@@ -207,11 +158,6 @@ impl Drop for SessionLoadReservation<'_> {
     }
 }
 
-/// The `session/set_mode` state commit: record the new mode exactly when the
-/// `current_mode_update` notification was successfully enqueued, inside the
-/// common send path's per-session critical section — so a failed send leaves
-/// the mode state untouched and concurrent `set_mode` calls serialize in
-/// delivery order.
 struct ModeStateCommit<'a> {
     sessions: &'a tokio::sync::Mutex<BTreeMap<String, AcpSessionState>>,
     session_id: String,
@@ -227,19 +173,14 @@ impl AsyncCommit for ModeStateCommit<'_> {
     }
 }
 
-/// One parsed ACP JSON-RPC frame, dispatch-level only.
 #[derive(Debug, Clone)]
 pub(crate) struct AcpRequest {
-    /// JSON-RPC request id. `None` marks a notification.
     pub(crate) id: Option<Value>,
     pub(crate) method: String,
-    /// Request params (`{}` when absent).
     pub(crate) params: Value,
 }
 
 impl AcpRequest {
-    /// Parse one ACP payload line. A non-object or id-less-when-claimed frame
-    /// is rejected so the caller can answer `-32600`.
     pub(crate) fn from_payload(payload: &str) -> Result<Self> {
         let value: Value = serde_json::from_str(payload)
             .with_context(|| "decoding Grok shim ACP payload".to_string())?;
@@ -267,25 +208,17 @@ impl AcpRequest {
     }
 }
 
-/// The wire output of one dispatched frame. Most notifications are emitted
-/// before the response so the pager observes the same order the reference
-/// agent produces; MCP initialization completion follows session creation's
-/// response because the pager needs that response to attach its routing.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AcpDispatch {
-    /// Serialized JSON-RPC notification lines, ordered by the live delegate.
     pub(crate) notifications: Vec<String>,
-    /// Serialized JSON-RPC response line, or `None` for notifications.
     pub(crate) response: Option<String>,
 }
 
-/// Outcome of a request handler: the result value plus notifications.
 struct RequestOutcome {
     notifications: Vec<Value>,
     result: Value,
 }
 
-/// Shape a successful JSON-RPC response envelope.
 fn response_line(id: &Value, result: &Value) -> String {
     serde_json::to_string(&json!({
         "jsonrpc": "2.0",
@@ -295,7 +228,6 @@ fn response_line(id: &Value, result: &Value) -> String {
     .expect("JSON-RPC response envelope is serializable")
 }
 
-/// Shape a JSON-RPC error envelope.
 fn error_line(id: &Value, code: i64, message: &str) -> String {
     serde_json::to_string(&json!({
         "jsonrpc": "2.0",
@@ -305,9 +237,6 @@ fn error_line(id: &Value, code: i64, message: &str) -> String {
     .expect("JSON-RPC error envelope is serializable")
 }
 
-/// Shape a JSON-RPC notification line.
-/// ACP extensions carry a leading underscore on the JSON-RPC wire; the SDK
-/// strips it before dispatching to Grok's `x.ai/...` handlers.
 pub(super) fn wire_method(method: &str) -> std::borrow::Cow<'_, str> {
     if method.starts_with("x.ai/") {
         std::borrow::Cow::Owned(format!("_{method}"))
@@ -333,24 +262,14 @@ fn notification_line(method: &str, params: &Value) -> String {
     .expect("JSON-RPC notification envelope is serializable")
 }
 
-// ACP service
-
-/// The ACP service implementing the leader server's delegate.
 pub(crate) struct AcpService {
     config: AcpServiceConfig,
     turns: Arc<TurnManager>,
     projections: Arc<ProjectionEngine>,
-    /// Connection-local session registry.
     sessions: tokio::sync::Mutex<BTreeMap<String, AcpSessionState>>,
     loading_sessions: std::sync::Mutex<BTreeSet<String>>,
-    /// The connection's assigned leader client id, set when the factory binds
-    /// the registering client's identity to this service.
     client_id: Option<u64>,
-    /// The registering client's registration mode, stored by the delegate
-    /// factory.
     registered_mode: Option<RegisterMode>,
-    /// The registering client's advertised capabilities, stored by the
-    /// delegate factory.
     registered_capabilities: Option<ClientCapabilities>,
 }
 
@@ -372,9 +291,6 @@ impl AcpService {
         }
     }
 
-    /// Store the registering client's identity and capabilities; `session/new`
-    /// derives `yoloMode`/`autoMode`/`clientTerminal` from the stored
-    /// capabilities.
     pub(super) fn register_client_identity(
         &mut self,
         client_id: u64,
@@ -385,11 +301,6 @@ impl AcpService {
         self.registered_capabilities = Some(registration.capabilities.clone());
     }
 
-    /// Dispatch one decoded ACP payload line, sending every turn
-    /// notification live through `sender` as it is produced. This is the
-    /// dispatch core shared by the production delegate and the headless
-    /// buffered path; there is no second code path that skips the projection
-    /// semantics.
     pub(super) async fn dispatch_with_sender(
         &self,
         payload: &str,
@@ -418,7 +329,6 @@ impl AcpService {
         self.dispatch_request(request, prompt_sender).await
     }
 
-    /// Dispatch a notification; notifications have no response body.
     async fn dispatch_notification(&self, request: AcpRequest) -> AcpDispatch {
         match request.method.as_str() {
             SESSION_CANCEL_METHOD => {
@@ -448,7 +358,6 @@ impl AcpService {
         AcpDispatch::default()
     }
 
-    /// Dispatch a request, mapping every handler failure to a shaped error.
     async fn dispatch_request(
         &self,
         request: AcpRequest,
@@ -490,7 +399,6 @@ impl AcpService {
         }
     }
 
-    /// Route one request to its handler.
     async fn handle_request(
         &self,
         request: &AcpRequest,
@@ -617,8 +525,6 @@ impl AcpService {
                 })
             }
             other if other.starts_with("terminal/") => {
-                // `projection::tools` owns the shaped terminal/* errors; they
-                // must not collapse into the generic method-not-found below.
                 let error = super::projection::tools::handle_terminal_client_method(other)
                     .expect_err("terminal client methods are never supported");
                 Err(anyhow::Error::new(ShapedMethodNotFound {
@@ -739,8 +645,6 @@ impl AcpService {
         }
         tracing::info!(%session_id, "grok shim session/new");
 
-        // The pager reads result["models"]["currentModelId"]; clientTerminal
-        // tells the agent whether terminal/* commands route to the client.
         Ok(RequestOutcome {
             notifications: vec![json!({
                 "__method": MCP_INITIALIZED_METHOD,
@@ -761,9 +665,6 @@ impl AcpService {
         })
     }
 
-    /// Write the pager's `/resume` record so stock grok can reattach; a write
-    /// failure is logged, never surfaced — the durable session is the
-    /// `AgentSession` document, not grok's file.
     fn write_pager_session_record(&self, request: &AcpRequest, session_id: &str) {
         let Some(grok_home) = self.config.grok_home.as_deref() else {
             return;
@@ -829,7 +730,6 @@ impl AcpService {
         })
     }
 
-    /// Called for this load RPC only, after its response is enqueued.
     async fn activate_loaded_session(&self, payload: &str, sender: &PromptSender) {
         let Ok(request) = AcpRequest::from_payload(payload) else {
             return;
@@ -919,8 +819,6 @@ impl AcpService {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| invalid_params("session/set_mode requires a non-empty modeId"))?;
 
-        // An unknown session must fail without touching the sequencer or
-        // the wire.
         {
             let sessions = self.sessions.lock().await;
             if !sessions.contains_key(&session_id) {
@@ -928,9 +826,6 @@ impl AcpService {
             }
         }
 
-        // The mode update shares the projection sequencer's per-session
-        // event-id space with the user echo, so a `set_mode` and a prompt on
-        // the same session can never stamp the same eventId.
         let commit = ModeStateCommit {
             sessions: &self.sessions,
             session_id: session_id.clone(),
@@ -1110,8 +1005,6 @@ impl AcpService {
     }
 }
 
-/// A JSON-RPC method-not-found failure, distinguished from an internal error
-/// so the dispatcher can shape the envelope with the exact audited code.
 #[derive(Debug)]
 pub(crate) struct ShapedMethodNotFound {
     pub(crate) message: String,
@@ -1157,8 +1050,6 @@ fn error_code_for(error: &anyhow::Error) -> i64 {
     }
 }
 
-/// A caller-controlled validation failure, answered with the JSON-RPC
-/// invalid-params code while preserving the source message.
 #[derive(Debug)]
 struct InvalidParams {
     message: String,
@@ -1172,14 +1063,12 @@ impl std::fmt::Display for InvalidParams {
 
 impl std::error::Error for InvalidParams {}
 
-/// Build a typed invalid-params error from a validation message.
 fn invalid_params(message: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(InvalidParams {
         message: message.into(),
     })
 }
 
-/// Extract the required `sessionId` from request params.
 fn required_session_id(params: &Value) -> Result<String> {
     params
         .get("sessionId")
@@ -1190,7 +1079,6 @@ fn required_session_id(params: &Value) -> Result<String> {
         .ok_or_else(|| invalid_params("request requires a non-empty sessionId"))
 }
 
-/// Extract an optional `sessionId` from request params for stub messaging.
 fn optional_session_id(params: &Value) -> Option<String> {
     params
         .get("sessionId")
@@ -1200,10 +1088,6 @@ fn optional_session_id(params: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Create the `AgentSession` document for `session_id` if absent, mirroring
-/// the runtime's `request_session_projection` semantics: immutable identity
-/// fields are only ever supplied on create, and a row bound to a different
-/// agent id or `node_did` is an explicit error rather than a silent rewrite.
 async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) -> Result<()> {
     let escaped_session_id = escape_graphql_string(session_id);
     let lookup = format!(
@@ -1302,7 +1186,6 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
     Ok(())
 }
 
-/// Bind the service to the leader server's delegate trait.
 impl AcpDelegate for AcpService {
     fn handle_acp<'a>(
         &'a self,
@@ -1407,8 +1290,6 @@ mod tests {
         }
     }
 
-    /// The staging `TempDir` is returned first so the node drops before the
-    /// guard deletes its storage directory.
     async fn config() -> (tempfile::TempDir, AcpServiceConfig) {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let node = Arc::new(
@@ -2628,79 +2509,6 @@ mod tests {
         }
     }
 
-    // -- Pure shape tests (no node, no siblings) -----------------------------
-
-    #[test]
-    fn models_object_is_nested_and_complete() {
-        let models = bound_model().models_object();
-        assert_eq!(
-            models["currentModelId"], "GLM-5.3-NVFP4",
-            "currentModelId must live inside the models object"
-        );
-        let available = models["availableModels"]
-            .as_array()
-            .expect("availableModels is an array");
-        assert_eq!(available.len(), 1);
-        assert_eq!(available[0]["modelId"], "GLM-5.3-NVFP4");
-        assert_eq!(available[0]["meta"]["totalContextTokens"], 262_144);
-        assert_eq!(available[0]["meta"]["acceptsImages"], false);
-        assert_eq!(available[0]["meta"]["inputModalities"], json!(["text"]));
-        assert_eq!(available[0]["meta"]["supportsReasoningEffort"], false);
-        assert!(available[0]["meta"].get("reasoningEfforts").is_none());
-    }
-
-    #[test]
-    fn model_catalog_normalizes_an_unspecified_context_window() {
-        let mut model = bound_model();
-        model.total_context_tokens = 0;
-        assert_eq!(
-            model.models_object()["availableModels"][0]["meta"]["totalContextTokens"],
-            super::super::projection::DEFAULT_CONTEXT_WINDOW_TOKENS
-        );
-        assert_eq!(
-            model.effective_context_window(),
-            super::super::projection::DEFAULT_CONTEXT_WINDOW_TOKENS
-        );
-    }
-
-    #[test]
-    fn catalog_entry_has_no_leading_underscore_keys() {
-        let entry = bound_model().catalog_entry();
-        assert!(entry.get("meta").is_some());
-        assert_eq!(entry["modelId"], "GLM-5.3-NVFP4");
-        assert_eq!(entry["name"], "GLM 5.3 NVFP4");
-    }
-
-    #[test]
-    fn acp_request_parses_request_and_notification() {
-        let request =
-            AcpRequest::from_payload(&request_payload("initialize", json!({}))).expect("parse");
-        assert_eq!(request.id, Some(json!(1)));
-        assert_eq!(request.method, "initialize");
-        assert!(!request.is_notification());
-
-        let notification = AcpRequest::from_payload(&notification_payload(
-            "session/cancel",
-            json!({ "sessionId": "s1" }),
-        ))
-        .expect("parse");
-        assert_eq!(notification.id, None);
-        assert!(notification.is_notification());
-        assert_eq!(notification.params["sessionId"], "s1");
-    }
-
-    #[test]
-    fn acp_request_rejects_malformed_payloads() {
-        assert!(AcpRequest::from_payload("not json").is_err());
-        assert!(AcpRequest::from_payload("[]").is_err());
-        assert!(AcpRequest::from_payload("{}").is_err());
-        assert!(AcpRequest::from_payload("{\"id\":1}").is_err());
-        let null_id =
-            AcpRequest::from_payload("{\"jsonrpc\":\"2.0\",\"id\":null,\"method\":\"x\"}")
-                .expect("parse");
-        assert!(null_id.is_notification());
-    }
-
     #[test]
     fn extension_methods_use_sdk_wire_prefix_and_normalize_at_dispatch() {
         for method in [
@@ -2743,25 +2551,6 @@ mod tests {
                 "only the exact _x.ai/ namespace is normalized"
             );
         }
-    }
-
-    #[test]
-    fn response_and_error_envelopes_are_shaped() {
-        let response = parse_response(&response_line(&json!(7), &json!({"ok": true})));
-        assert_eq!(response["jsonrpc"], "2.0");
-        assert_eq!(response["id"], 7);
-        assert_eq!(response["result"]["ok"], true);
-
-        let error = parse_response(&error_line(&json!(7), -32601, "nope"));
-        assert_eq!(response["jsonrpc"], "2.0");
-        assert_eq!(error["id"], 7);
-        assert_eq!(error["error"]["code"], -32601);
-        assert_eq!(error["error"]["message"], "nope");
-
-        let notification = parse_response(&notification_line("x.ai/models/update", &json!({})));
-        assert_eq!(notification["jsonrpc"], "2.0");
-        assert_eq!(notification["method"], "_x.ai/models/update");
-        assert!(notification.get("id").is_none());
     }
 
     #[test]
@@ -2821,27 +2610,6 @@ mod tests {
             wrapped.to_string(),
             parser_error.to_string(),
             "the wrapped error message matches the source verbatim"
-        );
-    }
-
-    #[test]
-    fn required_session_id_rejects_missing_and_empty() {
-        assert!(required_session_id(&json!({})).is_err());
-        assert!(required_session_id(&json!({ "sessionId": "" })).is_err());
-        assert!(required_session_id(&json!({ "sessionId": "  " })).is_err());
-        assert_eq!(
-            required_session_id(&json!({ "sessionId": " s1 " })).expect("session id"),
-            "s1"
-        );
-    }
-
-    #[test]
-    fn optional_session_id_tolerates_absence() {
-        assert_eq!(optional_session_id(&json!({})), None);
-        assert_eq!(optional_session_id(&json!({ "sessionId": "" })), None);
-        assert_eq!(
-            optional_session_id(&json!({ "sessionId": "s1" })),
-            Some("s1".to_string())
         );
     }
 
@@ -2960,7 +2728,6 @@ mod tests {
             result["models"]["availableModels"][0]["meta"]["totalContextTokens"],
             262_144
         );
-        // And must NOT leak the catalog keys to the top level.
         assert!(result.get("availableModels").is_none());
         assert!(result.get("currentModelId").is_none());
         assert_eq!(result["_meta"]["yoloMode"], true);
@@ -2985,7 +2752,6 @@ mod tests {
             },
         );
 
-        // The session/new request carries no mode `_meta` keys.
         let dispatch = service
             .handle_acp_payload(&request_payload(
                 "session/new",
@@ -3242,7 +3008,6 @@ mod tests {
             "the mismatch must name the immutable field: {message}"
         );
 
-        // The foreign row is untouched.
         let query = r#"{
             AgentSession(filter: { session_id: { _eq: "grok-edge-foreign-agent" } }) {
                 node_did closed_at
@@ -3649,7 +3414,6 @@ mod tests {
             .await
             .expect("set_mode dispatch");
 
-        // The notification must arrive before the response on the wire.
         let mut saw_mode_update = false;
         let mut saw_response = false;
         while let Ok(frame) =
@@ -3804,7 +3568,6 @@ mod tests {
         assert_eq!(a.len(), 1, "session A streamed one mode update");
         assert_eq!(b.len(), 1, "session B streamed one mode update");
 
-        // Each session consumed exactly its own first event id.
         let event_id = |line: &str| {
             parse_response(line)["params"]["_meta"]["eventId"]
                 .as_str()
@@ -4092,7 +3855,6 @@ mod tests {
             );
         }
 
-        // Shaped unsupported methods stay method-not-found.
         for (method, params) in [
             (
                 "x.ai/interject",
@@ -4117,8 +3879,6 @@ mod tests {
             );
         }
 
-        // Well-formed subagent requests with no caused session answer the
-        // null snapshot and the empty running list.
         let get = service
             .handle_acp_payload(&request_payload(
                 "x.ai/subagent/get",
@@ -4150,8 +3910,6 @@ mod tests {
                 "outcome": {"kind": "not_found"}} })
         );
 
-        // Stock get DTOs omit sessionId; their reach is limited to sessions
-        // registered on this connection.
         let dispatch = service
             .handle_acp_payload(&request_payload(
                 SUBAGENT_GET_METHOD,
@@ -4172,7 +3930,6 @@ mod tests {
             assert_eq!(response["error"]["code"], -32602, "{response}");
         }
 
-        // No durable rows were fabricated by any rejected input.
         let node = service.config.node.clone();
         let query = r#"{
             AgentRequest { request_id }

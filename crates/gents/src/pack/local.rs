@@ -1,11 +1,3 @@
-//! Packs named by content or by path: `sha256:{hex}`, `./x.pack`, `./dir`.
-//!
-//! A local pack is admitted exactly like a downloaded one: a `.pack` file is
-//! verified into the home's [`PackStore`] and opened from there, and a
-//! directory is packed with the same writer `gents pack build` uses first. A
-//! bare name is never a path, so `mailbox` always means the stored or
-//! registry pack even when a `mailbox/` directory sits in the working
-//! directory; a local directory is named `./mailbox`.
 
 use std::path::Path;
 
@@ -13,7 +5,6 @@ use crate::pack_archive::{write_pack, PackArchive, EXTENSION};
 use crate::pack_store::PackStore;
 use anyhow::{Context, Result};
 
-/// How a pack argument names a local pack, if it does.
 #[derive(Debug, PartialEq, Eq)]
 pub enum LocalName<'a> {
     Digest(&'a str),
@@ -32,8 +23,6 @@ pub fn classify(argument: &str) -> Option<LocalName<'_>> {
     explicit.then_some(LocalName::Path(path))
 }
 
-/// Opens the local pack `name` names, storing it in `home`'s store first.
-///
 /// A path argument is opened once, no-follow, and that handle is carried
 /// into the store import: an admission-to-read window where the named path
 /// is swapped for a symlink or a different file cannot change which bytes

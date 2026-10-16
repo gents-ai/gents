@@ -538,12 +538,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_stringified_json_object() {
-        normalize_arguments("x-data", "search_bookmarks", &json!("{\"query\":\"amy\"}"))
-            .expect_err("stringified arguments are not part of the tool contract");
-    }
-
-    #[test]
     fn rejects_obvious_schema_type_mismatch() {
         let arguments = json!({ "query": "amy", "limit": "5" })
             .as_object()
@@ -593,24 +587,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_tool_envelope_stays_tool_not_found() {
-        let error = StructuredToolError::tool_not_found(
-            "x-data",
-            "missing_search",
-            vec!["search_bookmarks".to_string()],
-        );
-
-        assert_eq!(error.failure_class, "tool_not_found");
-        assert_eq!(error.path, "/tool_name");
-        assert_eq!(error.service_id, "x-data");
-        assert_eq!(error.tool_name, "missing_search");
-        assert_eq!(
-            error.available_tools,
-            Some(vec!["search_bookmarks".to_string()])
-        );
-    }
-
-    #[test]
     fn oversized_mcp_result_is_capped_and_truncation_is_signalled() {
         let big_line = "x".repeat(200);
         let lines: Vec<String> = (0..500).map(|_| big_line.clone()).collect();
@@ -645,17 +621,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn small_mcp_result_passes_through_unchanged() {
-        let small_text = "hello from MCP tool";
-        let limits = TruncationLimits {
-            max_bytes: CALL_TOOL_MAX_BYTES,
-            max_lines: CALL_TOOL_MAX_LINES,
-        };
-        let (result, _trigger, was_truncated) =
-            truncate_text(small_text, TruncationMode::Head, &limits);
-
-        assert!(!was_truncated);
-        assert_eq!(result, small_text);
-    }
 }

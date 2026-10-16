@@ -1,6 +1,3 @@
-/* The UI harness must project backends with the bridge's shape:
-   InferenceBackendView.tags is a Vec<String> on the bridge, so it is always
-   a list, even when unset. */
 import { screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { renderIn, testApp } from "./app-fixture";
@@ -69,8 +66,6 @@ describe("harness backends keep the bridge's contract", () => {
   it("shows an Anthropic key backend as an API-key backend", async () => {
     const harness = createDesktopUiHarness();
     const api = harness.adapter;
-    /* the apply path, not save: the harness save path reports any env var as a
-       stored key, while its apply path matches the bridge */
     await api.applyConfigComponents({
       document: {
         node: { node_did: "did:key:z6MkBombadilAgent" },

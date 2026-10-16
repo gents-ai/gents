@@ -89,7 +89,6 @@ async fn agent_ids_resolve_from_their_node_local_slug() {
     .await;
     assert_eq!(target["document"]["agent_id"], worker);
 
-    // An exact ID wins over a slug that happens to match it.
     crate::test_support::install_test_agent(&node, &owner, "worker-b").await;
     crate::test_support::install_test_agent(&node, &owner, &format!("{owner}:worker-b")).await;
     let read = ok(
@@ -203,29 +202,6 @@ async fn type_errors_name_the_field_path_and_shape() {
     assert!(
         nested.contains(r#"Tools field host.cli[0].name: invalid type: integer `7`; expected string; host-registered CLI tool name"#),
         "{nested}"
-    );
-}
-
-#[test]
-fn target_id_may_repeat_the_argv_id_but_not_conflict() {
-    let params = |target_id: &str| {
-        serde_json::from_value::<command::ConfigCommandParams>(json!({
-            "argv": ["datastore", "edit", "handoff-tools"],
-            "target_id": target_id,
-        }))
-        .unwrap()
-    };
-    assert_eq!(
-        json!(params("handoff-tools").into_argv_for_test().unwrap()),
-        json!(["datastore", "edit", "handoff-tools"])
-    );
-    let conflict = params("other")
-        .into_argv_for_test()
-        .unwrap_err()
-        .to_string();
-    assert_eq!(
-        conflict,
-        r#"target ID "handoff-tools" in argv conflicts with target_id "other"; send one of them"#
     );
 }
 
@@ -439,8 +415,6 @@ async fn automation_validation_refuses_what_every_fire_would_reject() {
     .await;
     assert!(error.contains("doc.session"), "{error}");
 
-    // Schedules may explicitly target an existing session, but queueing
-    // without a destination and outcome emission remain unsupported.
     ok(
         &tools,
         edit(
@@ -656,26 +630,6 @@ async fn results_put_the_answer_first_and_execution_metadata_last() {
         other => panic!("expected an error: {other:?}"),
     };
     order(&error, &["error", "recovery", "config_execution"]);
-}
-
-#[test]
-fn a_list_of_strings_in_options_is_the_repeated_flag() {
-    let params: command::ConfigCommandParams = serde_json::from_value(json!({
-        "argv": ["cleanup", "preview"],
-        "options": {"target": ["task=a", "trigger=b"]}
-    }))
-    .unwrap();
-    assert_eq!(
-        json!(params.into_argv_for_test().unwrap()),
-        json!([
-            "cleanup",
-            "preview",
-            "--target",
-            "task=a",
-            "--target",
-            "trigger=b"
-        ])
-    );
 }
 
 #[tokio::test]

@@ -1,5 +1,3 @@
-//! Co-resident domain plugin for the fixture host.
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;

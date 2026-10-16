@@ -1,10 +1,3 @@
-//! `gents plugin run`: run one installed plugin to completion and print
-//! what it returned. Running is [`gents::plugin::PluginRunner`]'s job; this
-//! file finds the installed bytes and retained
-//! [`gents::pack::PackPlugin`] declaration by name and turns the typed
-//! [`gents::plugin::PluginOutcome`] into either the plugin's own JSON value
-//! or a clear refusal naming which bound was hit.
-
 use std::path::Path;
 use std::sync::Arc;
 
@@ -41,10 +34,6 @@ pub(crate) async fn run(args: PluginRunArgs) -> Result<()> {
     crate::print_json(&output)
 }
 
-/// Admits and calls one installed plugin, returning its own JSON result or
-/// an error naming which bound was hit. The executor runs the guest on a
-/// blocking thread (the WASI runtime blocks on its own runtime for host
-/// I/O, which panics on an async task's thread).
 async fn run_plugin(
     executor: &PluginExecutor,
     record: &InstalledPlugin,

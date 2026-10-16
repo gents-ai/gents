@@ -69,7 +69,6 @@ it("keeps session discovery and inspection in ordinary tool steps", () => {
   expect(isWorkerStep(call("success", "message"))).toBe(true);
 });
 
-/* what the bridge sends in production: message_count is always None */
 const summary = (turnState: string | null): SessionSummary =>
   ({
     sessionId: "child-session",

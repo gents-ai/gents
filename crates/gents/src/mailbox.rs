@@ -1,8 +1,3 @@
-//! Durable human-attention index.
-//!
-//! Mailbox rows are stamped envelopes. They do not advance graph work: only
-//! the correlated `AgentRequest` or domain-document create carries semantics.
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -295,7 +290,6 @@ fn canonical_field(name: &str, required: bool) -> WriteToolField {
     }
 }
 
-/// The only declaration allowed to target `MailboxItem`.
 pub fn canonical_mailbox_write_decl() -> WriteToolDecl {
     WriteToolDecl {
         notification: Some(MailboxNotificationPolicy::default()),
@@ -448,8 +442,6 @@ fn validate_file_args(
     Ok(())
 }
 
-/// Stamp and persist a mailbox item. The model never supplies owner, acting
-/// principal, target route, lifecycle state, timestamps, or item key.
 pub async fn stamp_create(
     node: &Arc<EmbeddedNode>,
     context: &MailboxStampContext,
@@ -751,11 +743,6 @@ impl crate::llm::tool::Tool for MailboxCreateTool {
     }
 }
 
-/// A question filed through `file_mailbox_item`. It is always an `ask` that
-/// the person answers with an interactive reply request, whatever the
-/// surface's default kind and action. Its event identity covers the request,
-/// title and whole question, so a different question is a new item and a
-/// filed question is never rewritten under a pending answer.
 struct QuestionFiling {
     event_id: String,
     payload: String,
@@ -793,8 +780,6 @@ pub struct MailboxCloseCollection {
     pub correlation_field: &'static str,
 }
 
-/// Explicit correlation-field overrides. Other response collections use the
-/// schema-validated immutable, unique `mailbox_item_key` field.
 pub const MAILBOX_CLOSE_COLLECTIONS: &[MailboxCloseCollection] = &[];
 
 fn mailbox_close_collection(
@@ -1660,8 +1645,6 @@ mod tests {
             }
         }
 
-        // Older closed rows and foreign open rows must not widen the indexed
-        // page scan for this node's open mailbox.
         for index in 0..64 {
             let mut closed_context = context("did:test:owner");
             let mut closed_args = args(
@@ -1829,11 +1812,6 @@ mod tests {
                     doc_fetches <= (MAILBOX_SWEEP_PAGE_SIZE + 1) as u64,
                     "keyset page must bound document reads, got {doc_fetches}: {execution}"
                 );
-                // DefraDB retains the node/status predicate as a residual filter,
-                // so its index scan has no page-size early-stop bound. Keep this
-                // honest suffix bound: older history before the cursor and other
-                // nodes must not widen the scan, while the current eligible tail
-                // can still be inspected to satisfy the residual predicate.
                 assert!(
                     index_fetches <= remaining_local_open_rows,
                     "keyset index scan should stay within the modeled local open suffix of {remaining_local_open_rows}, got {index_fetches}: {execution}"

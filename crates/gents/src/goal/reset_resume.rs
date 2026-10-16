@@ -1,5 +1,3 @@
-//! A usage-limited Goal the operator opted in resumes by itself once the
-//! reset its provider reported has passed (Lean `resumeBy`, `Cause.resetReached`).
 use super::*;
 use crate::blocked_turn::{goal_stopped_in_txn, served_profile};
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};

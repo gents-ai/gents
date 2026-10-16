@@ -278,7 +278,6 @@ pub struct EvalDefinition {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub updated_at: Option<String>,
-    /// Optional UI/discovery labels; execution is by references.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",

@@ -7,17 +7,12 @@ struct MockAdmin {
     recorded_filters: Mutex<Vec<(Vec<String>, PairingFilters)>>,
     deleted_replicator_collections: Mutex<Vec<Vec<String>>>,
     delete_replicator_not_found: Mutex<bool>,
-    /// Entries returned by `active_peers` (bare peer ids or dial addresses,
-    /// like the real adapters).
     active: Mutex<Vec<String>>,
-    /// `active_peers` fails when set, exercising the degraded-read path.
     fail_active_peers: bool,
     /// Barrier proving supervisor cancellation can drop an in-flight admin
     /// wait instead of waiting for its per-RPC timeout.
     active_peers_started: Option<Arc<tokio::sync::Notify>>,
     active_peers_release: Option<Arc<tokio::sync::Notify>>,
-    /// When set, `connect` fails after recording the call, modeling the
-    /// redial-timeout that motivated the active-peer gate.
     fail_connect: bool,
     /// Address-specific barrier proving one stale peer's dial does not
     /// head-of-line block a ready peer's sweep.
@@ -165,7 +160,6 @@ impl RemoteP2pAdmin for MockAdmin {
 
     async fn add_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
         for collection in collections {
-            // Stored token is the resolved id, as the adapter subscribes by id.
             self.collections
                 .lock()
                 .unwrap()

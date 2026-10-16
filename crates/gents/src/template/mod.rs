@@ -1,4 +1,3 @@
-//! Template rendering for event-driven tasks.
 
 #[cfg(test)]
 mod tests;
@@ -39,13 +38,7 @@ pub enum TemplateError {
 pub(crate) const MAX_TEMPLATE_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_RENDERED_BYTES: usize = 1024 * 1024;
 
-/// Authoring and execution resolve names against this one environment, so a
-/// name admission accepts is a name a fire can run.
-///
-/// `tojson` rewrites `<`, `>`, `&` and `'` into `\uXXXX` escapes inside the
-/// filter body rather than through the formatter, so the auto-escape callback
-/// does not make it escape-neutral; `{% autoescape %}` likewise decides from
-/// the value the tag names rather than from the callback.
+/// MiniJinja's `tojson` filter escapes HTML-sensitive characters even with auto-escaping disabled.
 fn environment() -> Environment<'static> {
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
@@ -133,10 +126,6 @@ impl NameUse {
     }
 }
 
-/// Configuration admission rejects names the engine can never provide, so
-/// every fire of the task cannot fail on them. Compiling is part of the
-/// check; a rejection reports only that nothing can provide a name, never
-/// that a render failed: value-dependent failures are not admission facts.
 pub fn check_template_vocabulary(template: &str) -> Result<(), TemplateError> {
     if template.len() > MAX_TEMPLATE_BYTES {
         return Err(TemplateError::Parse(format!(
@@ -169,25 +158,16 @@ pub fn check_template_vocabulary(template: &str) -> Result<(), TemplateError> {
             Instruction::CallFunction(name, _) => {
                 used.push((NameUse::Function, (*name).to_string()));
             }
-            // Assignment targets, `{% with %}` bindings and loop targets all
-            // compile to this; judged program-wide, without scope or order.
             Instruction::StoreLocal(name) => {
                 bound.insert((*name).to_string());
             }
-            // A recursive loop calls itself by this name.
             Instruction::PushLoop(_) => {
                 bound.insert("loop".to_string());
             }
-            // Bare variables resolve through frames, context roots, then
-            // globals; strict undefined fails every fire otherwise (#1970).
             Instruction::Lookup(name) => {
                 used.push((NameUse::Variable, (*name).to_string()));
             }
-            // Judged by the filter that resolves a name from it, not here.
             Instruction::LoadConst(_) => {}
-            // Exhaustive: a new name-carrying MiniJinja instruction, or a
-            // changed arity above, must fail to compile rather than leave the
-            // walk silently partial.
             Instruction::EmitRaw(_)
             | Instruction::GetAttr(_)
             | Instruction::SetAttr(_)
@@ -247,9 +227,6 @@ pub fn check_template_vocabulary(template: &str) -> Result<(), TemplateError> {
         if !judged.insert((use_site, name.clone())) {
             continue;
         }
-        // A default filter or definedness test renders an absent value, and
-        // which lookup it guards is value flow this walk does not follow, so a
-        // template that uses one anywhere leaves its variables to fire time.
         if use_site == NameUse::Variable && guards_undefined(&compiled) {
             continue;
         }
@@ -272,8 +249,6 @@ pub fn check_template_vocabulary(template: &str) -> Result<(), TemplateError> {
     Ok(())
 }
 
-/// Whether a compiled template uses a filter or test that renders an absent
-/// value (`default`, `d`, `defined`, `undefined`, `none`).
 fn guards_undefined(compiled: &minijinja::Template<'_, '_>) -> bool {
     let instructions = &machinery::get_compiled_template(compiled).instructions;
     (0..)
@@ -289,33 +264,12 @@ fn guards_undefined(compiled: &minijinja::Template<'_, '_>) -> bool {
         })
 }
 
-/// Whether a template renders an absent value somewhere, so configure-time
-/// field checks cannot tell an optional field from a misspelled one.
 pub fn template_guards_undefined(template: &str) -> bool {
     environment()
         .template_from_str(template)
         .is_ok_and(|compiled| guards_undefined(&compiled))
 }
 
-/// `map` resolves a filter, and the `select`/`reject` family a test, from a
-/// string argument while rendering: the only names the engine looks up from a
-/// value rather than from the source. The lookup runs before the piped value is
-/// iterated or any other argument is used, so an undefined input or a dynamic
-/// later argument does not spare it, and no other builtin reads an argument as
-/// a name.
-///
-/// A keyword argument carries no name - `map(attribute=...)` looks an attribute
-/// up instead - and an argument list too short to hold the name leaves the
-/// builtin nothing to resolve.
-///
-/// The filter pops the piped value and then one value per argument, each
-/// pushed by its own complete expression in source order, so the arguments
-/// after the name are the shortest run of instructions ending at the filter
-/// that pushes exactly that many values. The name is the argument ending just
-/// before that run, and it is a name only when it is a single string constant
-/// that no jump bypasses: a conditional or short-circuit name compiles to a
-/// branch, so which constant reaches the lookup depends on invocation values
-/// and the name is left to fire time.
 fn name_argument(
     instructions: &Instructions<'_>,
     analysis: &mut Option<ProgramAnalysis>,
@@ -337,8 +291,6 @@ fn name_argument(
     let Some(Instruction::LoadConst(value)) = instructions.get(name_index) else {
         return None;
     };
-    // A jump from outside `name_index..filter_index` landing on the name or
-    // after it lets control reach the filter without reading the name.
     if run.re_entered >= i64::from(filter_index) || analysis.entered(name_index, filter_index) {
         return None;
     }
@@ -346,8 +298,6 @@ fn name_argument(
     Some((use_site, name))
 }
 
-/// Counts what admission's analysis reads, so that a cost regression fails a
-/// test instead of only lengthening the suite.
 #[cfg(test)]
 mod work {
     use std::cell::Cell;
@@ -386,8 +336,6 @@ mod work {
         });
     }
 
-    /// The counts are per thread, so a caller must hold the thread for the whole
-    /// admission it measures.
     pub(super) fn measure(admit: impl FnOnce()) -> Work {
         WORK.with(|work| work.set(NOTHING));
         admit();
@@ -395,48 +343,21 @@ mod work {
     }
 }
 
-/// Where the arguments after the name begin, and the furthest index at or after
-/// the filter that jumps back into that run or onto the name before it.
 struct TrailingRun {
     start: u32,
     re_entered: i64,
 }
 
-/// The whole program read once, as expression code and as a jump graph, so that
-/// every filter judges its candidate runs by comparison instead of by a pass of
-/// its own. A template spells a filter out in a few instructions, so the number
-/// of filters grows with the program and a pass per filter costs the square of
-/// its length.
 struct ProgramAnalysis {
-    /// The stack height at every index, counted from the start of the run the
-    /// index belongs to.
     height: Vec<i64>,
-    /// The height every index leaves after its pops, and `i64::MAX` where the
-    /// instruction has no fixed stack effect.
     post_pop: Vec<i64>,
-    /// The first index the run reaching every index can begin at.
     run_start: Vec<u32>,
-    /// The nearest index after every index that a jump from before it lands on,
-    /// and `u32::MAX` where no jump passes over it.
     crossing: Vec<u32>,
-    /// Whether a jump from before every index lands on it.
     landed_on: Vec<bool>,
-    /// The furthest index at or after every index that jumps back to it, and
-    /// `-1` where none does.
     jumps_back_from: Vec<i64>,
 }
 
 impl ProgramAnalysis {
-    /// An instruction with no fixed stack effect and a jump leaving the program
-    /// both begin a new run after themselves, because control leaves the run
-    /// there. An index nothing reaches and a join on disagreeing heights begin
-    /// one at themselves: a run covering such an index is not reading a single
-    /// expression, while a run beginning at it carries neither the jump that
-    /// skipped it nor the joins that disagree.
-    ///
-    /// A jump landing past a filter would have ended the run in a pass reading
-    /// only the indices up to that filter. This pass keeps such a run going, so
-    /// `trailing_run` rules that jump out of the run it judges instead.
     fn read(instructions: &Instructions<'_>) -> Self {
         let span = u32::try_from(instructions.len()).unwrap_or(u32::MAX);
         let capacity = span as usize;
@@ -448,8 +369,6 @@ impl ProgramAnalysis {
         let mut landed_on = vec![false; capacity];
         let mut jumps_back_from = vec![-1i64; capacity];
         let mut arriving = vec![Arriving::Nothing; capacity];
-        // Every target of a jump from an earlier index that no index so far has
-        // reached, nearest first.
         let mut pending: BinaryHeap<Reverse<u32>> = BinaryHeap::new();
         let mut fall_through = Some(0i64);
         let mut first = 0u32;
@@ -510,18 +429,6 @@ impl ProgramAnalysis {
         }
     }
 
-    /// The last index at or before `filter_index` from which the instructions up
-    /// to the filter run as self-contained expression code leaving exactly
-    /// `trailing` values on the stack: `None` when every candidate consumes a
-    /// value pushed before it, holds an instruction with no fixed stack effect,
-    /// joins branches on disagreeing heights or leaves a different count.
-    ///
-    /// The heights are the whole program's one running count, so they answer for
-    /// a run only where no jump enters `start..filter_index` from outside it and
-    /// none leaves it: an arriving jump carries into the run a join the run does
-    /// not have, and a jump out of it leaves the run altogether where a pass
-    /// reading only up to the filter would have restarted the count. Both are
-    /// ruled out here rather than read off the heights.
     fn trailing_run(
         &self,
         instructions: &Instructions<'_>,
@@ -562,17 +469,12 @@ impl ProgramAnalysis {
         }
     }
 
-    /// Whether a jump from before `index` lands after it, at or before
-    /// `filter_index`. An index the pass did not cover reads as crossed, because
-    /// this walk cannot judge it.
     fn crossed(&self, index: u32, filter_index: u32) -> bool {
         self.crossing
             .get(index as usize)
             .is_none_or(|&crossing| crossing <= filter_index)
     }
 
-    /// Whether a jump from before `index` lands on it or after it, at or before
-    /// `filter_index`.
     fn entered(&self, index: u32, filter_index: u32) -> bool {
         self.landed_on.get(index as usize).copied().unwrap_or(true)
             || self.crossed(index, filter_index)
@@ -582,19 +484,10 @@ impl ProgramAnalysis {
 struct Step {
     pops: i64,
     pushes: i64,
-    /// The target a jump in the instruction takes, and the height it keeps there.
     keeps: Option<(u32, i64)>,
-    /// Whether the next instruction continues from this one.
     falls_through: bool,
 }
 
-/// The stack effect of one expression instruction; `None` for an instruction
-/// whose effect is not fixed, and for a jump leaving `index..=end`, which takes
-/// control out of the run rather than through it.
-///
-/// `JumpIfFalse` pops its condition however it goes, so its target runs one
-/// value lower; `JumpIfFalseOrPop` and `JumpIfTrueOrPop` pop only where they
-/// fall through, so the branch they take keeps the condition.
 fn expression_step(
     instruction: &Instruction<'_>,
     depth: i64,
@@ -663,7 +556,6 @@ fn expression_step(
 enum Arriving {
     Nothing,
     Height(i64),
-    /// Two jumps keep different heights there, so the index has no one height.
     Disagree,
 }
 
@@ -675,9 +567,6 @@ fn record_arrival(arriving: &mut Arriving, kept: i64) {
     };
 }
 
-/// The stack height at an index, joining the fall-through height with the one
-/// the jumps into it keep; `Some(None)` when nothing reaches it and `None` when
-/// the arriving heights disagree.
 fn join_height(fall_through: Option<i64>, arriving: Arriving) -> Option<Option<i64>> {
     match (fall_through, arriving) {
         (_, Arriving::Disagree) => None,
@@ -699,11 +588,6 @@ fn jump_target(instruction: &Instruction<'_>) -> Option<u32> {
     }
 }
 
-/// Names a call resolves to without the environment providing them: the VM
-/// looks a called name up through the context frames and the invocation scope
-/// before it reaches the globals, and resolves `super` itself without any
-/// lookup at all. The scope roots come from the sole owner of the render
-/// context, so admission cannot drift from what a fire supplies.
 fn callable_scope_names() -> HashSet<String> {
     let every_root = TemplateScope {
         session: Some(serde_json::Value::Null),
@@ -723,21 +607,10 @@ fn callable_scope_names() -> HashSet<String> {
     names
 }
 
-/// The virtual machine ignores whitespace inside a filter or test name.
 fn engine_name(name: &str) -> String {
     name.chars().filter(|c| !c.is_ascii_whitespace()).collect()
 }
 
-/// Only the engine's own refusal of the name counts: any other probe failure is
-/// about the probe's operand, so the name exists.
-///
-/// A name the source carries is a lexed identifier, so it interpolates into a
-/// probe that passes no argument; and with no argument no builtin reaches a name
-/// lookup of its own, so `{{ 0 | select }}` reports its operand rather than
-/// `select`'s absent test argument as an unknown name. A name a filter argument
-/// carries is arbitrary text, so `argument` binds it through the context
-/// instead, and that probe pipes an empty sequence so the builtin's own lookup
-/// is all that can fail.
 fn engine_resolves(env: &Environment<'static>, probe: &str, argument: Option<&str>) -> bool {
     let rendered = match argument {
         Some(name) => env.render_str(probe, serde_json::json!({ "probe": name })),
@@ -760,7 +633,6 @@ pub fn task_node_ctx(
     )
 }
 
-/// Render a Task's prompt and its Goal declaration, if any, in `scope`.
 pub(crate) fn render_task(
     prompt_template: &str,
     goal_objective_template: Option<&str>,
@@ -786,8 +658,6 @@ pub fn parse_template_for_validation(template: &str) -> Result<Vec<VariableRef>,
         )));
     }
 
-    // The reference scanner is not a syntax parser; compile with the rendering
-    // owner before accepting configuration.
     environment().template_from_str(template).map_err(|error| {
         TemplateError::Parse(format!(
             "{error}; use MiniJinja syntax, e.g. {{{{ doc.message }}}} for a document field or {{{{ args.name }}}} for a task argument"

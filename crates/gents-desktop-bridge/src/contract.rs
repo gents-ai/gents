@@ -1,6 +1,3 @@
-//! Command, permission-set, and event inventory used by bridge consistency
-//! checks.
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandContract {
     pub name: String,
@@ -10,11 +7,9 @@ pub struct CommandContract {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionSetContract {
     pub name: String,
-    /// `read`/`mutate` are fine-grained, `bundle` composed.
     pub kind: String,
 }
 
-/// Production event name emitted by the update pump.
 pub const CLIENT_UPDATED_EVENT: &str = "desktop://client-updated";
 pub const CODEX_LOGIN_URL_EVENT: &str = "desktop://codex-login-url";
 pub const MANAGED_SERVER_UPDATED_EVENT: &str = "desktop://managed-server-updated";
@@ -27,8 +22,6 @@ pub const CLAUDE_LOGIN_URL_EVENT: &str = "desktop://claude-login-url";
 pub const PLUGIN_APPROVALS_CHANGED_EVENT: &str = "desktop://plugin-approvals-changed";
 pub const EVENT_REASONS: &[&str] = &["store", "health", "lifecycle", "config"];
 
-/// Command → permission-set inventory checked against the plugin and Tauri
-/// permission files.
 pub fn command_inventory() -> Vec<CommandContract> {
     let entries: &[(&str, &str)] = &[
         ("desktop_bootstrap_summary", "core"),
@@ -150,9 +143,6 @@ pub fn command_inventory() -> Vec<CommandContract> {
         .collect()
 }
 
-/// Grantable permission sets aligned with `permissions/default.toml` +
-/// `permissions/sets.toml`; `read`/`mutate` sets must not mix categories,
-/// `bundle` sets intentionally span classes.
 pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
     [
         ("default", "bundle"),
@@ -412,8 +402,6 @@ mod tests {
                 assert_eq!(existing, set.kind, "set {} has mixed kinds", set.name);
             }
         }
-        // Privileged active actions classify as mutate deliberately: set
-        // purity tracks privilege, not just IO.
         const COMMAND_KINDS: &[(&str, &str)] = &[
             ("desktop_bootstrap_summary", "read"),
             ("desktop_client_snapshot", "read"),

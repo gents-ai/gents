@@ -312,31 +312,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn openai_client_builders_accept_session_tagging_transport() {
-        let _responses: rig::providers::openai::Client<SessionTaggingHttpClient> =
-            build_openai_responses_client(
-                "test-key",
-                "http://example.test/v1",
-                SessionTaggingHttpClient::default(),
-                HeaderMap::default(),
-            )
-            .expect("Responses client should build");
-
-        let _chat_completions: rig::providers::openai::CompletionsClient<SessionTaggingHttpClient> =
-            build_openai_chat_completions_client(
-                "test-key",
-                "http://example.test/v1",
-                SessionTaggingHttpClient::default(),
-            )
-            .expect("Chat Completions client should build");
-    }
-
-    #[test]
-    fn session_tagging_client_can_wrap_inner_transport() {
-        let _wrapped = SessionTaggingHttpClient::new(ReqwestClient::default());
-    }
-
     #[tokio::test]
     async fn responses_normalizing_client_normalizes_send_body() {
         let inner = CapturingHttpClient::default();

@@ -40,33 +40,21 @@ pub(crate) struct InitSummary {
     pub(crate) created_default_agent: bool,
 }
 
-/// This home's persisted `init.json` shape, shared with `gc-cell` so it
-/// provisions gents homes with the exact same document rather than a
-/// second, drifting copy.
 pub(crate) type StoredInitConfig = gents::home::StoredInitConfig<ToolPackageArg, ToolCeilingArg>;
 
-/// Operator-visible P2P admission bounds in effect for this server process,
-/// as the Codex shim's live binding reports them (`/healthz`, #699). The shim
-/// may bind *after* the HTTP surface is already serving: the supervisor flips
-/// this when a published generation makes the bound agent_config runnable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CodexShimHealth {
-    /// `--no-codex-shim`: not an error, and not a thing to report as degraded.
     Off,
-    /// Listening on its port.
     Listening {
         websocket: String,
         auth_required: bool,
         bound_node_did: String,
         bound_agent_id: String,
     },
-    /// Waiting for the control plane to supply the bound agent_config. Transient by
-    /// construction — the supervisor binds on the generation that carries it.
     Pending {
         bound_agent_id: String,
         reason: String,
     },
-    /// A host resource we cannot get. No generation retracts this.
     Disabled { reason: String },
 }
 
@@ -250,8 +238,6 @@ impl ConfigExportBundle {
     }
 }
 
-/// Counts follow the canonical collection vocabulary; adding a config document
-/// cannot silently omit it from the apply report.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ConfigApplyCounts(std::collections::BTreeMap<Collection, usize>);
 
@@ -321,7 +307,6 @@ pub(crate) struct ConfigApplyReport {
     pub(crate) root: String,
     pub(crate) access_mode: String,
     pub(crate) node_did: String,
-    /// Present when `<root>/schemas/` existed and was applied before config.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) schemas: Option<crate::commands::schema::PackSchemaPhase>,
     pub(crate) planned: desired_state::DesiredStateDiffCollectionsCounts,
@@ -330,7 +315,6 @@ pub(crate) struct ConfigApplyReport {
     pub(crate) remaining: desired_state::DesiredStateDiffCollectionsCounts,
 }
 
-/// The runtime observation (catalogs and probe status) of one backend row.
 pub(crate) async fn load_backend_observation(
     access: &gents::config_client::ConfigAccess,
     node_did: &str,

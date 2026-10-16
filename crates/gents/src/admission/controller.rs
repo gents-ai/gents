@@ -121,8 +121,6 @@ impl CapacityPool {
         permit: OwnedSemaphorePermit,
     ) -> Registration {
         let mut ledger = self.ledger();
-        // Lean `Registry.Ledger.register`: pool identity, openness and debt
-        // are checked together under the ledger lock.
         if !Arc::ptr_eq(&semaphore, &ledger.semaphore) {
             permit.forget();
             return Registration::Reacquire;

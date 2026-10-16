@@ -638,8 +638,6 @@ async fn wait_for_replicated_reply(
     Ok(())
 }
 
-/// A fresh peer can be missing the readiness row while every replicated block
-/// is in flight; the probe samples merged head height beside the runtime's.
 #[derive(Clone)]
 struct ReadinessProbe {
     node: Arc<gents::defra_node::EmbeddedNode>,
@@ -776,8 +774,6 @@ async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
     )
 }
 
-/// Every transcript message this session owns, as the message keys the
-/// authoring runtime holds for the client's exact tenancy scope.
 async fn runtime_transcript_keys(
     graphql: &str,
     session: &str,
@@ -829,8 +825,6 @@ async fn local_transcript_keys(
         for message in &page.store.transcript_messages {
             keys.insert(message.message.message_key.clone());
         }
-        // Page ordering is ascending while the walk descends; the next cursor
-        // is the page's lowest key.
         cursor = page
             .store
             .transcript_messages
@@ -860,9 +854,6 @@ async fn assert_local_pagination(
     })
     .await
     .context("session hydration did not settle before pagination")??;
-    // The runtime is the authority for what local paging must cover: hydration
-    // serves against the manifest its request was served, and later messages
-    // reach the client only over push replication.
     let expected =
         runtime_transcript_keys(graphql, session, agent, core.node_identity().did()).await?;
     timeout(TURN_BUDGET, async {

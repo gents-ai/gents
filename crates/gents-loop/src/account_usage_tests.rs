@@ -259,7 +259,6 @@ fn endpoint_grok_legacy_shape_is_malformed() {
 
 #[test]
 fn endpoint_openrouter_capped_key_window_and_next_reset() {
-    // 2026-09-30 is a Wednesday.
     let cases = [
         ("daily", rfc("2026-10-01T00:00:00Z")),
         ("weekly", rfc("2026-10-05T00:00:00Z")),

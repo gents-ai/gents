@@ -1,5 +1,3 @@
-//! Bounded local request workers.
-
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::future::Future;
@@ -8,7 +6,6 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-/// The physical request and execution generation one worker executes.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct WorkerTicket {
     pub(crate) request_doc_id: String,
@@ -42,7 +39,6 @@ struct RegisteredTicket {
     marker: Arc<()>,
 }
 
-/// One slot generation's active worker capacity.
 pub(crate) struct WorkerCapacity {
     active: Arc<Semaphore>,
     #[cfg(test)]
@@ -62,7 +58,6 @@ enum RequestGuard {
     },
 }
 
-/// Slot generation scope shared by its fixed worker tasks.
 pub(crate) async fn scope_slot_capacity<F: Future>(
     capacity: Arc<WorkerCapacity>,
     future: F,
@@ -145,7 +140,6 @@ impl WorkerCapacity {
         })
     }
 
-    /// Nonblocking counterpart for model conformance.
     #[cfg(test)]
     pub(crate) fn try_acquire_unbound(
         self: &Arc<Self>,
@@ -179,7 +173,6 @@ pub(crate) struct UnboundActiveGuard {
 }
 
 impl UnboundActiveGuard {
-    /// Binds a successfully claimed request to its exact generation.
     pub(crate) fn bind(
         mut self,
         ticket: WorkerTicket,
@@ -210,7 +203,6 @@ impl UnboundActiveGuard {
     }
 }
 
-/// One claimed request currently using an active worker.
 pub(crate) struct ActiveGuard {
     capacity: Arc<WorkerCapacity>,
     ticket: WorkerTicket,

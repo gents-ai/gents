@@ -308,7 +308,6 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
   const foldedRequestIds = new Set(
     (input.session?.foldedInputs ?? []).map((folded) => folded.requestId),
   );
-  // Lean `trackedRequestForFrontend`: a queued or folded submission is not the turn.
   const trackedRequestId =
     (input.localWorkflow.kind === "awaitingObservation" ||
       input.localWorkflow.kind === "turnInProgress") &&

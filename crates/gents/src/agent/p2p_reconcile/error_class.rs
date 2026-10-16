@@ -1,5 +1,3 @@
-//! Classify `RemoteP2pAdminError` for per-peer pairing retry status.
-
 use serde::{Deserialize, Serialize};
 
 use super::trait_def::RemoteP2pAdminError;

@@ -1,6 +1,3 @@
-//! Header-only authorized session forks: payload segments and tool lifecycle
-//! documents stay at their origin; a header's immutable references are the
-//! dependency graph and never executable child state.
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};

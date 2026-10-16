@@ -1,6 +1,3 @@
-//! The desktop surface of `gents::plugin::{allowed, approval}` for the
-//! managed local Node's home.
-
 use gents::pack::BindAccess;
 use gents::plugin::{allowed, approval};
 use serde::Serialize;

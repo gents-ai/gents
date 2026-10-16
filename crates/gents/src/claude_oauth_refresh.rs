@@ -1,5 +1,3 @@
-//! Claude subscription OAuth refresh against Anthropic's token endpoint.
-
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

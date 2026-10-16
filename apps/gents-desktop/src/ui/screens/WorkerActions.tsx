@@ -1,4 +1,4 @@
-// Native background processes have no desktop stop (#1969).
+// Native background processes have no desktop stop control.
 import { createContext, useContext } from "react";
 import { Square } from "lucide-react";
 import type { CausedRequestView } from "@source-inc/gents-desktop-client";

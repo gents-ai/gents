@@ -1,13 +1,3 @@
-//! Claude subscription over Anthropic Messages HTTP — the only wire.
-//!
-//! Every turn (tool-capable or not) is `POST /v1/messages` with the agent's
-//! `OAuthCredential` bearer, `system[0]` = [`CLAUDE_CODE_IDENTITY`], Gents
-//! preamble and `Message::System` rows after it, and `tools` only when the
-//! surface is non-empty. The SSE body is parsed incrementally by
-//! [`MessagesSseState`]; `tool_use` blocks map onto the gents surface or fail
-//! closed. Lean model: `Proofs/PromptAssembly/ClaudeMap.lean` (system
-//! assembly, accumulation).
-
 use std::collections::HashSet;
 #[cfg(test)]
 use std::collections::VecDeque;
@@ -38,9 +28,6 @@ pub const MESSAGES_URI: &str = "https://api.anthropic.com/v1/messages";
 pub(crate) const ANTHROPIC_VERSION: &str = "2023-06-01";
 pub(crate) const OAUTH_BETA: &str = "oauth-2025-04-20";
 
-// Body assembly moved to gents-loop (G-1): provider_input projects the exact
-// wire body for token accounting, and this crate's live transport builds the
-// identical body to send. Re-exported so this module's callers are unchanged.
 pub use gents_loop::claude_messages_body::{
     apply_reasoning_parameters, build_messages_body, build_messages_body_native,
     ADVERTISED_REASONING_EFFORTS_PARAM, CLAUDE_CODE_IDENTITY,
@@ -619,8 +606,6 @@ impl MessagesSseState {
     }
 }
 
-/// All-lines wrapper over [`MessagesSseState`] for tests and the conformance
-/// drivers.
 pub fn parse_messages_sse(
     sse: &str,
     surface: &HashSet<String>,
@@ -628,8 +613,6 @@ pub fn parse_messages_sse(
     parse_messages_sse_typed(sse, surface).map_err(Into::into)
 }
 
-/// Parse the same SSE body while retaining the parser's exact error cause.
-/// The live transport uses `parse_messages_sse`'s Rig-facing conversion.
 pub fn parse_messages_sse_typed(
     sse: &str,
     surface: &HashSet<String>,
@@ -894,9 +877,6 @@ pub async fn stream_messages<S: BearerSource>(
     stream_messages_at(MESSAGES_URI, model, request, surface, bearer, http, usage).await
 }
 
-/// `stream_messages` against an explicit URI (tests point it at a local
-/// server). On a transport 401 the bearer is invalidated once before the
-/// error is returned; that request fails and the next request refreshes.
 pub(crate) async fn stream_messages_at<S: BearerSource>(
     uri: &str,
     model: &str,
@@ -965,9 +945,6 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
     });
     let response = match client.send_streaming(http_request).await {
         Ok(response) => response,
-        // The transport pre-checks the status and hands back the body text
-        // with its rate-limit header marker; bound the body the same way as
-        // the streamed path and keep the marker whole.
         Err(http_client::Error::InvalidStatusCodeWithMessage(status, message)) => {
             if status.as_u16() == 401 {
                 bearer.invalidate().await;
@@ -987,8 +964,6 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
         .get("request-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    // Reachable only for non-reqwest transports (e.g. the fixture): the
-    // reqwest terminal pre-checks the status and errors above.
     if !status.is_success() {
         let prefix = read_body_prefix(response.into_body()).await;
         return Err(non_success_error(status, request_id.as_deref(), &prefix));
@@ -1006,7 +981,6 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
     ))
 }
 
-/// Longest response-body prefix kept in a non-2xx error.
 const NON_SUCCESS_BODY_PREFIX_BYTES: usize = 512;
 
 /// Non-2xx Messages response as a `ProviderError`. Carries the status, the
@@ -1028,15 +1002,11 @@ fn non_success_error(
     CompletionError::ProviderError(message)
 }
 
-/// Up to [`NON_SUCCESS_BODY_PREFIX_BYTES`] of `bytes`, lossily decoded and
-/// trimmed.
 fn body_prefix(bytes: &[u8]) -> String {
     let end = bytes.len().min(NON_SUCCESS_BODY_PREFIX_BYTES);
     String::from_utf8_lossy(&bytes[..end]).trim().to_string()
 }
 
-/// Drain at most the prefix budget from a non-2xx body; read errors end the
-/// prefix early rather than failing the (already failed) request.
 async fn read_body_prefix(mut body: http_client::sse::BoxedStream) -> String {
     let mut bytes: Vec<u8> = Vec::new();
     while bytes.len() < NON_SUCCESS_BODY_PREFIX_BYTES {
@@ -1048,9 +1018,6 @@ async fn read_body_prefix(mut body: http_client::sse::BoxedStream) -> String {
     body_prefix(&bytes)
 }
 
-/// Serves a queued SSE fixture or forwards to the shared client. Sits
-/// behind `RenderedRequestCapturingHttpClient` so persist-before-send runs
-/// for fixtures too.
 #[derive(Clone)]
 struct MessagesTransport {
     fixture: Option<String>,
@@ -1128,9 +1095,6 @@ impl fmt::Debug for MessagesTransport {
     }
 }
 
-/// Test-only SSE body: one text block (`content_block_start` + one
-/// `text_delta` + `content_block_stop`). No `message_stop`, so callers can
-/// append their own terminator.
 #[cfg(test)]
 pub(crate) fn sse_fixture_text(text: &str) -> String {
     let text = serde_json::to_string(text).expect("escape");
@@ -1141,9 +1105,6 @@ pub(crate) fn sse_fixture_text(text: &str) -> String {
     )
 }
 
-/// Test-only SSE body: one `tool_use` block with `input: {}` at start, one
-/// `input_json_delta` carrying `partial_json`, then `message_delta` (usage
-/// 10/5) and `message_stop`.
 #[cfg(test)]
 pub(crate) fn sse_fixture_tool_use(id: &str, name: &str, partial_json: &str) -> String {
     let partial = serde_json::to_string(partial_json).expect("escape");
@@ -1156,8 +1117,6 @@ pub(crate) fn sse_fixture_tool_use(id: &str, name: &str, partial_json: &str) -> 
     )
 }
 
-/// Test-only SSE body: [`sse_fixture_text`] terminated by `message_delta`
-/// (usage 12/3) and `message_stop`.
 #[cfg(test)]
 pub(crate) fn sse_fixture_final_text(text: &str) -> String {
     format!(

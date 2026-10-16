@@ -251,7 +251,6 @@ fn is_retryable_lake_build_failure(stdout: &str, stderr: &str) -> bool {
         || combined.contains("ProofWidgets not up-to-date")
 }
 
-/// Run the contract generator under the proofs-dir lock.
 pub fn run_contract_generator(proofs_dir: &Path) -> Result<String> {
     with_proofs_dir_lock(proofs_dir, || run_contract_generator_unlocked(proofs_dir))
 }

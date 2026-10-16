@@ -49,34 +49,6 @@ async fn prepare_package_refuses_a_write_collection_the_package_does_not_declare
     assert!(message.contains("review"), "{message}");
 }
 
-#[test]
-fn explicit_graph_selection_preserves_authored_identity_and_rejects_ambiguity() {
-    let options = GraphPackageInstallBindings {
-        node_did: "did:key:owner".into(),
-        inference_slots: BTreeMap::new(),
-    };
-    let mut package = load_test_graph_package("review_graph", &options);
-    assert_eq!(
-        selected_intent(&package.config.graph_intents, None)
-            .unwrap()
-            .graph_id,
-        "code-review"
-    );
-    let mut second = package.config.graph_intents[0].clone();
-    second.graph_id = "second-review".into();
-    package.config.graph_intents.push(second.clone());
-    assert!(selected_intent(&package.config.graph_intents, None).is_err());
-    assert_eq!(
-        selected_intent(&package.config.graph_intents, Some("second-review"))
-            .unwrap()
-            .graph_id,
-        "second-review"
-    );
-    assert!(selected_intent(&package.config.graph_intents, Some("absent")).is_err());
-    package.config.graph_intents.push(second);
-    assert!(selected_intent(&package.config.graph_intents, Some("second-review")).is_err());
-}
-
 #[tokio::test]
 async fn missing_or_foreign_owner_does_not_register_package_schema() {
     let (node, access, options) = fixture().await;

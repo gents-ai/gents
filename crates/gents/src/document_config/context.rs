@@ -2,8 +2,6 @@ use serde::{Deserialize, Serialize};
 
 use super::references::ConfigReferences;
 
-/// Reusable context configuration referenced by an agent.
-///
 /// This document describes how context is assembled; conversation messages,
 /// activated skills, and generated compaction entries remain session state.
 /// References identify documents, not pinned revisions.
@@ -11,7 +9,6 @@ use super::references::ConfigReferences;
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct AgentContext {
-    /// Logical configuration key; `_docID` is the storage identity.
     pub context_id: String,
     pub node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]

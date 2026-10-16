@@ -1,4 +1,3 @@
-//! Read-only queries for tool-call lifecycle reconstruction.
 
 mod accepted;
 mod result;
@@ -303,7 +302,6 @@ impl ToolCallLifecycle {
         let selected_tool_identity =
             decode_selected_tool_identity(row.selected_service_id, row.selected_tool_name)?;
 
-        // The publication binds a physical request, not a session-relative logical ID.
         let scope = crate::session::session_scope_filter(
             owner,
             &row.session_id,
@@ -348,8 +346,6 @@ impl ToolCallLifecycle {
             request_doc_id: row.request_doc_id.filter(|value| !value.trim().is_empty()),
             session_id: row.session_id,
             node_did,
-            // Recovery only updates the existing immutable row; preserve the route key
-            // so a create transition cannot rehydrate the lifecycle as unrouted.
             requester_did: row.requester_did,
             tool_call_id: row.tool_call_id,
             call_id: if spawned_by_tool_call_doc_id.is_none() && plugin_effect.is_none() {
@@ -385,9 +381,6 @@ mod tests {
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     use std::time::Duration;
 
-    /// Canonical claimed-request fixture, mirroring
-    /// `tool_call_lifecycle::delivery::claimed_request`, with the coordinator
-    /// route key this load test exercises.
     async fn claimed_request(
         node: &Arc<EmbeddedNode>,
         request_id: &str,

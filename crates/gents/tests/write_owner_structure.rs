@@ -15,9 +15,6 @@ const READ_OWNER_FILES: &[&str] = &[
     "crates/gents/src/graphql.rs",
 ];
 
-/// Production files that still call `EmbeddedNode` GraphQL execution directly,
-/// with their current site counts. A new file or a higher count fails, and so
-/// does a lower count until the entry is lowered or removed. Never raise.
 #[rustfmt::skip]
 const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-migration/src/materialize.rs", 1),
@@ -835,7 +832,6 @@ const OAUTH_ROW_READERS: &[&str] = &[
     "lookup_oauth_credential_by_doc_id",
 ];
 
-/// Per-file row-read counts, a ratchet like `NODE_EXECUTE_ALLOWLIST`. Never raise.
 #[rustfmt::skip]
 const OAUTH_ROW_READ_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-desktop-bridge/src/tauri_commands/inference_setup.rs", 2),
@@ -849,9 +845,6 @@ struct OAuthPickVisitor {
     reads: usize,
 }
 
-/// An `OAuthCredential` read or mutation: the name, then arguments or a
-/// selection set (`{{` in a format string) across any whitespace. A format
-/// placeholder such as `OAuthCredential {id}` is not one.
 static RAW_OAUTH_QUERY: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"OAuthCredential\s*(\(|\{[{\s])").expect("raw query pattern")
 });
@@ -1020,8 +1013,6 @@ const RIG_OWNER_MODULES: &[&str] = &[
     "crates/gents/src/agent/loop_stream",
 ];
 
-/// Production files outside [`RIG_OWNER_MODULES`] that still name the `rig`
-/// crate; never add.
 #[rustfmt::skip]
 const RIG_PATH_ALLOWLIST: &[&str] = &[
     "crates/gents-loop/src/claude_messages_body.rs",

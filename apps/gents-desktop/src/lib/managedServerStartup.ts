@@ -8,10 +8,6 @@ export const MANAGED_SERVER_BOOT_TIMEOUT_MS = 5 * 60_000;
 export const MANAGED_SERVER_APPROVAL_TIMEOUT_MS = 10 * 60_000;
 export const MANAGED_SERVER_POLL_INTERVAL_MS = 1_000;
 
-/* `updating` is a runtime that answers but has not reported ready,
-   typically migrating its data after an update. It is waited on without
-   a bound and is never offered a restart, which would interrupt the
-   migration. */
 export type ManagedServerWaitKind = "approval" | "booting" | "updating";
 
 export type ManagedServerWait = {

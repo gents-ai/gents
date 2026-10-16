@@ -1,5 +1,4 @@
-//! Shared helpers for the runner integration-test binaries.
-#![allow(dead_code)] // each test binary compiles this module separately and none uses every helper
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 

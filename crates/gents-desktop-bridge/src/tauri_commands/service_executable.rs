@@ -1,5 +1,3 @@
-//! Which executable a native Gents service runs, and where it has to live.
-
 use std::io::Read;
 use std::path::{Path, PathBuf};
 

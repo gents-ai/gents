@@ -1,6 +1,3 @@
-//! Sealed Afterburner ActionPlan adapter. Callback ownership and journals stay
-//! with the callback lifecycle; artifact execution belongs to PluginExecutor.
-
 use std::collections::BTreeSet;
 
 use base64::engine::general_purpose::STANDARD;
@@ -32,7 +29,6 @@ pub struct CallbackModuleLimits {
     pub max_output_bytes: usize,
 }
 
-/// Content-addressed id over decoded bytes + canonical JSON args + ABI.
 pub fn compute_module_id(wasm: &[u8], args: &Value, abi_version: i64) -> Result<String, String> {
     let args_json = canonical_json_string(args)?;
     let mut hasher = Sha256::new();
@@ -230,7 +226,6 @@ fn bounded_usize(value: Option<i64>, field: &str, max: usize) -> Result<usize, S
     usize::try_from(n).map_err(|_| format!("CallbackModule.{field} exceeds usize"))
 }
 
-/// `None` only when the fixture build was explicitly skipped.
 #[cfg(test)]
 pub(crate) fn fixture_create_workspace_artifact() -> Option<&'static [u8]> {
     static ARTIFACT: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();

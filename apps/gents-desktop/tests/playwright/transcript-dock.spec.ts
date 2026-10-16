@@ -90,9 +90,7 @@ test("dragging the divider lays the pane out once, on release", async ({
     );
     await page.mouse.up();
   });
-  /* held at its width through the drag */
   expect(distinct(during)).toHaveLength(1);
-  /* then laid out once where the divider was let go */
   expect(distinct(widths.map((w) => w.pane))).toHaveLength(2);
 });
 

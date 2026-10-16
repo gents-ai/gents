@@ -1,6 +1,3 @@
-//! Request observation for an embedded trial: wait until terminal, read the
-//! evidence rows, and classify the outcome the way the stage runner does.
-
 use std::sync::Arc;
 use std::time::Duration;
 

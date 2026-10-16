@@ -57,7 +57,6 @@ theorem select_respect_node (skills : Finset Skill) (b : Context)
   rw [Finset.mem_filter] at hs
   exact ⟨hs.2.2.1, hs.2.2.2⟩
 
-/-- Recommendations never grant tool authority beyond the resolved ceiling. -/
 def skillTools (b : Context) (s : Skill) : Finset ToolId :=
   s.toolRefs ∩ b.ceiling
 
@@ -68,8 +67,6 @@ theorem source_directory_preserves_tool_authority (b : Context) (s : Skill)
     (directory : Option String) :
     skillTools b { s with sourceDirectory := directory } = skillTools b s := rfl
 
-/-- Activation carries existing tool authority unchanged; there is no second
-tool-surface composition through skill references. -/
 def activate (skills : Finset Skill) (b : Context) : Finset Skill × Finset ToolId :=
   (select skills b, b.ceiling)
 

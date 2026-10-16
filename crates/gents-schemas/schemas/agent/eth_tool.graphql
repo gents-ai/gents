@@ -8,7 +8,6 @@ type EthTool @branchable @index(fields: ["node_did", "tool_id"], unique: true) {
     rpc_timeout_secs: Int
     query_methods: [String]
     calls: [String]
-    # ChainKeyBinding.binding_id this agent may sign with; null = read-only.
     key_binding_id: String
     created_at: String
     tags: [String!]

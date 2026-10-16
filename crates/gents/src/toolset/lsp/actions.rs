@@ -351,7 +351,6 @@ async fn raw_request(
     )))
 }
 
-/// `LspTool::call` resolves `timeout` through the configured action policy.
 fn request_timeout(req: &ActionRequest) -> std::time::Duration {
     std::time::Duration::from_secs(
         req.timeout
@@ -453,7 +452,6 @@ pub(crate) async fn request_maybe_retry(
         if !retry_empty || !semantic_result_is_empty(&result) {
             return Ok(result);
         }
-        // Servers that never report work fall back to bounded attempts.
         if client.wait_while_busy(deadline).await {
             if std::time::Instant::now() >= deadline {
                 return Err(format!(

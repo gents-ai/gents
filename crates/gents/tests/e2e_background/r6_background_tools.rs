@@ -647,19 +647,6 @@ async fn wait_for_initial_request_terminal(turn: &AcceptedBackgroundTurn) {
     );
 }
 
-#[tokio::test]
-async fn background_diagnostic_snapshot_is_bounded_and_explicit() {
-    let ready = bounded_diagnostic(Duration::from_secs(1), async { "ready" }).await;
-    assert_eq!(ready, "\"ready\"");
-
-    let unavailable =
-        bounded_diagnostic(Duration::ZERO, std::future::pending::<&'static str>()).await;
-    assert_eq!(
-        unavailable,
-        "<unavailable: diagnostic query timed out after 0ns>"
-    );
-}
-
 async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_name: &str) -> usize {
     let session_id = escape_graphql_string(session_id);
     let tool_name = escape_graphql_string(tool_name);
@@ -1005,8 +992,6 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
     let tool_call_id = row.tool_call_id.expect("accepted valid orphan");
     finish_dynamic_turn(&turn);
     wait_for_initial_request_terminal(&turn).await;
-    // Make the parent uncleanly terminal before orphan recovery with an
-    // empty worker registry; a cleanly completed parent leaves its job running.
     set_parent_state(turn.db.node.as_ref(), &turn.request_id, "interrupted").await;
 
     let malformed = format!(

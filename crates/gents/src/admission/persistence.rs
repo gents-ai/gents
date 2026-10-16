@@ -9,7 +9,6 @@ use super::client::AdmissionError;
 use super::controller::InferenceCallRecord;
 use crate::graphql::escape_graphql_string;
 
-/// The provider usage components an `InferenceCall` row stores.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProviderCallUsage {
     pub(crate) input_tokens: u64,
@@ -179,8 +178,6 @@ pub(super) async fn persist_existing_call_terminal(
         r#"_docID: {{ _eq: "{doc_id}" }}, call_id: {{ _eq: "{call_id}" }}, call_state: {{ _in: ["completed", "failed", "cancelled"] }}"#
     );
     let exists = if usage.is_some() {
-        // Recovery may win while a provider response is in flight; record only
-        // its observed usage, never the winning outcome.
         let mutation = format!(
             r#"mutation {{ update_InferenceCall(
                 docID: "{doc_id}",

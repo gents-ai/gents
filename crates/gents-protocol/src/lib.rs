@@ -26,8 +26,6 @@ pub mod tool_service_health;
 pub mod transcript;
 pub mod trigger_delivery;
 
-/// Shared product instructions consumed by CLI, desktop, and live acceptance.
 pub const ENGINEER_PROMPT: &str = include_str!("../prompts/engineer.md");
 
-/// Shared first-run configurator grant; decoded using canonical Tools types.
 pub const ENGINEER_SELF_CONFIG_JSON: &str = include_str!("../presets/engineer-self-config.json");

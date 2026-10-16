@@ -84,7 +84,6 @@ export function useInferenceSetup({
     return () => {
       cancelled = true;
     };
-    // Mount-only probe; explicit retries go through the Detect button.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

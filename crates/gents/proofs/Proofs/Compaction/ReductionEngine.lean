@@ -109,9 +109,6 @@ theorem invalid_reduce_cannot_fit
     applyDecision source (.reduce prefixLength checkpoint) = .cannotFit := by
   simp [applyDecision, invalid]
 
-/-! ## Projection-bounded reduction and rebuilt dispatch
--/
-
 structure ProjectedRequest (Request : Type) where
   source : List Nat
   request : Request

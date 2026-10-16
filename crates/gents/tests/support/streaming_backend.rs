@@ -1,4 +1,3 @@
-//! Deterministic OpenAI-compatible streaming backend for full-daemon tests.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
@@ -15,20 +14,12 @@ use axum::Router;
 use serde_json::json;
 use tokio::sync::{oneshot, Notify};
 
-/// One streamed delta: assistant text, or a tool call the model is asking for.
-///
-/// Tool calls exist here because a multi-turn request is *only* reachable
-/// through them: a backend that can only stream text can never exercise
-/// turn 1, which is where per-turn compaction and the `turn_index` half of the
-/// rendered-capture key live.
 #[derive(Clone, Debug)]
 pub enum StreamChunk {
     Text(String),
     ToolCall {
         id: String,
         name: String,
-        /// A JSON *string* whose contents are the argument object, exactly as
-        /// an OpenAI-compatible provider streams it.
         arguments: String,
     },
 }
@@ -93,8 +84,6 @@ impl StreamScript {
         }
     }
 
-    /// Hold a matched provider request before publishing its first chunk;
-    /// callers release it with [`MockStreamingBackend::release`].
     pub fn paused_before(marker: impl Into<String>, chunks: Vec<StreamChunk>) -> Self {
         Self {
             marker: marker.into(),
@@ -226,7 +215,6 @@ impl MockStreamingBackend {
             .fallback(handle_fallback)
             .with_state(state.clone());
 
-        // Bind synchronously so the port is reserved before we return.
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
@@ -367,8 +355,6 @@ impl StreamingState {
     }
 
     async fn next_response(&self, body: &str) -> StreamResponse {
-        // Session-title inference is auxiliary to the authored agent turn and
-        // must never consume that turn's scripted tool response.
         if request_is_session_title(body) {
             return StreamResponse::Stream(StreamScript::completes(
                 "__session_title__",
@@ -770,8 +756,6 @@ fn streaming_response(script: StreamScript, state: Arc<StreamingState>) -> Respo
     Sse::new(stream).into_response()
 }
 
-/// `index` is the tool-call slot an OpenAI-compatible provider assigns; chunk
-/// position keeps two tool calls in one turn from colliding on slot 0.
 fn chunk_payload(index: usize, chunk: &StreamChunk) -> String {
     match chunk {
         StreamChunk::Text(content) => json!({

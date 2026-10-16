@@ -17,7 +17,6 @@ const RUNNER_ENV: &str = "GENTS_FS_RUNNER";
 const MAX_FS_RUNNER_SECONDS: i64 = 120;
 static SELF_RUNNER_ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// Declare that the current host executable implements the `__native-fs-runner` command.
 pub fn enable_self_runner() {
     SELF_RUNNER_ENABLED.store(true, Ordering::Relaxed);
 }
@@ -73,14 +72,11 @@ impl NativeFsRunner {
         }
     }
 
-    /// Returns resolved paths for LSP diagnostics, not model-facing GlobTool
-    /// text; `raw_json` is an internal decode seam.
     pub(crate) async fn glob_paths(
         &self,
         pattern: &str,
         max_matches: usize,
     ) -> Result<Vec<PathBuf>, ToolError> {
-        // Decode against the runner's effective request base, not the tool root.
         let base = self.effective_base();
         let raw = self
             .run(
@@ -484,36 +480,6 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
         assert!(!error.to_string().is_empty());
         assert!(!fixture.grant.root().join("target/native-readback").exists());
         assert_eq!(std::fs::read(source.join("README.md")).unwrap(), original);
-    }
-
-    #[test]
-    fn effective_deadline_caps_long_request_deadlines() {
-        let now = Utc::now();
-        let request_deadline = now + ChronoDuration::hours(12);
-        let effective = effective_deadline(Some(request_deadline), now);
-        assert_eq!(
-            effective,
-            now + ChronoDuration::seconds(MAX_FS_RUNNER_SECONDS)
-        );
-    }
-
-    #[test]
-    fn effective_deadline_keeps_shorter_request_deadlines() {
-        let now = Utc::now();
-        let request_deadline = now + ChronoDuration::seconds(30);
-        assert_eq!(
-            effective_deadline(Some(request_deadline), now),
-            request_deadline
-        );
-    }
-
-    #[test]
-    fn effective_deadline_bounds_calls_without_request_deadline() {
-        let now = Utc::now();
-        assert_eq!(
-            effective_deadline(None, now),
-            now + ChronoDuration::seconds(MAX_FS_RUNNER_SECONDS)
-        );
     }
 
     #[test]

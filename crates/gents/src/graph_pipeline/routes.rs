@@ -1,7 +1,3 @@
-//! One route list, shared by the materializer's identity preview and the
-//! installation record, keyed by the same digest-scoped id
-//! [`super::runtime::graph_trigger_id`] gives its documents.
-
 use anyhow::Result;
 
 use super::runtime::graph_trigger_id;

@@ -39,8 +39,6 @@ private def outcomeJson : TaskOutcome → String
   | .failure error => "{\"kind\":\"failure\",\"error\":" ++ primaryErrorJson error ++ "}"
   | .interrupted => "{\"kind\":\"interrupted\"}"
 
-/-- One thing `runTask` asked an external owner to do: attempt a configured
-occurrence, or run the owned work. -/
 inductive HookInvocation where | hook (hookId : String) | work
   deriving DecidableEq, Repr
 
@@ -124,7 +122,6 @@ structure ScriptedResult where
   result : CommandResult
   deriving DecidableEq, Repr
 
-/-- An unscripted hook is observed to have exited zero; `HookExec` is total. -/
 private def scriptedExec (script : List ScriptedResult) : HookExec := fun h =>
   match script.find? (fun s => s.hookId == h.hookId) with
   | some s => s.result

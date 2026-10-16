@@ -685,10 +685,6 @@ impl ClientStore {
         let mut rows = self.to_rows();
         let patch_rows = patch.to_rows();
 
-        // Operator GraphQL supplies the canonical agent scope after a local
-        // submit may already have installed an unscoped optimistic row. Let
-        // the scoped document replace that placeholder; keeping both makes
-        // agent-aware turn lookup select the older processing row first.
         retire_request_placeholders(&mut rows.requests, &patch_rows.requests);
         upsert_rows_by_key(&mut rows.requests, patch_rows.requests, request_merge_key);
         union_immutable_rows(
@@ -1093,8 +1089,6 @@ mod overlay_tests {
                     .as_array()
                     .expect("modeled rows")
                     .clone();
-                // The model describes retained facts; ClientStore applies its
-                // canonical presentation order independently of merge order.
                 let by_physical_identity = |left: &serde_json::Value, right: &serde_json::Value| {
                     left["doc"].as_u64().cmp(&right["doc"].as_u64())
                 };

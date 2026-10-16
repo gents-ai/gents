@@ -1,17 +1,3 @@
-//! The round loop for a host-served plugin: the plugin answers a call with a
-//! batch of requests, the host serves them, and the plugin runs again with the
-//! answers until it returns a result. Services are [`super::model_calls`]
-//! (`model_calls`/`model_results`), [`super::http_calls`]
-//! (`http_calls`/`http_results`) and tool calls. A driven call's input is
-//! always a JSON object carrying `true` under each offered service's key; the
-//! caller's `"state"` and result keys are stripped (only the host sets them)
-//! and a null input becomes `{}`. One round asks one service. Shared bounds:
-//! [`MAX_ROUNDS`] rounds, and the call's wall clock and fuel across all rounds
-//! (time serving `tool_calls` children is excluded). When the wall clock runs
-//! out while requests are served, the unanswered ones get error results and
-//! the plugin gets one final round (one
-//! [`FINAL_ROUND_RESERVE_DIVISOR`]th of the clock) to finish; only a plugin
-//! that asks again is a timeout.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -21,10 +7,7 @@ use serde_json::{Map, Value};
 
 use super::{http_calls, model_calls, tool_calls, PluginBudget, PluginOutcome, PluginVerdict};
 
-/// Rounds of requests one call may be answered.
 pub const MAX_ROUNDS: u32 = 64;
-/// The final round after request time runs out gets this fraction of the
-/// call's wall clock.
 pub const FINAL_ROUND_RESERVE_DIVISOR: u32 = 8;
 
 pub(super) type Round = Arc<dyn Fn(Value, PluginBudget) -> Result<PluginOutcome> + Send + Sync>;

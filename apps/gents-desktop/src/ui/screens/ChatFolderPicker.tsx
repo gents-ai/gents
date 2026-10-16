@@ -1,7 +1,5 @@
-/* The folder the chat works in, on the line under the composer: each
-   message carries it as the tools' working folder, and with none the
-   agent's own folder applies. Shown only where the OS folder picker exists,
-   since the path has to be one on this computer. */
+/* Each message uses this computer's picked path as the tools' working folder;
+   with none, the agent's own folder applies. */
 import { ChevronDown, FolderClosed } from "lucide-react";
 import {
   DropdownMenu,
@@ -22,10 +20,8 @@ import { toastFailure } from "../lib/failure";
 import { distinctNames, pathName, shortPath } from "../lib/paths";
 import { canPickDirectory, pickDirectory } from "../../lib/nativeShell";
 
-/* "no folder" as a radio value; a picked path is never empty */
 const NONE = "";
 
-/** The selected chat's folder picker, reading and writing its own state. */
 export function SelectedChatFolder() {
   const {
     actions: { setChatFolder },

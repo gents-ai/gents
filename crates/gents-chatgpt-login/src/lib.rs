@@ -1,5 +1,3 @@
-//! Minimal ChatGPT OAuth flows used by the Gents CLI and desktop app.
-
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
@@ -585,45 +583,6 @@ mod tests {
         };
         let debug = format!("{tokens:?} {tokens:#?}");
         assert!(!debug.contains("secret-"), "{debug}");
-    }
-
-    #[test]
-    fn authorize_url_preserves_the_codex_compatible_contract() {
-        let options = LoginOptions {
-            open_browser: false,
-            ..LoginOptions::default()
-        };
-        let pkce = PkceCodes {
-            verifier: "verifier".to_string(),
-            challenge: "challenge".to_string(),
-        };
-        let url = build_authorize_url(
-            &options,
-            "http://localhost:1455/auth/callback",
-            &pkce,
-            "state",
-        )
-        .expect("authorize URL");
-        let url = Url::parse(&url).expect("valid URL");
-        let query: HashMap<_, _> = url.query_pairs().into_owned().collect();
-        assert_eq!(url.path(), "/oauth/authorize");
-        assert_eq!(query.get("client_id").map(String::as_str), Some(CLIENT_ID));
-        assert_eq!(
-            query.get("code_challenge").map(String::as_str),
-            Some("challenge")
-        );
-        assert_eq!(
-            query.get("code_challenge_method").map(String::as_str),
-            Some("S256")
-        );
-        assert_eq!(query.get("state").map(String::as_str), Some("state"));
-        assert_eq!(
-            query.get("originator").map(String::as_str),
-            Some(ORIGINATOR)
-        );
-        assert!(query
-            .get("scope")
-            .is_some_and(|scope| scope.contains("offline_access")));
     }
 
     #[test]

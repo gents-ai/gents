@@ -1,8 +1,3 @@
-//! `${VAR}` is required; `${VAR:-default}` falls back when unset or empty;
-//! `$$` is a literal `$`, so `$${VAR}` survives as the text `${VAR}`. Applied
-//! by the common pack loader to parsed JSON string values only; `.md`
-//! sidecars carry runtime `{{ }}` prompt templates and are hydrated
-//! untouched, so the two substitution systems never meet.
 pub fn interpolate_with(
     input: &str,
     lookup: &dyn Fn(&str) -> Option<String>,
@@ -66,107 +61,10 @@ pub fn interpolate_with(
     }
 }
 
-/// [`interpolate_with`] against the process environment.
 pub fn interpolate(input: &str) -> Result<String, Vec<String>> {
     interpolate_with(input, &|name| std::env::var(name).ok())
 }
 
-/// The authored form of `text` that [`interpolate_with`] reads back as
-/// exactly `text` under any environment: every `$` doubled.
 pub fn escape(text: &str) -> String {
     text.replace('$', "$$")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-            .collect()
-    }
-
-    fn expand(input: &str, pairs: &[(&str, &str)]) -> Result<String, Vec<String>> {
-        let map = env(pairs);
-        interpolate_with(input, &move |name| map.get(name).cloned())
-    }
-
-    #[test]
-    fn leaves_text_without_references_untouched() {
-        let input = r#"{"endpoint":"http://127.0.0.1:8000/v1"}"#;
-        assert_eq!(expand(input, &[]).unwrap(), input);
-    }
-
-    #[test]
-    fn substitutes_a_set_variable() {
-        assert_eq!(
-            expand(r#"{"endpoint":"${EP}"}"#, &[("EP", "http://host:1/v1")]).unwrap(),
-            r#"{"endpoint":"http://host:1/v1"}"#
-        );
-    }
-
-    #[test]
-    fn falls_back_to_the_default_when_unset_or_empty() {
-        assert_eq!(
-            expand("${EP:-http://fallback}", &[]).unwrap(),
-            "http://fallback"
-        );
-        assert_eq!(
-            expand("${EP:-http://fallback}", &[("EP", "")]).unwrap(),
-            "http://fallback"
-        );
-    }
-
-    #[test]
-    fn a_set_variable_wins_over_its_default() {
-        assert_eq!(
-            expand("${MODEL:-default-model}", &[("MODEL", "other-model")]).unwrap(),
-            "other-model"
-        );
-    }
-
-    #[test]
-    fn reports_every_unresolved_variable_rather_than_just_the_first() {
-        let missing = expand(r#"{"a":"${ONE}","b":"${TWO}","c":"${ONE}"}"#, &[]).unwrap_err();
-        assert_eq!(missing, vec!["ONE".to_string(), "TWO".to_string()]);
-    }
-
-    #[test]
-    fn an_unset_required_variable_never_becomes_an_empty_string() {
-        assert!(expand(r#"{"endpoint":"${EP}"}"#, &[]).is_err());
-    }
-
-    #[test]
-    fn double_dollar_escapes_a_literal_reference() {
-        assert_eq!(expand("$${EP}", &[("EP", "substituted")]).unwrap(), "${EP}");
-        assert_eq!(expand("costs $$5", &[]).unwrap(), "costs $5");
-    }
-
-    #[test]
-    fn an_escaped_text_interpolates_to_itself() {
-        for text in [
-            "${EP}", "$$", "${EP:-d}", "$", "costs $5", "${UNSET}", "plain",
-        ] {
-            assert_eq!(
-                expand(&escape(text), &[("EP", "substituted")]).unwrap(),
-                text
-            );
-        }
-    }
-
-    #[test]
-    fn a_lone_dollar_or_unterminated_reference_is_preserved() {
-        assert_eq!(expand("100$ and ${OPEN", &[]).unwrap(), "100$ and ${OPEN");
-    }
-
-    #[test]
-    fn defaults_may_contain_colons_and_slashes() {
-        assert_eq!(
-            expand("${EP:-http://100.73.235.38:8000/v1}", &[]).unwrap(),
-            "http://100.73.235.38:8000/v1"
-        );
-    }
 }

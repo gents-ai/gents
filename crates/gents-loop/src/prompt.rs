@@ -1,7 +1,3 @@
-//! The compaction-summary rendering the loop needs when it resumes a session
-//! with prior compaction checkpoints; `gents::prompt` owns full preamble
-//! assembly and calls into this shared slice.
-
 use gents_protocol::message::{Message, Text, UserContent};
 
 pub fn system_reminder(text: &str) -> Message {

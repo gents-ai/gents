@@ -1,8 +1,5 @@
-//! Lean `canonicalToolResultBound`: the physical tool document anchors both
-//! the delivery publication and its native result block.
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, TranscriptMessage};
 
-/// Sole canonical invocation reply for an accepted call.
 pub(crate) fn is_exact_invocation_reply(
     message: &TranscriptMessage,
     request_doc_id: &str,

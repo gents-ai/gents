@@ -1,4 +1,3 @@
-//! Exact accepted-header tool accounting inside the request terminal transaction.
 use anyhow::{Context, Result};
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};

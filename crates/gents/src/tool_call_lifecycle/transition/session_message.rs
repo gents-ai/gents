@@ -1,7 +1,5 @@
 use super::*;
 
-/// The durable terminal of the request an `agent_new`/`agent_message` row
-/// caused (Lean `Recovery.SessionMessageRecoveryCause`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CausedRequestTerminal {
     Completed { output: String },
@@ -50,8 +48,6 @@ impl CausedRequestTerminal {
 }
 
 impl ToolCallLifecycle {
-    /// Running -> terminal carrying the output of the request it caused;
-    /// returns whether this caller won the running compare.
     pub(crate) async fn settle_session_message(
         &mut self,
         terminal: &CausedRequestTerminal,

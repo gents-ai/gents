@@ -60,9 +60,6 @@ const PLACEMENT_FIELDS: &str = r#"
     observed_tree_hash
 "#;
 
-/// Copy `seal_hash` onto post-seal ReadOnly/Integrate lineage. Fail closed
-/// when `workspace_id` is set but IsolatedWorkspace is missing, and refuse
-/// ReadWrite after Sealed / Integrate before Sealed.
 pub async fn stamp_workspace_lineage(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
@@ -213,9 +210,6 @@ pub async fn seal_on_writer_success(
     flush_seal_outcome(node, &docs, &outcome).await
 }
 
-/// Integrator request success: typed `integrate_workspace` (apply sealed diff
-/// to trunk). Never worker bash against the source checkout. No-op unless the
-/// request is Integrate-bound.
 pub async fn integrate_on_integrator_success(
     node: &std::sync::Arc<EmbeddedNode>,
     request: &AgentRequest,

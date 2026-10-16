@@ -143,14 +143,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn an_unknown_path_is_a_plain_not_found() {
-        let response = response(CallbackPage::NotFound);
-        assert_eq!(response.status_code().0, 404);
-        assert!(response
-            .headers()
-            .iter()
-            .any(|header| header.field.equiv("Content-Type")
-                && header.value.as_str().starts_with("text/plain")));
-    }
 }

@@ -634,7 +634,6 @@ fn steering_parent_id(row: &AgentRequestRow) -> Option<String> {
     .flatten()
 }
 
-/// Request-only projection per `Proofs/Client/Types.lean`.
 fn row_is_effectively_active(row: &AgentRequestRow) -> bool {
     project_persisted_attempt(
         row.lifecycle_state

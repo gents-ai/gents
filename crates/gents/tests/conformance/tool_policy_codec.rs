@@ -1,9 +1,3 @@
-//! JSON-view codec between the Lean `ToolPolicy.ContractCases.SurfaceView`
-//! rows and the production `ToolPolicySurface`.
-//! The rank mappings are wire-discriminator codecs matching Lean
-//! `FileCap.rank` / `executionModeContractCode` / `networkRank`. The view
-//! encodes only the bash execution mode: the legacy bash-tool selector is
-//! outside this projection.
 
 use std::collections::{BTreeMap, BTreeSet};
 

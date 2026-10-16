@@ -1,5 +1,3 @@
-/* One mailbox item: its kind and status, what it asks, the action it
-   wants and the controls that take it, its deadline and its payload. */
 import {
   ChevronDown,
   CircleCheck,
@@ -41,7 +39,6 @@ import { useFleet } from "@/hooks/useFleet";
 
 type BadgeVariant = ComponentProps<typeof Badge>["variant"];
 
-/* the kind glyph on the rail, its word, and its badge */
 export const KIND: Record<
   string,
   { icon: typeof CircleHelp; label: string; tone?: string; badge: BadgeVariant }
@@ -82,7 +79,7 @@ export function Item({
   onSelect: (next: boolean) => void;
   last: boolean;
 }) {
-  /* the node that filed the item names its agent; its session may be listed by any node */
+  // The filer names the agent; a session may be listed by another node.
   const filer = useFleet((state) => nodeOf(state, m.nodeDid));
   const session = useFleet((state) =>
     m.sessionId ? state.bySessionId[m.sessionId] : undefined,
@@ -98,8 +95,6 @@ export function Item({
     label: m.status,
     badge: "outline" as BadgeVariant,
   };
-  /* a kind with its own answer surface renders it; any other item keeps
-     the generic reading view */
   const question = parseQuestion(m);
   const body = [m.summary, m.payload && !question ? payloadMarkdown(m.payload) : null]
     .filter((part): part is string => Boolean(part?.trim()))
@@ -109,7 +104,7 @@ export function Item({
   const Icon = kind.icon;
   const open = () => openItem(m, openMailboxItem);
   const deadline = deadlineOf(m);
-  // a passed deadline shows as overdue until the runtime expires the item
+  // A passed deadline stays overdue until the runtime expires the item.
   const due = deadline === null ? null : span(Math.max(0, deadline - now));
   const soon = dueSoon(deadline, now);
   const age = when(m.createdAt, now);
@@ -263,7 +258,6 @@ export function Item({
               </p>
             )}
           </div>
-          {/* open it, where opening means anything */}
           <div className="col-start-3 row-start-1 -mr-1 flex items-center gap-1 max-md:self-center md:-mt-1 md:self-start">
             {openable(m) && (
               <Button
@@ -296,7 +290,6 @@ export function Item({
   );
 }
 
-/* ack: there is nothing to do but read it, so opening goes to its source */
 export const openable = (m: MailboxItemView) =>
   Boolean(m.sessionId) || m.action !== "ack";
 
@@ -349,12 +342,9 @@ export async function openItem(
         : { name: "session", sessionId: null },
     );
   } catch {
-    // reported by the action
   }
 }
 
-/* the key hint inside a pill: a box inside a box read as two outlines,
-   so the hint is a tint of the button's own colour with no edge */
 export const KEY =
   "ml-0.5 h-4 min-w-4 rounded-md border-transparent! bg-current/12! text-[10px] opacity-100!";
 

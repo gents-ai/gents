@@ -31,9 +31,6 @@ async fn goal_show(args: GoalShowArgs) -> Result<()> {
     print_json(&goal_show_value(&access, &node_did, &args.scope.session, Utc::now()).await?)
 }
 
-/// `goal show`'s JSON: the Goal's snapshot, the operator's
-/// `auto_resume_at_reset` opt-in and, when its latest request stopped where
-/// the operator can act, `blocked`.
 async fn goal_show_value(
     access: &ConfigAccess,
     node_did: &str,

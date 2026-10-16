@@ -111,7 +111,6 @@ async fn runtime_seal_case(unowned: bool) {
         )
         .unwrap();
     }
-    // Persisted domain-level acceptance is input/evidence, never path authority.
     query(&node, r#"mutation { create_CapabilityReviewVerdict(input: { workspace_id: "runtime-capability", accepted: true }) { _docID } }"#).await;
     let before_head = git(&fx.repo, &["rev-parse", "HEAD"]);
     let before_readme = fs::read(fx.repo.join("README.md")).unwrap();

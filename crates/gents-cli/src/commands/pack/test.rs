@@ -1,5 +1,3 @@
-//! CLI adapter for the shared plugin-case test owner.
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -60,8 +58,6 @@ pub(crate) async fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
 mod tests {
     use super::*;
 
-    /// Driven from an async task; calling a guest directly panics inside
-    /// the WASI runtime.
     #[tokio::test]
     async fn a_scaffolded_plugin_passes_its_case_and_a_wrong_expectation_fails() {
         let root = tempfile::tempdir().unwrap();

@@ -294,7 +294,6 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
             case.name
         );
 
-        // Vacate the parent before child claim.
         let parent_row =
             crate::request_binding::load_agent_request_by_doc_id(&db.node, &parent.doc_id)
                 .await
@@ -333,8 +332,6 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
         let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
         lifecycle.begin_owned_execution(&writer).await.unwrap();
 
-        // Real owner handoff after claim/begin, before an AuthoredInputReady
-        // stream item is accepted.
         if outcome == crate::lifecycle::RequestTerminalOutcome::Interrupted {
             assert!(case.interrupt_at.is_none(), "{}", case.name);
             crate::interrupt::interrupt_request_by_doc_id(

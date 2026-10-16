@@ -80,8 +80,6 @@ async fn resolve_created_agent_request_doc_id(
         .map(str::to_string)
 }
 
-/// Write one signed pending request. `session_id` names an existing session
-/// the request continues; absent mints a new session.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conversation_title(
     node: &std::sync::Arc<EmbeddedNode>,
@@ -159,9 +157,6 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
     })
 }
 
-/// Retry the complete graph publication transaction on native conflicts. A
-/// first-seen trigger event cannot be replayed, so retrying only its row create
-/// would either lose the stage or bypass a newly committed graph closure.
 async fn publish_graph_root_request(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
@@ -189,12 +184,6 @@ async fn publish_graph_root_request(
     })
 }
 
-/// Build and sign the canonical pending request used by trigger materialization.
-/// Callers that stage controller documents in the same transaction precompute
-/// the request/session/retry identity and pass the returned immutable create
-/// document to their atomic submit seam. `requester_did` is the requester that
-/// owns the existing session a runtime fire is delivered into; `None` is the
-/// target itself.
 #[allow(clippy::too_many_arguments)]
 pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
     node_did: &str,
@@ -289,7 +278,6 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
     build_signed_request(spec, RequestSigner::RegisteredTarget).await
 }
 
-/// Identity fields every writer decides for a fresh `AgentRequest`.
 pub struct RequestIdentity {
     pub requester_did: Option<String>,
     pub request_id: String,
@@ -301,8 +289,6 @@ pub struct RequestIdentity {
     pub created_at: String,
 }
 
-/// Causal lineage: the logical and physical identifiers of the request (and,
-/// for `agent_new`/`agent_message`, the tool call) that caused this one.
 #[derive(Default)]
 pub struct ParentLink {
     pub depth: u32,
@@ -312,8 +298,6 @@ pub struct ParentLink {
     pub parent_tool_call_doc_id: Option<String>,
 }
 
-/// Retry linkage: the failed request this one supersedes, the root of the
-/// retry chain, and the counters carried forward from it.
 pub struct RetryLink {
     pub parent_request_id: Option<String>,
     pub parent_request_doc_id: Option<String>,
@@ -322,22 +306,15 @@ pub struct RetryLink {
     pub max_retries: i64,
 }
 
-/// Every input a writer decides before an `AgentRequestCreate` is built and
-/// signed; `build_request` alone owns which of its fields become which
-/// stamped columns.
 pub struct RequestSpec {
     pub purpose: gents_protocol::request_admission::RequestPurpose,
     pub identity: RequestIdentity,
     pub admission: gents_protocol::request_admission::AgentRequestAdmissionRecord,
     pub initial_lifecycle_state: RequestLifecycleState,
-    /// Correlation/context/kind/id/source-doc lineage of the trigger that
-    /// caused this request; `trigger_doc_id` is not part of the signed
-    /// trigger-provenance payload validated by `validate_trigger_provenance`.
     pub trigger_lineage: TriggerLineage,
     pub trigger_doc_id: Option<String>,
     pub workspace: Option<WorkspaceLineage>,
     pub parent: Option<ParentLink>,
-    /// `None` means this is not a retry.
     pub retry: Option<RetryLink>,
     pub input: gents_protocol::request_input::RequestInput,
     pub retry_key: Option<String>,
@@ -367,18 +344,11 @@ impl RequestSpec {
     }
 }
 
-/// How the built `AgentRequestCreate` is signed: as the already-registered
-/// runtime node named by `spec.identity.node_did` (the common case for
-/// runtime-authored requests), or with an explicit caller-held identity.
 pub enum RequestSigner<'a> {
     RegisteredTarget,
     Identity(&'a dyn crate::identity::NodeIdentity),
 }
 
-/// Build and stamp one `AgentRequestCreate`, unsigned. Sole owner of the
-/// mapping from a writer's decisions (`RequestSpec`) to the DTO's stamped
-/// columns, split from signing so a caller may inspect the built DTO before
-/// paying for a signature.
 pub(crate) fn build_request(
     spec: RequestSpec,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
@@ -463,7 +433,6 @@ pub(crate) fn build_request(
     Ok(create)
 }
 
-/// Sign an `AgentRequestCreate` built by `build_request`.
 pub(crate) async fn sign_request(
     create: &mut gents_protocol::request_admission::AgentRequestCreate,
     signer: RequestSigner<'_>,
@@ -479,7 +448,6 @@ pub(crate) async fn sign_request(
     Ok(())
 }
 
-/// Build, stamp, and sign one `AgentRequestCreate` in one call.
 pub async fn build_signed_request(
     spec: RequestSpec,
     signer: RequestSigner<'_>,
@@ -489,8 +457,6 @@ pub async fn build_signed_request(
     Ok(create)
 }
 
-/// The parent link is provenance only. The persisted pending request is the
-/// crash-recoverable owner of title inference, including after its parent ends.
 pub(crate) async fn write_pending_title_request(
     node: &std::sync::Arc<EmbeddedNode>,
     parent: &AgentRequest,
@@ -535,7 +501,6 @@ pub(crate) async fn write_pending_title_request(
         .context("title request creation omitted its exact durable request")
 }
 
-/// Why a request exists, for its causal hop (Lean `CausalHop.Cause`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestHopCause {
     Root,
@@ -544,8 +509,6 @@ pub enum RequestHopCause {
     Continuation,
 }
 
-/// Lean `CausalHop.nextHop`: `own` is the hop of the request this one
-/// continues in its own session, `0` for a new session.
 pub fn next_request_hop(cause: RequestHopCause, own: u32) -> u32 {
     match cause {
         RequestHopCause::Root => 0,
@@ -554,13 +517,10 @@ pub fn next_request_hop(cause: RequestHopCause, own: u32) -> u32 {
     }
 }
 
-/// Lean `CausalHop.admitHop`.
 pub fn request_hop_within_bound(max_request_hop: u32, hop: u32) -> bool {
     hop <= max_request_hop
 }
 
-/// The calling edge an `agent_new`/`agent_message` request records: the
-/// caller's DID (its requester and signer), request and tool call.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionMessageCause {
     pub(crate) caller_node_did: String,
@@ -572,8 +532,6 @@ pub(crate) struct SessionMessageCause {
     pub(crate) correlation: Option<String>,
 }
 
-/// Where a session-message request runs. The target node's own
-/// agent configures it; nothing is inherited from the caller.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionMessageTarget {
     pub(crate) node_did: String,
@@ -581,12 +539,6 @@ pub(crate) struct SessionMessageTarget {
     pub(crate) session_id: String,
 }
 
-/// Build and sign the request an `agent_new`/`agent_message` call
-/// materializes at `hop` (Lean `DurableLineage.sessionMessageWrite`). This is
-/// the single writer of the calling edge (`caused_by_parent_*`). The caller is
-/// the requester and signer: its own node admits it as LocalSelf, any
-/// other target as Peer under that target's ACP. A steering delivery carries
-/// `queue`, which orders it after the busy session's active request.
 pub(crate) async fn build_session_message_request(
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
@@ -935,17 +887,11 @@ impl RequestLifecycle {
     }
 }
 
-/// Session rows sharing the request's `(node, session)` label, decoded one
-/// row at a time so rows that fail canonical decode stay separable.
 pub(super) struct LabeledSessionRows {
     pub(super) decoded: Vec<session::SessionOwnerRow>,
     pub(super) undecodable: Vec<anyhow::Error>,
 }
 
-/// Resolve the session rows sharing the request's `(node, session)` label.
-/// Requester scope is deliberately absent from the filter: the claim boundary
-/// must see a foreign-owned label to refuse it, and the refusal boundary must
-/// see it to leave it untouched.
 async fn labeled_session_rows_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
@@ -975,16 +921,11 @@ async fn labeled_session_rows_in_txn(
     })
 }
 
-/// Materialize the single session through its owner in the claim transaction.
-/// Creation intent is consumed once; request observations come from the exact
-/// authoritative request row after the claim mutation.
 pub(super) async fn apply_request_session_projection(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
     now: &str,
 ) -> Result<()> {
-    // The session belongs to one requester; a request under any other scope
-    // is refused rather than attached.
     let rows = labeled_session_rows_in_txn(txn, request).await?;
     if let Some(error) = rows.undecodable.into_iter().next() {
         return Err(error
@@ -1064,12 +1005,6 @@ pub(super) async fn apply_request_session_projection(
     Ok(())
 }
 
-/// Project a refused request into its session inside the refusal transaction,
-/// so the failed turn stays reachable from the session after the client stops
-/// tracking it. Guards mirror `AgentSession.advance` and leave the session
-/// untouched instead of failing the refusal: a refusal never reopens a closed
-/// session, and the pending -> failed write must not roll back if the
-/// projection cannot decode or read unrelated durable rows.
 pub(crate) async fn project_refused_request_session_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
@@ -1166,7 +1101,6 @@ async fn project_refused_request_onto_session_in_txn(
     Ok(())
 }
 
-/// Canonical identity shared by automated and manually invoked Task fires.
 pub fn task_fire_key(identity: &gents_protocol::trigger_delivery::FireIdentity) -> String {
     crate::trigger_engine::durable::fire_key(identity)
 }

@@ -175,7 +175,6 @@ pub struct McpServerElicitationRequestParams {
     pub request: McpServerElicitationRequest,
 }
 
-/// Typed form schema for MCP `elicitation/create` requests.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpElicitationSchema {

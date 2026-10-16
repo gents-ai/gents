@@ -1,7 +1,3 @@
-//! Grok shim message projection: projects canonical headers and output
-//! segments of one request into the Grok pager's streaming `session/update`
-//! payloads. The Grok decoder expects the chunk field name `content`, not
-//! `contentBlock`.
 
 use std::sync::Arc;
 
@@ -13,12 +9,10 @@ use serde_json::{json, Value};
 
 use super::{effective_context_window_tokens, nonempty};
 
-/// `sessionUpdate` discriminators emitted by this leaf.
 pub(super) const AGENT_MESSAGE_CHUNK: &str = "agent_message_chunk";
 pub(super) const AGENT_THOUGHT_CHUNK: &str = "agent_thought_chunk";
 pub(super) const USER_MESSAGE_CHUNK: &str = "user_message_chunk";
 
-/// One projected streaming chunk.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum MessageUpdate {
     AgentMessageChunk { text: String },
@@ -27,10 +21,6 @@ pub(super) enum MessageUpdate {
 }
 
 impl MessageUpdate {
-    /// Echo a persisted runtime completion without presenting it as something
-    /// the human typed; `hideFromScrollback` is Grok's native ContentChunk
-    /// metadata. Call only after classifying the durable message key, never
-    /// from text.
     pub fn background_completion_payload(text: impl Into<String>) -> Value {
         let mut payload = Self::chunk_payload(USER_MESSAGE_CHUNK, text);
         payload["_meta"] = json!({"hideFromScrollback": true});
@@ -45,10 +35,6 @@ impl MessageUpdate {
         }
     }
 
-    /// `kind` must be one of
-    /// [`AGENT_MESSAGE_CHUNK`]/[`AGENT_THOUGHT_CHUNK`]/[`USER_MESSAGE_CHUNK`]; any other value
-    /// falls back to `agent_message_chunk` rather than fabricating an
-    /// unknown discriminator on the wire.
     pub fn chunk_payload(kind: &str, text: impl Into<String>) -> Value {
         let kind = match kind {
             AGENT_THOUGHT_CHUNK => AGENT_THOUGHT_CHUNK,
@@ -65,50 +51,23 @@ impl MessageUpdate {
     }
 }
 
-/// The full set of streaming message updates for one request id, in transcript
-/// order, plus the projection bookkeeping the engine needs to stamp `_meta`.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct MessageProjection {
     pub updates: Vec<MessageUpdate>,
-    /// Durable chronology key per update, aligned 1:1 with `updates`: the
-    /// row's `sequence` in the shared transcript sequence space. `None` when
-    /// the row carries no sequence — such updates sort after every
-    /// positioned event of the family.
     pub chronology: Vec<Option<i64>>,
-    /// Durable chunk identity per update, aligned 1:1 with `updates`:
-    /// `"{message_key}:{update kind}:{per-row ordinal of that kind}"`. The
-    /// live projection poll deduplicates streamed chunks by these keys, so
-    /// two distinct rows carrying identical text both stream *and* one row's
-    /// reasoning thought and body text are distinct chunks.
     pub update_keys: Vec<String>,
-    /// Generated-token accounting is not part of canonical output.
     pub total_tokens: u64,
-    /// Whether the projected request is terminal (complete, error, or
-    /// non-empty `interrupted_at`). A still-running request keeps the pending
-    /// prompt unresolved.
     pub terminal: bool,
-    /// Terminal stop reason projection when `terminal` is true. This is an
-    /// adapter projection, not a persisted field.
     pub stop_reason: Option<&'static str>,
-    /// Context window tokens used to bound `totalTokens`; falls back to the
-    /// catalog default when the bound configuration did not supply one.
     pub context_window_tokens: u64,
     pub live_tail: LiveResponseTail,
-    /// Exact canonical source-to-header bindings derived from payload close
-    /// document identities. Text equality is never used as provenance.
     pub canonical_bindings: Vec<CanonicalSourceBinding>,
-    /// Inclusive durable transcript high-water proved by this projection.
-    /// The caller commits it only after every event in the batch sends.
     pub message_sequence_high_water: Option<i64>,
-    /// Durable request start used as the first generation timing candidate.
     pub response_started_at_ms: Option<i64>,
-    /// Durable terminal timestamp bounds the retained streaming tail during
-    /// replay. Arrival time is not historical generation time.
     pub response_ended_at_ms: Option<i64>,
     pub timeline: Vec<MessageTimelineRow>,
 }
 
-/// Timestamp-bearing identity of one request-local transcript row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct MessageTimelineRow {
     pub sequence: i64,
@@ -120,8 +79,6 @@ pub(super) struct MessageTimelineRow {
 pub(super) struct LiveResponseTail {
     pub content: Option<String>,
     pub reasoning: Option<String>,
-    /// Sequence of the current assistant `AgentMessage` row, used as the live
-    /// segment's chronology position.
     pub assistant_sequence: Option<i64>,
     pub source_key: Option<String>,
 }
@@ -133,10 +90,6 @@ pub(super) struct CanonicalSourceBinding {
     pub message_key: String,
 }
 
-/// Query seam so tests can supply bounded canonical header/segment facts;
-/// production reads through
-/// `gents::graphql::graphql_with_transaction_retry`. The returned future is
-/// `Send` so the loader's futures stay `Send` end to end.
 pub(super) trait QuerySink: Send + Sync {
     fn execute(
         &self,
@@ -154,8 +107,6 @@ impl QuerySink for NodeSink<'_> {
     }
 }
 
-/// Project the streaming message chunks for one request id. Returns an empty
-/// projection when the request has no rows.
 pub(super) async fn project_messages(
     node: &Arc<EmbeddedNode>,
     message_sequence_high_water: Option<i64>,
@@ -468,8 +419,6 @@ fn push_nonempty(updates: &mut Vec<MessageUpdate>, update: MessageUpdate) {
     }
 }
 
-/// Text pieces of a reasoning block that stream as thought text; encrypted
-/// and redacted payloads are opaque.
 fn reasoning_texts(reasoning: &gents_protocol::message::Reasoning) -> Vec<String> {
     use gents_protocol::message::ReasoningContent;
     reasoning
@@ -484,7 +433,6 @@ fn reasoning_texts(reasoning: &gents_protocol::message::Reasoning) -> Vec<String
         .collect()
 }
 
-/// Streamable chunk text: verbatim, but whitespace-only blocks are skipped.
 fn streamable_owned(value: &str) -> Option<String> {
     (!value.trim().is_empty()).then(|| value.to_string())
 }

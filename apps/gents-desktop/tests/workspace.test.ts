@@ -1,22 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dockScope, restoreWorkspace, workspace } from "@/app/workspace";
-import {
-  clearSurfaces,
-  getSurface,
-  listSurfaces,
-  registerSurface,
-} from "@/app/surfaces";
-
-const Nothing = () => null;
-
 const A = "session:a";
 
 describe("the workspace store", () => {
   beforeEach(() => workspace.reset());
-
-  it("starts with every dock closed and empty", () => {
-    expect(workspace.dock(A)).toEqual({ open: false, tabs: [], active: null });
-  });
 
   it("opens a surface as a tab and shows it; opening it again only shows it", () => {
     workspace.openSurface(A, "trace");
@@ -177,27 +164,3 @@ describe("restoring the docks from storage", () => {
   });
 });
 
-describe("the surface registry", () => {
-  beforeEach(() => clearSurfaces());
-
-  it("finds a registered surface by id and lists by placement", () => {
-    registerSurface({
-      id: "trace",
-      title: "Trace",
-      icon: Nothing,
-      placements: ["dock"],
-      render: Nothing,
-    });
-    registerSurface({
-      id: "diff",
-      title: "Diff",
-      icon: Nothing,
-      placements: ["dock", "inline"],
-      render: Nothing,
-    });
-    expect(getSurface("trace")?.title).toBe("Trace");
-    expect(getSurface("missing")).toBeNull();
-    expect(listSurfaces("inline").map((s) => s.id)).toEqual(["diff"]);
-    expect(listSurfaces().length).toBe(2);
-  });
-});

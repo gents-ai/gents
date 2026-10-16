@@ -102,7 +102,6 @@ fn every_fixture_pack_keeps_its_digest_through_a_pack_file() {
     }
 }
 
-/// Golden digest; guards against a digest that compares a fixture to itself.
 #[test]
 fn assets_fixture_digest_matches_a_pinned_golden_value() {
     let (_guard, root) = fixture_pack_dir("assets_fixture");

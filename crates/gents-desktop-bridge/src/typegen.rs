@@ -1,5 +1,3 @@
-//! TypeScript bridge-contract generation and bindings freshness gate.
-
 use std::path::{Path, PathBuf};
 
 mod commands;

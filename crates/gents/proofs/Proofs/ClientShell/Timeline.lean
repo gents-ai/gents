@@ -1,40 +1,40 @@
 import Proofs.Client
 
-/-!
-# Client Shell Timeline Ordering (#608 parity)
 
-Every client shell renders a session's transcript in the same order: messages
-interleaved with their tool groups, with a pending turn immediately before the
-first durable message from its request (or at the tail), then orphan tool
-groups and the live-assistant overlay. While an unmaterialized foreground tool
-is running, the overlay is placed immediately before that tool's orphan group,
-without jumping ahead of earlier historical orphan groups. Otherwise the
-overlay remains at the tail. The *order and the message↔tool-group partition* are semantics a
-second shell must reproduce exactly; only the pixels are presentation.
 
-This models `gents_protocol::timeline::build_timeline_order`. Request-owned
-pending inputs are ordered and deduplicated by physical identity. The Rust
-function is structured in the same three phases this model concatenates:
 
-    buildOrder = placePendingInputs (dedupPending [] pending) body ++ orphanTail
 
-where `body` interleaves each surviving (deduped) message with the tool group it
-owns, `orphans` are the tool groups no surviving message owns, and the final
-phase inserts the visible overlay at the tail or immediately before one
-identified orphan sequence.
 
-Model boundary: the input message list is taken **already sorted** by the
-shell's total sequence order, and tool-group keys are unique (the Rust uses map
-keys and sorts first; sort correctness is a
-standard fact, not re-derived here). The fence is the interleave / partition /
-tail discipline *on top of* that order — which is exactly the part a second
-shell re-implements and can get wrong.
--/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 namespace ClientShell.Timeline
 
-/-- A page's accounting coverage and an exact prompt-owner lookup are independent.
-A missing prompt in a visible page alone is not evidence that it is pending. -/
+
+
 structure ReadCoverage where
   sessionComplete : Bool
   promptOwnerKnown : Bool
@@ -43,8 +43,8 @@ structure ReadCoverage where
 def pendingOwnerAbsent (coverage : ReadCoverage) (materialized : Bool) : Bool :=
   coverage.promptOwnerKnown && !materialized
 
-/-- A physical prompt lookup covers only its own request, even when its rows
-are merged with a bounded session page. Native adapters retain scope checks. -/
+
+
 def pendingRequestOwnerAbsent (coverage : ReadCoverage) (requested observed : Nat)
     (materialized : Bool) : Bool :=
   pendingOwnerAbsent ⟨coverage.sessionComplete,
@@ -68,9 +68,9 @@ inductive Role
   | assistant
   deriving DecidableEq, Repr
 
-/-- The ordering-relevant projection of one transcript message. `seq` is the
-sort key and the tool-group attach key; `emitsItem` says whether it contributes
-a visible slot; `token` is an opaque presentation-dedup token. -/
+
+
+
 structure Msg where
   key : Nat
   seq : Int
@@ -79,8 +79,8 @@ structure Msg where
   token : Option Nat
   deriving DecidableEq, Repr
 
-/-- One ordered slot. A shell maps each to a rich item; the order and identity
-of the slots is the shared contract. -/
+
+
 inductive Slot
   | message (key : Nat) (seq : Int) (role : Role)
   | toolGroup (seq : Int)
@@ -88,8 +88,8 @@ inductive Slot
   | overlay
   deriving DecidableEq, Repr
 
-/-- First-wins dedup by `key`, then by `token`. Threads the seen sets in order,
-so the SURVIVING messages keep their input order. -/
+
+
 def dedup (seenKeys : List Nat) (seenTokens : List Nat) : List Msg → List Msg
   | [] => []
   | m :: rest =>
@@ -105,16 +105,16 @@ def dedup (seenKeys : List Nat) (seenTokens : List Nat) : List Msg → List Msg
         | none =>
             m :: dedup (m.key :: seenKeys) seenTokens rest
 
-/-- The kept (deduped) messages, in input order. -/
+
 def kept (msgs : List Msg) : List Msg := dedup [] [] msgs
 
-/-- Does sequence `s` have a tool group? -/
+
 def hasGroup (groups : List Int) (s : Int) : Bool := s ∈ groups
 
-/-- Body slots: each kept message emits its slot (when `emitsItem`) immediately
-followed by the tool group it owns (when it owns one). Mirrors the per-message
-loop; the `attached` accumulator prevents a repeated sequence from re-emitting a
-group. -/
+
+
+
+
 def bodyGo (groups : List Int) (attached : List Int) : List Msg → List Slot
   | [] => []
   | m :: rest =>
@@ -127,16 +127,16 @@ def bodyGo (groups : List Int) (attached : List Int) : List Msg → List Slot
 def body (groups : List Int) (msgs : List Msg) : List Slot :=
   bodyGo groups [] (kept msgs)
 
-/-- The sequences a surviving message attaches a group to. -/
+
 def attachedSeqs (groups : List Int) (msgs : List Msg) : List Int :=
   ((kept msgs).map Msg.seq).filter (fun s => hasGroup groups s)
 
-/-- Orphan groups: those attached to no surviving message. -/
+
 def orphans (groups : List Int) (msgs : List Msg) : List Int :=
   groups.filter (fun s => s ∉ attachedSeqs groups msgs)
 
-/-- Live overlay placement. A running foreground tool identifies the exact
-orphan sequence immediately before which its reasoning belongs. -/
+
+
 inductive OverlayPlacement
   | tail
   | beforeOrphan (seq : Int)
@@ -147,9 +147,9 @@ structure Overlay where
   placement : OverlayPlacement
   deriving DecidableEq, Repr
 
-/-- A request-owned pending user turn normally sits at the body tail. During
-partial replication, a later message from the same request may arrive first;
-then the pending turn is inserted immediately before that message. -/
+
+
+
 inductive PendingPlacement
   | tail
   | beforeMessage (seq : Int)
@@ -186,8 +186,8 @@ theorem pending_before_matching_tool_group_head
       (Slot.pending 0) :: Slot.toolGroup target :: rest := by
   simp [placePending, insertPendingKeyBefore]
 
-/-- Insert `visibleOverlay` immediately before the first matching orphan.
-If the target is absent (a partial-sync race), keep the overlay at the tail. -/
+
+
 def insertOverlayBefore (target : Int) (visibleOverlay : List Slot) : List Int → List Slot
   | [] => visibleOverlay
   | seq :: rest =>
@@ -211,15 +211,15 @@ def orphanTail (groups : List Int) (msgs : List Msg) (overlay : Option Overlay) 
   | some o => placeOrphanTail o.placement visibleOverlay (orphans groups msgs)
   | none => (orphans groups msgs).map Slot.toolGroup
 
-/-- Singleton specialization for the established slot-partition lemmas. -/
+
 def buildSingleOrder (groups : List Int) (msgs : List Msg)
     (pending : Option PendingPlacement) (overlay : Option Overlay) : List Slot :=
   placePending pending (body groups msgs) ++ orphanTail groups msgs overlay
 
-/-- Identity is an interned physical request document reference, not prompt text.
-The caller supplies admitted request order and anchors before the first visible
-message of the same or a following request. Interrupted admission remains visible
-without acquiring canonical authored-message authority. -/
+
+
+
+
 structure PendingInput where
   key : Nat
   placement : PendingPlacement
@@ -240,9 +240,9 @@ def placePendingInputs : List PendingInput → List Slot → List Slot
   | [], slots => slots
   | p :: rest, slots => placePendingInputs rest (placePendingKey p slots)
 
-/-- Request-owned pending observations join the same body and orphan-tail owner.
-First physical identity wins; equal anchors and tail positions retain admission
-order. Missing anchors fall back to the body tail, before orphan tool groups. -/
+
+
+
 def buildOrder (groups : List Int) (msgs : List Msg)
     (pending : List PendingInput) (overlay : Option Overlay) : List Slot :=
   placePendingInputs (dedupPending [] pending) (body groups msgs)
@@ -288,10 +288,10 @@ theorem pending_inputs_membership (pending : List PendingInput) (probe : Nat)
   | cons p rest ih =>
     simp [placePendingInputs, ih, keyed_pending_membership, or_assoc, or_left_comm, or_comm]
 
-/-! ## Slot-membership helpers -/
 
-/-- No `Slot.overlay` is produced by the body phase: the interleave emits only
-message and tool-group slots. -/
+
+
+
 theorem overlay_not_in_bodyGo (groups : List Int) (attached : List Int) (ms : List Msg) :
     Slot.overlay ∉ bodyGo groups attached ms := by
   induction ms generalizing attached with
@@ -359,10 +359,10 @@ theorem pending_mem_insertOverlayBefore_iff (target : Int) (visible : List Slot)
       · simp [insertOverlayBefore, htarget]
       · simp [insertOverlayBefore, htarget, ih]
 
-/-! ## Overlay: shown iff live, and precisely placed -/
 
-/-- The overlay is emitted exactly when it is present and no durable assistant
-turn already owns the same request-local content. -/
+
+
+
 theorem overlay_shown_iff (groups : List Int) (msgs : List Msg)
     (pending : Option PendingPlacement) (o : Overlay) :
     (Slot.overlay ∈ buildSingleOrder groups msgs pending (some o)) ↔ o.hasDurableOwner = false := by
@@ -377,7 +377,7 @@ theorem overlay_shown_iff (groups : List Int) (msgs : List Msg)
         simp [hp, hm, hplace, placeOrphanTail, List.mem_append, hb,
           overlay_mem_insertOverlayBefore_iff]
 
-/-- No overlay slot appears when the overlay is absent. -/
+
 theorem no_overlay_when_absent (groups : List Int) (msgs : List Msg)
     (pending : Option PendingPlacement) :
     Slot.overlay ∉ buildSingleOrder groups msgs pending none := by
@@ -387,7 +387,7 @@ theorem no_overlay_when_absent (groups : List Int) (msgs : List Msg)
   have hp := overlay_mem_placePending_iff pending (body groups msgs)
   simp [hp, List.mem_append, hb, ho]
 
-/-! ## Tool-group multiplicity in the emitted timeline -/
+
 
 private theorem group_count_bodyGo (groups attached : List Int) (msgs : List Msg) (seq : Int) :
     (bodyGo groups attached msgs).count (.toolGroup seq) =
@@ -481,9 +481,9 @@ private theorem nodup_count (groups : List Int) (hunique : groups.Nodup) (seq : 
         simp [List.count_cons, (List.count_eq_zero.mpr hunique.1)]
       · simp [List.count_cons, heq, Ne.symm heq, ih hunique.2]
 
-/-- Runtime tool groups come from unique map keys. Under that explicit adapter
-premise, the actual emitted timeline contains each group exactly once. Pending
-turns and overlays preserve this count, whatever their placement. -/
+
+
+
 theorem tool_group_emitted_once (groups : List Int) (hunique : groups.Nodup)
     (msgs : List Msg) (pending : List PendingInput) (overlay : Option Overlay)
     (seq : Int) :
@@ -507,17 +507,17 @@ theorem tool_group_emitted_once (groups : List Int) (hunique : groups.Nodup)
     simp only [List.mem_map] at hnone ⊢
     simp only [not_false_eq_true, true_and, hnone, ↓reduceIte, Nat.zero_add]
 
-/-! ## Auxiliary membership partition -/
 
-/-- A sequence that a surviving message attaches a group to is a real group. -/
+
+
 theorem attachedSeqs_subset_groups (groups : List Int) (msgs : List Msg) {s : Int}
     (h : s ∈ attachedSeqs groups msgs) : s ∈ groups := by
   unfold attachedSeqs at h
   rw [List.mem_filter] at h
   simpa [hasGroup] using h.2
 
-/-- **Partition (completeness).** Every tool group is either attached to a
-surviving message or an orphan — none is dropped. -/
+
+
 theorem group_attached_or_orphan (groups : List Int) (msgs : List Msg) {s : Int}
     (h : s ∈ groups) : s ∈ attachedSeqs groups msgs ∨ s ∈ orphans groups msgs := by
   by_cases ha : s ∈ attachedSeqs groups msgs
@@ -527,15 +527,15 @@ theorem group_attached_or_orphan (groups : List Int) (msgs : List Msg) {s : Int}
     rw [List.mem_filter]
     exact ⟨h, by simpa using ha⟩
 
-/-- **Partition (disjointness).** No tool group is both attached and an orphan —
-this membership partition alone does not establish output multiplicity. -/
+
+
 theorem group_not_both (groups : List Int) (msgs : List Msg) {s : Int}
     (ha : s ∈ attachedSeqs groups msgs) : s ∉ orphans groups msgs := by
   unfold orphans
   rw [List.mem_filter]
   simp [ha]
 
-/-! ## Tail structure -/
+
 
 theorem pending_not_in_body (groups : List Int) (msgs : List Msg) :
     (Slot.pending 0) ∉ body groups msgs := by
@@ -573,7 +573,7 @@ theorem pending_mem_placePending_iff (pending : Option PendingPlacement)
       | tail => simp [placePending]
       | beforeMessage target => simp [placePending, pending_mem_insertPendingBefore]
 
-/-- The pending turn appears exactly when a turn is pending. -/
+
 theorem pending_shown_iff (groups : List Int) (msgs : List Msg)
     (pending : Option PendingPlacement) (overlay : Option Overlay) :
     ((Slot.pending 0) ∈ buildSingleOrder groups msgs pending overlay) ↔ pending.isSome := by
@@ -591,8 +591,8 @@ theorem pending_shown_iff (groups : List Int) (msgs : List Msg)
           simpa [hm, hplace, placeOrphanTail, List.mem_append, ho,
             pending_mem_insertOverlayBefore_iff] using hp
 
-/-- **Tail overlay is last.** When no running orphan tool needs the live
-reasoning placed before it, an emitted overlay remains the final slot. -/
+
+
 theorem overlay_is_last (groups : List Int) (msgs : List Msg)
     (pending : Option PendingPlacement) (o : Overlay) (hshow : o.hasDurableOwner = false)
     (htail : o.placement = .tail) :
@@ -600,7 +600,7 @@ theorem overlay_is_last (groups : List Int) (msgs : List Msg)
   unfold buildSingleOrder orphanTail
   simp [hshow, htail, placeOrphanTail, List.getLast?_append]
 
-/-- Prefix groups remain before the overlay when it targets a later orphan. -/
+
 theorem insertOverlayBefore_prefix (target : Int) (visible : List Slot)
     (earlier suffix : List Int) (hnot : target ∉ earlier) :
     insertOverlayBefore target visible (earlier ++ target :: suffix) =
@@ -614,8 +614,8 @@ theorem insertOverlayBefore_prefix (target : Int) (visible : List Slot)
       have hseq : seq ≠ target := Ne.symm hnot.1
       simp [insertOverlayBefore, hseq, ih hnot.2, List.append_assoc]
 
-/-- **Running-tool overlay shape.** The emitted overlay appears immediately
-before its target orphan while all earlier historical orphans stay earlier. -/
+
+
 theorem overlay_before_target_shape (groups : List Int) (msgs : List Msg)
     (pending : Option PendingPlacement) (o : Overlay) (target : Int) (earlier suffix : List Int)
     (hshow : o.hasDurableOwner = false)
@@ -631,10 +631,10 @@ theorem overlay_before_target_shape (groups : List Int) (msgs : List Msg)
   simp [hshow, hplace, placeOrphanTail, horphans,
     insertOverlayBefore_prefix target [Slot.overlay] earlier suffix hnot]
 
-/-! ## Dedup: no message is shown twice -/
 
-/-- The surviving messages have distinct keys, and none was already seen. First-
-wins dedup is what stops a shell from rendering the same message twice. -/
+
+
+
 theorem dedup_keys_nodup (msgs : List Msg) :
     ∀ seenKeys seenTokens,
       ((dedup seenKeys seenTokens msgs).map Msg.key).Nodup ∧
@@ -668,7 +668,7 @@ theorem dedup_keys_nodup (msgs : List Msg) :
             · subst h; exact hk
             · exact (hns k h) ∘ List.mem_cons_of_mem _
 
-/-- **Each surviving message key is unique.** -/
+
 theorem kept_keys_nodup (msgs : List Msg) :
     ((kept msgs).map Msg.key).Nodup :=
   (dedup_keys_nodup msgs [] []).1
@@ -734,8 +734,8 @@ theorem keyed_pending_not_in_orphanTail (probe : Nat) (groups : List Int)
         | cons seq rest ih =>
           by_cases h : seq = target <;> simp_all [insertOverlayBefore]
 
-/-- A pending physical request identity is shown exactly when supplied by the
-request projection; content equality never suppresses distinct admissions. -/
+
+
 theorem pending_identity_shown_iff (groups : List Int) (msgs : List Msg)
     (pending : List PendingInput) (overlay : Option Overlay) (probe : Nat) :
     Slot.pending probe ∈ buildOrder groups msgs pending overlay ↔

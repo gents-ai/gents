@@ -484,8 +484,6 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
     Ok(())
 }
 
-/// Seed one request with two rendered-request captures carrying v3 provenance
-/// manifests with the admission join.
 async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
     let request_doc_id = exec_doc_id(
         node,
@@ -597,8 +595,6 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
     Ok(())
 }
 
-/// Rows stored exactly as a v2 writer left them; these keep the CLI's delta
-/// decode pinned over immutable history.
 async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
     let mut first_capture_key = String::new();
     for turn in 0..2usize {
@@ -2598,10 +2594,6 @@ fn with_mock_doc_id<T: serde::Serialize>(document: T, doc_id: &str) -> Value {
     value
 }
 
-/// Apply the same physical and logical scope predicates used by the
-/// canonical header reader. In particular, its twin check intentionally
-/// queries by `(agent, session, requester)` plus `(message_key OR sequence)`;
-/// returning every session header there would fabricate a cross-agent twin.
 fn filter_projection_mock_headers(query: &str, rows: Vec<Value>) -> Value {
     let mut rows = filter_projection_mock_rows(query, rows)
         .as_array()
@@ -2785,9 +2777,6 @@ fn projection_mock_output_segments(query: &str) -> Value {
     )
 }
 
-/// Canonical readers address dependencies by physical document ID. Scoped
-/// session/request reads omit an `_docID` equality and legitimately receive
-/// the full candidate set; exact reads must return exactly the addressed row.
 fn filter_projection_mock_rows(query: &str, rows: Vec<Value>) -> Value {
     let addressed = rows.iter().filter_map(|row| {
         let doc_id = row.get("_docID")?.as_str()?;
@@ -2860,8 +2849,6 @@ fn projection_mock_tool_calls(query: &str) -> Value {
             rows.retain(|row| row[field].as_str() == Some(value));
         }
     }
-    // Known foreign scopes are intentionally empty. Returning the root tool
-    // here would invent an accepted binding for a different agent/request.
     if query.contains(r#"node_did: { _eq: "did:test:reviewer" }"#)
         || query.contains(r#"request_doc_id: { _eq: "doc-request-child" }"#)
     {

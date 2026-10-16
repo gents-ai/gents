@@ -1,5 +1,3 @@
-//! Background health checker for registered data services.
-
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -159,13 +157,6 @@ enum ProbeEvent {
     RegistryAbsent,
 }
 
-/// Full MCP service health snapshot exposed to operators (CLI table, desktop
-/// panel, and the persisted `ToolServiceHealthState` DefraDB row).
-///
-/// Carries the K-model fields (`failure_count`, `k_max`, `backoff_until`)
-/// that the public `HealthStatus` projection collapses. `status` is the
-/// internal `HealthStateInternal` projected to its DefraDB string
-/// vocabulary (`healthy` / `stale` / `evicted` / `reconnecting`).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct MCPServiceHealthSnapshot {
     pub service_id: String,
@@ -1032,8 +1023,6 @@ mod tests {
             );
         }
 
-        // A failed publish must discard the confirmed snapshot, even when its
-        // native outcome could be ambiguous. The next attempt repairs all fields.
         let unavailable = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         let failed_context = HealthPersistenceContext {
             node: &unavailable,

@@ -4,8 +4,6 @@ use crate::error::{
 use crate::tool::ToolDefinition;
 use crate::ToolChoice;
 
-/// A provider completion model the owned loop drives. Runtime owners are
-/// generic over this bound so the provider client's traits stay here.
 pub trait ProviderModel:
     rig::completion::CompletionModel<Response: 'static, StreamingResponse: 'static> + 'static
 {
@@ -19,7 +17,6 @@ where
 {
 }
 
-/// A built provider client; `completion_model` names one [`ProviderModel`].
 pub trait ProviderClient: rig::client::CompletionClient<CompletionModel: ProviderModel> {}
 
 impl<C> ProviderClient for C
@@ -29,10 +26,6 @@ where
 {
 }
 
-/// Whether the provider's raw response carries an OpenAI Responses cache-token
-/// observation. Rig's `Usage` turns a missing `input_tokens_details` into zero,
-/// so admission must consult the raw response before persisting the nullable
-/// InferenceCall column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CachedInputTokensObservation {
     NotAvailable,
@@ -40,9 +33,8 @@ pub enum CachedInputTokensObservation {
     Reported(u64),
 }
 
-/// Read cached-token presence from a serializable raw provider response; this
-/// identifies the Responses usage shape without changing other providers'
-/// accounting behavior.
+/// Rig maps absent Responses cache details to zero; inspect the raw response
+/// so the durable nullable column preserves whether the provider reported it.
 pub fn cached_input_tokens_observation<T: serde::Serialize>(
     raw_response: &T,
 ) -> CachedInputTokensObservation {
@@ -517,7 +509,6 @@ pub fn from_rig_assistant_content(
     }
 }
 
-/// The native cause of a rig stream failure.
 pub fn loop_failure_cause(error: &rig::agent::StreamingError) -> LoopFailureCause {
     use rig::completion::{CompletionError, PromptError};
     match error {
@@ -542,7 +533,6 @@ pub fn loop_failure_cause(error: &rig::agent::StreamingError) -> LoopFailureCaus
     }
 }
 
-/// Carry a rig stream failure across the loop's output boundary.
 pub fn loop_stream_error(error: rig::agent::StreamingError) -> LoopStreamError {
     LoopStreamError::new(loop_failure_cause(&error), error)
 }

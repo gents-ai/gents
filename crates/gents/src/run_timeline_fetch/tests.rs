@@ -369,8 +369,6 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
         .expect("canonical accepted tool publication");
     assert_eq!(published.accepted_tools.len(), 1);
 
-    // Publication between the tool snapshot and immutable dependency reads
-    // must not introduce a tool whose admission was absent from the snapshot.
     let later_messages = resolve_timeline_messages_for_session(
         &access,
         "did:test:timeline",

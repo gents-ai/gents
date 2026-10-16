@@ -1,6 +1,3 @@
-//! Live end-to-end `agent_new`/`agent_message` tests against a real inference
-//! target, gated by the `GENTS_LIVE_*` env vars named in each test's `#[ignore]` note.
-
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Once;

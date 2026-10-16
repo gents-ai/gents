@@ -48,7 +48,6 @@ pub async fn run_openai_oneshot_with_tools(
         .resolve(
             &node,
             agent.node_did(),
-            // No host plugin store on this path; a plugin tool it names fails closed at build time.
             &Default::default(),
         )
         .await?;
@@ -109,10 +108,6 @@ async fn run_oneshot_with_completion_client<C>(
 where
     C: ProviderClient,
 {
-    // Exemption (pinned by tests/misc/oneshot_admission_exemption.rs): a
-    // never-reconciled AdmissionRegistry would make every completion fail with
-    // "backend admission controller is not active" instead of skipping the
-    // daemon's per-backend concurrency ceiling.
     let model = client.completion_model(&agent.model_name);
     let mut config = loop_config(
         agent,
@@ -219,9 +214,6 @@ async fn run_oneshot_owned<M: ProviderModel>(
         .as_deref()
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&chrono::Utc));
-    // Fresh one-shot has no restored assistant history; accepted turns may
-    // continue through tools, so bind their reasoning to the daemon's
-    // header/close/capture owner.
     config.replay = crate::provider_input::replay::owned_replay_input(
         node.clone(),
         request.clone(),
@@ -397,7 +389,6 @@ async fn run_oneshot_owned<M: ProviderModel>(
                 lifecycle_result,
                 Ok(TerminalizeResult::Won | TerminalizeResult::AlreadySame)
             ) {
-                // One-shot has no periodic daemon sweep.
                 RequestLifecycle::recover_all(&node, agent.node_did()).await?;
             }
             let close_result = if matches!(lifecycle_result, Ok(TerminalizeResult::Won)) {

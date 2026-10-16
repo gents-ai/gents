@@ -72,7 +72,6 @@ export function TracePanel({
   chrome = true,
 }: {
   onClose: () => void;
-  /** the card and its header; off when the dock draws them */
   chrome?: boolean;
 }) {
   const trackedRequestId = useView((view) => view.trackedRequestId);

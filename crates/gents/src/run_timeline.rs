@@ -197,9 +197,6 @@ impl RetrySummary {
     }
 }
 
-/// The strict canonical `AgentMessage` header plus the reconstructed native
-/// message. No role/content/reasoning projection is stored: consumers read
-/// the typed native message or the header role/blocks directly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimelineMessageRow {
     #[serde(default, rename = "_docID", skip_serializing)]
@@ -214,7 +211,6 @@ pub struct TimelineMessageRow {
     pub timestamp: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_did: Option<String>,
-    /// The canonical protocol header exactly as decoded from `AgentMessage`.
     pub header: gents_protocol::output::TranscriptMessage,
     pub message: gents_protocol::message::Message,
 }
@@ -278,9 +274,6 @@ pub struct TimelineInferenceCallRow {
     pub queue_depth_at_enqueue: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller_generation: Option<i64>,
-    /// Keyed connection fingerprint of the behavior slot that made the call;
-    /// one `controller_generation` can carry two values across a connection
-    /// change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_config_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -293,8 +286,6 @@ pub struct TimelineInferenceCallRow {
     pub context_accounting_json: Option<String>,
 }
 
-/// One content-addressed historical `Goal` document version from DefraDB's
-/// `_commits` + CID query boundary.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineGoalVersionRow {
     #[serde(default, skip_serializing)]
@@ -404,8 +395,6 @@ pub struct TimelineToolCallRow {
     pub args: String,
     #[serde(default)]
     pub result: Option<String>,
-    /// Nullable historical presentation mirror; the canonical fetcher
-    /// overwrites it from `lifecycle_state`.
     #[serde(default, deserialize_with = "empty_string_if_null")]
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -474,7 +463,6 @@ pub struct TimelineCompactionRow {
     pub created_at: Option<String>,
 }
 
-/// Metadata-only timeline view of a request-local provider reduction.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineProviderContextReductionRow {
     #[serde(default, rename = "_docID")]
@@ -602,9 +590,6 @@ pub struct TimelineRequestEvent {
     pub retry_summary: RetrySummary,
 }
 
-/// A rendered-request capture in the timeline — metadata only. `provenance_status`
-/// is derived through the versioned reader: `"captured_only"`,
-/// `"unsupported_manifest"`, `"unavailable"`, or `"malformed"`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineRenderedRequestEvent {
     pub capture_key: String,
@@ -671,9 +656,6 @@ pub struct TimelineInferenceCallEvent {
     pub queue_depth_at_enqueue: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub controller_generation: Option<i64>,
-    /// Keyed connection fingerprint of the behavior slot that made the call;
-    /// one `controller_generation` can carry two values across a connection
-    /// change.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend_config_fingerprint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -694,7 +676,6 @@ pub struct TimelineInferenceCallEvent {
     pub account: Option<String>,
 }
 
-/// The proven state vocabulary recorded at one durable Goal version.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineGoalState {
     pub status: String,
@@ -709,7 +690,6 @@ pub struct TimelineGoalParentState {
     pub state: TimelineGoalState,
 }
 
-/// A semantic Goal transition derived from DefraDB's native version DAG.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineGoalTransitionEvent {
     pub goal_id: String,
@@ -743,8 +723,6 @@ pub struct TimelineMessageEvent {
     pub sequence: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc_id: Option<String>,
-    /// The strict protocol header exactly as resolved through the authorized
-    /// canonical reader (`session::load_canonical_message`).
     pub header: gents_protocol::output::TranscriptMessage,
     pub message: gents_protocol::message::Message,
 }
@@ -917,9 +895,6 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
     }
 
     for message in &rows.messages {
-        // #1425: a message whose request_doc_id is missing or does not resolve
-        // to a request doc has no synthetic request membership — it is not
-        // part of this timeline's request-scoped event stream.
         let request_id = resolve_logical_request_id_for_doc(
             message.header.request_doc_id.as_deref(),
             std::iter::once(&rows.request).chain(rows.requests.iter()),
@@ -1355,8 +1330,6 @@ fn should_include_event(
         .unwrap_or_else(|| event_session_id.is_some() && event_session_id == root_session_id)
 }
 
-/// Family ranks are unserialized internals that only break same-millisecond
-/// ties.
 fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
     match event {
         RunTimelineEvent::Request(event) => (

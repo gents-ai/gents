@@ -3,8 +3,6 @@ import Proofs.CanonicalOutput.ReconstructionGrowth
 
 namespace CanonicalOutput
 
-/-- Appending to an open source cannot modify the immutable closure selected
-by an already successful reference. Global identity freshness is essential. -/
 theorem resolveClose_append_open (records : List Segment) (record : Segment)
     (fresh : ∀ existing ∈ records, existing.id ≠ record.id)
     (openSource : closures records record.coordinate = [])
@@ -391,8 +389,6 @@ theorem reconstructExtent_append_open_of_resolved (records : List Segment)
   intro streams h
   simpa only [reconstructExtent, extents] using h
 
-/-- Successful native reconstruction is stable under writes to an open source.
-This covers all native block kinds and metadata checks, not just text bytes. -/
 theorem reconstructMessage_append_open (records : List Segment) (record : Segment)
     (fresh : ∀ existing ∈ records, existing.id ≠ record.id)
     (openSource : closures records record.coordinate = [])

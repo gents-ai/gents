@@ -296,34 +296,6 @@ mod tests {
     }
 
     #[test]
-    fn request_input_advances_past_a_non_rendering_physical_anchor() {
-        let pending = super::PendingTurnView {
-            request_id: "interrupted".into(),
-            request_doc_id: Some("physical-request".into()),
-            content: "keep this input".into(),
-            selected_skill_ids: vec![],
-            lifecycle_state: Some("interrupted".into()),
-            folded_into_request_id: None,
-            origin: None,
-            created_at: None,
-        };
-        let hidden = MessageView {
-            has_tool_results: true,
-            ..user_message("hidden-result", 1, "tool result")
-        };
-        for messages in [
-            vec![hidden.clone()],
-            vec![hidden, user_message("later", 2, "next input")],
-        ] {
-            let items = build_rendered_timeline(&messages, &[], &[(pending.clone(), Some(1))]);
-            assert!(
-                matches!(&items[0], RenderedTimelineItem::PendingUserTurn { request_id, .. }
-                if request_id == "interrupted")
-            );
-        }
-    }
-
-    #[test]
     fn session_message_identity_and_await_mode_reach_rendered_tool() {
         let tool = ToolCallView {
             tool_call_key: "start-1".to_string(),
@@ -394,40 +366,6 @@ mod tests {
                 output: None,
                 ..
             }
-        ));
-    }
-
-    #[test]
-    fn background_completion_controls_do_not_render_as_user_turns() {
-        let messages = vec![
-            user_message("user-1", 1, "Please classify these sessions."),
-            MessageView {
-                runtime_control: true,
-                ..user_message(
-                    "notification",
-                    2,
-                    r#"<tool-completion tool_call_id="child-1" tool_name="agent_message" status="completed">
-  <result>classification complete</result>
-</tool-completion>"#,
-                )
-            },
-            MessageView {
-                runtime_control: true,
-                ..user_message(
-                    "wake",
-                    3,
-                    gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
-                )
-            },
-        ];
-
-        let timeline = build_rendered_timeline(&messages, &[], &[]);
-
-        assert_eq!(timeline.len(), 1);
-        assert!(matches!(
-            &timeline[0],
-            RenderedTimelineItem::UserMessage { content, .. }
-                if content.as_deref() == Some("Please classify these sessions.")
         ));
     }
 

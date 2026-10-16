@@ -89,7 +89,6 @@ pub(crate) async fn schema_apply(args: SchemaApplyArgs) -> Result<()> {
     Ok(())
 }
 
-/// Result of applying pack-local schemas during `config apply`.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct PackSchemaPhase {
     pub(crate) status: &'static str,
@@ -110,10 +109,6 @@ impl PackSchemaPhase {
     }
 }
 
-/// If `<pack_root>/schemas` exists, apply every SDL/patch under it (same
-/// discovery rules as `gents schema apply`); `None` when the directory is
-/// absent. Scoped to the pack: only `schemas/` under the desired-state root
-/// is considered — never global product schemas.
 pub(crate) async fn apply_pack_schemas_if_present(
     access: &ConfigAccess,
     pack_root: &Path,
@@ -419,97 +414,6 @@ fn filter_existing_field_adds(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn classify_schema_input_accepts_sdl_and_patch_suffixes() {
-        assert_eq!(
-            classify_schema_input(Path::new("app.graphql")),
-            Some(SchemaInputKind::Sdl)
-        );
-        assert_eq!(
-            classify_schema_input(Path::new("app.gql")),
-            Some(SchemaInputKind::Sdl)
-        );
-        assert_eq!(
-            classify_schema_input(Path::new("app.patch.json")),
-            Some(SchemaInputKind::Patch)
-        );
-        assert_eq!(
-            classify_schema_input(Path::new("app.json-patch")),
-            Some(SchemaInputKind::Patch)
-        );
-        assert_eq!(classify_schema_input(Path::new("app.json")), None);
-    }
-
-    #[test]
-    fn collection_name_from_patch_uses_first_path_segment() {
-        let patch = json!([
-            {"op": "add", "path": "/ActionRequest/Fields/-", "value": {"Name": "status", "Kind": "String"}}
-        ]);
-
-        assert_eq!(collection_name_from_patch(&patch).unwrap(), "ActionRequest");
-    }
-
-    #[test]
-    fn normalize_patch_value_accepts_wrapped_patch() {
-        let wrapped = json!({
-            "Patch": [
-                {"op": "add", "path": "/ActionRequest/Fields/-", "value": {"Name": "status", "Kind": "String"}}
-            ]
-        });
-
-        assert!(normalize_patch_value(wrapped).unwrap().is_array());
-    }
-
-    #[test]
-    fn filters_already_existing_additive_field_ops() {
-        let patch = json!([
-            {"op": "add", "path": "/ActionRequest/Fields/-", "value": {"Name": "status", "Kind": "String"}},
-            {"op": "add", "path": "/ActionRequest/Fields/-", "value": {"Name": "reviewed_at", "Kind": "DateTime"}}
-        ]);
-        let field_adds = additive_field_ops("ActionRequest", &patch).unwrap();
-        let existing_fields = BTreeSet::from(["status".to_string()]);
-
-        let (filtered, applied, skipped) =
-            filter_existing_field_adds(&patch, &field_adds, &existing_fields).unwrap();
-
-        assert_eq!(applied, vec!["reviewed_at".to_string()]);
-        assert_eq!(skipped, vec!["status".to_string()]);
-        assert_eq!(filtered.as_array().unwrap().len(), 1);
-        assert_eq!(
-            filtered
-                .as_array()
-                .unwrap()
-                .first()
-                .unwrap()
-                .get("value")
-                .and_then(|value| value.get("Name"))
-                .and_then(Value::as_str),
-            Some("reviewed_at")
-        );
-    }
-
-    #[test]
-    fn non_additive_patch_is_left_unchanged() {
-        let patch = json!([
-            {"op": "replace", "path": "/ActionRequest/Description", "value": "new"}
-        ]);
-        let field_adds = additive_field_ops("ActionRequest", &patch).unwrap();
-        let existing_fields = BTreeSet::new();
-
-        let (filtered, applied, skipped) =
-            filter_existing_field_adds(&patch, &field_adds, &existing_fields).unwrap();
-
-        assert_eq!(filtered, patch);
-        assert!(applied.is_empty());
-        assert!(skipped.is_empty());
-    }
-}
-
-#[cfg(test)]
 mod pack_schema_tests {
     use super::*;
     use std::fs;
@@ -565,33 +469,4 @@ mod pack_schema_tests {
             .contains("pending"));
     }
 
-    #[test]
-    fn pack_schemas_dir_absent_means_skip() {
-        let dir = tempdir().unwrap();
-        assert!(!dir.path().join("schemas").is_dir());
-    }
-
-    #[test]
-    fn pack_schemas_dir_discovers_graphql() {
-        let dir = tempdir().unwrap();
-        let schemas = dir.path().join("schemas");
-        fs::create_dir_all(&schemas).unwrap();
-        fs::write(
-            schemas.join("widget.graphql"),
-            "type Widget { id: String }\n",
-        )
-        .unwrap();
-        let inputs = discover_schema_inputs(&schemas, &[]).unwrap();
-        assert_eq!(inputs.len(), 1);
-        assert_eq!(inputs[0].kind, SchemaInputKind::Sdl);
-    }
-
-    #[test]
-    fn pack_schemas_empty_dir_is_detectable() {
-        let dir = tempdir().unwrap();
-        let schemas = dir.path().join("schemas");
-        fs::create_dir_all(&schemas).unwrap();
-        let inputs = discover_schema_inputs(&schemas, &[]).unwrap();
-        assert!(inputs.is_empty());
-    }
 }

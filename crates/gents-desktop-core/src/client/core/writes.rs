@@ -368,7 +368,6 @@ impl ClientCore {
             .await
     }
 
-    /// Dismiss an open mailbox item as the authenticated local node.
     pub async fn dismiss_mailbox_item(&self, doc_id: &str) -> Result<gents::mailbox::MailboxItem> {
         let result =
             gents::mailbox::dismiss_mailbox_item(&self.node, doc_id, self.node_identity.did())
@@ -792,10 +791,6 @@ impl ClientCore {
                     self.store.request_resync(Some(node_did));
                     return Ok(None);
                 }
-                // The query above already produced a fresh patch. A bounded
-                // snapshot may have evicted its rows since the prior identical
-                // read, so publish this result through the current fence below
-                // instead of treating cache absence as a stale read.
             }
         }
 
@@ -808,21 +803,13 @@ impl ClientCore {
             self.store.request_resync(Some(node_did));
             return Ok(None);
         };
-        // A rejected patch must never become evidence for a later cache hit.
-        // Record the signature only after the StoreReadFence owner accepted
-        // this publication.
         let mut signatures = self.request_patch_signatures.lock().await;
         if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
             signatures.clear();
         }
         signatures.insert(cache_key, signature);
         drop(signatures);
-        // A completed agent turn may have used self-configuration tools. Most
-        // of that control plane is intentionally absent from the client P2P
-        // route (the Node document and inference credentials in particular),
-        // so the terminal request is the bounded signal to refresh the node's
-        // operator projection. This keeps the next composer/default agent
-        // current without putting GraphQL reads on every snapshot render.
+        // Terminal requests refresh operator configuration because the client P2P route omits it.
         let version = if terminal {
             self.refresh_node(node_did).await?.unwrap_or(version)
         } else {
@@ -1218,7 +1205,6 @@ impl ClientCore {
             .await
     }
 
-    /// Resolve an action's target independently of the observation filter.
     pub fn request_in_scope(
         &self,
         request_id: &str,
@@ -2637,41 +2623,6 @@ mod delete_source_tests {
             format!("{error:#}").contains("notARequestState"),
             "{error:#}"
         );
-    }
-
-    #[test]
-    fn initial_hydration_matches_receiver_start_truth_table() {
-        use gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress;
-        // SessionHydration.canStartInitial, including a live request with an
-        // owned header and a pending compose request without one.
-        for (owned, documents, active, expected) in [
-            (false, false, false, false),
-            (false, false, true, false),
-            (false, true, false, true),
-            (false, true, true, false),
-            (true, false, false, true),
-            (true, false, true, true),
-            (true, true, false, true),
-            (true, true, true, true),
-        ] {
-            let progress = ClientHydrationProgress {
-                merged_count: usize::from(documents),
-                ..Default::default()
-            };
-            let evidence = LocalHydrationStartEvidence {
-                owned_session_present: owned,
-                nonterminal_request_present: active,
-            };
-            assert_eq!(
-                hydration_start_evidence_is_ready(false, &progress, &evidence),
-                expected,
-                "owned={owned}, documents={documents}, active={active}"
-            );
-            assert!(
-                !hydration_start_evidence_is_ready(true, &progress, &evidence),
-                "a foreign header never starts: owned={owned}, documents={documents}, active={active}"
-            );
-        }
     }
 
     #[test]

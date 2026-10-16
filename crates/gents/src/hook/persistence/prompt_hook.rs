@@ -1,9 +1,6 @@
 use super::*;
 use crate::hook::{decide_persistence_outcome, FailurePolicy, PolicyDecision};
 
-/// A tool call the session hook owns in `on_tool_call` instead of ordinary
-/// dispatch; composed plugin children are refused for each route
-/// (Lean `ToolPolicy.PluginCalls.supported`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HookOwnedTool {
     GetGoal,

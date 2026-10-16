@@ -467,8 +467,6 @@ async fn mid_stream_failure_after_tool_intent_retracts_without_dispatch() {
     assert_eq!(collected.error, None);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(collected.retractions, vec![(0, 0)]);
-    // The no-effect retry path emits the retraction, not the post-effect
-    // continuation's AttemptFailed/backoff observation.
     assert!(collected.attempts.is_empty());
 
     let histories = model.seen_histories().await;

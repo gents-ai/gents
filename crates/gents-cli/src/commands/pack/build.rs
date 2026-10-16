@@ -1,4 +1,3 @@
-//! CLI adapters for the shared pack build owner.
 
 use std::path::Path;
 
@@ -201,8 +200,6 @@ mod tests {
         assert!(message.contains("is not a directory"), "{message}");
     }
 
-    /// A second build of unchanged source reuses the artifact; a source edit
-    /// rebuilds it.
     #[test]
     fn an_unchanged_plugin_is_not_recompiled() {
         let root = tempfile::tempdir().unwrap();

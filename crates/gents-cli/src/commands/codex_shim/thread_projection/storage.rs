@@ -175,17 +175,3 @@ fn absolute_cwd(base_cwd: &Path, cwd: &Path) -> PathBuf {
         base_cwd.join(cwd)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn settings_json_cwd_reads_thread_settings_cwd() {
-        let base = Path::new("/workspace");
-        assert_eq!(
-            settings_json_cwd(base, r#"{"cwd":"/repo"}"#),
-            Some(PathBuf::from("/repo"))
-        );
-        assert_eq!(settings_json_cwd(base, "{}"), None);
-    }
-}

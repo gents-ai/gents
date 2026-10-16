@@ -5,7 +5,6 @@ use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
-/// EXPERIMENTAL - list available apps/connectors.
 pub struct AppsListParams {
     pub cursor: Option<String>,
     pub limit: Option<u32>,
@@ -16,7 +15,6 @@ pub struct AppsListParams {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-/// EXPERIMENTAL - app metadata returned by app-list APIs.
 pub struct AppBranding {
     pub category: Option<String>,
     pub developer: Option<String>,
@@ -61,7 +59,6 @@ pub struct AppMetadata {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-/// EXPERIMENTAL - app metadata returned by app-list APIs.
 pub struct AppInfo {
     pub id: String,
     pub name: String,
@@ -83,7 +80,6 @@ pub struct AppInfo {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-/// EXPERIMENTAL - app metadata summary for plugin responses.
 pub struct AppSummary {
     pub id: String,
     pub name: String,
@@ -106,7 +102,6 @@ impl From<AppInfo> for AppSummary {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-/// EXPERIMENTAL - app list response.
 pub struct AppsListResponse {
     pub data: Vec<AppInfo>,
     pub next_cursor: Option<String>,
@@ -114,7 +109,6 @@ pub struct AppsListResponse {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-/// EXPERIMENTAL - notification emitted when the app list changes.
 pub struct AppListUpdatedNotification {
     pub data: Vec<AppInfo>,
 }

@@ -1,7 +1,3 @@
-//! A plugin node end to end: a graph run's entry document reaches the plugin
-//! through the callback engine, and the plugin's result lands as the node's
-//! output document, correlated to the run.
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

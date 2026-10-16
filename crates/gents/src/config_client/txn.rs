@@ -1,5 +1,3 @@
-//! Canonical committed-write owner for embedded and HTTP DefraDB access.
-
 use std::collections::HashMap;
 use std::future::Future;
 #[cfg(test)]

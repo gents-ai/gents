@@ -1,17 +1,7 @@
-//! Fence tying `gents_migration::CLIENT_AUTHORED_COLLECTIONS` (guarded against
-//! chained schema evolution by `fresh_apply_parity.rs` in `gents-migration`)
-//! to the client push surface gents itself configures, so extending that
-//! surface without extending the guard fails here.
-//!
-//! The load-bearing property is "a client store fresh-applies this
-//! collection's SDL and replicates documents in it", not strict client
-//! authorship: some rows are minted server-side but replicate through client
-//! stores all the same, and a client store can only merge a collection whose
-//! fresh-applied version identity matches the server's.
-//!
-//! The derived surface is the `machine` `ScopeTemplate`'s `PerCollection`
-//! rules plus the exact owner-scoped enrollment direct-push collections;
-//! template collections listed unfiltered are shared config, excluded.
+//! Client stores can merge only collections whose fresh-applied schema identity
+//! matches the server. Keep the derived client push set aligned with the
+//! migration guard, including owner-scoped enrollment pushes and excluding
+//! shared config collections.
 
 use std::collections::BTreeSet;
 

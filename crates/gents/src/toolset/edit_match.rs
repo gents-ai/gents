@@ -1,8 +1,3 @@
-//! One pure decision function drives both dry-run and apply. The
-//! stale-content precondition (#724) is enforced by the caller against raw
-//! bytes before this module runs; gate ordering is fenced in
-//! `toolset::tests::edit_file_stale_hash_rejects_before_matching_and_reports_current`.
-
 use std::fmt::Write as _;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

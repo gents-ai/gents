@@ -1,27 +1,6 @@
-//! Bounded client-side resume policy for rmcp streamable-HTTP sessions (#639).
-//!
-//! rmcp's `SseAutoReconnectStream` resumes a closed SSE stream forever: a
-//! graceful close consults the retry policy with `current_times == 0` every
-//! time, so `max_times`-style caps can never fire. Against a server that
-//! answers resume-of-a-dead-session with 200 + empty stream, the client
-//! re-resumes in a hot loop that the idle TTL cannot break because an
-//! actively-failing session is never idle. [`SessionResumePolicy`] is
-//! installed as the transport's `retry_config` and closes both holes from our
-//! side: a granted resume whose stream dies within
-//! [`RAPID_STREAM_DEATH_THRESHOLD`] is the dead-session signature and poisons
-//! the session after that one attempt, and consecutive resume errors are
-//! capped at [`MAX_CONSECUTIVE_RESUME_FAILURES`].
-//!
-//! Poisoning is terminal for the session only: the pool observes it via
-//! [`SessionResumePolicy::is_poisoned`] on next use, drops the connection
-//! (which terminates the server-side session through the #626 drop →
-//! cancellation → worker-cleanup DELETE path) and connects fresh.
-//!
-//! Scope note: rmcp bypasses `retry_config.retry(0)` when an SSE stream
-//! supplies a `retry:` field, because the server-provided interval takes
-//! precedence. Bounding a server that repeatedly sends only `retry:` control
-//! frames and then closes requires an upstream rmcp seam or a custom transport
-//! wrapper.
+//! rmcp retries graceful SSE closes with `current_times == 0`; this policy
+//! poisons sessions after rapid stream death and caps consecutive resume errors.
+//! Server supplied SSE `retry:` intervals bypass this policy.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};

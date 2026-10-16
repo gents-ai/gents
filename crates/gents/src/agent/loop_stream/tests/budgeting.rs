@@ -225,7 +225,6 @@ fn generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger() {
             "{}: each prior usage row needs both durable components",
             case.name
         );
-        // Decoded rows cover accounted spend, not missing-usage validation.
         let used = crate::provider_usage::sum_charged_from_persisted_parts(
             case.prior_prompt_tokens
                 .iter()
@@ -573,7 +572,6 @@ async fn exact_aggregate_exhaustion_rejects_tool_intent_before_dispatch() {
     ))
     .await;
 
-    // Streamed intent is not dispatch authority.
     assert!(collected.tool_results.is_empty());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert!(
@@ -729,7 +727,6 @@ async fn zero_remaining_capacity_is_not_captured_or_dispatched() {
         "zero-capacity request reached the provider model"
     );
 
-    // Re-derives the typed contract error's shape the loop surfaces.
     let mut loop_config = config(0);
     loop_config.context_window = 100;
     let mut request = CompletionRequest {
@@ -827,7 +824,6 @@ async fn final_fit_failure_after_compaction_is_typed_and_never_dispatched() {
     let prompt = Message::user("current prompt survives compaction");
     let mut loop_config = config(0);
     loop_config.max_tokens = Some(1_000);
-    // The typed context-fit result must win over the threshold diagnostic.
     loop_config.compaction_threshold = 0.5;
 
     let compacted_request = build_request(&model, prompt.clone(), &[], &[], &[], &loop_config)
@@ -1019,7 +1015,6 @@ async fn aggregate_budget_fails_closed_on_mid_stream_error_before_retry() {
                         vec![RawStreamingChoice::Message("partial".to_string())],
                         transient_provider_error("decode"),
                     ),
-                    // Must never be reached: the failed turn fails closed.
                     ScriptedCall::Turn(vec![
                         RawStreamingChoice::Message("must not run".to_string()),
                         RawStreamingChoice::FinalResponse(()),
@@ -1055,8 +1050,6 @@ async fn aggregate_budget_fails_closed_on_mid_stream_error_before_retry() {
         ))
         .await;
 
-        // A failed provider turn never reached acceptance, so no tool effect
-        // may escape.
         if with_tool {
             assert_eq!(calls.load(Ordering::SeqCst), 0);
             assert!(collected.tool_results.is_empty());
@@ -1121,8 +1114,6 @@ async fn mid_stream_failure_after_tool_budget_exhausted_fails() {
     );
 }
 
-/// Drives the production compaction trigger and per-turn output clamp from the
-/// Lean `PromptAssembly.Budget` boundary vector.
 #[test]
 fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
     let cases = crate::lean_vocab_test::lean_prompt_assembly_budget_cases();

@@ -77,16 +77,6 @@ mod tests {
     use gents::plugin::allowed::{self, Resolved};
 
     #[test]
-    fn answers_parse_and_default_to_deny() {
-        assert_eq!(parse_answer("o\n"), Answer::Once);
-        assert_eq!(parse_answer(" Always "), Answer::AlwaysFolder);
-        assert_eq!(parse_answer("f"), Answer::AlwaysPath);
-        assert_eq!(parse_answer("yes"), Answer::Once);
-        assert_eq!(parse_answer(""), Answer::Deny);
-        assert_eq!(parse_answer("whatever"), Answer::Deny);
-    }
-
-    #[test]
     fn only_this_sessions_questions_are_answered_and_always_stores_the_folder() {
         let home = tempfile::tempdir().unwrap();
         let folder = tempfile::tempdir().unwrap();

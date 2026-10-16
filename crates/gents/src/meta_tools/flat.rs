@@ -1,4 +1,3 @@
-//! Flat presentation is only an adapter: invocation uses the dispatcher owner.
 use super::{CallToolArgs, CallToolTool, MetaToolContext};
 use crate::document_config::{RemoteToolStyle, RemoteTools};
 use crate::llm::tool::{BoxFuture, Tool, ToolDefinition, ToolDyn, ToolError};

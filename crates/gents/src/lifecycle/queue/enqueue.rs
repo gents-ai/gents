@@ -1,8 +1,5 @@
 use super::*;
 
-/// Append an authenticated same-session steering request beneath an exact
-/// committed parent. External adapters supply input and parent binding; the
-/// runtime alone admits and signs requests.
 pub async fn enqueue_local_steering_request(
     node: &std::sync::Arc<EmbeddedNode>,
     parent_request_id: &str,
@@ -20,9 +17,6 @@ pub async fn enqueue_local_steering_request(
     enqueue_steering_request(node, &parent, content, input).await
 }
 
-/// Atomically persist the signed steering request. Its admission content is
-/// shown while queued and published to the transcript only when owned
-/// execution starts.
 pub(crate) async fn enqueue_steering_request(
     node: &std::sync::Arc<EmbeddedNode>,
     parent: &AgentRequest,

@@ -43,7 +43,6 @@ const matchesSource = (c: SessionSummary, source: SessionSource) =>
       ? Boolean(c.startedBy)
       : !(c.taskId || c.triggerId || c.startedBy);
 
-// within an axis the options are a union, across axes they meet
 const passes = (c: SessionSummary, f: SessionFilter) =>
   (f.states.length === 0 || f.states.some((s) => matchesState(c, s))) &&
   (f.sources.length === 0 || f.sources.some((s) => matchesSource(c, s))) &&
@@ -89,7 +88,6 @@ export function Axis<V extends string>({
 }: {
   label: string;
   icon: ComponentType<{ className?: string }>;
-  /** the trigger shows no word until something is picked */
   wordless?: boolean;
   options: Option<V>[];
   counts: Record<string, number>;
@@ -112,7 +110,6 @@ export function Axis<V extends string>({
         }
       >
         <AxisIcon className="size-4" />
-        {/* the words come back at sm on a narrow row */}
         {(!wordless || picked.length > 0) && (
           <span className="hidden text-xs sm:inline">
             {picked.length === 1
@@ -259,15 +256,11 @@ export function SessionFilters({
   nodes,
 }: {
   sessions: SessionSummary[];
-  /** the nodes the list spans: their agents are the axis's options */
   nodeDids: readonly string[];
   value: SessionFilter;
   onChange: (next: SessionFilter) => void;
-  /** the node pick beside this row, so one clear empties the whole bar */
   nodes?: { picked: boolean; clear: () => void };
 }): ReactNode {
-  /* a count says what its option would leave: its own axis is dropped from
-     the filter, so the numbers answer "and how many of those" as you narrow */
   const countFor = (axis: keyof SessionFilter, test: (c: SessionSummary) => boolean) =>
     sessions.filter((c) => passes(c, { ...value, [axis]: [] }) && test(c)).length;
 

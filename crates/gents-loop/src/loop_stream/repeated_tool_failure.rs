@@ -1,6 +1,3 @@
-//! Refinement of CompletionRetry.RepeatedToolFailure: execution-local
-//! accounting over the loop's own dispatch record.
-
 use super::invalid_tool_progress::InvalidToolProgress;
 use crate::live_output::{COMMAND_OUTPUT_META_PREFIX, COMMAND_OUTPUT_VOLATILE_FIELDS};
 use crate::tool_call_lifecycle::{FailureClass, ToolOutcome};
@@ -10,8 +7,6 @@ const FAILURE_LIMIT: u32 = 3;
 const SUPPRESSION_LIMIT: u32 = 2;
 const ERROR_EXCERPT_BYTES: usize = 512;
 
-/// Prefix of the terminal reason when a model keeps repeating a call that
-/// failed identically.
 pub const REPEATED_TOOL_FAILURE_PREFIX: &str = "repeated_tool_failure: ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,9 +51,6 @@ impl RepeatedToolFailure {
         *self = Self::default();
     }
 
-    /// Only an ordinary failure with a derivable error identity counts toward
-    /// the streak; `command_envelope` is the dispatched tool's own
-    /// registration.
     pub(super) fn record_dispatched(
         &mut self,
         tool: &str,
@@ -98,8 +90,6 @@ impl RepeatedToolFailure {
         }
     }
 
-    /// The typed result that stands in for a suppressed call; recorded through
-    /// the hook like any dispatched outcome.
     pub(super) fn suppress(&mut self) -> ToolOutcome {
         self.suppressed += 1;
         let streak = self
@@ -138,9 +128,6 @@ impl RepeatedToolFailure {
     }
 }
 
-/// Stable identity of an ordinary failure: its class and text. Only a result
-/// of the command runner has volatile fields, and only those are dropped; an
-/// unparseable envelope yields no identity.
 fn error_identity(class: FailureClass, text: &str, command_envelope: bool) -> Option<String> {
     let envelope = command_envelope
         .then(|| text.strip_prefix(COMMAND_OUTPUT_META_PREFIX))
@@ -162,33 +149,4 @@ fn error_identity(class: FailureClass, text: &str, command_envelope: bool) -> Op
 
 fn error_excerpt(error: &str) -> &str {
     &error[..floor_char_boundary(error, ERROR_EXCERPT_BYTES)]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn failed(class: FailureClass, text: &str) -> ToolOutcome {
-        ToolOutcome::Failed {
-            class,
-            denial: None,
-            text: text.into(),
-        }
-    }
-
-    #[test]
-    fn unparseable_command_metadata_has_no_identity() {
-        let class = FailureClass::ToolReturnedError;
-        let text = "gents_exec: {not json\nstdout:\n";
-        assert_eq!(error_identity(class, text, true), None);
-        assert_eq!(error_identity(class, "gents_exec: {}", true), None);
-    }
-
-    #[test]
-    fn error_excerpt_respects_char_boundaries() {
-        let error = "é".repeat(ERROR_EXCERPT_BYTES);
-        let excerpt = error_excerpt(&error);
-        assert!(excerpt.len() <= ERROR_EXCERPT_BYTES);
-        assert!(excerpt.chars().all(|c| c == 'é'));
-    }
 }

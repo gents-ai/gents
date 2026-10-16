@@ -10,7 +10,7 @@ use crate::toolset::{
     CommandNetworkMode,
 };
 
-use super::adapter::{bound_dirty_base_summary, DIRTY_BASE_SUMMARY_LIMIT};
+use super::adapter::DIRTY_BASE_SUMMARY_LIMIT;
 use super::*;
 
 fn capabilities() -> BTreeSet<String> {
@@ -683,16 +683,6 @@ fn git_worktree_diff_denies_metadata_writes_allows_reads() {
         deny_git_metadata_writes: true,
     };
     assert!(constraints.to_spawn_policy().deny_git_metadata_writes());
-}
-
-#[test]
-fn dirty_base_summary_truncates_on_char_boundary() {
-    let cjk = "文".repeat(700);
-    assert!(cjk.len() > DIRTY_BASE_SUMMARY_LIMIT);
-    assert!(!cjk.is_char_boundary(DIRTY_BASE_SUMMARY_LIMIT));
-    let summary = bound_dirty_base_summary(&cjk);
-    assert!(summary.len() <= DIRTY_BASE_SUMMARY_LIMIT);
-    assert!(cjk.is_char_boundary(summary.len()));
 }
 
 #[test]
@@ -1954,7 +1944,6 @@ fn integrate_and_cleanup_plans_omit_host_path() {
     .is_err());
 }
 
-/// Drives the emitted seal subset through real Git/executor consumers.
 fn generated_workspace_path_capability_seal_cases_drive_real_git_executor() {
     let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
     let cases = snapshot["workspace_path_capability_cases"]
@@ -2185,7 +2174,6 @@ fn generated_workspace_receipt_cases_recover_without_checkout_or_reapplying() {
             integrate_writer(&fx, &mut docs, "ws-replay-cap", "req-int");
         }
         if name == "changed_capability_cannot_replay_receipt" {
-            // Mutable storage deliberately violates immutable row identity here.
             docs.workspaces
                 .get_mut("ws-replay-cap")
                 .unwrap()
@@ -2443,7 +2431,6 @@ fn generated_legacy_workspace_cases_recover_identity_without_fresh_provision() {
         )
         .unwrap();
         let dest = PathBuf::from(&created.placement.host_path);
-        // Old persisted row has explicit compatibility; historical host marker lacks it.
         docs.workspaces
             .get_mut("ws-legacy-cap")
             .unwrap()

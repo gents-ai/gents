@@ -17,8 +17,6 @@ pub enum CanonicalMessageProjection {
     Invalid(ReconstructionError),
 }
 
-/// Project exactly one immutable header. The caller supplies only facts visible
-/// in its authenticated agent/requester/fork dependency scope.
 pub fn project_canonical_message(
     header: &TranscriptMessageRow,
     segments: &[OutputSegmentRow],

@@ -1,8 +1,4 @@
-//! Shared GraphQL utility functions used across Gents runtime modules.
-//!
-//! A raw object/fragment spliced in whole — as an event source filter is by
-//! the trigger engine's filter probe — is covered by neither escaping nor
-//! identifier validation. See #1038.
+//! Raw GraphQL fragments require validation; string escaping and identifier validation do not cover them.
 
 use anyhow::{Context, Result};
 use defra_node::{EmbeddedNode, QueryResponse};
@@ -51,8 +47,6 @@ pub async fn graphql_response_with_transaction_retry(
     crate::config_client::ConfigAccess::read_local_response(node, graphql, operation).await
 }
 
-/// Execute identity-aware GraphQL with transaction-conflict retry and fail on
-/// GraphQL errors.
 pub async fn graphql_with_transaction_retry(
     node: &EmbeddedNode,
     graphql: &str,
@@ -81,8 +75,6 @@ pub(crate) fn mutation_affected_documents(response: &QueryResponse) -> usize {
         .unwrap_or_default()
 }
 
-/// Native payloads can contain entire transcripts. Preserve their allocations
-/// when adapting the response envelope instead of serializing a second copy.
 pub(crate) fn into_data_envelope(data: Option<Value>) -> Value {
     Value::Object(serde_json::Map::from_iter([(
         "data".to_owned(),
@@ -97,10 +89,6 @@ pub fn ensure_no_errors(response: &QueryResponse, operation: &str) -> Result<()>
     Ok(())
 }
 
-/// Parse a canonical positive integer represented as either a JSON number or
-/// decimal string. Leading zeroes and values above `maximum` are rejected so
-/// independently persisted members cannot disagree through alternate textual
-/// representations of the same count.
 pub fn canonical_positive_count(value: &Value, maximum: usize) -> Option<usize> {
     let parsed = match value {
         Value::Number(number) => number
@@ -211,9 +199,6 @@ fn single_mutation_document_in_data<'a>(
     }
 }
 
-/// Extract the exact identity of a single create from a transaction envelope.
-/// Use the same mutation normalization as other storage adapters: the pinned
-/// DefraDB accepts `create_` but returns `add_` unless explicitly aliased.
 pub fn created_doc_id(response: &Value, collection: &str) -> Result<String> {
     let field = format!("create_{collection}");
     let documents = mutation_documents(response, &field)?;
@@ -286,9 +271,6 @@ fn response_composite_commits(
     decode_composite_commits(rows)
 }
 
-/// Read the exact newest composite commit exposed by a mutation's `_version`
-/// selection. DefraDB returns the full version history newest-first today; we
-/// still sort explicitly so the contract does not depend on response order.
 pub fn mutation_composite_version(
     response: &QueryResponse,
     field: &str,
@@ -339,9 +321,6 @@ fn unique_newest_composite_commit(
     Ok(commits.into_iter().next())
 }
 
-/// Read at most the current composite heads for a document. `depth: 1` keeps
-/// the query independent of document history length, while `limit: 2` retains
-/// enough evidence to reject concurrent newest heads.
 pub async fn newest_document_composite_commit(
     node: &EmbeddedNode,
     doc_id: &str,

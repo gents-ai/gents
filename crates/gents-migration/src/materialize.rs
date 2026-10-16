@@ -76,9 +76,6 @@ pub async fn materialize_collections(
     Ok(stats)
 }
 
-/// A unique-index violation surfaced through the `EmbeddedNode` anyhow chain.
-/// Only this error class is tolerated at boot; the message is DefraDB's shared
-/// constant (`storage::corekv::Error::UniqueConstraintViolation`).
 fn is_unique_index_violation(error: &anyhow::Error) -> bool {
     error
         .chain()
@@ -93,14 +90,6 @@ fn is_safe_graphql_identifier(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Best-effort identification of the parked document(s) behind a boot-time
-/// unique-index violation; diagnostics must never fail boot.
-///
-/// Scans the collection (non-index reads see parked documents), groups rows
-/// by each unique index's field values, and applies the merge path's
-/// deterministic-winner rule — the lexicographically smallest public docID
-/// holds the index entry — so the reported winner/parked split matches what
-/// the merge already persisted.
 async fn describe_parked_unique_conflict(
     node: &EmbeddedNode,
     collection: &str,

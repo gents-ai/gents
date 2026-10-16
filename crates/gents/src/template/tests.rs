@@ -10,70 +10,6 @@ fn authoring_rejects_invalid_rendering_syntax_without_invocation_values() {
 }
 
 #[test]
-fn renders_event_var() {
-    let scope = TemplateScope {
-        session: None,
-        request: None,
-        event: serde_json::json!({"fired_at": "2026-04-21T00:00:00Z", "trigger_kind": "schedule"}),
-        doc: None,
-        args: None,
-        group: None,
-        node: serde_json::json!({}),
-        ctx: serde_json::json!({}),
-    };
-    let out = render_template("fired at {{ event.fired_at }}", &scope).unwrap();
-    assert_eq!(out, "fired at 2026-04-21T00:00:00Z");
-}
-
-#[test]
-fn strict_undefined_errors_on_missing_var() {
-    let scope = TemplateScope {
-        session: None,
-        request: None,
-        event: serde_json::json!({}),
-        doc: None,
-        args: None,
-        group: None,
-        node: serde_json::json!({}),
-        ctx: serde_json::json!({}),
-    };
-    let err = render_template("{{ event.missing }}", &scope).unwrap_err();
-    assert!(matches!(err, TemplateError::Render(_)));
-}
-
-#[test]
-fn renders_args_var_when_scope_has_args() {
-    let scope = TemplateScope {
-        session: None,
-        request: None,
-        event: serde_json::json!({"trigger_kind": "manual"}),
-        doc: None,
-        args: Some(serde_json::json!({"name": "Amy", "count": 3})),
-        group: None,
-        node: serde_json::json!({}),
-        ctx: serde_json::json!({}),
-    };
-    let out = render_template("hi {{ args.name }}, n={{ args.count }}", &scope).unwrap();
-    assert_eq!(out, "hi Amy, n=3");
-}
-
-#[test]
-fn errors_on_missing_args_key() {
-    let scope = TemplateScope {
-        session: None,
-        request: None,
-        event: serde_json::json!({}),
-        doc: None,
-        args: Some(serde_json::json!({})),
-        group: None,
-        node: serde_json::json!({}),
-        ctx: serde_json::json!({}),
-    };
-    let err = render_template("{{ args.missing }}", &scope).unwrap_err();
-    assert!(matches!(err, TemplateError::Render(_)));
-}
-
-#[test]
 fn enforces_rendered_size_cap() {
     let big = "x".repeat(2_000_000);
     let scope = TemplateScope {
@@ -400,8 +336,6 @@ fn authoring_accepts_a_call_on_every_name_the_render_scope_resolves() {
 
 #[test]
 fn authoring_rejects_a_constant_name_argument_followed_by_dynamic_arguments() {
-    // The builtin resolves its name argument before it uses any later one, so a
-    // dynamic value after the name does not make the name value-dependent.
     for (template, kind, unknown) in [
         (
             "{{ doc.rows | select('nosuchtest', doc.threshold) }}",

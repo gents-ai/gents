@@ -30,12 +30,6 @@ pub(crate) fn parameters(schema: &str) -> Result<Value> {
     Ok(shape)
 }
 
-// Count-carrier admission (CompletionRetry.CountCarrier): whether some
-// successful native write can supply a canonical positive count. Nullability
-// does not change whether a count witness exists. DateTime arguments are
-// strings, but a canonical decimal string is not RFC3339 and cannot complete a
-// DateTime write; whole-valued floats have an integer witness, without
-// promising arbitrary integer precision.
 pub fn can_hold_canonical_count(schema: &str) -> bool {
     if schema.trim_end_matches('!') == "DateTime" {
         return false;

@@ -858,8 +858,6 @@ fn trajectory_usage_totals(timeline: &RunTimeline) -> (Option<u64>, Option<u64>,
         .inference_calls
         .iter()
         .filter(|call| root_inference_call(timeline, call))
-        // Title generation and other one-off provider work is not part of the
-        // projected agent trajectory.
         .filter(|call| matches!(call.call_kind.as_str(), "inference" | "compaction"));
     crate::provider_usage::sum_persisted_usage_columns(root_calls.map(|call| {
         (

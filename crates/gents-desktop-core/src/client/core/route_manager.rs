@@ -1,4 +1,3 @@
-//! Single owner for directional desktop-to-runtime route lifecycle.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -34,9 +33,6 @@ pub(super) struct ClientRouteManager {
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
     actor: Arc<PrincipalIdentity>,
-    /// The one serialization boundary for desktop route intent and effects.
-    /// Directory generations, transport changes, desired/applied documents,
-    /// remote return routes, and status publication must move under this gate.
     lifecycle: Mutex<()>,
 }
 
@@ -220,8 +216,6 @@ impl ClientRouteManager {
         updated
     }
 
-    /// Repair both directional routes and return a durable readiness update.
-    /// `None` preserves the last known value across transient admin/store errors.
     async fn reconcile(
         &self,
         record: &PeerRecord,
@@ -517,8 +511,6 @@ impl ClientRouteManager {
         Ok(())
     }
 
-    /// HTTP P2P admin for a runtime's management endpoint, acting as the
-    /// runtime's node identity exactly when the operator endpoint does.
     fn remote_admin(
         &self,
         record: &PeerRecord,
@@ -533,9 +525,6 @@ impl ClientRouteManager {
 
     async fn teardown_remote(&self, record: &PeerRecord) -> Result<()> {
         if is_enrollment_peer(record) {
-            // The runtime enrollment owner retracts its own return route from
-            // the authorization revision. This client only tears down its
-            // locally owned outbound route.
             return Ok(());
         }
         let route_id = client_route_id(&record.peer_id, PairingDirection::RuntimeToClient);
@@ -548,9 +537,6 @@ impl ClientRouteManager {
         if let Ok(applied) = store.load_applied(&route_id).await {
             addresses.extend(applied.state.replicator_addresses);
         }
-        // Desired state can be missing after a partial local write. The live
-        // desktop transport endpoint is still the authoritative target of the
-        // remote return route and lets removal prove absence before committing.
         addresses.insert(
             current_local_endpoint(&self.p2p, self.actor.as_ref())
                 .await?
@@ -865,10 +851,6 @@ fn replacement_endpoint(
                 gents::agent::p2p_reconcile::TransportEndpoint::parse(address.clone()).ok()?;
             (endpoint.peer_id() == current.peer_id()).then_some((address, endpoint))
         })
-        // `/p2p/info` may contain both a canonical shareable ticket and an
-        // equivalent listen-address spelling. Pick one authoritative
-        // candidate before comparing it with persisted state; otherwise an
-        // old equivalent spelling can mask a newly rotated ticket.
         .max_by_key(|(address, endpoint)| {
             (
                 address.starts_with("endpoint"),

@@ -1,5 +1,3 @@
-//! The one path a running agent takes to call an installed plugin. A model
-//! tool and a graph stage both call through here.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,8 +18,6 @@ use super::store::{self, InstalledPlugin};
 use super::{allowed, approval};
 use super::{BoundDir, Manifold, PluginBudget, PluginOutcome, PluginRunner};
 
-/// Bytes of admitted artifacts kept in memory before the cache is dropped
-/// whole (per-entry eviction is the upgrade if needed).
 const ADMITTED_BYTES_BUDGET: u64 = 512 * 1024 * 1024;
 
 struct Admitted {
@@ -48,8 +44,6 @@ impl BindContext<'_> {
     }
 }
 
-/// The refusal sentence for a path no folder covers for this call's `access`
-/// and nobody approved; names the next call that admits it.
 fn not_allowed(
     resolved: &allowed::Resolved,
     access: crate::pack::BindAccess,
@@ -92,15 +86,11 @@ fn not_allowed(
     }
 }
 
-/// One completed call: which artifact ran and what it returned.
 #[derive(Debug, Clone)]
 pub struct PluginCall {
     pub coordinate: String,
-    /// `sha256:<hex>` of the artifact that ran.
     pub digest: String,
     pub outcome: PluginOutcome,
-    /// One sentence for the operator when the plugin's model binding could
-    /// not be used and the plugin ran without a model; `None` otherwise.
     pub binding_note: Option<String>,
     pub receipt: PluginExecutionReceipt,
 }
@@ -188,7 +178,6 @@ fn receipt_verdict(verdict: super::PluginVerdict) -> PluginExecutionVerdict {
     }
 }
 
-/// Calls installed plugins from one gents home.
 pub struct PluginExecutor {
     home: Option<PathBuf>,
     models: Option<Arc<dyn ModelResolver>>,
@@ -211,8 +200,6 @@ impl Default for PluginExecutor {
 }
 
 impl PluginExecutor {
-    /// Callback planners receive only canonical JSON and a sealed WASI sandbox.
-    /// The callback owner validates its content address and output ActionPlan.
     pub(crate) fn call_sealed_artifact(
         artifact: &[u8],
         input: &serde_json::Value,
@@ -238,7 +225,6 @@ impl PluginExecutor {
         PluginRunner::compile_within(artifact, &DECLARATION, &Manifold::sealed())
     }
 
-    /// Plugins installed under `home`; `None` has none installed.
     pub fn new(home: Option<PathBuf>) -> Self {
         if let Some(home) = &home {
             allowed::protect(home);
@@ -255,17 +241,11 @@ impl PluginExecutor {
         self.home.as_deref()
     }
 
-    /// Lets the plugins whose model slot is bound call a model through
-    /// `models` (see [`super::model_calls`]).
     pub fn with_models(mut self, models: Arc<dyn ModelResolver>) -> Self {
         self.models = Some(models);
         self
     }
 
-    /// The model session for `record`, when its `model_slot` is bound for
-    /// this installation; `None` (with the operator sentence) when the
-    /// binding no longer resolves, so a call that does not need the model
-    /// still works.
     async fn model_session(
         &self,
         record: &InstalledPlugin,
@@ -299,10 +279,6 @@ impl PluginExecutor {
         }
     }
 
-    /// Binds the path in `input` under `record`'s declared `bind_dir` field
-    /// for one call; `None` when the plugin declares no binding or the input
-    /// does not carry the field (the plugin then runs sealed). The one
-    /// function a graph node and a model tool both call.
     pub async fn bind_input(
         &self,
         record: &InstalledPlugin,
@@ -367,10 +343,6 @@ impl PluginExecutor {
             .map_err(refuse)
     }
 
-    /// [`Self::call`] for a model tool: binds the path the model named under
-    /// the ambient session, then runs. The working folder is the session's
-    /// workspace folder, else `tool_root`; never the process's own current
-    /// directory.
     pub async fn call_data_bound(
         &self,
         record: &InstalledPlugin,
@@ -427,8 +399,6 @@ impl PluginExecutor {
         (result, receipt)
     }
 
-    /// The installed record for `coordinate`, which must still be the
-    /// artifact `pinned` names when a pin is given.
     pub fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> Result<InstalledPlugin> {
         let (namespace, name) = store::parse_coordinate(coordinate)?;
         let home = self.home.as_deref().with_context(|| {
@@ -446,9 +416,7 @@ impl PluginExecutor {
         Ok(record)
     }
 
-    /// Runs `record`'s artifact once on `input`, within its recorded grant.
-    /// Dropping the future does not stop a call already running; the plugin's
-    /// own wall-clock budget does.
+    // Dropping this future does not stop an admitted call; its plugin wall-clock budget remains authoritative.
     pub async fn call(
         &self,
         record: &InstalledPlugin,
@@ -624,9 +592,6 @@ impl PluginExecutor {
     }
 }
 
-/// Runs a plugin that is not installed, such as a pack author's own under
-/// `gents pack test`, once on `input`: the host serves the network `runner`'s
-/// granted manifold allows, exactly as for an installed call.
 pub async fn call_runner(
     coordinate: &str,
     runner: Arc<PluginRunner>,

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Negative controls for the canonical-output handoff inventory checker."""
 import copy
 import importlib.util
 import json

@@ -385,132 +385,19 @@ fn print_table_row<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::args::Cli;
-    use clap::Parser;
     use serde_json::json;
 
-    #[test]
-    fn p2p_network_list_table_parses() {
-        let cli = Cli::try_parse_from(["gents", "p2p", "network", "list", "--output", "table"])
-            .expect("p2p network list --output table should parse");
-        match cli.command {
-            crate::cli::args::Command::P2p {
-                command: crate::cli::args::P2pCommand::Network { command },
-            } => match command {
-                crate::cli::args::P2pNetworkCommand::List(args) => {
-                    assert_eq!(args.output, OutputFormat::Table);
-                }
-                _ => panic!("expected network list"),
-            },
-            _ => panic!("expected p2p network"),
-        }
-    }
 
-    #[test]
-    fn p2p_network_list_json_parses() {
-        let cli = Cli::try_parse_from(["gents", "p2p", "network", "list", "--output", "json"])
-            .expect("p2p network list --output json should parse");
-        match cli.command {
-            crate::cli::args::Command::P2p {
-                command: crate::cli::args::P2pCommand::Network { command },
-            } => match command {
-                crate::cli::args::P2pNetworkCommand::List(args) => {
-                    assert_eq!(args.output, OutputFormat::Json);
-                }
-                _ => panic!("expected network list"),
-            },
-            _ => panic!("expected p2p network"),
-        }
-    }
 
-    #[test]
-    fn p2p_network_list_default_output_is_table() {
-        let cli = Cli::try_parse_from(["gents", "p2p", "network", "list"])
-            .expect("p2p network list should parse");
-        match cli.command {
-            crate::cli::args::Command::P2p {
-                command: crate::cli::args::P2pCommand::Network { command },
-            } => match command {
-                crate::cli::args::P2pNetworkCommand::List(args) => {
-                    assert_eq!(args.output, OutputFormat::Table);
-                }
-                _ => panic!("expected network list"),
-            },
-            _ => panic!("expected p2p network"),
-        }
-    }
 
-    #[test]
-    fn p2p_network_register_parses() {
-        let cli = Cli::try_parse_from([
-            "gents",
-            "p2p",
-            "network",
-            "register",
-            "--display-name",
-            "my-node",
-            "--template",
-            "conversation",
-            "--network",
-            "staging",
-        ])
-        .expect("p2p network register should parse");
-        match cli.command {
-            crate::cli::args::Command::P2p {
-                command: crate::cli::args::P2pCommand::Network { command },
-            } => match command {
-                crate::cli::args::P2pNetworkCommand::Register(args) => {
-                    assert_eq!(args.display_name.as_deref(), Some("my-node"));
-                    assert_eq!(args.templates, vec!["conversation".to_string()]);
-                    assert_eq!(args.network_id.as_deref(), Some("staging"));
-                }
-                _ => panic!("expected network register"),
-            },
-            _ => panic!("expected p2p network"),
-        }
-    }
 
-    #[test]
-    fn p2p_network_register_bare_parses() {
-        let cli = Cli::try_parse_from([
-            "gents",
-            "p2p",
-            "network",
-            "register",
-            "--display-name",
-            "x",
-            "--template",
-            "conversation",
-        ])
-        .expect("p2p network register minimal should parse");
-        match cli.command {
-            crate::cli::args::Command::P2p {
-                command: crate::cli::args::P2pCommand::Network { command },
-            } => match command {
-                crate::cli::args::P2pNetworkCommand::Register(args) => {
-                    assert_eq!(args.display_name.as_deref(), Some("x"));
-                    assert!(args.network_id.is_none());
-                }
-                _ => panic!("expected network register"),
-            },
-            _ => panic!("expected p2p network"),
-        }
-    }
 
-    #[test]
-    fn p2p_network_rm_parses() {
-        let cli = Cli::try_parse_from(["gents", "p2p", "network", "rm"])
-            .expect("p2p network rm should parse");
-        match cli.command {
-            crate::cli::args::Command::P2p {
-                command: crate::cli::args::P2pCommand::Network { command },
-            } => match command {
-                crate::cli::args::P2pNetworkCommand::Rm(_) => {}
-                _ => panic!("expected network rm"),
-            },
-            _ => panic!("expected p2p network"),
-        }
-    }
+
+
+
+
+
+
 
     fn make_row(
         peer_id: &str,

@@ -1,20 +1,3 @@
-//! Live EthTool write qualification against a local Anvil chain (Foundry,
-//! Rust). Hardhat is a fallback if `anvil` is not on PATH.
-//!
-//! The production write surface cannot take agent-supplied bytecode: `write`
-//! declarations require a known `to`, so this harness deploys a tiny Counter
-//! as the operator, then the live model uses `send_eth` and `counter_increment`.
-//!
-//! ```bash
-//! GENTS_ETH_LIVE=1 GENTS_EVAL_TARGET=workstation-1 cargo test -p gents --features live-e2e --test e2e_live \
-//!   eth_tool_live_model_writes_on_local_chain \
-//!   -- --ignored --test-threads=1 --nocapture
-//! ```
-//!
-//! Prefers `anvil` (`GENTS_ANVIL_BIN`, `$PATH`, or `~/.foundry/bin/anvil`).
-//! Override the RPC with `GENTS_ETH_WRITE_RPC`. Inference comes from the
-//! target named by `GENTS_EVAL_TARGET`.
-
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -47,7 +30,6 @@ const FUND_WEI: u128 = 10_000_000_000_000_000_000;
 const LOCAL_CHAIN_ID: u64 = 31337;
 const MAX_FEE_PER_GAS: &str = "100000000000";
 
-/// solc 0.8.24 optimized Counter { uint256 public number; function increment() public { number += 1; } }
 const COUNTER_CREATION: &str = "608060405234801561000f575f80fd5b5060c58061001c5f395ff3fe6080604052348015600e575f80fd5b50600436106030575f3560e01c80638381f58a146034578063d09de08a14604d575b5f80fd5b603b5f5481565b60405190815260200160405180910390f35b60536055565b005b60015f8082825460649190606b565b9091555050565b80820180821115608957634e487b7160e01b5f52601160045260245ffd5b9291505056fea264697066735822122000a3e71424d079deaed95e53c48e10615d932a0714eba78a80c57d13e22b571664736f6c63430008180033";
 const COUNTER_NUMBER_SELECTOR: &str = "0x8381f58a";
 
@@ -63,14 +45,10 @@ impl Drop for LocalChain {
         let Some(child) = self.child.as_mut() else {
             return;
         };
-        // Signal the child's process group directly; do not use procps-ng 4
-        // `kill -TERM -<pgid>`, which parses the group operand as
-        // kill(-1, SIGTERM) and terminates every process of the invoking user.
         #[cfg(unix)]
         if let Some(pgid) = child.id().and_then(|pid| libc::pid_t::try_from(pid).ok()) {
             if pgid > 1 {
-                // SAFETY: killpg has no memory-safety preconditions; the group
-                // was created for this child with `process_group(0)`.
+                // SAFETY: this group was created for this child with process_group(0).
                 unsafe {
                     libc::killpg(pgid, libc::SIGTERM);
                 }

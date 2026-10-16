@@ -99,7 +99,6 @@ pub struct AdapterProjectionEnvelope {
     pub output: AdapterProjection,
 }
 
-/// The capture events of a timeline, in timeline order.
 fn rendered_capture_events(timeline: &RunTimeline) -> Vec<TimelineRenderedRequestEvent> {
     timeline
         .events
@@ -111,8 +110,6 @@ fn rendered_capture_events(timeline: &RunTimeline) -> Vec<TimelineRenderedReques
         .collect()
 }
 
-/// The same capture events as a JSON array, for open extension surfaces
-/// (ATIF `extra`, LangGraph `values`). `None` when the timeline has none.
 pub(crate) fn rendered_captures_json(timeline: &RunTimeline) -> Option<Value> {
     let captures = rendered_capture_events(timeline);
     if captures.is_empty() {

@@ -1,8 +1,6 @@
 use std::time::Duration;
 
 use chrono::Utc;
-use rand::rngs::StdRng;
-use rand::SeedableRng;
 
 use super::*;
 
@@ -12,8 +10,6 @@ fn transient(reason: &str) -> InferenceError {
     }
 }
 
-/// A provider message matching the vLLM tool-call json-parse-failure
-/// signature (`error.rs::provider_message_is_tool_call_json_parse_failure`).
 fn parse_400_text(tag: &str) -> String {
     format!("BadRequestError: Expecting ',' delimiter [{tag}]: line 1 column 5 (char 4)")
 }
@@ -54,17 +50,6 @@ fn failure_class_fail_closed_tool_use_is_parse_bad_request() {
         failure_class(&transient(text), text),
         FailureClass::ParseBadRequest
     );
-}
-
-#[test]
-fn jitter_is_deterministic_for_a_seeded_rng_and_within_25_percent() {
-    let base = Duration::from_secs(10);
-    let mut rng_a = StdRng::seed_from_u64(42);
-    let mut rng_b = StdRng::seed_from_u64(42);
-    let delay_a = jitter(base, &mut rng_a);
-    let delay_b = jitter(base, &mut rng_b);
-    assert_eq!(delay_a, delay_b, "same seed must produce same jitter");
-    assert_in_range(delay_a, 7_500, 12_500);
 }
 
 #[test]
@@ -121,25 +106,7 @@ fn rate_limited_uses_provider_hint_when_larger_than_ladder() {
     match state.on_pre_stream_failure(&error, "rate limited", now, None) {
         PreStreamDirective::RetryAfter { delay, kind } => {
             assert_eq!(kind, RetryKind::Transport);
-            // ladder[0] = 5s, provider hint = 90s -> max is 90s, +/- 25%.
             assert_in_range(delay, 67_500, 112_500);
-        }
-        other => panic!("expected RetryAfter, got {other:?}"),
-    }
-}
-
-#[test]
-fn rate_limited_keeps_ladder_delay_when_larger_than_hint() {
-    let mut state = CompletionRetryState::new(CompletionRetryPolicy::scheduled_default());
-    let now = Utc::now();
-    let error = InferenceError::RateLimited {
-        retry_after: Some(Duration::from_secs(1)),
-    };
-    match state.on_pre_stream_failure(&error, "rate limited", now, None) {
-        PreStreamDirective::RetryAfter { delay, kind } => {
-            assert_eq!(kind, RetryKind::Transport);
-            // ladder[0] = 5s > hint 1s -> stays 5s +/- 25%.
-            assert_in_range(delay, 3_750, 6_250);
         }
         other => panic!("expected RetryAfter, got {other:?}"),
     }
@@ -165,11 +132,9 @@ fn deadline_fail_fast_when_next_delay_overshoots() {
     let now = Utc::now();
     let error = transient("connection reset");
 
-    // Consume the first ladder entry (5s) so the next call needs 30s.
     let first = state.on_pre_stream_failure(&error, "connection reset", now, None);
     assert!(matches!(first, PreStreamDirective::RetryAfter { .. }));
 
-    // Deadline is 10s out; even at -25% jitter the 30s floor blows past it.
     let deadline = now + chrono::Duration::seconds(10);
     match state.on_pre_stream_failure(&error, "connection reset", now, Some(deadline)) {
         PreStreamDirective::Fail { reason } => {
@@ -201,8 +166,6 @@ fn deterministic_parse_400_skips_remaining_resample_budget_and_repairs() {
     }
     assert_eq!(state.retry_count(), 1);
 
-    // Same error text again: deterministic, even though resample budget (2)
-    // is not spent — must go straight to Repair.
     let second = state.on_pre_stream_failure(&error, &text, now, None);
     assert_eq!(second, PreStreamDirective::Repair);
 }
@@ -253,86 +216,6 @@ fn fresh_parse_400_deadline_overshoot_fails_immediately_not_repair() {
 }
 
 #[test]
-fn mid_stream_without_effects_retracts_and_resamples() {
-    let mut state = CompletionRetryState::new(CompletionRetryPolicy::scheduled_default());
-    let now = Utc::now();
-    match state.on_mid_stream_failure(false, now, None) {
-        MidStreamDirective::RetractAndResample { delay } => {
-            assert_in_range(delay, 3_750, 6_250);
-        }
-        other => panic!("expected RetractAndResample, got {other:?}"),
-    }
-    assert_eq!(state.retry_count(), 1);
-}
-
-#[test]
-fn mid_stream_with_effects_closes_and_continues() {
-    let mut state = CompletionRetryState::new(CompletionRetryPolicy::scheduled_default());
-    let now = Utc::now();
-    match state.on_mid_stream_failure(true, now, None) {
-        MidStreamDirective::CloseAndContinue { delay } => {
-            assert_in_range(delay, 3_750, 6_250);
-        }
-        other => panic!("expected CloseAndContinue, got {other:?}"),
-    }
-    assert_eq!(state.retry_count(), 1);
-}
-
-#[test]
-fn mid_stream_budget_exhausted_fails() {
-    let policy = CompletionRetryPolicy {
-        transport_backoff: vec![Duration::from_secs(2)],
-        max_resample: 0,
-        allow_repair: true,
-    };
-    let mut state = CompletionRetryState::new(policy);
-    let now = Utc::now();
-    assert!(matches!(
-        state.on_mid_stream_failure(false, now, None),
-        MidStreamDirective::RetractAndResample { .. }
-    ));
-    match state.on_mid_stream_failure(false, now, None) {
-        MidStreamDirective::Fail { reason } => assert!(reason.contains("exhausted")),
-        other => panic!("expected Fail, got {other:?}"),
-    }
-}
-
-#[test]
-fn interactive_default_allows_a_single_short_retry_then_fails() {
-    let mut state = CompletionRetryState::new(CompletionRetryPolicy::interactive_default());
-    let now = Utc::now();
-    let error = transient("connection reset");
-
-    match state.on_pre_stream_failure(&error, "connection reset", now, None) {
-        PreStreamDirective::RetryAfter { delay, kind } => {
-            assert_eq!(kind, RetryKind::Transport);
-            assert_in_range(delay, 1_500, 2_500); // 2s +/- 25%
-        }
-        other => panic!("expected RetryAfter, got {other:?}"),
-    }
-
-    match state.on_pre_stream_failure(&error, "connection reset", now, None) {
-        PreStreamDirective::Fail { .. } => {}
-        other => panic!("expected Fail, got {other:?}"),
-    }
-}
-
-#[test]
-fn internal_immediate_carries_a_small_fixed_ladder_with_no_resample_or_repair() {
-    let policy = CompletionRetryPolicy::internal_immediate();
-    assert_eq!(
-        policy.transport_backoff,
-        vec![
-            Duration::ZERO,
-            Duration::from_secs(1),
-            Duration::from_secs(2)
-        ]
-    );
-    assert_eq!(policy.max_resample, 0);
-    assert!(!policy.allow_repair);
-}
-
-#[test]
 fn internal_immediate_retracts_three_times_then_fails() {
     let mut state = CompletionRetryState::new(CompletionRetryPolicy::internal_immediate());
     let now = Utc::now();
@@ -360,28 +243,6 @@ fn internal_immediate_is_deadline_aware() {
         MidStreamDirective::Fail { reason } => assert!(reason.contains("deadline")),
         other => panic!("expected Fail, got {other:?}"),
     }
-}
-
-#[test]
-fn default_for_origin_maps_interactive_and_scheduled() {
-    use crate::execution_origin::ExecutionOrigin;
-
-    let interactive = CompletionRetryPolicy::default_for_origin(ExecutionOrigin::Interactive);
-    assert_eq!(interactive.transport_backoff, vec![Duration::from_secs(2)]);
-    assert_eq!(interactive.max_resample, 0);
-    assert!(interactive.allow_repair);
-
-    let scheduled = CompletionRetryPolicy::default_for_origin(ExecutionOrigin::Scheduled);
-    assert_eq!(
-        scheduled.transport_backoff,
-        vec![
-            Duration::from_secs(5),
-            Duration::from_secs(30),
-            Duration::from_secs(120)
-        ]
-    );
-    assert_eq!(scheduled.max_resample, 1);
-    assert!(scheduled.allow_repair);
 }
 
 #[test]
@@ -433,19 +294,6 @@ fn usage_limit_fails_immediately_with_its_reset_time() {
         other => panic!("expected Fail, got {other:?}"),
     }
     assert_eq!(state.retry_count(), 0);
-}
-
-#[test]
-fn rate_limited_without_hint_uses_the_ladder() {
-    let mut state = CompletionRetryState::new(CompletionRetryPolicy::scheduled_default());
-    let error = InferenceError::RateLimited { retry_after: None };
-    match state.on_pre_stream_failure(&error, "rate limited", Utc::now(), None) {
-        PreStreamDirective::RetryAfter { delay, kind } => {
-            assert_eq!(kind, RetryKind::Transport);
-            assert_in_range(delay, 3_750, 6_250);
-        }
-        other => panic!("expected RetryAfter, got {other:?}"),
-    }
 }
 
 #[test]

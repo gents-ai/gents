@@ -1,7 +1,5 @@
 import Proofs.CanonicalOutput.Terminal
 import Proofs.RequestExecutionLease.Transition
-
-/-! Executable witnesses. -/
 namespace CanonicalOutput.Examples
 
 local instance {ε α : Type} [DecidableEq ε] [DecidableEq α] :

@@ -1,25 +1,19 @@
 use crate::expectation::CollectionExpectation;
 
-/// One collection registered at the migration baseline (lineage root).
 #[derive(Debug, Clone, Copy)]
 pub struct BaselineCollection<'a> {
     pub name: &'a str,
     pub sdl: &'a str,
-    /// Pinned root VersionID. Production entries must specify a pin; dynamic
-    /// registries may omit it while authoring a new migration.
     pub expected_version: Option<&'a str>,
     pub expected_state: CollectionExpectation,
 }
 
-/// Embedded wasm + args for a lens edge. Wasm is always `from_bytes`, never
-/// path.
 #[derive(Debug, Clone, Copy)]
 pub struct LensSpec<'a> {
     pub wasm: &'a [u8],
     pub args_json: Option<&'a str>,
 }
 
-/// One declarative migration step.
 #[derive(Debug, Clone, Copy)]
 pub enum MigrationStep<'a> {
     AddCollection {
@@ -64,7 +58,6 @@ impl<'a> MigrationStep<'a> {
     }
 }
 
-/// Full migration registry: baseline + ordered step chain.
 #[derive(Debug, Clone, Copy)]
 pub struct Registry<'a> {
     pub baseline: &'a [BaselineCollection<'a>],
@@ -72,7 +65,6 @@ pub struct Registry<'a> {
     pub ordinary_indexes: &'a [OrdinaryIndex<'a>],
 }
 
-/// Named ordinary index that must be present on a managed collection.
 #[derive(Debug, Clone, Copy)]
 pub struct OrdinaryIndex<'a> {
     pub collection: &'a str,
@@ -80,7 +72,6 @@ pub struct OrdinaryIndex<'a> {
     pub fields: &'a [OrdinaryIndexField<'a>],
 }
 
-/// One ordered field in an ordinary index definition.
 #[derive(Debug, Clone, Copy)]
 pub struct OrdinaryIndexField<'a> {
     pub name: &'a str,
@@ -88,18 +79,12 @@ pub struct OrdinaryIndexField<'a> {
 }
 
 impl<'a> Registry<'a> {
-    /// Baseline names only; AddCollection steps extend the managed set at
-    /// apply time.
     pub fn managed_names(&self) -> impl Iterator<Item = &'a str> + '_ {
         self.baseline.iter().map(|b| b.name)
     }
 }
 
-// ---------------------------------------------------------------------------
-// Owned / dynamic registry (tests + pin authoring)
-// ---------------------------------------------------------------------------
 
-/// Owned baseline entry for dynamic registries.
 #[derive(Debug, Clone)]
 pub struct BaselineCollectionOwned {
     pub name: String,
@@ -108,14 +93,12 @@ pub struct BaselineCollectionOwned {
     pub expected_state: CollectionExpectation,
 }
 
-/// Owned lens spec (wasm held by the owner).
 #[derive(Debug, Clone)]
 pub struct LensSpecOwned {
     pub wasm: Vec<u8>,
     pub args_json: Option<String>,
 }
 
-/// Owned step for dynamic registries.
 #[derive(Debug, Clone)]
 pub enum MigrationStepOwned {
     AddCollection {
@@ -141,7 +124,6 @@ pub enum MigrationStepOwned {
     },
 }
 
-/// Heap-owned registry used by conformance tests that discover pins at runtime.
 #[derive(Debug, Clone, Default)]
 pub struct DynamicRegistry {
     pub baseline: Vec<BaselineCollectionOwned>,
@@ -212,9 +194,6 @@ impl DynamicRegistry {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Default production registry (canonical baseline, zero steps)
-// ---------------------------------------------------------------------------
 
 macro_rules! baseline_entry {
     ($name:expr, $sdl:expr, $version:literal) => {
@@ -227,8 +206,6 @@ macro_rules! baseline_entry {
     };
 }
 
-/// Fresh canonical schema baseline. Re-author pins after changing the protocol
-/// catalog with the pin-authoring test.
 pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_BACKEND_NAME,
@@ -632,7 +609,6 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
 ];
 
-/// Future schema evolution starts here, after the canonical baseline lands.
 pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[];
 
 static AGENT_REQUEST_NODE_SESSION_FIELDS: &[OrdinaryIndexField<'static>] = &[
@@ -737,7 +713,6 @@ static AGENT_OUTPUT_SOURCE_FIELDS: &[OrdinaryIndexField<'static>] = &[
     },
 ];
 
-/// Ordinary indexes reconciled on fresh and existing stores.
 pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
     OrdinaryIndex {
         collection: gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
@@ -771,24 +746,17 @@ pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
     },
 ];
 
-/// Production registry: canonical pinned baseline plus future migrations.
 pub static DEFAULT_REGISTRY: Registry<'static> = Registry {
     baseline: DEFAULT_BASELINE,
     steps: DEFAULT_STEPS,
     ordinary_indexes: DEFAULT_ORDINARY_INDEXES,
 };
 
-/// Embedded fixture lens wasm (built by `build.rs`).
 pub fn fixture_lens_wasm() -> &'static [u8] {
     include_bytes!(env!("GENTS_LENS_FIXTURE_ADD_LABEL_WASM_PATH"))
 }
 
-// ---------------------------------------------------------------------------
-// Client-authored collections
-// ---------------------------------------------------------------------------
 
-/// Collections authored by paired clients must share the server's fresh-apply
-/// schema root; versioned and in-place steps would diverge that CID.
 pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::AGENT_REQUEST_NAME,
     gents_protocol::schemas::AGENT_MESSAGE_NAME,

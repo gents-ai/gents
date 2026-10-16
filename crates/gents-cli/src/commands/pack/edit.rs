@@ -1,11 +1,3 @@
-//! `gents pack add`, `gents pack remove-part` and `gents pack fmt`: editing a
-//! pack directory while keeping `manifest.json` consistent with its files.
-//!
-//! Every edit writes the file it needs and records it in the manifest
-//! (assets, schemas, inference slots, plugins) in the same step, so the asset
-//! list is never maintained by hand. `manifest.json` and `pack_config.json`
-//! are written in canonical form (sorted keys, two-space indent, trailing
-//! newline), which is also what `fmt` writes, so an edit's diff is the edit.
 
 use std::path::{Path, PathBuf};
 
@@ -51,8 +43,6 @@ impl PackEdit {
         self.manifest["kind"].as_str().unwrap_or_default()
     }
 
-    /// The configuration, created when an assets pack gains its first
-    /// document.
     pub(super) fn config(&mut self) -> Result<&mut Map<String, Value>> {
         if self.config.is_none() {
             anyhow::ensure!(

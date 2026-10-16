@@ -1702,12 +1702,6 @@ fn display_shim_host(host: IpAddr) -> String {
     }
 }
 
-/// Resolve the Grok TUI leader socket path.
-///
-/// An explicit `--grok-shim-socket-path` wins. Otherwise the leader binds
-/// under `$XDG_RUNTIME_DIR/gents/grok.sock`, falling back to
-/// `/tmp/gents-grok.sock` when no runtime dir is set (the same
-/// platform-neutral default the leader server's tests use as a short root).
 pub(crate) fn resolve_grok_shim_socket_path(explicit: Option<&Path>) -> PathBuf {
     if let Some(path) = explicit {
         return path.to_path_buf();
@@ -1736,8 +1730,6 @@ mod grok_shim_tests {
         }
     }
 
-    /// A home key an older build wrote with ambient (0644) permissions stops
-    /// the runtime with the insecure-key exit status, not a generic crash.
     #[cfg(unix)]
     #[test]
     fn an_older_insecure_home_key_exits_with_the_insecure_key_status() {

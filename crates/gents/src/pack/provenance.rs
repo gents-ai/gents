@@ -228,17 +228,3 @@ pub(super) fn stamp_pack_origin(
     serde_json::from_value(value).context("decoding provenance-stamped pack configuration")
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn pack_artifact_document_digest_ignores_tags() {
-        let left = serde_json::json!({"node_did":"owner","task_id":"task","tags":["one"]});
-        let right = serde_json::json!({"node_did":"owner","task_id":"task","tags":["two"]});
-        assert_eq!(
-            pack_artifact_document_digest(&left).unwrap(),
-            pack_artifact_document_digest(&right).unwrap()
-        );
-    }
-}

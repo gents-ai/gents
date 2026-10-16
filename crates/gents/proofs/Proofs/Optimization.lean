@@ -89,10 +89,6 @@ structure SeedRendering where
   rendered : Bool
   deriving DecidableEq, Repr
 
-/-- Exact seed rendering is structural admission, not a grade: all frozen stage
-seeds with a created-event route to the target task are checked; rendering is
-owned by MiniJinja against the seed's actual values (schema fields cannot
-substitute). -/
 def failedTaskSeedRenders (target : Option String) (taskEnabled : Bool)
     (triggers : List SeedTrigger) (sources : List SeedSource)
     (seeds : List SeedRendering) : List SeedRendering :=
@@ -130,8 +126,6 @@ inductive Arm where
 
 def scoreBpMax : Nat := 10000
 
-/-- The score imputed to an unknown case-trial: fails the candidate, passes the
-baseline, so an unknown can never help a candidate. -/
 def unknownBp : Arm → Nat
   | .baseline => scoreBpMax
   | .candidate => 0
@@ -143,7 +137,6 @@ theorem baseline_unknown_is_best (bp : Nat) (h : bp ≤ scoreBpMax) :
     bp ≤ unknownBp .baseline := by
   simpa [unknownBp] using h
 
-/-- One case: the number of evidence pairs and both arms' summed scores. -/
 structure CasePairs where
   pairs : Nat
   sumBaseline : Nat
@@ -153,7 +146,6 @@ structure CasePairs where
 structure Evidence where
   casesMatch : Bool
   cases : List CasePairs
-  /-- Distinct (case, trial index) keys seen in either cell. -/
   keys : Nat
   droppedBaseline : Nat
   droppedCandidate : Nat
@@ -169,13 +161,10 @@ structure Params where
   maxTokenIncreaseBp : Nat
   deriving DecidableEq, Repr
 
-/-- Bonferroni: one validation split, up to `maxRounds` candidates. -/
 def alphaEffectivePpm (p : Params) : Nat := p.alphaPpm / (max p.maxRounds 1)
 
 def absDiff (a b : Nat) : Nat := (a - b) + (b - a)
 
-/-- Gate 1. The last conjunct: the permutation test can reach significance at
-all, `2^-n ≤ alpha`, written without division. -/
 def sufficient (p : Params) (e : Evidence) : Bool :=
   e.casesMatch && !e.cases.isEmpty
     && e.cases.all (fun c => decide (p.minPairs ≤ c.pairs))
@@ -184,11 +173,9 @@ def sufficient (p : Params) (e : Evidence) : Bool :=
     && decide (absDiff e.droppedBaseline e.droppedCandidate * 10000 ≤ p.maxAsymmetryBp * e.keys)
     && decide (1000000 ≤ alphaEffectivePpm p * 2 ^ e.cases.length)
 
-/-- Gate 2a. `mean(cand) ≥ mean(base) − tol` per case, cross-multiplied by `pairs`. -/
 def noCaseRegression (p : Params) (e : Evidence) : Bool :=
   e.cases.all fun c => decide (c.sumBaseline ≤ c.sumCandidate + p.caseToleranceBp * c.pairs)
 
-/-- Gate 2b. Mean tokens per case-trial, cross-multiplied. -/
 def costOk (p : Params) (baseTokens baseTrials candTokens candTrials : Nat) : Bool :=
   decide (candTokens * baseTrials * 10000
     ≤ baseTokens * candTrials * (10000 + p.maxTokenIncreaseBp))
@@ -207,7 +194,6 @@ inductive Decision where
   | inconclusive
   deriving DecidableEq, Repr
 
-/-- The first failing gate decides. `confirm` never consults the improvement test. -/
 def decideGates (mode : Mode) (sufficient noCaseRegression costOk improves : Bool) : Decision :=
   if !sufficient then .inconclusive
   else if !noCaseRegression then .reject .caseRegression
@@ -247,8 +233,6 @@ theorem too_few_cases_never_accepts (mode : Mode) (p : Params) (e : Evidence) (r
     omega
   simp [decideGates, hs]
 
-/-! ## Job journal -/
-
 inductive Entry where
   | frozen | runStarted | proposed | structuralReject
   | decided (d : Decision)
@@ -258,7 +242,6 @@ inductive Entry where
 
 abbrev Journal := List Entry
 
-/-- Append guarded by the expected journal length (the Rust transaction check). -/
 def appendIf (expectedLen : Nat) (j : Journal) (e : Entry) : Journal :=
   if j.length = expectedLen then j ++ [e] else j
 
@@ -277,7 +260,6 @@ theorem appendIf_match (j : Journal) (e : Entry) : appendIf j.length j e = j ++ 
 
 def roundsUsed (j : Journal) : Nat := j.count .proposed
 
-/-- A round may start only while rounds remain. -/
 def propose (maxRounds : Nat) (j : Journal) : Journal :=
   if roundsUsed j < maxRounds then j ++ [.proposed] else j
 

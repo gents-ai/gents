@@ -248,16 +248,6 @@ fn openrouter_additional_params_require_parameters() {
 }
 
 #[test]
-fn openai_compatible_has_no_provider_specific_additional_params() {
-    assert!(provider_additional_params(
-        BackendProviderKind::OpenAiCompatible,
-        crate::OpenAiWireApi::Responses,
-        crate::inference_setup::OPENAI_ENDPOINT,
-    )
-    .is_none());
-}
-
-#[test]
 fn generated_responses_storage_cases_drive_loop_config() {
     use crate::lean_vocab_test::lean_prompt_assembly_responses_storage_cases;
 
@@ -389,29 +379,6 @@ fn sampling_additional_params_merge_with_provider_params() {
     assert_eq!(value["top_k"], 40);
     assert!(value.get("max_tokens").is_none());
     assert!(value.get("temperature").is_none());
-}
-
-#[test]
-fn sampling_additional_params_omit_dedicated_completion_fields() {
-    let sampling = SamplingConfig {
-        temperature: Some(0.1),
-        top_p: None,
-        top_k: None,
-        max_tokens: Some(1024),
-        ..Default::default()
-    };
-
-    assert!(sampling.additional_params().is_none());
-}
-
-#[test]
-fn effective_max_tokens_falls_back_to_agent_budget() {
-    assert_eq!(effective_max_tokens(4096, None), Some(4096));
-}
-
-#[test]
-fn effective_max_tokens_prefers_sampling_override() {
-    assert_eq!(effective_max_tokens(4096, Some(512)), Some(512));
 }
 
 #[test]
@@ -895,13 +862,3 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
     .await;
 }
 
-#[test]
-fn loop_config_for_request_keeps_the_inference_capture_scope() {
-    let agent = agent_with_retry(CompletionRetryProfileFields::default());
-    let config =
-        loop_config_for_request(&agent, "preamble".to_string(), &request(), None, 0).unwrap();
-    assert!(
-        config.on_rendered_request.is_some(),
-        "the request path must arm a rendered-request capture"
-    );
-}

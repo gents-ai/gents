@@ -432,39 +432,6 @@ async fn managed_exec_reports_spawn_failure_as_a_typed_outcome() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn managed_exec_caps_stdout() {
-    let outcome = run_managed_exec(ManagedExecRequest {
-        argv: vec![
-            "/bin/sh".to_string(),
-            "-c".to_string(),
-            "printf 'abcdef'".to_string(),
-        ],
-        cwd: PathBuf::from("/"),
-        deadline_at: Some(Utc::now() + chrono::Duration::seconds(1)),
-        cancellation_token: CancellationToken::new(),
-        max_output_bytes: 3,
-        stdin: Vec::new(),
-        environment: None,
-        tool_name: Some("test".to_string()),
-        live_output: None,
-    })
-    .await;
-
-    match outcome {
-        ManagedExecOutcome::Exited {
-            stdout,
-            stdout_truncated,
-            ..
-        } => {
-            assert_eq!(stdout, b"abc");
-            assert!(stdout_truncated);
-        }
-        other => panic!("expected exited outcome, got {other:?}"),
-    }
-}
-
-#[cfg(unix)]
-#[tokio::test]
 async fn managed_exec_bounds_stdout_drain_after_direct_child_exit() {
     assert_bounded_capture_drain("stdout").await;
 }

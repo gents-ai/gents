@@ -157,8 +157,6 @@ pub(crate) struct LeanCanonicalToolAdmission {
     pub(crate) await_mode: String,
 }
 
-/// A background tool spawned by an already running parent tool; names the
-/// physical parent tool document that owns it.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCanonicalSpawnedToolAdmission {
@@ -267,14 +265,12 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         generation: u64,
         record: LeanCanonicalSegment,
     },
-    /// Explicit due-only deadline CAS.
     RenewLease {
         actor: u64,
         now: u64,
         generation: u64,
         expected_deadline: u64,
     },
-    /// Guarded raw output insert; never updates the lease.
     AppendOutput {
         actor: u64,
         now: u64,
@@ -287,15 +283,12 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         document: u64,
         record: LeanCanonicalSegment,
     },
-    /// The same guarded insert attempted by a same-task holder whose sibling
-    /// awaits the gate. The holder is unpollable, so nothing may commit.
     AppendOutputWhileSiblingWaits {
         actor: u64,
         now: u64,
         generation: u64,
         record: LeanCanonicalSegment,
     },
-    /// Accepted provider turn with caller-supplied closure, header and admissions.
     AcceptTurn {
         actor: u64,
         now: u64,
@@ -331,9 +324,7 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         closing: LeanCanonicalSegment,
         message: LeanCanonicalMessage<LeanPayloadSpec>,
     },
-    /// Advance the compaction watermark across a provider-stable published prefix.
     AdvanceCompactionCursor { actor: u64, now: u64, cursor: u64 },
-    /// Terminate conflicted work without discarding either conflicting fact.
     RevokeCorrupt {
         actor: u64,
         now: u64,
@@ -342,8 +333,6 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         outcome: String,
         selection: LeanTerminalSelection,
     },
-    /// A distinct immutable fact arriving by replication; the native fixture
-    /// must insert it as a remote merge, never through the execution owner.
     DeliverReplicatedSegment {
         actor: u64,
         now: u64,
@@ -406,8 +395,6 @@ pub(crate) struct LeanCanonicalExecutionObservation {
     pub(crate) physical_tool_request: Option<u64>,
     pub(crate) lease_deadline: Option<u64>,
     pub(crate) compaction_cursor: Option<u64>,
-    /// Exact durable rows. Fixture output is deterministically ordered, while
-    /// harness comparison treats native rows as multisets with multiplicity.
     pub(crate) segments: Vec<LeanCanonicalSegment>,
     pub(crate) messages: Vec<LeanCanonicalMessage<LeanPayloadSpec>>,
 }
@@ -517,14 +504,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{exact_multiset_eq, LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation};
-
-    #[test]
-    fn exact_multiset_comparison_is_order_independent_and_multiplicity_sensitive() {
-        assert!(exact_multiset_eq(&[1, 2, 1], &[2, 1, 1]));
-        assert!(!exact_multiset_eq(&[1, 2], &[1, 3]));
-        assert!(!exact_multiset_eq(&[1, 1], &[1, 2]));
-    }
+    use super::{LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation};
 
     #[test]
     fn generated_background_accept_cases_decode_background_admissions() {

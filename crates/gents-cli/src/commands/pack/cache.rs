@@ -1,8 +1,3 @@
-//! The asset-cache directory tree, `<home>/packs/.materialized/<namespace>/<name>/<digest>/`, and its
-//! lock and prune/release rules. `gents pack prune` and `gents pack remove`
-//! share [`release_cache_root`] for the marker/`runs/` retention rule, and
-//! [`lock_exclusive`] for the per-pack cache lock, so the two cannot diverge
-//! on when a cache version is safe to touch or delete.
 
 use std::fs::File;
 use std::path::Path;
@@ -67,9 +62,6 @@ fn prune_stale_asset_cache(parent: &Path, current: &Path) -> Result<Vec<String>>
     Ok(removed)
 }
 
-/// [`super::asset_cache_root`] from a pack's coordinate and digest directly, for a
-/// caller (`gents pack remove`) that only has a [`gents::pack::HomePackInstall`]
-/// record, not a resolved [`PackSource`].
 pub(super) fn asset_cache_root_for(
     home: &Path,
     namespace: &str,
@@ -79,9 +71,6 @@ pub(super) fn asset_cache_root_for(
     gents::pack::materialize::cache_root(home, namespace, name, digest)
 }
 
-/// A receipt whose path omits the namespace needs its verified pack contents
-/// to establish ownership. Its recorded parent remains the lock owner; those
-/// paths are never included in namespace-scoped pruning.
 pub(super) fn release_recorded_cache(
     home: &Path,
     coordinate: &str,
@@ -109,9 +98,6 @@ impl PreparedCacheRelease {
     }
 }
 
-/// Acquires and retains the cache lock, and validates ownership and retention
-/// rules before local pack records are removed. `finish` performs the delete
-/// later while the caller still holds the home's plugin-store guard.
 pub(super) fn prepare_recorded_cache(
     home: &Path,
     coordinate: &str,
@@ -167,8 +153,6 @@ pub(super) fn prepare_recorded_cache(
     })
 }
 
-/// Takes the exclusive lock on a pack's cache parent directory, failing
-/// loudly rather than blocking when another pack operation already holds it.
 pub(super) fn lock_exclusive(parent: &Path) -> Result<FileLock> {
     match FileLock::try_exclusive(cache_lock(parent)?) {
         Ok(lock) => Ok(lock),
@@ -179,7 +163,6 @@ pub(super) fn lock_exclusive(parent: &Path) -> Result<FileLock> {
     }
 }
 
-/// What [`release_cache_root`] did with one cache version directory.
 pub(super) enum CacheRelease {
     Removed,
     Retained(&'static str),

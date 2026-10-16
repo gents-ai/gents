@@ -1,11 +1,4 @@
 #!/usr/bin/env bash
-#
-# uninstall-gents-macos.sh — remove Gents resources from this Mac:
-#   ~/.gents agent home, LaunchAgent ai.gents.runtime, keychain identity
-#   com.source-inc.gents.identity, /usr/local/bin/gents, /Applications/Gents.app,
-#   and every Gents entry under ~/Library.
-# Per-repo worktrees under <repo>/.gents/workspaces/ are reported, not removed.
-#
 # Usage:
 #   ./uninstall-gents-macos.sh           # interactive (asks for confirmation)
 #   ./uninstall-gents-macos.sh --yes     # no prompt
@@ -136,7 +129,6 @@ if [[ "$ASSUME_YES" -ne 1 && "$DRY_RUN" -ne 1 ]]; then
   esac
 fi
 
-# Stop & remove the LaunchAgent
 info "Stopping and removing the LaunchAgent service ($SERVICE_LABEL)"
 uid="$(id -u)"
 if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -147,7 +139,6 @@ else
 fi
 remove_path "$LAUNCH_AGENT_PLIST"
 
-# Quit and remove the desktop app
 info "Quitting and removing the desktop app"
 if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] osascript quit \"Gents\""
@@ -182,7 +173,6 @@ else
   log "      from Keychain Access manually; they are not exportable via CLI."
 fi
 
-# Remove every Gents entry under ~/Library
 info "Removing all Gents entries under ~/Library"
 if [[ "$DRY_RUN" -ne 1 ]]; then
   # Drop cached preferences so cfprefsd doesn't rewrite them.

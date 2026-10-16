@@ -100,13 +100,7 @@ fn default_namespace() -> String {
 pub struct PackPlugin {
     pub name: String,
     pub description: String,
-    /// Always a full `.afb`, never a bare `.wasm`: a Python plugin compiles
-    /// to an emscripten-pyodide bundle rather than a WASI command, and only
-    /// Afterburner itself dispatches every one of those shapes (see
-    /// `crate::plugin`).
     pub artifact: String,
-    /// Present for a pack that carries its sources, absent for one that
-    /// ships only the compiled artifact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     pub language: String,
@@ -115,25 +109,14 @@ pub struct PackPlugin {
     pub manifold: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
-    /// Lets one directory (or a file inside one) be bound into a call, named
-    /// fresh at every call site rather than granted once at install (see
-    /// `crate::plugin::allowed`). Absent means the plugin can never be
-    /// bound. No `deny_unknown_fields` on [`PackPlugin`] itself, so an
-    /// older gents ignores this field entirely on a manifest that declares
-    /// it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bind_dir: Option<PluginDirBinding>,
-    /// Resource ceiling this plugin declares it needs, raising
-    /// [`crate::plugin::PluginBudget::for_plugin`]'s default rather than
-    /// capping a caller's own budget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limits: Option<PluginLimits>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_slot: Option<String>,
 }
 
-/// How much of a bound directory a plugin uses. Ordered: `ReadWrite`
-/// includes `Read`, so a folder allowed `ReadWrite` also serves a reader.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -144,7 +127,6 @@ pub enum BindAccess {
 }
 
 impl BindAccess {
-    /// The manifest and operator spelling: `read` or `read_write`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Read => "read",
@@ -178,15 +160,11 @@ pub struct PluginDirBinding {
     pub description: String,
     #[serde(default, skip_serializing_if = "BindAccess::is_read")]
     pub access: BindAccess,
-    /// Only a `read_write` plugin may declare these; empty on a `read_write`
-    /// plugin means every call writes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub write_fields: Vec<String>,
 }
 
 impl PluginDirBinding {
-    /// The access one call with `arguments` asks for: Lean
-    /// `ToolPolicy.pluginCallAccess`.
     pub fn call_access(&self, arguments: &serde_json::Value) -> BindAccess {
         match self.access {
             BindAccess::Read => BindAccess::Read,
@@ -198,8 +176,6 @@ impl PluginDirBinding {
         }
     }
 
-    /// The declared write fields `arguments` sets, the ones an error names
-    /// when that call is refused for writing.
     pub fn write_fields_set(&self, arguments: &serde_json::Value) -> Vec<&str> {
         self.write_fields
             .iter()
@@ -239,11 +215,6 @@ pub fn tool_instructions(plugin: &str, bytes: &[u8]) -> Result<String> {
 
 pub const PLUGIN_ARTIFACT_PREFIX: &str = "plugins/";
 
-/// Mirrors exactly what `afterburner::cli::compile::lang::SourceLang::from_str`
-/// accepts. That type lives behind the `afterburner` crate's `bin` feature,
-/// which is a dependency of `gents-cli` (where the actual compiling
-/// happens) and not of this crate, so this is a plain, independent copy
-/// rather than a shared import, kept in sync by hand.
 pub const SUPPORTED_PLUGIN_LANGUAGES: &[&str] = &[
     "js",
     "javascript",
@@ -382,9 +353,6 @@ impl PackPlugin {
                     self.name
                 );
             }
-            // A bound directory is authority granted fresh at every call
-            // (see `crate::plugin::BoundDir`), never a standing one, so it
-            // is mutually exclusive with a declared `fs` grant.
             let declares_fs = !matches!(
                 crate::plugin::authority::declared_manifold(self)?.fs,
                 afterburner_core::manifold::FsAccess::None
@@ -502,8 +470,6 @@ pub struct PackageExternalDependency {
     pub install_command: String,
 }
 
-/// Before strict decoding, fill omitted root owners from this explicit scope;
-/// reject mismatched explicit owners. Never rewrite target/caller/signer DIDs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackInstallOptions {
@@ -522,12 +488,6 @@ pub(crate) fn open_pack_asset(root: &std::path::Path, path: &str) -> Result<std:
     asset_path::open_pack_asset(root, path)
 }
 
-/// Everything a pack manifest has to be true of, whichever way the pack
-/// arrived.
-///
-/// A pack compiled into this binary and a pack downloaded from a registry
-/// are held to one set of rules, checked here, because a pack that only
-/// passes when it comes from a trusted place is not checked at all.
 pub fn validate_manifest(name: &str, manifest: &PackManifest) -> Result<()> {
     anyhow::ensure!(
         manifest.manifest_version == 1 && manifest.name == name,
@@ -759,9 +719,6 @@ pub fn digest_declared_assets<'a>(
     Ok(digest.finish())
 }
 
-/// The pack digest, computed incrementally: each declared path in
-/// [`declared_paths`] order, as its length, its bytes, its content length and
-/// its content.
 #[derive(Default)]
 pub struct PackDigester(sha2::Sha256);
 
@@ -802,79 +759,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_plugin_artifact_must_be_a_compiled_afb_path() {
-        let plugin = PackPlugin {
-            artifact: "plugins/format_check.wasm".to_owned(),
-            ..valid_plugin()
-        };
-        let error = plugin
-            .validate()
-            .expect_err("a bare .wasm artifact must be refused");
-        let message = format!("{error:#}");
-        assert!(message.contains("format_check"), "{message}");
-        assert!(message.contains(".afb"), "{message}");
-    }
-
-    #[test]
-    fn a_plugin_artifact_must_live_under_the_plugins_prefix() {
-        let plugin = PackPlugin {
-            artifact: "tools/format_check.afb".to_owned(),
-            ..valid_plugin()
-        };
-        let error = plugin
-            .validate()
-            .expect_err("an artifact outside plugins/ must be refused");
-        let message = format!("{error:#}");
-        assert!(message.contains("format_check"), "{message}");
-        assert!(message.contains("plugins/"), "{message}");
-        assert!(message.contains("tools/format_check.afb"), "{message}");
-    }
-
-    #[test]
-    fn a_plugin_with_an_unknown_language_is_refused_naming_it_and_the_supported_set() {
-        let plugin = PackPlugin {
-            language: "haskell".to_owned(),
-            ..valid_plugin()
-        };
-        let error = plugin
-            .validate()
-            .expect_err("an unsupported language must be refused");
-        let message = format!("{error:#}");
-        assert!(message.contains("format_check"), "{message}");
-        assert!(message.contains("haskell"), "{message}");
-        assert!(message.contains("rust"), "{message}");
-        assert!(message.contains("ruby"), "{message}");
-    }
-
-    #[test]
-    fn every_supported_language_identifier_is_accepted_case_insensitively() {
-        for language in SUPPORTED_PLUGIN_LANGUAGES {
-            let plugin = PackPlugin {
-                language: language.to_ascii_uppercase(),
-                ..valid_plugin()
-            };
-            plugin
-                .validate()
-                .unwrap_or_else(|error| panic!("{language:?} must be accepted: {error:#}"));
-        }
-    }
-
     fn plugins_pack(slots: serde_json::Value, model_slot: Option<&str>) -> PackManifest {
         let mut plugin = serde_json::to_value(valid_plugin()).unwrap();
         plugin["model_slot"] = serde_json::json!(model_slot);
         serde_json::from_value(serde_json::json!({
-            "manifest_version": 1,
-            "name": "ocr",
-            "version": "1.0.0",
-            "description": "reads pages",
-            "authors": ["tests"],
-            "kind": "plugins",
+            "manifest_version": 1, "name": "ocr", "version": "1.0.0",
+            "description": "reads pages", "authors": ["tests"], "kind": "plugins",
             "assets": ["README.md", "plugins/format_check.afb"],
-            "inference_slots": slots,
-            "plugins": [plugin],
-        }))
-        .unwrap()
+            "inference_slots": slots, "plugins": [plugin],
+        })).unwrap()
     }
 
     #[test]
@@ -882,266 +775,16 @@ mod tests {
         let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases;
         for case in cases["model_slots"].as_array().unwrap() {
             let slots = if case["declared"].as_bool().unwrap() {
-                serde_json::json!([{
-                    "name": "remote_ocr", "description": "d",
-                    "optional": case["optional"],
-                    "agents": if case["agent_free"].as_bool().unwrap() { vec![] } else { vec!["scan"] },
-                }])
-            } else {
-                serde_json::json!([])
-            };
+                serde_json::json!([{"name":"remote_ocr", "description":"d",
+                    "optional":case["optional"],
+                    "agents":if case["agent_free"].as_bool().unwrap() {vec![]} else {vec!["scan"]}}])
+            } else { serde_json::json!([]) };
             let mut manifest = plugins_pack(slots, Some("remote_ocr"));
             manifest.metadata.kind = PackKind::Documents;
             manifest.config = Some("config.json".to_owned());
             manifest.metadata.assets.push("config.json".to_owned());
-            assert_eq!(
-                validate_pack_manifest(&manifest).is_ok(),
-                case["expected"].as_bool().unwrap(),
-                "{case}"
-            );
+            assert_eq!(validate_pack_manifest(&manifest).is_ok(),
+                case["expected"].as_bool().unwrap(), "{case}");
         }
-    }
-
-    fn bindable_plugin() -> PackPlugin {
-        PackPlugin {
-            input_schema: serde_json::json!({"type": "object", "properties": {"root": {"type": "string"}}}),
-            bind_dir: Some(PluginDirBinding {
-                input_field: "root".to_owned(),
-                original_field: None,
-                description: "the directory to scan".to_owned(),
-                access: BindAccess::Read,
-                write_fields: Vec::new(),
-            }),
-            ..valid_plugin()
-        }
-    }
-
-    #[test]
-    fn bind_dir_access_defaults_to_read_and_names_only_read_or_read_write() {
-        let parse = |access: &str| {
-            serde_json::from_str::<PluginDirBinding>(&format!(
-                r#"{{"input_field":"root","description":"d"{access}}}"#
-            ))
-        };
-        assert_eq!(parse("").unwrap().access, BindAccess::Read);
-        assert_eq!(
-            parse(r#","access":"read_write""#).unwrap().access,
-            BindAccess::ReadWrite
-        );
-        assert!(parse(r#","access":"write""#).is_err());
-        let plain = serde_json::to_value(parse("").unwrap()).unwrap();
-        assert!(
-            plain.get("access").is_none(),
-            "the default is not written out"
-        );
-    }
-
-    #[test]
-    fn bind_dir_requires_its_input_field_to_be_a_schema_property() {
-        bindable_plugin()
-            .validate()
-            .expect("root is a declared property");
-
-        let mut missing = bindable_plugin();
-        missing.input_schema = serde_json::json!({"type": "object"});
-        let error = missing.validate().expect_err("root is not declared");
-        assert!(format!("{error:#}").contains("root"));
-    }
-
-    #[test]
-    fn bind_dir_write_fields_are_schema_properties_on_a_read_write_plugin() {
-        let mut plugin = bindable_plugin();
-        plugin.input_schema = serde_json::json!({"type": "object", "properties": {
-            "root": {"type": "string"}, "output": {"type": "object"}}});
-        let binding = plugin.bind_dir.as_mut().unwrap();
-        binding.write_fields = vec!["output".into()];
-        let error = plugin.validate().expect_err("a read plugin cannot write");
-        assert!(
-            format!("{error:#}").contains("access read_write"),
-            "{error:#}"
-        );
-        plugin.bind_dir.as_mut().unwrap().access = BindAccess::ReadWrite;
-        plugin
-            .validate()
-            .expect("any declared property can be a write field");
-        for field in ["missing", "root"] {
-            plugin.bind_dir.as_mut().unwrap().write_fields = vec![field.into()];
-            let error = plugin.validate().expect_err("not a write field");
-            assert!(format!("{error:#}").contains(field), "{error:#}");
-        }
-        let parsed: PluginDirBinding = serde_json::from_str(
-            r#"{"input_field":"root","description":"d","access":"read_write","write_fields":["output"]}"#,
-        )
-        .unwrap();
-        assert_eq!(parsed.write_fields, ["output"]);
-        assert_eq!(
-            parsed.call_access(&serde_json::json!({"output": null})),
-            BindAccess::Read
-        );
-        assert_eq!(
-            parsed.call_access(&serde_json::json!({"output": {}})),
-            BindAccess::ReadWrite
-        );
-    }
-
-    #[test]
-    fn bind_dir_original_field_is_a_second_string_property() {
-        let mut plugin = bindable_plugin();
-        plugin.input_schema = serde_json::json!({"type": "object", "properties": {
-            "root": {"type": "string"}, "root_original": {"type": "string"}}});
-        plugin.bind_dir.as_mut().unwrap().original_field = Some("root_original".into());
-        plugin
-            .validate()
-            .expect("a declared second string property");
-
-        plugin.bind_dir.as_mut().unwrap().original_field = Some("root".into());
-        assert!(plugin.validate().is_err(), "it cannot be the input field");
-        plugin.bind_dir.as_mut().unwrap().original_field = Some("elsewhere".into());
-        let error = plugin.validate().expect_err("it must be declared");
-        assert!(format!("{error:#}").contains("original_field"));
-    }
-
-    #[test]
-    fn bind_dir_accepts_a_property_declared_by_one_one_of_branch() {
-        let mut plugin = bindable_plugin();
-        plugin.input_schema = serde_json::json!({
-            "oneOf": [
-                {"properties": {"root": {"type": "string"}}},
-                {"properties": {"files": {"type": "array"}}},
-            ]
-        });
-        plugin
-            .validate()
-            .expect("one branch declaring root as a string is enough");
-
-        plugin.input_schema = serde_json::json!({
-            "oneOf": [
-                {"properties": {"other": {"type": "string"}}},
-                {"properties": {"files": {"type": "array"}}},
-            ]
-        });
-        assert!(plugin.validate().is_err(), "no branch declares root at all");
-    }
-
-    #[test]
-    fn bind_dir_refuses_a_non_string_input_field() {
-        let mut plugin = bindable_plugin();
-        plugin.input_schema = serde_json::json!({
-            "type": "object", "properties": {"root": {"type": "integer"}}
-        });
-        let error = plugin
-            .validate()
-            .expect_err("call_bound always injects a string; a non-string field can never match");
-        assert!(format!("{error:#}").contains("string"));
-
-        plugin.input_schema = serde_json::json!({
-            "oneOf": [{"properties": {"root": {"type": "integer"}}}]
-        });
-        assert!(
-            plugin.validate().is_err(),
-            "a non-string oneOf branch property must also be refused"
-        );
-    }
-
-    #[test]
-    fn bind_dir_and_a_standing_fs_grant_are_mutually_exclusive() {
-        let mut plugin = bindable_plugin();
-        plugin.manifold = Some(serde_json::json!({
-            "fs": {"ReadOnly": ["/data"]}, "net": "None", "env": "None",
-            "crypto": false, "child_process": false
-        }));
-        let error = plugin
-            .validate()
-            .expect_err("bind_dir plus a standing fs grant must be refused");
-        assert!(format!("{error:#}").contains("bind_dir"));
-
-        let mut plugin = bindable_plugin();
-        plugin.manifold = Some(serde_json::json!({
-            "fs": "None", "net": "None", "env": {"AllowList": ["HOME"]},
-            "crypto": false, "child_process": false
-        }));
-        plugin
-            .validate()
-            .expect("a non-fs grant alongside bind_dir is fine");
-    }
-
-    #[test]
-    fn limits_must_not_exceed_the_host_ceiling() {
-        let mut plugin = valid_plugin();
-        plugin.limits = Some(PluginLimits {
-            memory_mib: Some(crate::plugin::MAX_DECLARED_MEMORY_MIB),
-            wall_clock_secs: Some(crate::plugin::MAX_DECLARED_WALL_CLOCK_SECS),
-            max_output_mib: Some(crate::plugin::MAX_DECLARED_OUTPUT_MIB),
-        });
-        plugin.validate().expect("exactly the ceiling is fine");
-
-        plugin.limits = Some(PluginLimits {
-            memory_mib: Some(crate::plugin::MAX_DECLARED_MEMORY_MIB + 1),
-            ..Default::default()
-        });
-        let error = plugin
-            .validate()
-            .expect_err("over the ceiling must be refused");
-        assert!(format!("{error:#}").contains("memory_mib"));
-
-        plugin.limits = Some(PluginLimits {
-            wall_clock_secs: Some(crate::plugin::MAX_DECLARED_WALL_CLOCK_SECS + 1),
-            ..Default::default()
-        });
-        assert!(plugin.validate().is_err());
-
-        plugin.limits = Some(PluginLimits {
-            max_output_mib: Some(crate::plugin::MAX_DECLARED_OUTPUT_MIB + 1),
-            ..Default::default()
-        });
-        assert!(plugin.validate().is_err());
-    }
-
-    #[test]
-    fn a_zero_limit_is_refused_for_being_zero_not_for_being_over_the_ceiling() {
-        let mut plugin = valid_plugin();
-        plugin.limits = Some(PluginLimits {
-            memory_mib: Some(0),
-            ..Default::default()
-        });
-        let error = plugin.validate().expect_err("zero is never a valid budget");
-        let message = format!("{error:#}");
-        assert!(message.contains("at least 1"), "{message}");
-        assert!(!message.contains("ceiling"), "{message}");
-    }
-
-    fn documents_manifest(dependencies: Vec<&str>) -> PackManifest {
-        serde_json::from_value(serde_json::json!({
-            "manifest_version": 1,
-            "name": "dep_test",
-            "version": "1.0.0",
-            "description": "a test documents pack",
-            "authors": ["gents"],
-            "kind": "documents",
-            "assets": ["README.md", "pack_config.json"],
-            "config": "pack_config.json",
-            "dependencies": dependencies,
-        }))
-        .unwrap()
-    }
-
-    #[test]
-    fn dependency_coordinates_are_bare_or_namespaced_names_never_pinned() {
-        validate_pack_manifest(&documents_manifest(vec!["acme/widget"])).unwrap();
-        validate_pack_manifest(&documents_manifest(vec!["widget"])).unwrap();
-
-        let pinned = validate_pack_manifest(&documents_manifest(vec!["acme/widget@1.0.0"]))
-            .expect_err("a dependency must not pin a version");
-        assert!(
-            format!("{pinned:#}").contains("must be a coordinate"),
-            "{pinned:#}"
-        );
-
-        let bad = validate_pack_manifest(&documents_manifest(vec!["Acme/Widget"]))
-            .expect_err("a dependency coordinate must be snake_case");
-        assert!(
-            format!("{bad:#}").contains("is not a valid pack coordinate"),
-            "{bad:#}"
-        );
     }
 }

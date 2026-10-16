@@ -140,13 +140,9 @@ fn rust_periodic_recovery_sweep_ids() -> BTreeSet<&'static str> {
 
 async fn drive_recovery_sweep_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
     if case.collection == "AgentToolCall" {
-        // Driven by the crate-private accepted-publication recovery conformance
-        // tests, including deferred missing parents.
         return;
     }
     if case.collection == "TaskHookRecord" {
-        // Host records are crate-private;
-        // lean_vocab_test::task_hook_recovery drives these witnesses.
         return;
     }
     match (case.collection.as_str(), case.sweep_id.as_str()) {
@@ -156,9 +152,6 @@ async fn drive_recovery_sweep_case(case: &lean_vocab_test::LeanRecoverySweepCase
     }
 }
 
-/// Startup ordering issue #1001: the parent-gated inference sweep must run
-/// after request repair; a crash orphan terminalizes in the FIRST startup pass.
-/// Lean: `Recovery.request_before_inference_converges`.
 pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
     let db = test_db("startup-recovery-order-1001").await;
     let request_id = "startup-order-1001-request";
@@ -247,7 +240,6 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
     );
 }
 
-/// Lean: `Recovery.deferred_startup_then_expired_periodic_converges`.
 #[tokio::test]
 async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_registry() {
     for (initial_call_state, terminal_call_state) in
@@ -280,8 +272,6 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             },
         )
         .await;
-        // Dropping the fixture owner would relinquish the lease, unlike the
-        // hard process loss represented by these persisted rows.
         let _owner =
             own_child_fixture(&db.node, NODE_DID, &doc_id, &request_id, &session_id, true).await;
         insert_inference_call(&db.node, &request_id, initial_call_state).await;
@@ -324,8 +314,6 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             initial_call_state
         );
 
-        // Change only the expiry: the recovery owner fences on the generation
-        // and progress tuple when it wins terminalization.
         let expired = db.node.execute(&format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "{RECOVERY_CREATED_AT}" }}) {{ _docID }} }}"#,
             escape_graphql_string(&doc_id),
@@ -605,13 +593,8 @@ async fn seed_expired_execution_tuple(node: &EmbeddedNode, request_doc_id: &str)
     );
 }
 
-/// Regression: pre-output crash shape not covered by the generated
-/// request-recovery witnesses — the owner persists an explicit `NoMessage`
-/// terminal selection, and a latched interrupt outranks the default Failed
-/// disposition.
 #[tokio::test]
 async fn request_recovery_before_output_persists_canonical_terminal_selection() {
-    // Sub-case A: no published output, no interrupt latch.
     let db = test_db("recovery-no-response-failed").await;
     let request_id = "recovery-no-response-request";
     let session_id = "recovery-no-response-session";
@@ -680,7 +663,6 @@ async fn request_recovery_before_output_persists_canonical_terminal_selection() 
         "a repaired terminal request must leave the active-recovery scope"
     );
 
-    // Sub-case B: no published output but a latched interrupt.
     let db = test_db("recovery-no-response-interrupted").await;
     let request_id = "recovery-no-response-interrupted-request";
     let session_id = "recovery-no-response-interrupted-session";

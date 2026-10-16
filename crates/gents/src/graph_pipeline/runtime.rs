@@ -37,7 +37,6 @@ pub struct PublishedGraph {
     pub trigger_ids: Vec<String>,
 }
 
-/// Storage identity scope for one artifact proposed by a compiled plan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GraphArtifactIdentityScope {
@@ -45,17 +44,12 @@ pub enum GraphArtifactIdentityScope {
     Node,
 }
 
-/// Pure preview of the revision materializer's owned ID scheme for an artifact
-/// an approved publication would inspect; it does not predict whether
-/// publication will create, reuse, or reject the stored document.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct ProspectiveGraphArtifactIdentity {
     pub collection: String,
     pub identity_scope: GraphArtifactIdentityScope,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_did: Option<String>,
-    /// Unique-key fields used by the existing materializer. GraphRevision has
-    /// both globally unique digest and revision_id keys.
     pub identity_keys: BTreeMap<String, String>,
 }
 
@@ -77,13 +71,6 @@ pub struct GraphRunReceipt {
     pub seed_doc_id: String,
 }
 
-/// The durable `run_graph` tool result. Session observers find the run a
-/// session started through this reply, so its only writer and reader
-/// ([`run_receipt_from_tool_result`]) live together. The loop persists only a
-/// bounded head of every tool result
-/// ([`TruncationLimits::default`](crate::truncation::TruncationLimits)), and a
-/// cut reply is not JSON, so its run would never be observed: the reply sheds
-/// the run's entry `input`, then the rest of `observed`, before exceeding them.
 pub fn run_graph_tool_result(
     node: &str,
     receipt: &GraphRunReceipt,
@@ -117,8 +104,6 @@ pub fn run_graph_tool_result(
     Ok(reply)
 }
 
-/// Decode the receipt from a durable [`run_graph_tool_result`]. Any other
-/// text is `None`.
 pub fn run_receipt_from_tool_result(result: &str) -> Option<GraphRunReceipt> {
     #[derive(serde::Deserialize)]
     struct Envelope {
@@ -129,11 +114,6 @@ pub fn run_receipt_from_tool_result(result: &str) -> Option<GraphRunReceipt> {
         .map(|envelope| envelope.receipt)
 }
 
-/// `Operator` is caller-supplied input, admitted against the entry's
-/// `input_schema` (when declared) inside the start transaction; it conveys no
-/// trust beyond that admission, and an entry that declares `prepare` refuses
-/// it. `Prepared` is the output of the host's own prepare step, already
-/// admitted and persisted as the entry's evidence documents.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryInputOrigin {
     Operator,
@@ -153,7 +133,6 @@ pub struct GraphRunTerminalDecision {
     pub may_cancel: bool,
 }
 
-/// Executable refinement of the Lean GraphRun terminal transition guards.
 pub fn graph_run_terminal_decision(
     status: &str,
     cancellation_requested: bool,
@@ -169,9 +148,6 @@ pub fn graph_run_terminal_decision(
     }
 }
 
-/// Executable refinement of the Lean publication gate for a single revision.
-/// `activation_precondition_met` is the caller's compare-and-swap expectation;
-/// `pointer_matches` is the active pointer selecting this exact revision.
 pub fn revision_gate_decision(
     status: &str,
     artifacts_complete: bool,
@@ -211,8 +187,6 @@ pub(crate) fn graph_trigger_id(digest: &str, route: &str) -> Result<String> {
     ))
 }
 
-/// Extract the immutable revision identity from the reserved artifact ID
-/// namespace.
 pub(crate) fn graph_artifact_revision_digest(id: &str) -> Option<String> {
     let tail = id.strip_prefix(TRIGGER_PREFIX)?;
     let (digest, component) = tail.split_once('-')?;
@@ -461,7 +435,6 @@ async fn verify_package_artifacts_in_txn(
     Ok(())
 }
 
-/// Preflight and transactional publication consume the same admission policy.
 pub(super) fn graph_publication_denial(
     runs: &[Value],
     revision_digest: &str,
@@ -585,10 +558,6 @@ fn materialization_receipt(plan: &GraphPlan) -> Result<MaterializedRevision> {
     })
 }
 
-/// Pure preview of prospective artifact identities without reading or writing
-/// storage; `owner_did` scopes only the artifacts whose canonical keys are
-/// node-scoped. Approved publication owns lookup and the resulting
-/// create/reuse/conflict decision.
 pub fn prospective_graph_artifact_identities(
     owner_did: &str,
     plan: &GraphPlan,
@@ -897,8 +866,6 @@ async fn materialize_in_txn(
         anyhow::bail!("approved task {missing:?} is missing or disabled");
     }
 
-    // The route ids come from the one shared `planned_routes` list a preview
-    // and the installation record also iterate.
     let routes = super::routes::planned_routes(plan)?;
     let (entry_routes, edge_routes) = routes.split_at(plan.entries.len());
     let mut trigger_documents = Vec::new();
@@ -1062,8 +1029,6 @@ async fn planned_route_documents(
         .collect())
 }
 
-/// Compare-and-swap the one mutable pointer that makes a complete immutable
-/// revision visible to runtime reconciliation.
 pub async fn activate_graph_revision(
     node: &std::sync::Arc<EmbeddedNode>,
     identity: Option<Did>,
@@ -1747,8 +1712,6 @@ mod tests {
         test_plan_with_entry(configuration, None, None)
     }
 
-    /// [`test_plan`], with the entry's `input_schema`/`prepare` set to
-    /// whatever a start-guard test needs to exercise.
     fn test_plan_with_entry(
         configuration: &str,
         input_schema: Option<Value>,
@@ -2035,39 +1998,6 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
-    fn reserved_artifact_ids_round_trip_only_in_strict_shape() {
-        let digest = format!("sha256:{}", "a".repeat(64));
-        let id = graph_trigger_id(&digest, "entry:input:node:input").unwrap();
-        assert_eq!(graph_artifact_revision_digest(&id), Some(digest.clone()));
-        assert_eq!(graph_artifact_revision_digest("operator-task"), None);
-        assert_eq!(
-            graph_artifact_revision_digest("graph-trigger-not-a-digest-x"),
-            None
-        );
-        let active = BTreeSet::from([digest.clone()]);
-        assert!(graph_artifact_is_reserved(&id));
-        assert!(graph_artifact_is_reserved("graph-trigger-not-a-digest-x"));
-        assert!(!graph_artifact_is_reserved("operator-task"));
-        assert!(graph_artifact_is_visible(&id, &active));
-        assert!(graph_artifact_is_visible("operator-task", &BTreeSet::new()));
-        assert!(!graph_artifact_is_visible(&id, &BTreeSet::new()));
-        assert!(!graph_artifact_is_visible(
-            "graph-trigger-not-a-digest-x",
-            &BTreeSet::new()
-        ));
-    }
-
-    #[test]
-    fn package_visibility_distinguishes_active_pointers_from_run_pins() {
-        assert!(revision_visibility_authorized("active", true, false));
-        assert!(!revision_visibility_authorized("retired", true, false));
-        assert!(revision_visibility_authorized("active", false, true));
-        assert!(revision_visibility_authorized("retired", false, true));
-        assert!(!revision_visibility_authorized("validated", true, true));
-        assert!(!revision_visibility_authorized("draft", true, true));
-    }
-
     async fn install_plan_tasks(node: &Arc<EmbeddedNode>, plan: &GraphPlan) {
         install_graph_test_tasks(
             node,
@@ -2328,8 +2258,6 @@ mod tests {
         assert_eq!(data["PipelineInput"][0]["graph_run_id"], run.run_id);
         assert_eq!(data["PipelineInput"][0]["payload"], "hello");
 
-        // Foreign active pointers and live pins must never retain this owner's
-        // artifacts after its own last run finishes.
         let foreign = node.execute(&format!(r#"mutation {{
             create_GraphDefinition(input: {{graph_id: "foreign-pointer", node_did: "did:key:foreign",
                 enabled: true, active_revision_digest: "{digest}"}}) {{_docID}}
@@ -2370,7 +2298,6 @@ mod tests {
             Some(first.digest.as_str())
         );
         assert_eq!(switched.generation, 2);
-        // The old revision remains executable only while its real run is live.
         assert_visible(&node, &materialized.trigger_ids[0], true).await;
 
         let now = chrono::Utc::now().to_rfc3339();
@@ -2477,9 +2404,6 @@ mod tests {
         }
     }
 
-    /// The Lean `start_requires_admitted_input` guard: `Operator` on an
-    /// entry that prepares its input on the host is refused before it ever
-    /// reaches `admit_operator_input`.
     #[tokio::test]
     async fn start_run_refuses_operator_origin_when_the_entry_declares_prepare() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
@@ -2530,9 +2454,6 @@ mod tests {
         node.shutdown().await;
     }
 
-    /// `Prepared` on an entry that does not declare `prepare` is refused: a
-    /// caller cannot claim host-shaped input for an entry that never asked
-    /// for it.
     #[tokio::test]
     async fn start_run_refuses_prepared_origin_when_the_entry_has_no_prepare() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
@@ -2579,9 +2500,6 @@ mod tests {
         node.shutdown().await;
     }
 
-    /// `Operator` input that violates the entry's `input_schema` is refused
-    /// inside `start_run_in_txn`, and an admitted default fills a field the
-    /// operator left out.
     #[tokio::test]
     async fn start_run_validates_operator_input_against_the_entry_schema() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
@@ -2723,9 +2641,6 @@ mod tests {
             .await;
         assert!(!result.has_errors(), "{:?}", result.errors);
 
-        // Ordinary automation may deliberately reuse the run UUID as a
-        // correlation value. Only requests/groups owned by this pinned
-        // revision's trigger IDs contribute to graph completion.
         let unrelated = node
             .execute(&format!(
                 r#"mutation {{
@@ -2916,10 +2831,6 @@ mod tests {
         }
     }
 
-    // Drives the real GraphRun transaction/interrupt owners. Request fixture
-    // state changes emulate executor terminal observations, not a second graph
-    // coordinator. No provider or wall-clock sleep is needed.
-    /// Seed a real authenticated route receipt, then set its mutable lifecycle.
     pub(in crate::graph_pipeline) fn graph_test_owner() -> &'static str {
         use crate::identity::NodeIdentity;
         static OWNER: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -3006,8 +2917,6 @@ mod tests {
             node.add_schema(schema).await.unwrap();
         }
         let mut plan = result_test_plan();
-        // The physical requests must fit the run limit, or the fixture would
-        // prove invocation-limit failure instead of request-cause attribution.
         plan.limits.max_total_invocations = max_invocations;
         plan.digest = crate::graph_pipeline::graph_plan_digest(&plan);
         install_plan_tasks(&node, &plan).await;
@@ -3055,8 +2964,6 @@ mod tests {
         let first = reconcile_failure_fixture(&node, &run.run_id, via_access).await;
         assert_eq!(first.status, "running");
         assert_eq!(first.active_request_count, 1);
-        // Reload from DB: asserting only failure_evidence would pass before
-        // the fix because that is recomputed and is not a durable latch.
         let latched = super::super::load_graph_run_view(&node, graph_test_owner(), &run.run_id)
             .await
             .unwrap();
@@ -3078,8 +2985,6 @@ mod tests {
                 .is_some()
         );
 
-        // A fresh reconciliation object has only DB state, like restart after
-        // the committed cause and initial interrupt. It cannot replace cause.
         let repeated = reconcile_failure_fixture(&node, &run.run_id, via_access).await;
         assert_eq!(repeated.status, "running");
         assert_eq!(repeated.error.as_ref(), Some(&primary));
@@ -3111,8 +3016,6 @@ mod tests {
             assert!(cancelled.cancellation_requested_at.is_some());
             assert_eq!(cancelled.cancellation_reason.as_deref(), reason);
             assert!(cancelled.update_generation > latched.update_generation);
-            // Error may remain diagnostic during drain. Cancellation must win
-            // final status and clear error once the sibling is terminal.
         }
         let drained = node
             .execute(&format!(

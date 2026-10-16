@@ -7,8 +7,6 @@ namespace Compaction
 open Transcript (MessageRow MessageKind ToolResultKey)
 open PromptAssembly (ActiveBlockValid ActiveBlockValidFrom)
 
-/-! ## Fold helpers -/
-
 theorem foldrMax_eq_zero_or_mem :
     ∀ l : List Nat, l.foldr max 0 = 0 ∨ l.foldr max 0 ∈ l := by
   intro l
@@ -34,8 +32,6 @@ theorem foldrMax_le (n : Nat) :
       rw [List.foldr_cons]
       exact max_le (h x (List.mem_cons_self _ _))
         (ih (fun y hy => h y (List.mem_cons_of_mem _ hy)))
-
-/-! ## The pair-safe boundary -/
 
 abbrev SplitPolicy := List MessageRow → Nat
 
@@ -185,8 +181,6 @@ theorem openRoundReduction_cannot_fit (msgs : List MessageRow) (rawIndex : Nat)
       = false := by simp [haligned]
   simp [prepareProtectedReplayCheckpoint, hne, protectedPairSafeBoundary_zero]
 
-/-! ## Pair closure of the retained tail -/
-
 theorem announcementsAreAssistant_drop {msgs : List MessageRow} (n : Nat)
     (h : PromptView.AnnouncementsAreAssistant msgs) :
     PromptView.AnnouncementsAreAssistant (msgs.drop n) := by
@@ -301,8 +295,6 @@ theorem drop_blockValid_of_pending_empty {msgs : List MessageRow} {n : Nat}
   have h := activeBlockValidFrom_append (msgs.take n) (msgs.drop n) ∅
     (by rw [List.take_append_drop]; exact hblock)
   rwa [hpend] at h
-
-/-! ## The reducer -/
 
 def summarize (policy : SplitPolicy) (handle : SummaryHandle) :
     TranscriptReducer := fun v =>

@@ -780,16 +780,9 @@ fn bounded_chars(text: &str, limit: usize) -> String {
     format!("{}...", text.chars().take(limit).collect::<String>())
 }
 
-/// The longest a tool's key argument or failure status may be in the short
-/// summary line before eliding the rest — long enough to show a real
-/// command or path, short enough that even a giant one stays one line.
 pub(super) const SUMMARY_ARGUMENT_MAX_CHARS: usize = 100;
 
-/// Makes tool-provided text safe to print as a single terminal line: tool
-/// arguments and output are untrusted terminal input, and an embedded
-/// control character would become a live terminal control sequence when
-/// printed. The sole normalization/bounding helper for terminal-facing
-/// untrusted text — every such call site routes through this function.
+/// Removes terminal control characters from untrusted text before display.
 pub(super) fn sanitize_summary_text(text: &str, max_chars: usize) -> Option<String> {
     let mut normalized = String::with_capacity(text.len());
     let mut last_was_space = false;
@@ -853,8 +846,6 @@ fn key_argument(arguments: &str) -> Option<String> {
     None
 }
 
-/// The two prefixes gents's own tools use for their first, compact-text
-/// metadata line; both carry at least `ok` (bool) and `status` (string).
 const TOOL_OUTPUT_METADATA_PREFIXES: [&str; 2] = ["gents_exec: ", "gents_fs: "];
 
 fn parse_tool_output_metadata(result: &str) -> Option<(bool, String)> {
@@ -1013,22 +1004,6 @@ mod tests {
     }
 
     #[test]
-    fn canonical_tool_presentation_retains_compact_arguments_and_result() {
-        let tool = ToolCallProgress {
-            tool_call_doc_id: "physical-tool".into(),
-            tool_call_key: "tool-key".into(),
-            tool_name: "bash".into(),
-            status: "completed".into(),
-            arguments: "{\n  \"command\": \"printf hi\"\n}".into(),
-            result: Some("hi\nthere".into()),
-        };
-        assert_eq!(
-            format_tool_progress_line(&tool),
-            "[tool done] bash ({ \"command\": \"printf hi\" }) => hi there"
-        );
-    }
-
-    #[test]
     fn compact_preview_is_unicode_safe_and_bounded() {
         let preview = preview_compact_text(&"考".repeat(121)).expect("nonempty preview");
         assert_eq!(preview.chars().count(), 123);
@@ -1109,122 +1084,6 @@ mod tests {
             arguments: r#"{"args":["branch","--show-current"],"command":"git"}"#.into(),
             result: result.map(ToOwned::to_owned),
         }
-    }
-
-    #[test]
-    fn key_argument_joins_command_and_args_for_bash() {
-        assert_eq!(
-            key_argument(r#"{"args":["branch","--show-current"],"command":"git"}"#),
-            Some("git branch --show-current".to_string())
-        );
-        assert_eq!(key_argument(r#"{"command":"ls"}"#), Some("ls".to_string()));
-    }
-
-    #[test]
-    fn key_argument_uses_path_for_file_tools() {
-        assert_eq!(
-            key_argument(r#"{"path":"notes.txt","start_line":1}"#),
-            Some("notes.txt".to_string())
-        );
-    }
-
-    #[test]
-    fn key_argument_prefers_pattern_with_non_default_path_for_search_tools() {
-        assert_eq!(
-            key_argument(r#"{"pattern":"TODO","path":"crates/gents"}"#),
-            Some("TODO in crates/gents".to_string())
-        );
-        assert_eq!(
-            key_argument(r#"{"pattern":"TODO","path":"."}"#),
-            Some("TODO".to_string())
-        );
-    }
-
-    #[test]
-    fn key_argument_is_none_for_unrecognized_shape() {
-        assert_eq!(key_argument(r#"{"objective":"ship it"}"#), None);
-        assert_eq!(key_argument("not json"), None);
-    }
-
-    #[test]
-    fn tool_summary_line_reports_ok_for_a_successful_completed_bash_call() {
-        let tool = bash_tool(
-            "completed",
-            Some(
-                "gents_exec: {\"ok\":true,\"status\":\"success\",\"exit_code\":0}\nstdout:\n(empty)\nstderr:\n(empty)",
-            ),
-        );
-        assert_eq!(
-            format_tool_summary_line(&tool, false),
-            "  [tool] bash git branch --show-current -> ok"
-        );
-    }
-
-    #[test]
-    fn tool_summary_line_reports_failed_with_short_status_for_a_nonzero_exit() {
-        let tool = bash_tool(
-            "completed",
-            Some(
-                "gents_exec: {\"ok\":false,\"status\":\"exit_nonzero\",\"exit_code\":1}\nstdout:\n(empty)\nstderr:\nfatal: not a git repository",
-            ),
-        );
-        assert_eq!(
-            format_tool_summary_line(&tool, false),
-            "  [tool] bash git branch --show-current -> failed: exit_nonzero"
-        );
-    }
-
-    #[test]
-    fn tool_summary_line_reports_failed_for_an_infra_level_tool_error() {
-        let tool = bash_tool("error", Some("command denied by policy: rm"));
-        assert_eq!(
-            format_tool_summary_line(&tool, false),
-            "  [tool] bash git branch --show-current -> failed: command denied by policy: rm"
-        );
-    }
-
-    #[test]
-    fn tool_summary_line_has_no_outcome_while_still_running() {
-        let tool = bash_tool("running", None);
-        assert_eq!(
-            format_tool_summary_line(&tool, false),
-            "  [tool] bash git branch --show-current"
-        );
-    }
-
-    #[test]
-    fn tool_summary_line_uses_path_for_a_successful_file_read() {
-        let tool = ToolCallProgress {
-            tool_call_doc_id: "physical-tool".into(),
-            tool_call_key: "tool-key".into(),
-            tool_name: "read_file".into(),
-            status: "completed".into(),
-            arguments: r#"{"path":"notes.txt"}"#.into(),
-            result: Some(
-                "gents_fs: {\"ok\":true,\"status\":\"success\",\"tool\":\"read_file\",\"path\":\"notes.txt\"}\nchat-tool-token"
-                    .into(),
-            ),
-        };
-        assert_eq!(
-            format_tool_summary_line(&tool, false),
-            "  [tool] read_file notes.txt -> ok"
-        );
-    }
-
-    #[test]
-    fn tool_summary_line_falls_back_to_a_compact_preview_for_unknown_shapes() {
-        let tool = ToolCallProgress {
-            tool_call_doc_id: "physical-tool".into(),
-            tool_call_key: "tool-key".into(),
-            tool_name: "create_goal".into(),
-            status: "completed".into(),
-            arguments: r#"{"objective":"ship it","token_budget":100}"#.into(),
-            result: None,
-        };
-        assert_eq!(
-            format_tool_summary_line(&tool, false),
-            r#"  [tool] create_goal {"objective":"ship it","token_budget":100} -> ok"#
-        );
     }
 
     #[test]

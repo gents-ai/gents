@@ -1,5 +1,3 @@
-//! Core DefraDB-backed agent runtime for Gents.
-
 #[cfg(test)]
 extern crate self as gents;
 
@@ -87,24 +85,14 @@ pub mod xai_grok_oauth;
 pub mod xai_oauth_login;
 pub mod xai_oauth_refresh;
 
-/// Shared in-crate test utilities.
 #[cfg(test)]
 pub(crate) mod test_support {
-    /// Event targets a scoped subscriber in this crate's tests reads back; a
-    /// target left out stays subject to the tracing callsite interest cache
-    /// described on [`enable_scoped_event_capture`].
     const CAPTURED_EVENT_TARGETS: &[&str] = &[
         crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
         crate::runtime_status::RECONCILE_PHASE_EVENT_TARGET,
         crate::session::REFUSAL_PROJECTION_EVENT_TARGET,
     ];
 
-    /// Keeps the captured targets' callsites enabled so a scoped subscriber
-    /// observes them: `tracing` caches one interest per callsite from the
-    /// default subscriber of whichever thread reaches it first, so a callsite
-    /// first reached by a thread with no subscriber is cached as disabled and a
-    /// later scoped subscriber receives nothing. Call this before installing a
-    /// scoped subscriber a test reads from.
     pub(crate) fn enable_scoped_event_capture() {
         static INSTALLED: std::sync::Once = std::sync::Once::new();
         INSTALLED.call_once(|| {
@@ -173,7 +161,6 @@ pub(crate) mod test_support {
         Ok(())
     }
 
-    /// Sets a process environment variable and restores its previous value on drop.
     pub(crate) struct EnvVarGuard {
         key: &'static str,
         previous: Option<String>,
@@ -196,7 +183,6 @@ pub(crate) mod test_support {
         }
     }
 
-    /// Installs an explicit, inert inference/context/tools chain for a named test agent.
     pub(crate) async fn install_test_agent(
         node: &std::sync::Arc<defra_node::EmbeddedNode>,
         owner: &str,
@@ -231,9 +217,6 @@ pub(crate) mod test_support {
             .unwrap();
     }
 
-    /// Copies the declared files of the fixture pack `tests/fixtures/packs/<name>`
-    /// into a temp directory; a plugin's `.afb` (not checked in) is written as a
-    /// module that prints `plugin_output`, every other file is copied as is.
     pub(crate) fn fixture_pack_copy(
         name: &str,
         plugin_output: &serde_json::Value,
@@ -271,8 +254,6 @@ pub(crate) mod test_support {
         (dir, root)
     }
 
-    /// A gents home whose pack store holds the fixture pack `tests/fixtures/packs/<name>`
-    /// with a plugin executor over it.
     pub(crate) fn home_with_fixture_pack(
         name: &str,
     ) -> (
@@ -363,10 +344,6 @@ pub(crate) mod test_support {
         items.first().expect("non-empty content")
     }
 
-    /// The #589 production poison, byte-faithful to the persisted `AgentToolCall`
-    /// row `Rrt-HmhWfFSmkh1HSUmHt`: contaminated model tool-call `arguments`
-    /// (out-of-channel tokens, duplicated keys, literal newlines) whose intended
-    /// call survives as the final `tool_name: list_hosts`.
     pub(crate) const CORRUPT_TOOL_ARGS_589: &str = "{\"raw_schema\": false, \
          \"service_id\": \"observability-mcp\", \"tool房\n</think\": \"\n<tool_call>\n\
          <function=describe_tool>\", \"raw_schema\": false, \

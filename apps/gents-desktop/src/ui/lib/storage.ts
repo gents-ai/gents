@@ -12,14 +12,12 @@ export const browserStorage = {
     try {
       localStorage.setItem(key, value);
     } catch {
-      // Storage unavailable.
     }
   },
   removeItem(key: string) {
     try {
       localStorage.removeItem(key);
     } catch {
-      // Storage unavailable.
     }
   },
 };

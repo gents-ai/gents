@@ -1,5 +1,3 @@
-//! Typed invocation wire boundary. Admission and signature coverage require the
-//! production owners to consume these inputs; serde acceptance grants no authority.
 use super::*;
 use gents_protocol::request_input::RequestInput;
 
@@ -114,8 +112,6 @@ fn signed_request_input_fields_match_lean_bytes() {
             expected.as_slice(),
             "{name}: real signing owner must use Lean's typed-input framing"
         );
-        // Next immutable semantic: execution_origin (present optional field);
-        // also rejects extra fields in the input segment.
         assert_eq!(fields[start + expected.len()], vec![1], "{name}");
         assert_eq!(fields[start + expected.len() + 1], b"interactive", "{name}");
     }

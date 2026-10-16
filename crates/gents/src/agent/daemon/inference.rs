@@ -1555,8 +1555,6 @@ pub(super) mod tests {
         let _ = std::fs::remove_dir_all(data_path);
     }
 
-    /// The R6 completion fixture uses a background agent-target session; its
-    /// selected wake stays pending until the daemon's ordinary admission runs.
     #[tokio::test]
     async fn successor_background_wake_moves_notification_after_previous_answer() {
         use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -1645,8 +1643,6 @@ pub(super) mod tests {
             .await
             .unwrap();
 
-        // This direct daemon fixture has no watcher/router; it only observes
-        // pending title work.
         let session_id = crate::graphql::escape_graphql_string(&wake.session_id);
         let node_did = crate::graphql::escape_graphql_string(&admission.node_did);
         let title_purpose = crate::graphql::escape_graphql_string(

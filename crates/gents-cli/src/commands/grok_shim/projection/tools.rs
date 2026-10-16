@@ -1,19 +1,3 @@
-//! Grok shim tool projection: projects durable `AgentToolCall` rows into the
-//! Grok pager's `tool_call` / `tool_call_update` `session/update`
-//! notifications, request-id scoped and ordered by `started_at`.
-//!
-//! Ordering and wire rules mirrored from `xai-grok-pager/src/acp/tracker.rs`:
-//! suppressed tool families (`todo`, `bg-plumbing`, `goal`, `scheduler`,
-//! `workflow`) are never rendered; `task`/`Task` are deliberately **not**
-//! suppressed and the pager handles title recognition, waiting, and
-//! suppression on its side; orphan `tool_call_update` values arriving before
-//! their `tool_call` are merged by `toolCallId` on arrival.
-//!
-//! Terminal ACP client methods (`terminal/create`, `terminal/output`,
-//! `terminal/wait_for_exit`, `terminal/kill`, `terminal/release`) remain
-//! explicit shaped unsupported results: the shim registers
-//! `clientTerminal: false`, so shell work runs agent-side. No permission
-//! document is ever created by this leaf.
 
 use std::{char::REPLACEMENT_CHARACTER, collections::HashMap, sync::Arc};
 
@@ -29,32 +13,18 @@ use super::nonempty;
 
 mod background;
 
-/// JSON-RPC error code the pager uses for a client method the client does
-/// not implement.
 pub(crate) const JSONRPC_METHOD_NOT_SUPPORTED: i64 = -32601;
 
-/// The exact message the reference pager answers `terminal/wait_for_exit`
-/// with; the pager's adapter falls back to polling when it sees it.
 pub(crate) const PAGER_WAIT_FOR_EXIT_MESSAGE: &str = "pager does not handle WaitForTerminalExit";
 
-/// Canonical tool meta envelope key the pager recognizes: the `_meta` field
-/// of a `tool_call` carries an envelope object whose `x.ai/tool` entry holds
-/// the canonical tool meta (`version`/`kind`), with a `subagentBackground`
-/// boolean sibling merged from the row's persisted `await_mode`.
 pub(super) const TOOL_META_KEY: &str = "x.ai/tool";
 
-/// Canonical tool meta version marker.
 pub(super) const TOOL_META_VERSION: u64 = 1;
 
-/// Canonical tool meta kind for an active agent message
-/// (`send_subagent_message`).
 pub(super) const TOOL_META_KIND_ACTIVE_AGENT_MESSAGE: &str = "ActiveAgentMessage";
 
-/// Title the pager falls back to when recognizing
-/// `send_subagent_message` without canonical meta.
 pub(super) const SEND_ACTIVE_AGENT_MESSAGE_TITLE: &str = "send_subagent_message";
 
-/// Grok pager tool-call kinds, mapped from durable tool names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ToolCallKind {
     Read,
@@ -84,7 +54,6 @@ impl ToolCallKind {
     }
 
 
-    /// Map a durable Gents tool name onto the pager kind vocabulary.
     pub(super) fn from_tool_name(tool_name: &str) -> Self {
         match tool_name {
             "read_file" | gents::toolset::AGENT_SESSION_READ_TOOL_NAME => ToolCallKind::Read,
@@ -112,7 +81,6 @@ impl ToolCallKind {
     }
 }
 
-/// Grok pager tool-call statuses, mapped from the durable lifecycle state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ToolCallStatus {
     Pending,
@@ -131,13 +99,11 @@ impl ToolCallStatus {
         }
     }
 
-    /// True when the pager treats the tool call as settled.
     pub(super) fn is_completed(self) -> bool {
         matches!(self, ToolCallStatus::Completed | ToolCallStatus::Failed)
     }
 }
 
-/// One durable `AgentToolCall` row scoped to the projected request.
 #[derive(Clone, Debug, Deserialize)]
 pub(super) struct ToolCallRow {
     #[serde(rename = "_docID")]
@@ -155,13 +121,8 @@ pub(super) struct ToolCallRow {
     selected_tool_name: Option<String>,
     #[serde(default)]
     tool_failure_class: Option<String>,
-    /// Persisted await mode: only the exact value `background` marks a
-    /// background call.
     #[serde(default)]
     await_mode: Option<String>,
-    /// Durable transcript position of the assistant turn this call belongs
-    /// to; the cross-family chronology key for the projection engine's
-    /// merged emission order.
     #[serde(default)]
     message_sequence: Option<i64>,
     #[serde(default)]
@@ -186,20 +147,12 @@ const TOOL_CALL_FIELDS: &str = r#"
     completed_at
 "#;
 
-/// The full set of projection events for one request id, ordered so a client
-/// can replay each tool call's lifecycle exactly once.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ToolProjection {
     pub updates: Vec<ToolUpdate>,
-    /// Durable chronology key per update, aligned 1:1 with `updates`: the
-    /// row's `message_sequence` for per-call events, `None` for the trailing
-    /// positionless `available_commands_update`. The projection engine merges
-    /// families by this key; `None` sorts after every positioned event of the
-    /// family.
     pub chronology: Vec<Option<i64>>,
 }
 
-/// A single projected tool update.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum ToolUpdate {
     ToolCall(ToolCallUpdate),
@@ -209,8 +162,6 @@ pub(super) enum ToolUpdate {
 }
 
 impl ToolUpdate {
-    /// Test observation helper: the projection engine discriminates by
-    /// matching the enum.
     #[cfg(test)]
     pub fn session_update_kind(&self) -> &'static str {
         match self {
@@ -222,7 +173,6 @@ impl ToolUpdate {
     }
 }
 
-/// A full `tool_call` tracker registration payload.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ToolCallUpdate {
     pub tool_call_id: String,
@@ -242,9 +192,6 @@ impl ToolCallUpdate {
             || self.title == SEND_ACTIVE_AGENT_MESSAGE_TITLE
     }
 
-    /// Optional absent objects (`rawInput`/`rawOutput`/`_meta`/`content`) are
-    /// omitted entirely rather than sent as nulls, matching the pager
-    /// decoder.
     pub fn to_payload(&self) -> Value {
         let mut payload = json!({
             "sessionUpdate": "tool_call",
@@ -272,8 +219,6 @@ impl ToolCallUpdate {
     }
 }
 
-/// A `tool_call_update` payload: the changed fields merged into the pending
-/// base by `toolCallId`.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ToolCallFieldsUpdate {
     pub tool_call_id: String,
@@ -287,9 +232,6 @@ impl ToolCallFieldsUpdate {
     }
 }
 
-/// Render ACP's flattened `tool_call_update` shape. The schema models the
-/// changed fields with `#[serde(flatten)]`, so nesting them below a synthetic
-/// `fields` key makes the pager silently ignore status/content revisions.
 pub(super) fn tool_call_update_payload(tool_call_id: &str, fields: &Value) -> Value {
     let mut payload = json!({
         "sessionUpdate": "tool_call_update",
@@ -301,7 +243,6 @@ pub(super) fn tool_call_update_payload(tool_call_id: &str, fields: &Value) -> Va
     payload
 }
 
-/// An `available_commands_update` payload.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct AvailableCommandsUpdate {
     pub tools: Vec<String>,
@@ -319,12 +260,7 @@ impl AvailableCommandsUpdate {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Suppressed tool families and canonical meta
-// ---------------------------------------------------------------------------
 
-/// The tool families the pager never renders as scrollback blocks. The
-/// `task` family is deliberately **not** suppressed.
 pub(super) fn suppressed_tool_family(tool_name: &str) -> Option<&'static str> {
     match tool_name {
         "todo" | "todos" => Some("todo"),
@@ -336,8 +272,6 @@ pub(super) fn suppressed_tool_family(tool_name: &str) -> Option<&'static str> {
     }
 }
 
-/// True when the durable tool name belongs to the `task` family the pager
-/// recognizes for agent spawns.
 pub(super) fn is_task_family(tool_name: &str) -> bool {
     matches!(
         tool_name,
@@ -345,8 +279,6 @@ pub(super) fn is_task_family(tool_name: &str) -> bool {
     )
 }
 
-/// True when canonical tool meta recognizes the call as an active agent
-/// message (`send_subagent_message`).
 pub(super) fn is_active_agent_message_meta(meta: Option<&Value>) -> bool {
     let Some(meta) = meta else {
         return false;
@@ -361,12 +293,7 @@ pub(super) fn is_active_agent_message_meta(meta: Option<&Value>) -> bool {
         && object.get("kind").and_then(Value::as_str) == Some(TOOL_META_KIND_ACTIVE_AGENT_MESSAGE)
 }
 
-// ---------------------------------------------------------------------------
-// Projection entry point
-// ---------------------------------------------------------------------------
 
-/// Project the tool-call lifecycle for one request id. A reconstruction
-/// error is a real projection error, never a tool status change.
 pub(super) async fn project_tools(
     node: &Arc<EmbeddedNode>,
     request: &gents_protocol::row::AgentRequestRow,
@@ -432,17 +359,11 @@ pub(super) async fn project_tools(
     Ok(projection)
 }
 
-/// One call of a named tool in a root session and its durable reply.
 pub(crate) struct SessionToolResult {
     pub doc_id: String,
-    /// `Ok(None)` until the reply is delivered; an `Err` belongs to this
-    /// call alone and does not abort the batch read.
     pub result: Result<Option<String>>,
 }
 
-/// Calls of `tool_name` in this root session (requester is the node),
-/// excluding `skip`ped physical identities, each read through the canonical
-/// presentation owner.
 pub(crate) async fn session_tool_results(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -487,8 +408,6 @@ pub(crate) async fn session_tool_results(
     Ok(results)
 }
 
-/// The durable chronology sort key of one tool call row:
-/// `(message_sequence, stable identity)`.
 fn tool_call_row_sort_key(row: &ToolCallRow) -> (i64, String) {
     (
         row.message_sequence.unwrap_or(i64::MAX),
@@ -496,14 +415,10 @@ fn tool_call_row_sort_key(row: &ToolCallRow) -> (i64, String) {
     )
 }
 
-/// Sort decoded rows into the deterministic durable chronology order; this
-/// stable sort is the single ordering authority for the family.
 fn sort_tool_call_rows(rows: &mut [ToolCallRow]) {
     rows.sort_by_key(tool_call_row_sort_key);
 }
 
-/// Pure projection over decoded rows joined with their canonical
-/// presentations (keyed by physical `_docID`); unit-testable without a node.
 pub(super) fn project_tool_rows(
     rows: &[ToolCallRow],
     presentations: &HashMap<String, CanonicalToolCallPresentation>,
@@ -514,7 +429,6 @@ pub(super) fn project_tool_rows(
     let mut ordered = rows.to_vec();
     sort_tool_call_rows(&mut ordered);
 
-    // Borrowed across the loop so `result_text` can reference them.
     let mut live_windows: Vec<String> = Vec::new();
 
     for row in &ordered {
@@ -624,8 +538,6 @@ pub(super) fn project_tool_rows(
 }
 
 impl ToolCallRow {
-    /// The pager-visible `toolCallId`: the durable `tool_call_id` when
-    /// recorded, otherwise the `tool_call_key`.
     fn tool_call_key_tool_call_id(&self) -> Option<String> {
         if let Some(id) = self.tool_call_id.as_deref().and_then(nonempty) {
             return Some(id.to_string());
@@ -638,9 +550,6 @@ impl ToolCallRow {
         })
     }
 
-    /// The durable stable identity of this row for deterministic ordering
-    /// ties: the first non-empty of `tool_call_id`, `tool_call_key`, and
-    /// `_docID`.
     fn stable_identity(&self) -> &str {
         self.tool_call_id
             .as_deref()
@@ -651,8 +560,6 @@ impl ToolCallRow {
     }
 }
 
-/// The streaming live-output preview for one tool row, when the canonical
-/// presentation has no durable result text yet.
 fn live_output_window(
     presentation: Option<&CanonicalToolCallPresentation>,
     row: &ToolCallRow,
@@ -674,10 +581,6 @@ fn live_output_window(
     Some(decoded)
 }
 
-/// The authoritative observed lifecycle status of one tool row: the durable
-/// `lifecycle_state` wins; a persisted failure class is always `failed`; a
-/// blank row falls back to the legacy `status` vocabulary; anything else is
-/// still in progress.
 fn observed_status(row: &ToolCallRow) -> ToolCallStatus {
     if row
         .tool_failure_class
@@ -709,9 +612,6 @@ fn observed_status(row: &ToolCallRow) -> ToolCallStatus {
     }
 }
 
-/// The pager title for a tool call. `send_subagent_message` keeps its
-/// recognized title; shell tools surface their command; other tools surface
-/// their durable name.
 fn tool_title(
     row: &ToolCallRow,
     kind: &ToolCallKind,
@@ -753,7 +653,6 @@ fn tool_title(
     }
 }
 
-/// Extract a shell command from JSON args (`command` key).
 fn shell_command_from_args(args: &str) -> Option<String> {
     let object = serde_json::from_str::<Value>(args).ok()?;
     object
@@ -763,9 +662,6 @@ fn shell_command_from_args(args: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// The `content` blocks for a tool call, derived from the recorded result
-/// text. Absent results produce no blocks (the field is omitted on the
-/// wire).
 fn tool_content(result_text: &str) -> Vec<Value> {
     let trimmed = result_text.trim();
     if trimmed.is_empty() {
@@ -777,8 +673,6 @@ fn tool_content(result_text: &str) -> Vec<Value> {
     })]
 }
 
-/// `agent_message` keeps the pager's active-agent-message input shape:
-/// the target session as `subagent_id` and the message as `text`.
 fn agent_message_raw_input(args: &str) -> Option<Value> {
     let object = serde_json::from_str::<Value>(args.trim()).ok()?;
     let mut shaped = Map::new();
@@ -791,10 +685,6 @@ fn agent_message_raw_input(args: &str) -> Option<Value> {
     Some(Value::Object(shaped))
 }
 
-/// The structured `rawInput` for a tool call. JSON args are passed through
-/// as the object; `send_subagent_message` is shaped to
-/// `{"subagent_id", "text"}`; non-JSON args are wrapped as a single
-/// `input` string.
 fn raw_input_value(args: &str, meta: Option<&Value>) -> Option<Value> {
     let trimmed = args.trim();
     if trimmed.is_empty() {
@@ -817,9 +707,6 @@ fn raw_input_value(args: &str, meta: Option<&Value>) -> Option<Value> {
     Some(json!({ "input": trimmed }))
 }
 
-/// The structured `rawOutput` for a tool call. JSON results pass through;
-/// shell results surface their recorded exit code when present; plain text
-/// is wrapped as a single `output` string.
 fn raw_output_value(result_text: &str) -> Option<Value> {
     let trimmed = result_text.trim();
     if trimmed.is_empty() {
@@ -831,11 +718,6 @@ fn raw_output_value(result_text: &str) -> Option<Value> {
     Some(json!({ "output": trimmed }))
 }
 
-/// Decode the canonical tool meta envelope for a tool call: the full
-/// envelope object (the `x.ai/tool` entry verbatim, plus a
-/// `subagentBackground` boolean merged from the row's persisted
-/// `await_mode`). Task-family rows always carry an object `meta` with the
-/// explicit boolean — false is never omitted.
 fn tool_meta_envelope(tool_name: &str, args: &str, await_mode: Option<&str>) -> Option<Value> {
     let tool_meta = tool_meta_from_args(args);
     let background = matches!(await_mode, Some("background"));
@@ -863,7 +745,6 @@ fn tool_meta_envelope(tool_name: &str, args: &str, await_mode: Option<&str>) -> 
     }
 }
 
-/// Decode the canonical tool meta recorded in the row's args, when present.
 fn tool_meta_from_args(args: &str) -> Option<Value> {
     let trimmed = args.trim();
     if trimmed.is_empty() {
@@ -873,9 +754,6 @@ fn tool_meta_from_args(args: &str) -> Option<Value> {
     object.get(TOOL_META_KEY).cloned()
 }
 
-/// The visible tool list for `available_commands_update`, derived from the
-/// projected request's non-suppressed durable tool names, deduplicated and
-/// ordered.
 fn available_commands(rows: &[ToolCallRow]) -> Vec<String> {
     let mut tools: Vec<String> = rows
         .iter()
@@ -888,13 +766,7 @@ fn available_commands(rows: &[ToolCallRow]) -> Vec<String> {
     tools
 }
 
-// ---------------------------------------------------------------------------
-// Terminal ACP client method stubs
-// ---------------------------------------------------------------------------
 
-/// The exact not-supported JSON-RPC error the reference pager answers
-/// `terminal/wait_for_exit` with; the pager's adapter recognizes this
-/// failure and falls back to polling, so the message stays verbatim.
 pub(crate) fn wait_for_exit_not_supported() -> Value {
     json!({
         "code": JSONRPC_METHOD_NOT_SUPPORTED,
@@ -902,9 +774,6 @@ pub(crate) fn wait_for_exit_not_supported() -> Value {
     })
 }
 
-/// The shaped method-not-found error value for the terminal ACP client
-/// methods other than `terminal/wait_for_exit`; the wording is the shim's
-/// own.
 pub(crate) fn terminal_not_supported_error(method: &str) -> Value {
     json!({
         "code": JSONRPC_METHOD_NOT_SUPPORTED,
@@ -915,9 +784,6 @@ pub(crate) fn terminal_not_supported_error(method: &str) -> Value {
     })
 }
 
-/// Route one terminal ACP client method to its shaped unsupported result.
-/// Unknown methods are routed through the caller's generic method-not-found
-/// handling.
 pub(crate) fn handle_terminal_client_method(method: &str) -> std::result::Result<(), Value> {
     match method {
         "terminal/wait_for_exit" => Err(wait_for_exit_not_supported()),
@@ -935,9 +801,6 @@ pub(crate) fn handle_terminal_client_method(method: &str) -> std::result::Result
     }
 }
 
-// ---------------------------------------------------------------------------
-// Queries and decoding
-// ---------------------------------------------------------------------------
 
 fn tool_calls_query(request: &gents_protocol::row::AgentRequestRow) -> Result<String> {
     let scope = gents::session::session_scope_filter(
@@ -996,17 +859,6 @@ mod tests {
         .unwrap();
         request_fixture(id, session, &physical)
     }
-    #[test]
-    fn tool_results_use_acp_tool_call_content_not_bare_message_blocks() {
-        assert_eq!(
-            super::tool_content("tool call cancelled"),
-            vec![serde_json::json!({
-                "type":"content", "content":{"type":"text","text":"tool call cancelled"}
-            })]
-        );
-        assert!(super::tool_content("  ").is_empty());
-    }
-
     use super::*;
 
     fn tool_row(tool_name: &str, lifecycle_state: Option<&str>) -> ToolCallRow {
@@ -1108,52 +960,6 @@ mod tests {
         };
         assert_eq!(update.payload["rawOutput"]["output_for_prompt"], text);
         assert_eq!(update.payload["rawOutput"]["truncated"], true);
-    }
-
-    #[test]
-    fn kind_mapping_covers_durable_tool_names() {
-        assert_eq!(
-            ToolCallKind::from_tool_name("read_file"),
-            ToolCallKind::Read
-        );
-        for name in [
-            "bash",
-            "bash_unrestricted",
-            "shell",
-            "execute",
-            "execute_command",
-            "run_command",
-            "run_terminal_command",
-            "run_terminal_cmd",
-            "terminal",
-        ] {
-            assert_eq!(
-                ToolCallKind::from_tool_name(name),
-                ToolCallKind::Execute,
-                "{name}"
-            );
-        }
-        assert_eq!(ToolCallKind::from_tool_name("grep"), ToolCallKind::Search);
-        assert_eq!(
-            ToolCallKind::from_tool_name(gents::toolset::AGENT_SESSION_LIST_TOOL_NAME),
-            ToolCallKind::Search
-        );
-        assert_eq!(
-            ToolCallKind::from_tool_name(gents::toolset::AGENT_SESSION_READ_TOOL_NAME),
-            ToolCallKind::Read
-        );
-        assert_eq!(
-            ToolCallKind::from_tool_name("unknown_tool"),
-            ToolCallKind::Other
-        );
-    }
-
-    #[test]
-    fn status_wire_names_match_grok_pager() {
-        assert_eq!(ToolCallStatus::Pending.wire_name(), "pending");
-        assert_eq!(ToolCallStatus::InProgress.wire_name(), "in_progress");
-        assert_eq!(ToolCallStatus::Completed.wire_name(), "completed");
-        assert_eq!(ToolCallStatus::Failed.wire_name(), "failed");
     }
 
     #[test]
@@ -1327,8 +1133,6 @@ mod tests {
         let payload = call.to_payload();
         assert_eq!(payload["_meta"]["subagentBackground"], true);
 
-        // A non-`background` await mode is foreground: explicit false, never
-        // an omitted key.
         let mut foreground = tool_row("Task", Some("running"));
         foreground.await_mode = Some("foreground".to_string());
         let projection = project_tool_rows(&[foreground], &presentations);
@@ -1448,13 +1252,6 @@ mod tests {
         assert_eq!(payload["sessionUpdate"], "available_commands_update");
         assert_eq!(payload["availableCommands"], json!([]));
         assert_eq!(payload["_meta"]["tools"], json!(["bash", "read_file"]));
-    }
-
-    #[test]
-    fn empty_rows_project_nothing() {
-        let projection = project_tool_rows(&[], &no_presentations());
-        assert!(projection.updates.is_empty());
-        assert!(projection.chronology.is_empty());
     }
 
     #[test]
@@ -1893,10 +1690,6 @@ mod tests {
             presentation("doc-a", r#"{"command":"true"}"#, Some("output for a")),
         ]);
         let projection = project_tool_rows(&[call_b, call_a], &presentations);
-        // Emission: base a, update a, base b, update b, commands. The update
-        // interleaves inside the projection stream (the merged engine sort
-        // re-groups by family later); what matters here is the identity
-        // pairing and the per-call result join.
         let pairs: Vec<(String, &str)> = projection
             .updates
             .iter()
@@ -2366,7 +2159,6 @@ mod tests {
         let reprojection = project_tools(&node, &request)
             .await
             .expect("tool reprojection");
-        // Same toolCallId, still rendered, now terminal.
         let call = call_for(&reprojection, "call-tasks-absent");
         assert_eq!(call.status, ToolCallStatus::Completed);
         assert_eq!(
@@ -2380,7 +2172,6 @@ mod tests {
             call.meta.is_none(),
             "plural tasks remains an ordinary tool after terminal update"
         );
-        // The same-id terminal tool_call_update follows the base.
         let update = reprojection
             .updates
             .iter()

@@ -306,8 +306,6 @@ pub(crate) mod tests {
     const OWNER: &str = "did:key:subject-owner";
     pub(crate) use crate::eval::runner::freeze::tests::FIXTURE_PROMPT;
 
-    /// The eval runner's own fixture pack: a manifest, a README, the canonical
-    /// config bundle and one agent sidecar holding [`FIXTURE_PROMPT`].
     pub(crate) fn write_fixture_pack(root: &Path) {
         crate::eval::runner::freeze::tests::write_fixture_pack(root, "Off");
     }
@@ -406,9 +404,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// The fixture pack with one task of the monitor agent, its prompt
-    /// template in a sidecar or inline in `pack_config.json`, fired by an
-    /// event trigger whose source has no group.
     pub(crate) fn write_task_fixture_pack(root: &Path, inline: bool) {
         write_fixture_pack(root);
         let manifest_path = root.join("manifest.json");

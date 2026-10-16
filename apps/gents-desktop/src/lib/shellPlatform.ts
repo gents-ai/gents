@@ -31,12 +31,10 @@ export function isMobileTauriShell(): boolean {
   return inTauri() && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
 
-// Browser harnesses retain local hosting for UI tests.
 export function supportsLocalManagedServer(): boolean {
   return !inTauri() || isMacTauriShell() || isLinuxTauriShell();
 }
 
-// Only Windows uses a web-rendered window bar; macOS and Linux keep native chrome.
 export function headerIsWindowBar(): boolean {
   return isWindowsTauriShell();
 }

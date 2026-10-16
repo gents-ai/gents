@@ -1,6 +1,3 @@
-//! Versioned provider/model guidance shared by first-run onboarding and later
-//! inference editing. Provider responses remain advertised facts; every value
-//! Gents recommends lives here and is labelled with this catalog version.
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -367,7 +364,6 @@ pub fn connection_spec(
     Ok(spec)
 }
 
-/// Recover the setup vocabulary for an existing canonical backend.
 pub fn provider_selection_for_backend(
     provider_kind: BackendProviderKind,
     endpoint: &str,
@@ -407,7 +403,6 @@ pub fn provider_selection_for_backend(
     }
 }
 
-/// Exact xAI API endpoint, ignoring ASCII case and trailing `/`.
 pub(crate) fn is_xai_api_endpoint(endpoint: &str) -> bool {
     endpoint
         .trim_end_matches('/')
@@ -552,7 +547,6 @@ pub fn recommendation_for_model(
         None
     };
 
-    // Reasoning-style OpenAI models reject or ignore temperature/top-p.
     let supports_sampling = !is_claude && !is_codex && !is_reasoning;
     let fixture = advertised.model_name == "GLM-5.3-Flash-NVFP4";
     let temperature = (supports_sampling || fixture).then(|| RecommendedNumberControl {

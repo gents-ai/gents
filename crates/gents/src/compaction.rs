@@ -1,4 +1,3 @@
-//! Provider-view compaction; re-exports `gents_loop::compaction`.
 #[cfg(test)]
 #[path = "compaction/tests.rs"]
 mod tests;
@@ -9,7 +8,6 @@ use futures::future::BoxFuture;
 
 pub use gents_loop::compaction::*;
 
-/// Build reduction options from canonical behavior compaction settings.
 pub(crate) fn reduction_options_for_agent(
     behavior: &crate::config::ResolvedAgent,
 ) -> anyhow::Result<ReductionOptions> {
@@ -87,7 +85,6 @@ pub(crate) fn backend_scoped_reduction_engine(
     Arc::new(BackendScopedReductionEngine { inner, backend_id })
 }
 
-// Test-only glue for the tests module above.
 #[cfg(test)]
 use crate::provider_input::budget::{
     rolling_summary_input_budget, summary_output_ceiling, threshold_decision, ThresholdDecision,

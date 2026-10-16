@@ -64,8 +64,6 @@ pub(crate) struct WorkspaceOverlay {
     pub seal_hash: Option<String>,
 }
 
-/// Bound overlays always yield `Some` (including `{}`); unbound requests fall
-/// through to the live cwd→tool-root walk.
 pub(crate) fn frozen_instruction_manifest_from_overlay(
     overlay: Option<&WorkspaceOverlay>,
 ) -> Option<&str> {
@@ -123,8 +121,6 @@ pub(crate) fn require_workspace_principal(
     Ok(())
 }
 
-/// Ordinary unbound requests stay on the behavior tool root; artifact execution
-/// requires a valid sealed binding before any tool dispatch.
 #[inline(never)]
 pub(crate) async fn resolve_request_workspace_overlay(
     node: &Arc<EmbeddedNode>,
@@ -190,7 +186,6 @@ async fn resolve_request_workspace_overlay_on_host(
     Ok(Some(overlay))
 }
 
-/// Admission uses the same workspace owner without creating a binding or grant.
 pub(crate) async fn validate_request_workspace_input(
     node: &Arc<EmbeddedNode>,
     request: &AgentRequest,

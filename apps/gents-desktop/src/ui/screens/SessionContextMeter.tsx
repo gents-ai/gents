@@ -1,5 +1,3 @@
-/* The session's context meter: how much of the window the next request
-   fills, and what compaction has done. */
 import { useRef } from "react";
 import { X } from "lucide-react";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
@@ -14,7 +12,6 @@ function formatTokens(value: number) {
   return `${amount >= 10 ? Math.round(amount) : amount.toFixed(1).replace(/\.0$/, "")}k`;
 }
 
-// the arc takes the brand color past the compaction threshold
 function ContextRing({
   used,
   window,
@@ -24,7 +21,6 @@ function ContextRing({
   window: number;
   threshold: number;
 }) {
-  /* a 20px ring with a 7px radius: enough arc to read at a glance */
   const r = 7;
   const c = 2 * Math.PI * r;
   const share = Math.min(1, used / window);
@@ -91,7 +87,6 @@ export function SessionContext({
       onOpenChange={popover.onOpenChange}
       onOpenChangeComplete={popover.onOpenChangeComplete}
     >
-      {/* details open on hover where there is a pointer; on touch a tap opens them */}
       <PopoverTrigger
         render={
           compact ? (

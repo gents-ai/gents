@@ -1,7 +1,3 @@
-//! The client owner snapshots DefraDB replication and transport facts; this
-//! module only chooses the product label shown in the UI. Per-deployment
-//! pairing and route readiness remain separate authorities.
-
 #[cfg(test)]
 use gents::P2pSyncStatusSnapshot;
 
@@ -13,8 +9,6 @@ pub enum SyncHealthState {
     Syncing,
     Offline,
     Failed,
-    /// No retry or reconnect can merge writes until both sides run the same
-    /// schema version.
     Incompatible,
 }
 

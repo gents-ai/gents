@@ -81,8 +81,6 @@ pub fn session_scope_filter(
     )
 }
 
-/// Add the public request purpose (`RequestPurpose::PUBLIC`) to an
-/// AgentRequest filter.
 pub fn public_request_filter(scope: &str) -> String {
     let purpose = format!(
         r#"purpose: {{ _eq: "{}" }}"#,
@@ -95,8 +93,6 @@ pub fn public_request_filter(scope: &str) -> String {
     }
 }
 
-/// Load the exact durable session document under its logical label; duplicate
-/// rows for one label are a data error.
 pub(super) async fn load_agent_session_row(
     node: &EmbeddedNode,
     node_did: &str,

@@ -86,7 +86,6 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
             .agents
             .get("20")
             .unwrap_or_else(|| panic!("{} missing selected agent", case.name));
-        // The model projects semantic runtime state, not an observation lease.
         for timestamp in ["1970-01-01T00:00:00Z", "2999-01-01T00:00:00Z"] {
             let mut aged_row = row.clone();
             aged_row.updated_at = timestamp.to_string();

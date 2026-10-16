@@ -1233,7 +1233,6 @@ fn integrate_workspace_action(
         });
     }
 
-    // New integration needs the writer's existing immutable seal witness.
     let writer_matches = receipts.iter().any(|receipt| {
         !receipt.produced_by_request_id.trim().is_empty()
             && !receipt.produced_by_request_doc_id.trim().is_empty()

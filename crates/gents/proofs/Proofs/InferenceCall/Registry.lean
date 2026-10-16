@@ -66,7 +66,6 @@ def admit (s : State) (slot : Nat) : State :=
 @[simp] theorem admit_gone (s : State) (slot : Nat) :
     (admit s slot).tally.gone = s.tally.gone := rfl
 
-/-- FIFO hand-off of free permits to parked callers. -/
 def serve (c : Config) (s : State) : List Nat → State
   | [] => { s with queue := [] }
   | w :: rest =>

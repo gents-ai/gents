@@ -1,4 +1,3 @@
-//! Current context is a persisted inference observation, not token spend.
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
@@ -10,7 +9,6 @@ pub(super) struct ContextSample {
     pub used: u64,
 }
 
-/// The turn owner supplies its authorized physical request.
 pub(super) async fn load(
     node: &EmbeddedNode,
     request: &AgentRequestRow,

@@ -1,12 +1,3 @@
-//! The gent's owned completion loop, carved out of `gents` (G-1) so it
-//! compiles for `wasm32-wasip1`: provider-input assembly, retry/retract
-//! decisions, streamed-turn accumulation, tool dispatch, and message
-//! threading — no socket, no TLS, no filesystem, no DefraDB, no thread spawn.
-//! Durable effects are reached through three seam traits:
-//! [`session_hook::SessionHook`], [`stream_writer::StreamWriter`], and
-//! [`request_lifecycle::RequestLifecycleControl`]. `gents`'s native
-//! `DefraSessionHook`, `DefraStreamWriter`, and `RequestLifecycle` implement
-//! them and re-export every symbol here at its original `gents` path.
 
 pub mod account_usage;
 pub mod backend_provider;
@@ -43,10 +34,8 @@ pub mod truncation;
 
 pub use session_hook::SessionHook;
 
-/// The persisted message family, re-exported from `gents-protocol`.
 pub use gents_protocol::message;
 
-/// Whether the model must call a tool before answering (rig `ToolChoice`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum ToolChoice {
     #[default]
@@ -56,8 +45,6 @@ pub enum ToolChoice {
     Specific { function_names: Vec<String> },
 }
 
-/// Whether a hook callback continues the loop or terminates it early (rig
-/// `HookAction`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookAction {
     Continue,
@@ -76,8 +63,6 @@ impl HookAction {
     }
 }
 
-/// Whether the pre-execution tool-call hook runs, skips, or terminates (rig
-/// `ToolCallHookAction`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolCallHookAction {
     Continue,
@@ -103,11 +88,8 @@ impl ToolCallHookAction {
     }
 }
 
-/// Shared in-crate test fixtures (mirrors `gents`'s own `test_support`).
 #[cfg(test)]
 pub(crate) mod test_support {
-    /// Byte-identical to `gents`'s own `CORRUPT_TOOL_ARGS_589` fixture so the
-    /// moved conformance tests stay meaningful.
     pub(crate) const CORRUPT_TOOL_ARGS_589: &str = "{\"raw_schema\": false, \
          \"service_id\": \"observability-mcp\", \"tool房\n</think\": \"\n<tool_call>\n\
          <function=describe_tool>\", \"raw_schema\": false, \

@@ -436,8 +436,6 @@ pub(crate) async fn create_goal_backed_agent_request(
     committed_submitted_request(graphql, &prepared.create).await
 }
 
-/// Embedded adapters keep their prompt identity and cancellation path while
-/// delegating the goal/claim/request transaction to the runtime owner.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn create_goal_backed_agent_request_local(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
@@ -696,8 +694,6 @@ fn wait_output_progress(
         gents::session::CanonicalRequestOutput::Published { presentation, .. } => {
             ("published", presentation)
         }
-        // Retained partials are historical diagnostics, never current answer
-        // progress. Loading/absence similarly carry no new bytes.
         _ => return None,
     };
     Some(WaitOutputProgress {
@@ -1008,8 +1004,6 @@ tokio::task_local! {
     static CAPTURED_REPORT: std::cell::RefCell<Option<Value>>;
 }
 
-/// Prints `value` in its own field order; a typed report keeps the order
-/// its struct declares.
 pub(crate) fn print_json<T: serde::Serialize + ?Sized>(value: &T) -> Result<()> {
     if CAPTURED_REPORT.try_with(|_| ()).is_ok() {
         let value = serde_json::to_value(value).context("encoding JSON report")?;
@@ -1024,8 +1018,6 @@ pub(crate) fn print_json<T: serde::Serialize + ?Sized>(value: &T) -> Result<()> 
         .context("writing JSON report to stdout")
 }
 
-/// One compact JSON object on its own line, for a stream a script reads line
-/// by line. Captured like `print_json` when an embedding caller captures.
 pub(crate) fn print_ndjson(value: &Value) -> Result<()> {
     if CAPTURED_REPORT
         .try_with(|report| *report.borrow_mut() = Some(value.clone()))
@@ -1039,8 +1031,6 @@ pub(crate) fn print_ndjson(value: &Value) -> Result<()> {
         .context("writing NDJSON record to stdout")
 }
 
-/// Runs `command` and returns the report it would have printed; the last
-/// one when it prints several.
 pub(crate) async fn capture_report<F>(command: F) -> Result<Value>
 where
     F: std::future::Future<Output = Result<()>>,

@@ -10,7 +10,6 @@ import type { Route } from "../lib/router";
 import { useApp } from "./AppContext";
 import { applyChosenTheme } from "../preferences";
 
-/** The window's theme, platform styling, link guard and simulator boot, once. */
 export function usePlatformSetup() {
   const { openExternalUrl } = useApp().actions;
   useEffect(() => {
@@ -32,7 +31,6 @@ const TITLES: Partial<Record<Route["name"], string>> = {
   mailbox: "Mailbox",
 };
 
-/** The macOS window title: the screen, then the selected node. */
 export function useWindowTitle(route: Route) {
   const agent = useSelectedNode()?.node.displayName ?? null;
   const sessionTitle = useSelectedSessionValue((s) => s?.title ?? null);

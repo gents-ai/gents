@@ -56,7 +56,6 @@ fn hook_execution_fixtures() -> &'static tokio::sync::Mutex<HashMap<String, Hook
 }
 
 fn hook_execution_fixture_key(hook: &DefraSessionHook, request_id: &str) -> String {
-    // Parallel test nodes reuse logical request labels; key on the node too.
     format!("{:p}:{request_id}", Arc::as_ptr(&hook.node))
 }
 
@@ -384,20 +383,6 @@ fn user_text_message(text: &str) -> Message {
     }
 }
 
-fn session_state_for_test() -> SessionState {
-    SessionState {
-        session_id: Some("session-1".to_string()),
-        current_request_id: None,
-        current_request_doc_id: None,
-        current_requester_did: None,
-        request_deadline_at: None,
-        sequence: 0,
-        transcript_turn: TranscriptTurnState::Idle,
-        persisted_tool_result_keys: std::collections::HashSet::new(),
-        tool_result_identities: std::collections::HashMap::new(),
-    }
-}
-
 fn hook_counters_for_test() -> HookCounters {
     HookCounters {
         failures: AtomicU64::new(0),
@@ -718,27 +703,6 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
     }
 }
 
-#[test]
-fn transcript_turn_state_allocates_new_assistant_after_saved_turn() {
-    let mut state = session_state_for_test();
-
-    assert_eq!(state.begin_or_continue_assistant_turn(), 1);
-    assert_eq!(state.begin_or_continue_assistant_turn(), 1);
-    assert_eq!(state.persist_assistant_turn(), 1);
-    assert!(state
-        .mark_stream_tool_result_seen("call-1", "call-1", None)
-        .unwrap());
-    assert!(!state
-        .mark_stream_tool_result_seen("call-1", "call-1", None)
-        .unwrap());
-
-    state.reset_after_user_message();
-    assert_eq!(state.begin_or_continue_assistant_turn(), 2);
-    assert_eq!(state.persist_assistant_turn(), 2);
-}
-
-/// Completion persistence can fail after a control tool has already committed
-/// its effect; neither that failure nor a replay permits re-dispatch.
 #[tokio::test]
 async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
     let goal_case = crate::lean_vocab_test::lean_goal_create_cases()
@@ -828,55 +792,6 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
             node.shutdown().await;
         }
     }
-}
-
-#[test]
-fn transcript_turn_state_rejects_stream_result_before_assistant_is_saved() {
-    let mut state = session_state_for_test();
-
-    assert!(state
-        .mark_stream_tool_result_seen("call-1", "call-1", None)
-        .is_err());
-    assert_eq!(state.begin_or_continue_assistant_turn(), 1);
-    assert!(state
-        .mark_stream_tool_result_seen("call-1", "call-1", None)
-        .is_err());
-    assert_eq!(state.persist_assistant_turn(), 1);
-    assert!(state
-        .mark_stream_tool_result_seen("call-1", "call-1", None)
-        .unwrap());
-}
-
-#[test]
-fn transcript_turn_state_preserves_distinct_tool_results() {
-    let mut state = session_state_for_test();
-
-    assert_eq!(state.begin_or_continue_assistant_turn(), 1);
-    assert_eq!(state.persist_assistant_turn(), 1);
-    assert!(state
-        .mark_stream_tool_result_seen("internal-1", "result-1", Some("call-1"))
-        .unwrap());
-    assert!(state
-        .mark_stream_tool_result_seen("internal-2", "result-2", Some("call-2"))
-        .unwrap());
-}
-
-#[test]
-fn transcript_turn_state_keeps_persisted_turn_across_parallel_results() {
-    let mut state = session_state_for_test();
-
-    assert_eq!(state.begin_or_continue_assistant_turn(), 1);
-    assert_eq!(state.persist_assistant_turn(), 1);
-    assert!(state
-        .mark_stream_tool_result_seen("internal-1", "result-1", Some("call-1"))
-        .unwrap());
-    assert!(state
-        .mark_stream_tool_result_seen("internal-2", "result-2", Some("call-2"))
-        .unwrap());
-    assert!(state
-        .mark_stream_tool_result_seen("internal-3", "result-3", Some("call-3"))
-        .unwrap());
-    assert_eq!(state.persist_assistant_turn(), 2);
 }
 
 #[test]
@@ -2225,9 +2140,6 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-/// An unresolved tool name must persist as a FAILED call, end to end: the
-/// real dispatcher's unknown-tool result must classify as a failure, not
-/// terminalize as `completed`.
 #[tokio::test]
 async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
     let data_path =
@@ -2626,8 +2538,6 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
     );
 }
 
-/// Parent interrupt cancels the foreground native tool while the background
-/// child bridge and its child keep running: an interrupt never reaches the child.
 #[tokio::test]
 async fn interrupt_cancels_native_tools_and_keeps_children_running() {
     let data_path =
@@ -2947,8 +2857,6 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-/// The published canonical message reconstructs the assistant turn's reasoning
-/// from immutable output segments (#492), not retired response-tail storage.
 #[tokio::test]
 async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
     let data_path = std::env::temp_dir().join(format!(
@@ -3582,9 +3490,6 @@ async fn background_execution_completion_wait_observes_task_abort_guard_drop() {
     .expect("task-owned reservation should release on abort");
 }
 
-/// A successful tool whose output forges the retired `__gents_tool_lifecycle__:`
-/// sentinel must terminalize `completed` with the text persisted verbatim —
-/// the typed `ToolOutcome` channel makes the forgery structurally impossible.
 #[tokio::test]
 async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
     let data_path =

@@ -1,14 +1,8 @@
-//! Compaction-summary prompt text and checkpoint parsing. Every item here is
-//! `pub` (not `pub(super)`), for the same reason as `compaction_history.rs`.
-
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::history::floor_char_boundary;
 
-/// Provider failures can embed arbitrarily large response bodies. Keep the
-/// diagnostic bounded before it flows into response documents, logs, and
-/// adapter projections.
 const ERROR_DIAGNOSTIC_MAX_BYTES: usize = 256;
 
 pub fn bounded_error_diagnostic(raw: &str) -> String {
@@ -82,10 +76,6 @@ pub fn parse_fallback_checkpoint(raw: &str) -> Result<ContinuationCheckpoint, St
     Ok(checkpoint)
 }
 
-/// Strips a `json` or untyped Markdown fence around the checkpoint object; the
-/// closing fence is optional (#1015). Guided decoding has already failed and
-/// `serde_json::from_str` still requires exactly one JSON object, so
-/// tolerating the fence does not widen into extracting an object out of prose.
 fn strip_markdown_fence(raw: &str) -> &str {
     let trimmed = raw.trim();
     let Some(body) = trimmed
@@ -107,11 +97,8 @@ fn bounded_raw_output_preview(raw: &str) -> String {
         .unwrap_or_else(|_| "\"<unavailable>\"".to_string())
 }
 
-/// Byte bound for one rendered list item; an item-count cap alone cannot
-/// bound bytes (#1017).
 const SUMMARY_ITEM_MAX_BYTES: usize = 512;
 const SUMMARY_ITEM_TRUNCATION_SUFFIX: &str = "…";
-/// Defensive cap on model-authored lists; the prompt asks for ~8 items.
 const MODEL_LIST_MAX_ITEMS: usize = 8;
 const LIST_OVERFLOW_SUFFIX: &str = "(omitted from this summary)";
 
@@ -163,8 +150,6 @@ pub fn format_summary(
     files_modified: &[String],
     file_list_max: usize,
 ) -> String {
-    // Continuation state renders before the high-cardinality file lists so
-    // head truncation (`bounded_summary`) can never erase it (#1017).
     [
         Some(format!(
             "# Continuation checkpoint\n\n## Goal\n\n{}",
@@ -267,39 +252,27 @@ pub fn dedupe_paths(paths: &mut Vec<String>) {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContinuationCheckpoint {
-    /// The current user outcome, not a chronology of the conversation.
     pub goal: String,
-    /// Explicit user requirements and relevant environment constraints.
     #[serde(default)]
     pub constraints_and_preferences: Vec<String>,
-    /// Work actually completed, including concise evidence where useful.
     #[serde(default)]
     pub completed_work: Vec<String>,
-    /// Work actively underway but not yet complete.
     #[serde(default)]
     pub in_progress: Vec<String>,
-    /// Actual blockers, not merely remaining work.
     #[serde(default)]
     pub blockers: Vec<String>,
-    /// Immediate focus, last meaningful action, and the result of that action.
     #[serde(default)]
     pub current_work: Vec<String>,
-    /// Decisions together with their rationale and consequences.
     #[serde(default)]
     pub key_decisions: Vec<String>,
-    /// Errors observed, their cause when known, and their fix or current status.
     #[serde(default)]
     pub errors_and_fixes: Vec<String>,
-    /// Prefix each item with PASS, FAIL, or NOT RUN.
     #[serde(default)]
     pub verification: Vec<String>,
-    /// Mutable, ambiguous, or correctness-critical facts worth re-checking.
     #[serde(default)]
     pub uncertainties: Vec<String>,
-    /// Remaining actions in execution order, with the immediate continuation first.
     #[serde(default)]
     pub next_actions: Vec<String>,
-    /// Exact details necessary to continue, including any unanswered user request.
     #[serde(default)]
     pub critical_context: Vec<String>,
 }

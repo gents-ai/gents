@@ -283,7 +283,6 @@ mod tests {
     use crate::eval::runner::scripted::ScriptedExecutor;
     use crate::eval::OutcomeKind;
 
-    /// One completed stage whose `items` capture holds `rows`.
     fn stage(rows: Vec<Value>) -> StageEvidence {
         let mut evidence = ScriptedExecutor::passed_evidence("did:x", "s1", "items", rows);
         evidence.stages.remove(0)

@@ -1,5 +1,3 @@
-//! Robust shared mock OpenAI-compatible backend for full-daemon tests.
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -169,8 +167,6 @@ async fn handle_chat(
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    // Mirror the real OpenAI API: reply with an SSE chunk stream when
-    // streaming is requested, otherwise the JSON completion below.
     let streaming = body.contains("\"stream\":true") || body.contains("\"stream\": true");
     record(&state, "POST", uri.path(), &headers, body);
     if !bearer_authorized(&state, &headers) {

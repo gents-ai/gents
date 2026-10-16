@@ -1,10 +1,3 @@
-//! Multi-node e2e for #664 `TerminalConverges` (owner re-drive + P2P apply):
-//! a real second node observes the owner's terminal state over P2P, and the
-//! owner re-drive re-pushes a higher-priority same-value delta without forking
-//! the peer's view. A second scenario exhausts the durable re-drive budget
-//! while the peer is absent, then proves a full replicator replay repairs the
-//! peer without an unbounded stream of same-value request writes.
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

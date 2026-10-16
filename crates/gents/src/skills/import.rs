@@ -10,7 +10,6 @@ use crate::document_config::SkillDocument;
 
 const MAX_SOURCE_BYTES: u64 = 1024 * 1024;
 
-/// Parsed SKILL.md frontmatter.
 #[derive(Default, serde::Deserialize)]
 pub struct SkillFrontmatter {
     pub name: Option<String>,
@@ -21,8 +20,6 @@ pub struct SkillFrontmatter {
     pub allowed_tools: Option<String>,
 }
 
-/// Broken metadata is an error, not an instruction body or silently discarded
-/// configuration.
 pub fn parse_skill_md(contents: &str) -> anyhow::Result<(SkillFrontmatter, String)> {
     let mut lines = contents.lines();
     if lines.next().map(str::trim) == Some("---") {

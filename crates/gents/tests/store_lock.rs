@@ -1,5 +1,3 @@
-//! Store lock lifetime: exclusion while held, release when dropped.
-
 use std::fs;
 use std::sync::{Mutex, MutexGuard};
 
@@ -153,8 +151,6 @@ fn a_store_outside_the_home_does_not_exclude_the_home_default_store() {
     fs::create_dir_all(&outside).unwrap();
     fs::create_dir_all(default_data_dir(&home)).unwrap();
 
-    // A server on `--data-dir <outside>` holds that directory's lock; a lock
-    // keyed on the home must not conclude anything about or disturb it.
     let held = lock_store(&home, &outside).unwrap();
     assert_eq!(
         held.path(),
@@ -180,8 +176,7 @@ fn dropping_the_store_lock_releases_it_even_before_a_forked_child_execs() {
     fs::create_dir_all(&data).unwrap();
     let held = lock_store(temp.path(), &data).unwrap();
 
-    // Everything the child touches is prepared before the fork: between fork
-    // and exec it may only make async-signal-safe calls.
+    // The child can make only async-signal-safe calls between fork and exec.
     let program = CString::new("/usr/bin/true").unwrap();
     let argv = [program.as_ptr(), std::ptr::null()];
     let mut go = [0; 2];
@@ -190,7 +185,6 @@ fn dropping_the_store_lock_releases_it_even_before_a_forked_child_execs() {
     if pid == 0 {
         unsafe {
             libc::close(go[1]);
-            // EOF is the release signal; anything but EINTR ends the wait.
             let mut byte = 0u8;
             while libc::read(go[0], (&mut byte as *mut u8).cast(), 1) == -1
                 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted

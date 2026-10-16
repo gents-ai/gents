@@ -1,11 +1,5 @@
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 
-/**
- * How the mailbox orders what the agent filed: what needs a decision first,
- * then within a group whatever is due soonest first. A deadline that has
- * passed is not a state here; the runtime expires such an item on its next
- * sweep, so the open list never holds one for long.
- */
 export type Triage = "decide" | "wrong" | "look" | "done";
 
 export const TRIAGE: { key: Triage; label: string; kinds: string[] }[] = [
@@ -15,18 +9,15 @@ export const TRIAGE: { key: Triage; label: string; kinds: string[] }[] = [
   { key: "done", label: "Done", kinds: ["finished"] },
 ];
 
-/** A kind this build does not know still lands somewhere a person looks. */
 export const triageOf = (kind: string): Triage =>
   TRIAGE.find((t) => t.kinds.includes(kind))?.key ?? "look";
 
-/** An item's deadline in milliseconds; null without one, or with one that does not parse. */
 export const deadlineOf = (item: MailboxItemView): number | null => {
   if (!item.deadlineAt) return null;
   const t = Date.parse(item.deadlineAt);
   return Number.isNaN(t) ? null : t;
 };
 
-/** Whether a deadline falls within the hour, when it turns the warm colour. */
 export const dueSoon = (deadline: number | null, now: number) =>
   deadline !== null && deadline - now < 60 * 60_000;
 
@@ -40,7 +31,6 @@ export function orderItems(items: MailboxItemView[]): MailboxItemView[] {
   });
 }
 
-/** A search is over what the person can see on the card, payload included. */
 export function matches(item: MailboxItemView, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;

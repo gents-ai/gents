@@ -1,16 +1,3 @@
-//! #738/#724 LIVE qualification: a real model, faced with drifted file
-//! content (CRLF + trailing whitespace), lands the edit through `edit_file`
-//! instead of falling back to `write_file`. The matcher itself is Lean-fenced
-//! (`Proofs/EditMatch/`); this pins the model-facing contract end to end.
-//!
-//! Runs against the inference target named by `GENTS_EVAL_TARGET`:
-//!
-//! ```bash
-//! GENTS_EVAL_TARGET=workstation-1 cargo test --test e2e_live \
-//!   edit_file_live_model_lands_drifted_edit_without_write_file \
-//!   -- --ignored --test-threads=1 --nocapture
-//! ```
-
 use std::sync::Arc;
 use std::time::Duration;
 

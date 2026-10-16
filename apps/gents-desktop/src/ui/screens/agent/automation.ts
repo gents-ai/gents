@@ -74,8 +74,6 @@ export function sourceInWords(deployment: NodeView, t: TriggerView): string | nu
 export type Readiness =
   { ok: true; note: string | null } | { ok: false; reason: string };
 
-/** Why a trigger will not fire, in the order a user can fix it; `ok` means
- * nothing here blocks it, not that the run will succeed. */
 export function triggerReadiness(deployment: NodeView, t: TriggerView): Readiness {
   const cfg = t.config;
   if (cfg.enabled === false) return { ok: false, reason: "Off" };

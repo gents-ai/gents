@@ -1,8 +1,3 @@
-//! Installation records: what a pack install created, so an upgrade can tell
-//! an operator's edit from the pack's own document and removal deletes only
-//! what the pack created. Drift stops install and removal unless the caller
-//! chose [`DriftPolicy::Overwrite`] or [`DriftPolicy::Keep`]; a graph pack's
-//! runtime-derived documents (see [`graph`]) are never drift-checked.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -39,7 +34,6 @@ pub struct PackIdentity {
     pub version: String,
     pub digest: String,
     pub plugins: Vec<InstalledPackPlugin>,
-    /// Only a documents pack may declare these.
     pub dependencies: Vec<String>,
 }
 
@@ -65,7 +59,6 @@ pub struct InstalledPackPlugin {
     pub digest: String,
 }
 
-/// What to do with a document someone edited since the pack wrote it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum DriftPolicy {
     #[default]
@@ -90,14 +83,12 @@ struct Record {
     documents: BTreeMap<String, RecordedDocument>,
     plugins: Vec<InstalledPackPlugin>,
     history: Vec<String>,
-    /// Coordinates of installed packs that depend on this one.
     required_by: BTreeSet<String>,
-    /// A legacy record with no `explicit` field reads as `true`.
+    /// Missing legacy records default to explicit ownership.
     explicit: bool,
     plugin_store: bool,
 }
 
-/// What an install or removal did.
 #[derive(Debug, Default, Serialize)]
 pub struct InstallReport {
     #[serde(flatten)]
@@ -110,14 +101,12 @@ pub struct InstallReport {
     pub plugins: Vec<InstalledPackPlugin>,
 }
 
-/// Something removal left in place.
 #[derive(Debug, Serialize)]
 pub struct Retained {
     pub item: String,
     pub reason: String,
 }
 
-/// What `gents pack remove` did.
 #[derive(Debug, Default, Serialize)]
 pub struct RemoveReport {
     pub pack: String,
@@ -205,7 +194,6 @@ async fn live_digest(
     }
 }
 
-/// Batched form of [`live_digest`], grouping `docs` by collection first.
 async fn live_digests<'a>(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -437,7 +425,6 @@ pub(crate) async fn install_in_txn(
     crate::config_client::validate_desired_state_plan(txn, &plan).await?;
     report.applied = crate::config_client::apply_desired_state_plan(txn, &plan).await?;
     report.plugins = pack.plugins.clone();
-    // The record holds what is stored, not what was authored.
     let written: Vec<(Collection, &str)> = recorded
         .iter()
         .filter(|(name, _)| !keep.contains(name))
@@ -474,16 +461,6 @@ pub(crate) async fn install_in_txn(
     Ok(report)
 }
 
-/// Records a change to `coordinate`'s plugins in the host plugin store under
-/// `home`: `installed` is what an install just stored, `None` a removal.
-/// The write is what wakes the control watcher, so an Agent that names a
-/// changed plugin is re-resolved on the next reconcile; callers change the
-/// store first.
-///
-/// A removal of the coordinate's plugins releases by these names, so an
-/// install's names join them. Otherwise the record is marked `plugin_store`:
-/// the installed-pack listings skip it, and it goes once the store holds
-/// none of `coordinate`'s plugins.
 pub async fn record_plugin_store_change(
     access: &ConfigAccess,
     owner: &str,
@@ -494,16 +471,7 @@ pub async fn record_plugin_store_change(
     record_plugin_store_change_as(access, owner, None, home, coordinate, installed).await
 }
 
-/// The same, retaining `identity` for the transaction's ACP decision when the
-/// access is embedded and the caller knows the invoking DID. `None` keeps the
-/// default actor (the operator/CLI path). A model-facing caller must pass the
-/// invoking DID: the record's owner string is not authentication.
-///
-/// This record wakes reconciliation; local plugin records govern execution.
-/// A local publication can outlive a failed or cancelled notification, so
-/// retries project the current home pin instead of restoring an older pin
-/// from the caller. Concurrent later publications are observed by their
-/// own notification or the next reconciliation.
+/// Model-facing callers pass the invoking DID; `owner` is document scope, not authentication.
 pub async fn record_plugin_store_change_as(
     access: &ConfigAccess,
     owner: &str,
@@ -573,8 +541,6 @@ async fn write_plugin_record(
         }
         _ => {}
     }
-    // A removal of the coordinate's plugins releases by these names, so an
-    // install's names join them.
     let mut plugins = prior.plugins.clone();
     for plugin in installed.map_or(&[][..], |pack| &pack.plugins[..]) {
         plugins.retain(|kept| kept.name != plugin.name);
@@ -758,7 +724,6 @@ pub async fn remove_pack(
         .await
 }
 
-/// One installed pack, as its record states it.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct InstalledPack {
     pub coordinate: String,
@@ -766,7 +731,6 @@ pub struct InstalledPack {
     pub digest: String,
 }
 
-/// Every pack installed for `owner`, by coordinate.
 pub async fn list_installed_packs(    access: &ConfigAccess,
     owner: &str,
 ) -> Result<Vec<InstalledPack>> {
@@ -791,7 +755,6 @@ pub async fn list_installed_packs(    access: &ConfigAccess,
         .collect()
 }
 
-/// The installed record for `coordinate`, if any.
 pub async fn read_installed_pack(
     access: &ConfigAccess,
     owner: &str,
@@ -823,8 +786,6 @@ pub async fn read_installed_pack(
         .transpose()
 }
 
-/// Every pack installed for `owner`, combining node-recorded installs
-/// with `home`'s file-recorded ones, sorted by coordinate.
 pub async fn installed_packs(
     home: Option<&Path>,
     node: Option<(&ConfigAccess, &str)>,
@@ -850,10 +811,6 @@ pub async fn installed_packs(
     Ok(packs.into_values().collect())
 }
 
-/// Every pack digest referenced by an install record in `home` (file
-/// records) or reachable through `node` (every owner's `PackInstallation`,
-/// current digest plus history): what `gents pack remove` must keep an
-/// archive or its unpacked copy for.
 pub async fn referenced_pack_digests(
     home: &Path,
     node: Option<&ConfigAccess>,
@@ -880,8 +837,6 @@ pub async fn referenced_pack_digests(
     Ok(digests)
 }
 
-/// A required string field of an installation record, failing loudly and
-/// naming the record's document ID when it is missing or not a string.
 fn required_record_field_str<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
     row.get(field).and_then(Value::as_str).with_context(|| {
         let doc_id = row.get("_docID").and_then(Value::as_str).unwrap_or("?");
@@ -889,8 +844,6 @@ fn required_record_field_str<'a>(row: &'a Value, field: &str) -> Result<&'a str>
     })
 }
 
-/// The documents of `config` an install writes: all but the principal,
-/// which is shared identity, never pack-owned.
 pub(crate) fn installable_documents(config: &PackConfig) -> Result<Vec<DesiredStateApplyDocument>> {
     Ok(DesiredStateApplyPlan::from_pack_config(config)?
         .documents()

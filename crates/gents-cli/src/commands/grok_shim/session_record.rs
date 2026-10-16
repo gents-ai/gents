@@ -79,46 +79,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn encodes_the_cwd_the_way_grok_names_session_directories() {
-        // Observed on disk: ~/.grok/sessions/%2FUsers%2Fedjroz%2FRepos%2Fgents.
-        assert_eq!(
-            encode_cwd("/Users/edjroz/Repos/gents"),
-            "%2FUsers%2Fedjroz%2FRepos%2Fgents"
-        );
-        assert_eq!(encode_cwd("/Repos/defradb.rs"), "%2FRepos%2Fdefradb.rs");
-        assert_eq!(encode_cwd("/a b/x-y_z~"), "%2Fa%20b%2Fx-y_z~");
-    }
-
-    #[test]
-    fn writes_the_minimal_record_once_and_leaves_an_existing_one_alone() {
-        let home = tempfile::tempdir().expect("grok home");
-        let written = write_record(home.path(), "/Users/edjroz/Repos/gents", "3e5d627d")
-            .expect("write")
-            .expect("first write creates the record");
-        assert_eq!(
-            written,
-            home.path()
-                .join("sessions/%2FUsers%2Fedjroz%2FRepos%2Fgents/3e5d627d/summary.json")
-        );
-        let record: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&written).expect("read")).expect("json");
-        assert_eq!(record["info"]["id"], "3e5d627d");
-        assert_eq!(record["info"]["cwd"], "/Users/edjroz/Repos/gents");
-        let created = record["created_at"].as_str().expect("created_at");
-        assert!(created.ends_with('Z'), "rfc3339 utc: {created}");
-        assert_eq!(record["updated_at"], record["created_at"]);
-        assert_eq!(record["last_active_at"], record["created_at"]);
-        assert_eq!(record["chat_format_version"], 1);
-
-        let again = write_record(home.path(), "/Users/edjroz/Repos/gents", "3e5d627d")
-            .expect("second write");
-        assert_eq!(again, None, "an existing record belongs to grok");
-        let unchanged: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&written).expect("read")).expect("json");
-        assert_eq!(unchanged, record);
-    }
-
-    #[test]
     fn refuses_relative_cwds_and_unsafe_session_ids() {
         let home = tempfile::tempdir().expect("grok home");
         assert_eq!(

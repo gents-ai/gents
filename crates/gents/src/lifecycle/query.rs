@@ -49,8 +49,7 @@ pub(super) async fn request_view(
     Ok(rows.into_iter().next())
 }
 
-/// ConfigAccess holds the node's mutation gate from transaction creation through
-/// commit. This read and the winning request CAS must stay inside that boundary.
+/// The read and winning request CAS must share the transaction's mutation gate.
 pub(super) async fn claim_queue_allows(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
@@ -137,8 +136,6 @@ pub(super) async fn claim_queue_allows(
     }
 
     if serial_trigger.is_some() {
-        // A serial trigger conflicts with active requests across sessions; scan the
-        // bounded pending set and join receipts instead of walking full history.
         let mut after_request = None;
         loop {
             let after_arg = cursor_after_arg(after_request.as_deref());

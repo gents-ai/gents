@@ -1,13 +1,4 @@
-//! The durable writer behind the capture seam, specified by
-//! `Proofs/RenderedCapture.lean`: an unbound `capture_key` writes, an
-//! identically-bound key writes nothing, a differently-bound key errors and
-//! blocks the send (`capture_failure_blocks_send`).
-//!
-//! Storage shape: the capture's blocks and its manifest row commit in one
-//! transaction, so a capture is never durable with a manifest naming blocks
-//! that are not.
-//!
-//! Identity: reads and writes use the node identity installed on
+//! Reads and writes use the node identity installed on
 //! `EmbeddedNode`; the `node_did` column is application data, not proof of
 //! authorship.
 
@@ -23,7 +14,6 @@ use super::{
 };
 use crate::graphql::escape_graphql_string;
 
-/// The DefraDB-backed capture sink.
 #[derive(Clone)]
 pub struct DefraRenderedRequestSink {
     node: Arc<EmbeddedNode>,
@@ -40,8 +30,6 @@ impl DefraRenderedRequestSink {
         Self { node }
     }
 
-    /// The immutable capture fact already stored under `capture_key`, if any.
-    /// A GraphQL error is an error, never "no rows".
     async fn stored_fact(&self, capture_key: &str) -> Result<Option<Value>> {
         let query = format!(
             r#"query {{
@@ -90,9 +78,6 @@ impl DefraRenderedRequestSink {
         }
     }
 
-    /// Create the capture manifest row inside `txn`, after the blocks it names.
-    /// A duplicate-key error is expected input to reconciliation and does not
-    /// warn; a genuine failure is logged by the transport.
     async fn create_in_txn(
         txn: &crate::config_client::ConfigApplyTxn<'_>,
         rendered: &RenderedCompletionRequest,
@@ -176,8 +161,6 @@ impl DefraRenderedRequestSink {
             .and_then(|value| value.get("call_id"))
             .and_then(Value::as_str)
         else {
-            // One-shot calls have no InferenceCall join. Their accounting is
-            // still durable in RenderedRequest.provenance_json.
             return Ok(None);
         };
         let accounting_json = canonical_json_string(
@@ -621,12 +604,9 @@ async fn stored_block_doc_ids_in_txn(
     Ok(stored)
 }
 
-/// A create that
-/// loses the unique content key to a concurrent writer surfaces as a
-/// transaction conflict; the transaction owner replays the capture on a fresh
-/// snapshot, whose existence read then finds the winner.
-/// Only content fields are written: DefraDB derives identical document ids
-/// from identical block content across writers.
+/// Unique content-key conflicts are retried on a fresh transaction snapshot,
+/// where the existence read resolves the winner. DefraDB derives identical
+/// document IDs from identical block content across writers.
 async fn create_blocks_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     blocks: &[&super::encoding::ChunkedBlock],
@@ -1048,9 +1028,6 @@ mod tests {
         node.shutdown().await;
     }
 
-    /// The regression #2333 exists to fix: two turns sharing a conversation
-    /// prefix write only the new blocks and a manifest row, so total capture
-    /// storage grows linearly with the conversation instead of quadratically.
     #[tokio::test]
     async fn a_shared_prefix_writes_only_new_blocks_and_a_small_manifest() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());

@@ -78,10 +78,6 @@ function NavSheet({ route, settings }: { route: Route; settings: ReactNode }) {
   );
 }
 
-/** The window bar: the shell's strip across the top, on the same tracks as
- * the row below; the caption buttons end it on Windows. The pane region is
- * the slot a screen fills; the dock region carries the dock's tabs. Below
- * md it is the app's header: the menu, the mark, then the slot. */
 export function WindowBar({
   route,
   history,
@@ -119,8 +115,6 @@ export function WindowBar({
       )}
       <div
         className={cn(
-          // While the pane is hidden its column is 0; the bar's contents
-          // must not spill over the dock's tabs.
           "app-bar-pane flex h-full min-w-0 items-center gap-3 overflow-hidden pr-3",
           paneHidden ? "pointer-events-none px-0" : "app-bar-first",
           windows && !(docked && dockOpen) && "pr-[138px]",
@@ -132,7 +126,6 @@ export function WindowBar({
         <NavSheet route={route} settings={settings} />
         <MarkLink className="md:hidden" />
         {history && <HistoryNav history={history} />}
-        {/* what the screen puts here: its title, marks and actions */}
         <div
           ref={onPaneBar}
           className="flex h-full min-w-0 flex-1 items-center gap-2"

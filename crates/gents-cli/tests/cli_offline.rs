@@ -1,6 +1,3 @@
-//! No-infrastructure CLI suites: pure filesystem/exit-code/help surface.
-//! Run one module with `cargo test -p gents-cli --test cli_offline <module>::`.
-
 mod support;
 
 #[path = "suites/cli_config_diff.rs"]

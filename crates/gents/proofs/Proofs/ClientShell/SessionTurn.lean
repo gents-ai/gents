@@ -31,9 +31,6 @@ def findRequest (rows : List Row) (requester : Nat) (request : RequestId) : Opti
 def retrySuccessor (rows : List Row) (row : Row) : Option Row :=
   rows.find? (fun r => r.retryParent == some row.request && r.requester == row.requester)
 
-/-- A repeated physical row ends resolution at that first repeated row. This
-keeps corrupt cyclic links deterministic without making the result depend on
-unrelated history rows included in the read. -/
 def resolveSeen (rows : List Row) : Nat → List Nat → Row → Row
   | 0, _, row => row
   | fuel + 1, seen, row =>
@@ -89,9 +86,6 @@ theorem available_arrival_keeps_its_place (queued : List Row) (doc : Nat)
 def foldedIn (rows : List Row) (requester : Nat) : List Row :=
   rows.filter (fun r => r.foldedInto.isSome && r.requester == requester)
 
-/-- All in-scope rows that `resolve` can follow from a row. Return every
-physical twin for logical request keys so filtering to the read set preserves
-the original first-match ordering. -/
 def resolutionDependencies (rows : List Row) (row : Row) : List Row :=
   match row.foldedInto with
   | some ownerDoc => rows.filter (fun candidate =>
@@ -120,7 +114,6 @@ def mayOmitCompletedPublicInput (row : Row) : Bool :=
   row.completed && row.publicInput && row.authoredInputMaterialized &&
     row.retryParentDoc.isNone
 
-/-- Add every resolution dependency while retaining the source row order. -/
 def expandReadRows (all current : List Row) : List Row :=
   let neededDocs := current.map (·.doc) ++
     (current.flatMap (fun row =>

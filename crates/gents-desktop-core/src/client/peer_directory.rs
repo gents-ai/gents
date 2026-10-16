@@ -52,9 +52,6 @@ impl PeerRecord {
         self.source.as_deref() == Some("enrollment")
     }
 
-    /// The managed runtime keeps its operator endpoint alongside the signed
-    /// enrollment route; enrollment owns data-plane authority, these fields
-    /// only identify the co-hosted config control plane.
     pub fn is_managed_runtime(&self) -> bool {
         self.local_node_home
             .as_deref()
@@ -65,9 +62,6 @@ impl PeerRecord {
             })
     }
 
-    /// HTTP GraphQL used as the operator control plane for a hosted local
-    /// runtime: client P2P routes do not carry `Node` or `InferenceBackend`,
-    /// so first-run config must be read and written here.
     pub fn operator_graphql(&self) -> Option<&str> {
         if self.source.as_deref() != Some("local-standard")
             && !(self.is_enrollment() && self.is_managed_runtime())
@@ -81,9 +75,6 @@ impl PeerRecord {
             .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
     }
 
-    /// Whether this durable route generation may authorize a chat write at
-    /// `now`: `pairing_ready` is applied-state evidence, not authority; an
-    /// enrollment row must also carry a complete, unexpired signed generation.
     pub fn is_chat_ready_at(&self, now: DateTime<Utc>) -> bool {
         if self.source.as_deref() == Some("local-standard") {
             return self.pairing_ready;
@@ -156,10 +147,6 @@ impl PeerRecord {
     }
 }
 
-/// A locally ended enrollment authorization generation; the signed durable
-/// documents stay replicated. Only this desktop's removal is recorded, so the
-/// reconciler cannot reinstall the same generation while its lease still
-/// reads as current.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct RetiredEnrollment {
     network_id: String,
@@ -184,9 +171,6 @@ impl RetiredEnrollment {
     }
 }
 
-/// Why a peer leaves the directory: only operator removal retires an
-/// enrollment generation; reconciliation removals must reinstall once the
-/// route receipt returns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::client) enum RemovalCause {
     Operator,
@@ -215,8 +199,6 @@ pub(crate) struct PeerDirectory {
     fail_persist: bool,
 }
 
-/// The final in-process owner must unlock explicitly: Unix `flock` locks
-/// survive its close while a forked child retains an inherited descriptor.
 #[derive(Debug)]
 struct PeerDirectoryLease(File);
 
@@ -312,9 +294,6 @@ impl PeerDirectory {
             .collect()
     }
 
-    /// Drop retirements whose enrolled server no longer has a current durable
-    /// authorization. Lease expiry and revocation end the generation and prune
-    /// the retirement; an absent route receipt must not.
     pub(in crate::client) async fn prune_retired_enrollments(
         &mut self,
         authority_server_peers: &BTreeSet<String>,
@@ -471,8 +450,6 @@ impl PeerDirectory {
             record.pairing_ready = false;
         }
         record.peer_id = peer_id.to_string();
-        // The enrollment label seeds a new record only; once saved it is
-        // user-owned and must survive authority refreshes.
         record.addr = addr.to_string();
         record.node_did = node_did.to_string();
         record.source = Some("enrollment".to_string());
@@ -484,8 +461,6 @@ impl PeerDirectory {
         record.enrollment_authorization_sequence = Some(authorization_sequence);
         record.enrollment_authorization_expires_at = Some(authorization_expires_at.to_string());
         if let Some(managed) = managed.as_ref() {
-            // Enrollment remains the route authority while the co-hosted
-            // bootstrap row remains the authority for local operator access.
             record.graphql.clone_from(&managed.graphql);
             record.local_node_home.clone_from(&managed.local_node_home);
         }
@@ -508,9 +483,6 @@ impl PeerDirectory {
                 .retain(|candidate| candidate.peer_id != existing.peer_id);
         }
 
-        // Status polling observes the same signed authorization every tick;
-        // rewriting an unchanged durable generation makes downstream route and
-        // sync fences look new.
         if existing.as_ref() == Some(&record) {
             return Ok(record);
         }
@@ -643,9 +615,6 @@ impl PeerDirectory {
         Ok(true)
     }
 
-    /// Route readiness is an observation, not durable authority across a
-    /// restart; every deployment must re-establish live authority and both
-    /// route legs before chat writes reopen.
     pub(in crate::client) async fn clear_ephemeral_pairing_readiness(&mut self) -> Result<()> {
         let mut candidate = self.clone();
         let mut changed = false;

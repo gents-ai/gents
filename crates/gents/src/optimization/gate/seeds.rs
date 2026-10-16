@@ -7,12 +7,6 @@ use crate::optimization::subject::{task_seed_routes, MaterializedPack};
 use crate::optimization::target::TargetField;
 use crate::template::{render_template, task_node_ctx, TemplateScope};
 
-/// Stable probes rather than predicted trial values: the source reader always
-/// selects `_docID`; other document fields come from the frozen fixtures and
-/// seeds. Route filters and group readiness remain the event engine's
-/// responsibility, so admission conservatively checks every seed in a
-/// configured collection. Diagnostics are operator-only and must not become
-/// proposer feedback.
 pub(crate) fn seed_gate(
     baseline: &MaterializedPack,
     definition: &EvalDefinition,

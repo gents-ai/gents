@@ -85,10 +85,6 @@ async fn desktop_owned_session(
     (desktop, create, parent, writer)
 }
 
-/// Lean `Enrollment.runtime_internal_adopts_session_scope`: runtime-signed
-/// controls of an enrolled desktop parent are written under the desktop's
-/// requester and share its existing session, while a parent from another
-/// session cannot lend its scope.
 #[tokio::test]
 async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestry() {
     for source in [
@@ -272,7 +268,6 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             error.to_string()
         );
 
-        // The next enrolled user request can use the same canonical session.
         let mut followup = create.clone();
         followup.initial_lifecycle_state = RequestLifecycleState::Pending;
         followup.request_id = "desktop-followup".into();
@@ -309,7 +304,6 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         );
         assert_eq!(after["AgentSession"][0]["requester_did"], desktop.did());
 
-        // Valid runtime signature but a physical parent from another session.
         let mut foreign_parent = parent.clone();
         foreign_parent.session_id = "other-session".into();
         let bad = session_request_create_mutation(
@@ -326,7 +320,6 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         .unwrap();
         let response = db.node.execute(&bad).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        // An existing other-session owner must not authorize the mismatched parent.
         session::ensure_session_with_agent_id_and_requester_did(
             &db.node,
             "other-session",
@@ -361,10 +354,6 @@ fn admission_verifier(db: &TestDb) -> crate::request_admission::AgentRequestAdmi
     )
 }
 
-/// #2064: a node-owned callee's result, returned (Lean
-/// `CausalHop.return_keeps_caller_hop`) into a session a paired desktop
-/// started, is written under the desktop's requester, admitted, claimed and
-/// resumed in that same session.
 #[tokio::test]
 async fn a_returned_result_is_admitted_into_a_paired_client_session() {
     let db = test_db("paired-client-completion").await;
@@ -1173,9 +1162,6 @@ async fn append_sequence_excludes_foreign_session_messages_and_reservations() {
     assert_eq!(next, 7);
 }
 
-/// Lean `CausalHop.completionWake`: the next wake claim consumes every pending
-/// notification, so a notification that needs a higher hop raises the one
-/// pending wake instead of riding a lower-hop wake already queued.
 #[tokio::test]
 async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
     let db = test_db("wake-hop-raise").await;
@@ -1248,11 +1234,6 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
     assert_eq!(lower["superseded_by_request_doc_id"], raised_wake.as_str());
 }
 
-/// Lean `CausalHop.return_keeps_caller_hop` and
-/// `CausalHop.return_into_refused_session_is_refused`: B's result returned to
-/// A wakes A at A's own hop and joins A's pending process wake. Once a request
-/// over the bound is A's latest, a later returned result copies that hop and
-/// is refused too.
 #[tokio::test]
 async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() {
     let db = test_db("wake-hop-refusal").await;
@@ -1271,7 +1252,6 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
             response.data.unwrap()["AgentRequest"][0].clone()
         }
     };
-    // A's background process completed first: a wake at A's hop is pending.
     let native = persist_background_completion_with_message_waking(
         &db.node,
         &parent,
@@ -1285,7 +1265,6 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
     .await
     .unwrap();
     let native_wake = native.request.expect("native wake").doc_id;
-    // B's result returns at A's hop, so it rides the pending wake.
     let returned = persist_background_completion_with_message_waking(
         &db.node,
         &parent,
@@ -1301,7 +1280,6 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
     assert!(!returned.created_request);
     assert_eq!(returned.request.expect("joined wake").doc_id, native_wake);
     assert_eq!(hop_of(native_wake.clone()).await["request_hop"], 0);
-    // A request past the bound becomes A's latest.
     let refused = persist_background_completion_with_message_waking(
         &db.node,
         &parent,
@@ -1322,7 +1300,6 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         bound + 1
     ));
     assert_eq!(hop_of(native_wake).await["lifecycle_state"], "superseded");
-    // Admission refuses the over-bound wake; it stays the session's latest.
     let response = db
         .node
         .execute(&format!(
@@ -1331,7 +1308,6 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    // A later returned result copies the refused hop and is refused as well.
     let later = persist_background_completion_with_message_waking(
         &db.node,
         &parent,

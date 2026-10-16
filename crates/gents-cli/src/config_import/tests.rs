@@ -83,7 +83,6 @@ async fn imports_complete_candidate_and_recreates_only_the_scoped_tombstone() ->
     let original = tools_id(&access, "owner-a", "tools").await?.unwrap();
     let foreign_id = tools_id(&access, "owner-b", "tools").await?.unwrap();
 
-    // The replacement context and removal must be validated together.
     let replacement = config("owner-a", "replacement");
     let counts = apply_config(&access, &replacement, Some(&first), true).await?;
     assert_eq!(counts.get(Collection::Tools), 2);
@@ -102,7 +101,6 @@ async fn imports_complete_candidate_and_recreates_only_the_scoped_tombstone() ->
         Some(foreign_id)
     );
 
-    // Retained inbound references prohibit an independently requested deletion.
     let rejected = access
         .transact_write("test.config_import.dangling_delete", |txn| {
             Box::pin(async move {

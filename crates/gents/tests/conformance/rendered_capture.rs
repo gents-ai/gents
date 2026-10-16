@@ -1,28 +1,3 @@
-//! Conformance fence for persist-before-send at the provider boundary (#840).
-//! Model: `Proofs/RenderedCapture.lean` — `sent_requires_a_capture_step`,
-//! `capture_key_determines_request`, `capture_failure_blocks_send`. The
-//! *ordering* half is fenced against the real owned loop in
-//! `agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send`;
-//! this file fences the *identity* half: that the capture key is the
-//! five-component tuple the model quantifies over, and that every component is
-//! carried on the production capture DTO.
-//!
-//! The model's `requestId` component names the provider-call scope inside a
-//! request; production encodes it as the injective JSON pair
-//! `[request_doc_id, capture_scope]` — one request runs several completion
-//! loops and each starts turn/attempt counters at zero, so the request document
-//! id alone does not identify a provider attempt. A component dropped here
-//! silently merges two provider attempts into one durable fact.
-//!
-//! `boundary.rendered-capture.assembled-request-artifact`: production captures
-//! at the transport seam
-//! (`rendered_request::transport::RenderedRequestCapturingHttpClient`), after
-//! the ChatGPT-Codex and xAI Grok body rewrites; the body is parsed and
-//! re-encoded through the canonical JSON encoder before storage, so equality is
-//! canonical-JSON value equality (accepted failure mode, not an open question).
-//! `boundary.rendered-capture.key-encoding-injectivity` is fenced below on
-//! every generated row; the Rust delimiter-collision half lives in
-//! `rendered_request::tests::capture_key_does_not_collide_across_component_boundaries`.
 
 use gents::rendered_request::{
     capture_key as derive_capture_key, AssemblyBuildPath, AssemblyTrace, ProvenanceManifest,
@@ -169,9 +144,6 @@ fn generated_rendered_capture_key_cases_pin_the_capture_key_tuple() {
             case.name
         );
 
-        // `boundary.rendered-capture.key-encoding-injectivity` (Rust half): the
-        // derived `capture_key` column must agree with tuple equality, or a
-        // lossy encoding silently merges two provider attempts into one fact.
         assert_eq!(
             left.capture_key == right.capture_key,
             case.same_fact,
@@ -180,8 +152,6 @@ fn generated_rendered_capture_key_cases_pin_the_capture_key_tuple() {
             case.name
         );
 
-        // Each row varies at most one component, so a dropped component is
-        // attributable.
         let varied = [
             case.left_node_did != case.right_node_did,
             case.left_session_id != case.right_session_id,
@@ -207,9 +177,6 @@ fn generated_rendered_capture_key_cases_pin_the_capture_key_tuple() {
     }
 }
 
-/// The Lean rows hold `requestId` opaque; this varies the scope half of
-/// production's third component: two completion loops inside one request at the
-/// same turn and attempt must be two facts.
 #[test]
 fn the_capture_scope_separates_completion_loops_within_one_request() {
     let inference = rendered_in_scope(1, 1, 1, "inference.1", 0, 0, json!({"model": "m"}));

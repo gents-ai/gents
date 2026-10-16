@@ -48,7 +48,7 @@ function MountedAgentPicker({
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [creating, setCreating] = useState(false);
-  // the create sheet waits for the popover's exit animation: one dialog at a time
+  // Wait for the popover's exit animation so two dialogs are never open at once.
   const createAfterClose = useRef(false);
   const popover = useExclusivePopover(() => {
     setQuery("");

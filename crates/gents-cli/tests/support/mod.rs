@@ -40,8 +40,6 @@ pub use waits::{
     wait_for_tool_call,
 };
 
-/// A gents-crate fixture pack directory,
-/// `crates/gents/tests/fixtures/packs/<name>`.
 pub fn fixture_pack_dir(name: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../gents/tests/fixtures/packs")
@@ -51,9 +49,6 @@ pub fn fixture_pack_dir(name: &str) -> std::path::PathBuf {
 pub const DEFAULT_MODEL_ENDPOINT: &str = "http://100.73.235.38:8000/v1";
 pub const DEFAULT_MODEL_NAME: &str = "GLM-5.2";
 
-/// Initialize a node home through `gents init --identity-only` and open its
-/// embedded node with the registered signing identity; without this the CLI's
-/// initialized-home check fails and commits are unsigned.
 pub async fn initialized_node(
     cwd: &std::path::Path,
     node_home: &std::path::Path,

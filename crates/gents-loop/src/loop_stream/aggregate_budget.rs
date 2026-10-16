@@ -3,10 +3,6 @@ use std::sync::{Arc, Mutex};
 use rig::agent::StreamingError;
 use rig::completion::{CompletionError, CompletionRequest, Usage};
 
-// pub, not pub(super): gents' own loop_stream test suite
-// (crates/gents/src/agent/loop_stream/tests/budgeting.rs) drives these
-// directly; a pub(super) item in this crate is invisible to a dependent
-// crate's own test build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AggregateTokenCharge {
     Missing,
@@ -45,8 +41,6 @@ pub struct AggregateTokenLedger {
 
 pub const AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX: &str = "aggregate_token_budget_exhausted: ";
 
-/// Recover only the typed request-budget failure from an anyhow context
-/// chain, so provider/model content cannot forge the scoreable outcome.
 pub fn aggregate_token_budget_exhaustion_message(error: &anyhow::Error) -> Option<String> {
     error.chain().find_map(|cause| {
         let reason = cause
@@ -58,9 +52,6 @@ pub fn aggregate_token_budget_exhaustion_message(error: &anyhow::Error) -> Optio
     })
 }
 
-/// Cloneable handle to the single monotone ledger for one durable request; all
-/// provider calls, including nested compaction runs, share it so they cannot
-/// mint a fresh allowance.
 #[derive(Debug, Clone)]
 pub struct AggregateTokenBudget {
     ledger: Arc<Mutex<AggregateTokenLedger>>,
@@ -71,9 +62,6 @@ impl AggregateTokenBudget {
         Self::with_prior_usage(limit, 0)
     }
 
-    /// Mint a ledger that already reflects durable `InferenceCall` usage for
-    /// this physical request (`request_doc_id`); crash redrive and mid-request
-    /// restart must not reset `used` to zero.
     pub fn with_prior_usage(limit: u64, used: u64) -> Self {
         Self {
             ledger: Arc::new(Mutex::new(AggregateTokenLedger { limit, used })),
@@ -132,8 +120,6 @@ impl AggregateTokenLedger {
     }
 }
 
-/// Apply the request-wide token ledger immediately before every provider
-/// dispatch; the post-call usage report is checked independently.
 pub(super) fn clamp_request_aggregate_token_budget(
     request: &mut CompletionRequest,
     budget: Option<&AggregateTokenBudget>,

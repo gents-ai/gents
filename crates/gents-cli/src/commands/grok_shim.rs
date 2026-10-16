@@ -1,16 +1,3 @@
-//! Grok TUI shim assembly. Gents is the leader server; stock Grok is its
-//! pager client. Submodules: [`protocol`] (wire codec and envelopes),
-//! [`server`] (leader lock, handshake, ACP forwarding), [`acp`] (ACP
-//! service and session surface), [`turn`] (connection-scoped pending
-//! prompts), [`projection`] (durable-row projection to `session/update`),
-//! [`graph_runs`] (workflow projection).
-//!
-//! Every query runs in-process through the
-//! [`gents::graphql::graphql_with_transaction_retry`] and
-//! [`gents::config_client::ConfigAccess`] owners with every interpolated
-//! value escaped by [`gents::graphql::escape_graphql_string`]; no HTTP
-//! GraphQL helper and no stock Grok import is used anywhere in the shim. All
-//! diagnostics go through `tracing` — never `println!`/`eprintln!`.
 
 use std::sync::Arc;
 
@@ -121,24 +108,15 @@ use crate::commands::grok_shim::server::{
     spawn_leader, AcpDelegate, LeaderHandle, LeaderServerConfig, Registration,
 };
 
-/// Everything the shim needs to bind, in one place.
 #[derive(Clone)]
 pub(crate) struct GrokShimBindArgs {
     pub(crate) background_executions: gents::hook::BackgroundExecutionRegistry,
-    /// In-process node every request, interrupt, and projection query uses.
     pub(crate) node: Arc<EmbeddedNode>,
-    /// Authenticated server node used as DefraDB's transaction actor.
     pub(crate) actor: identity::Did,
-    /// GraphQL endpoint string accepted by `create_agent_request`; the
-    /// in-process embedded node is authoritative for reads.
     pub(crate) graphql: String,
-    /// Bound agent id; `None` resolves the node's default.
     pub(crate) agent_id: Option<String>,
-    /// Node DID requests are submitted for.
     pub(crate) node_did: String,
-    /// Display name used in shim diagnostics.
     pub(crate) node_name: String,
-    /// Unix socket path the leader binds and the pager connects to.
     pub(crate) socket_path: std::path::PathBuf,
 }
 
@@ -165,8 +143,6 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
         socket = %args.socket_path.display(),
         "grok shim leader binding"
     );
-    // Each connection can select a different same-node agent via stock
-    // --agent metadata before creating/loading its first session.
     let factory_inputs = AcpDelegateFactoryInputs {
         background_executions: args.background_executions.clone(),
         node: args.node.clone(),
@@ -193,9 +169,6 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
     Ok(leader)
 }
 
-/// Immutable inputs a per-connection delegate factory clones from. A
-/// connection selecting another agent resolves that agent's model/context
-/// before constructing its service.
 #[derive(Clone)]
 struct AcpDelegateFactoryInputs {
     background_executions: gents::hook::BackgroundExecutionRegistry,
@@ -207,8 +180,6 @@ struct AcpDelegateFactoryInputs {
     bound: crate::commands::grok_shim::projection::BoundModelContext,
 }
 
-/// Build the production per-connection delegate factory; nothing mutable is
-/// shared between two registered connections.
 fn production_acp_delegate_factory(
     inputs: AcpDelegateFactoryInputs,
 ) -> impl Fn(u64, &Registration) -> Result<Arc<dyn AcpDelegate>> {

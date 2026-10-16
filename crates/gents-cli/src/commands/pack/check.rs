@@ -1,4 +1,3 @@
-//! CLI validation around the shared pack check and topology owners.
 
 use std::path::{Path, PathBuf};
 
@@ -44,7 +43,6 @@ pub(crate) async fn check(args: PackCheckArgs) -> Result<()> {
     Ok(())
 }
 
-/// Runs the shared authoring checks and adds checks whose owners live in the CLI.
 pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
     let shared = gents::pack::authoring::check_dir(dir).await;
     let mut report = CheckReport {
@@ -101,7 +99,6 @@ fn load_config(archive: &PackArchive) -> Result<gents::document_config::PackConf
     gents::pack::authoring::load_config(archive)
 }
 
-/// Runs event-source filters as queries against runtime and pack schemas.
 async fn check_filters(
     dir: &Path,
     config: &gents::document_config::PackConfig,

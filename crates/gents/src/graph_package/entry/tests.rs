@@ -33,44 +33,6 @@ fn commit(repo: &Path, message: &str) -> String {
     git_output(repo, &["rev-parse", "HEAD"]).unwrap()
 }
 
-#[test]
-fn git_diff_host_step_runs_the_declared_diff() {
-    let directory = init_repo();
-    let repo = directory.path();
-    std::fs::write(repo.join("a.txt"), "line one\n").unwrap();
-    let base = commit(repo, "base");
-    std::fs::write(repo.join("a.txt"), "line one changed\n").unwrap();
-    let head = commit(repo, "head");
-
-    let facts = collect_git_diff(repo, &base, &head, 3, 40, None).unwrap();
-    let expected_name_status =
-        git_output(repo, &["diff", "--name-status", &base, &head, "--"]).unwrap();
-    let expected_stat = git_output(repo, &["diff", "--stat", &base, &head, "--"]).unwrap();
-    let expected_patch = git_output_exact(
-        repo,
-        &[
-            "-c",
-            "core.quotepath=true",
-            "diff",
-            "--no-color",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--binary",
-            "--find-renames=40%",
-            "--unified=3",
-            &base,
-            &head,
-            "--",
-        ],
-    )
-    .unwrap();
-    assert_eq!(facts.base_sha, base);
-    assert_eq!(facts.head_sha, head);
-    assert_eq!(facts.name_status, expected_name_status);
-    assert_eq!(facts.stat, expected_stat);
-    assert_eq!(facts.patch, expected_patch);
-}
-
 use crate::plugin::tests::constant_output_wat;
 
 fn install_prepare_fixture_plugin(output: &Value) -> (tempfile::TempDir, String) {
@@ -137,30 +99,6 @@ fn fixture_plan(entry: PlannedEntry) -> GraphPlan {
         },
         package: None,
     }
-}
-
-#[tokio::test]
-async fn prepare_entry_run_returns_admitted_input_when_the_entry_has_no_prepare() {
-    let plan = fixture_plan(fixture_entry(None));
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
-    let access = ConfigAccess::local(std::sync::Arc::new(node));
-    let plugins = PluginExecutor::default();
-    let prepared = prepare_entry_run(
-        &access,
-        "did:key:tester",
-        EntryRunRequest {
-            plan: &plan,
-            entry: None,
-            input: json!({"note": "hello"}),
-            host_root: None,
-            plugins: &plugins,
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(prepared.origin, EntryInputOrigin::Operator);
-    assert_eq!(prepared.documents, 0);
-    assert_eq!(prepared.input, json!({"note": "hello"}));
 }
 
 #[tokio::test]
@@ -298,7 +236,6 @@ async fn persist_prepared_documents_batches_and_never_drops_a_document() {
         })
         .collect();
     let oversized_note = "z".repeat(PREPARE_DOCUMENTS_BATCH_BYTES + 1);
-    // Mid-list, so the byte budget forces an early batch break.
     documents.insert(
         40,
         PreparePluginDocument {

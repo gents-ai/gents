@@ -49,7 +49,6 @@ async fn trigger_binding(
     Ok((trigger, serde_json::from_value(source)?))
 }
 
-/// The per-document delivery settings one consumer's cursor checkpoints under.
 struct ConsumerBinding {
     enabled: bool,
     serial: bool,

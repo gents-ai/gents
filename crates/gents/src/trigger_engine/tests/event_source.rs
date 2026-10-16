@@ -482,8 +482,6 @@ async fn admit_observed_event(
 
 #[tokio::test]
 async fn event_source_reconciles_subscriptions_on_generation_bump() {
-    // `reconcile_subscriptions` opens the global update subscription on the
-    // first non-empty desired set, so this needs a real embedded node.
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
@@ -552,8 +550,7 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     let cancel = CancellationToken::new();
     let mut source = EventSource::new(rx, node.clone(), cancel.clone());
 
-    // Open the subscription BEFORE writing the doc; the bus only buffers
-    // messages for already-connected subscribers.
+    // The update bus only buffers messages for connected subscribers.
     source.reconcile_subscriptions(snapshot.as_ref()).await;
     assert_eq!(
         source.subscribed_collections(),
@@ -1575,8 +1572,6 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
 
     let cancel = CancellationToken::new();
     let mut source = EventSource::new(rx, node.clone(), cancel.clone());
-    // Open the subscription BEFORE writing the source doc, or the event is
-    // dropped by the bus.
     source.reconcile_subscriptions(snapshot.as_ref()).await;
 
     let node_for_mutation = node.clone();
@@ -1697,8 +1692,6 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
         .expect("next_fire timed out waiting for WebhookEvent")
         .expect("next_fire returned None instead of emitting a FireIntent");
 
-    // The `on_result` closure is `FnOnce`, so drive the Errored phase through
-    // the same writeback path it uses internally.
     let trigger_id = "trigger-skip-err".to_string();
     let source_doc_id = intent
         .event_vars

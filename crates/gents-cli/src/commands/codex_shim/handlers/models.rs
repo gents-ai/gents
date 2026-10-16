@@ -73,12 +73,10 @@ pub(super) async fn apply_config_writes(
     .await
 }
 
-/// Backend/model/effort choices live on the profile, never as agent copies.
 pub(super) struct BoundAgent {
     pub(super) inference_profile: InferenceProfile,
 }
 
-/// Catalog absence is never invented into synthetic model entries.
 pub(super) struct AvailableBackend {
     pub(super) backend: InferenceBackend,
     pub(super) catalog: Option<BackendModelCatalog>,
@@ -186,8 +184,6 @@ pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<Av
     Ok(available)
 }
 
-/// True only when every agent bound to `backend_id` is `Unavailable` for a
-/// backend-related reason; missing rows or agents read as "not vetoed."
 fn backend_vetoed_by_readiness(
     backend_id: &str,
     bindings: &[(String, String)],
@@ -264,7 +260,6 @@ pub(super) fn model_list_entries(backends: &[AvailableBackend], bound: &BoundAge
     entries
 }
 
-/// Unknown or empty efforts render as no selectable options.
 fn advertised_effort_options(efforts: Option<&[ReasoningEffort]>) -> Value {
     let Some(efforts) = efforts else {
         return json!([]);

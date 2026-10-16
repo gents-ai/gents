@@ -1,7 +1,3 @@
-//! Eval execution support shared by the runtime and the test harness: the loop
-//! that plans the trials a run still owes, executes them, and records what
-//! each one produced. Everything it decides comes from the frozen run, so a
-//! resumed run makes the same decisions a crashed one would have made.
 pub mod embedded;
 pub mod executor;
 mod files;
@@ -63,24 +59,13 @@ use crate::eval::{
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunOutcome {
     pub run_id: String,
-    /// Attempts whose completion was written, whatever they came to.
     pub completed: u32,
-    /// Trials that were launched and left unfinished by cancellation.
     pub abandoned: u32,
-    /// Slots whose every permitted attempt finished without evidence; a count
-    /// of slots, not of attempts, so it does not overlap [`Self::completed`].
-    /// `0` unless the run ended because it owed nothing.
     pub not_evidence: u32,
     pub breaker_tripped: bool,
-    /// The caller's token or a cancel marker stopped this pass while the run
-    /// still owed slots; a cancel that lands after the last slot is settled
-    /// leaves this `false`.
     pub cancelled: bool,
 }
 
-/// Too many trials in a row produced no evidence, so the run stopped. The
-/// count is read at the moment of the trip; a trial finishing later cannot
-/// rewrite why the run stopped.
 #[derive(Debug)]
 pub struct ProviderDown {
     pub outcome: RunOutcome,
@@ -103,10 +88,7 @@ pub fn provider_down(error: &anyhow::Error) -> Option<&ProviderDown> {
     error.downcast_ref::<ProviderDown>()
 }
 
-/// The file whose presence asks a run to stop: `<run dir>/cancel` (spec 4a
-/// §3). Written by another process on this machine; the loop checks it
-/// wherever it checks its token, and [`run`] and [`resume`] remove it before
-/// planning. Remote cancel is spec 2b's, never this marker.
+/// Local filesystem cancellation marker; remote cancellation uses its own path.
 pub const CANCEL_MARKER: &str = "cancel";
 
 pub fn run_dir(runs_dir: &Path, run_id: &str) -> Result<PathBuf> {
@@ -128,8 +110,6 @@ pub fn request_cancel(runs_dir: &Path, run_id: &str) -> Result<PathBuf> {
     Ok(marker)
 }
 
-/// The token is cancelled, or the marker is present, in which case the token
-/// is cancelled so every in-flight trial and later check reads the same answer.
 fn cancel_requested(run_dir: &Path, cancel: &CancellationToken) -> bool {
     if cancel.is_cancelled() {
         return true;
@@ -145,8 +125,6 @@ fn cancel_requested(run_dir: &Path, cancel: &CancellationToken) -> bool {
     false
 }
 
-/// Remove the marker a cancelled run left, if any; a run a live process still
-/// holds is refused instead.
 fn clear_cancel(run_dir: &Path) -> Result<()> {
     refuse_if_held(run_dir)?;
     let marker = run_dir.join(CANCEL_MARKER);
@@ -182,9 +160,6 @@ fn marker_poll(options: &RunOptions) -> Duration {
 
 const MARKER_POLL_CAP_SECS: u64 = 1;
 
-/// How long a `progress.json` entry stays fresh without being rewritten: the
-/// one staleness window every reader (including `gents eval watch`) uses,
-/// wide enough to cover any runner's marker period.
 pub const STALE_WINDOW: Duration = Duration::from_secs(3 * MARKER_POLL_CAP_SECS);
 
 pub fn slots_owed(record: &RunRecord, trials: &[TrialRecord]) -> usize {
@@ -275,9 +250,6 @@ pub async fn run(
     execute_frozen(&frozen, &recorder, executor, registry, cancel, options).await
 }
 
-/// Run what an existing run still owes: rebuilds the frozen origin rather
-/// than re-deciding it and plans from the trials already written, so a slot
-/// that answered before the crash is never run twice.
 #[allow(clippy::too_many_arguments)]
 pub async fn resume(
     access: &ConfigAccess,
@@ -295,17 +267,12 @@ pub async fn resume(
     execute_frozen(&frozen, &recorder, executor, registry, cancel, options).await
 }
 
-/// What one trial's turn through the loop came to.
 enum Slot {
     Skipped,
     Abandoned,
     Completed { attempt: u32, not_evidence: bool },
 }
 
-/// Plan, execute and record until the run owes nothing. Each pass re-reads
-/// the trials the run has written, so the plan is a function of what is
-/// durable rather than of what this process remembers. Every attempt that ran
-/// is completed, including one that learned nothing.
 pub(crate) async fn execute_frozen(
     frozen: &FrozenRun,
     recorder: &dyn Recorder,
@@ -503,8 +470,6 @@ pub(crate) async fn execute_frozen(
     Ok(outcome)
 }
 
-/// The not-evidence count of a run that owes nothing; every slot still
-/// without evidence has spent what the run allows.
 fn settled(run_id: &str, existing: &[TrialRecord]) -> u32 {
     let bounded = abandonment_bounded_slots(existing);
     if bounded > 0 {
@@ -518,7 +483,6 @@ fn settled(run_id: &str, existing: &[TrialRecord]) -> u32 {
     not_evidence_slots(existing)
 }
 
-/// One trial: provision, record, run, grade, and record the outcome.
 #[allow(clippy::too_many_arguments)]
 async fn execute_trial(
     frozen: &FrozenRun,
@@ -665,7 +629,6 @@ async fn execute_trial(
     })
 }
 
-/// Ends a slot's `progress.json` entry when the trial's turn ends.
 struct InFlightGuard<'a> {
     progress: &'a ProgressWriter,
     trial_id: &'a str,
@@ -693,9 +656,6 @@ fn write_evidence_sidecar(trial_dir: &Path, record: EvidenceRecord) {
 struct ViewWriter(tokio::sync::Mutex<()>);
 
 impl ViewWriter {
-    /// Derive the run's report through the recorder and write the
-    /// [`RunView`]. Advisory: a report that cannot be built, or a write that
-    /// fails, is logged and the run goes on.
     async fn refresh(&self, frozen: &FrozenRun, recorder: &dyn Recorder) {
         let _one = self.0.lock().await;
         let run_id = frozen.record.run_id.as_str();
@@ -784,8 +744,6 @@ fn stage_specs(case: &EvalCase, fallback: &[Capture]) -> Vec<StageSpec> {
         .collect()
 }
 
-/// The definition's fixtures, then the case's: a case adds to what every case
-/// shares rather than replacing it.
 fn fixtures(
     pack_dir: &Path,
     definition: Option<&EvalFixtures>,
@@ -813,10 +771,7 @@ fn fixtures(
     Ok(fixtures)
 }
 
-/// A fixture asset is a pack-relative path naming a file inside the run's own
-/// pack copy, never a path out of it. An asset the pack does not hold is the
-/// runner's failure, not the trial's: no trial ran, so there is no outcome to
-/// record. A directory asset materializes every file under it.
+/// Asset paths are confined to the run's pack copy.
 fn asset_files(pack_dir: &Path, asset: &str) -> Result<Vec<FixtureFile>> {
     anyhow::ensure!(
         Path::new(asset)
@@ -861,8 +816,6 @@ fn asset_files(pack_dir: &Path, asset: &str) -> Result<Vec<FixtureFile>> {
     Ok(files)
 }
 
-/// `index` is the row's position among the trial's rows, so a case naming one
-/// check twice on a stage still writes two distinct documents.
 fn verdict_draft(
     run_id: &str,
     trial_id: &str,
@@ -2492,9 +2445,6 @@ mod tests {
         assert!(!marker.exists());
     }
 
-    /// One trial's error stops the pass, but the trials already in flight are
-    /// cancelled and drained before it leaves, so none is dropped mid-run
-    /// with its runtime detached.
     #[tokio::test]
     async fn an_error_in_one_trial_drains_the_trials_in_flight() {
         let (launching, pack) = launching("captured_rows_count").await;

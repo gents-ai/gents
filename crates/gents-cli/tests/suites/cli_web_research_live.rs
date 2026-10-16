@@ -667,9 +667,6 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
     let researcher_slot = format!("researcher={profile_id}");
     let verifier_slot = format!("verifier={profile_id}");
 
-    // A local packs checkout (`GENTS_WEB_RESEARCH_PACK=/path/to/web_deep_research`)
-    // installs offline; the published coordinate resolves nowhere until
-    // gents-ai/packs ships.
     let pack_spec = std::env::var("GENTS_WEB_RESEARCH_PACK")
         .unwrap_or_else(|_| "gents/web_deep_research".to_string());
     let install = run_cli_json_with_env(

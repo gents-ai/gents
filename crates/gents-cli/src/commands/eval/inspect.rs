@@ -1,5 +1,3 @@
-//! `list`, `show` and `trial`: reads of the report `gents::eval::report`
-//! builds from a run's documents.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -19,7 +17,6 @@ use serde::Serialize;
 use super::{render, write_json, EvalContext};
 use crate::cli::{EvalListArgs, EvalShowArgs, EvalTrialArgs};
 
-/// One run as `eval list` shows it.
 #[derive(Debug, Serialize)]
 pub(crate) struct ListRow {
     pub(crate) run_id: String,
@@ -29,12 +26,9 @@ pub(crate) struct ListRow {
     pub(crate) purpose: String,
     pub(crate) created_at: String,
     pub(crate) invalidated: Option<Invalidation>,
-    /// `None` once `rm` or `gc` removed it, or when it could not be read
-    /// (`size_error` then says why).
     pub(crate) size_bytes: Option<u64>,
     pub(crate) size_error: Option<String>,
     pub(crate) cells: Vec<ListCell>,
-    /// Why the run's report could not be built, when it could not.
     pub(crate) report_error: Option<String>,
 }
 
@@ -63,8 +57,6 @@ pub(super) async fn list(
         if record.invalidated.is_some() && !args.all {
             continue;
         }
-        // An unreportable run is still listed, with why; any other failure
-        // (transport, database) fails the listing.
         let (cells, report_error) =
             match load_report_among(&ctx.access, &ctx.owner, &ctx.runs_dir(), record, &peers).await
             {
@@ -151,7 +143,6 @@ pub(crate) struct TrialVerdict {
     pub(crate) score_bp: Option<u32>,
     pub(crate) weight: u32,
     pub(crate) reason_code: Option<String>,
-    /// What the check observed against what it expected.
     pub(crate) detail: Option<String>,
     pub(crate) regrade_of: Option<String>,
     pub(crate) raw: serde_json::Value,
@@ -182,14 +173,8 @@ impl From<VerdictRecord> for TrialVerdict {
 pub(crate) struct TrialView {
     pub(crate) run_id: String,
     pub(crate) cell_id: String,
-    /// The slot as the report counts it: its `verdicts` are the counted
-    /// attempt's, after regrade supersession, which is what scoring reads.
     pub(crate) slot: SlotReport,
-    /// The retained trial home: `<home>/eval/runs/<home_hint>`.
     pub(crate) home: Option<PathBuf>,
-    /// Every verdict row of the latest attempt, regrades and the verdicts
-    /// they superseded included. The counted attempt is the latest completed
-    /// one, so a retry in flight has no verdicts here yet.
     pub(crate) verdicts: Vec<TrialVerdict>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) requests: Option<Vec<gents::eval::runner::embedded::RetainedRequest>>,

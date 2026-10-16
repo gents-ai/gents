@@ -4,10 +4,6 @@ use anyhow::Context;
 use crate::session_message::{AgentMessageArgs, AgentNewArgs};
 
 impl DefraSessionHook {
-    /// Dispatch `agent_new`/`agent_message`. The accepted call was published
-    /// in background and stays running until the request it caused reaches a
-    /// durable terminal, delivered as a notification by the background
-    /// completion observer.
     pub(super) async fn persist_session_message_tool_call(
         &self,
         tool_name: &str,
@@ -129,8 +125,6 @@ impl DefraSessionHook {
                 ),
             };
             let target_session = parsed.session_id.trim().to_owned();
-            // Lean `CausalHop.sendTargetAllowed`: messaging the calling
-            // session would steer it with no hop increase.
             if target_session == caller.session_id {
                 refuse!(
                     FailureClass::ArgumentInvalid,
@@ -244,8 +238,6 @@ impl DefraSessionHook {
                 invalid_tool_arguments_payload(tool_name, "/task", message)
             ),
         };
-        // A local target's own admission would refuse this hop; refuse the
-        // call instead. A peer checks its own bound at admission.
         if target.node_did == caller.node_did {
             let max_request_hop =
                 crate::request_admission::max_request_hop(&self.node, &caller.node_did).await?;
@@ -265,10 +257,6 @@ impl DefraSessionHook {
                     &["status", "session_id", "request_id", "tool_call_id"],
                 )?,
                 Err(error) => {
-                    // The durable row is still pending, so nothing was
-                    // delivered and the invocation reply is the failure. On an
-                    // unknown outcome `spawn_failed` refuses a row that left
-                    // pending, and the hook fails instead.
                     refuse!(
                         FailureClass::ServiceUnavailable,
                         service_unavailable_payload(

@@ -1,8 +1,3 @@
-//! `gents cloud login`: device-code sign-in against a gents cloud pod.
-//! The token is written to the credential document and never printed,
-//! logged, or put in the result JSON; the poll loop honours the interval
-//! and expiry the server reports, bounded below and above.
-
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -18,30 +13,17 @@ use crate::{print_json, resolve_config_access, resolve_node_did};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Floor under the poll interval the server asks for: a zero interval
-/// would hot-spin against the server's public port.
 const MIN_POLL_INTERVAL_SECS: u64 = 1;
 
-/// Ceiling on how long one `gents cloud login` waits, whatever expiry the
-/// server reports; the wait actually used is printed in the give-up
-/// message so a clamp is never silent.
 const MAX_LOGIN_WAIT_SECS: u64 = 15 * 60;
 
-/// Ceiling on how much of a server message is echoed to the terminal:
-/// the body is network input.
 const MAX_MESSAGE_CHARS: usize = 200;
 
 const DEFAULT_REFUSAL: &str = "this sign-in was refused; run `gents cloud login` again";
 
-/// A gents cloud workspace token carries no expiry in the poll response;
-/// `OAuthCredential.access_token_expires_at` is required, so the row
-/// records now plus ten years.
 const NO_EXPIRY_HORIZON_DAYS: i64 = 3650;
 
-/// Stored in the required `refresh_token` field because a blank value
-/// fails decoding of every credential for the agent. The device flow has
-/// no refresh grant: this is not a token and must not be sent to a token
-/// endpoint.
+/// Sentinel for credentials without a refresh grant. Never send it to a token endpoint.
 const NO_REFRESH_GRANT: &str = "gents-cloud:no-refresh-grant";
 
 pub(crate) async fn dispatch(command: CloudCommand) -> Result<()> {
@@ -138,7 +120,6 @@ pub(crate) fn cloud_login_result_json(outcome: &CloudLoginOutcome) -> Value {
     })
 }
 
-/// What `POST /auth/device/start` answers.
 #[derive(Deserialize)]
 struct DeviceStart {
     device_code: String,
@@ -184,14 +165,10 @@ impl std::fmt::Debug for SignedIn {
 #[derive(Debug)]
 enum PollStep {
     Pending,
-    /// The one and only time the token is handed over.
     SignedIn(SignedIn),
-    /// Denied, expired, or already spent, with the cloud's own reason.
     Refused(String),
 }
 
-/// The one thing the poll loop does to the outside world; a trait so the
-/// loop's schedule is testable without a server.
 trait DevicePolls {
     async fn poll_once(&self, device_code: &str) -> Result<PollStep>;
 }
@@ -261,11 +238,7 @@ fn classify_poll(status: StatusCode, body: &str) -> Result<PollStep> {
     }
 }
 
-/// Polls until approval, refusal, or the code runs out of time. The
-/// schedule is the server's, but bounded here because both values arrive
-/// over the network: [`MIN_POLL_INTERVAL_SECS`] stops a hot loop and
-/// [`MAX_LOGIN_WAIT_SECS`] stops a wedged terminal, and the wait actually
-/// used is in the give-up message.
+/// Bounds server supplied polling values to prevent hot loops and indefinite waits.
 async fn wait_for_approval(polls: &impl DevicePolls, start: &DeviceStart) -> Result<SignedIn> {
     let interval = Duration::from_secs(start.interval_secs.max(MIN_POLL_INTERVAL_SECS));
     let wait_secs = start.expires_in_secs.min(MAX_LOGIN_WAIT_SECS);
@@ -300,9 +273,6 @@ fn credential_from_session(
         access_token: session.token.clone(),
         refresh_token: NO_REFRESH_GRANT.to_string(),
         id_token: None,
-        // The account the cloud verified, and the only workspace naming:
-        // the token already names the workspace to the cloud, and a second
-        // copy here is a copy that can drift.
         account_id: Some(session.email.clone()),
         chatgpt_plan_type: None,
         is_fedramp: false,
@@ -321,9 +291,7 @@ fn no_expiry_horizon(now: DateTime<Utc>) -> DateTime<Utc> {
         .unwrap_or(DateTime::<Utc>::MAX_UTC)
 }
 
-/// Turns `--cloud` into the base URL of a gents cloud public listener.
-/// `http` is kept only for a loopback listener: a workspace token has no
-/// expiry, so cleartext to any other host would publish it.
+/// Allows cleartext only for loopback because workspace tokens have no expiry.
 fn cloud_base_url(cloud: &str) -> Result<reqwest::Url> {
     let cloud = cloud.trim();
     if cloud.is_empty() {
@@ -354,7 +322,6 @@ fn host_is_loopback(url: &reqwest::Url) -> bool {
     if host.eq_ignore_ascii_case("localhost") {
         return true;
     }
-    // `host_str` keeps the brackets around an IPv6 address.
     let host = host
         .strip_prefix('[')
         .and_then(|host| host.strip_suffix(']'))
@@ -363,9 +330,7 @@ fn host_is_loopback(url: &reqwest::Url) -> bool {
         .is_ok_and(|address| address.is_loopback())
 }
 
-/// Cloud login writes one non-refreshing workspace token; the provider
-/// must not be one of the OAuth providers gents refreshes, or this write
-/// would replace that grant with a token those clients then try to refresh.
+/// Prevents replacing credentials managed by the OAuth refreshers with workspace tokens.
 fn cloud_provider(provider: &str) -> Result<&str> {
     let provider = provider.trim();
     if provider.is_empty() {
@@ -392,7 +357,6 @@ fn cloud_endpoint(base: &reqwest::Url, path: &str) -> String {
     url.to_string()
 }
 
-/// One sentence for a cloud that answered, but said no.
 fn cloud_said_no(action: &str, status: StatusCode, body: &str) -> anyhow::Error {
     match message_sentence(body) {
         Some(reason) => anyhow::anyhow!(
@@ -404,9 +368,6 @@ fn cloud_said_no(action: &str, status: StatusCode, body: &str) -> anyhow::Error 
     }
 }
 
-/// `reqwest` reports a transport failure as a cause chain; the segments
-/// are joined on one line because the outer segment repeats the URL the
-/// sentence already names.
 fn unreachable_cloud(url: &str, error: &reqwest::Error) -> anyhow::Error {
     anyhow::anyhow!(
         "cannot reach the gents cloud at {url} ({}); check --cloud and that the host is reachable",
@@ -431,9 +392,7 @@ fn transport_reasons(error: &reqwest::Error) -> String {
     }
 }
 
-/// The server's own message, made safe to print: the first non-empty
-/// line, trimmed and bounded, with the truncation visible. `None` when
-/// the body says nothing.
+/// Bounds and trims untrusted server text before displaying it.
 fn message_sentence(body: &str) -> Option<String> {
     let first = body.lines().map(str::trim).find(|line| !line.is_empty())?;
     let kept: String = first.chars().take(MAX_MESSAGE_CHARS).collect();
@@ -475,8 +434,6 @@ mod tests {
     }
 
     impl ScriptedPolls {
-        /// Must be built inside the test's runtime: `started` anchors the
-        /// recorded poll times to the same (paused) clock the loop sleeps on.
         fn new(steps: impl IntoIterator<Item = PollStep>) -> Self {
             Self {
                 steps: Mutex::new(steps.into_iter().collect()),
@@ -644,9 +601,6 @@ mod tests {
         }
     }
 
-    /// Pins the operator-facing promise, not the transport reason (which
-    /// differs per host and platform): one line naming the URL, a reason,
-    /// what to do, and no cause chain for `{:?}` to unfold into a stack.
     #[tokio::test]
     async fn an_unreachable_cloud_fails_with_one_plain_sentence() {
         let polls = CloudDevicePolls {
@@ -654,8 +608,6 @@ mod tests {
                 .timeout(Duration::from_secs(2))
                 .build()
                 .expect("client"),
-            // Port 1 is privileged and never a gents cloud: the connect
-            // fails immediately without a network.
             poll_url: "http://127.0.0.1:1/auth/device/poll".to_string(),
         };
         let error = polls

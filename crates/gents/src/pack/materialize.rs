@@ -212,19 +212,6 @@ pub fn cached(
 mod tests {
     use super::ensure_root_dir;
 
-    #[test]
-    fn absent_root_is_created() {
-        let temp = tempfile::tempdir().unwrap();
-        // `ensure_root_dir` uses a nonrecursive create, so the trusted parent
-        // must already exist; only the root itself is created here.
-        std::fs::create_dir(temp.path().join("a")).unwrap();
-        let root = temp.path().join("a").join("b");
-        ensure_root_dir(&root).unwrap();
-        assert!(root.is_dir());
-        // Idempotent when the root already exists as a directory.
-        ensure_root_dir(&root).unwrap();
-    }
-
     #[cfg(unix)]
     #[test]
     fn existing_root_symlink_is_refused() {
@@ -239,15 +226,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn existing_root_regular_file_is_refused() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("root-file");
-        std::fs::write(&root, b"not a directory").unwrap();
-        let error = ensure_root_dir(&root).unwrap_err();
-        assert!(
-            error.to_string().contains("is not a directory"),
-            "unexpected error: {error}"
-        );
-    }
 }

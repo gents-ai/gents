@@ -15,7 +15,6 @@ pub enum AuthMode {
     ApiKey,
     Chatgpt,
     /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
-    ///
     /// ChatGPT auth tokens are supplied by an external host app and are only
     /// stored in memory. Token refresh must be handled by the external host app.
     #[serde(rename = "chatgptAuthTokens")]
@@ -120,7 +119,6 @@ macro_rules! client_request_definitions {
             }
         ),* $(,)?
     ) => {
-        /// Request from the client to the server.
         #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ClientRequest {
@@ -169,7 +167,6 @@ macro_rules! client_request_definitions {
             }
         }
 
-        /// Typed response from the server to the client.
         #[derive(Serialize, Deserialize, Debug, Clone)]
         #[allow(clippy::large_enum_variant)]
         #[serde(tag = "method", rename_all = "camelCase")]
@@ -537,7 +534,6 @@ client_request_definitions! {
         serialization: None,
         response: v2::AppsListResponse,
     },
-    // File system requests are intentionally concurrent; remote fs mirrors that model.
     FsReadFile => "fs/readFile" {
         params: v2::FsReadFileParams,
         serialization: None,
@@ -909,7 +905,6 @@ macro_rules! server_request_definitions {
             }
         ),* $(,)?
     ) => {
-        /// Request initiated from the server and sent to the client.
         #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
         #[allow(clippy::large_enum_variant)]
         #[serde(tag = "method", rename_all = "camelCase")]
@@ -950,7 +945,6 @@ macro_rules! server_request_definitions {
             }
         }
 
-        /// Typed response from the client to the server.
         #[derive(Serialize, Deserialize, Debug, Clone)]
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ServerResponse {
@@ -1009,7 +1003,6 @@ macro_rules! server_notification_definitions {
             $variant:ident $(=> $wire:literal)? ( $payload:ty )
         ),* $(,)?
     ) => {
-        /// Notification sent from the server to the client.
         #[derive(
             Serialize,
             Deserialize,
@@ -1133,7 +1126,6 @@ pub struct FuzzyFileSearchParams {
     pub cancellation_token: Option<String>,
 }
 
-/// Superset of [`codex_file_search::FileMatch`]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FuzzyFileSearchResult {
     pub root: String,

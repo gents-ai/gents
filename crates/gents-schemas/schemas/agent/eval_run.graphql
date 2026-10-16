@@ -1,4 +1,3 @@
-# One frozen eval invocation (#1515). Facts only: progress derives from trials.
 type EvalRun @branchable @index(fields: ["owner_node_did", "run_id"], unique: true) {
     run_id: String @immutable
     owner_node_did: String @index @immutable

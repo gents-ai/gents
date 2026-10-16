@@ -51,7 +51,6 @@ def Submission.step? (submission : Submission) (action : Action) : Option Submis
   (Status.step? submission.status action).map fun status =>
     { submission with status := status }
 
-/-- Recovery can poll or rebroadcast, but cannot manufacture bytes. -/
 theorem step_preserves_prepared_identity
     (before after : Submission) (action : Action)
     (h : before.step? action = some after) :

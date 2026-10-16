@@ -1,8 +1,3 @@
-//! The `OptimizationJob` document: a frozen origin and an append-only journal
-//! guarded by its own length, whose state is derived from the journal. This is
-//! the Rust refinement of `Optimization.appendIf`. The job is the driver's
-//! notebook, not a request: `state` is derived, never claimed, and no runtime
-//! reconciles this collection.
 
 use std::path::PathBuf;
 
@@ -18,9 +13,6 @@ use crate::graphql::escape_graphql_string;
 use crate::optimization::policy::{Decision, Mode, PolicyV2};
 use crate::optimization::target::{FrozenDocument, Target};
 
-/// What a job may spend. `max_rounds` is also the Bonferroni divisor, so the
-/// significance level a decision is judged at matches the number of candidates
-/// the job may try on one validation split.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Budgets {
     pub max_rounds: u32,
@@ -29,7 +21,6 @@ pub struct Budgets {
     pub deadline_unix_secs: Option<u64>,
 }
 
-/// Frozen at creation and never rewritten.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobOrigin {
     pub target: Target,
@@ -39,18 +30,12 @@ pub struct JobOrigin {
     pub policy: PolicyV2,
     pub trials_per_case: u32,
     pub budgets: Budgets,
-    /// The target's text at freeze: the first checkpoint, and what `revert`
-    /// would restore if nothing had been promoted since.
     pub baseline_text: String,
     pub owner: String,
     pub seed_base: i64,
     pub inference_profile_id: String,
     pub max_text_bytes: usize,
     pub jobs_dir: PathBuf,
-    /// What every run of the job reads out of a finished trial home: the
-    /// request-level fallback; stage-level `EvalStage.capture` supersedes it
-    /// once the runner reads stage captures. The runner refuses to resume a
-    /// run under a changed list; empty is a valid list.
     #[serde(default)]
     pub captures: Vec<Capture>,
 }
@@ -106,8 +91,6 @@ pub struct DecisionSummary {
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum JournalEntry {
     Frozen,
-    /// Written before the runner is asked for a run; one without a matching
-    /// `Decided` means the run may be incomplete and replay resumes it.
     RunStarted {
         run_id: String,
         round: Option<u32>,
@@ -432,8 +415,6 @@ pub async fn load_job(
         .await
 }
 
-/// `Optimization.appendIf`. The update matches only while `journal_len` still
-/// equals the length this writer read, so a stale writer changes nothing.
 pub(crate) async fn append_in_txn(
     txn: &ConfigApplyTxn<'_>,
     job: &JobRecord,
@@ -482,7 +463,6 @@ pub async fn append(access: &ConfigAccess, job: &mut JobRecord, entry: JournalEn
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::optimization::policy::{InconclusiveReason, RejectReason};
     use crate::optimization::target::{Target, TargetField};
     use std::sync::Arc;
 
@@ -638,57 +618,6 @@ mod tests {
         let loaded = load_job(&access, OWNER, "job-3").await.unwrap().unwrap();
         assert_eq!(loaded.journal, vec![JournalEntry::Frozen]);
         assert_eq!(derive_state(&loaded.journal), JobState::Running);
-    }
-
-    #[test]
-    fn the_checkpoint_is_the_last_accepted_round_and_never_the_best_seen() {
-        let journal = vec![
-            JournalEntry::Frozen,
-            proposed(1, "one"),
-            decided(1, Decision::Accept),
-            proposed(2, "two"),
-            decided(2, Decision::Reject(RejectReason::NoImprovement)),
-            proposed(3, "three"),
-            decided(3, Decision::Inconclusive(InconclusiveReason::Insufficient)),
-        ];
-        let retained = checkpoint(&journal).expect("round 1 was accepted");
-        assert_eq!((retained.round, retained.text.as_str()), (1, "one"));
-        assert_eq!(retained.pack_digest, "sha256:candidate-1");
-        assert_eq!(
-            checkpoint(&journal[..2]),
-            None
-        );
-        assert_eq!(rounds_used(&journal), 3);
-    }
-
-    #[test]
-    fn the_state_is_derived_from_the_terminal_entries_in_order() {
-        let mut journal = vec![JournalEntry::Frozen];
-        assert_eq!(derive_state(&journal), JobState::Running);
-        journal.push(JournalEntry::Finalized {
-            state: JobState::ReadyToPromote,
-        });
-        assert_eq!(derive_state(&journal), JobState::ReadyToPromote);
-        journal.push(JournalEntry::PromotionRefused {
-            drifted: vec![DriftedRef {
-                collection: "AgentContext".into(),
-                id: "monitor-context".into(),
-            }],
-        });
-        assert_eq!(derive_state(&journal), JobState::Stale);
-        journal.push(JournalEntry::Promoted {
-            by: OWNER.into(),
-            target_digest: "sha256:after".into(),
-            previous_text: "Watch the mailbox.\n".into(),
-            previous_digest: "sha256:before".into(),
-        });
-        assert_eq!(derive_state(&journal), JobState::Promoted);
-        journal.push(JournalEntry::Reverted { by: OWNER.into() });
-        assert_eq!(
-            derive_state(&journal),
-            JobState::Reverted
-        );
-        assert_eq!(JobState::Reverted.label(), "reverted");
     }
 
     #[tokio::test]

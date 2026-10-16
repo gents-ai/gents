@@ -1,6 +1,3 @@
-//! Pins that one-shot completion calls bypass `AdmissionRegistry`; the
-//! registry requires the daemon's reconciler.
-
 use std::sync::Arc;
 
 use anyhow::Result;

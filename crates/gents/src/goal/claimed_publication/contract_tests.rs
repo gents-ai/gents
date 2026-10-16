@@ -1,4 +1,3 @@
-//! Generated cases exercise the actual native transaction and publication owner.
 use super::*;
 use crate::identity::NodeIdentity;
 use crate::lifecycle::queue::goal_continuation_identity;

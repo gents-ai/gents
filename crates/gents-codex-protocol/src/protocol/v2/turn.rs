@@ -52,7 +52,6 @@ pub struct TurnStartParams {
     pub effort: Option<ReasoningEffort>,
     pub summary: Option<ReasoningSummary>,
     pub personality: Option<Personality>,
-    /// Optional JSON Schema used to constrain the final assistant message.
     pub output_schema: Option<JsonValue>,
 
     /// EXPERIMENTAL - Set a pre-set collaboration mode. Takes precedence over
@@ -105,7 +104,6 @@ pub struct ByteRange {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TextElement {
-    /// Byte range in the parent `text` buffer that this element occupies.
     pub byte_range: ByteRange,
     placeholder: Option<String>,
 }

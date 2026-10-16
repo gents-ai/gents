@@ -95,7 +95,6 @@ theorem invalid_budget_never_creates (request : CreateRequest)
   split <;> simp_all
   split <;> simp_all
 
-/-- A budget has meaning only when the Task also declares a goal objective. -/
 structure TaskGoalDeclaration where
   goalObjective : Option String
   goalTokenBudget : Option Int
@@ -213,8 +212,6 @@ structure TaskPublication where
   retryKey : Option String
   deriving DecidableEq, Repr
 
-/-- A valid goal declaration switches publication to the atomic goal+request
-boundary and carries deterministic identities for retry/reconciliation. -/
 def decideTaskPublication (declaration : TaskGoalDeclaration)
     (nodeDid taskId fireKey : String) : TaskPublication :=
   if !validTaskGoalDeclaration declaration then

@@ -12,10 +12,6 @@ fn served_principals() -> &'static Mutex<HashMap<u16, String>> {
     PRINCIPALS.get_or_init(Default::default)
 }
 
-/// Record the principal of the home served on `port`, loading its key into
-/// this process so fixture requests can sign as it; a served home's node
-/// access control refuses anonymous writes, and an uninitialized home is
-/// left anonymous.
 pub fn register_served_home(home: &Path, port: u16) -> Result<()> {
     let Some(config) = gents::home::read_init_config::<Value, Value>(home)? else {
         return Ok(());
@@ -32,7 +28,6 @@ pub fn register_served_home(home: &Path, port: u16) -> Result<()> {
     Ok(())
 }
 
-/// Acting as the principal of the test home served there, if any.
 pub fn served_endpoint(graphql: &str) -> gents::config_client::GraphqlEndpoint {
     let principal = reqwest::Url::parse(graphql)
         .ok()

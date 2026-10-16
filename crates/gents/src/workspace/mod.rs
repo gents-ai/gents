@@ -72,7 +72,6 @@ mod tests;
 #[cfg(test)]
 pub(crate) use overlay::overlay_tests::{artifact_test_fixture, ArtifactTestFixture};
 
-// Action journal advances here so a later run cannot assume any other owner.
 pub(crate) use overlay::{
     decode_isolated_workspace_record_response, isolated_workspace_record_query,
 };

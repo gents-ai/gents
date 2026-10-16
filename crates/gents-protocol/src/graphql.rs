@@ -794,9 +794,6 @@ fn retryable_graphql_error_message(value: &serde_json::Value) -> Option<String> 
 }
 
 /// Whether GraphQL/DefraDB error text describes a retryable store conflict.
-///
-/// This is intentionally case-insensitive and is shared with callers that
-/// must reconcile an ambiguous mutation before retrying it themselves.
 pub fn retryable_graphql_error_text(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     message.contains("transaction conflict")
@@ -820,11 +817,7 @@ fn graphql_transport_error_is_retryable(error: &reqwest::Error) -> bool {
         || message.contains("error decoding response body")
 }
 
-/// Whether an anyhow error, including any wrapped cause, is retryable under
-/// the canonical GraphQL transport and DefraDB-conflict policy.
-///
-/// Inspecting the full cause chain matters because callers normally attach
-/// endpoint/operation context above the original `reqwest::Error`.
+/// Whether an anyhow error is retryable under the GraphQL transport policy.
 #[cfg(feature = "native")]
 pub fn graphql_error_is_retryable(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
@@ -889,24 +882,16 @@ mod tests {
     #[test]
     fn validate_graphql_filter_fragment_rejects_break_outs() {
         for filter in [
-            // The confirmed #1038 payload: closes the enclosing _and array,
-            // object and paren, then appends its own selection.
             r#"{} ] }, limit: 1) { _docID } Agent(filter: { _and: [ {} ] }, limit: 1) { system_prompt } PocEvent(filter: { _and: [ {}"#,
-            // Unbalanced / stray delimiters.
             "{ a: 1 } }",
             "{ a: 1 ]",
             "{ a: 1 }) { x } (",
-            // Two top-level values.
             "{ a: 1 } { b: 2 }",
-            // A comment can hide the rest of a line.
             "{ a: 1 } # trailing",
-            // Not an object at all.
             "kind",
             "",
             "   ",
-            // Unterminated string literal.
             r#"{ a: { _eq: "open } }"#,
-            // JSON-style quoted keys.
             r#"{"instructions": {"_eq": "b"}}"#,
         ] {
             assert!(
@@ -918,9 +903,6 @@ mod tests {
 
     #[test]
     fn graphql_input_literal_rejects_object_keys_that_are_not_graphql_names() {
-        // Object keys land in identifier position in the rendered literal,
-        // where escaping does not apply. A self-config patch value is
-        // agent-controlled, so a non-Name key is an injection, not a typo.
         let hostile = serde_json::json!({
             "endpoint": {
                 r#"x: 1 }, api_key: "leaked" }) { _docID } #"#: 1
@@ -933,7 +915,6 @@ mod tests {
             "error should name the identifier rule: {err}"
         );
 
-        // Well-formed nested keys still render.
         let ok = serde_json::json!({ "outer": { "inner_1": "v" } });
         assert!(graphql_input_literal(&ok)
             .expect("valid Name keys render")
@@ -957,8 +938,6 @@ mod tests {
             "rendered: {rendered}"
         );
         assert!(rendered.contains("skill_ids: null"), "rendered: {rendered}");
-        // Field-specific checks are stronger than a generic !contains("[]")
-        // (the latter could be defeated by unrelated substrings in complex values).
         assert!(!rendered.contains("target_ids: []"), "rendered: {rendered}");
         assert!(!rendered.contains("skill_ids: []"), "rendered: {rendered}");
     }
@@ -1128,12 +1107,6 @@ mod tx_tests {
         );
     }
 
-    // One transport-level retry proof: a wrapped retryable error text triggers a
-    // second attempt. Both store-conflict strings ("transaction conflict",
-    // "database is locked") are pinned as retryable by
-    // `retryable_graphql_error_text_matches_store_conflict_variants`; the
-    // wrapped-cause-chain walk is pinned by
-    // `retryable_graphql_error_walks_wrapped_cause_chain_case_insensitively`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn execute_graphql_async_retries_retryable_store_conflict_errors() {
         assert_execute_graphql_async_retries_error(

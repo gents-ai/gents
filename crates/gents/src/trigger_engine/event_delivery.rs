@@ -1,5 +1,3 @@
-//! Shared event selection and durable group observation for task triggers and
-//! callback bindings.
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents_protocol::event_delivery::{EventConsumer, EventGroupState};

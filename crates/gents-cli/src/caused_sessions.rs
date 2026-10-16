@@ -11,7 +11,6 @@ use gents::session_origin::{caused_requests, lineage, load_session, started_by, 
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 
-/// A session another session's request started.
 #[derive(Clone, Debug)]
 pub(crate) struct CausedSession {
     pub(crate) scope: SessionScope,

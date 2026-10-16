@@ -1,5 +1,4 @@
-//! Shared explicit CLI collection selections. Pairing templates remain the
-//! owner of directional DID/requester predicates.
+//! Pairing templates remain the owner of directional DID/requester predicates.
 
 use std::collections::BTreeSet;
 

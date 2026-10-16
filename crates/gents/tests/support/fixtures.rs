@@ -7,8 +7,6 @@ use gents::{
     RuntimeNode,
 };
 
-/// Every pack fixture directory under `tests/fixtures/packs`, sorted by name;
-/// panics when any manifest is unreadable or a known fixture is missing.
 pub fn fixture_pack_names() -> Vec<String> {
     const KNOWN: [&str; 7] = [
         "review_graph",
@@ -126,9 +124,6 @@ pub fn test_agent_for_node(
     }
 }
 
-/// Publish the complete behavior-owned tool graph used by integration tests:
-/// standalone `AgentTarget` documents, `Tools` selecting them, `AgentContext`
-/// selecting the tools, and the behavior selecting the context.
 pub async fn configure_child_agent(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -279,8 +274,6 @@ pub async fn configure_child_agent(
     .unwrap();
 }
 
-/// Publish one canonical `Tools -> AgentContext -> Agent` chain and
-/// any standalone documents referenced by the tools document.
 pub async fn configure_agent_tools(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -382,8 +375,6 @@ pub async fn bind_default_agent_backend(
     bind_agent_backend_chain(node, node_did, None, backend_id, endpoint, "default").await;
 }
 
-/// Publish the canonical principal → behavior → inference profile → backend
-/// chain with an explicit behavior id.
 pub async fn bind_agent_backend(
     node: &Arc<EmbeddedNode>,
     node_did: &str,

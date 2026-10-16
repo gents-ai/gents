@@ -14,8 +14,8 @@ export function activityStatus(
   return "Thinking";
 }
 
-/** A stop applies only to the request it was made for, while it is in
- * flight: once its interrupt is accepted, or its own outcome carries it. */
+/** A stop applies only to its request while in flight, until its interrupt
+ * is accepted or that request's outcome carries it. */
 export function isStopping({
   inFlight,
   requestId,

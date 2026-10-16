@@ -1,5 +1,3 @@
-//! Exact terminal selection of the request a session-message row caused;
-//! neither response rows nor latest-message fallbacks participate.
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::output::{
@@ -12,8 +10,7 @@ use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 use crate::tool_call_lifecycle::CausedRequestTerminal;
 
-/// The durable terminal of one exact caused request, or `None` while it is
-/// live or its terminal output selection has not replicated yet.
+/// The durable terminal of one exact caused request.
 pub async fn load_caused_request_terminal(
     node: &std::sync::Arc<EmbeddedNode>,
     caused_request_doc_id: &str,

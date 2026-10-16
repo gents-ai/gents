@@ -1,13 +1,9 @@
 #!/usr/bin/env node
-// Capture and restore every piece of state the triage migration destroys:
-// deleting a label removes it from every associated item (any state) and
-// discards its definition, and renaming is not self-inverting.
 import { writeFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const DEFAULT_REPO = process.env.GITHUB_REPOSITORY ?? process.env.GH_REPO ?? "gents-ai/gents";
 const TOKEN = process.env.GITHUB_TOKEN;
-// Labels this migration renames or deletes; the blast radius to capture.
 const DOOMED = [
   "cluster: quality-ci",
   "cluster: context-memory",
@@ -73,8 +69,6 @@ export const capture = async (api, file, REPO = DEFAULT_REPO) => {
     description: l.description ?? "",
   }));
 
-  // due_on is captured because a milestone recreated without it is not the
-  // same milestone.
   const milestones = (await paginate(api, `/repos/${REPO}/milestones?state=all`)).map((m) => ({
     number: m.number,
     title: m.title,
@@ -94,16 +88,12 @@ export const capture = async (api, file, REPO = DEFAULT_REPO) => {
     });
   };
 
-  // Every open issue: the migration also backfills horizon labels and assigns
-  // milestones across the open backlog, which the doomed-label sweep below
-  // cannot reach.
   for (const it of await paginate(api, `/repos/${REPO}/issues?state=open`)) {
     if (it.pull_request) continue;
     record(it);
   }
   const openIssues = items.size;
 
-  // Any state, so closed issues and pull requests are covered too.
   for (const label of DOOMED) {
     const hits = await paginate(
       api,
@@ -140,7 +130,6 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
     );
   }
 
-  // 1. Recreate label definitions before any association can reference them.
   const live = new Set((await paginate(api, `/repos/${REPO}/labels`)).map((l) => l.name));
   for (const l of snap.labels) {
     if (live.has(l.name)) continue;
@@ -164,7 +153,6 @@ export const restore = async (api, file, REPO = DEFAULT_REPO) => {
     }
   }
 
-  // Restore each affected item's full label set.
   for (const it of snap.items) {
     await api(`/repos/${REPO}/issues/${it.number}/labels`, {
       method: "PUT",

@@ -1,8 +1,6 @@
 import Proofs.PeerRegistryDiscovery.RootAdmission
 import Proofs.Conformance.Contracts.Json.Helpers
 
-/-! Model-generated cases for the canonical descendant-root admission bridge. -/
-
 namespace Conformance.RootAdmissionContracts
 
 open PeerRegistryDiscovery.RootAdmission

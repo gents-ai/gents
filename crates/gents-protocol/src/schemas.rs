@@ -1,10 +1,3 @@
-//! Static GraphQL schema strings for every replicated collection.
-//!
-//! Agent-domain schemas are re-exported from `gents_schemas`; the inference
-//! and services domains are `include_str!`-compiled here so that runtime
-//! nodes and client peers register identical collection schemas.
-
-// agent domain
 pub use gents_schemas::{
     is_local_audit_collection, is_local_only_collection, AGENT, AGENT_CONTEXT, AGENT_CONTEXT_NAME,
     AGENT_MESSAGE, AGENT_MESSAGE_NAME, AGENT_NAME, AGENT_OUTPUT_SEGMENT, AGENT_OUTPUT_SEGMENT_NAME,
@@ -44,7 +37,6 @@ pub use gents_schemas::{
     WORKSPACE_RECEIPT_NAME, WORKSPACE_ROOT, WORKSPACE_ROOT_NAME,
 };
 
-// inference domain
 pub const INFERENCE_BACKEND_NAME: &str = "InferenceBackend";
 pub const INFERENCE_BACKEND: &str = include_str!("../schemas/inference/inference_backend.graphql");
 pub const INFERENCE_CALL_NAME: &str = "InferenceCall";
@@ -66,7 +58,6 @@ pub const PROVIDER_ACCOUNT_USAGE_NAME: &str = "ProviderAccountUsage";
 pub const PROVIDER_ACCOUNT_USAGE: &str =
     include_str!("../schemas/inference/provider_account_usage.graphql");
 
-// services domain
 pub const TOOL_SERVICE_REGISTRY_NAME: &str = "ToolServiceRegistry";
 pub const TOOL_SERVICE_REGISTRY: &str =
     include_str!("../schemas/services/tool_service_registry.graphql");
@@ -74,11 +65,9 @@ pub const TOOL_SERVICE_HEALTH_STATE_NAME: &str = "ToolServiceHealthState";
 pub const TOOL_SERVICE_HEALTH_STATE: &str =
     include_str!("../schemas/services/tool_service_health_state.graphql");
 
-/// Schemas that must be registered before the runtime can start reconciling.
 pub const RUNTIME_ALL: &[&str] = &[INFERENCE_BACKEND];
 pub const RUNTIME_COLLECTION_NAMES: &[&str] = &[INFERENCE_BACKEND_NAME];
 
-/// Every schema required by a full agent deployment, in registration order.
 pub const ALL: &[&str] = &[
     NODE,
     AGENT,
@@ -244,8 +233,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
 
 pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = BRANCHABLE_AGENT_COLLECTION_NAMES;
 
-/// Credential-bearing collections: `ScopeTemplates.credentialCollections`,
-/// bound by the scope-template conformance suite.
 pub const CREDENTIAL_COLLECTION_NAMES: &[&str] = &[INFERENCE_BACKEND_NAME, OAUTH_CREDENTIAL_NAME];
 
 pub fn is_credential_collection(name: &str) -> bool {

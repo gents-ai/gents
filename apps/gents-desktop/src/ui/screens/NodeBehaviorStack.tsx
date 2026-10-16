@@ -23,10 +23,7 @@ export function NodeAgentStack({
   agentId: string | null | undefined;
   description?: string;
   size?: "sm" | "md";
-  /** sessions this one handed out: their agents, and any remote node
-      they run on, join the stack so the row says the whole piece of work */
   workers?: readonly SessionSummary[];
-  /** the agent avatar is a labelled button, so its card opens from the keyboard */
   keyboard?: boolean;
 }) {
   const homeDid = useHomeDid();
@@ -59,16 +56,11 @@ export function NodeAgentStack({
     ),
   ];
   const spread = node !== null || workerAgents.length > 0 || workerNodes.length > 0;
-  /* the order says whose is whose: this session's node and agent lead,
-     then each distinct agent its workers use, then any remote node a
-     worker runs on. The stack says who worked on it, not how many workers
-     did: three of each at most, and the count is only what that left out */
   const shownNodes = workerNodes.slice(0, 3);
   const shownAgents = workerAgents.slice(0, 3);
   const agentsLeft = workerAgents.length - shownAgents.length;
   const nodesLeft = workerNodes.length - shownNodes.length;
   const leftOut = agentsLeft + nodesLeft;
-  /* every mark moves with the same curve, so the spread reads as one motion */
   const motion = "transition-[margin,box-shadow] duration-200 ease-out";
   const shifted = cn(
     "cursor-default ring-2 ring-background",
@@ -97,8 +89,6 @@ export function NodeAgentStack({
         side={spread ? "bottom" : "right"}
       >
         {keyboard ? (
-          /* a button, so the card opens from the keyboard too: the one
-             place a screen offers this, so the name is found once */
           <button
             type="button"
             aria-label={`About ${agentName(agentId ?? null, found)} agent`}

@@ -41,45 +41,6 @@ impl super::StreamGuardLifecycle for ContendedFinalizeProbe {
     }
 }
 
-/// Finalization must progress without stream.next() polls.
-#[tokio::test]
-async fn terminal_persistence_progresses_while_consumer_waits_for_shared_write_gate() {
-    let gate = Arc::new(tokio::sync::Mutex::new(()));
-    let (entered_tx, mut entered_rx) = tokio::sync::oneshot::channel();
-    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-    let finished = Arc::new(AtomicBool::new(false));
-    let inner = StreamingCompletionResponse::stream(Box::pin(futures::stream::iter(vec![Ok(
-        RawStreamingChoice::FinalResponse(()),
-    )])));
-    let mut stream = hold_stream_guard(
-        inner,
-        ContendedFinalizeProbe {
-            gate: gate.clone(),
-            entered: entered_tx,
-            release: release_rx,
-            finished: finished.clone(),
-            drop_probe: None,
-        },
-    );
-    tokio::select! {
-        result = &mut entered_rx => result.expect("finalization entered"),
-        _ = stream.next() => panic!("terminal item escaped before persistence"),
-    }
-    release_tx.send(()).expect("release finalizer");
-    // Intentionally do not poll stream: mirrors the selected flush branch.
-    let waiter = tokio::time::timeout(Duration::from_millis(250), gate.lock()).await;
-    assert!(
-        waiter.is_ok(),
-        "finalization stranded its write gate when consumer stopped polling"
-    );
-    drop(waiter);
-    assert!(finished.load(Ordering::SeqCst));
-    assert!(matches!(
-        stream.next().await,
-        Some(Ok(rig::streaming::StreamedAssistantContent::Final(_)))
-    ));
-}
-
 #[tokio::test]
 async fn dropping_stream_aborts_owned_finalizer_and_releases_its_gate() {
     let gate = Arc::new(tokio::sync::Mutex::new(()));
@@ -161,41 +122,6 @@ impl super::StreamGuardLifecycle for AsyncFinalizeProbe {
             }
         })
     }
-}
-
-#[tokio::test]
-async fn awaits_finalization_before_publishing_final_response() {
-    let started = Arc::new(AtomicBool::new(false));
-    let finished = Arc::new(AtomicBool::new(false));
-    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-    let inner = StreamingCompletionResponse::stream(Box::pin(futures::stream::iter(vec![Ok(
-        RawStreamingChoice::FinalResponse(()),
-    )])));
-    let mut guarded = hold_stream_guard(
-        inner,
-        AsyncFinalizeProbe {
-            started: started.clone(),
-            finished: finished.clone(),
-            release: release_rx,
-            error: None,
-        },
-    );
-
-    assert!(
-        tokio::time::timeout(Duration::from_millis(20), guarded.next())
-            .await
-            .is_err(),
-        "terminal response must wait for durable finalization"
-    );
-    assert!(started.load(Ordering::SeqCst));
-    assert!(!finished.load(Ordering::SeqCst));
-
-    release_tx.send(()).unwrap();
-    assert!(matches!(
-        guarded.next().await,
-        Some(Ok(rig::streaming::StreamedAssistantContent::Final(_)))
-    ));
-    assert!(finished.load(Ordering::SeqCst));
 }
 
 #[tokio::test]

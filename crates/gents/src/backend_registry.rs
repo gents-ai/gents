@@ -1,6 +1,3 @@
-//! Backend configuration and observation lookups; logical references are
-//! scoped by their owning node and authentication stays an explicit selection.
-
 use crate::backend_provider::BackendProviderKind;
 pub use crate::document_config::InferenceBackend;
 use crate::document_config::{
@@ -18,7 +15,6 @@ pub const DEFAULT_MAX_QUEUE_DEPTH: i64 = 100;
 pub const HEALTHY_PROBE_STATUS: &str = "healthy";
 pub const UNKNOWN_PROBE_STATUS: &str = "unknown";
 
-/// Effective provider input assembled from one backend connection.
 #[derive(Debug, Clone)]
 pub struct BackendFields {
     pub backend_id: Option<String>,
@@ -36,7 +32,6 @@ impl InferenceBackend {
         let object = config
             .as_object_mut()
             .context("InferenceBackend must be an object")?;
-        // DefraDB envelopes, never desired config.
         for field in [
             "_docID",
             "_deleted",
@@ -189,8 +184,6 @@ impl InferenceBackendObservation {
     }
 }
 
-/// Pure function backing [`InferenceBackendObservation::display_state`]; kept
-/// outside the impl for the Tauri bridge's raw `(enabled, probe_status)` pairs.
 pub fn derive_display_state(enabled: bool, probe_status: &str) -> &'static str {
     if !enabled {
         return "disabled";
@@ -549,9 +542,8 @@ pub async fn record_model_catalog_in_txn(
     Ok(())
 }
 
-// Operator-side discovery (desktop setup, CLI) through the same observation
-// owner as the runtime prober. The credential that authorized the request has
-// no representation in `BackendModelCatalog`.
+// The credential that authorized discovery has no representation in
+// `BackendModelCatalog`.
 pub async fn record_discovered_catalog_on(
     access: &crate::config_client::ConfigAccess,
     backend: &InferenceBackend,
@@ -571,9 +563,8 @@ pub async fn record_discovered_catalog_on(
     Ok(catalog)
 }
 
-// Discovery for a connection rather than a stored backend (desktop setup
-// discovers before it persists). Only same-principal backends using exactly
-// this provider, endpoint and authentication selection receive it.
+// Only same-principal backends matching this provider, endpoint and
+// authentication selection receive the catalog.
 pub async fn record_connection_catalog_on(
     access: &crate::config_client::ConfigAccess,
     owner: &str,
@@ -619,8 +610,7 @@ pub async fn record_connection_catalog_on(
         .await
 }
 
-// Read-only projection of a backend's observation for its own
-// authentication scope; other scopes' advertisements are never exposed.
+// Other authentication scopes' advertisements must never be exposed.
 pub fn scoped_observation_view(
     observation: Option<&InferenceBackendObservation>,
     owner: &str,

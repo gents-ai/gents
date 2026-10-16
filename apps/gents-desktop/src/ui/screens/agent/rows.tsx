@@ -103,8 +103,6 @@ export function Fact({
   );
 }
 
-/* A path as it reads: from ~ when it is on this computer, shortened from
-   the left so its own name stays, and whole in its title. */
 export function PathFact({ path, local }: { path: string | null; local: boolean }) {
   const home = useHomeFolder();
   if (!path) return <Fact>{null}</Fact>;

@@ -11,9 +11,7 @@ use crate::tool_call_lifecycle::{query, ToolCallState};
 pub(super) enum WaitEvidence {
     Absent,
     Running,
-    /// Fail-closed: the evidence was read but cannot be interpreted.
     Invalid(anyhow::Error),
-    /// A read failed at the transaction owner; nothing is known yet.
     Unavailable(anyhow::Error),
 }
 

@@ -1,5 +1,3 @@
-# Portable writer/integrator result. JSON-ish blobs are String; empty lists
-# are null in mutations, never GraphQL `[]`.
 type WorkspaceReceipt @branchable {
     receipt_id: String @index(unique: true) @immutable
     workspace_id: String @index @immutable

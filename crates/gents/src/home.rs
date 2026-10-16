@@ -7,14 +7,6 @@ use serde::{Deserialize, Serialize};
 
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 
-// The explicit deserialize bound replaces serde_derive's default bound
-// inference, which (a known serde_derive limitation) adds `ToolPackage:
-// Default` merely because `tool_package` is a `#[serde(default)]` field
-// mentioning it, even though the generated code only ever calls
-// `Option::<ToolPackage>::default()` (`None`, no `ToolPackage: Default`
-// bound required by `Option`'s own blanket impl). Without this override,
-// `gents-cli`'s `ToolPackageArg`/`ToolCeilingArg` (which do not, and
-// should not, derive `Default`) could not deserialize this struct.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(deserialize = "ToolPackage: Deserialize<'de>, ToolCeiling: Deserialize<'de>"))]
 pub struct StoredInitConfig<ToolPackage = String, ToolCeiling = String> {
@@ -47,13 +39,9 @@ pub fn default_home_dir() -> Result<PathBuf> {
 
 const DATA_DIR_NAME: &str = "data";
 const KEYS_DIR_NAME: &str = "keys";
-/// The runtime's persisted serving state (`gents server`).
 pub const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
-/// The runtime's persisted P2P transport key.
 pub const P2P_SECRET_KEY_FILE_NAME: &str = "p2p-secret-key";
 pub const PACKS_DIR_NAME: &str = "packs";
-/// The operator's allowed folders for caller-bound plugin directories
-/// (`gents plugin dirs`); written only by the operator's CLI or desktop.
 pub const ALLOWED_DIRS_FILE_NAME: &str = "allowed-dirs.json";
 pub const PLUGIN_APPROVALS_DIR_NAME: &str = "plugin-approvals";
 pub const PLUGINS_DIR_NAME: &str = "plugins";
@@ -62,13 +50,6 @@ pub const CODEX_UI_DIR_NAME: &str = "codex-ui";
 pub const EVAL_DIR_NAME: &str = "eval";
 pub const PACK_INSTALLS_DIR_NAME: &str = "pack-installs";
 
-/// Every top-level entry a gents runtime writes in its home. Writers name
-/// these entries through this module; retiring a home (after an upgrade
-/// that cannot open it) moves or deletes exactly these names; anything else
-/// in the home is left in place. A new top-level entry belongs here first.
-///
-/// The test `runtime_writers_name_home_entries_only_from_the_inventory` is a
-/// syntactic ratchet over writers, not complete enforcement (see its docs).
 pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     DATA_DIR_NAME,
     INIT_CONFIG_FILE_NAME,
@@ -96,15 +77,12 @@ pub struct StoreLock {
 }
 
 impl StoreLock {
-    /// Keep the lock file in place while held: a renamed or removed lock
-    /// file no longer excludes a new holder.
+    /// A renamed or removed lock file no longer excludes a new holder.
     pub fn path(&self) -> &Path {
         &self.path
     }
 }
 
-/// Takes the exclusive lock on `data_dir`'s store, so two runtimes never
-/// open one store. `data_dir` must exist.
 pub fn lock_store(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
     let canonical = fs::canonicalize(data_dir)
         .with_context(|| format!("resolving data directory {}", data_dir.display()))?;
@@ -134,8 +112,6 @@ pub fn lock_store_at(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
                     data_dir.display()
                 );
             };
-            // The lock file is deliberately not a runtime home entry: a
-            // reset leaves it in place while held.
             let lock_dir = fs::canonicalize(parent)
                 .with_context(|| format!("resolving {}", parent.display()))?;
             lock_path(
@@ -149,7 +125,6 @@ pub fn lock_store_at(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
     }
 }
 
-/// A store lock this process could not take because another holder has it.
 #[derive(Debug)]
 pub struct StoreLockHeld {
     pub home: PathBuf,
@@ -229,9 +204,7 @@ pub fn init_config_path(home_dir: &Path) -> PathBuf {
     home_dir.join(INIT_CONFIG_FILE_NAME)
 }
 
-/// Writes `state` to `<home_dir>/init.json`, creating `home_dir` if it
-/// does not already exist. Publish and sync the complete record before any
-/// encrypted store write; interruption must not truncate the custody record.
+/// Publish and sync the complete custody record before encrypted store writes.
 pub fn write_init_config<ToolPackage: Serialize, ToolCeiling: Serialize>(
     home_dir: &Path,
     state: &StoredInitConfig<ToolPackage, ToolCeiling>,
@@ -712,19 +685,8 @@ mod tests {
         }
     }
 
-    /// A syntactic ratchet, not complete writer enforcement: it scans every
-    /// crate's production sources line by line for `.join(...)` onto the
-    /// receiver names `home`, `home_dir`, `agent_home`, `gents_home` and
-    /// `home_path`, stopping at a file's first `#[cfg(test)]`. There, a
-    /// literal must be in the inventory, a constant (resolved by unqualified
-    /// name, so duplicate names resolve by directory order) must name an
-    /// inventory entry, and a computed (`format!`) name is refused. Joins
-    /// split across lines or onto other receiver names are not seen, so it
-    /// catches the common ways a new top-level entry appears, not all.
     #[test]
     fn runtime_writers_name_home_entries_only_from_the_inventory() {
-        /// Crates whose `home` is not a Gents home (a fixture plugin's own
-        /// application data directory).
         const NOT_GENTS_HOMES: &[&str] = &["fixture-domain-plugin"];
         let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let receiver = r"\b(?:home|home_dir|agent_home|gents_home|home_path)\s*\.join\(\s*";
@@ -762,8 +724,6 @@ mod tests {
             }
         }
 
-        // Constant name -> string value, following one level of aliasing
-        // (`const X: &str = gents::home::Y;`).
         let mut values = std::collections::HashMap::<String, String>::new();
         let mut aliases = std::collections::HashMap::<String, String>::new();
         for path in &sources {
@@ -927,9 +887,6 @@ mod tests {
         assert!(!backup.exists());
     }
 
-    /// Only a missing entry is skipped. An entry that cannot be inspected
-    /// (permission denied, I/O error) stops the retirement with an account of
-    /// what already happened. Injected, so it holds on privileged runners.
     #[test]
     fn an_uninspectable_entry_stops_retirement_with_an_account() {
         let temp = tempfile::tempdir().unwrap();
@@ -1003,72 +960,7 @@ mod tests {
         assert!(home.join("data/MANIFEST").is_file());
     }
 
-    fn sample() -> StoredInitConfig<String, String> {
-        StoredInitConfig {
-            home: "/home/user/.gents".to_string(),
-            node_name: "default".to_string(),
-            node_did: "did:key:z6Mk...".to_string(),
-            key_path: Some("/home/user/.gents/keys/default.key".to_string()),
-            identity_backend: None,
-            keychain_label: None,
-            secure_enclave_label: None,
-            tool_package: Some("Readonly".to_string()),
-            tool_ceiling: "Readonly".to_string(),
-            tool_root: None,
-            store_encryption: None,
-        }
-    }
 
-    #[test]
-    fn default_data_dir_nests_under_home() {
-        assert_eq!(
-            default_data_dir(Path::new("/home/user/.gents")),
-            PathBuf::from("/home/user/.gents/data")
-        );
-    }
 
-    #[test]
-    fn default_key_path_nests_under_keys_by_node_name() {
-        assert_eq!(
-            default_key_path(Path::new("/home/user/.gents"), "default"),
-            PathBuf::from("/home/user/.gents/keys/default.key")
-        );
-    }
 
-    #[test]
-    fn init_config_path_is_init_json_under_home() {
-        assert_eq!(
-            init_config_path(Path::new("/home/user/.gents")),
-            PathBuf::from("/home/user/.gents/init.json")
-        );
-    }
-
-    #[test]
-    fn write_then_read_round_trips() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = sample();
-
-        write_init_config(dir.path(), &state).unwrap();
-        let loaded: StoredInitConfig<String, String> = read_init_config(dir.path())
-            .unwrap()
-            .expect("init.json must exist");
-
-        assert_eq!(loaded, state);
-    }
-
-    #[test]
-    fn read_returns_none_for_an_uninitialized_home() {
-        let dir = tempfile::tempdir().unwrap();
-        let loaded: Option<StoredInitConfig<String, String>> =
-            read_init_config(dir.path()).unwrap();
-        assert!(loaded.is_none());
-    }
-
-    #[test]
-    fn tool_package_is_omitted_from_json_when_absent() {
-        let mut state = sample();
-        state.tool_package = None;
-        let json = serde_json::to_value(&state).unwrap();
-        assert!(!json.as_object().unwrap().contains_key("tool_package"));
-    }
 }

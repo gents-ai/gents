@@ -3,14 +3,10 @@ type ProjectionAcpBinding @branchable @index(fields: ["node_did", "binding_id"],
     node_did: String @index
     agent_id: String @index
     projection_id: String @index
-    # Active DefraDB Document ACP policy id used for runtime read decisions.
     policy_id: String @index
-    # Rotation metadata; runtime enforcement uses policy_id only.
     staged_policy_id: String @index
     previous_policy_id: String @index
-    # JSON mapping runtime collection names to DefraDB ACP resource names.
     resource_map_json: String
-    # Lifecycle metadata; discovery only accepts published or rotating bindings.
     publication_status: String @index
     published_at: String @index(direction: DESC)
     enabled: Boolean @index

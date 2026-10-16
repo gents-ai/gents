@@ -252,7 +252,6 @@ async fn drive(case: &LeanFoldQueueCase) {
     let db = test_db(&case.name).await;
     let session_id = case.session_id.to_string();
     let mut bound: HashMap<u64, String> = HashMap::new();
-    // Native queue order: admission order of rows still pending.
     let mut arrivals: Vec<u64> = Vec::new();
     let mut active: Option<ActiveTurn> = None;
     let mut claims = Vec::new();
@@ -480,13 +479,6 @@ async fn durable_facts(node: &EmbeddedNode, session_id: &str) -> serde_json::Val
     data
 }
 
-/// Lean `FoldPublication.cases`: every step's acceptance, queue and authored
-/// keys match the model. Seeded replay: a model `recover` step is driven by
-/// re-pending the same physical request directly and claiming it under a
-/// fresh generation; this binds publication reuse and fencing on a replayed
-/// request, not a production reclaim path. A native
-/// terminal commit is the model's terminalize-then-finish boundary, so queue
-/// facts are compared after `finish`.
 #[tokio::test]
 async fn generated_fold_publication_scripts_bind_to_native_owners() {
     use crate::lean_vocab_test::LeanFoldPublicationStep as Step;

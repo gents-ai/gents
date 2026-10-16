@@ -1,7 +1,3 @@
-# A DID's self-published reachability record: binding from a `did` (unique) to
-# its current transport coordinates. `binding_sig` is the DID's own signature
-# over the binding. `@branchable` is required: DefraDB only P2P-syncs
-# branchable collections.
 type PeerEndpoint @branchable {
     did: String @index(unique: true) @immutable
     node_id: String

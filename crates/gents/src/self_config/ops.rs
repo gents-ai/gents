@@ -1,11 +1,3 @@
-//! DID-parameterized self-configuration core (#654).
-//!
-//! Transport-agnostic operations behind the model-facing `config` command
-//! tools: every write is a transactional read-modify-write on one owned
-//! document, executed under the node DID so DefraDB ACP is the authorization
-//! boundary. A future MCP surface wraps this same core with a DID from the
-//! incoming call.
-
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -36,7 +28,6 @@ pub(super) struct MissingConfigDocument {
 #[derive(Debug, thiserror::Error)]
 pub(super) struct MissingAgent {
     pub agent_id: String,
-    /// Never resolved implicitly: display names are mutable and not unique.
     pub suggestions: Vec<String>,
 }
 
@@ -59,7 +50,6 @@ pub const EFFECT_TIMING_NOTE: &str = "Committed changes are picked up by the run
      the resulting generation swap; the current turn keeps its existing \
      configuration.";
 
-/// Self-configuration executor for one agent of one node.
 #[derive(Clone)]
 pub struct SelfConfigCore {
     node: Arc<EmbeddedNode>,
@@ -75,9 +65,7 @@ pub struct SelfConfigCore {
 pub struct PatchOutcome {
     pub committed: bool,
     pub collection: &'static str,
-    /// The target document's logical ID.
     pub target_id: String,
-    /// The agent the command targeted.
     pub agent_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<Value>,
@@ -210,7 +198,6 @@ impl SelfConfigCore {
             .map_err(|error| anyhow!("node DID is not ACP-addressable: {error}"))
     }
 
-    /// Load and ownership-check the agent anchor inside the transaction.
     pub(crate) async fn load_agent_anchor(&self, txn: &ConfigApplyTxn<'_>) -> Result<AgentAnchor> {
         let Some((_doc_id, doc)) =
             read_owned_doc(txn, SelfConfigTarget::Agent, &self.node_did, &self.agent_id).await?
@@ -277,8 +264,6 @@ impl SelfConfigCore {
         })
     }
 
-    /// Aborts wholesale on any failure. `resolve_unique` maps the agent anchor
-    /// to the target document's unique value.
     pub(crate) async fn apply(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome> {
         ensure_admissible(request.target, &request.patch)?;
 
@@ -509,7 +494,6 @@ impl SelfConfigCore {
         read(SelfConfigTarget::Tools, field(&context, "tools_id")?).await
     }
 
-    /// Preview: merge + validate in memory; nothing is written.
     pub(crate) async fn preview(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome> {
         ensure_admissible(request.target, &request.patch)?;
         let identity = self.identity()?;

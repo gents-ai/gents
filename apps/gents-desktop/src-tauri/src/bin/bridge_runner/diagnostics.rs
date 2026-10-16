@@ -117,7 +117,6 @@ pub(crate) async fn build_desktop_client_snapshot(
     }
 }
 
-// The fixture owns both Defra nodes; the runtime stays the config source.
 async fn overlay_fixture_operator_config(fixture: &LiveBridgeFixture) -> anyhow::Result<()> {
     if let Some(error) = refresh_store_with_timeout(fixture.remote_core().as_ref()).await {
         anyhow::bail!(error);

@@ -3302,8 +3302,6 @@ async fn terminal_request_without_tool_handoff_still_reports_in_flight() {
     assert!(before.in_flight);
     assert_eq!(before.tool_stuck_since, None);
 
-    // Negative control: request terminality alone must not conceal an
-    // unreleased foreground tool.
     let doc_id = crate::graphql::escape_graphql_string(&native.request_doc_id);
     let mutation = format!(
         r#"mutation {{ update_AgentRequest(

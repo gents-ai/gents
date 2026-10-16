@@ -96,8 +96,6 @@ example : validateSnapshot Examples.scope 2 signedClosure [] [201] []
     [Examples.originMessage, Examples.childMessage] [Examples.closing]
     Examples.access [] [] = .valid := by native_decide
 
-/-- All IDs may be present while the signed manifest still disagrees with the
-typed reference closure. Identity coverage alone cannot complete. -/
 example : validateSnapshot Examples.scope 2 (signedClosure.erase ⟨.agentRequest, 10⟩) [] [201] []
     [Examples.originMessage, Examples.childMessage] [Examples.closing]
     Examples.access [] [] = .invalid := by native_decide
@@ -195,7 +193,6 @@ def observe (prev : ClientProgress) (mergedDocuments : Finset DocumentKey)
       (mergeServed base.servedDocuments servedDocuments)
       validation failed with session, node }
 
-/-- Durable control-row state for one exact session/node target. -/
 inductive DurableRequest where
   | missing
   | pending
@@ -219,11 +216,6 @@ def canAdmitRequest (action : AdmissionAction) (request : DurableRequest)
       !foreignHeader && canRetry prev session node
   | _, _ => false
 
-/-- The only admission transition starts a fresh durable attempt. Passive
-observation may create only a missing request; retry may reset only a rejected
-request after the user explicitly asks; a denied action retains the observation
-unchanged. Admission is scoped to the durable row and the observation for the
-exact target; it retains no process-wide receiver state. -/
 def admitRequest (action : AdmissionAction) (request : DurableRequest)
     (prev : ClientProgress) (session node : String)
     (foreignHeader ownedSession hasDocuments nonterminalRequest : Bool) : ClientProgress :=

@@ -1,7 +1,3 @@
-//! Durable-goal trigger source: continues the canonical goal for a session
-//! after the whole session is idle, claiming a durable parent-request latch
-//! before creating the deterministic same-session child request.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -47,9 +43,6 @@ const GOAL_OBSERVED_COLLECTIONS: &[&str] = &[
     "NodeRuntime",
 ];
 
-/// Build a complete ID-to-name map so the source only suppresses changes whose
-/// collection is known to be unrelated to Goal reconciliation. An incomplete
-/// schema inventory disables filtering; unknown IDs always wake a durable scan.
 fn goal_collection_names_by_id(node: &EmbeddedNode) -> Option<HashMap<String, String>> {
     let mut names_by_id = HashMap::new();
     for name in node.list_collections().ok()? {
@@ -79,8 +72,6 @@ fn goal_document_batch_requires_rescan(
     })
 }
 
-/// Request/claim evidence selected before a usage refresh belongs to this
-/// observed Goal epoch. Reloading must not relabel it with a resumed epoch.
 fn continuation_evidence_is_current(observed: &GoalDocument, current: &GoalDocument) -> bool {
     observed.doc_id == current.doc_id
         && observed.status == current.status
@@ -173,8 +164,6 @@ impl GoalSource {
         None
     }
 
-    /// Opted-in usage-limited Goals resume via the operator resume
-    /// transaction once their reported reset has passed.
     async fn resume_at_reported_resets(&self, node_did: &str) {
         let goals = match self
             .load_goals(
@@ -348,9 +337,6 @@ impl GoalSource {
                     return Ok(None);
                 }
             }
-            // A crash may leave the durable claim without its child. Decision
-            // side effects (notably retry charging) were committed before the
-            // claim and must not be replayed.
             let retries = goal.infrastructure_retry_count.unwrap_or_default().max(0);
             let retry_prefix = (retries > 0
                 && goal.last_failure.as_deref() == Some(terminal_name.as_str()))
@@ -447,8 +433,6 @@ impl GoalSource {
                 wrapup_requested: goal.wrapup_requested.unwrap_or(false),
                 wrapup_completed: goal.wrapup_completed.unwrap_or(false),
             };
-        // The usage refresh below writes the Goal, and every write wakes this
-        // source; waiting must return before it.
         let persisted_budget_reached = goal
             .token_budget
             .is_some_and(|budget| goal.tokens_used.unwrap_or_default() >= budget);
@@ -621,8 +605,6 @@ impl GoalSource {
             GoalContinuationAction::Materialize,
         );
 
-        // Carry the exact tuple installed by our successful claim; reloading
-        // here could silently authorize a newer owner's claim after an await.
         goal.continuation_sequence = Some(
             goal.continuation_sequence()
                 .checked_add(1)
@@ -1181,10 +1163,6 @@ mod tests {
         assert!(prompt.contains("Do not expect another automatic continuation"));
     }
 
-    /// Canonical wrapup detection: the wrapup fact is the typed
-    /// `input.goal_continuation` of the goal-kind request, matched against
-    /// its declared goal lineage. Ordinary schedule/event/manual requests and
-    /// goal-kind requests outside the exact goal lineage are never wrapups.
     #[test]
     fn request_is_goal_wrapup_reads_typed_input_facts_only() {
         fn row(
@@ -1211,7 +1189,6 @@ mod tests {
             }
         }
 
-        // Canonical wrapup with the exact goal lineage.
         assert!(request_is_goal_wrapup(
             &row(Some("goal"), Some("goal-1"), Some(wrapup_input(true))),
             "goal-1"

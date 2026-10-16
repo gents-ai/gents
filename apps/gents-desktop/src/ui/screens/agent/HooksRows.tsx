@@ -21,8 +21,6 @@ export const PHASES: { value: TaskHookPhase; label: string }[] = [
   { value: "finally", label: "Always, afterwards" },
 ];
 
-/** A hook as drafted: the command as one line, with the stored argv kept
- * beside it and written back untouched unless the line is edited. */
 export type HookDraft = {
   hook_id: string;
   phase: TaskHookPhase;

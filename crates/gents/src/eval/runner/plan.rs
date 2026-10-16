@@ -1,14 +1,9 @@
-//! Which trials a run still owes: planning is a pure function of the run's
-//! origin and the trials already written, so a resumed run plans exactly the
-//! slots that still owe an answer.
-
 use std::collections::BTreeMap;
 
 use sha2::{Digest, Sha256};
 
 use crate::eval::{classify, EvidenceClass, OutcomeKind, RunOrigin, TrialCompletion, TrialRecord};
 
-/// One trial slot the run still owes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlannedTrial {
     pub trial_id: String,
@@ -20,8 +15,6 @@ pub struct PlannedTrial {
     pub seed: i64,
 }
 
-/// The identity of a slot's attempt: stable across replanning, distinct per
-/// attempt.
 pub fn trial_id_for(
     run_id: &str,
     cell_id: &str,
@@ -33,7 +26,6 @@ pub fn trial_id_for(
     format!("{:x}", Sha256::digest(material.as_bytes()))
 }
 
-/// Whether a finished attempt is evidence about its subject.
 pub fn completion_is_not_evidence(completion: &TrialCompletion) -> bool {
     completion.stages.is_empty()
         || completion
@@ -46,8 +38,6 @@ pub fn completion_is_not_evidence(completion: &TrialCompletion) -> bool {
             })
 }
 
-/// How many slots finished every attempt they were allowed without learning
-/// anything.
 pub fn not_evidence_slots(existing: &[TrialRecord]) -> u32 {
     let mut latest: BTreeMap<(&str, &str, u32), (u32, bool)> = BTreeMap::new();
     for record in existing {
@@ -73,16 +63,8 @@ pub fn not_evidence_slots(existing: &[TrialRecord]) -> u32 {
         .count() as u32
 }
 
-/// How many abandoned attempts (a null completion: the host crashed or the
-/// run was cancelled mid-trial) a slot may accumulate. Abandonment is not a
-/// verdict on the subject or the provider, so it spends no
-/// `max_infra_retries`; this bound only stops a trial that kills its host
-/// every time from looping forever (spec 4b §9).
 pub const MAX_ABANDONED_ATTEMPTS: u32 = 10;
 
-/// How many slots [`MAX_ABANDONED_ATTEMPTS`] stopped. Kept apart from
-/// [`plan`], which every listing of runs calls; the loop asks once, when its
-/// plan comes back empty, to say why those slots stay unanswered.
 pub fn abandonment_bounded_slots(existing: &[TrialRecord]) -> u32 {
     let mut slots: BTreeMap<(&str, &str, u32), (u32, Option<(u32, bool)>)> = BTreeMap::new();
     for record in existing {
@@ -110,16 +92,6 @@ pub fn abandonment_bounded_slots(existing: &[TrialRecord]) -> u32 {
         .count() as u32
 }
 
-/// The trials `run_id` still owes, given what it has already written.
-///
-/// A slot is done once its latest completed attempt is evidence about the
-/// subject. A slot whose latest completed attempt is not evidence, and a slot
-/// whose attempts were all abandoned, are planned again at one past their
-/// highest attempt, so the new row never collides with an old one. Two bounds
-/// stop that: `max_infra_retries + 1` attempts that finished without
-/// evidence, and [`MAX_ABANDONED_ATTEMPTS`] attempts that never finished. An
-/// abandoned attempt counts only toward the second, so a cancel never costs a
-/// slot its pair.
 pub fn plan(
     origin: &RunOrigin,
     run_id: &str,

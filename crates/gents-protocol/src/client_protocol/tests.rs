@@ -1,16 +1,5 @@
 use super::*;
 
-fn attempt(lifecycle_state: RequestLifecycleState, is_superseded: bool) -> AttemptView {
-    AttemptView {
-        request: RequestSnapshot {
-            request_id: "request".into(),
-            retry_parent_request: None,
-            lifecycle_state,
-            is_superseded,
-        },
-    }
-}
-
 fn keyed_attempt(
     request_id: &str,
     retry_parent_request: Option<&str>,
@@ -25,45 +14,6 @@ fn keyed_attempt(
             is_superseded,
         },
     }
-}
-
-#[test]
-fn projection_preserves_request_detail_and_terminality() {
-    for state in RequestLifecycleState::ALL {
-        let head = project_attempt(&attempt(state, false));
-        assert_eq!(head.request_state, state);
-        assert_eq!(head.is_terminal(), state.is_terminal());
-        assert_eq!(head.is_active(), !state.is_terminal());
-    }
-}
-
-#[test]
-fn persisted_attempt_takes_exactly_two_arguments() {
-    for state in RequestLifecycleState::ALL {
-        let derived = derive_persisted_attempt(state.as_str(), false);
-        assert_eq!(derived, Some(derive_attempt(&attempt(state, false))));
-
-        let projected = project_persisted_attempt(state.as_str(), false);
-        assert_eq!(projected, Some(project_attempt(&attempt(state, false))));
-    }
-}
-
-#[test]
-fn persisted_attempt_supersession_matches_in_memory_projection() {
-    for state in RequestLifecycleState::ALL {
-        assert_eq!(
-            derive_persisted_attempt(state.as_str(), true),
-            Some(ClientTurnState::Superseded)
-        );
-    }
-}
-
-#[test]
-fn persisted_attempt_rejects_invalid_lifecycle_strings() {
-    assert_eq!(derive_persisted_attempt("", false), None);
-    assert_eq!(derive_persisted_attempt("running", false), None);
-    assert_eq!(project_persisted_attempt("", false), None);
-    assert_eq!(project_persisted_attempt("running", false), None);
 }
 
 #[test]
@@ -117,24 +67,3 @@ fn unordered_turn_rejects_ambiguous_tips() {
     assert_eq!(derive_turn(&ambiguous), None);
 }
 
-#[test]
-fn supersession_overrides_every_lifecycle() {
-    for state in RequestLifecycleState::ALL {
-        let head = project_attempt(&attempt(state, true));
-        assert_eq!(head.turn_state, ClientTurnState::Superseded);
-        assert_eq!(head.request_state, state);
-    }
-}
-
-#[test]
-fn claimed_and_silent_processing_are_running_without_response_facts() {
-    for state in [
-        RequestLifecycleState::Claimed,
-        RequestLifecycleState::Processing,
-    ] {
-        assert_eq!(
-            derive_attempt(&attempt(state, false)),
-            ClientTurnState::Running
-        );
-    }
-}

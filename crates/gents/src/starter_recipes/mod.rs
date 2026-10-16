@@ -1,8 +1,3 @@
-//! Versioned starter recipes for authoring ordinary agent configuration.
-//!
-//! Recipes are a catalog and rendering aid only: their identifiers and
-//! provenance must never drive runtime selection, automatic upgrades, or
-//! replacement of later user edits.
 
 use std::fmt;
 use std::path::Path;
@@ -195,8 +190,6 @@ pub struct StarterRecipeDefinition {
     prompt_asset: &'static str,
 }
 
-/// The workspace choice narrows a recipe proposal; it does not admit the
-/// path itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum StarterWorkspaceScope {
@@ -241,7 +234,6 @@ pub fn starter_recipe(id: StarterRecipeId) -> &'static StarterRecipeDefinition {
         .expect("every stable recipe id must have one catalog entry")
 }
 
-/// Resolve an optional recipe without mutating configuration.
 pub fn resolve_starter_recipe(
     id: StarterRecipeId,
     node_did: &str,

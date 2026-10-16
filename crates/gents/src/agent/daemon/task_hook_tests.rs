@@ -387,7 +387,6 @@ impl Harness {
         self.request_row(&doc_id).await
     }
 
-    /// Runs the request and interrupts it once `marker` appears.
     async fn run_interrupting_at(&self, request: AgentRequest, marker: &Path) -> serde_json::Value {
         let doc_id = request.doc_id.clone();
         let mut daemon = self.daemon(false);
@@ -1028,8 +1027,6 @@ async fn workspace_seal_completes_before_the_after_phase_is_selected() {
 }
 
 impl Harness {
-    /// Runs the request and, once `marker` appears, revokes its execution
-    /// generation.
     async fn run_superseding_at(&self, request: AgentRequest, marker: &Path) -> serde_json::Value {
         let doc_id = request.doc_id.clone();
         let mut daemon = self.daemon(false);

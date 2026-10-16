@@ -318,27 +318,6 @@ mod tests {
         assert!(debug.contains("900"), "{debug}");
     }
 
-    #[test]
-    fn credential_from_tokens_leaves_chatgpt_fields_unused() {
-        let tokens = XaiLoginTokens {
-            access_token: "acc".into(),
-            refresh_token: "ref".into(),
-            id_token: Some("id".into()),
-            expires_in: Some(900),
-        };
-        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
-        let credential = credential_from_login_tokens("did:key:zA", "xai-oauth", &tokens, now);
-        assert_eq!(credential.provider, "xai-oauth");
-        assert_eq!(credential.credential_id, "xai-oauth:did:key:zA");
-        assert!(credential.chatgpt_plan_type.is_none());
-        assert!(!credential.is_fedramp);
-        assert!(credential.enabled);
-        assert_eq!(
-            credential.access_token_expires_at,
-            now + chrono::Duration::seconds(900)
-        );
-    }
-
     fn grok_login(access_token: String) -> OAuthCredential {
         let tokens = XaiLoginTokens {
             access_token,

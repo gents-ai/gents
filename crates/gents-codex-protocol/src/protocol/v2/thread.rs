@@ -377,14 +377,12 @@ pub enum ThreadUnsubscribeStatus {
     Unsubscribed,
 }
 
-/// Parameters for `thread/increment_elicitation`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadIncrementElicitationParams {
     pub thread_id: String,
 }
 
-/// Response for `thread/increment_elicitation`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadIncrementElicitationResponse {
@@ -392,14 +390,12 @@ pub struct ThreadIncrementElicitationResponse {
     pub paused: bool,
 }
 
-/// Parameters for `thread/decrement_elicitation`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDecrementElicitationParams {
     pub thread_id: String,
 }
 
-/// Response for `thread/decrement_elicitation`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDecrementElicitationResponse {
@@ -723,7 +719,6 @@ pub enum SortDirection {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadListResponse {
     pub data: Vec<Thread>,
-    /// Cursor for the next call; None means no more items.
     pub next_cursor: Option<String>,
     /// Cursor for reversing `sortDirection`; only populated when the page
     /// contains at least one thread. For timestamp sorts it anchors at the
@@ -742,7 +737,6 @@ pub struct ThreadSearchResult {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSearchResponse {
     pub data: Vec<ThreadSearchResult>,
-    /// Cursor for the next call; None means no more items.
     pub next_cursor: Option<String>,
     /// Cursor for reversing `sortDirection`; only populated when the page
     /// contains at least one thread. For timestamp sorts it anchors at the
@@ -761,7 +755,6 @@ pub struct ThreadLoadedListParams {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadLoadedListResponse {
     pub data: Vec<String>,
-    /// Cursor for the next call; None means no more items.
     pub next_cursor: Option<String>,
 }
 
@@ -788,7 +781,6 @@ pub enum ThreadActiveFlag {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadReadParams {
     pub thread_id: String,
-    /// When true, include turns and their items from rollout history.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_turns: bool,
 }
@@ -826,7 +818,6 @@ pub struct ThreadTurnsListParams {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadTurnsListResponse {
     pub data: Vec<Turn>,
-    /// Cursor for the next call; None means no more turns.
     pub next_cursor: Option<String>,
     /// Cursor for reversing `sortDirection`; only populated when the page
     /// contains at least one turn, anchors at that turn so its updates are
@@ -848,7 +839,6 @@ pub struct ThreadTurnsItemsListParams {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadTurnsItemsListResponse {
     pub data: Vec<ThreadItem>,
-    /// Cursor for the next call; None means no more items.
     pub next_cursor: Option<String>,
     /// Cursor for reversing `sortDirection`; only populated when the page
     /// contains at least one item.

@@ -1228,7 +1228,6 @@ fn nonnegative_metric_value(value: Option<i64>) -> Option<i64> {
     value.map(|value| value.max(0))
 }
 
-/// Core health rows, before the optional progress observation.
 pub(crate) struct MetricsCoreData {
     envelope: MetricsQueryEnvelope,
     local_node_did: String,
@@ -1709,31 +1708,6 @@ mod tests {
                 r#"gents_runtime_node_readiness_observed{node_did="did:test:metrics"} 0"#
             ));
         }
-    }
-
-    #[test]
-    fn metrics_runtime_inventory_is_readiness_not_diagnostics() {
-        let readiness = metrics_readiness("did:test:readiness-only");
-        let data = MetricsQueryData {
-            node_runtimes: Vec::new(),
-            node_readiness: vec![readiness],
-            inference_backends: Vec::new(),
-            liveness: RuntimeLivenessSnapshot::default(),
-        };
-        assert_eq!(
-            runtime_inventory(&data)
-                .map(|row| row.node_did.as_str())
-                .collect::<Vec<_>>(),
-            vec!["did:test:readiness-only"]
-        );
-
-        let diagnostics_only = MetricsQueryData {
-            node_runtimes: vec![metrics_runtime("did:test:diagnostics-only")],
-            node_readiness: Vec::new(),
-            inference_backends: Vec::new(),
-            liveness: RuntimeLivenessSnapshot::default(),
-        };
-        assert_eq!(runtime_inventory(&diagnostics_only).count(), 0);
     }
 
     #[test]

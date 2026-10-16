@@ -1,4 +1,3 @@
-//! Real persisted graph invocations; request signatures use the actual target key.
 use super::*;
 use crate::goal::{set_goal, GoalStatus};
 use crate::graph_pipeline::runtime::graph_test_owner;

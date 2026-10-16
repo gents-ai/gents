@@ -1,7 +1,3 @@
-//! Install the plugins a fetched pack carries, stored exactly as
-//! `gents pack install` does so `gents plugin run` and `gents plugin list`
-//! find them by name.
-
 use anyhow::{Context, Result};
 use serde_json::json;
 

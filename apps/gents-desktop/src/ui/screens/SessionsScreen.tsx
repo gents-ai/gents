@@ -73,7 +73,6 @@ const rowHeight = (row: Row) => (row.kind === "toggle" ? 37 : row.child ? 41 : 6
 export function SessionsScreen({
   nodeDid,
 }: {
-  /** a node named on the route: the list opens narrowed to it */
   nodeDid?: string;
 }) {
   const nodes = useFleet(useShallow(fleetNodes));

@@ -1,7 +1,3 @@
-//! Anthropic Messages request-body assembly: `provider_input` projects this
-//! exact body for token accounting, and the real transport (native, in
-//! `gents`) builds the identical body to send.
-
 use base64::Engine as _;
 use gents_protocol::message::{
     AssistantContent, DocumentSourceKind, Image, ImageMediaType, Message, ReasoningContent,
@@ -21,13 +17,8 @@ const DEFAULT_MAX_TOKENS: u64 = 4096;
 #[doc(hidden)]
 pub const ADVERTISED_REASONING_EFFORTS_PARAM: &str = "_gents_advertised_reasoning_efforts";
 
-/// First `system` block. The subscription token was minted for Claude Code;
-/// without this identity the same token 429s on every model (write request #7).
-/// Lean: `ClaudeMap.identity`.
 pub const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
-/// Result of the owning runtime's provider-turn/capture join, never inferred
-/// from an opaque signature or the buffer currently carrying the message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReplayOrigin {
     ClaudeSubscription,
@@ -37,8 +28,6 @@ pub enum ReplayOrigin {
     Ambiguous,
 }
 
-/// Exact reasoning projection retained from the owning assistant turn.
-/// Positions refer to native content, before any wire omission of empty text.
 pub type ReasoningWitness = Vec<(usize, Vec<ReasoningContent>)>;
 
 pub fn reasoning_witness(content: &[AssistantContent]) -> ReasoningWitness {
@@ -52,8 +41,6 @@ pub fn reasoning_witness(content: &[AssistantContent]) -> ReasoningWitness {
         .collect()
 }
 
-/// A physical provider-output coordinate. The request document identity is
-/// part of the tag; provider message IDs are not continuation identity.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplayTag {
@@ -67,9 +54,6 @@ impl ReplayTag {
     }
 }
 
-/// One selected assistant occurrence and its independently carried sidecar.
-/// `id` remains native provider data; neither preparation nor restore uses it
-/// to associate a canonical source with this row.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaggedAssistantRow {
     pub source: Option<ReplayTag>,
@@ -86,8 +70,6 @@ pub struct ReplayCheckpoint {
     pub retained: Vec<TaggedAssistantRow>,
 }
 
-/// Supplied by the canonical header/close/capture owner, never reconstructed
-/// from a row's current native content.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedReplayEvidence {
     pub origin: ReplayOrigin,
@@ -96,16 +78,12 @@ pub struct ResolvedReplayEvidence {
     pub wire: ReplayWire,
     pub physical_header: String,
     pub complete: bool,
-    /// The flattened accepted request that produced the turn; `None` when the
-    /// capture is missing or undecodable.
     pub captured: Option<Vec<FlatItem>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReplayIssuer {
     pub family: String,
-    /// Opaque, injectively encoded transport route identity supplied by the
-    /// capture owner; never infer this from a provider-assigned message ID.
     pub endpoint: String,
 }
 
@@ -131,9 +109,6 @@ pub enum ReplayCheckpointError {
     Codec(#[from] AssistantCodecError),
 }
 
-/// Lean `ClaudeMap.prepareReplayCheckpoint`. Splitting is exact and keeps
-/// source sidecars attached to their row occurrences; it never discovers a
-/// tag from equal native bytes or a provider-generated message ID.
 pub fn prepare_replay_checkpoint(
     required: Vec<ReplayTag>,
     rows: Vec<TaggedAssistantRow>,
@@ -231,7 +206,6 @@ fn row_candidates(row: &TaggedAssistantRow) -> Vec<ReasoningCandidate<'_>> {
         .collect()
 }
 
-/// Lean `ClaudeMap.TurnGroup`.
 struct TurnGroup<'a> {
     candidates: Vec<ReasoningCandidate<'a>>,
     ordinary: bool,
@@ -278,7 +252,6 @@ fn replayable_reasoning(wire: ReplayWire, parts: &[ReasoningContent]) -> bool {
     }
 }
 
-/// Lean `ClaudeMap.wireReasoningCount`.
 fn wire_reasoning_count(wire: ReplayWire, parts: &[ReasoningContent]) -> usize {
     match wire {
         ReplayWire::ClaudeMessages => parts.len(),
@@ -286,7 +259,6 @@ fn wire_reasoning_count(wire: ReplayWire, parts: &[ReasoningContent]) -> usize {
     }
 }
 
-/// Lean `ClaudeMap.turnHeaderOffset`.
 fn turn_header_offset(wire: ReplayWire) -> usize {
     match wire {
         ReplayWire::ClaudeMessages => 1,
@@ -294,7 +266,6 @@ fn turn_header_offset(wire: ReplayWire) -> usize {
     }
 }
 
-/// Evidence resolved once per selection; the owner queries every tag.
 struct Selection<'a> {
     rows: &'a [TaggedAssistantRow],
     issuer: &'a ReplayIssuer,
@@ -338,7 +309,6 @@ impl<'a> Selection<'a> {
             .unwrap_or_default()
     }
 
-    /// Lean `ClaudeMap.validForReplayProjection`.
     fn candidate_valid(&self, candidate: &ReasoningCandidate<'_>) -> bool {
         let (Some(tag), Some(header), Some(index)) = (
             candidate.source,
@@ -377,7 +347,6 @@ impl<'a> Selection<'a> {
             })
     }
 
-    /// Lean `ClaudeMap.turnBase`.
     fn turn_base(&self, group: &TurnGroup<'_>) -> bool {
         !group.candidates.is_empty()
             && (self.wire == ReplayWire::Responses || group.ordinary)
@@ -387,7 +356,6 @@ impl<'a> Selection<'a> {
                 .all(|candidate| self.candidate_valid(candidate))
     }
 
-    /// Lean `ClaudeMap.turnCaptured`.
     fn turn_captured(&self, group: &TurnGroup<'_>) -> Option<Vec<FlatItem>> {
         let tag = group.candidates.first()?.source?;
         match self.evidence(tag) {
@@ -396,7 +364,6 @@ impl<'a> Selection<'a> {
         }
     }
 
-    /// Lean `ClaudeMap.replayBaseKept`, as the index of its first group.
     fn base_start(&self) -> usize {
         self.groups
             .iter()
@@ -412,8 +379,6 @@ impl<'a> Selection<'a> {
     }
 }
 
-/// Lean `ClaudeMap.locateTurns`. Any disagreement with the expected wire
-/// counts fails closed.
 fn locate_turns(
     offset: usize,
     body: &[FlatItem],
@@ -451,7 +416,6 @@ fn locate_turns(
     Some(layouts)
 }
 
-/// Lean `ClaudeMap.stripFirstReasoningRows`.
 fn strip_first_reasoning(rows: &[TaggedAssistantRow], mut count: usize) -> Vec<TaggedAssistantRow> {
     rows.iter()
         .map(|row| {
@@ -478,7 +442,6 @@ fn strip_first_reasoning(rows: &[TaggedAssistantRow], mut count: usize) -> Vec<T
         .collect()
 }
 
-/// Lean `ClaudeMap.replayStage`.
 pub fn replay_stage(
     rows: &[TaggedAssistantRow],
     issuer: &ReplayIssuer,
@@ -489,9 +452,6 @@ pub fn replay_stage(
     strip_first_reasoning(rows, selection.candidates_before(selection.base_start()))
 }
 
-/// Lean `ClaudeMap.restoreHistoricalReasoningSuffix`. Only the longest suffix
-/// of whole accepted turns whose assembled prefix is their accepted producing
-/// prefix minus a leading reasoning run keeps reasoning.
 pub fn select_replay(
     rows: &[TaggedAssistantRow],
     issuer: &ReplayIssuer,
@@ -533,7 +493,6 @@ pub fn select_replay(
     strip_first_reasoning(selection.rows, total - kept)
 }
 
-/// Anthropic Messages JSON body from a rig `CompletionRequest`.
 pub fn build_messages_body(model: &str, request: &CompletionRequest) -> anyhow::Result<Value> {
     let history: Vec<Message> = request
         .chat_history
@@ -553,8 +512,6 @@ pub fn build_messages_body(model: &str, request: &CompletionRequest) -> anyhow::
     Ok(body)
 }
 
-/// Lean `ClaudeMap.selectedEffort`: permit one supported effort field, not a
-/// wholesale merge of additional_params.
 pub fn apply_reasoning_parameters(_model: &str, params: &Value, body: &mut Value) {
     let Some(supported) = params
         .get(ADVERTISED_REASONING_EFFORTS_PARAM)
@@ -573,9 +530,6 @@ pub fn apply_reasoning_parameters(_model: &str, params: &Value, body: &mut Value
     }
 }
 
-/// Lean: `systemBlocks`, `splitSystem`, `toolsField`. Two `cache_control`
-/// breakpoints: the last `system` block and the last content block of the
-/// last message.
 pub fn build_messages_body_native(
     model: &str,
     preamble: Option<&str>,
@@ -620,8 +574,7 @@ pub fn build_messages_body_native(
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools);
     }
-    // No sampling keys: live claude-sonnet-5 400s on `temperature` / `top_p`
-    // / `top_k`; `additional_params` carries those and is not merged.
+    // No sampling keys: live claude-sonnet-5 rejects `temperature` / `top_p` / `top_k`.
     Ok(body)
 }
 
@@ -631,7 +584,6 @@ fn mark_ephemeral(block: Option<&mut Value>) {
     }
 }
 
-/// `Message::System` rows in transcript order (Lean `splitSystem`).
 fn system_rows(history: &[Message]) -> Vec<String> {
     history
         .iter()
@@ -673,7 +625,6 @@ fn anthropic_messages(history: &[Message]) -> anyhow::Result<Vec<Value>> {
                     out.push(json!({"role": "assistant", "content": blocks}));
                 }
             }
-            // Rows were lifted into `system` by `system_rows`.
             Message::System { .. } => {}
         }
     }
@@ -715,7 +666,6 @@ fn tool_result_content(
         .collect()
 }
 
-/// The Anthropic image source for an image the API accepts, else `None`.
 fn image_source(image: &Image) -> Option<Value> {
     match (&image.data, media_type(image)) {
         (DocumentSourceKind::Base64(data), Some(media_type)) => {
@@ -736,24 +686,14 @@ fn media_type(image: &Image) -> Option<&'static str> {
     }
 }
 
-/// Anthropic refuses a whole request over one image beyond its vision limits
-/// (platform.claude.com/docs/en/build-with-claude/vision, "Request limits"):
-/// more than 8000 px on a side; more than 2000 px on a side once the request
-/// carries more than 20 images; more than 100 images (the 200k-context
-/// models' count, the lowest any model accepts).
+/// Anthropic's request limits: 8000 px per side, 2000 px for requests over 20
+/// images, and 100 images maximum.
 const CLAUDE_IMAGE_MAX_SIDE: u32 = 8000;
 const CLAUDE_MANY_IMAGES: usize = 20;
 const CLAUDE_MANY_IMAGES_MAX_SIDE: u32 = 2000;
 const CLAUDE_MAX_IMAGES: usize = 100;
 
-/// One entry per tool-result image the wire would carry, in history order:
-/// the note that replaces it, or `None` to send it. Images are kept newest
-/// first, so the model keeps what it saw last: the newest 20 within 8000 px,
-/// then older ones only while every kept image is within 2000 px, up to 100.
-/// An image whose dimensions its header does not give (a URL, an unknown
-/// encoding) counts as within every side limit.
 fn image_omissions(history: &[Message]) -> Vec<Option<String>> {
-    // `Some(data)` for base64, `None` for a URL: the images `image_source` sends.
     let images: Vec<Option<&str>> = history
         .iter()
         .filter_map(|message| match message {
@@ -808,9 +748,6 @@ fn image_omissions(history: &[Message]) -> Vec<Option<String>> {
     notes
 }
 
-/// Width and height from a base64 PNG, GIF, WebP or JPEG header, sniffed from
-/// the bytes rather than the declared media type. JPEG, whose frame header may
-/// follow arbitrary metadata segments, decodes a doubling prefix until found.
 fn base64_image_dimensions(data: &str) -> Option<(u32, u32)> {
     let decode = |chars: usize| {
         let prefix = if chars >= data.len() {
@@ -865,7 +802,6 @@ fn image_header_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
-/// Walks JPEG marker segments to the first start-of-frame header.
 fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     let be16 = |at: usize| Some(u16::from_be_bytes(bytes.get(at..at + 2)?.try_into().ok()?) as u32);
     let mut at = 2;
@@ -901,9 +837,6 @@ pub enum AssistantCodecError {
     UnsupportedReasoning,
 }
 
-/// Strict assistant-side block codec shared by the live Claude body builder
-/// and restored continuation. Empty ordinary text is omitted on this wire;
-/// signed empty thinking is preserved.
 pub fn encode_assistant_content(
     content: &[AssistantContent],
 ) -> Result<Vec<Value>, AssistantCodecError> {
@@ -981,7 +914,6 @@ mod tests {
         let mut vp8x = b"RIFF\0\0\0\0WEBPVP8X\0\0\0\0\0\0\0\0".to_vec();
         vp8x.extend(&(9999u32 - 1).to_le_bytes()[..3]);
         vp8x.extend(&(5u32 - 1).to_le_bytes()[..3]);
-        // SOI, an APP1 segment, then a baseline frame header.
         let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x06, 1, 2, 3, 4];
         jpeg.extend([0xFF, 0xC0, 0x00, 0x11, 8]);
         jpeg.extend(1200u16.to_be_bytes());
@@ -1000,7 +932,6 @@ mod tests {
                 "{bytes:?}"
             );
         }
-        // A frame header past the first decoded prefix.
         let mut late = vec![0xFF, 0xD8, 0xFF, 0xE1, 0x27, 0x12];
         late.extend(vec![0; 0x2710]);
         late.extend([0xFF, 0xC2, 0x00, 0x11, 8]);

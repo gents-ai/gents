@@ -62,9 +62,6 @@ theorem invalid_spends_one (s : State) (o : Outcome)
     (recordDurable s o).invalidUsed = s.invalidUsed + 1 := by
   simp [recordDurable, h, hi]
 
-/-- A strict natural-valued rank decreases on every accepted invalid outcome.
-Valid outcomes cannot replenish it; bounds invalid churn even with interspersed
-valid calls, and does not claim termination of infinite valid work. -/
 theorem invalid_rank_decreases (s : State) (o : Outcome)
     (h : canDispatch s = true) (hi : invalid o = true) :
     limit - (recordDurable s o).invalidUsed < limit - s.invalidUsed := by

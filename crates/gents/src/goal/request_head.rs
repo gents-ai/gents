@@ -1,4 +1,3 @@
-//! Shared validation of Goal continuation receipts and request ordering.
 use super::*;
 use crate::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
 use crate::request_admission::{
@@ -7,8 +6,6 @@ use crate::request_admission::{
 use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::row::AgentRequestRow;
 
-/// Historical children inherit different optional fields; their original
-/// target signature binds the exact physical predecessor.
 pub(crate) fn verify_goal_continuation_edge(
     node_did: &str,
     session_id: &str,
@@ -173,11 +170,9 @@ fn latest_scoped_request<'a>(
 pub(crate) struct AuthenticatedGoalRequestMembers<'a> {
     pub(crate) entry: &'a AgentRequestRow,
     pub(crate) member_doc_ids: Vec<String>,
-    /// Verified physical Goal edges, child -> parent.
     pub(crate) parents: std::collections::BTreeMap<String, String>,
 }
 
-/// `rows` must include complete signed request projections for the session.
 pub(crate) fn authenticated_goal_request_members<'a>(
     node_did: &str,
     session_id: &str,
@@ -219,7 +214,6 @@ pub(crate) fn authenticated_goal_request_members<'a>(
         if doc == entry_doc {
             continue;
         }
-        // Successful resolution to entry already verified this exact edge.
         let parent = by_doc[doc.as_str()]
             .caused_by_parent_request_doc_id
             .as_deref()

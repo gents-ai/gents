@@ -5,7 +5,6 @@ export type ThemePreference = "light" | "dark";
 export const systemTheme = (): ThemePreference =>
   matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 
-/** Shows a theme: on the page and, on macOS, on the window's own chrome. */
 export function applyTheme(preference: ThemePreference) {
   if (preference === "dark") document.documentElement.dataset.theme = "dark";
   else delete document.documentElement.dataset.theme;

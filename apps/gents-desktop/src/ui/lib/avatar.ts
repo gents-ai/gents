@@ -1,5 +1,3 @@
-// Picked by the agent's name so an agent keeps the same picture everywhere;
-// changing AVATARS re-picks most agents' pictures.
 const AVATARS = 16;
 export function avatarFor(name: string) {
   let h = 0;

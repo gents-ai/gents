@@ -3,15 +3,6 @@ import Proofs.CanonicalOutput.Execution.State
 import Proofs.PromptAssembly.AggregateBudget
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 
-/-!
-Request-scoped inference usage projections. `InferenceCall.Persistence.Row.usage`
-remains the one durable provider usage observation, including observations
-arriving after its terminal write. The finite call-ID set represents physical
-`InferenceCall` identity. The translated row carries the call's physical
-`request_doc_id` alongside the persisted call. Historical signed title
-provenance remains observable after the active claim is cleared.
--/
-
 open scoped BigOperators
 
 namespace InferenceCall.UsageProjection

@@ -148,8 +148,6 @@ impl RemoteSigner for TestRemoteSigner {
     }
 }
 
-/// Reproduces a cross-node signed-invite bug where `verify` erred instead of
-/// falling back to `did:key` parsing for an unregistered signer DID.
 #[tokio::test]
 async fn verify_resolves_did_key_without_prior_registration() {
     use identity::FullIdentity as _;
@@ -167,7 +165,6 @@ async fn verify_resolves_did_key_without_prior_registration() {
     let result = node_b.verify(&raw_did, payload, &signature).await;
     assert!(result.unwrap_or_default());
 
-    // Tampered payload or garbage DID must never verify as true.
     let tampered_result = node_b.verify(&raw_did, b"tampered payload", &signature).await;
     assert!(!matches!(tampered_result, Ok(true)));
 

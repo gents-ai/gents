@@ -352,8 +352,6 @@ enum ConfigFormat {
     McpJson,
 }
 
-/// Scan only the selected roots; partial results cannot be mistaken for a
-/// complete inventory.
 pub fn discover_configuration(request: &DiscoveryRequest) -> ConfigurationDiscoveryInventory {
     discover_configuration_inner(request, None)
 }

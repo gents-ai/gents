@@ -1,10 +1,3 @@
-//! `gents plugin`: build, publish, install and run plugins.
-//!
-//! A plugin is a compiled `.afb` that always travels inside a pack, under
-//! `plugins/`. Publishing one on its own wraps it in a single-plugin
-//! `plugins` pack ([`publish`]); installing one by name fetches its pack
-//! and installs the plugins it carries ([`install`]).
-
 mod bind;
 mod build;
 mod dirs;

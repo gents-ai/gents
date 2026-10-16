@@ -19,7 +19,6 @@ pub struct ServiceAccount {
     pub deployment_id: String,
 }
 
-/// Resolved DID and signing handle for one runtime assembly.
 #[derive(Clone)]
 pub struct RuntimeNode {
     pub node_did: String,
@@ -106,8 +105,6 @@ impl KeyIdentity {
     }
 }
 
-/// Registers the gents-owned principal key for DefraDB commit signing,
-/// instead of letting DefraDB create a second database-specific identity.
 pub fn register_ed25519_signing_identity(
     did: &str,
     private_key_bytes: &[u8],
@@ -175,7 +172,6 @@ pub fn defradb_bearer_authorization(did: &str, audience: &str) -> Result<String>
     Ok(format!("Bearer {token}"))
 }
 
-/// Whether [`defradb_bearer_authorization`] can mint for `did` in this process.
 pub fn can_mint_defradb_bearer(did: &str) -> bool {
     defra_core::signing::get_identity(did).is_some_and(|config| config.has_local_private_key())
 }
@@ -452,7 +448,6 @@ fn load_or_create_macos_keychain_raw_identity(
     }
 }
 
-/// A login-keychain generic password, or the Keychain status that refused it.
 #[cfg(target_os = "macos")]
 pub(crate) fn macos_keychain_find(
     service: &str,
@@ -690,8 +685,6 @@ fn verify_with_public_key(
         .with_context(|| format!("verifying payload for {did}"))
 }
 
-/// Verify a signature against the public key identified by a DID without
-/// requiring access to that principal's private signer.
 pub(crate) fn verify_did_signature(did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
     verify_with_public_key(did, known_public_key_for_did(did)?, payload, signature)
 }

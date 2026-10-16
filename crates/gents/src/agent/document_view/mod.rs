@@ -98,7 +98,6 @@ impl DocumentRuntimeView {
 #[cfg(test)]
 mod tests;
 
-/// Resolve selected surface documents within this principal's tool owner.
 pub(crate) fn merge_surface_tools(
     tools: &Tools,
     view: &DocumentRuntimeView,
@@ -117,8 +116,6 @@ pub(crate) struct ExpandedEthTools {
     pub calls: Vec<crate::eth::ResolvedEthCall>,
 }
 
-/// Expand `eth_tool_ids` into query and call tools; missing or foreign ids
-/// fail closed, disabled EthTools are skipped.
 pub(crate) fn expand_eth_tools(
     selection: &Tools,
     view: &DocumentRuntimeView,

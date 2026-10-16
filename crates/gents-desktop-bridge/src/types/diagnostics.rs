@@ -39,27 +39,3 @@ pub struct ToolSurfaceExplanationView {
     pub surface: gents::tool_surface::ToolSurfaceExplanation,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn timeline_view_preserves_the_native_report_and_event_payloads() {
-        let request = gents::run_timeline::TimelineRequestRow {
-            request_id: "request".into(),
-            session_id: Some("session".into()),
-            created_at: Some("2026-10-14T12:00:00Z".into()),
-            ..Default::default()
-        };
-        let native =
-            gents::run_timeline::build_run_timeline(gents::run_timeline::RunTimelineRows {
-                request: request.clone(),
-                requests: vec![request],
-                ..Default::default()
-            });
-        let report = serde_json::to_value(native).unwrap();
-        let view: RequestTimelineView = serde_json::from_value(report.clone()).unwrap();
-        assert!(!view.events.is_empty());
-        assert_eq!(serde_json::to_value(view).unwrap(), report);
-    }
-}

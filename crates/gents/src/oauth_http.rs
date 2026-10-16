@@ -16,8 +16,6 @@ use crate::oauth_credential::{
     DbCredentialBearer, OAuthAuthProblem, OAuthCredential, OAuthProduct, OAuthRefreshKind,
 };
 
-/// Per-provider policy for [`BearerAuthHttpClient`]. Every method has a
-/// passthrough default so a provider only overrides what it differs on.
 pub trait OAuthHttpPolicy: Clone + Default + Send + Sync + 'static {
     // xAI's proxy uses 403 as a NotEntitled tier gate no refresh fixes; with
     // rotating refresh tokens a force-refresh loop would burn a rotation per
@@ -33,7 +31,6 @@ pub trait OAuthHttpPolicy: Clone + Default + Send + Sync + 'static {
         req
     }
 
-    /// Buffered (non-streaming) send.
     fn send_via<T, U>(
         &self,
         inner: &T,
@@ -64,7 +61,6 @@ pub fn is_bearer_rejection(rejection_statuses: &[u16], error: &http_client::Erro
     bearer_rejection_status(error).is_some_and(|status| rejection_statuses.contains(&status))
 }
 
-// Only fills in `content-type` when the backend omitted it.
 pub fn ensure_event_stream_content_type(headers: &mut HeaderMap) {
     if !headers.contains_key("content-type") {
         headers.insert(
@@ -247,8 +243,6 @@ where
     }
 }
 
-/// Resolve the `OAuthCredential` `pick` names for `(node_did, provider)` and
-/// mint a shared, cached [`DbCredentialBearer`] against it.
 pub async fn bootstrap_oauth_client(
     node: Arc<EmbeddedNode>,
     node_did: &str,
@@ -341,7 +335,6 @@ mod tests {
         let (bearer, _) = bootstrap().await.unwrap();
         assert_eq!(bearer.current_bearer().await.unwrap(), "access-a");
 
-        // Same document, changed underneath: the cached token stands.
         ConfigAccess::write_local(
             &node,
             "test.same_document",
@@ -362,7 +355,6 @@ mod tests {
             })
             .await
             .unwrap();
-        // An earlier expiry than the cached token: adoption is by document.
         let b = store_sign_in(&access, sign_in("b", 3600), None)
             .await
             .unwrap();

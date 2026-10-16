@@ -24,7 +24,6 @@ const ADD_LABEL_PATCH: &str = r#"[
   {"op":"replace","path":"/IsActive","value":false}
 ]"#;
 
-/// Discover the destination CID of an inactive field-add patch.
 async fn discover_inactive_patch_pin(node: &EmbeddedNode) -> (String, String) {
     node.add_schema(FIXTURE_SDL).await.expect("add FixtureDoc");
     let v0 = node
@@ -113,7 +112,6 @@ async fn patch_versioned_lensless_attach_patch_activate_and_idempotent() {
     assert!(active.is_active);
     assert!(active.fields.iter().any(|f| f.name == "label"));
 
-    // Both versions known pins.
     let all = node.get_all_collection_versions().await.expect("versions");
     let fixture_versions: Vec<_> = all
         .iter()
@@ -178,8 +176,6 @@ async fn materialization_rescans_versioned_collections_only() {
     assert_eq!(first.materialization.collections_attempted, 1);
     assert_eq!(first.materialization.documents_materialized, 0);
 
-    // The recurring pass remains scoped to FixtureDoc, so old-version rows
-    // arriving over P2P after this first migration are still advanced.
     let later = ensure_migrations_dynamic(node.as_ref(), &registry)
         .await
         .expect("repeat migration and materialization");
@@ -191,7 +187,6 @@ async fn materialization_rescans_versioned_collections_only() {
 #[tokio::test]
 async fn patch_versioned_with_fixture_lens_registers_transform() {
     let wasm = fixture_lens_wasm();
-    // Stub wasm is 8 bytes.
     if wasm.len() <= 16 {
         eprintln!(
             "skipping fixture lens e2e: stub wasm (set wasm target / unset GENTS_SKIP_LENS_BUILD)"
@@ -270,7 +265,6 @@ async fn patch_versioned_with_fixture_lens_registers_transform() {
         "transform pin must match content-derived id"
     );
 
-    // The activation reindex and eager materializer persist the transformed row.
     let q = r#"{ FixtureDoc { name label } }"#;
     let resp = node.execute(q).await;
     assert!(!resp.has_errors(), "lens read: {:?}", resp.errors);
@@ -284,7 +278,6 @@ async fn patch_versioned_with_fixture_lens_registers_transform() {
     assert_eq!(rows[0]["name"], serde_json::json!("alice"));
     assert_eq!(rows[0]["label"], serde_json::json!("ALICE"));
 
-    // Idempotent re-run.
     let report2 = ensure_migrations_dynamic(node.as_ref(), &registry)
         .await
         .expect("idempotent lens step");

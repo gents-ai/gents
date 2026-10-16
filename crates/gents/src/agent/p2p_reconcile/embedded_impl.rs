@@ -1,5 +1,3 @@
-//! Embedded-node implementation of the runtime pairing admin seam.
-
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -741,9 +739,6 @@ mod tests {
         .expect("valid canonical daemon fixture")
     }
 
-    /// Accept one `agent_new` call on the coordinator addressed to the
-    /// host node and materialize its Peer request through the
-    /// session-message owner. Returns the caused request id.
     async fn seed_peer_session_message(
         node: &Arc<EmbeddedNode>,
         lifecycle: &crate::lifecycle::RequestLifecycle,
@@ -1128,7 +1123,7 @@ mod tests {
 
         for template in super::super::templates::builtin_templates() {
             if template.collections.is_empty() {
-                continue; // app-collections: bring-your-own collection set.
+                continue;
             }
             let filters = match &template.scope {
                 Scope::ClientRoute => super::super::policy::resolve_template_filters(
@@ -1253,7 +1248,6 @@ mod tests {
         wait_for_active_peer(&receiver_admin).await;
 
         let collections = vec!["AgentRequest".to_string(), "AgentToolCall".to_string()];
-        // Receiver-side authorization mirrors the production embedded P2P setup.
         receiver_admin
             .add_replicator(&sender_addresses, &collections, &PairingFilters::default())
             .await
@@ -1706,8 +1700,6 @@ mod tests {
             BTreeSet::from([match_request_doc_id.clone()]),
             "only the routed return projection's segments must replicate"
         );
-        // Canonical output only carries the header and its segments; the
-        // retired AgentResponse collection must not appear on the return leg.
         let agent_response_rows = receiver.execute("{ AgentResponse { response_key } }").await;
         assert!(
             agent_response_rows.has_errors(),
@@ -1734,7 +1726,6 @@ mod tests {
                         .downcast_ref::<gents_protocol::output::ReconstructionError>()
                         .is_some_and(|error| error.is_incomplete()) =>
                 {
-                    // Missing dependency: replication still converging.
                     tokio::time::sleep(Duration::from_millis(250)).await;
                     continue;
                 }

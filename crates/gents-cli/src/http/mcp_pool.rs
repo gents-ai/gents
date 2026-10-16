@@ -199,9 +199,6 @@ fn status_eq(value: Option<&str>, expected: &str) -> bool {
         .is_some_and(|value| value.eq_ignore_ascii_case(expected))
 }
 
-/// Buckets a persisted `ToolServiceHealthState.status` by the owned
-/// projection; unrecognized or missing statuses fall into `unknown`
-/// (a projection word like "stale" must not count as the real state).
 fn count_health_status(totals: &mut McpPoolTotals, status: Option<&str>) {
     match ToolServiceHealthState::parse_opt(status).map(ToolServiceHealthState::project) {
         Some(ToolServiceHealthProjection::Healthy) => totals.healthy += 1,

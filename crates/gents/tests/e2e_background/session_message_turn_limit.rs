@@ -270,9 +270,6 @@ async fn started_session_without_an_execution_document_runs_past_a_low_turn_limi
     runtime.runtime.shutdown().await;
 }
 
-/// `PromptError::MaxTurnsError` reports `config.max_turns`, the bound the
-/// child's own loop enforced, so the persisted failure names the applied limit
-/// and the applied provenance rather than the configuration they came from.
 #[tokio::test]
 async fn started_session_loop_enforces_its_execution_documents_turn_limit() {
     let db = test_db("e2e-session-limit-explicit").await;

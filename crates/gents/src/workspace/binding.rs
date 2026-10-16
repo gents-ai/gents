@@ -14,10 +14,6 @@ pub enum AdmitBinding {
     },
 }
 
-/// ReadWrite is exclusive while Ready; Integrate is exclusive while Sealed.
-/// `release_previous` is the retry path: the previous Active exclusive binding
-/// is Released first. After Sealed, ReadWrite is illegal; ReadOnly/Integrate
-/// copy and verify `seal_hash`.
 pub fn admit_workspace_binding(
     workspace_id: &str,
     workspace_state: &str,

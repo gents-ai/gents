@@ -324,8 +324,6 @@ def consumeFolded (s : SessionQueueState) (entry : QueueEntry) (rest : List Queu
     SessionQueueState :=
   { s with folding := rest, terminal := insert entry.requestId s.terminal }
 
-/-- A turn ending before it published a selected message returns it to the head
-of the queue in its original order. -/
 def finishActive (s : SessionQueueState) (requestId : RequestId) : SessionQueueState :=
   { s with
     active := none

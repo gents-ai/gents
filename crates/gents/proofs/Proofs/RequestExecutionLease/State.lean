@@ -34,7 +34,6 @@ inductive Lease (Generation : Type) where
   | terminal (generation : Generation) (outcome : Outcome)
   deriving DecidableEq, Repr
 
-/-- Duplicate terminal side effects surface as counter values above one. -/
 structure World (Generation : Type) where
   request : RequestState
   lease : Lease Generation

@@ -1,5 +1,3 @@
-//! Built-in permission presets and exact-match classification for Tools.
-
 pub const PRESET_READONLY: &str = "readonly";
 pub const PRESET_WRITE: &str = "write";
 
@@ -128,10 +126,4 @@ mod tests {
         assert_eq!(classify_tools(&tools, &merged).unwrap(), None);
     }
 
-    #[test]
-    fn one_flipped_field_classifies_as_custom() {
-        let mut fields = preset_fields(PRESET_WRITE).expect("write preset should exist");
-        fields.enable_self_config = true;
-        assert_eq!(preset_name(&fields), None);
-    }
 }

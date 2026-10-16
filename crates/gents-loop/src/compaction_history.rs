@@ -1,7 +1,3 @@
-//! Pure message-history shaping for compaction. Every item here is `pub`
-//! (not `pub(super)`): gents' own compaction test suite reaches this module
-//! through `crate::compaction::history`.
-
 use std::collections::HashMap;
 
 use gents_protocol::message::{
@@ -15,7 +11,6 @@ use crate::provider_input::ProviderInputProfile;
 #[derive(Debug)]
 pub struct SourcedMessage {
     pub source_index: usize,
-    /// Positions in the original assistant row, carried through shaping.
     pub block_indices: Vec<usize>,
     pub message: Message,
 }
@@ -59,8 +54,6 @@ pub fn strip_tool_results_sourced(
     {
         match message {
             Message::Assistant { id, content } => {
-                // Scope the lookup to the turn being opened: provider-generated
-                // call ids can repeat across turns.
                 let opens_turn = content
                     .iter()
                     .any(|item| matches!(item, AssistantContent::ToolCall(_)));
@@ -110,9 +103,6 @@ pub fn strip_tool_results_sourced(
     (stripped_messages, file_activity)
 }
 
-/// Which tool results close each assistant turn; resolution is scoped to the
-/// active turn, mirroring [`drop_orphaned_tool_results`] so a reused call id
-/// cannot be closed by an earlier turn's result.
 fn resolved_keys_per_turn<'a>(
     len: usize,
     messages: impl IntoIterator<Item = &'a Message>,
@@ -134,8 +124,6 @@ fn resolved_keys_per_turn<'a>(
                         _ => has_plain_content = true,
                     }
                 }
-                // Plain content ends the turn *after* the results it rides with,
-                // matching `drop_orphaned_tool_results`.
                 if has_plain_content {
                     active_turn = None;
                 }
@@ -164,11 +152,6 @@ pub fn drop_unpaired_tool_calls_sourced(messages: Vec<SourcedMessage>) -> Vec<So
         match message {
             Message::Assistant { id, content } => {
                 let resolved = &resolved_per_turn[index];
-                // Duplicate call keys *within one turn* are malformed:
-                // `drop_orphaned_tool_results` pairs through a set, so it closes
-                // such a turn with a single result while every duplicate call
-                // would survive here — again leaving a dangling call. Keep the
-                // first occurrence of each key and drop the rest.
                 let mut announced: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
                 let mut kept_indices = Vec::new();
@@ -275,9 +258,6 @@ pub fn drop_orphaned_tool_results_sourced(messages: Vec<SourcedMessage>) -> Vec<
     kept_messages
 }
 
-/// Select the provider's assistant content order at the send boundary:
-/// text, then other non-call content, then tool calls (Claude keeps native
-/// block order); relative order within each category is preserved.
 pub fn normalize_assistant_content_order(
     profile: ProviderInputProfile,
     messages: Vec<Message>,
@@ -292,8 +272,6 @@ pub fn normalize_assistant_content_order_sourced(
     profile: ProviderInputProfile,
     messages: Vec<SourcedMessage>,
 ) -> Vec<SourcedMessage> {
-    // Claude continuation replays native blocks in their original order; the
-    // configured provider wire, not signatures, selects this branch.
     if profile == ProviderInputProfile::ClaudeMessages {
         return messages;
     }
@@ -374,9 +352,6 @@ pub fn split_messages_for_summary_with_counter(
     split_messages_for_summary_with_counter_bounded(messages, keep_recent_tokens, counter, None)
 }
 
-/// The bound is an index in this exact provider-view list. A required replay
-/// row at that index cannot be summarized, even when the token target would
-/// otherwise choose a later split.
 pub fn split_messages_for_summary_with_counter_bounded(
     messages: Vec<Message>,
     keep_recent_tokens: usize,
@@ -390,9 +365,6 @@ pub fn split_messages_for_summary_with_counter_bounded(
         return Ok((Vec::new(), messages));
     }
 
-    // Find the longest provider-visible suffix under the retention target.
-    // Counting whole candidates is intentional: provider conversions are not
-    // additive (Chat Completions can erase a reasoning-only assistant row).
     let mut low = 0usize;
     let mut high = messages.len() - 1;
     let mut split_index = messages.len() - 1;
@@ -410,12 +382,6 @@ pub fn split_messages_for_summary_with_counter_bounded(
         }
     }
 
-    // A budget split landing inside a ToolCall/ToolResult pair would drop the
-    // tool's output from the provider view; retreat to the nearest turn
-    // boundary. Moving earlier over-retains by at most one turn and never
-    // loses context. Modelled as `Compaction.pairSafeBoundary`, with
-    // `Compaction.raw_split_can_orphan` witnessing that the unadjusted index
-    // is unsound.
     let raw_split_index = split_index;
     let mut split_index = pair_safe_boundary(&messages, raw_split_index);
 
@@ -424,13 +390,6 @@ pub fn split_messages_for_summary_with_counter_bounded(
             .ok_or(super::ReductionError::CannotFit)?;
     }
 
-    // An oversized pair-closed tail that exceeds the retention budget cannot
-    // fit dispatch, so summarize every row; over-summarizing complete turns
-    // beats not fitting. Modelled as
-    // `Compaction.summarize_oversized_complete_turn`. The retreat guard
-    // (`split_index < raw_split_index`) keeps a never-compacted transcript
-    // intact; the full-list check then refuses to end on a call awaiting its
-    // result.
     let retained_tokens = counter.estimate_message_request(&messages[split_index..])?;
     if max_compacted_prefix_messages.is_none()
         && split_index < raw_split_index
@@ -449,9 +408,6 @@ pub fn split_messages_for_summary_with_counter_bounded(
     Ok((old_messages, recent_messages))
 }
 
-/// Select a nonempty pair-closed prefix no later than the first required
-/// continuation row. The retention target selects `raw_split_index` but does
-/// not establish whether the retained suffix fits the full context window.
 pub fn protected_pair_safe_split_index(
     messages: &[Message],
     raw_split_index: usize,
@@ -462,9 +418,6 @@ pub fn protected_pair_safe_split_index(
     (split > 0).then_some(split)
 }
 
-// Not `#[cfg(test)]`: gents' own compaction test suite calls this test-only
-// convenience wrapper, and a cfg(test) item in this crate is invisible to a
-// dependent crate's own test build.
 pub fn split_messages_for_summary(
     messages: Vec<Message>,
     keep_recent_tokens: usize,
@@ -478,9 +431,6 @@ pub fn split_messages_for_summary(
         .expect("test provider projection should succeed")
 }
 
-/// Greatest `j <= limit` at which no tool call is awaiting its result.
-/// Mirrors `Compaction.pairSafeBoundary` and the pending-set discipline in
-/// [`drop_orphaned_tool_results`].
 pub fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
     let limit = limit.min(messages.len());
     pair_safe_boundaries(&messages[..limit])
@@ -489,8 +439,6 @@ pub fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
         .unwrap_or(0)
 }
 
-/// Every positive prefix length at which no tool call is awaiting its result;
-/// the linear-time form used by rolling compaction.
 pub fn pair_safe_boundaries(messages: &[Message]) -> Vec<usize> {
     let mut pending: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut boundaries = Vec::new();
@@ -529,11 +477,6 @@ pub fn pair_safe_boundaries(messages: &[Message]) -> Vec<usize> {
     boundaries
 }
 
-/// File activity credited only to tool calls that actually produced a result:
-/// an interrupted call whose result never arrived must not be counted as a
-/// write, since these lists are persisted and rendered into later prompts.
-/// A failed call that returned an error result is still credited (results
-/// carry no error flag); dry runs are excluded at classification time.
 pub fn extract_file_activity(messages: &[Message]) -> FileActivity {
     extract_file_activity_iter(messages.iter())
 }
@@ -602,29 +545,19 @@ pub fn floor_char_boundary(text: &str, mut index: usize) -> usize {
     index
 }
 
-/// Head and tail of every stub this module writes. The tail names the
-/// `sessions` read that returns the call's full stored output, which is why
-/// that tool is enabled unless a behavior opts out.
 const STUB_HEAD: &str = "[tool: ";
 const STUB_RECOVERY: &str = "full output: sessions ";
 const STUB_TAIL: &str = "]";
 const STUB_JOIN: &str = " — ";
 const STUB_TRUNCATED: &str = ", truncated";
 
-/// Notices the truncation owner writes. Matching these exactly replaces a
-/// `contains("truncated")` sniff that fired on any tool output happening to
-/// mention the word.
 const TRUNCATION_MARKERS: [&str; 4] = crate::truncation::TRUNCATION_NOTICE_PREFIXES;
 
-/// Facts a previously written stub carries, recovered so that re-stubbing
-/// reproduces it exactly.
 struct StubFacts {
     byte_count: usize,
     truncated: bool,
 }
 
-/// Recover the byte count and truncation flag from stub-shaped text. Shape
-/// recognition is a hint only: a rewrite is never skipped on a misread.
 fn parse_stub(tool_result: &ToolResult) -> Option<StubFacts> {
     let [ToolResultContent::Text(text)] = tool_result.content.as_slice() else {
         return None;
@@ -650,9 +583,6 @@ fn parse_stub(tool_result: &ToolResult) -> Option<StubFacts> {
     })
 }
 
-/// Replace a tool result's payload with a pointer stub, recovering facts from
-/// an existing stub so the rewrite is a fixed point (production's half of
-/// `Compaction.strip_idempotent`; the request path strips twice).
 fn strip_tool_result(
     mut tool_result: ToolResult,
     tool_calls: &HashMap<String, ToolCallInfo>,
@@ -736,9 +666,6 @@ struct ToolCallInfo {
     is_write: bool,
 }
 
-/// Tools whose calls mean "this path was read"; keep in sync with the tool
-/// registry — `every_registered_file_tool_is_classified` fails if a file tool
-/// is added without a classification.
 pub fn is_read_tool(name: &str) -> bool {
     matches!(
         name,
@@ -746,7 +673,6 @@ pub fn is_read_tool(name: &str) -> bool {
     )
 }
 
-/// Tools whose calls mean "this path was modified".
 pub fn is_write_tool(name: &str) -> bool {
     matches!(
         name,

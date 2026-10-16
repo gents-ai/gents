@@ -88,9 +88,6 @@ pub fn graph_plan_path(graph_id: &str) -> String {
     format!("graphs/{}.plan.json", graph_id.replace('-', "_"))
 }
 
-/// Compiles for the placeholder owner `node_did`; a plan names no owner, so
-/// the result is the plan any install of these files compiles, which install
-/// recompiles to verify.
 pub fn compile_pack_graphs(
     manifest: &crate::pack::PackManifest,
     asset: &dyn Fn(&str) -> Result<Vec<u8>>,
@@ -138,9 +135,6 @@ pub fn check_graph_pack(
     Ok(plans)
 }
 
-/// Refuses a shipped plan differing from this build's compilation (other
-/// compiler or edited after build). A pack that ships no plan compiles at
-/// install, as always.
 pub fn verify_shipped_plan(
     compiled: &crate::graph_pipeline::GraphPlan,
     asset: &dyn Fn(&str) -> Option<Vec<u8>>,

@@ -1,8 +1,3 @@
-//! Provider-agnostic OAuth credential documents and owner-only bearer refresh.
-//!
-//! ChatGPT Codex and Grok / xAI subscription OAuth both store tokens as
-//! `OAuthCredential` rows and share this cache + refresh-lock shell. Provider
-//! differences live in [`OAuthRefreshKind`] and product-specific HTTP clients.
 
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,12 +12,11 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id node_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled account_ref connected_at provider_account_key label";
-/// The fields [`pick_oauth_credential`] reads: no token.
 const OAUTH_PICK_FIELDS: &str =
     "_docID credential_id node_did provider enabled account_ref connected_at provider_account_key";
 
-/// Display metadata only. Never use decoded, unverified claims for authorization
-/// or overwrite the account ID used by a provider's authentication headers.
+/// Display metadata only. Decoded, unverified claims must not authorize requests or replace
+/// `account_id` used by provider authentication headers.
 pub fn account_display_label(credential: &OAuthCredential) -> Option<String> {
     let claims = credential
         .id_token
@@ -42,20 +36,13 @@ pub fn account_display_label(credential: &OAuthCredential) -> Option<String> {
         .or_else(|| field("sub"))
 }
 const REFRESH_SKEW: Duration = Duration::minutes(5);
-/// After a failed refresh the bearer serves that failure again for this long
-/// instead of POSTing the provider's token endpoint on every request. While
-/// the cooldown holds every call returns the classified error: no provider
-/// round-trip and no fast-path token. A re-login is picked up once the
-/// cooldown lapses, because the forced slow path re-reads the document first.
 const REFRESH_FAILURE_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Product copy used when classifying auth failures for operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OAuthProduct {
     pub name: &'static str,
     pub backend_label: &'static str,
     pub login_command: &'static str,
-    /// What to do about a valid-grant-but-tier-gated account (HTTP 403).
     pub not_entitled_guidance: &'static str,
 }
 
@@ -74,7 +61,6 @@ pub const XAI_OAUTH_PRODUCT: OAuthProduct = OAuthProduct {
                             https://api.x.ai/v1, or check SuperGrok / X Premium+ eligibility.",
 };
 
-/// Which token endpoint / claim mapping to use when rotating credentials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OAuthRefreshKind {
     ChatGpt,
@@ -89,7 +75,6 @@ pub enum OAuthAuthProblem {
         found_mode: String,
     },
     Expired,
-    /// Valid grant, but the account is not entitled to this OAuth surface (tier gate).
     NotEntitled,
     Other(String),
 }
@@ -146,11 +131,6 @@ pub fn classify_chatgpt_auth_error(
     classify_oauth_auth_error(&CHATGPT_OAUTH_PRODUCT, node_did, provider, problem)
 }
 
-/// Single owner of the OAuth access-token expiry fallback chain xAI's
-/// device-code login and refresh both used to duplicate: prefer the JWT's own
-/// `exp` claim (authoritative when present), fall back to a positive
-/// `expires_in` (seconds) added to `now`, and default to a conservative
-/// 15-minute window when neither is present or valid.
 pub fn resolve_access_token_expiry(
     access_token: &str,
     expires_in: Option<i64>,
@@ -196,20 +176,12 @@ pub struct OAuthCredential {
     #[serde(default)]
     pub last_refresh: Option<DateTime<Utc>>,
     pub enabled: bool,
-    /// Which of the provider's accounts this row is; `None` is the provider's
-    /// original account (the row upgraded in place).
     #[serde(default)]
     pub account_ref: Option<String>,
-    /// When the account was first stored; `None` for rows from before the
-    /// field existed.
     #[serde(default)]
     pub connected_at: Option<DateTime<Utc>>,
-    /// The provider's stable id for the signed-in account, scoped by
-    /// `provider`; `None` when the tokens did not show it.
     #[serde(default)]
     pub provider_account_key: Option<String>,
-    /// The user-chosen name shown in every view instead of the sign-in email;
-    /// `None` shows the product name.
     #[serde(default)]
     pub label: Option<String>,
 }
@@ -277,18 +249,12 @@ pub fn oauth_credential_by_id_query(credential_id: &str) -> String {
     )
 }
 
-/// Fields a token write never sends to a stored row.
 const SET_ONCE_FIELDS: &[&str] = &["node_did", "account_ref", "connected_at", "label"];
 
 pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String {
     let fields = oauth_credential_input_fields(credential);
     let add_input = render_oauth_input(&fields, &[]);
-    // `node_did` is `@immutable` and `credential_id` is the unique key. On this DefraDB pin the
-    // immutability check rejects re-sending an immutable field on a pre-existing document, so the
-    // `update` branch (re-login and per-request token rotation both land here) must omit it.
-    // `credential_id` is likewise only ever written in `add`. Mirrors session/observations.rs.
-    // `account_ref`, `connected_at` and `label` are set once, when a row is first stored; a
-    // refresh or re-sign-in never rewrites them (a label changes only through its own update).
+    // `node_did` is immutable, so the update branch must omit it on this DefraDB pin.
     let update_input = render_oauth_input(&fields, SET_ONCE_FIELDS);
     let credential_id = crate::graphql::escape_graphql_string(&credential.credential_id);
     format!(
@@ -307,25 +273,16 @@ pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String 
     )
 }
 
-/// Which of a provider's accounts a caller needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountPick<'a> {
-    /// The provider's default account, for callers with no backend.
     ProviderDefault,
-    /// The account a backend names; `None` is the provider's original account
-    /// (the row with no `account_ref`), never another enabled account.
     Reference(Option<&'a str>),
 }
 
-/// The fixed account order: earliest `connected_at` first, rows without one
-/// (stored before the field existed) before any time, ties by `credential_id`.
 fn resolver_order(a: &OAuthCredential, b: &OAuthCredential) -> std::cmp::Ordering {
     (a.connected_at, &a.credential_id).cmp(&(b.connected_at, &b.credential_id))
 }
 
-/// The single credential pick: the first enabled row of `node_did` and
-/// `provider` in [`resolver_order`] that `pick` names. Every reader that
-/// chooses a row goes through here.
 pub fn pick_oauth_credential<'c>(
     rows: impl IntoIterator<Item = &'c OAuthCredential>,
     node_did: &str,
@@ -359,8 +316,6 @@ fn enabled_oauth_credentials_query(node_did: &str, provider: &str, fields: &str)
     )
 }
 
-/// Read `node_did`'s enabled rows for `provider` through `access` and pick one
-/// with [`pick_oauth_credential`].
 pub async fn resolve_oauth_credential(
     access: &crate::config_client::ConfigAccess,
     node_did: &str,
@@ -377,11 +332,6 @@ pub async fn resolve_oauth_credential(
     pick_from_response(&response, node_did, provider, pick)
 }
 
-/// The provider's default account for `node_did` (Lean `SelfConfig` `dflt`),
-/// read inside a self-config transaction. `None` means both "the original
-/// account is the default" and "no account is enabled"; the latter lets a move
-/// onto the provider's no-reference backend through, which then fails at run
-/// time with the missing-credential guidance, as with one account today.
 pub(crate) async fn provider_default_account_ref(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -394,8 +344,6 @@ pub(crate) async fn provider_default_account_ref(
     )
 }
 
-/// [`resolve_oauth_credential`] inside the caller's transaction, the picked
-/// row's token fields left blank.
 pub(crate) async fn resolve_oauth_credential_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -416,9 +364,6 @@ pub(crate) async fn resolve_oauth_credential_in_txn(
     Ok(pick_oauth_credential(&rows, node_did, provider, pick).cloned())
 }
 
-/// Decode a row read with [`OAUTH_PICK_FIELDS`] like
-/// [`oauth_credential_from_value`], its token fields left blank. The pick
-/// takes whole rows; this keeps a model-driven transaction off the tokens.
 fn pick_row_from_value(value: Value) -> Result<OAuthCredential> {
     let row: OAuthCredentialRow =
         serde_json::from_value(value).context("decoding OAuthCredential row")?;
@@ -516,11 +461,6 @@ pub async fn list_oauth_credentials(
         .collect()
 }
 
-/// Read node-scoped credentials through the selected canonical control-plane
-/// access. Desktop-managed runtimes use their operator GraphQL endpoint here;
-/// callers must not fall back to a replicated client copy for private tokens.
-/// Rows come back in resolver order, so a list's first enabled row of a
-/// provider is the provider's default account.
 pub async fn list_oauth_credentials_on(
     access: &crate::config_client::ConfigAccess,
     node_did: &str,
@@ -575,7 +515,6 @@ pub async fn upsert_oauth_credential_on(
     gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")
 }
 
-/// Whether a sign-in stored a new account or refreshed a stored one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SignInResult {
@@ -583,23 +522,16 @@ pub enum SignInResult {
     Refreshed,
 }
 
-/// A stored sign-in: the row as written and how it was matched.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignIn {
     pub doc_id: String,
     pub credential: OAuthCredential,
     pub result: SignInResult,
-    /// The sign-in refreshed a row that knew an identity field (key or
-    /// `account_id`), as opposed to a row with no identity at all.
     pub identity_matched: bool,
-    /// An add at the provider's original slot: the profiles on the
-    /// provider's backends with no account reference, which now run on it.
     pub profiles: Vec<String>,
 }
 
 impl SignIn {
-    /// After a sign-in that refreshed an account already stored: how to reach
-    /// another account instead (a signed-in browser returns the same one).
     pub fn account_chooser_hint(&self) -> Option<String> {
         (self.result == SignInResult::Refreshed && self.identity_matched).then(|| {
             let name = sign_in_product(&self.credential.provider)
@@ -612,7 +544,6 @@ impl SignIn {
         })
     }
 
-    /// After an add at the original slot: which profiles now use it.
     pub fn profiles_note(&self) -> Option<String> {
         (!self.profiles.is_empty()).then(|| {
             format!(
@@ -624,8 +555,6 @@ impl SignIn {
     }
 }
 
-/// The product of a sign-in provider; `None` for a provider no backend kind
-/// reads (a sign-in there would be stored and never used).
 fn sign_in_product(provider: &str) -> Option<OAuthProduct> {
     match provider {
         crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER => Some(CHATGPT_OAUTH_PRODUCT),
@@ -652,7 +581,6 @@ fn oauth_credentials_of_provider_query(node_did: &str, provider: &str) -> String
     )
 }
 
-/// `node_did`'s rows of `provider`, enabled or not, in resolver order.
 async fn provider_rows_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -672,8 +600,6 @@ fn trimmed(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
-/// The backend a provider's added account runs on: the provider's preset
-/// connection, named by the account's label, referencing the account.
 fn account_backend(
     credential: &OAuthCredential,
     account_ref: &str,
@@ -686,7 +612,6 @@ fn account_backend(
     )
 }
 
-/// `provider`'s preset connection for `node_did`'s account `account_ref`.
 pub(crate) fn preset_account_backend(
     node_did: &str,
     provider: &str,
@@ -735,9 +660,6 @@ async fn write_account_backend(
         )
 }
 
-/// Give an added account its backend when none references it (a lost one
-/// comes back), and carry a label change to a backend still named by the
-/// old label.
 async fn sync_account_backend(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     credential: &OAuthCredential,
@@ -765,10 +687,8 @@ async fn sync_account_backend(
     Ok(())
 }
 
-/// Longest account label, in characters.
 const MAX_ACCOUNT_LABEL_CHARS: usize = 64;
 
-/// A label as stored: trimmed, 1 to 64 characters, no control characters.
 pub fn validate_account_label(label: &str) -> Result<String> {
     let label = label.trim();
     anyhow::ensure!(!label.is_empty(), "an account label cannot be empty");
@@ -783,7 +703,6 @@ pub fn validate_account_label(label: &str) -> Result<String> {
     Ok(label.to_owned())
 }
 
-/// The name an account shows: its label, else its product's name.
 pub fn effective_account_label(credential: &OAuthCredential) -> String {
     credential.label.clone().unwrap_or_else(|| {
         sign_in_product(&credential.provider)
@@ -792,7 +711,6 @@ pub fn effective_account_label(credential: &OAuthCredential) -> String {
     })
 }
 
-/// `label` unless another of the provider's accounts shows it.
 fn ensure_label_free(others: &[&OAuthCredential], label: &str) -> Result<()> {
     anyhow::ensure!(
         !others
@@ -803,7 +721,6 @@ fn ensure_label_free(others: &[&OAuthCredential], label: &str) -> Result<()> {
     Ok(())
 }
 
-/// The first of `Name`, `Name 2`, `Name 3`, ... no account shows.
 fn next_free_label(rows: &[OAuthCredential], provider: &str) -> String {
     let name = sign_in_product(provider).map_or(provider, |product| product.name);
     let taken: std::collections::HashSet<_> = rows.iter().map(effective_account_label).collect();
@@ -813,12 +730,6 @@ fn next_free_label(rows: &[OAuthCredential], provider: &str) -> String {
         .expect("an unbounded sequence has a free label")
 }
 
-/// Store a sign-in: refresh the stored account it shows, or add it.
-///
-/// A refresh keeps the row's id, reference, connection time and label and
-/// enables it. An add takes the provider's original slot
-/// (`{provider}:{did}`, no reference) when the provider has no row on this
-/// node, else mints an opaque, DID-free `account_ref`.
 pub async fn store_sign_in(
     access: &crate::config_client::ConfigAccess,
     credential: OAuthCredential,
@@ -839,10 +750,6 @@ pub async fn store_sign_in(
         .await
 }
 
-/// The key forms `credential`'s own tokens show, whole values trimmed. ChatGPT
-/// and Grok keys are recomputed from the tokens (a stored key written beside
-/// other tokens is not trusted); a Claude access token is opaque, so its
-/// stored key stands.
 fn identity_keys(credential: &OAuthCredential) -> Vec<String> {
     let keys = match credential.provider.as_str() {
         crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER => {
@@ -865,10 +772,6 @@ fn identity_keys(credential: &OAuthCredential) -> Vec<String> {
         .collect()
 }
 
-/// How a stored row matches a sign-in, best first: the sign-in shows every
-/// identity field the row knows (a key in its key set, an equal
-/// `account_id`), and the row knows a key, or only an `account_id`, or
-/// nothing at all. `None` when the sign-in cannot confirm a known field.
 fn sign_in_match(
     row: &OAuthCredential,
     sign_in_keys: &[String],
@@ -901,8 +804,6 @@ async fn store_sign_in_in_txn(
         .filter_map(|row| Some((sign_in_match(row, &sign_in_keys, &credential)?, row)))
         .min_by_key(|(tier, _)| *tier);
     if let Some((tier, row)) = matched {
-        // Keep the stored key when this sign-in shows it in any form, so a
-        // key moving between forms does not re-key the account.
         if trimmed(row.provider_account_key.as_deref())
             .is_some_and(|stored| sign_in_keys.iter().any(|key| key == stored))
         {
@@ -1000,8 +901,6 @@ async fn store_sign_in_in_txn(
     })
 }
 
-/// Profiles on `credential`'s provider's backends with no account reference:
-/// the ones its original account serves.
 async fn original_account_profiles(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     credential: &OAuthCredential,
@@ -1029,30 +928,20 @@ async fn original_account_profiles(
     )
 }
 
-/// One sign-in account as views show it: no token.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AccountSummary {
     pub credential_id: String,
     pub provider: String,
     pub account_ref: Option<String>,
-    /// The effective label ([`effective_account_label`]).
     pub label: String,
-    /// The sign-in's display identity ([`account_display_label`]); display only.
     pub identity: Option<String>,
     pub plan: Option<String>,
     pub enabled: bool,
-    /// The provider's default account ([`AccountPick::ProviderDefault`]).
     pub default: bool,
     pub access_token_expires_at: DateTime<Utc>,
-    /// When this sign-in took its slot; `None` for a row stored before the
-    /// field existed.
     pub connected_at: Option<DateTime<Utc>>,
 }
 
-/// The account a node OAuth backend runs on, among `accounts` (one node's):
-/// the one of the backend's provider with the backend's reference, where no
-/// reference is the provider's original account. `None` for a backend that
-/// uses no account; `Some(None)` when that account is not on this node.
 pub fn backend_account<'a>(
     backend: &crate::InferenceBackend,
     accounts: &'a [AccountSummary],
@@ -1069,9 +958,6 @@ pub fn backend_account<'a>(
     )
 }
 
-/// Whether the account a backend runs on can serve it. `Missing` covers an
-/// account removed from this node and one signed in on another node: stored
-/// rows cannot tell them apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountState {
     Enabled,
@@ -1095,20 +981,14 @@ impl Serialize for AccountState {
     }
 }
 
-/// The account a backend runs on, as views show it: a label, never an
-/// identity or token.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ServingAccount {
     pub label: String,
     pub state: AccountState,
-    /// The sign-in provider of a node OAuth backend.
     #[serde(skip)]
     pub provider: Option<&'static str>,
 }
 
-/// [`backend_account`] as a label and state. A backend that uses no account
-/// is its own account; one whose account is not on this node keeps its
-/// backend name, which for an added account is its label.
 pub fn serving_account(
     backend: &crate::InferenceBackend,
     accounts: &[AccountSummary],
@@ -1139,8 +1019,6 @@ pub fn serving_account(
     }
 }
 
-/// Where a profile can move instead: `provider`'s enabled accounts by label,
-/// or how to sign one in when there is none.
 pub fn enabled_accounts_note(provider: &str, accounts: &[AccountSummary]) -> String {
     let product = sign_in_product(provider);
     let name = product.as_ref().map_or(provider, |product| product.name);
@@ -1159,12 +1037,10 @@ pub fn enabled_accounts_note(provider: &str, accounts: &[AccountSummary]) -> Str
     }
 }
 
-/// The product name of `provider`'s sign-ins, else `provider` itself.
 pub fn provider_name(provider: &str) -> &str {
     sign_in_product(provider).map_or(provider, |product| product.name)
 }
 
-/// Why a profile on `provider` has nowhere to move, and how to add an account.
 pub fn no_switch_candidate_note(provider: &str, model: &str) -> String {
     match sign_in_product(provider) {
         Some(product) => format!(
@@ -1177,14 +1053,12 @@ pub fn no_switch_candidate_note(provider: &str, model: &str) -> String {
     }
 }
 
-/// The providers whose sign-ins are accounts: the ones a backend reads.
 const ACCOUNT_PROVIDERS: [&str; 3] = [
     crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
     crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
     crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
 ];
 
-/// A filter on `node_did`'s accounts, optionally one `credential_id`.
 fn account_filter(node_did: &str, credential_id: Option<&str>) -> String {
     let providers = ACCOUNT_PROVIDERS
         .iter()
@@ -1209,8 +1083,6 @@ fn account_not_found(credential_id: &str) -> anyhow::Error {
     anyhow::anyhow!("account {credential_id:?} not found for this node")
 }
 
-/// `node_did`'s sign-in accounts in resolver order. Only providers a backend
-/// reads are accounts; a cloud workspace token is not.
 pub async fn list_accounts(
     access: &crate::config_client::ConfigAccess,
     node_did: &str,
@@ -1249,7 +1121,6 @@ pub async fn list_accounts(
         .collect())
 }
 
-/// Rename an account; a backend still named by its old label follows.
 pub async fn set_account_label(
     access: &crate::config_client::ConfigAccess,
     node_did: &str,
@@ -1298,7 +1169,6 @@ pub async fn set_account_label(
         .await
 }
 
-/// Enable or disable an account, keeping its tokens.
 pub async fn set_account_enabled(
     access: &crate::config_client::ConfigAccess,
     node_did: &str,
@@ -1318,8 +1188,6 @@ pub async fn set_account_enabled(
     ensure_matched(&response, "update_OAuthCredential", credential_id)
 }
 
-/// Delete an account's row and its usage rows inside the caller's
-/// transaction.
 pub async fn remove_account_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -1560,9 +1428,6 @@ pub fn apply_refreshed_tokens(credential: &mut OAuthCredential, refreshed: Refre
     credential.last_refresh = Some(Utc::now());
 }
 
-/// The provider account key `credential`'s own tokens show, by the bearer's
-/// refresh kind (a provider name can be anything). Claude access tokens carry
-/// no identity, so Claude rows fill at the next sign-in.
 fn provider_account_key(kind: OAuthRefreshKind, credential: &OAuthCredential) -> Option<String> {
     match kind {
         OAuthRefreshKind::ChatGpt => crate::chatgpt_oauth_refresh::chatgpt_account_key(
@@ -1608,22 +1473,17 @@ pub trait BearerSource: Send + Sync {
         async {}
     }
 
-    /// Whether the bearer is an OAuth sign-in (which needs the OAuth beta).
     fn is_oauth(&self) -> bool {
         true
     }
 }
 
-/// What a refresh's write found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RefreshPersist {
     Written,
-    /// The row was removed, replaced or signed in again since the refresh
-    /// read it; the stored row stands.
     Superseded,
 }
 
-/// The fields a refresh changes, plus the key when this refresh filled it.
 const REFRESH_FIELDS: &[&str] = &[
     "access_token",
     "refresh_token",
@@ -1673,9 +1533,6 @@ fn refresh_update_mutation(
 const MOVE_OFF_ACCOUNT: &str =
     "Move a profile off it: gents config profile set-account <profile> <account> (gents accounts list).";
 
-/// `<Product> account "<label>" is <state>.` A label that reads as a provider
-/// limit or a context-length error is replaced by the product name: bearer
-/// errors reach the limit classifiers, and a label is free text.
 pub(crate) fn account_failure(product: &OAuthProduct, label: &str, state: &str) -> String {
     let lower = label.to_ascii_lowercase();
     let label = if gents_loop::provider_limit::classify_provider_limit(label, Utc::now()).is_some()
@@ -1689,7 +1546,6 @@ pub(crate) fn account_failure(product: &OAuthProduct, label: &str, state: &str) 
     format!("{} account \"{label}\" is {state}.", product.name)
 }
 
-/// The state an [`account_failure`] sentence in `text` names, if any.
 pub fn account_failure_state(text: &str) -> Option<&'static str> {
     const STATES: [&str; 5] = [
         "signed out (expired or revoked)",
@@ -1713,10 +1569,9 @@ pub fn account_failure_state(text: &str) -> Option<&'static str> {
     .flatten()
 }
 
-/// Bounds each token-endpoint exchange, not the persist that follows it: a
-/// hung token endpoint must fail the refresh (classified as a transport error)
-/// instead of stalling every caller, including the serial backend prober, while
-/// cancelling after the response could drop a rotated refresh token.
+/// Bounds each token-endpoint exchange, not the persist that follows it: a hung endpoint must
+/// fail refresh instead of stalling callers, while cancelling after a response could lose a
+/// rotated refresh token.
 const REFRESH_REQUEST_TIMEOUT: std::time::Duration = if cfg!(test) {
     std::time::Duration::from_secs(5)
 } else {
@@ -1730,8 +1585,7 @@ pub struct DbCredentialBearer {
     credential_id: String,
     http: reqwest::Client,
     cache: Mutex<Option<OAuthCredential>>,
-    /// Single-flight refresh lock. It also holds the last refresh failure, so
-    /// the cooldown check and the refresh share one critical section.
+    /// Serializes refreshes and retains the last failure during its cooldown.
     refresh_lock: Mutex<Option<(std::time::Instant, OAuthAuthProblem)>>,
     is_owner: bool,
     force_refresh: AtomicBool,
@@ -1833,9 +1687,7 @@ impl DbCredentialBearer {
         *self.cache.lock().await = Some(credential.clone());
     }
 
-    /// Serve `stored` when the cache holds another document: the cached row
-    /// was removed and its `credential_id` signed in again, so its token is
-    /// not this account's. The same document keeps the cache.
+    /// Replace cached tokens when this credential ID now refers to a different stored document.
     pub(crate) async fn adopt_document(&self, stored: &OAuthCredential) {
         let mut cache = self.cache.lock().await;
         if cache
@@ -1846,11 +1698,8 @@ impl DbCredentialBearer {
         }
     }
 
-    /// Write a refresh's fields onto the row it read, only while that row
-    /// still holds `stored_refresh_token`: a sign-in (always a new refresh
-    /// token), remove or replacement since the read makes it match nothing,
-    /// so a refresh never revives, re-enables or overwrites a row. Retried
-    /// only on an error.
+    /// Persist rotated fields only while the stored refresh token still matches the one read.
+    /// A sign-in, removal, or replacement since that read must not be overwritten or revived.
     async fn persist_with_retry(
         &self,
         credential: &OAuthCredential,
@@ -1891,9 +1740,6 @@ impl DbCredentialBearer {
         Err(last_error.expect("persist_with_retry ran at least one failing attempt"))
     }
 
-    /// `credential` is the row being refreshed, never the cache: after a
-    /// remove and a new sign-in at this `credential_id` the cache can still
-    /// hold the removed account.
     fn auth_error(
         &self,
         credential: &OAuthCredential,
@@ -1972,8 +1818,6 @@ impl BearerSource for DbCredentialBearer {
 
         let db_credential = self.load_credential().await?;
         let stored_refresh_token = db_credential.refresh_token.clone();
-        // Another document at this `credential_id` replaced the cached one
-        // (remove, then a sign-in): never refresh the removed account.
         if db_credential.doc_id != credential.doc_id
             || db_credential.access_token_expires_at >= credential.access_token_expires_at
         {
@@ -2000,9 +1844,6 @@ impl BearerSource for DbCredentialBearer {
         };
         *last_failure = None;
         apply_refreshed_tokens(&mut credential, refreshed);
-        // The refresh owner is the single writer of existing rows: an empty key
-        // is filled here, from the tokens persisted beside it, and never
-        // recomputed once present.
         let key_filled = credential.provider_account_key.is_none() && {
             credential.provider_account_key = provider_account_key(self.refresh_kind, &credential);
             credential.provider_account_key.is_some()
@@ -2016,7 +1857,6 @@ impl BearerSource for DbCredentialBearer {
         {
             Ok(RefreshPersist::Written) => {}
             Ok(RefreshPersist::Superseded) => {
-                // The next call loads the stored row instead of refreshing this one.
                 *self.cache.lock().await = None;
                 tracing::debug!(
                     node_did = %self.node_did,
@@ -2149,22 +1989,6 @@ mod tests {
             calls.load(Ordering::SeqCst),
             2,
             "construct exactly once per distinct key"
-        );
-    }
-
-    #[test]
-    fn token_is_fresh_respects_refresh_skew() {
-        assert!(
-            token_is_fresh(Utc::now() + Duration::hours(1)),
-            "comfortably-future token is fresh"
-        );
-        assert!(
-            !token_is_fresh(Utc::now() - Duration::minutes(1)),
-            "expired token is stale"
-        );
-        assert!(
-            !token_is_fresh(Utc::now() + Duration::minutes(2)),
-            "token inside the 5-minute skew window is treated as stale"
         );
     }
 
@@ -2336,7 +2160,6 @@ mod tests {
         assert_eq!(stored.account_ref.as_deref(), Some("acct-b"));
         assert_eq!(stored.connected_at, Some(connected_at));
 
-        // A refresh or re-sign-in stores the row again without the account fields.
         credential.account_ref = None;
         credential.connected_at = None;
         credential.access_token = "access-rotated".to_string();
@@ -2702,8 +2525,6 @@ mod resolver_tests {
     }
 }
 
-/// Every sign-in writer stores through `upsert_oauth_credential_on`, which
-/// writes the key in both upsert branches: a sign-in always leaves its own key.
 #[cfg(test)]
 mod sign_in_tests {
     use super::test_support::{test_node, unsigned_jwt};
@@ -2854,8 +2675,6 @@ mod lifecycle_tests {
             }
         }
 
-        /// A sign-in of account `who` (key `member-{who}`, `org-1:account-{who}`
-        /// or `user:principal-{who}`; Claude `account_id` `label-{who}`).
         fn sign_in(self, did: &str, who: &str, refresh_token: &str) -> OAuthCredential {
             match self {
                 Self::ChatGpt => {
@@ -3099,8 +2918,6 @@ mod lifecycle_tests {
         )
     }
 
-    /// A row written raw, as older clients or pre-#2116 nodes left it; the
-    /// input goes through a variable, so no value is trimmed on the way in.
     async fn seed_raw(access: &ConfigAccess, input: Value) {
         access
             .transact_write("test.seed_raw", |txn| {
@@ -3325,7 +3142,6 @@ mod lifecycle_tests {
     async fn a_claude_row_with_a_stale_key_is_not_overwritten() {
         let access = access().await;
         let did = "did:key:z6MkTestClaudeSkew";
-        // A pre-PR4 client replaced tokens and label but kept the key.
         store(
             &access,
             claude(did, "label-b", Some("account-1"), "refresh-1"),
@@ -3920,8 +3736,6 @@ mod lifecycle_tests {
         assert!(error.to_string().contains("not found"), "{error}");
     }
 
-    /// Q1 (i): with no row left, a sign-in takes the original slot again and
-    /// the backends with no account reference run on it, deliberately.
     #[tokio::test]
     async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
         let access = access().await;
@@ -4026,7 +3840,6 @@ mod backfill_tests {
     const XAI_ENV: &str = crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV;
     const CHATGPT_ENV: &str = gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 
-    /// A token response whose access token carries `access_claims`.
     fn token_response(access_claims: Value) -> &'static str {
         let body = json!({
             "access_token": unsigned_jwt(access_claims),
@@ -4059,8 +3872,6 @@ mod backfill_tests {
         upsert_oauth_credential(node, &credential).await.unwrap();
     }
 
-    /// Refresh `did`'s `provider` row once through an owner bearer built
-    /// directly (never the shared registry) and read the stored row back.
     async fn refresh_once(
         node: &Arc<EmbeddedNode>,
         did: &str,
@@ -4139,9 +3950,6 @@ mod backfill_tests {
         assert_eq!(stored.provider_account_key, None);
     }
 
-    /// Refresh `did`'s expired Grok row through an owner bearer while
-    /// `change` runs between the owner's pre-refresh read and its persist.
-    /// Returns the owner bearer.
     async fn refresh_racing<F>(node: &Arc<EmbeddedNode>, did: &str, change: F) -> DbCredentialBearer
     where
         F: std::future::Future<Output = ()>,
@@ -4267,7 +4075,6 @@ mod backfill_tests {
             Some("user:principal-1")
         );
 
-        // The next refresh refreshes the sign-in, not the superseded session.
         let _env = TOKEN_URL_ENV.lock().await;
         let body =
             token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
@@ -4281,8 +4088,6 @@ mod backfill_tests {
         assert!(request.contains("refresh-signed-in"), "{request}");
     }
 
-    /// Q1 (i): remove-all then a first sign-in re-creates the row at the same
-    /// `credential_id` while a refresh of the removed row is in flight.
     #[tokio::test]
     async fn a_refresh_racing_a_replaced_sign_in_keeps_the_new_row() {
         let node = test_node().await;
@@ -4330,8 +4135,6 @@ mod backfill_tests {
         );
     }
 
-    /// A cached removed document is never refreshed once its slot holds
-    /// another document, even when the cached expiry is the later one.
     #[tokio::test]
     async fn a_refresh_adopts_a_replaced_document() {
         let node = test_node().await;
@@ -4367,7 +4170,6 @@ mod backfill_tests {
         assert!(request.contains("refresh-TEST"), "{request}");
     }
 
-    /// Rows stored before #2116, with none of the account fields.
     async fn seed_upgraded_row(
         node: &Arc<EmbeddedNode>,
         did: &str,
@@ -4483,11 +4285,6 @@ mod cooldown_tests {
     };
     use super::*;
 
-    /// A failed refresh is served from the cooldown on the next call instead
-    /// of POSTing the token endpoint again. The one-shot server accepts one
-    /// request and is gone before the second call, so a second POST would
-    /// surface as a transport error rather than the cached "expired or
-    /// revoked" text.
     #[tokio::test]
     async fn failed_refresh_is_not_retried_during_the_cooldown() {
         let node = test_node().await;
@@ -4523,10 +4320,6 @@ mod cooldown_tests {
         assert_eq!(first.to_string(), second.to_string());
     }
 
-    /// After `invalidate()` (a provider 401) a failed refresh must keep the
-    /// bearer forced: while the cooldown holds every call returns the
-    /// classified error instead of taking the cache fast path and re-serving
-    /// the unexpired but rejected access token.
     #[tokio::test]
     async fn failed_refresh_keeps_the_bearer_forced_and_never_reserves_the_bad_token() {
         let node = test_node().await;
@@ -4588,8 +4381,6 @@ mod cooldown_tests {
             .unwrap();
     }
 
-    /// A refresh against a one-shot 401 `invalid_grant` endpoint, then a
-    /// second call inside the cooldown; returns both errors and the request.
     async fn revoked_twice(bearer: &DbCredentialBearer) -> (String, String, String) {
         let (url, handle) = one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
         let _env = TOKEN_URL_ENV.lock().await;
@@ -4790,10 +4581,8 @@ pub(crate) mod test_support {
     use defra_node::EmbeddedNode;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    /// Serializes lib tests that set a process-global token-URL override.
     pub(crate) static TOKEN_URL_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-    /// In-memory node with the gents schemas loaded.
     pub(crate) async fn test_node() -> Arc<EmbeddedNode> {
         let node = Arc::new(
             EmbeddedNode::builder()
@@ -4807,7 +4596,6 @@ pub(crate) mod test_support {
         node
     }
 
-    /// The bearer a client build bound for `credential_id`, without binding one.
     pub(crate) fn bound_bearer(
         credential_id: &str,
     ) -> Option<std::sync::Arc<super::DbCredentialBearer>> {
@@ -4859,8 +4647,6 @@ pub(crate) mod test_support {
             .expect("seed credential");
     }
 
-    /// A JWT with an `alg: none` header. The signature segment stays non-empty:
-    /// `jwt_payload` decodes nothing from a token whose signature is empty.
     pub(crate) fn unsigned_jwt(payload: serde_json::Value) -> String {
         use base64::Engine;
         let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
@@ -4869,7 +4655,6 @@ pub(crate) mod test_support {
         format!("{header}.{payload}.sig")
     }
 
-    /// Accepts exactly one HTTP request, returns its body, and answers with `status` + `body`.
     pub(crate) async fn one_shot_token_server(
         status: u16,
         body: &'static str,
@@ -4877,8 +4662,6 @@ pub(crate) mod test_support {
         gated_token_server(status, body, None).await
     }
 
-    /// [`one_shot_token_server`] that, with a gate, signals once it has read
-    /// the request and answers only after the gate's release fires.
     pub(crate) async fn gated_token_server(
         status: u16,
         body: &'static str,

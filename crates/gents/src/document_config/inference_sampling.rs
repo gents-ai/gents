@@ -37,7 +37,6 @@ pub struct InferenceSampling {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub repetition_penalty: Option<f64>,
-    /// Optional UI/discovery labels.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -48,7 +47,6 @@ pub struct InferenceSampling {
 }
 
 impl InferenceSampling {
-    /// Validate the sampling bounds owned by this document.
     pub fn validation_violations(&self) -> Vec<String> {
         let sampling_id = self.sampling_id.trim();
         let mut violations: Vec<String> = Vec::new();

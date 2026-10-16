@@ -1,4 +1,3 @@
-//! Native storage premises exercised without depending on the runtime's writers.
 use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryRequest};
 use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,

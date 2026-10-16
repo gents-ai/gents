@@ -279,7 +279,6 @@ impl McpPool {
         }
     }
 
-    /// Bind the cache/parking namespace independently of outbound header policy.
     pub fn for_agent(&self, node_did: &str) -> Self {
         let mut pool = self.clone();
         pool.owner_node_did = Some(node_did.to_string());
@@ -472,13 +471,7 @@ impl McpPool {
         .await
     }
 
-    /// Call a tool on the MCP server at `endpoint`.
-    ///
-    /// Unlike `list_tools`, this does not retry after a dispatch failure:
-    /// repeating an MCP tool call can repeat side effects until services
-    /// advertise idempotency metadata that `Proofs.ToolExecution` can model.
-    /// A dead cached connection therefore keeps failing `call_tool` until
-    /// `list_tools` or explicit removal evicts it.
+    /// Dispatch failures are not retried because calls can repeat side effects without idempotency evidence.
     pub async fn call_tool(
         &self,
         service_id: &str,
@@ -607,8 +600,6 @@ impl McpPool {
             }
         }
 
-        // Connect runs OUTSIDE the pool lock: a hung or slow connect (#622)
-        // must not wedge every other service in the pool.
         let mut poison_detected_for_key = None;
         {
             let mut guard = self.inner.write().await;

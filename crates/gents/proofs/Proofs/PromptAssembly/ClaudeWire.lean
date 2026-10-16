@@ -5,8 +5,6 @@ namespace PromptAssembly.ClaudeWire
 
 open PromptAssembly.ClaudeMap
 
-/-- Wire decoding rejects a present non-text signature before the executable
-Claude content-block owner receives any event. -/
 inductive WireError where
   | invalidSignatureType
   deriving DecidableEq, Repr
@@ -30,8 +28,6 @@ inductive EvaluationError where
   | content (error : MapError)
   deriving DecidableEq, Repr
 
-/-- The wire adapter only expands valid representation into existing ClaudeMap
-events. -/
 def evaluate (start : ThinkingStart) (later : List StreamEvent) :
     Except EvaluationError (List ContentStep × List StreamBlock) := do
   let initial ← (expandThinkingStart start).mapError EvaluationError.wire

@@ -1,21 +1,6 @@
 import Proofs.CanonicalOutput.Execution.Projection
-
-/-!
-# Background Tool Output: canonical source projection and paging (#937)
-
-`read_tool_output` reads the exact physical tool's canonical immutable segment
-source. Open output is its validated dense prefix; closed output is its
-committed extent, so late suffix facts are inert. Missing or conflicting facts
-are failure, never invented empty output. UTF-8 character-boundary snapping of
-slice edges and the one-byte progress guard for a sub-codepoint budget remain
-native representation details; conformance rows use ASCII and positive budgets.
--/
-
 namespace Background
 namespace ToolOutput
-
-/-! ## Retained-window slice (mirrors `read_retained_output_slice`) -/
-
 structure RetainedWindow where
   firstOffset : Nat
   retainedLen : Nat
@@ -91,9 +76,6 @@ theorem readSlice_progress
     0 < (readSlice window offset maxBytes).sliceLen := by
   simp [readSlice] at h_remaining ⊢
   omega
-
-/-! ## Canonical physical-source projection -/
-
 inductive SourceState where | open | closed deriving DecidableEq, Repr
 
 structure Projection where

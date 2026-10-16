@@ -122,7 +122,6 @@ def classify : OutcomeKind → Option ProviderReason → EvidenceClass
   | .grader, _ => .unknown
   | .unknown, _ => .unknown
 
-/-- Outcomes a subject can bring about through its own behavior. -/
 def subjectCausable : OutcomeKind → Option ProviderReason → Bool
   | .modelAcceptance, _ => true
   | .deadline, _ => true
@@ -163,7 +162,6 @@ def caseClass (verdicts : List EvidenceClass) : CaseClass :=
   else if verdicts.any (· == .unknown) then .unknown
   else .scored
 
-/-- Adding a verdict never improves a case's class. -/
 theorem caseClass_cons_rank (v : EvidenceClass) (vs : List EvidenceClass) :
     (caseClass vs).rank ≤ (caseClass (v :: vs)).rank := by
   cases v <;> simp only [caseClass, List.any_cons] <;>

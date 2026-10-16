@@ -1220,7 +1220,6 @@ pub(crate) const GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS: &str = r#"
     runtime_issuer_did runtime_source_request_id runtime_source_kind
 "#;
 
-/// Stable logical request identity for goal-backed submission retries.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub(crate) struct GoalBackedRequestFingerprint {
     request_id: String,

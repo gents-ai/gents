@@ -16,8 +16,6 @@ use serde::Serialize;
 use http::BridgeRunnerServer;
 use live_fixture::{LiveBackendOverride, LiveBridgeFixture, LiveTargetBackendOverride};
 
-/// glibc per-thread arenas retained DefraDB query churn at ~2.5x the live heap
-/// and memcg-OOM-killed the runtime at 512 MiB (#2034).
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

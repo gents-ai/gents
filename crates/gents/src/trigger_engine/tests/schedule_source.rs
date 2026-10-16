@@ -783,7 +783,7 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
         .await
         .expect(
             "next_fire did not yield a FireIntent within 2s for a trigger with null \
-             next_run_at; the engine must seed the Trigger cursor on first-seen (Finding 2)",
+             next_run_at; the engine must seed the Trigger cursor on first-seen",
         )
         .expect("next_fire returned None for a trigger with null next_run_at");
     let elapsed = started.elapsed();

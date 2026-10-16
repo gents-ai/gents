@@ -8,7 +8,7 @@ use support::{run_grep, unique_root};
 #[test]
 fn grep_skips_files_over_size_cap_and_counts_them() {
     let root = unique_root("size-cap");
-    let mut big = "padding\n".repeat(400_000); // ~3.2 MiB, over the 2 MiB cap
+    let mut big = "padding\n".repeat(400_000);
     big.push_str("needle\n");
     std::fs::write(root.join("big.log"), big).unwrap();
     std::fs::write(root.join("small.txt"), "needle\n").unwrap();
@@ -63,7 +63,7 @@ fn grep_case_insensitive_non_ascii_needle_still_matches() {
 fn grep_explicit_single_file_over_size_cap_is_still_searched() {
     let root = unique_root("explicit-large");
     let mut big = String::from("needle at the top\n");
-    big.push_str(&"padding\n".repeat(400_000)); // ~3.2 MiB
+    big.push_str(&"padding\n".repeat(400_000));
     std::fs::write(root.join("big.log"), big).unwrap();
 
     let output = execute_request_with_base(

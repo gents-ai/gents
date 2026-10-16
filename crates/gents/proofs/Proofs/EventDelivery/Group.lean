@@ -13,7 +13,6 @@ structure EventGroupState where
 def EventGroupState.quiesce (s : EventGroupState) (now : Nat) : EventGroupState :=
   if s.quiescedAt.isSome then s else { s with quiescedAt := some now }
 
-/-- Reuse the existing timeout/cache observation instead of another clock. -/
 def EventGroupState.observe (s : EventGroupState) (cached : Option Nat) : TimeoutObservation :=
   ⟨s.firstSeen, cached⟩
 
@@ -28,8 +27,6 @@ theorem quiesce_once (s : EventGroupState) (first later : Nat) :
     (s.quiesce first).quiesce later = s.quiesce first := by
   cases h : s.quiescedAt <;> simp [EventGroupState.quiesce, h]
 
-/-- Quiescence marks an invalid group, not sealed input; it prevents delivery
-even if current membership would otherwise be eligible. -/
 def captureCallback (group : EventGroupState) (candidate : Candidate)
     (invocationId input : String) : Option CallbackInvocation :=
   if group.quiescedAt.isNone && candidate.eligible && decide (candidate.key = group.key) then

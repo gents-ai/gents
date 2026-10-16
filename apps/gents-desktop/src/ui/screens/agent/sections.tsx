@@ -49,7 +49,6 @@ export type AgentSection = {
 export const isListed = (section: AgentSection): section is AgentSection & Listed =>
   !("under" in section);
 
-/** The sections, in sidebar order; groups show in the order their first section does. */
 export const SECTIONS: AgentSection[] = [
   { group: "Configure", id: "agent", label: "Agent", icon: Bot, Panel: AgentPanel },
   {

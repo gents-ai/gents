@@ -156,7 +156,6 @@ fn live_text_patch(
     }
 }
 
-/// The cursor binds the source selected by the canonical owner.
 fn accepts_live_cursor(base: Option<&str>, current: Option<&str>, terminal: bool) -> bool {
     !terminal && base.is_some() && base == current
 }

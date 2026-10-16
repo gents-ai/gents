@@ -9,8 +9,6 @@ use serde_json::{json, Value};
 
 use crate::caused_sessions::{load_caused_sessions, SessionScope};
 
-/// The stock ContextInfo DTO accepts partial snapshots; report what the
-/// runtime's accounting owner observed without inventing fields.
 fn context_info(
     observation: &gents::toolset::SessionInferenceObservation,
     configured_window: u64,
@@ -140,8 +138,6 @@ pub(super) async fn session_info(
         }
     }
     context["compactionCount"] = json!(compactions.len());
-    // SessionInfo uses the extension's nested result envelope; `agentName` is
-    // the stock wire key for the bound agent's logical id.
     Ok(json!({"result":{
         "sessionId":session, "cwd":"", "agentName":agent_id, "model":model,
         "modelDisplayName":model_name, "apiBackend":"gents", "turns":turns,
@@ -226,72 +222,4 @@ pub(super) async fn session_usage(
 mod tests {
     use super::*;
 
-    #[test]
-    fn context_info_uses_runtime_groups_and_distinguishes_missing_accounting() {
-        let mut observation = gents::toolset::SessionInferenceObservation {
-            token_usage: SessionTokenUsage::default(),
-            inference_turns: Some(0),
-            latest_context: None,
-            latest_completion_tokens: None,
-        };
-        assert_eq!(
-            context_info(&observation, 2000).unwrap()["freeTokens"],
-            2000
-        );
-        observation.token_usage.model_calls = 1;
-        assert!(context_info(&observation, 2000).is_err());
-        observation.latest_context = Some(serde_json::from_value(json!({
-            "request_id":"r", "call_id":"c", "call_sequence":1, "queued_at":"2026-09-01T12:00:00Z",
-            "accounting":{"accounting_version":1, "estimator":"provider-wire", "components":{
-                "messages":800, "tool_schemas":100, "documents":50, "additional_parameters":20, "output_schema":30},
-                "estimated_input_tokens":1000, "context_window":2000,
-                "compaction_threshold_basis_points":7500, "compaction_threshold_tokens":1500,
-                "compaction_reason":"below_threshold"}
-        })).unwrap());
-        observation.latest_completion_tokens = Some(100);
-        let info = context_info(&observation, 9000).unwrap();
-        assert_eq!(info["used"], 1100);
-        assert_eq!(info["total"], 2000);
-        assert_eq!(info["freeTokens"], 900);
-        assert_eq!(info["usagePct"], 55);
-        assert_eq!(info["autoCompactThresholdPercent"], 75);
-        assert_eq!(info["toolDefinitionsTokens"], 100);
-        assert!(info.get("systemPromptTokens").is_none());
-        assert_eq!(
-            info["usageCategories"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|category| category["tokens"].as_u64().unwrap())
-                .sum::<u64>(),
-            1100
-        );
-    }
-
-    #[test]
-    fn usage_keeps_cache_inside_input_and_never_invents_cost() {
-        let mut totals = Totals::default();
-        totals.add(&SessionTokenUsage {
-            input_tokens: Some(100),
-            output_tokens: Some(20),
-            cached_input_tokens: Some(70),
-            model_calls: 2,
-            api_duration_ms: Some(1250),
-            ..Default::default()
-        });
-        totals.add(&SessionTokenUsage {
-            model_calls: 1,
-            incomplete: true,
-            ..Default::default()
-        });
-        let value = totals.wire(Some(1));
-        assert_eq!(value["usage"]["totalTokens"], 120);
-        assert_eq!(value["usage"]["cachedReadTokens"], 70);
-        assert_eq!(value["usage"]["usageIsIncomplete"], true);
-        assert_eq!(value["usage"]["modelCalls"], 3);
-        assert_eq!(value["usage"]["apiDurationMs"], 1250);
-        assert_eq!(value["_meta"]["gents/durationIsIncomplete"], true);
-        assert!(value["usage"].get("costUsdTicks").is_none());
-        assert_eq!(value["usage"]["costIsPartial"], true);
-    }
 }

@@ -1,5 +1,3 @@
-//! Private conflict classification and shared retry policy for committed writes.
-
 use std::fmt;
 use std::time::Duration;
 

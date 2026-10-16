@@ -84,19 +84,14 @@ impl DesktopPaths {
         &self.iroh_secret_key_path
     }
 
-    /// The client store's recorded at-rest encryption.
     pub fn store_encryption_path(&self) -> &Path {
         &self.store_encryption_path
     }
 
-    /// The client store's key when it is kept in a file.
     pub fn store_key_path(&self) -> &Path {
         &self.store_key_path
     }
 
-    /// Whether this home contains enough durable client state to require a
-    /// restart; the restarted client still verifies every enrollment signature,
-    /// authorization generation, lease, and route receipt.
     pub fn client_state_exists(&self) -> bool {
         self.principal_metadata_path.is_file()
             && self.identity_key_path.is_file()
@@ -104,8 +99,6 @@ impl DesktopPaths {
             && self.node_data_dir.join("MANIFEST").is_file()
     }
 
-    /// Records only the desktop client writes; their presence shows the root
-    /// is a desktop home.
     pub fn client_records(&self) -> [&Path; 6] {
         [
             &self.principal_metadata_path,
@@ -117,8 +110,6 @@ impl DesktopPaths {
         ]
     }
 
-    /// Every entry of the desktop client's durable state; the packaged runtime
-    /// under the same root is not client state.
     pub fn client_state_entries(&self) -> Vec<PathBuf> {
         vec![
             self.node_data_dir.clone(),

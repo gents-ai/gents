@@ -62,7 +62,6 @@ impl CausedThreadUpdateFilter {
     }
 }
 
-/// A Codex-owned-root session projected as a read-only sub-agent thread.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CausedThread {
     pub(super) session_id: String,

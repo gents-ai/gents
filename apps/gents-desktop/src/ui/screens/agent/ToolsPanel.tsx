@@ -35,12 +35,6 @@ export function newToolsDocument(deployment: NodeView): Tools {
 
 const ROOT = "Workspace root";
 
-/**
- * The Canonical JSON field as the Tools document takes it: an object of
- * the fields only it edits, each limit, timeout, target, remote service
- * and datastore surface checked against the node. Throws the first
- * problem; remote services' tool names are trimmed and deduplicated.
- */
 export function parseAdvancedTools(
   text: string,
   deployment: NodeView,

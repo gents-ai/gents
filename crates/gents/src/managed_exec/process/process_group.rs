@@ -15,8 +15,6 @@ pub(super) struct ManagedChild {
 
 impl ManagedChild {
     pub(super) fn new(child: Child) -> Self {
-        // The pre_exec setsid() call makes the child's pid its process-group id.
-        // If setsid() fails, Command::spawn returns an error before this point.
         let pgid = child.id().and_then(|pid| i32::try_from(pid).ok());
         Self {
             inner: child,
@@ -37,7 +35,7 @@ impl ManagedChild {
 impl Drop for ManagedChild {
     fn drop(&mut self) {
         if !self.finished {
-            // Drop is last-resort cleanup, so skip TERM grace and force the group down.
+            // Last-resort cleanup cannot wait through the TERM grace period.
             if let Some(pgid) = self.pgid {
                 let _ = signal_process_group(pgid, libc::SIGKILL);
             }

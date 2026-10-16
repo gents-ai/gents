@@ -1,10 +1,3 @@
-//! Node-bound adapters for a graph entry's contract.
-//!
-//! Every adapter here prepares host evidence and durable workspace/config
-//! rows for the same [`ConfigAccess`] and principal that own the graph.
-//! Model-facing tools and the CLI share this code; neither discovers another
-//! Gents home, endpoint, credential, or binary.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -19,9 +12,6 @@ use crate::graph_pipeline::{
 };
 use crate::plugin::executor::PluginExecutor;
 
-/// A prepare plugin's returned documents are persisted in batches of at most
-/// this many documents or bytes of rendered mutation text, whichever comes
-/// first, so one prepare step never renders an unbounded mutation.
 const PREPARE_DOCUMENTS_BATCH_LIMIT: usize = 32;
 const PREPARE_DOCUMENTS_BATCH_BYTES: usize = 1024 * 1024;
 
@@ -101,8 +91,6 @@ struct GitDiffFacts {
     patch: String,
 }
 
-/// Runs the declared `git diff` at the entry's declared context lines and
-/// rename threshold.
 fn collect_git_diff(
     repository: &Path,
     base: &str,
@@ -157,13 +145,9 @@ pub struct PreparedEntryRun {
     pub entry_name: String,
     pub input: Value,
     pub origin: EntryInputOrigin,
-    /// Documents the prepare plugin's evidence was persisted as; `0` when
-    /// the entry has no `prepare` step.
     pub documents: usize,
 }
 
-/// One seam for entry selection: a ceiling or authority decision made from
-/// the selection can never disagree with which entry actually runs.
 pub(crate) fn select_entry<'a>(
     plan: &'a GraphPlan,
     requested: Option<&str>,
@@ -191,7 +175,6 @@ pub(crate) fn select_entry<'a>(
     }
 }
 
-/// One document a prepare plugin asked to create, as its stdout names it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PreparePluginDocument {
@@ -309,8 +292,6 @@ fn batch_alias_doc_id<'a>(response: &'a Value, alias: &str) -> Option<&'a str> {
         .or_else(|| value.as_array()?.first()?.get("_docID")?.as_str())
 }
 
-/// Persists a prepare plugin's returned documents in the plugin's own
-/// returned order, all inside one transaction.
 async fn persist_prepared_documents(
     access: &ConfigAccess,
     documents: &[PreparePluginDocument],

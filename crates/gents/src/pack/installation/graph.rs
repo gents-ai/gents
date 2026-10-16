@@ -1,22 +1,3 @@
-//! Graph packs' installation record, and removal of what it lists.
-//!
-//! A graph pack's [`super::Record`] lists every document its install and
-//! activation created: the `GraphDefinition`, every `GraphRevision` this
-//! package has ever produced for that graph (including retired ones, so a
-//! reinstall after an untracked install picks up every one of them), each
-//! revision's derived `EventSource`/`Trigger`/`Callback`/`CallbackBinding`,
-//! and the package's own authored documents (agents, tasks, and so on).
-//!
-//! The runtime-derived documents are never drift-checked: a `GraphDefinition`'s
-//! active pointer and generation change on activation, and a `GraphRevision`
-//! and its derived artifacts are wholly owned by the graph pipeline. They are
-//! recorded with an empty digest and, when created by this install, removed
-//! unconditionally, never through the ordinary per-document digest comparison
-//! [`super::remove_record_in_txn`] runs for a pack's own authored documents.
-//! A `GraphDefinition` or `GraphRevision` (and its derived artifacts) that
-//! already existed before this install wrote anything is recorded as not
-//! created, the same as an adopted authored document, so removal leaves an
-//! operator's untracked graph alone.
 
 use std::collections::BTreeSet;
 
@@ -32,18 +13,15 @@ const UNFINISHED_RUN_REPORT_LIMIT: usize = 8;
 
 const RETAINED_RUN_REPORT_LIMIT: usize = 20;
 
-/// One mutation per page rather than one per row.
 const REVISION_DELETE_PAGE_SIZE: usize = 256;
 
+/// Graph-pipeline-owned state changes during activation and is removed by creation provenance, not content digest.
 pub(super) fn is_graph_owned(document: &RecordedDocument) -> bool {
     document.collection == "GraphRevision"
         || document.collection == "GraphDefinition"
         || graph_artifact_is_reserved(&document.id)
 }
 
-/// What was true before a graph package's install/activation ran, observed
-/// inside the same transaction so [`record_graph_install_in_txn`] can tell a
-/// document the install created from one that already existed.
 pub(crate) struct ObservedGraphInstall {
     prior: Record,
     preexisting: BTreeSet<String>,
@@ -51,12 +29,6 @@ pub(crate) struct ObservedGraphInstall {
     preexisting_revision_digests: BTreeSet<String>,
 }
 
-/// Observes the prior installation record and which of `desired`'s package
-/// documents, `graph_id`'s `GraphDefinition`, and `graph_id`'s existing
-/// revisions already exist. Called from inside the graph publish
-/// transaction, after schemas are ensured and before the desired-state plan
-/// and revision are applied, so [`record_graph_install_in_txn`] can tell a
-/// document this install created from one it only adopted.
 pub(crate) async fn observe_graph_install_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -114,8 +86,6 @@ pub(crate) async fn observe_graph_install_in_txn(
     })
 }
 
-/// Records a graph package install/activation after it succeeded, in the
-/// shared `PackInstallation` record.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn record_graph_install_in_txn(
     txn: &ConfigApplyTxn<'_>,
@@ -135,8 +105,6 @@ pub(crate) async fn record_graph_install_in_txn(
     } = observed;
     let mut documents = prior.documents.clone();
 
-    // Every revision this package has ever produced for this graph,
-    // including retired ones.
     let response = txn
         .execute(&format!(
             r#"{{ GraphRevision(filter: {{ owner_did: {{ _eq: "{}" }}, graph_id: {{ _eq: "{}" }} }}) {{ digest plan_json }} }}"#,
@@ -259,7 +227,6 @@ pub(crate) async fn record_graph_install_in_txn(
     .await
 }
 
-/// Refuses removal while any of `graph_ids`' runs is not terminal.
 pub(super) async fn ensure_no_unfinished_runs_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -302,10 +269,6 @@ pub(super) async fn ensure_no_unfinished_runs_in_txn(
     anyhow::bail!("{}; retry after cancelling", names.join("; "))
 }
 
-/// Deletes every `GraphRevision` named by `digests`, returning what was
-/// removed and, for each SDL schema its package required, a
-/// [`Retained`] entry: DefraDB cannot drop a collection schema, so package
-/// schemas outlive their revision.
 pub(super) async fn delete_revisions_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -360,9 +323,6 @@ pub(super) async fn delete_revisions_in_txn(
         })
         .collect();
 
-    // GraphRun history stays; its pinned revision is gone, so its result
-    // view needs the graph reinstalled. Bounded to a handful of runs plus a
-    // `COUNT` aggregate past the limit, never a full scan.
     let runs = txn
         .execute(&format!(
             r#"{{ GraphRun(filter: {{ owner_did: {{ _eq: "{}" }}, revision_digest: {{ _in: {list} }} }}, limit: {}) {{ run_id }} }}"#,

@@ -213,9 +213,6 @@ fn generated_compaction_reducer_cases_pin_contract() {
 
 #[test]
 fn compaction_runtime_reduces_valid_canonical_history() {
-    // This test drives the same bulky-history DefraDB replay path as the
-    // runtime. Match the production CLI's worker stack instead of Tokio's 2 MiB
-    // test default, which is too small for that path.
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .thread_stack_size(16 * 1024 * 1024)

@@ -1,5 +1,3 @@
-//! Deletion fence: these removed authority names must stay absent.
-
 use std::path::PathBuf;
 
 const REMOVED_COLLECTIONS: &[&str] = &[

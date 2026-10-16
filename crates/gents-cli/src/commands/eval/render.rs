@@ -14,7 +14,6 @@ use serde::Serialize;
 
 use super::inspect::{ListRow, TrialView};
 
-/// Basis points as a percentage with two decimals, or `-`.
 pub(crate) fn percent(bp: Option<u32>) -> String {
     bp.map_or_else(
         || "-".to_owned(),
@@ -22,7 +21,6 @@ pub(crate) fn percent(bp: Option<u32>) -> String {
     )
 }
 
-/// A value's serde form: an enum's wire name, a string's text.
 pub(crate) fn wire<T: Serialize>(value: &T) -> String {
     match serde_json::to_value(value) {
         Ok(serde_json::Value::String(text)) => text,
@@ -151,7 +149,6 @@ pub(crate) fn report_table(report: &EvalReport, out: &mut dyn Write) -> io::Resu
     )
 }
 
-/// A byte count for a person: `512B`, `1.5KiB`, `3.0MiB`.
 pub(crate) fn human_bytes(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
     if bytes < 1024 {
@@ -336,7 +333,6 @@ pub(crate) fn trial_text(view: &TrialView, out: &mut dyn Write) -> io::Result<()
     Ok(())
 }
 
-/// Signed basis points as a percentage, or `-`.
 pub(crate) fn signed_percent(bp: Option<i64>) -> String {
     bp.map_or_else(
         || "-".to_owned(),
@@ -364,7 +360,6 @@ fn yes(value: bool) -> &'static str {
     }
 }
 
-/// A gate that may be unread: `yes`, `no`, or what its absence means.
 fn yes_or(value: Option<bool>, absent: &'static str) -> &'static str {
     value.map_or(absent, yes)
 }
@@ -441,7 +436,6 @@ pub(crate) fn comparison_table(comparison: &Comparison, out: &mut dyn Write) -> 
     Ok(())
 }
 
-/// A compare breakdown, as `--json` prints it: `{"by": …, "rows": […]}`.
 #[derive(Debug, Serialize)]
 #[serde(tag = "by", content = "rows", rename_all = "snake_case")]
 pub(crate) enum Breakdown {
@@ -550,7 +544,6 @@ pub(crate) fn case_view_text(view: &CaseView, out: &mut dyn Write) -> io::Result
     Ok(())
 }
 
-/// Seconds since `timestamp`, or `None` when it does not parse.
 fn age(timestamp: &str, now: chrono::DateTime<chrono::Utc>) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(timestamp)
         .ok()
@@ -561,9 +554,6 @@ fn age(timestamp: &str, now: chrono::DateTime<chrono::Utc>) -> Option<i64> {
         })
 }
 
-/// Why an entry written by `pid` at `written_at` is stale, or `None` while
-/// it is fresh: one window, the runner's (`STALE_WINDOW`, via `is_fresh`'s
-/// rule).
 fn staleness(
     fresh: bool,
     pid: u32,
@@ -585,8 +575,6 @@ fn staleness(
     }
 }
 
-/// The in-flight lines under a watched report: which process holds the run,
-/// and each slot in flight.
 pub(crate) fn in_flight(
     progress: Option<&Progress>,
     now: chrono::DateTime<chrono::Utc>,
@@ -645,8 +633,6 @@ pub(crate) fn in_flight(
     Ok(())
 }
 
-/// The finished slots of `view`, latest first, each with the snapshot its
-/// trial ended on and the detail of every verdict that counts for it.
 pub(crate) fn finished(view: &RunView, limit: usize, out: &mut dyn Write) -> io::Result<()> {
     let mut rows: Vec<(&str, &SlotReport, Option<&EvidenceRecord>)> = view
         .report
@@ -726,10 +712,8 @@ pub(crate) fn finished(view: &RunView, limit: usize, out: &mut dyn Write) -> io:
     Ok(())
 }
 
-/// How many of a snapshot's tools are named.
 const TOP_TOOLS: usize = 5;
 
-/// The width the watch wraps its lists to.
 const WIDTH: usize = 118;
 
 fn snapshot_lines(live: &LiveSnapshot, goal: &[GoalEntry], out: &mut dyn Write) -> io::Result<()> {

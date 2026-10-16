@@ -1,11 +1,3 @@
-//! The structural gate, pure: [`text_gate`] judges the proposed text alone,
-//! [`structural_gate`] compares two materialized packs byte for byte.
-//!
-//! The gate does not validate the candidate's reference closure: pack agents
-//! name inference-slot markers bound only at execution, so a pack-level check
-//! would refuse every real candidate. The byte comparison proves the
-//! candidate's references are exactly the baseline's; the live closure is
-//! validated by promotion, where a transaction exists.
 
 use std::collections::BTreeSet;
 
@@ -23,8 +15,6 @@ pub(crate) use seeds::seed_gate;
 
 const CONFIG_ASSET: &str = "pack_config.json";
 
-/// Why a candidate never reached a validation run. `reason` is a closed
-/// vocabulary for the journal; `detail` is operator diagnostics.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StructuralRejection {
     pub reason: &'static str,
@@ -67,8 +57,6 @@ fn raw_config(pack: &MaterializedPack) -> Result<Value, StructuralRejection> {
     })
 }
 
-/// The raw target field of `pack`'s target document, and the config with it
-/// masked.
 fn split_prompt(
     mut raw: Value,
     pack: &MaterializedPack,
@@ -89,7 +77,6 @@ fn split_prompt(
     Ok((prompt, raw))
 }
 
-/// Decide whether `text` may become a candidate of `baseline` at all.
 pub fn text_gate(
     baseline: &MaterializedPack,
     text: &str,
@@ -162,8 +149,6 @@ fn owner_validation(baseline: &MaterializedPack, text: &str) -> Result<(), Struc
         })
 }
 
-/// The variable paths a task template renders, as the template owner reads
-/// them; a template the owner cannot parse renders nothing.
 fn template_variables(template: &str) -> Result<BTreeSet<String>, StructuralRejection> {
     parse_template_for_validation(template)
         .map(|references| {
@@ -180,11 +165,6 @@ fn template_variables(template: &str) -> Result<BTreeSet<String>, StructuralReje
         })
 }
 
-/// Decide whether `candidate` may be evaluated at all.
-///
-/// The checks run in the order a rejection is cheapest to explain, and the
-/// first failure decides. `seen_digests` holds the checkpoint's digest and
-/// every earlier candidate's, so a repeating proposer spends nothing.
 pub fn structural_gate(
     baseline: &MaterializedPack,
     candidate: &MaterializedPack,
@@ -265,7 +245,6 @@ pub fn structural_gate(
                     ),
                 ));
             }
-            // The loader interpolates this file, so the text is compared escaped.
             if prompt.as_str() != Some(interpolate::escape(text).as_str()) {
                 return Err(reject(
                     "text_mismatch",

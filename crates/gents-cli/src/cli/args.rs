@@ -2361,7 +2361,6 @@ impl BackendPresetArg {
         }
     }
 
-    /// Default model for presets whose endpoint implies a model source.
     pub(crate) fn default_model_name(self) -> Option<&'static str> {
         match self {
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_MODEL_NAME),
@@ -4272,7 +4271,6 @@ impl EvalCommand {
             Self::Watch(args) => &args.scope,
             Self::Gc(args) => &args.scope,
             Self::Init(args) => &args.scope,
-            // `dispatch` answers `checks` before resolving any home.
             Self::Checks(_) => &NO_SCOPE,
         }
     }

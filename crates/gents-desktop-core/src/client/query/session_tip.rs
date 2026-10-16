@@ -4,8 +4,6 @@ use gents::session::canonical_rows::{
     decode_transcript_message_row, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
 };
 
-// Overflow must not masquerade as complete input to the live target selector
-// or as evidence that a prompt is absent.
 const MAX_TIP_REQUEST_ROWS: usize = 2_048;
 
 pub async fn load_session_tip_store(
@@ -26,8 +24,6 @@ pub async fn load_session_tip_store_on(
     tip_store(&data, request)
 }
 
-// These rows live only for this projection: never merge payloads into the
-// observer or retain a per-request cache.
 pub async fn load_session_live_store(
     node: &EmbeddedNode,
     request: &AgentRequestRow,
@@ -64,7 +60,6 @@ fn live_store(data: &Value, expected: &AgentRequestRow) -> Result<ClientStore> {
     Ok(ClientStore::from_rows(rows))
 }
 
-// Absence is known only for physical requests whose bounded lookup succeeded.
 #[derive(Debug, Clone, Default)]
 pub struct RequestPromptOwnership {
     pub by_request_doc_id: std::collections::BTreeMap<String, RequestPromptFact>,
@@ -79,7 +74,6 @@ pub struct RequestPromptFact {
     pub first_sequence: Option<i64>,
 }
 
-// A folded message has no messages of its own; its published entry is its anchor.
 fn input_owner(request: &AgentRequestRow) -> Result<(String, String, bool)> {
     let (owner, key) = gents::lifecycle::input_message_owner(request)
         .context("prompt lookup lacks physical request")?;
@@ -167,7 +161,6 @@ fn prompt_ownership_batch_query(requests: &[AgentRequestRow]) -> Option<String> 
     ))
 }
 
-// Oversized histories and tied anchors retain the exact per-request lookup path.
 fn decode_prompt_ownership_batch(
     data: &Value,
     requests: &[AgentRequestRow],
@@ -321,9 +314,6 @@ fn decode_prompt_ownership(
     Ok(())
 }
 
-// DefraDB extracts index candidates from conjunctive fields, while a
-// disjunction remains a residual filter; keep the exact namespace in one
-// residual disjunct so it applies before the row limit.
 fn tip_query(request: &AgentRequestRow, include_request: bool) -> Result<String> {
     let doc = escape_graphql_string(
         request
@@ -486,8 +476,6 @@ mod tests {
             .await
             .unwrap();
         }
-        // Deliberately undecodable: selecting the whole session would fail
-        // even though neither tip needs these bytes.
         ConfigAccess::write_local(&node, "test.tip_history", r#"mutation {
             create_AgentOutputSegment(input: {node_did:"agent", session_id:"session",
                 request_doc_id:"completed", source:{kind:"not_a_source"}, payload:"historic"}) { _docID }
@@ -578,8 +566,6 @@ mod tests {
         node.shutdown().await;
     }
 
-    // Reviewer: unique fold-ownership regression not covered by the
-    // live-node tests above — confirm coverage ownership in second pass.
     #[test]
     fn a_folded_message_is_owned_by_its_folded_entry_under_the_claiming_request() {
         let request = |doc: &str| AgentRequestRow {
@@ -633,9 +619,6 @@ mod tests {
         assert_eq!(facts.by_request_doc_id["folded"].first_sequence, None);
     }
 
-    // Reviewer: unique index-planning benchmark/regression (repeated-owner
-    // `_in` plan parity); ignored live-node benchmark — confirm retention in
-    // second pass.
     #[tokio::test]
     #[ignore = "measures repeated-owner index planning against a large disposable session"]
     async fn folded_prompt_ownership_index_benchmark() {
@@ -776,8 +759,6 @@ mod tests {
         node.shutdown().await;
     }
 
-    // H streams while Q waits behind it or F was folded into it: the tip is
-    // H's, so H's open output reaches the live tail.
     #[tokio::test]
     async fn a_queued_or_folded_submission_loads_the_running_turns_open_output() {
         use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};

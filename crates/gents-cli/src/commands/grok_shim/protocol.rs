@@ -1,12 +1,3 @@
-//! Grok shim wire codec: length-prefixed frames and leader envelopes.
-//!
-//! Gents is the leader server on this socket and stock Grok is the pager
-//! client: one JSON value per frame behind a four-byte big-endian `u32`
-//! length prefix, capped at [`MAX_MESSAGE_SIZE`]. A clean end of stream
-//! before any header byte is [`ProtocolError::ConnectionClosed`]; a header or
-//! payload that stops early is a truncation error, never a silently short
-//! frame. ACP payloads are opaque to this layer; [`super::acp`] owns their
-//! JSON-RPC decoding. The shim imports no Grok code.
 
 use std::fmt;
 
@@ -15,43 +6,26 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-/// Largest frame the codec will read or write: 64MB, matching the Grok leader
-/// protocol's `MAX_MESSAGE_SIZE`.
 pub const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 
-/// Length-prefix width in bytes (big-endian `u32`).
 pub const FRAME_PREFIX_BYTES: usize = 4;
 
-/// Leader protocol version spoken by this shim.
 pub const LEADER_PROTOCOL_VERSION: u32 = 1;
 
-/// Leader binary version reported in `registered`, verbatim from the wire
-/// contract: `format!("gents-{}", env!("CARGO_PKG_VERSION"))`.
 pub const LEADER_BINARY_VERSION: &str = concat!("gents-", env!("CARGO_PKG_VERSION"));
 
-// ---------------------------------------------------------------------------
-// Frame errors
-// ---------------------------------------------------------------------------
 
-/// Errors produced by the frame codec and envelope decoding.
 #[derive(Debug)]
 pub enum ProtocolError {
-    /// A frame declared a length above [`MAX_MESSAGE_SIZE`].
     MessageTooLarge(usize),
-    /// The stream ended before any prefix byte: a clean disconnect.
     ConnectionClosed,
-    /// The stream ended partway through the four-byte length prefix.
     TruncatedHeader { read: usize },
-    /// The stream ended before the declared payload length was reached.
     TruncatedFrame { declared: usize, read: usize },
-    /// A frame body was not a decodable value of the expected shape.
     InvalidFrame(String),
-    /// The underlying stream failed.
     Io(std::io::Error),
 }
 
 impl ProtocolError {
-    /// True when the peer disconnected cleanly before any header byte.
     pub fn is_connection_closed(&self) -> bool {
         matches!(self, ProtocolError::ConnectionClosed)
     }
@@ -108,12 +82,7 @@ impl From<serde_json::Error> for ProtocolError {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Frame IO
-// ---------------------------------------------------------------------------
 
-/// Read one length-prefixed frame and return its payload bytes. Declared
-/// lengths above [`MAX_MESSAGE_SIZE`] are rejected before any allocation.
 pub async fn read_frame<R>(reader: &mut R) -> Result<Vec<u8>, ProtocolError>
 where
     R: AsyncRead + Unpin,
@@ -141,8 +110,6 @@ where
     Ok(payload)
 }
 
-/// Write one length-prefixed frame. The payload is flushed before returning
-/// so a peer never observes a partial frame body.
 pub async fn write_frame<W>(writer: &mut W, payload: &[u8]) -> Result<(), ProtocolError>
 where
     W: AsyncWrite + Unpin,
@@ -158,7 +125,6 @@ where
     Ok(())
 }
 
-/// Read one frame and decode it as `T`.
 pub async fn read_frame_as<T, R>(reader: &mut R) -> Result<T, ProtocolError>
 where
     T: DeserializeOwned,
@@ -168,7 +134,6 @@ where
     decode_frame(&payload)
 }
 
-/// Encode `value` and write it as one frame.
 pub async fn write_frame_as<T, W>(writer: &mut W, value: &T) -> Result<(), ProtocolError>
 where
     T: Serialize,
@@ -178,7 +143,6 @@ where
     write_frame(writer, &payload).await
 }
 
-/// Decode a frame body as `T`.
 pub fn decode_frame<T>(payload: &[u8]) -> Result<T, ProtocolError>
 where
     T: DeserializeOwned,
@@ -186,7 +150,6 @@ where
     serde_json::from_slice(payload).map_err(ProtocolError::from)
 }
 
-/// Encode a value into frame body bytes.
 #[cfg(test)]
 pub fn encode_frame<T>(value: &T) -> Result<Vec<u8>, ProtocolError>
 where
@@ -195,7 +158,6 @@ where
     serde_json::to_vec(value).map_err(ProtocolError::from)
 }
 
-/// Read one client (pager → leader) envelope.
 pub async fn read_client_envelope<R>(reader: &mut R) -> Result<ClientEnvelope, ProtocolError>
 where
     R: AsyncRead + Unpin,
@@ -203,7 +165,6 @@ where
     read_frame_as(reader).await
 }
 
-/// Read one server (leader → pager) envelope.
 #[cfg(test)]
 pub async fn read_server_envelope<R>(reader: &mut R) -> Result<ServerEnvelope, ProtocolError>
 where
@@ -212,7 +173,6 @@ where
     read_frame_as(reader).await
 }
 
-/// Write one client (pager → leader) envelope.
 #[cfg(test)]
 pub async fn write_client_envelope<W>(
     writer: &mut W,
@@ -224,7 +184,6 @@ where
     write_frame_as(writer, envelope).await
 }
 
-/// Write one server (leader → pager) envelope.
 pub async fn write_server_envelope<W>(
     writer: &mut W,
     envelope: &ServerEnvelope,
@@ -235,8 +194,6 @@ where
     write_frame_as(writer, envelope).await
 }
 
-/// Fill `buf` as far as the stream allows, tolerating `Interrupted`; a return
-/// below `buf.len()` means the stream ended.
 async fn read_full<R>(reader: &mut R, buf: &mut [u8]) -> Result<usize, ProtocolError>
 where
     R: AsyncRead + Unpin,
@@ -253,18 +210,11 @@ where
     Ok(filled)
 }
 
-// ---------------------------------------------------------------------------
-// Client (pager → leader) envelopes
-// ---------------------------------------------------------------------------
 
-/// Capabilities a registering client may advertise. Every flag is optional on
-/// the wire; unknown keys are ignored so newer pagers still register.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ClientCapabilities {
-    /// Approve-all tool execution; the leader injects `yoloMode: true`.
     #[serde(default)]
     pub yolo_mode: bool,
-    /// Classifier-driven auto approval; the leader injects `autoMode: true`.
     #[serde(default)]
     pub auto_mode: bool,
     #[serde(default)]
@@ -273,7 +223,6 @@ pub struct ClientCapabilities {
     pub client_version: Option<String>,
     #[serde(default)]
     pub code_nav_enabled: bool,
-    /// Route terminal commands to the client; the reference pager is `false`.
     #[serde(default)]
     pub terminal: bool,
     #[serde(default)]
@@ -295,7 +244,6 @@ impl ClientCapabilities {
     }
 }
 
-/// Registration mode: interactive stdio pager or headless client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegisterMode {
@@ -312,24 +260,18 @@ impl RegisterMode {
     }
 }
 
-/// Envelope sent by the pager client to the Gents leader.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientEnvelope {
-    /// First envelope on a fresh connection; the leader answers `registered`.
     Register {
         client_type: String,
         mode: RegisterMode,
         #[serde(default)]
         capabilities: ClientCapabilities,
     },
-    /// One raw JSON-RPC 2.0 line passed through to/from the ACP service.
     Acp { payload: String },
-    /// Control command addressed by request id.
     Control { request_id: String, command: Value },
-    /// Liveness probe; answered with `pong`.
     Ping,
-    /// Graceful client disconnect.
     Disconnect,
 }
 
@@ -350,15 +292,7 @@ impl ClientEnvelope {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Server (leader → pager) envelopes
-// ---------------------------------------------------------------------------
 
-/// Capabilities the leader advertises in `registered`.
-///
-/// The v1 shim only advertises what it genuinely answers, so every flag
-/// defaults to false and an empty profile-format list; assembly flips a flag
-/// on only when the corresponding surface is wired.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LeaderCapabilities {
     #[serde(default)]
@@ -373,7 +307,6 @@ pub struct LeaderCapabilities {
     pub relaunch_v1: bool,
 }
 
-/// Why the leader is shutting down.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShutdownReason {
@@ -405,12 +338,9 @@ fn default_leader_binary_version() -> String {
     LEADER_BINARY_VERSION.to_string()
 }
 
-/// Envelope sent by the Gents leader to the pager client.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerEnvelope {
-    /// Answer to `register`. `ready: false` means the client must wait for
-    /// [`ServerEnvelope::LeaderReady`] before sending any ACP traffic.
     Registered {
         client_id: u64,
         #[serde(default = "default_ready")]
@@ -422,21 +352,15 @@ pub enum ServerEnvelope {
         #[serde(default)]
         leader_capabilities: LeaderCapabilities,
     },
-    /// Leader finished initializing; ACP traffic may now flow.
     LeaderReady,
-    /// One raw JSON-RPC 2.0 line passed through to/from the ACP service.
     Acp { payload: String },
-    /// Answer to `ping`.
     Pong,
-    /// Protocol-level error.
     Error { code: i32, message: String },
-    /// Announced before `shutdown`, with the delay before it lands.
     ShuttingDown {
         reason: ShutdownReason,
         #[serde(default)]
         delay_ms: u64,
     },
-    /// Terminal: the leader is going away.
     Shutdown,
 }
 
@@ -478,17 +402,12 @@ impl ServerEnvelope {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Round-trip one value through a real duplex stream using the frame
-    /// codec, so serialization, prefixing, and decoding are all exercised.
     async fn round_trip<E>(envelope: E) -> E
     where
         E: Serialize + DeserializeOwned,
@@ -672,7 +591,6 @@ mod tests {
         assert!(envelope.client_id() == Some(42));
         assert!(envelope.is_registered_ready());
 
-        // `ready` defaults to true when a peer omits it.
         let decoded =
             decode_frame::<ServerEnvelope>(br#"{"type":"registered","client_id":1}"#).unwrap();
         assert!(decoded.is_registered_ready());
@@ -685,7 +603,6 @@ mod tests {
             leader_capabilities: LeaderCapabilities::default(),
         };
         assert!(!not_ready.is_registered_ready());
-        // A leader_ready envelope re-opens the gate.
         assert!(ServerEnvelope::LeaderReady.is_registered_ready());
     }
 
@@ -820,8 +737,6 @@ mod tests {
 
     #[tokio::test]
     async fn wrong_envelope_kind_is_invalid_frame() {
-        // A client envelope on the server side must not decode as a server
-        // envelope: the `type` tags are disjoint.
         let (mut writer, mut reader) = tokio::io::duplex(64);
         write_client_envelope(&mut writer, &ClientEnvelope::Ping)
             .await

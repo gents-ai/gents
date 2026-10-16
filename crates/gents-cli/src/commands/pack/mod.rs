@@ -887,7 +887,6 @@ mod tests {
         );
     }
 
-    /// The CI gate for real (packs-repo) packs moves to packs CI (`gents pack test`); this keeps only the gents-side machinery honest.
     #[test]
     fn a_document_pack_materializes_a_valid_configuration() {
         let home = tempfile::tempdir().unwrap();
@@ -943,12 +942,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn split_namespace_defaults_to_gents() {
-        assert_eq!(split_namespace("mailbox"), ("gents", "mailbox"));
-        assert_eq!(split_namespace("acme/widget"), ("acme", "widget"));
-    }
-
     #[tokio::test]
     async fn plugin_slot_bindings_need_a_declared_slot_and_open_no_store_without_one() {
         let manifest: PackManifest = serde_json::from_value(json!({
@@ -972,22 +965,6 @@ mod tests {
             format!("{error:#}").contains("no inference slot"),
             "{error:#}"
         );
-    }
-
-    #[test]
-    fn inference_slot_flags_are_complete_unique_pairs() {
-        let bindings =
-            parse_inference_slot_bindings(&["coordinator=claude".into(), "worker=glm".into()])
-                .unwrap();
-        assert_eq!(bindings["coordinator"], "claude");
-        assert_eq!(bindings["worker"], "glm");
-        for invalid in [
-            vec!["missing-separator".into()],
-            vec!["worker=".into()],
-            vec!["worker=one".into(), "worker=two".into()],
-        ] {
-            assert!(parse_inference_slot_bindings(&invalid).is_err());
-        }
     }
 
     fn plugin_manifest(

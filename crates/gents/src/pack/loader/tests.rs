@@ -208,8 +208,6 @@ fn graph_fixture_loads_slot_authoring_and_literal_prompt_assets() {
 #[test]
 fn every_fixture_pack_that_ships_a_config_loads_it_cleanly() {
     for name in crate::support::fixtures::fixture_pack_names() {
-        // The copy carries a built stand-in for each plugin artifact the
-        // fixture declares; the repository holds none.
         let (_guard, copy) = crate::test_support::fixture_pack_copy(&name, &json!({}));
         let root = copy;
         let manifest: PackManifest =
@@ -250,7 +248,6 @@ fn eval_config(cases: Value) -> Value {
     }]})
 }
 
-/// A sidecar case whose prompt names an unset variable.
 const SIDECAR_CASE: &str = r#"{"case_id":"one","split":"train","stages":[{"stage_id":"s","prompt":"literal ${NOT_INTERPOLATED}","deadline_secs":60,"checks":[{"check":"finding_count","params":{"count":1},"tier":"acceptance"}]}]}"#;
 
 fn load_eval(manifest: &PackManifest, config: Value) -> Result<PackConfig> {

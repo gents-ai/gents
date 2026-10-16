@@ -1,4 +1,3 @@
-/* Placement decided by what came before, never by what comes after. */
 import type {
   RenderedTimelineItem,
   RenderedToolCallView,

@@ -41,15 +41,11 @@ pub enum IncompatibleStoreKind {
 }
 
 impl IncompatibleStoreKind {
-    /// Whether the store is known to come from an earlier release. A foreign
-    /// version may be newer; its data is not offered for deletion by default.
     pub fn is_older(self) -> bool {
         !matches!(self, Self::ForeignVersion)
     }
 }
 
-/// A data directory this build refuses to open, and why. Carried in the error
-/// chain so hosts can recognize the refusal by type instead of by message.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{}", describe(*kind, data_path))]
 pub struct IncompatibleStore {
@@ -109,7 +105,6 @@ pub fn incompatible_store_kind(data_path: &Path) -> Result<Option<IncompatibleSt
 }
 
 /// Reject a data directory created by a retired runtime storage backend.
-///
 /// Regolith, Lark, and RocksDB use incompatible on-disk formats. Regolith
 /// would otherwise try to open legacy files as its own store, so callers must
 /// fail before opening the directory.
@@ -136,9 +131,6 @@ pub(crate) fn require_existing_store(data_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The store refusal carried by `error`, if any. The migration engine
-/// refuses before it registers or patches anything, so the store is left
-/// exactly as the older build wrote it.
 pub fn incompatible_store(error: &anyhow::Error, data_path: &Path) -> Option<IncompatibleStore> {
     if let Some(store) = error.downcast_ref::<IncompatibleStore>() {
         return Some(store.clone());
@@ -184,9 +176,6 @@ pub fn incompatible_store(error: &anyhow::Error, data_path: &Path) -> Option<Inc
         })
 }
 
-/// Attach the typed store refusal to an error from opening `data_path`, so
-/// the refusal is recognizable by type wherever the error surfaces. Other
-/// errors pass through unchanged.
 pub fn classify_store_error(error: anyhow::Error, data_path: &Path) -> anyhow::Error {
     if error.downcast_ref::<IncompatibleStore>().is_some() {
         return error;

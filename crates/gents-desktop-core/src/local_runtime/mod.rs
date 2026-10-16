@@ -26,7 +26,6 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 const SERVE_READY_TIMEOUT: Duration = Duration::from_secs(60);
 const SERVE_READY_POLL: Duration = Duration::from_millis(500);
 
-/// Reuse Reqwest's native roots because loading macOS trust settings blocks and is costly.
 async fn runtime_http_client() -> Result<&'static reqwest::Client> {
     static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
     CLIENT

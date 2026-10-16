@@ -1,4 +1,3 @@
-//! Configuration optimization (#1455), a consumer of the eval core contract.
 
 pub mod driver;
 pub mod evidence;

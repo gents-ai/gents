@@ -24,7 +24,6 @@ import { useApp } from "@/app/AppContext";
 import { useFleet } from "@/hooks/useFleet";
 import { Item, KEY, KIND, openable, openItem, Primary } from "./MailboxItem";
 
-/* the kind axis */
 const KINDS: Option<string>[] = KIND_ORDER.map((value) => ({
   value,
   label: KIND[value]!.label,
@@ -35,7 +34,6 @@ const KINDS: Option<string>[] = KIND_ORDER.map((value) => ({
 export function MailboxScreen({
   nodeDid,
 }: {
-  /** a node named on the route: the list opens narrowed to it */
   nodeDid?: string;
 }) {
   const nodes = useFleet(useShallow(fleetNodes));
@@ -93,8 +91,8 @@ export function MailboxScreen({
   const dismissChosen = async () => {
     setDismissing(true);
     try {
-      /* one at a time: the contract dismisses one item per call, and a
-         failure part-way leaves the rest selected rather than lost */
+      /* The contract dismisses one item per call. If one fails, keep the rest
+         selected rather than losing them. */
       for (const id of chosen) {
         await dismissMailboxItem(id);
         setSelected((current) => {
@@ -104,7 +102,6 @@ export function MailboxScreen({
         });
       }
     } catch {
-      // reported by the action
     } finally {
       setDismissing(false);
     }
@@ -316,7 +313,6 @@ export function MailboxScreen({
         {/* a selection's one action, kept in reach at the foot of the
             scroller rather than at the top of a long list */}
         {chosen.length > 0 && (
-          /* centred on the cards, not the rail column beside them */
           <div className="sticky bottom-4 mt-8 pl-10">
             <div
               className="mx-auto flex w-full max-w-xl items-center justify-between gap-3 rounded-full border border-border bg-raised/95 py-2.5 pr-2.5 pl-5 shadow-2xl shadow-black/60 backdrop-blur animate-in fade-in-0 slide-in-from-bottom-2 duration-200 motion-reduce:animate-none"

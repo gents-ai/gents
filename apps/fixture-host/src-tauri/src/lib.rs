@@ -1,6 +1,3 @@
-//! Composition fixture. The co-resident domain plugin is not a second DefraDB
-//! node; it is a separate plugin-local store.
-
 use std::path::PathBuf;
 
 use fixture_domain_plugin::DomainConfig;

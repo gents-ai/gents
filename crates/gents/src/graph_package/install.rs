@@ -22,8 +22,6 @@ pub struct GraphPackageInstallBindings {
     pub inference_slots: crate::pack::PackInferenceBindings,
 }
 
-/// One `GraphInstallRecord` shape for every graph installer, so the record
-/// is written the same way from every call site.
 #[derive(Clone, Debug, Default)]
 pub struct GraphInstallRecord {
     pub plugins: Vec<crate::pack::InstalledPackPlugin>,
@@ -166,22 +164,15 @@ pub async fn load_installed_package_plan(
         .await
 }
 
-/// Which active graph plan a run starts.
 #[derive(Clone, Copy, Debug)]
 pub enum GraphRunSelector<'a> {
     Package {
         name: &'a str,
-        /// With `coordinate` (`namespace/name`), the active revision must
-        /// also match that coordinate's installation record.
         coordinate: Option<&'a str>,
     },
-    /// A graph by id, pinned to the digest of its active revision.
     Pinned { graph_id: &'a str, digest: &'a str },
 }
 
-/// The one selection owner for graph runs (`gents graph run` and the
-/// `run_graph` tool). `None` when nothing is installed or active under the
-/// selector, so each surface names its own next step.
 pub async fn select_run_plan(
     access: &ConfigAccess,
     owner_did: &str,
@@ -247,8 +238,6 @@ fn digest_bytes(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
-/// Read outside any transaction and re-read inside the commit transaction
-/// through [`active_revision_digest`].
 fn active_revision_digest_query(owner: &str, graph_id: &str) -> String {
     format!(
         r#"{{ GraphDefinition(filter: {{ node_did: {{ _eq: "{}" }}, graph_id: {{ _eq: "{}" }} }}, limit: 2) {{ active_revision_digest }} }}"#,
@@ -354,8 +343,6 @@ async fn prepare_package(
         intent.node_did == options.node_did,
         "graph owner differs from installation scope"
     );
-    // The existing node is shared identity, never graph-owned replacement
-    // configuration.
     let bundle = DesiredStateApplyPlan::from_pack_config(&config)?;
     let desired_state = DesiredStateApplyPlan::new(
         bundle
@@ -528,11 +515,6 @@ pub async fn install_loaded_graph_package(
         .await
 }
 
-/// One transaction. Refuses with
-/// [`crate::config_client::StaleExpectation`] when the graph's active
-/// revision digest changed since `prepared` observed it (#1651). Split out
-/// so a caller can interleave a concurrent change between preparing and
-/// committing an install.
 async fn commit_prepared_graph_package_install(
     access: &ConfigAccess,
     owner: &str,
@@ -572,8 +554,6 @@ async fn commit_prepared_graph_package_install(
                 let effective =
                     crate::pack::prepare_pack_plan_in_txn(txn, desired.documents(), true).await?;
                 crate::config_client::validate_desired_state_plan(txn, &effective).await?;
-                // Observed before any write, so the install's own record can
-                // tell a document it created from one that already existed.
                 let observed = crate::pack::observe_graph_install_in_txn(
                     txn,
                     owner,

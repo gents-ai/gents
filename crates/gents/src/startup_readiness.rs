@@ -1,10 +1,6 @@
-//! Startup readiness under bounded build failures (#559); the model is
-//! `proofs/Proofs/RuntimeReconcile/StartupReadiness.lean`.
 
 use std::time::Duration;
 
-/// Diagnostic plumbing for embedders and deterministic test fixtures; it does
-/// not participate in the build-failure verdict.
 #[doc(hidden)]
 pub trait StartupBuildFailureObserver: Send + Sync {
     fn on_build_failure(&self, agent_id: &str, failure_number: u32, budget: u32, error: &str);

@@ -147,7 +147,6 @@ pub struct BackgroundExecutionRegistry {
     task_hook_records: crate::task_hooks::TaskHookRecordStore,
 }
 
-/// Bound on waiting for a signalled live worker to release its execution.
 const LIVE_STOP_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl BackgroundExecutionRegistry {
@@ -168,8 +167,6 @@ impl BackgroundExecutionRegistry {
         &self.task_hook_records
     }
 
-    /// Recorder installed around one background execution; each spawned
-    /// process replaces the execution's record.
     pub(crate) fn process_recorder(
         &self,
         tool_call_id: &str,
@@ -233,11 +230,6 @@ impl BackgroundExecutionRegistry {
         self.process_records.remove(tool_call_id);
     }
 
-    /// Stops one background execution through its owner and reports the
-    /// verdict (Lean `ManagedExec.stopOutcome`). A live worker in this
-    /// runtime is proven ownership; otherwise only a durable record whose
-    /// leader matches proves it. The caller persists the row's terminal
-    /// state first.
     pub(crate) async fn stop_execution(
         &self,
         tool_call_id: &str,
@@ -340,10 +332,6 @@ impl BackgroundExecutionRegistry {
         self.lock_executions().contains_key(tool_call_id)
     }
 
-    /// Waits until this process releases ownership of a background execution.
-    /// Subscribing while holding the registry lock makes the boundary
-    /// missed-event-safe: an execution removed before this call returns
-    /// immediately, while an execution removed afterward signals this waiter.
     pub async fn wait_for_completion(&self, tool_call_id: &str) {
         let mut completion_rx = {
             let executions = self.lock_executions();
@@ -654,8 +642,6 @@ impl DefraSessionHook {
         Ok(())
     }
 
-    /// Binds hooks to an admitted physical call; internal keys alone never
-    /// authorize dispatch.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn adopt_accepted_tool_dispatch(
         &self,

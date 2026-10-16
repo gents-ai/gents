@@ -1,15 +1,3 @@
-//! Live EthTool qualification: a live model uses `{tool_id}_query` against
-//! Base Sepolia (live chain data, live inference).
-//!
-//! ```bash
-//! GENTS_ETH_LIVE=1 GENTS_EVAL_TARGET=workstation-1 cargo test -p gents --features live-e2e --test e2e_live \
-//!   eth_tool_live_model_queries_base_sepolia \
-//!   -- --ignored --test-threads=1 --nocapture
-//! ```
-//!
-//! The RPC defaults to `https://sepolia.base.org` (chain id 84532); override
-//! with `GENTS_ETH_LIVE_RPC`, `GENTS_ETH_LIVE_CHAIN_ID`.
-
 use std::sync::Arc;
 use std::time::Duration;
 

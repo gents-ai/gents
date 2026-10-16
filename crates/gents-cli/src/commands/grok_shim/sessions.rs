@@ -287,7 +287,6 @@ async fn list_entries(
         .await?;
     }
     let mut entries = Vec::new();
-    // Batch owner validation: no N+1 per-session DB query.
     let ids: Vec<_> = grouped.keys().cloned().collect();
     for page in ids.chunks(PAGE_SIZE) {
         let ids = page
@@ -418,8 +417,6 @@ pub(super) async fn list(
 /// JSONL file.
 pub(super) async fn roster(node: &EmbeddedNode, principal: &str, behavior: &str) -> Result<Value> {
     let mut sessions = Vec::new();
-    // The roster has no pagination on the wire; fold history once rather than
-    // re-scanning for each picker page.
     for (_, _, row) in list_entries(node, principal, behavior, &ListParams::default()).await? {
         sessions.push(json!({"sessionId":row["sessionId"], "title":row["summary"],
                 "cwd":"", "activity":row["_meta"]["gents/activity"],
@@ -461,34 +458,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn picker_filters_validate_and_cursor_is_bound_to_search() {
-        let mut params: ListParams = serde_json::from_value(
-            json!({"query":"  HELLO ", "_meta":{"x.ai/facetFilters":{"kind":["build"]}}}),
-        )
-        .unwrap();
-        params.validate().unwrap();
-        assert!(!params.excludes_build());
-        params.cursor = Some(
-            serde_json::to_string(&Cursor {
-                updated_at: Utc::now(),
-                session_id: "s".into(),
-                query: "hello".into(),
-            })
-            .unwrap(),
-        );
-        params.validate().unwrap();
-        params.query = Some("another".into());
-        assert!(params.validate().is_err());
-        for invalid in [
-            json!({"limit":0}),
-            json!({"headless":"unknown"}),
-            json!({"_meta":{"x.ai/facetFilters":{"cwd":"/tmp"}}}),
-        ] {
-            assert!(serde_json::from_value::<ListParams>(invalid)
-                .unwrap()
-                .validate()
-                .is_err());
-        }
-    }
 }

@@ -1,5 +1,3 @@
-//! Canonical signing payloads retained by authenticated enrollment.
-
 use serde::{Deserialize, Serialize};
 
 pub fn derive_network_id(admin_did: &str, name: &str) -> String {

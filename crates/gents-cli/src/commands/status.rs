@@ -196,7 +196,6 @@ async fn load_live_http_liveness_value(graphql: &GraphqlEndpoint) -> Option<Valu
         .cloned()
 }
 
-/// The serving runtime's `/status` body, beside the GraphQL endpoint.
 pub(crate) async fn fetch_runtime_status(
     graphql: &GraphqlEndpoint,
     timeout: std::time::Duration,

@@ -1,4 +1,3 @@
-// Compile and decode the runtime's actual fixture DTOs independently of gents.
 #[path = "../../gents/src/lean_vocab_test/support.rs"]
 mod runtime_contract;
 

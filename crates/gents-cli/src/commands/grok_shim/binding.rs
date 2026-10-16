@@ -1,5 +1,3 @@
-//! Stock --agent is sent as session/new|load _meta.agentProfile. Select one
-//! immutable agent-scoped service per connection, before exposing history.
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -11,8 +9,6 @@ use super::acp::{internal_method, AcpRequest, AcpService};
 use super::server::{AcpDelegate, AcpOutbound, Registration};
 use super::AcpDelegateFactoryInputs;
 
-/// Stock Grok sends its built-in agents' `agent_type` as `_meta.agentProfile`
-/// even without `--agent`; those names are Grok's own, not Gents agent ids.
 pub(super) fn grok_built_in_agent_profile(name: &str) -> bool {
     name == "grok-build" || name.starts_with("grok-build-")
 }

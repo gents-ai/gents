@@ -141,13 +141,9 @@ theorem observation_does_not_authorize_retry (pre : SessionState)
     retryFromRows? pre { session with observation } rows parentDoc failedId newId =
       retryFromRows? pre session rows parentDoc failedId newId := rfl
 
-/-- The desktop owner keys a retry intent by the physical parent document, not a
-new host/session identity. -/
 structure RetryIntentState where
   successor : RequestId → Option RequestId
 
-/-- Claim the one durable successor slot for `parent`: the first candidate wins;
-later callers observe and return that same winner. -/
 def claimRetry
     (state : RetryIntentState)
     (parent candidate : RequestId) : RetryIntentState × RequestId :=

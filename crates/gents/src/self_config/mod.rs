@@ -138,7 +138,6 @@ fn agent_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<
     fence_profile_pick(&mut request);
     request
 }
-/// An `inference_profile_id` pick may not switch accounts of one provider.
 fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
     request.validate = Box::new(|txn, anchor, stored, merged| {
         Box::pin(async move {
@@ -284,9 +283,6 @@ fn tools_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<
     request.guard = Box::new(|_, stored, merged| guard_tools_keep_control(stored, merged));
     request
 }
-/// On the invoker's own Tools a set that silently drops what it omits is
-/// refused unless `allow_drop` names the group; confirms intent, narrows no
-/// legal transition.
 fn refuse_silent_tools_drops(
     mut request: ApplyRequest<'static>,
     allow_drop: BTreeSet<String>,
@@ -297,8 +293,6 @@ fn refuse_silent_tools_drops(
         .map(|(field, _)| field.clone())
         .filter(|field| !allow_drop.contains(field))
         .collect::<Vec<_>>();
-    // Invoker-only guard slot, after the lockout guard so a lockout is
-    // reported as one.
     let guard = request.guard;
     request.guard = Box::new(move |anchor, stored, merged| {
         guard(anchor, stored, merged)?;
@@ -328,8 +322,6 @@ fn refuse_silent_tools_drops(
     request
 }
 
-/// Settings present in `before` and absent from `after`. A changed value is a
-/// choice, not a drop.
 fn dropped_settings(path: &str, before: &Value, after: &Value, out: &mut Vec<String>) {
     match (before, after) {
         (Value::Null, _) => {}
@@ -364,7 +356,6 @@ fn profile_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
     fence_profile_backend(&mut request);
     request
 }
-/// A profile's backend selection may not switch accounts of one provider.
 fn fence_profile_backend(request: &mut ApplyRequest<'static>) {
     request.validate = Box::new(|txn, _, stored, merged| {
         Box::pin(async move {
@@ -993,8 +984,6 @@ impl PackInstaller {
         Ok(())
     }
 
-    /// An `update` asks the registry for the newest version first, so it
-    /// never resolves back to the version it is meant to replace.
     async fn resolve(
         &self,
         operation: &str,
@@ -2009,8 +1998,6 @@ impl Tool for RunGraphTool {
                     format!("graph {graph_id:?} has no active revision; call list_graphs again")
                 }
             })?;
-        // The same selection `prepare_entry_run` makes below, so the ceiling
-        // decision can never disagree with which entry actually runs.
         let selected_entry = crate::graph_package::select_entry(&plan, args.entry.as_deref()).ok();
         let requires_git_diff_ceiling = selected_entry
             .and_then(|entry| entry.prepare.as_ref())
@@ -2272,8 +2259,6 @@ fn cancel_graph_run_definition() -> ToolDefinition {
     }
 }
 
-/// Build the gated self-config tool family for one agent. Fails closed:
-/// with an empty node DID no tools are registered.
 pub fn build_self_config_tools(
     node: Arc<EmbeddedNode>,
     node_did: String,
@@ -2348,8 +2333,6 @@ pub fn build_self_config_tools(
     tools
 }
 
-/// Offered only with the pack-install grant: a graph intent reaches storage
-/// only through pack installation.
 fn previews_graphs(config: &SelfConfigToolConfig) -> bool {
     config.enable_graph_tools && config.enable_pack_install
 }

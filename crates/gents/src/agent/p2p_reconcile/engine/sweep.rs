@@ -86,9 +86,6 @@ pub(super) async fn run_pairing_reconciler_loop(
     let mut failing_peers = BTreeSet::<String>::new();
     let mut subscription_open = true;
 
-    // Log (not propagate) transient sweep failures; the next tick retries.
-    // The interval's first tick is immediately ready and stays as the startup
-    // retry fence, unlike the discovery/heartbeat daemons.
     if !sweep_pairings_logged_until_cancelled(
         admin,
         store,
@@ -159,8 +156,6 @@ pub(super) async fn sweep_pairings_logged_until_cancelled(
     }
 }
 
-/// Run a sweep, logging (not propagating) a transient failure; the next tick
-/// retries. Mirrors the discovery/heartbeat daemons.
 async fn sweep_pairings_logged(
     admin: &dyn RemoteP2pAdmin,
     store: &dyn PairingStateStore,
@@ -178,8 +173,6 @@ pub(super) async fn sweep_pairings(
     replay_connections: &mut BTreeMap<String, bool>,
     failing_peers: &mut BTreeSet<String>,
 ) -> Result<()> {
-    // Amortize membership materialization across the sweep; fall back to a live
-    // read per peer on failure.
     store.begin_sweep().await?;
     let preparation_inputs = store
         .list_peer_ids()

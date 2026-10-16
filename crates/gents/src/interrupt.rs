@@ -1,4 +1,3 @@
-//! Shared types and helpers for request interruption signaling.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,7 +26,6 @@ pub async fn interrupt_request(node: &Arc<EmbeddedNode>, request_id: &str) -> Re
         .map(|_| ())
 }
 
-/// Interrupt the exact request already selected within a node/requester scope.
 pub async fn interrupt_request_by_doc_id(
     node: &Arc<EmbeddedNode>,
     request_doc_id: &str,
@@ -95,7 +93,6 @@ fn scoped_request_filter(
     ))
 }
 
-/// Latch the exact interrupt through local or HTTP transaction access.
 pub async fn interrupt_request_by_doc_id_with_access(
     access: &crate::config_client::ConfigAccess,
     request_doc_id: &str,
@@ -212,8 +209,6 @@ pub(crate) async fn active_session_request(
     Ok(rows.pop())
 }
 
-/// `_docID` is the globally unique physical key, so this lookup cannot cross
-/// nodes or collide on a shared logical `request_id`.
 pub async fn fetch_interrupt_requested_at_by_doc_id(
     node: &EmbeddedNode,
     request_doc_id: &str,
@@ -253,9 +248,6 @@ pub async fn fetch_interrupt_requested_at_by_doc_id(
     Ok(value)
 }
 
-/// Fetch the durable interrupt intent by logical request id. The logical id is
-/// not a physical key: resolution goes through the request-binding owner, which
-/// rejects ambiguous ids instead of silently reading one replica's row.
 pub async fn fetch_interrupt_requested_at(
     node: &EmbeddedNode,
     request_id: &str,
@@ -264,9 +256,6 @@ pub async fn fetch_interrupt_requested_at(
     fetch_interrupt_requested_at_by_doc_id(node, &request_doc_id).await
 }
 
-/// Fetch the durable interrupt intent by logical request id within one node
-/// scope. Any same-scope collision fails closed via the ambiguity rejection
-/// (`limit: 2` + row-count check), never `limit: 1`.
 pub async fn fetch_interrupt_requested_at_scoped(
     node: &EmbeddedNode,
     request_id: &str,

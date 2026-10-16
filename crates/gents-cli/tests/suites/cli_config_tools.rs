@@ -119,8 +119,6 @@ async fn tools_set_persists_host_root_and_export_round_trips_it() -> Result<()> 
         ],
     )?;
     let export = tempdir.path().join("export");
-    // Exercise offline export explicitly: do not depend on runtime discovery
-    // selecting the server while it still holds the embedded datastore lock.
     server.child.kill()?;
     server.child.wait()?;
     run_cli_text(

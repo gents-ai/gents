@@ -1,8 +1,6 @@
 use super::*;
 
 impl ToolCallLifecycle {
-    /// Running mode-flip: await_mode Foreground → Background (Lean
-    /// `ToolCallContext.Transition.background`).
     pub async fn background(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "background")?;
         anyhow::ensure!(
@@ -63,9 +61,6 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    /// Running mode-flip: await_mode Background → Foreground (Lean
-    /// `ToolCallContext.Transition.foreground`). An `agent_new`/`agent_message`
-    /// row is background-only: its result arrives only as a message.
     pub async fn foreground(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "foreground")?;
         if self.is_session_message() {

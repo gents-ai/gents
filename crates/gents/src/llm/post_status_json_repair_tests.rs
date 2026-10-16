@@ -1,7 +1,3 @@
-//! Escape repair preserves large report bodies and rejects incomplete input.
-//! Direct tool calls have no provider termination observation, so JSON EOF does
-//! not establish that a token limit caused the malformed arguments.
-
 use crate::llm::tool::{Tool, ToolDefinition, ToolDyn, ToolError, UnparseableArgsKind};
 use serde::{Deserialize, Serialize};
 

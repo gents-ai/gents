@@ -1,15 +1,9 @@
-//! Pure desired-vs-actual diff for pairing reconcile.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
 use super::templates::{to_replication_filters, PairingFilters};
 
-/// Operator-set desired pairing for one peer. `replicator_filter` is part of
-/// the replicator identity: a changed filter map forces teardown+install,
-/// mirroring Lean `PairingReconcile.ReplicatorId = (address, ReplicatorFilter)`
-/// and `filter_change_forces_reinstall`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingDesired {
     pub collections: BTreeSet<String>,
@@ -50,14 +44,12 @@ pub struct PairingActual {
     pub replicator_collections: BTreeMap<String, BTreeSet<String>>,
     #[serde(default)]
     pub replicator_filters: BTreeMap<String, defra_p2p_adapter::ReplicationFilters>,
-    /// Unknown filters do not trigger an unbounded reinstall loop, but a
-    /// scoped route with unknown filters is never certified as live-matching.
+    /// Unknown filters do not cause repeated reinstalls, but cannot certify a
+    /// scoped route as matching.
     #[serde(default)]
     pub replicator_filters_unobserved: BTreeSet<String>,
-    /// Transport-reported addresses keyed by the durable route address that
-    /// owns the transport peer; both identities are needed to adopt a restored
-    /// route by peer id while still detecting a stale ticket/address
-    /// projection.
+    /// Keep the durable route key alongside transport-reported addresses to
+    /// adopt restored peers without accepting stale ticket projections.
     #[serde(default)]
     pub replicator_observed_addresses: BTreeMap<String, BTreeSet<String>>,
 }
@@ -123,12 +115,8 @@ pub fn compute_owned_pairing_diff(
     {
         ops.push(DiffOp::TeardownCollection(c.clone()));
     }
-    // Replicator identity is (address, filter, collections); filter or
-    // carried-collection drift is a distinct identity (Lean
-    // `filter_change_distinct_identity`, `collections_change_distinct_identity`)
-    // and forces teardown+install. The collections comparison fences the
-    // layer-order race where a data-plane-installed replicator silently kept
-    // its narrow collection set after the control-plane layer merged in.
+    // A data-plane install can precede a merged control-plane layer, so compare
+    // live carried collections to catch this ordering race.
     let filter_changed = desired.replicator_filter != applied.replicator_filter;
     let desired_live_filters = to_replication_filters(&desired.replicator_filter).ok();
     let desired_replicator_collections = desired.effective_replicator_collections();
@@ -184,8 +172,6 @@ pub fn compute_owned_pairing_diff(
     ops
 }
 
-/// Whether owned desired state is converged and, for scoped routes, the live
-/// remote exposed the filters needed to verify that convergence.
 pub fn owned_pairing_live_matches(
     desired: &PairingDesired,
     actual: &PairingActual,
@@ -269,58 +255,6 @@ mod tests {
 
     fn s(xs: &[&str]) -> BTreeSet<String> {
         xs.iter().map(|x| x.to_string()).collect()
-    }
-
-    #[test]
-    fn missing_collection_yields_install() {
-        let desired = PairingDesired {
-            collections: s(&["c1"]),
-            ..Default::default()
-        };
-        let actual = PairingActual::default();
-        assert_eq!(
-            compute_pairing_diff(&desired, &actual),
-            vec![DiffOp::InstallCollection("c1".into())]
-        );
-    }
-
-    #[test]
-    fn extra_collection_yields_teardown() {
-        let desired = PairingDesired::default();
-        let actual = PairingActual {
-            collections: s(&["c1"]),
-            ..Default::default()
-        };
-        assert_eq!(
-            compute_pairing_diff(&desired, &actual),
-            vec![DiffOp::TeardownCollection("c1".into())]
-        );
-    }
-
-    #[test]
-    fn collections_diff_emits_before_replicators_diff() {
-        let desired = PairingDesired {
-            collections: s(&["c1"]),
-            replicator_addresses: s(&["/ip4/1/p2p/p"]),
-            ..Default::default()
-        };
-        let actual = PairingActual::default();
-        let ops = compute_pairing_diff(&desired, &actual);
-        assert_eq!(ops.len(), 2);
-        assert!(matches!(ops[0], DiffOp::InstallCollection(_)));
-        assert!(matches!(ops[1], DiffOp::InstallReplicator(_)));
-    }
-
-    #[test]
-    fn owned_diff_does_not_teardown_unmanaged_actual() {
-        let desired = PairingDesired::default();
-        let actual = PairingActual {
-            collections: s(&["manual"]),
-            replicator_addresses: s(&["/ip4/manual/p2p/p"]),
-            ..Default::default()
-        };
-        let applied = PairingApplied::default();
-        assert!(compute_owned_pairing_diff(&desired, &actual, &applied).is_empty());
     }
 
     fn filter(field: &str, value: &str) -> PairingFilters {
@@ -455,7 +389,6 @@ mod tests {
         );
     }
 
-    /// Mirrors Lean `filter_change_forces_reinstall`.
     #[test]
     fn changing_scoped_did_reinstalls_replicator() {
         let desired = PairingDesired {

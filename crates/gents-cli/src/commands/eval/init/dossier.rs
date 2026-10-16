@@ -12,8 +12,6 @@ use gents::pack::{
 };
 use serde_json::Value;
 
-/// Everything the author may know about the subject, and the collections a
-/// draft's documents captures may name.
 pub(crate) struct Dossier {
     pub(crate) pack_name: String,
     pub(crate) pack_version: String,
@@ -52,8 +50,6 @@ pub(super) fn runtime_collections() -> &'static BTreeMap<String, BTreeSet<String
     })
 }
 
-/// The dossier of `agent` (or the pack's only agent) of the directory
-/// pack at `pack_dir`.
 pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
     let (manifest, assets) = read_pack(pack_dir)?;
     let asset = |path: &str| {

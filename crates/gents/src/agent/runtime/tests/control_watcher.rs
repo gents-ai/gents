@@ -47,7 +47,6 @@ where
     }
 }
 
-/// Pass-through phases are captured here in order.
 #[derive(Clone, Default)]
 struct ReconcilePhaseCapture {
     phases: Arc<StdMutex<Vec<String>>>,
@@ -724,7 +723,6 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
             models,
         }
     };
-    // A later discovery drops that model, leaving the profile invalid.
     crate::backend_registry::record_model_catalog(
         &node,
         &backend,
@@ -822,7 +820,6 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     );
 }
 
-/// Records the plugin-store install of `fixture/list_files`.
 async fn record_plugin_install(
     node: &Arc<defra_node::EmbeddedNode>,
     node_did: &str,

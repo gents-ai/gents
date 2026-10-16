@@ -1,6 +1,3 @@
-//! Authoritative client dataplane policy: route identity, direction,
-//! collection membership, and filters.
-
 use std::collections::BTreeSet;
 
 use anyhow::{bail, Context, Result};
@@ -42,7 +39,6 @@ impl PairingDirection {
     }
 }
 
-/// Read the direction from a durable client-route key.
 pub fn client_route_direction(pairing_id: &str) -> Result<PairingDirection> {
     let pairing_id = pairing_id.trim();
     if pairing_id.is_empty() {
@@ -176,7 +172,6 @@ pub fn client_route_collections(direction: PairingDirection) -> &'static [&'stat
     }
 }
 
-/// Resolve one template's filters for an explicitly named direction.
 pub fn resolve_template_filters(
     template: &ScopeTemplate,
     direction: PairingDirection,

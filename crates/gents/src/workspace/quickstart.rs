@@ -1,7 +1,3 @@
-//! Operator-initiated read-only workspace placement for graph entrypoints.
-//! Composes existing repository placement, the ActionPlan executor, and
-//! workspace document mutations; it does not create a second workspace model.
-
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -72,9 +68,6 @@ async fn flush_workspace_documents(
         .await
 }
 
-/// Create a Git worktree at an immutable head commit and persist its ordinary
-/// workspace records. The source checkout is only a repository placement; its
-/// path never enters GraphRevision or GraphRun.
 pub async fn provision_read_only_workspace(
     access: &ConfigAccess,
     repository_path: &Path,

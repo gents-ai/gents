@@ -1092,7 +1092,6 @@ mod tests {
             revoked_at: None,
             tags: vec!["payments".into()],
         };
-        // Foreign logical IDs are deliberately inserted first.
         for owner in ["did:test:foreign", identity.did()] {
             let mut record = binding.clone();
             record.node_did = owner.into();
@@ -1200,8 +1199,6 @@ mod tests {
             } else {
                 json!({"tool_id":"payments","node_did":binding.node_did,"chain_id":8453,"key_binding_id":"signing","enabled":true})
             };
-            // Tags do not create a second logical identity. The schema owns this
-            // invariant, so an impossible duplicate never reaches signing.
             value["tags"] = json!(["duplicate"]);
             let input = gents_protocol::graphql::graphql_input_literal(&value).unwrap();
             let response = node

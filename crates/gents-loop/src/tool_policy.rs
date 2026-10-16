@@ -1,7 +1,3 @@
-//! Pure command-policy vocabulary shared between the loop's tool-dispatch
-//! outcome (`ToolOutcome::Failed { denial, .. }`) and `gents`'s native
-//! command-execution enforcement. No process spawn, filesystem, or DefraDB
-//! access here.
 
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
@@ -46,7 +42,6 @@ impl CommandExecutionMode {
         }
     }
 
-    /// Intersect effects: source writes and private artifact writes are incomparable.
     pub fn meet(self, other: Self) -> Self {
         if self == other {
             return self;
@@ -58,8 +53,6 @@ impl CommandExecutionMode {
     }
 }
 
-/// Request `workspace_authority`. ReadWrite meets command mode to WorkspaceWrite,
-/// never Unrestricted. Integrate is inspect-only (no bash writes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -98,7 +91,6 @@ impl WorkspaceAuthority {
         matches!(self, Self::ReadWrite)
     }
 
-    /// Greatest lower bound. Child spawn cannot outrank a bound parent.
     pub fn infimum(self, other: Self) -> Self {
         if self.rank() <= other.rank() {
             self
@@ -170,7 +162,6 @@ impl CommandNetworkMode {
         !matches!(self, Self::Disabled)
     }
 
-    /// More restrictive mode wins: Disabled < Inherit < Enabled.
     pub fn meet(self, other: Self) -> Self {
         if self.rank() <= other.rank() {
             self

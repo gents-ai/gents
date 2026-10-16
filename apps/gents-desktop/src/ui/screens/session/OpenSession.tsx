@@ -124,8 +124,6 @@ export function OpenSession() {
             condensed ? "opacity-100" : "opacity-0",
           )}
         />
-        {/* transcript and composer scroll together in the kit's scroll area;
-            the composer sticks to the foot so the bar runs the full height */}
         <div ref={columnRef} className="min-h-0 flex-1">
           <ScrollArea className="h-full">
             <div
@@ -170,15 +168,12 @@ export function OpenSession() {
                     )}
                   </div>
                 </div>
-                {/* Keep started sessions reachable after the main header scrolls away. */}
                 {session && (
                   <StartedSessionsButton
                     sessionId={session.sessionId}
                     className="max-md:hidden"
                   />
                 )}
-                {/* Hidden, the meter gives back its width and gap; condensed,
-                    it opens into that space without shifting the menu. */}
                 {session?.context && (
                   <div
                     aria-hidden={!condensed}

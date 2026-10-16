@@ -1,4 +1,3 @@
-//! Transition methods on ToolCallLifecycle.
 
 use anyhow::{anyhow, Context, Result};
 
@@ -97,8 +96,6 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    /// Assert that the current state is in `allowed`. Returns
-    /// `IllegalToolCallTransition` otherwise.
     pub(crate) fn ensure_state(
         &self,
         allowed: &[ToolCallState],

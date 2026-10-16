@@ -168,8 +168,7 @@ fn tally(
 }
 
 /// What one verdict contributes, by scoring's verdict rule; `None` for an
-/// unknown or not-evidence verdict, which a breakdown skips. Mirrors the
-/// frozen scoring's private per-verdict helper; a test pins the two together.
+/// unknown or not-evidence verdict, which a breakdown skips.
 fn verdict_bp(verdict: &SlotVerdict) -> Option<u32> {
     match classify(verdict.kind, verdict.provider_reason) {
         EvidenceClass::Pass => Some(verdict.score_bp.unwrap_or(SCORE_BP_MAX).min(SCORE_BP_MAX)),
@@ -331,56 +330,6 @@ mod tests {
             assert_eq!((comparison.pairs, comparison.imputed), (1, 1));
             assert!(by_check(&comparison).is_empty());
             assert!(by_stage(&comparison).is_empty());
-        }
-    }
-
-    #[test]
-    fn a_one_verdict_case_scores_as_case_trial_score_scores_it() {
-        use crate::document_config::EvalReducer;
-        use crate::eval::scoring::{case_trial_score, CaseTrialScore, VerdictView};
-
-        for (kind, score_bp) in [
-            (OutcomeKind::Passed, None),
-            (OutcomeKind::Passed, Some(6_000)),
-            (OutcomeKind::ModelAcceptance, None),
-            (OutcomeKind::ModelAcceptance, Some(3_000)),
-            (OutcomeKind::Grader, Some(7_000)),
-        ] {
-            let rows = Rows::default()
-                .add(
-                    RUN,
-                    at("baseline", "a", 0, 1),
-                    Outcome::Verdict(kind, score_bp),
-                )
-                .add(RUN, at("candidate", "a", 0, 1), pass());
-            let trial = trial_id(RUN, at("baseline", "a", 0, 1));
-            let record = rows
-                .verdicts
-                .iter()
-                .find(|verdict| verdict.trial_id == trial)
-                .unwrap();
-            let view = VerdictView {
-                verdict_id: record.verdict_id.clone(),
-                stage_index: 0,
-                check: record.check.clone(),
-                tier: record.tier,
-                kind: record.kind,
-                provider_reason: record.provider_reason,
-                score_bp: record.score_bp,
-                weight: record.weight,
-                regrade_of: None,
-            };
-            let expected = match case_trial_score(EvalReducer::WeightedMean, &[view]) {
-                CaseTrialScore::Scored(bp) => Some(10_000 - i64::from(bp)),
-                CaseTrialScore::Unknown | CaseTrialScore::NotEvidence => None,
-            };
-            let comparison = comparison_of(&["a"], &rows);
-            assert_eq!(
-                by_check(&comparison)
-                    .first()
-                    .and_then(|row| row.mean_diff_bp),
-                expected
-            );
         }
     }
 

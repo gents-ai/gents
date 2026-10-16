@@ -254,8 +254,6 @@ async fn generated_graph_failure_attribution_traces_drive_real_transactions() {
     }
 }
 
-// FailureAttribution.capture_loser_observes_winner: a cancellation committed
-// between two observers of one generation must remain visible.
 #[tokio::test]
 async fn failure_capture_loser_reloads_cancellation_winner() {
     let (node, run, trigger) = super::super::runtime::attribution_test_fixture(2).await;

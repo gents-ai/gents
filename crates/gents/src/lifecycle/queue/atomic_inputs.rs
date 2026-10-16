@@ -50,12 +50,7 @@ pub(super) fn background_completion_gate(
     gate
 }
 
-/// Atomically persist background input and reuse or create the coalesced
-/// pending wake. A Goal on the session, in any status, never suppresses the
-/// wake (Lean `CompletionContinuation.enqueueWake?`).
 /// A concurrent claim conflicts and retries, so a wake cannot precede its input.
-/// The single transaction owner for fresh input and canonical receipt replay;
-/// an observed receipt ID is reloaded and validated inside this transaction.
 pub(crate) async fn persist_background_completion_with_message_canonical(
     node: &std::sync::Arc<EmbeddedNode>,
     parent: &AgentRequest,
@@ -449,8 +444,6 @@ async fn background_completion_transaction_attempt(
     let pending_rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["pending"].clone())
             .context("decode pending AgentRequest rows")?;
-    // The one pending wake carries the highest hop any pending notification
-    // requires; a lower one is superseded by a new wake at this hop.
     let (pending, lower) = match pending_rows.into_iter().find(|row| {
         row_matches_coalesced_source_and_key(row, QueueSource::BackgroundCompletion, queue_key)
     }) {

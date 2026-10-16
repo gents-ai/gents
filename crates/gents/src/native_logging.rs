@@ -1,8 +1,3 @@
-//! Thin adapters from our existing tracing events to OS-owned log storage.
-//!
-//! No files, rotation, collector processes, or retention policy live here. A
-//! foreground CLI keeps stderr; installed services opt into the native sink.
-
 use tracing::Subscriber;
 use tracing_subscriber::{registry::LookupSpan, Layer};
 
@@ -31,7 +26,6 @@ where
     }
 }
 
-/// A service definition sets this explicitly; ordinary CLI output stays local.
 pub fn service_logging_enabled() -> bool {
     std::env::var_os("GENTS_SYSTEM_LOG").is_some_and(|value| value == "1")
 }

@@ -1,4 +1,3 @@
-# One cumulative compaction record.
 type CompactionEntry @branchable {
     compaction_key: String @index(unique: true)
     session_id: String @index
@@ -11,8 +10,6 @@ type CompactionEntry @branchable {
     files_read: String
     files_modified: String
     messages_compacted: Int
-    # Canonical AgentMessage.sequence cursor of the cumulative compacted
-    # provider prefix; null on legacy entries.
     compacted_through_sequence: Int
     original_tokens: Int
     compacted_tokens: Int

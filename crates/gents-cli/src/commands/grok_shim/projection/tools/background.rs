@@ -1,5 +1,3 @@
-//! Native task cards derived exclusively from persisted background Bash calls;
-//! no process registry: IDs, lifecycle and output remain runtime-owned.
 
 use super::{observed_status, ToolCallRow, ToolCallStatus};
 use serde_json::{json, Value};
@@ -10,7 +8,6 @@ pub(crate) struct BackgroundTaskUpdate {
     pub kind: &'static str,
     pub key: String,
     pub payload: Value,
-    /// Runtime stream offset, carried internally rather than on the ACP wire.
     pub output_start: Option<u64>,
 }
 
@@ -27,9 +24,8 @@ fn update(kind: &'static str, id: &str, payload: Value) -> BackgroundTaskUpdate 
     }
 }
 
-/// The shell's TaskSnapshot uses serde's SystemTime representation, not an
-/// RFC3339 string; missing durable timestamps must not become wall-clock
-/// state.
+/// Missing durable timestamps must not become wall-clock state; the shell's
+/// TaskSnapshot uses serde's SystemTime representation, not an RFC3339 string.
 fn system_time(timestamp: Option<&str>) -> Option<Value> {
     let time = chrono::DateTime::parse_from_rfc3339(timestamp?).ok()?;
     let seconds = u64::try_from(time.timestamp()).ok()?;
@@ -135,7 +131,6 @@ pub(super) fn project(
                 .iter()
                 .filter_map(|field| metadata[field]["total_bytes"].as_u64())
                 .fold(0_u64, u64::saturating_add);
-            // A stale success output must not override terminal failure.
             let exit_code = if signal.is_some() && metadata["exit_code"].as_i64() == Some(0) {
                 Value::Null
             } else {

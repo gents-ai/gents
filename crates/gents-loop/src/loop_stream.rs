@@ -1,7 +1,3 @@
-//! Owned multi-turn completion and tool-execution loop: provider-request
-//! assembly, retry and retract decisions, streamed-turn accumulation, tool
-//! dispatch, and message threading; rig stays the provider client and
-//! streaming decoder at the boundary.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -72,10 +68,6 @@ pub use request_assembly::{
     assemble_provider_request, association_reduction, provider_messages, provider_view_tagged,
     replay_compaction_prefix_bound, sanitize_tagged_history, select_tagged_assistant_blocks,
 };
-// Not `#[cfg(test)]`: gents' own loop_stream test suite (crates/gents/src/
-// agent/loop_stream/tests/) calls these directly, and a cfg(test) item in
-// this crate is invisible to a dependent crate's own test build (same
-// reasoning as `rendered_request::transport::CountingInner`).
 pub use request_assembly::{
     clamp_request_output_budget, completion_request_input_components, ensure_context_can_dispatch,
     repair_provider_input,
@@ -104,11 +96,8 @@ pub use aggregate_budget::{
     AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX,
 };
 
-/// Prefix of the loop's terminal error for a tool-free turn that returned no
-/// visible text after its resample budget.
 pub const NO_VISIBLE_OUTPUT_PREFIX: &str = "completion produced no visible output: ";
 
-/// Whether a stream error is the loop's terminal no-visible-output failure.
 pub fn is_no_visible_output_failure(error: &LoopStreamError) -> bool {
     error
         .provider_message()
@@ -1332,8 +1321,6 @@ pub async fn build_request<M: CompletionModel>(
     Ok(builder.build())
 }
 
-/// The send boundary: the one place the provider content order is applied,
-/// after replay association.
 fn assemble_rig_chat_history(
     config: &LoopConfig,
     prompt: &Message,

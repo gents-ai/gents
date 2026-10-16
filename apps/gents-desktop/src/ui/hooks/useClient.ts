@@ -1,5 +1,3 @@
-/* What screens read about the client and the selection, by name. Each
-   re-renders its caller only when what it returns changes. */
 import { useMemo } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
@@ -95,11 +93,6 @@ export function useToolAuthority() {
   );
 }
 
-/**
- * What a node may touch. This machine's own setup describes only its own
- * node; any other node says it through its default agent's environment, and
- * a path it names is on that node's host, not this one.
- */
 export function useNodeReach(node: NodeView) {
   const homeDid = useHomeDid();
   const own = useToolAuthority();
@@ -116,8 +109,6 @@ export function useNodeReach(node: NodeView) {
   };
 }
 
-/** A value worked out over the fleet in the selection's scope; re-renders
-    when it changes, item by item for a list. */
 export function useInScope<T>(pick: (ctx: ScopeContext) => T): T {
   const selectedNodeDid = useSelectedNodeDid();
   const homeDid = useHomeDid();
@@ -144,14 +135,12 @@ export function useChatFolder() {
   return useStore(stores.chat, (state) => folderOf(state.folders, sessionId));
 }
 
-/** The folders chats were last pointed at, for picking one again. */
 export function useRecentFolders() {
   const { stores } = useApp();
   const folders = useStore(stores.chat, (state) => state.folders);
   return useMemo(() => recentFolders(folders), [folders]);
 }
 
-/** The mailbox item the next message answers, while it is held. */
 export function useMailboxCause() {
   const { stores } = useApp();
   const route = stores.selection.use.mailboxRoute();
@@ -178,7 +167,6 @@ export function useStartup() {
     ...state,
     managedServerWait,
     incompatibleHome: useIncompatibleHome(stores.client, lifecycle.home),
-    // A restart needs the node name and authority the failed start reported.
     canRestartManagedServer: Boolean(
       failure?.status.nodeName &&
       failure.status.effectiveToolCeiling &&

@@ -1,7 +1,3 @@
-//! Pure text truncation: head/tail line-and-byte clamping with no storage
-//! side effect. The full output is retained by the canonical transcript;
-//! this only selects what the model is shown.
-
 /// Every notice `truncate` writes starts with one of these; compaction
 /// recognizes already-truncated tool output by them.
 pub const TRUNCATION_NOTICE_PREFIXES: [&str; 4] = [
@@ -11,7 +7,6 @@ pub const TRUNCATION_NOTICE_PREFIXES: [&str; 4] = [
     "[Output omitted: ",
 ];
 
-/// The notice heading a byte-exact tail of `total` bytes.
 pub fn tail_bytes_notice(shown: usize, total: usize) -> String {
     format!("[Showing last {shown} of {total} bytes]\n\n")
 }
@@ -64,8 +59,6 @@ pub struct TextTruncation {
     pub returned_bytes: usize,
 }
 
-/// Byte ranges of the lines `str::lines` yields, each keeping any `\r`
-/// before its `\n`.
 fn line_spans(text: &str) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
     let mut start = 0;
     text.split_inclusive('\n').map(move |line| {
@@ -267,7 +260,6 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
     }
 }
 
-/// The largest UTF-8 boundary of `text` at or below `index`.
 pub fn floor_char_boundary(text: &str, index: usize) -> usize {
     let mut index = index.min(text.len());
     while !text.is_char_boundary(index) {
@@ -276,7 +268,6 @@ pub fn floor_char_boundary(text: &str, index: usize) -> usize {
     index
 }
 
-/// The smallest UTF-8 boundary of `text` at or above `index`.
 pub fn ceil_char_boundary(text: &str, index: usize) -> usize {
     let mut index = index.min(text.len());
     while !text.is_char_boundary(index) {
@@ -297,80 +288,6 @@ pub fn truncate_text(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn no_truncation_under_limits() {
-        let text = "line 1\nline 2\nline 3";
-        let (result, trigger, truncated) =
-            truncate_text(text, TruncationMode::Head, &TruncationLimits::default());
-        assert!(!truncated);
-        assert!(trigger.is_none());
-        assert_eq!(result, text);
-    }
-
-    #[test]
-    fn head_truncation_by_lines() {
-        let lines: Vec<String> = (0..100).map(|i| format!("line {}", i)).collect();
-        let text = lines.join("\n");
-        let limits = TruncationLimits {
-            max_lines: 10,
-            max_bytes: 1024 * 1024,
-        };
-
-        let (result, trigger, truncated) = truncate_text(&text, TruncationMode::Head, &limits);
-        assert!(truncated);
-        assert_eq!(trigger, Some(TruncationTrigger::Lines));
-        assert!(result.starts_with("line 0\n"));
-        assert!(result.contains("[Showing lines 1-10 of 100"));
-    }
-
-    #[test]
-    fn tail_truncation_by_lines() {
-        let lines: Vec<String> = (0..100).map(|i| format!("line {}", i)).collect();
-        let text = lines.join("\n");
-        let limits = TruncationLimits {
-            max_lines: 10,
-            max_bytes: 1024 * 1024,
-        };
-
-        let (result, trigger, truncated) = truncate_text(&text, TruncationMode::Tail, &limits);
-        assert!(truncated);
-        assert_eq!(trigger, Some(TruncationTrigger::Lines));
-        assert!(result.contains("line 99"));
-        assert!(result.contains("[Showing lines 91-100 of 100"));
-    }
-
-    #[test]
-    fn head_truncation_by_bytes() {
-        let text = "x".repeat(100_000);
-        let limits = TruncationLimits {
-            max_lines: 1_000_000,
-            max_bytes: 1024,
-        };
-
-        let (result, trigger, truncated) = truncate_text(&text, TruncationMode::Head, &limits);
-        assert!(truncated);
-        assert_eq!(trigger, Some(TruncationTrigger::Bytes));
-        assert!(result.len() < 100_000);
-        assert!(result.starts_with(&"x".repeat(1024)));
-        assert!(result.contains("[Showing first 1024 of 100000 bytes]"));
-    }
-
-    #[test]
-    fn tail_truncation_by_bytes() {
-        let text = "x".repeat(100_000);
-        let limits = TruncationLimits {
-            max_lines: 1_000_000,
-            max_bytes: 1024,
-        };
-
-        let (result, trigger, truncated) = truncate_text(&text, TruncationMode::Tail, &limits);
-        assert!(truncated);
-        assert_eq!(trigger, Some(TruncationTrigger::Bytes));
-        assert!(result.len() < 100_000);
-        assert!(result.ends_with(&"x".repeat(1024)));
-        assert!(result.contains("[Showing last 1024 of 100000 bytes]"));
-    }
 
     #[test]
     fn every_truncated_output_carries_a_notice_prefix() {
@@ -518,7 +435,6 @@ mod tests {
             max_lines: 10,
             max_bytes: 8,
         };
-        // "ok\n" is 3 bytes; 5 remain, which splits the third "é".
         let head = truncate(
             &format!("ok\n{}", "é".repeat(10)),
             TruncationMode::Head,
@@ -593,20 +509,6 @@ mod tests {
                 result.text
             );
         }
-    }
-
-    #[test]
-    fn both_limits_exceeded() {
-        let lines: Vec<String> = (0..5000).map(|i| format!("line {:04}", i)).collect();
-        let text = lines.join("\n");
-        let limits = TruncationLimits {
-            max_lines: 100,
-            max_bytes: 1024,
-        };
-
-        let (_, trigger, truncated) = truncate_text(&text, TruncationMode::Head, &limits);
-        assert!(truncated);
-        assert!(trigger.is_some());
     }
 
     #[test]

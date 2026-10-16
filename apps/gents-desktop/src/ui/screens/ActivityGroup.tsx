@@ -173,8 +173,6 @@ export function ActivityGroup({
   const [animated, setAnimated] = useState(false);
   const root = useRef<HTMLDivElement>(null);
 
-  // the capped box scrolls in the kit's ScrollArea: a plain overflow box drew
-  // WebKit's wide scrollbar
   const box = useRef<HTMLDivElement>(null);
   const capped = !single;
   const more = useScrollEdges(box);
@@ -229,8 +227,6 @@ export function ActivityGroup({
           <ScrollArea
             className={cn(
               capped && "max-h-80",
-              // no overscroll containment: a contained box at its end would
-              // keep the wheel and stop the transcript under the pointer
               "[&>[data-slot=scroll-area-viewport]]:max-h-[inherit]",
             )}
           >
@@ -322,9 +318,6 @@ export function Reasoning({ text }: { text: string }) {
           )}
         </div>
         {(all || clipped) && (
-          // the composer floats over the scroller's foot and padding does not
-          // move a sticky element: it pins against the scrollport, so the
-          // offset must still clear the room the composer leaves
           <div
             className={cn(
               "mt-1 flex w-fit items-center gap-1 rounded-lg p-0.5",

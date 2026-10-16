@@ -1,8 +1,5 @@
 import Proofs.CanonicalOutput.Execution.Examples
 import Proofs.StreamingResponse.ReasoningAudit
-
-/-! Compaction and fallback captures are request-owned audit facts, never
-assistant turns. -/
 namespace CanonicalOutput.Execution.AuxiliaryCases
 
 open CanonicalOutput

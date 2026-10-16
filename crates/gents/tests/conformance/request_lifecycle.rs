@@ -28,9 +28,6 @@ fn rust_request_transition_action(from: &str, to: &str) -> Option<&'static str> 
     }
 }
 
-/// Writers for edges no single `RequestContext.Action` takes: request recovery
-/// revokes an expired generation whose canonical output is definitively
-/// unreconstructable (`boundary.request.recovery-sweep-reachable`).
 fn rust_request_recovery_sweep_writer(from: &str, to: &str) -> Option<&'static str> {
     match (from, to) {
         ("claimed", "dead") | ("processing", "dead") => {
@@ -40,8 +37,6 @@ fn rust_request_recovery_sweep_writer(from: &str, to: &str) -> Option<&'static s
     }
 }
 
-// The classification comes from the generated Lean contract, never a Rust
-// mirror table.
 
 #[tokio::test]
 async fn ordinary_completion_rejects_claimed_without_execution() {
@@ -105,9 +100,6 @@ async fn admission_rejection_persists_despite_an_undecodable_session_row_under_i
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
     let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-    // Seed a row under the request's exact `(node, session)` label that fails
-    // canonical decode: ownership is unknowable, so the refusal must leave it
-    // untouched instead of rolling back.
     let seeded = db
         .node
         .execute(&format!(
@@ -237,8 +229,6 @@ async fn terminalizing_an_older_request_preserves_the_latest_projection() {
         &created_at,
     )
     .await;
-    // Seed a newer replicated observation; terminalization must retain this
-    // exact physical/logical identity.
     support::seed_session_observation(
         &db.node,
         &session_id,
@@ -389,9 +379,6 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
                 .await
                 .unwrap();
             } else {
-                // Drive the PRODUCTION supersede writer. This arm used to issue its
-                // own raw mutation, which asserted only that DefraDB accepts a
-                // superseding write — not that any runtime code performs one.
                 let survivor_id = uuid::Uuid::new_v4().to_string();
                 let survivor_created_at =
                     (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
@@ -577,12 +564,6 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
                 drive_generated_request_legal_case(case).await;
             }
             "illegal" => {
-                // This consults the writer inventory above, which catches drift
-                // between the inventory and the Lean contract. The claim that
-                // production cannot REACH these edges is carried by
-                // `production_request_writers_only_reach_contracted_edges`, which
-                // drives the real writers and asserts the observed edge set falls
-                // inside legal + recoveryReachable.
                 assert!(
                     rust_request_transition_action(&case.from, &case.to).is_none()
                         && rust_request_recovery_sweep_writer(&case.from, &case.to).is_none(),
@@ -636,7 +617,6 @@ async fn force_terminal_persisted_state(node: &EmbeddedNode, doc_id: &str, lifec
     force_persisted_lifecycle_state(node, doc_id, lifecycle_state).await;
 }
 
-/// Queue input marking a request as coalescible under `key`.
 fn coalesce_input(key: &str) -> String {
     serde_json::json!({
         "queue": {
@@ -667,16 +647,6 @@ async fn force_persisted_lifecycle_state(node: &EmbeddedNode, doc_id: &str, life
     );
 }
 
-/// Drive every `RequestLifecycle` writer from every persisted start state and
-/// require the observed edge set to fall inside legal + recoveryReachable.
-/// Placing each writer in its own locally-permitted state and forcing the row
-/// independently keeps the persisted CAS filter decisive (verified by weakening
-/// a production CAS: this test then reports an out-of-contract edge).
-///
-/// Coverage: every legal edge except `processing -> processing`, plus
-/// `pending -> dead`; the `claimed/processing -> dead` revocation edges are
-/// driven by the generated `corrupt_twin_revocation_*` cases; output appends
-/// add no lifecycle edge.
 #[tokio::test]
 async fn production_request_writers_only_reach_contracted_edges() {
     const START_STATES: [&str; 9] = [
@@ -737,8 +707,6 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 created_at.clone(),
             );
 
-            // Give post-claim writers a real generation before pinning the
-            // persisted start state.
             match writer {
                 "claim"
                 | "admission_reject"
@@ -751,7 +719,6 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 }
             }
 
-            // Processing writers require a real claimed generation.
             if start == "processing" && matches!(writer, "complete" | "fail" | "interrupt") {
                 crate::support::begin_owned_execution(&mut lifecycle, &db.node)
                     .await
@@ -770,7 +737,6 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 assert!(!result.has_errors(), "{:?}", result.errors);
             }
 
-            // Auxiliary rows the sweep writers act on.
             match writer {
                 "coalesce_pending" => {
                     let survivor_id = uuid::Uuid::new_v4().to_string();
@@ -794,8 +760,6 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 _ => {}
             }
 
-            // Then pin the persisted row to the start state under test,
-            // independently of local state.
             force_persisted_lifecycle_state(&db.node, &doc_id, start).await;
 
             let before = fetch_request_snapshot(&db.node, &doc_id)
@@ -815,8 +779,6 @@ async fn production_request_writers_only_reach_contracted_edges() {
                     let _ = lifecycle.reject_admission("projection rejected").await;
                 }
                 "claim_after_ttl_lapse" => {
-                    // Reached THROUGH claim(): pre-claim TTL lapse terminalizes
-                    // to `dead`.
                     let _ = lifecycle.claim().await;
                 }
                 "begin_execution" => {
@@ -880,8 +842,6 @@ async fn production_request_writers_only_reach_contracted_edges() {
         }
     }
 
-    // Coverage floor: without this, the subset assertion below could be met by
-    // a fixture that silently stopped driving its writer.
     let expected: std::collections::BTreeSet<(String, String)> = [
         ("pending", "claimed"),
         ("pending", "failed"),
@@ -904,9 +864,6 @@ async fn production_request_writers_only_reach_contracted_edges() {
         "production writers stopped reaching edges this test is supposed to cover: {missing:?}"
     );
 
-    // Classify against the LEAN-EMITTED contract, not the Rust mirror table:
-    // an out-of-contract edge can only be legitimised by changing the Lean
-    // model.
     let contract = lean_request_transition_cases();
     for (from, to) in &observed {
         let case = contract
@@ -923,13 +880,6 @@ async fn production_request_writers_only_reach_contracted_edges() {
     }
 }
 
-/// S1 (`terminal_irreversibility`) asserted against PRODUCTION writers: a live
-/// `RequestLifecycle` races an actor that already terminalized the row; every
-/// terminal writer must leave the persisted document untouched.
-///
-/// Covered writers: `claim`, `admission_reject`, `begin_execution`, `complete`,
-/// `fail`, `interrupt`, `repair_terminal_requests`. Deduplication, expiry, and
-/// remaining recovery mutations are #994.
 #[tokio::test]
 async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers() {
     const TERMINAL_STATES: [&str; 5] = ["completed", "failed", "superseded", "dead", "interrupted"];
@@ -960,15 +910,12 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
                 created_at.clone(),
             );
 
-            // Take real ownership first so the persisted CAS filter decides.
             if writer != "claim" {
                 assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
             }
 
-            // Another actor terminalizes the row underneath the live lifecycle.
             force_terminal_persisted_state(&db.node, &doc_id, terminal).await;
 
-            // The contract is about the persisted document, not the return value.
             match writer {
                 "claim" => {
                     let outcome = lifecycle.claim().await;
@@ -1370,8 +1317,6 @@ async fn drive_queue_deadline_case(case: &lean_vocab_test::LeanQueueDeadlineConf
         "terminal_active_allows_next_pending_same_session_claim" => {
             drive_terminal_active_allows_next_pending_same_session_claim(case).await;
         }
-        // This generated case's native drive lives in
-        // tool_call_lifecycle::request_scope_conformance.
         "background_completion_notification_creates_no_agent_request" => {}
         "cancel_drains_automated_wakeups_preserves_user_pending" => {
             drive_cancel_drains_automated_wakeups_preserves_user_pending(case).await;

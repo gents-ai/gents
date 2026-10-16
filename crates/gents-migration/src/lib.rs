@@ -1,6 +1,3 @@
-//! Lens-first schema migration for Gents. There is no public "register schemas
-//! only" path — any bypass forks the version lineage.
-
 mod engine;
 mod error;
 mod expectation;

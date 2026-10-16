@@ -15,8 +15,6 @@ import { renderIn, testApp } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 import { deferred } from "./deferred";
 
-/* the step card on screen; a later step is paced in after the one before
-   has had its time, so it is waited for */
 const shownStep = (text: string) =>
   waitFor(() => expect(screen.getByTestId("startup-step")).toHaveTextContent(text), {
     timeout: 2_000,

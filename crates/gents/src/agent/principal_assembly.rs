@@ -1,5 +1,3 @@
-//! Node-scoped runtime agent assembly.
-
 use std::sync::Arc;
 
 use crate::config::ResolvedAgent;

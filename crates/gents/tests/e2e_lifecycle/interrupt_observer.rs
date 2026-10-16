@@ -128,9 +128,6 @@ async fn observer_survives_malformed_interrupt_timestamp() {
     }
 }
 
-/// Regression: an interrupt latched before observer spawn must be observed on
-/// the first poll, not skipped to the second tick (the historical "2-second
-/// blind spot").
 #[tokio::test]
 async fn observer_picks_up_already_set_interrupt_on_first_poll() {
     let db = test_db("observer-initial-poll").await;

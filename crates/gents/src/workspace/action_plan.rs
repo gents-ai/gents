@@ -104,7 +104,6 @@ pub struct SealWorkspaceAction {
     pub produced_by_request_doc_id: String,
 }
 
-/// Operator-only freeze of an unchanged base; no producer request is implied.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct FreezeWorkspaceBaseAction {

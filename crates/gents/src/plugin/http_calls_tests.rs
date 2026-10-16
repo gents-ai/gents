@@ -1,5 +1,3 @@
-//! Host-mediated plugin HTTP against a loopback server, fake resolvers and
-//! WAT plugins.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -14,7 +12,6 @@ use crate::plugin::PluginVerdict;
 
 const PLUGIN: &str = "team/plugin";
 
-/// A loopback HTTP server.
 struct Server {
     port: u16,
     hits: Arc<Mutex<Vec<String>>>,
@@ -422,7 +419,6 @@ async fn a_rebinding_name_is_checked_on_the_addresses_the_connection_uses() {
 }
 
 /// The host never follows a redirect: the plugin gets the 3xx and its
-/// location.
 #[tokio::test]
 async fn a_redirect_comes_back_to_the_plugin() {
     let server = Server::start().await;
@@ -521,7 +517,6 @@ async fn caps_bound_bodies_requests_and_time() {
     assert!(error.contains("larger than"), "{error}");
 }
 
-/// Concurrent requests share one budget.
 #[tokio::test]
 async fn the_response_budget_is_charged_as_bytes_are_read() {
     let server = Server::start().await;

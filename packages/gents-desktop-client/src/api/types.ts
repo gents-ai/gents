@@ -181,7 +181,6 @@ export type DesktopApiAdapter = {
     content: string;
     causedBySourceDocId?: string | null;
     answer?: MailboxQuestionAnswer | null;
-    /** The folder the user works in for this chat. */
     cwd?: string | null;
   }) => Promise<ChatSendResult>;
   editPendingQueue: (

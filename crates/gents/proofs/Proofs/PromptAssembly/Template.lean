@@ -5,18 +5,6 @@ import Proofs.PromptAssembly.Executable
 import Proofs.Configuration
 import Proofs.Skills
 
-/-!
-# Prompt assembly: literal system prompt, task-only templates
-
-System prompts stay literal at request time: they are not templates and do
-not consult a volatility catalog. `Volatility`, `Catalog`, `WellFormedSystem`,
-and `validateSystem` are deleted; only task prompt templates remain, rendered
-per invocation against an explicit binding. The `contextPreamble` slot for the
-removed dynamic request context is gone (see `PromptAssembly.Slot`), and layer
-order is preserved: preamble first, skill reminders, compaction/conversation
-layers, prompt last.
--/
-
 set_option linter.dupNamespace false
 
 namespace PromptAssembly.Template

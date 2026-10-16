@@ -74,7 +74,6 @@ fn project<T: DeserializeOwned + Serialize>(
     Ok((fields, normalized))
 }
 
-/// Canonical desired-field metadata and optional typed configuration normalization.
 pub fn config_projection(
     collection: Collection,
     value: Option<&Value>,
@@ -111,7 +110,6 @@ pub fn config_projection(
     }
 }
 
-/// Commit canonical desired values, never reinterpret strings as legacy JSON.
 pub fn desired_state_document_digest(value: &Value) -> Result<String> {
     let mut value = value.clone();
     let root = value
@@ -461,7 +459,6 @@ async fn validate_trigger_document_fields(
     Ok(())
 }
 
-/// The templates a fire of `trigger` renders against the delivered document.
 fn event_trigger_templates<'a>(
     trigger: &'a crate::document_config::Trigger,
     task: &'a crate::document_config::Task,
@@ -910,8 +907,6 @@ pub struct DriftedDocument {
     pub found: Option<String>,
 }
 
-/// Refinement of `ApplyReconcile.publishIf`: a stale expectation leaves desired
-/// and live state unchanged. Recover it with [`stale_expectation`].
 #[derive(Debug)]
 pub struct StaleExpectation {
     pub drifted: Vec<DriftedDocument>,
@@ -1192,10 +1187,6 @@ pub async fn apply_desired_state_plan(
         let (owner, id) = document_identity(document.collection, &document.add)?;
         let existing =
             existing_documents.remove(&(document.collection, owner.to_owned(), id.to_owned()));
-        // Only configuration changes are diagnostic events. Keeping this at
-        // the common desired-state owner covers packs, self-config, and
-        // direct writers without making runtime resolution log on every
-        // reconcile.
         let changed = existing
             .as_ref()
             .is_none_or(|(_, current)| current != &document.update);

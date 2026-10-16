@@ -1,12 +1,3 @@
-//! Live concurrent multi-wave P2P admission e2e against real inference.
-//!
-//! ```bash
-//! GENTS_LIVE_P2P_ADMISSION=1 GENTS_EVAL_TARGET=workstation-1 \
-//!   cargo test -p gents --test e2e_live \
-//!     concurrent_multiwave_single_push_worker_converges_with_live_inference \
-//!     -- --ignored --nocapture --test-threads=1
-//! ```
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

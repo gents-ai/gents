@@ -1,9 +1,3 @@
-//! Transport liveness of one armed provider attempt, stamped by the capturing
-//! transport. Bytes rather than decoded items are the signal because healthy
-//! providers stream long runs that decode to no loop item. Admission waits
-//! happen before the send stamp and durable finalization after the settle, so
-//! neither counts as idleness.
-
 use std::sync::Mutex;
 
 use tokio::time::Instant;
@@ -55,9 +49,8 @@ impl ProviderActivity {
         self.lock().token_limit_reached
     }
 
-    /// Recorded before the stalled attempt's stream is dropped, so the
-    /// admission permit's drop path can report why the call ended.
     pub fn mark_stalled(&self, reason: String) {
+        // The permit drop path reads this after the stalled stream is dropped.
         self.lock().stall_reason = Some(reason);
     }
 

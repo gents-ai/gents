@@ -26,5 +26,4 @@ export const getSurface = registry.get;
 export const listSurfaces = (placement?: Placement): Surface[] =>
   registry.list().filter((s) => !placement || s.placements.includes(placement));
 export const useSurfaces = registry.useList;
-// Tests only.
 export const clearSurfaces = registry.clear;

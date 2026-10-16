@@ -47,9 +47,6 @@ pub fn describe_manifold(manifold: &Manifold) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("; "))
 }
 
-/// What operator consent for `plugin` covers, beyond [`describe_manifold`]'s
-/// own axes. `bind_dir` is one caller-bound directory per call, never standing
-/// authority (see [`super::BoundDir`]).
 pub fn describe_plugin_authority(plugin: &PackPlugin, manifold: &Manifold) -> Option<String> {
     let mut parts: Vec<String> = describe_manifold(manifold).into_iter().collect();
     if let Some(binding) = &plugin.bind_dir {

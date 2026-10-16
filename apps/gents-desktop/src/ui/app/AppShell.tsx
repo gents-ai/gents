@@ -87,8 +87,6 @@ export function AppShell({
         >
           <main
             className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
-            /* Keeps its own width while the card is narrower than it should
-               lay out at, so it slides under the dock rather than re-wrapping. */
             style={
               paneWidth !== null
                 ? { width: Math.max(360, paneWidth - 10) }

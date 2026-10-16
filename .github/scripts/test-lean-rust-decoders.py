@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Negative controls for the Lean/Rust fixture structural lint."""
 import copy
 import importlib.util
 from pathlib import Path

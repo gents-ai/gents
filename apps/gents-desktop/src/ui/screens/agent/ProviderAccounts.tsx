@@ -37,10 +37,6 @@ function referencedAccount(
   );
 }
 
-/**
- * A subscription backend serves only on its enabled account and is named
- * "<label> · <provider>"; other backends always serve.
- */
 export function backendAccount(
   accounts: readonly ProviderAccountView[],
   b: InferenceBackendView,

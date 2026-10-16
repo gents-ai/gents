@@ -104,7 +104,6 @@ fn sorted_diagnostics(diagnostics: &mut [Diagnostic]) {
     });
 }
 
-/// One requested limit outside its platform range `minimum..=ceiling`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LimitViolation {
     pub field: &'static str,
@@ -245,8 +244,7 @@ fn validate_capability_ports(
                     ),
                 );
             }
-            // Ports come from installed packs, so they are a datastore surface
-            // for the protected eval collections.
+            // Pack ports are a datastore surface for protected eval collections.
             if validate_collection_identifier(&port.collection).is_err()
                 || reject_protected_collection_name(&port.collection).is_err()
             {
@@ -275,11 +273,8 @@ fn validate_capability_ports(
     }
 }
 
-/// Compile an untrusted intent without performing I/O.
-///
-/// Capabilities must come from the caller-visible configured catalog.
-/// Empty `allowed_callers` lists deny access. Every diagnostic is stable-sorted
-/// so a model can repair a proposal deterministically.
+/// Capabilities must come from the caller-visible configured catalog; an empty
+/// `allowed_callers` list denies access.
 pub fn compile_graph(
     intent: &GraphIntent,
     capabilities: &[StageCapability],
@@ -400,7 +395,6 @@ pub fn compile_graph(
         resolved.insert(node.node_id.as_str(), *capability);
     }
 
-    // Event-source triggers route by physical collection, not producer node.
     let mut output_collections = BTreeMap::new();
     for (node_id, capability) in &resolved {
         for port in &capability.output_ports {
@@ -1157,7 +1151,6 @@ pub fn graph_plan_digest(plan: &GraphPlan) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
-/// Bind typed package/configuration provenance to an already validated graph.
 pub fn bind_package_plan(mut plan: GraphPlan, mut package: PackagePlan) -> GraphPlan {
     package.artifacts.sort();
     package.required_schema_digests.sort();

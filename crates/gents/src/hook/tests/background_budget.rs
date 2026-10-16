@@ -286,9 +286,6 @@ impl ToolDyn for NoisyTool {
     }
 }
 
-/// The completion notification's summary is bounded by the owning behavior's
-/// configured `max_output_chars`, and a redrive replays the published notice
-/// under the budget it was rendered with (never a second notice).
 #[tokio::test]
 async fn background_completion_summary_honors_the_configured_output_budget() {
     let dir = tempfile::tempdir().unwrap();

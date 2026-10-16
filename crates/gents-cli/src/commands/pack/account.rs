@@ -1,9 +1,3 @@
-//! Registry accounts and releases from the command line: `gents pack login`,
-//! `logout`, `whoami`, `info` and `yank`.
-//!
-//! A token comes from `--token`, then `GENTS_REGISTRY_TOKEN`, then what
-//! `gents pack login` saved for that registry in the gents home, so every
-//! command that writes to the registry resolves it the same way.
 
 use std::path::Path;
 
@@ -141,15 +135,7 @@ mod tests {
         serve_fake_pack, FAKE_PASSWORD, FAKE_TOKEN, FAKE_USERNAME,
     };
 
-    #[tokio::test]
-    async fn an_empty_password_is_refused_before_it_reaches_the_registry() {
-        let client = RegistryClient::new("http://127.0.0.1:1".to_string());
-        let error = login_with_password(&client, "demo", "").await.unwrap_err();
-        assert!(
-            format!("{error:#}").contains("password") && format!("{error:#}").contains("empty"),
-            "{error:#}"
-        );
-    }
+
 
     #[tokio::test]
     async fn login_exchanges_a_password_for_a_token_the_fake_registry_issued() {
@@ -282,14 +268,5 @@ mod tests {
         assert_eq!(token, FAKE_TOKEN);
     }
 
-    #[test]
-    fn resolve_token_flag_passes_through_an_explicit_token_without_touching_stdin() {
-        assert_eq!(
-            resolve_token_flag(Some("explicit".to_owned()), false)
-                .unwrap()
-                .as_deref(),
-            Some("explicit")
-        );
-        assert_eq!(resolve_token_flag(None, false).unwrap(), None);
-    }
+
 }

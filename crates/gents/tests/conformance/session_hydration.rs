@@ -1,4 +1,3 @@
-//! Conformance fence for `Proofs/SessionHydration`.
 
 use std::collections::BTreeSet;
 
@@ -367,7 +366,6 @@ fn hydration_coverage_distinguishes_same_doc_id_in_different_collections() {
     use gents::agent::p2p_reconcile::session_hydration::{
         project_durable_hydration_progress, ClientHydrationRequestState,
     };
-    // an ID from another collection must not satisfy the served manifest.
     let message = SessionHydrationDocumentKey {
         collection: SessionHydrationCollection::AgentMessage,
         doc_id: "shared-id".into(),

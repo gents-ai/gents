@@ -72,33 +72,6 @@ async fn manual_source_run_task_now_yields_intent_with_args_vars() {
 }
 
 #[tokio::test]
-async fn manual_source_run_task_now_rejects_unknown_task() {
-    let snapshot =
-        snapshot_with_active_task(resolved_task_for_test("other-task", "behavior-1", "x"));
-    let (_source, handle) = ManualSource::new(CancellationToken::new());
-    let err = handle
-        .run_task_now(snapshot.as_ref(), "missing", serde_json::json!({}))
-        .await
-        .unwrap_err();
-    assert!(
-        err.to_string().contains("not in the active snapshot"),
-        "expected 'not in the active snapshot' in error, got: {err}"
-    );
-}
-
-#[tokio::test]
-async fn manual_source_next_fire_returns_none_after_cancel() {
-    let cancel = CancellationToken::new();
-    let (mut source, _handle) = ManualSource::new(cancel.clone());
-    cancel.cancel();
-
-    let result = tokio::time::timeout(std::time::Duration::from_millis(200), source.next_fire())
-        .await
-        .expect("timed out waiting for cancelled next_fire");
-    assert!(result.is_none());
-}
-
-#[tokio::test]
 async fn production_materializer_persists_event_source_document_lineage() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();

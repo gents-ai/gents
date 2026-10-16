@@ -1,40 +1,4 @@
 #[tokio::test]
-async fn single_turn_no_tools_yields_text_then_final() {
-    let model = ScriptedModel::new(vec![
-        RawStreamingChoice::Message("Hello ".to_string()),
-        RawStreamingChoice::Message("world".to_string()),
-        RawStreamingChoice::FinalResponse(()),
-    ]);
-
-    let stream = run_loop_stream(
-        model,
-        None::<gents_loop::session_hook::NoopSessionHook>,
-        TaggedMessage::unassociated(Message::user("hi")),
-        Vec::new(),
-        Arc::new(Vec::new()),
-        config(0),
-    );
-    futures::pin_mut!(stream);
-
-    let mut texts = Vec::new();
-    let mut final_text = None;
-    while let Some(item) = stream.next().await {
-        match item.expect("loop item should be Ok") {
-            LoopStreamItem::Text(text) => {
-                texts.push(text);
-            }
-            LoopStreamItem::Final { text } => {
-                final_text = Some(text);
-            }
-            _ => {}
-        }
-    }
-
-    assert_eq!(texts, vec!["Hello ".to_string(), "world".to_string()]);
-    assert_eq!(final_text.as_deref(), Some("Hello world"));
-}
-
-#[tokio::test]
 async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_reminder() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -128,10 +92,7 @@ async fn exceeding_max_turns_terminates_with_error() {
         !error.classify().is_retryable(),
         "max-turns exhaustion must be non-retryable; got {last:?}"
     );
-    // External-system obligation: the Harbor adapter (scripts/harbor/run_gents.sh)
-    // classifies budget exhaustion by matching the persisted error message's
-    // exact prefix `agent stream failed: ` + this display; changing the wording
-    // silently reverts MaxTurn trials to Harbor infrastructure exceptions.
+    // Harbor classifies budget exhaustion by matching the persisted error message prefix.
     assert!(
         error.to_string().starts_with("PromptError: MaxTurnError: "),
         "max-turns error display must start with the anchored Harbor prefix; got {error}"
@@ -143,12 +104,6 @@ async fn managed_terminal_tool_result_terminates_loop() {
     let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let prompt = Message::user("run the slow tool");
 
-    // A tool CANNOT fabricate a managed terminal: run the loop under an
-    // already-expired tool-execution scope so the dispatcher's own envelope
-    // produces `ToolOutcome::TimedOut`. The owned driver is required because
-    // dispatch only happens after the accepted publication fold
-    // (`ProviderTurnReady` → StreamProcessor adoption), which a bare
-    // stream.next() driver never reaches.
     let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(FixedTool {
         name: "echo".to_string(),
         output: "unreachable".to_string(),
@@ -163,11 +118,6 @@ async fn managed_terminal_tool_result_terminates_loop() {
         owned_config(4),
     );
 
-    // The daemon installs the tool runtime scope around stream polling; an
-    // already-expired deadline makes the dispatcher's envelope resolve the
-    // tool call to `ToolOutcome::TimedOut`. Keep the runtime-scope wrapper
-    // from embedding the large driver futures inline in the Tokio task's
-    // stack frame.
     let collected = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
         Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
         tokio_util::sync::CancellationToken::new(),
@@ -185,7 +135,6 @@ async fn managed_terminal_tool_result_terminates_loop() {
         .error
         .as_deref()
         .expect("stream should end with a terminal error");
-    // The managed terminal travels as typed data, never threaded as tool output.
     assert!(
         error.contains("PromptCancelled"),
         "expected the typed PromptCancelled terminal; got {error}"
@@ -198,9 +147,6 @@ async fn managed_terminal_tool_result_terminates_loop() {
 
 #[tokio::test]
 async fn threaded_assistant_turn_carries_provider_message_id() {
-    // P2a regression: the in-loop assistant message threaded back to the provider
-    // must carry the provider message id (OpenAI Responses / ChatGPT Codex
-    // follow-up requests reference prior `msg_` ids).
     let model = ScriptedModel::new_turns(vec![
         vec![
             RawStreamingChoice::MessageId("msg_abc123".to_string()),

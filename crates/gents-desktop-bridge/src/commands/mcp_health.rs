@@ -13,12 +13,6 @@ use gents_protocol::tool_service_health::ToolServiceHealthState;
 
 use super::super::types::{MCPServiceHealthView, McpServiceProbeResult};
 
-/// Reads persisted `ToolServiceHealthState` rows scoped to the selected node.
-/// Bridges to the GraphQL store, not the in-memory `ServiceHealthMap`: the node
-/// runtime lives in a separate process, so the persisted collection is the
-/// desktop's only path to that state. Rows are written by a `node_did`; on a
-/// replicated desktop node the local DefraDB holds every replicated node's rows,
-/// hence the selected-node filter.
 pub async fn load_mcp_services_with_health(core: &ClientCore) -> Result<Vec<MCPServiceHealthView>> {
     let Some(node_did) = core.selected_node_did() else {
         return Ok(Vec::new());
@@ -75,8 +69,6 @@ pub(crate) async fn load_mcp_services_with_health_for_node(
     rows.into_iter().map(view_from_row).collect()
 }
 
-/// `display_state` is the collapsed projection of the persisted `status`; a
-/// missing or unrecognized status fails loudly rather than rendering healthy.
 pub(crate) fn view_from_row(row: ToolServiceHealthStateRow) -> Result<MCPServiceHealthView> {
     let display_state = ToolServiceHealthState::parse_opt(row.status.as_deref())
         .ok_or_else(|| {

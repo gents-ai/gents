@@ -219,8 +219,6 @@ pub(crate) async fn resolve_send_target(
     )
 }
 
-/// Lean `DurableLineage.sessionTargetAllowed`; ACP decides which canonical
-/// sessions are readable before this check, and still authorizes each write.
 fn session_target_allowed(
     session: &gents_protocol::session::AgentSession,
     caller_node_did: &str,
@@ -406,12 +404,6 @@ pub(crate) struct SessionMessageReceipt {
     pub status: String,
 }
 
-/// Start the pending row, persist its planned request and publish the
-/// receipt naming that request, all in one transaction. An embedded commit
-/// can be durable although its result was lost, so a failed commit is decided
-/// by the durable row: a running row with its receipt was delivered, and a
-/// pending row was not. Any other observation is an error, and the row is
-/// left to recovery.
 pub(crate) async fn commit(
     node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
@@ -602,15 +594,10 @@ pub(crate) async fn load_receipt(
 
 pub(crate) enum CausedObservation {
     Bound(gents_protocol::row::AgentRequestRow),
-    /// Lean `SessionMessageRecoveryCause`: a peer has not replicated the
-    /// named request back.
     NotVisible,
     Unbound(&'static str),
 }
 
-/// The one request a session-message row caused, read through the row's
-/// receipt and checked against its lineage: a session-message request, new or
-/// steering, carrying the row's full calling edge under this requester.
 pub(crate) async fn observe_caused_request(
     node: &std::sync::Arc<EmbeddedNode>,
     lifecycle: &crate::tool_call_lifecycle::ToolCallLifecycle,
@@ -673,8 +660,6 @@ pub(crate) async fn observe_caused_request(
     Ok(CausedObservation::Bound(caused))
 }
 
-/// Lean `DurableLineage.interruptAllowed`: in 0.20 an agent may interrupt
-/// another session only when the caller's session started it.
 pub fn agent_interrupt_allowed(
     caller_session: &str,
     target_session: &str,
@@ -726,7 +711,6 @@ pub async fn interrupt_session(
     Ok(Some(active.request_id))
 }
 
-/// `agent_list`: the currently configured startup targets.
 pub(crate) async fn agent_list(
     _node: &Arc<EmbeddedNode>,
     _caller: &crate::AgentRequest,
@@ -747,7 +731,6 @@ pub(crate) async fn agent_list(
     Ok(serde_json::json!({ "ok": true, "agents": agents }))
 }
 
-/// What a kill did (Lean `Recovery.KillAction`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KillOutcome {
     Settled,
@@ -755,8 +738,6 @@ pub(crate) enum KillOutcome {
     Cancelled,
 }
 
-/// Lean `Recovery.killAction`. A kill never waits on a peer or on a request
-/// it cannot name: those rows are cancelled directly.
 pub(crate) async fn kill(
     node: &std::sync::Arc<EmbeddedNode>,
     lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
@@ -874,8 +855,6 @@ mod hop_tests {
         }
     }
 
-    /// Lean `DurableLineage.sessionMessageWrite`: a message into an idle
-    /// session is a new request and one into a busy session steers it.
     #[tokio::test]
     async fn generated_session_message_writes_carry_the_calling_edge() {
         let message = published_session_message(PublishedAdmissionOptions {
@@ -1052,8 +1031,6 @@ mod agent_tools_tests {
         assert!(!response.has_errors(), "{:?}", response.errors);
     }
 
-    /// Lean `DurableLineage.interruptAllowed`: only the session that started
-    /// a session may interrupt it.
     #[tokio::test]
     async fn only_the_starting_session_may_interrupt() {
         let (message, caller, caused) = started("agent-interrupt-permission").await;

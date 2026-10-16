@@ -1,17 +1,8 @@
 import Proofs.Basic
 
-/-!
-# Request-wide provider token budget
-
-One durable agent request may issue several provider calls (tool turns and
-later-retracted attempts) against one monotone ledger: the runtime must
-constrain every dispatch from the ledger and charge every non-zero provider
-usage report. The provider tokenizer and the truthfulness of its usage report
-remain external assumptions. Live charging rejects missing or all-zero usage
-and fails on an observed overrun; restart accounting sums decoded durable
-components and omits wholly unreported rows, so whether every completed call
-reported usage remains the durable call owner's admission obligation.
--/
+/-! The provider tokenizer and truthfulness of provider usage reports are
+external assumptions. The durable call owner must ensure completed calls have
+reported usage before restart accounting omits unreported rows. -/
 
 namespace PromptAssembly.AggregateBudget
 
@@ -50,8 +41,8 @@ structure Ledger where
   used : Nat
   deriving DecidableEq, Repr
 
-/-- InferenceCall accounting uses the exact physical request; logical retry
-labels, goals and sessions must not widen the query. -/
+/-- Accounting uses the exact physical request; logical retry labels, goals and
+sessions must not widen the query. -/
 inductive CallKind where
   | inference | compaction
   deriving DecidableEq, Repr
@@ -84,7 +75,6 @@ theorem rehydrate_keeps_pinned_limit (requestDocId : String) (limit : Nat)
 theorem no_limit_stays_unlimited (requestDocId : String) (rows : List DurableCallUsage) :
     rehydrateRequest requestDocId none rows = none := by rfl
 
-/-- Neither call kind nor later retraction exempts a persisted charge. -/
 theorem owned_call_counts (requestDocId : String) (kind : CallKind)
     (usage : PersistedUsage) (rows : List DurableCallUsage) :
     rehydrateUsed (requestUsage requestDocId (⟨requestDocId, kind, usage⟩ :: rows)) =
@@ -123,9 +113,6 @@ inductive PostChargeAction where
   | fail
   deriving DecidableEq, Repr
 
-/-- Exact exhaustion may publish only an already-valid terminal response; it
-cannot admit a tool turn, empty response, or failed structured-output contract.
-Missing usage and observed overrun always fail. -/
 def postChargeAction (result : ChargeResult) (terminalValid : Bool) : PostChargeAction :=
   match result with
   | .missing | .overrun _ => .fail
@@ -207,8 +194,6 @@ theorem missing_usage_fails (terminalValid : Bool) :
     postChargeAction .missing terminalValid = .fail := by
   simp [postChargeAction]
 
-/-- Key retry property: a completed attempt that is later retracted still
-consumes the same ledger as the replacement attempt. -/
 theorem two_charges_are_additive
     (ledger : Ledger) (first second : Usage) :
     ((ledger.charge first).charge second).used =

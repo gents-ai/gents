@@ -1,15 +1,3 @@
-//! Live qualification: a real model uses the native `lsp` tool against
-//! rust-analyzer on **this** Gents workspace.
-//!
-//! ```bash
-//! rust-analyzer --version
-//! GENTS_LIVE_LSP=1 GENTS_EVAL_TARGET=workstation-1 \
-//!   GENTS_LSP_RUST_PACK_DIR=<packs checkout>/packs/gents/lsp_rust \
-//!   cargo test -p gents --features live-e2e --test e2e_live \
-//!   lsp_live_model_uses_rust_analyzer \
-//!   -- --ignored --test-threads=1 --nocapture
-//! ```
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -337,7 +325,6 @@ async fn lsp_live_model_uses_rust_analyzer() {
         ));
     }
 
-    // Deterministic arm: stable harness/protocol regression gate.
     let request_id = "lsp-live-req-1";
     let prompt = pack_default_prompt();
     create_runtime_request(

@@ -228,9 +228,6 @@ impl RequestLifecycle {
         self.claim_inner(true).await
     }
 
-    /// The one durable claim entry: pre-claim gates and the atomic claim /
-    /// mailbox / session projection. Clock closures are invoked after their
-    /// preceding async reads.
     pub(crate) async fn claim_pending_durable_with_inputs<T, F>(
         &mut self,
         ttl_now: T,
@@ -303,8 +300,6 @@ impl RequestLifecycle {
         Ok(())
     }
 
-    /// The single durable claimed-to-processing transaction; the live owner
-    /// adds its process-local stream buffer after this commit.
     pub(crate) async fn begin_owned_execution_durable_with_clock<F>(
         node: &Arc<EmbeddedNode>,
         request_doc_id: &str,
@@ -665,8 +660,6 @@ impl RequestLifecycle {
         Ok(ClaimOutcome::Claimed)
     }
 
-    /// Persist the exact pending-to-claimed transaction without arming the
-    /// process-local renewal scheduler.
     async fn persist_pending_claim_at(
         &self,
         now: chrono::DateTime<chrono::Utc>,

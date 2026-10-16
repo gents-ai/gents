@@ -128,10 +128,6 @@ pub fn chatgpt_codex_client_version() -> String {
         .unwrap_or_else(|| CHATGPT_CODEX_CLIENT_VERSION.to_string())
 }
 
-// The codex backend-api hides each model whose minimal_client_version exceeds
-// the advertised client version, so an old default silently hides newer model
-// families (#982). Keep this at a current codex CLI release;
-// GENTS_CHATGPT_CODEX_CLIENT_VERSION overrides it at runtime.
 const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.160.0";
 const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "GENTS_CHATGPT_CODEX_CLIENT_VERSION";
 

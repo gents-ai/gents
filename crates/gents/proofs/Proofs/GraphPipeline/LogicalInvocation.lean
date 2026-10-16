@@ -121,7 +121,6 @@ theorem applied_other_root_replaces_goal_head :
 theorem pending_other_root_preserves_goal_head :
     assignmentOwnsGoal true [⟨10,true,true,true,false⟩, ⟨20,false,true,false,false⟩] = true := by decide
 
-/-- Limits count physical members, never logical chains. -/
 def projectLimited (rows : List Attempt) (edges : List Edge) (root : Doc)
     (goal : Option GoalEvidence) (resultSatisfied : Bool) (maximum : Nat) : Outcome :=
   if (members rows edges root).length > maximum then .limitExceeded

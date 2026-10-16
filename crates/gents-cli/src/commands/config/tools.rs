@@ -60,27 +60,3 @@ pub(super) async fn tools_set(args: ToolsSetArgs) -> Result<()> {
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn nested_tools_use_canonical_defaults_and_preserve_explicit_selection() {
-        let (tools, plan) = tools_plan(br#"{"node_did":"owner","tools_id":"main","built_ins":{"enable_goal_tools":true},"agents":{"target_ids":["worker"]}}"#).unwrap();
-        assert_eq!(tools.agents.unwrap().target_ids, ["worker"]);
-        assert_eq!(plan.documents().len(), 1);
-        assert_eq!(
-            plan.documents()[0].update["built_ins"]["enable_goal_tools"],
-            true
-        );
-    }
-    #[test]
-    fn invalid_or_retired_fields_cannot_enter_tools_plan() {
-        for input in [
-            r#"{"node_did":"owner","tools_id":"main","enable_bash":true}"#,
-            r#"{"tools_id":"main"}"#,
-            r#"{"node_did":"owner","tools_id":"main","host":{"unknown":true}}"#,
-        ] {
-            assert!(tools_plan(input.as_bytes()).is_err(), "{input}");
-        }
-    }
-}

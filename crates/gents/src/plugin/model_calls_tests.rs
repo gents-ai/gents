@@ -1,4 +1,3 @@
-//! Model calls against a local fake chat completions server and WAT plugins.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

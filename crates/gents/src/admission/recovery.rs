@@ -187,8 +187,6 @@ async fn recover_inference_call_row(
         }}"#,
     );
 
-    // Terminal InferenceCall states have no outgoing transitions; a delayed
-    // sweep cannot overwrite a completion.
     let response = crate::config_client::ConfigAccess::write_local_response(
         node,
         "recover_inference_call",

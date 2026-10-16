@@ -74,8 +74,6 @@ impl PrincipalIdentity {
         })
     }
 
-    /// The DID a desktop home's identity record names when `path` is a
-    /// regular file that decodes as one.
     pub fn recorded_did(path: &Path) -> Option<String> {
         if !std::fs::symlink_metadata(path).ok()?.is_file() {
             return None;

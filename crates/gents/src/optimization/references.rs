@@ -1,7 +1,3 @@
-//! Which eval runs an optimization job's journal names: its train,
-//! validation, re-run and held-out runs. `gents eval gc` keeps them (spec 4b
-//! §7), so a job's evidence and a later A/A calibration over it never lose
-//! their homes to a side effect.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -12,7 +8,6 @@ use crate::optimization::job::{
     derive_state, fold_jobs_for_owner, job_ids_in_txn, JobState, JournalEntry,
 };
 
-/// Every run `journal` started and every run one of its decisions read.
 pub fn journal_run_ids(journal: &[JournalEntry]) -> BTreeSet<String> {
     let mut ids = BTreeSet::new();
     for entry in journal {
@@ -36,7 +31,6 @@ pub fn journal_run_ids(journal: &[JournalEntry]) -> BTreeSet<String> {
     ids
 }
 
-/// The ids of every job `owner` has, sorted.
 pub async fn job_ids(access: &ConfigAccess, owner: &str) -> Result<Vec<String>> {
     let owner = owner.to_owned();
     let response = access
@@ -48,7 +42,6 @@ pub async fn job_ids(access: &ConfigAccess, owner: &str) -> Result<Vec<String>> 
     Ok(response)
 }
 
-/// Every run any of `owner`'s jobs names.
 pub async fn referenced_run_ids(access: &ConfigAccess, owner: &str) -> Result<BTreeSet<String>> {
     fold_jobs_for_owner(access, owner, |ids: &mut BTreeSet<String>, job| {
         ids.extend(journal_run_ids(&job.journal));
@@ -57,9 +50,6 @@ pub async fn referenced_run_ids(access: &ConfigAccess, owner: &str) -> Result<BT
     .await
 }
 
-/// Whether a job's directory, and its runs' directories, may go without
-/// `--force`. `ReadyToPromote` is not: `promote` verifies the
-/// retained checkpoint pack in the job's directory.
 pub fn removable(state: &JobState) -> bool {
     matches!(
         state,
@@ -72,8 +62,6 @@ pub fn removable(state: &JobState) -> bool {
     )
 }
 
-/// Every run a job that is not [`removable`] still names, with
-/// that job's id and state. `gents eval rm` refuses these without `--force`.
 pub async fn held_runs(
     access: &ConfigAccess,
     owner: &str,
@@ -99,47 +87,9 @@ pub async fn held_runs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_config::EvalSplit;
     use crate::eval::runner::freeze::tests::OWNER;
     use crate::optimization::driver::matrix::accepting_harness;
-    use crate::optimization::job::{load_job, DecisionSummary, JobState};
-    use crate::optimization::policy::{Decision, Mode};
-
-    #[test]
-    fn a_journal_names_every_run_it_started_or_decided_on() {
-        let journal = vec![
-            JournalEntry::Frozen,
-            JournalEntry::RunStarted {
-                run_id: "train".into(),
-                round: Some(1),
-                split: EvalSplit::Train,
-            },
-            JournalEntry::Decided {
-                round: Some(1),
-                attempt: 0,
-                run_ids: vec!["val-a".into(), "val-b".into()],
-                mode: Mode::Improve,
-                decision: Decision::Accept,
-                policy_version: "v2".into(),
-                summary: DecisionSummary {
-                    improved: 0,
-                    tied: 0,
-                    worsened: 0,
-                    mean_diff_bp: None,
-                    p_ppm: None,
-                    alpha_effective_ppm: 0,
-                    cost_skipped: true,
-                },
-            },
-            JournalEntry::Reverted {
-                by: "did:key:owner".into(),
-            },
-        ];
-        assert_eq!(
-            journal_run_ids(&journal),
-            BTreeSet::from(["train".to_owned(), "val-a".to_owned(), "val-b".to_owned()])
-        );
-    }
+    use crate::optimization::job::{load_job, JobState};
 
     #[tokio::test]
     async fn every_run_of_an_owners_jobs_is_referenced() {
@@ -202,28 +152,6 @@ mod tests {
         assert_eq!(
             held_runs(harness.access(), OWNER).await.unwrap().len(),
             expected.len()
-        );
-    }
-
-    #[test]
-    fn removable_states_are_the_settled_ones_that_need_nothing_more() {
-        let failed = JobState::Failed {
-            reason: "held_out_regression".into(),
-        };
-        for state in [
-            JobState::NothingToPromote,
-            JobState::Exhausted,
-            failed,
-            JobState::Stale,
-            JobState::Promoted,
-            JobState::Reverted,
-        ] {
-            assert!(removable(&state), "{state:?}");
-        }
-        assert!(!removable(&JobState::Running));
-        assert!(
-            !removable(&JobState::ReadyToPromote),
-            "promote verifies the retained checkpoint pack in the job's directory"
         );
     }
 

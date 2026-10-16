@@ -1,16 +1,11 @@
-//! Presentation-neutral timeline ordering.
-//!
-//! Shells compute the slot order here, then map each neutral slot to their own
-//! rich item. Fenced by `proofs/Proofs/ClientShell/Timeline.lean`.
+//! Fenced by `proofs/Proofs/ClientShell/Timeline.lean`.
 
-/// A message's role, reduced to what the ordering cares about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimelineRole {
     User,
     Assistant,
 }
 
-/// The ordering-relevant projection of one transcript message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimelineMessageInput {
     /// Stable identity for first-wins dedup.
@@ -25,8 +20,6 @@ pub struct TimelineMessageInput {
     pub dedup_token: Option<String>,
 }
 
-/// The request-ownership fields needed to decide whether a durable user
-/// message has taken over from the request document's pending projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DurableUserOwnerInput<'a> {
     pub request_id: Option<&'a str>,
@@ -35,9 +28,6 @@ pub struct DurableUserOwnerInput<'a> {
     pub runtime_control: bool,
 }
 
-/// A durable user message owns the pending projection only when it names the
-/// exact request. Missing and unrelated request ids deliberately do not fall
-/// back to content or turn-count heuristics.
 pub fn has_durable_user_owner(messages: &[DurableUserOwnerInput<'_>], request_id: &str) -> bool {
     messages.iter().any(|message| {
         message.request_id == Some(request_id)
@@ -47,7 +37,6 @@ pub fn has_durable_user_owner(messages: &[DurableUserOwnerInput<'_>], request_id
     })
 }
 
-/// Where the live-assistant overlay belongs relative to orphan tool groups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayPlacement {
     /// Append the overlay after every orphan tool group.
@@ -57,7 +46,6 @@ pub enum OverlayPlacement {
     BeforeOrphan { message_sequence: Option<i64> },
 }
 
-/// The live-assistant overlay's ordering-relevant state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OverlayInput {
     /// True when a durable assistant turn from the same request already owns
@@ -79,8 +67,6 @@ pub struct PendingInput {
     pub placement: PendingPlacement,
 }
 
-/// One ordered slot. A shell maps each to its rich, platform-specific item;
-/// the *order and identity* of the slots is the shared contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TimelineSlot {
     Message {
@@ -97,7 +83,6 @@ pub enum TimelineSlot {
     Overlay,
 }
 
-/// `None` sequences sort first, then ascending.
 fn sequence_lt(left: Option<i64>, right: Option<i64>) -> bool {
     match (left, right) {
         (None, None) => false,
@@ -107,19 +92,6 @@ fn sequence_lt(left: Option<i64>, right: Option<i64>) -> bool {
     }
 }
 
-/// Build the canonical timeline slot order.
-///
-/// Discipline, mirrored by `ClientShell.Timeline.buildOrder`:
-/// 1. sort messages by `sequence` (None first),
-/// 2. first-wins dedup by `key`, then by `dedup_token`,
-/// 3. each surviving message emits its slot (if `emits_item`) immediately
-///    followed by its tool group (if it owns one),
-/// 4. each distinct pending request key before its chosen durable message,
-///    or at the body tail when no anchor is visible,
-/// 5. orphan tool groups in sequence order, inserting the overlay before the
-///    targeted active group when it owns a still-running, unmaterialized tool turn,
-/// 6. otherwise the overlay at the tail, iff present and not already owned
-///    by a durable assistant turn from the same request.
 pub fn build_timeline_order(
     messages: &[TimelineMessageInput],
     group_sequences: &[Option<i64>],
@@ -277,15 +249,12 @@ mod tests {
         assert!(!has_durable_user_owner(&messages, "request-under-test"));
     }
 
-    /// Lean `group_attached_or_orphan` + `group_not_both`: every tool group is
-    /// placed exactly once — attached or orphan, never both, never dropped.
     #[test]
     fn every_tool_group_is_placed_exactly_once() {
         let messages = vec![
             msg("a", 0, TimelineRole::User),
             msg("b", 2, TimelineRole::Assistant),
         ];
-        // seq 0 is owned by message "a"; seq 5 is an orphan (no message owns it).
         let groups = vec![Some(0), Some(5)];
         let slots = build_timeline_order(&messages, &groups, &[], None);
 
@@ -295,7 +264,6 @@ mod tests {
             "attached group placed once"
         );
         assert_eq!(count_group(&slots, Some(5)), 1, "orphan group placed once");
-        // The attached group immediately follows its owner message.
         let a_pos = slots
             .iter()
             .position(|s| matches!(s, TimelineSlot::Message { key, .. } if key == "a"))
@@ -311,9 +279,6 @@ mod tests {
         );
     }
 
-    /// Lean `overlay_shown_iff` + `overlay_is_last`: the overlay is emitted iff
-    /// present and not a duplicate of the trailing assistant, and remains last
-    /// when no running orphan tool requires early placement.
     #[test]
     fn overlay_is_shown_conditionally_and_last() {
         let messages = vec![msg("a", 0, TimelineRole::Assistant)];
@@ -449,12 +414,9 @@ mod tests {
         );
     }
 
-    /// Lean `pending_shown_iff`: the pending turn appears iff a turn is pending,
-    /// and (structurally) after the body, before orphan groups.
     #[test]
     fn pending_turn_shown_iff_and_before_orphans() {
         let messages = vec![msg("a", 0, TimelineRole::User)];
-        let groups = vec![Some(9)]; // orphan
         let slots = build_timeline_order(&messages, &groups, &pending_tail(), None);
 
         let pending_pos = slots
@@ -578,8 +540,6 @@ mod tests {
         );
     }
 
-    /// Lean `kept_keys_nodup`: first-wins dedup by key — a repeated message key
-    /// yields a single message slot.
     #[test]
     fn duplicate_message_keys_are_deduped_first_wins() {
         let messages = vec![
@@ -598,8 +558,6 @@ mod tests {
         );
     }
 
-    /// Presentation-token dedup collapses re-presentations AND suppresses the
-    /// second message's group attach.
     #[test]
     fn presentation_token_dedup_also_drops_the_second_group_attach() {
         let mut first = msg("m1", 0, TimelineRole::Assistant);
@@ -616,11 +574,9 @@ mod tests {
             !m2_shown,
             "presentation-deduped message must not render: {slots:?}"
         );
-        // Group 1 still appears exactly once — as an orphan.
         assert_eq!(count_group(&slots, Some(1)), 1);
     }
 
-    /// `None` sequences sort first.
     #[test]
     fn none_sequence_sorts_before_some() {
         let mut none_msg = msg("none", 0, TimelineRole::Assistant);

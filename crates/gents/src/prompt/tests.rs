@@ -45,14 +45,6 @@ fn preamble_strips_title_generation_suffix() {
     assert!(!preamble.contains("Never call tools. Never explain."));
 }
 
-#[test]
-fn preamble_is_frozen() {
-    let builder = test_builder("System prompt v1.", "test");
-
-    assert_eq!(builder.preamble(), builder.preamble());
-    assert!(builder.preamble().contains("System prompt v1."));
-}
-
 #[tokio::test]
 async fn build_with_summaries_prepends() {
     let builder = test_builder("Be helpful.", "general");

@@ -1,7 +1,3 @@
-//! Pack operations for embedding callers such as the desktop: the same
-//! commands `gents pack` runs, returning their reports instead of printing
-//! them, so there is one install path, not two.
-
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -16,12 +12,10 @@ use crate::commands::pack as command;
 use crate::output_format::OutputFormat;
 use crate::request_helpers::capture_report;
 
-/// What to do with pack documents someone edited since they were installed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum EditedDocuments {
-    /// Stop and name them.
     #[default]
     Refuse,
     Overwrite,
@@ -43,7 +37,6 @@ fn scope(home: PathBuf) -> GraphScopeArgs {
     }
 }
 
-/// Installed packs with the registry's latest version of each.
 pub async fn installed(home: PathBuf, registry: Option<String>) -> Result<Value> {
     capture_report(command::update::outdated(PackOutdatedArgs {
         scope: scope(home),
@@ -65,8 +58,6 @@ pub async fn info(registry: Option<String>, package: String) -> Result<Value> {
     capture_report(command::account::info(PackInfoArgs { package, registry })).await
 }
 
-/// Installs `package` (a registry name, `sha256:<hex>`, a `.pack` file or a
-/// directory), or with `preview` reports what it would write.
 #[allow(clippy::too_many_arguments)]
 pub async fn install(
     home: PathBuf,
@@ -93,8 +84,6 @@ pub async fn install(
     .await
 }
 
-/// The installed plugins that can call a model, which profile each is bound
-/// to (`null` when none), and the profiles a slot may be bound to.
 pub async fn plugin_slots(home: PathBuf) -> Result<Value> {
     let plugins = gents::plugin::store::list_records(&home)?
         .into_iter()
@@ -115,8 +104,6 @@ pub async fn plugin_slots(home: PathBuf) -> Result<Value> {
     Ok(serde_json::json!({"plugins": plugins, "profiles": profiles}))
 }
 
-/// Binds the installed `plugin`'s model slot to `profile`, or leaves it
-/// unbound when `profile` is `None`.
 pub async fn bind_plugin_slot(
     home: PathBuf,
     plugin: String,

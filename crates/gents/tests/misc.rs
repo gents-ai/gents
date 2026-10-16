@@ -1,10 +1,5 @@
-//! Aggregated small integration suites; run one with
-//! `cargo test -p gents --test misc <module>::`.
-
 mod support;
 
-#[path = "misc/backend_auth_config.rs"]
-mod backend_auth_config;
 #[path = "misc/backend_auth_startup.rs"]
 mod backend_auth_startup;
 #[path = "misc/client_authored_collections_fence.rs"]

@@ -1,12 +1,3 @@
-/* The rail, expanded: hovering the side nav slides out a raised panel
-   over the canvas with the same items in full (agent, new session,
-   mailbox, sessions) and a quick list of recent sessions, the way a
-   collapsed sidebar opens on hover. It overlays rather than pushes, so
-   the screen behind never reflows, and its rows sit on the rail's own
-   grid (same top padding, heights and gaps, icons in the same 32px slot
-   12px from the edge) so nothing appears to move when it opens. Opens
-   after a short rest, closes when the pointer leaves; keyboard focus
-   inside keeps it open. */
 import { createContext } from "react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronRight, Inbox, Lock, Plus, ScrollText, Waypoints } from "lucide-react";
@@ -70,9 +61,7 @@ export function NavPanel({
   syncRow,
 }: {
   route: Route;
-  /** the settings menu, as a row at the foot */
   settings: ReactNode;
-  /** the sync chip as a row above Nodes; the hover flyout's is the rail's own */
   syncRow: boolean;
 }) {
   const online = useOnline();
@@ -240,16 +229,11 @@ export function RailFlyout({
   children,
 }: {
   route: Route;
-  /** hover: rail with a flyout; expanded: the panel in the flow; collapsed: rail only */
   mode?: NavMode;
   settings: ReactNode;
-  /** the collapsed rail */
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  /* menus opened from the flyout render inside it rather than at the end
-     of the body, so moving the pointer or focus into one is not leaving
-     the flyout, and it stays open while the menu is used */
   const [portal, setPortal] = useState<HTMLElement | null>(null);
   const timer = useRef<number | null>(null);
   const later = (next: boolean, ms: number) => {
@@ -273,14 +257,6 @@ export function RailFlyout({
         hover && e.pointerType === "mouse" && later(true, OPEN_AFTER)
       }
       onPointerLeave={() => hover && later(false, CLOSE_AFTER)}
-      /* Do not replace the hit target between pointerdown and pointerup.
-         Pressing a rail icon focuses it, and opening on focus put a flyout
-         row — aligned to the rail's own grid, so nothing looks like it
-         moved — over the icon before the finger came up. The browser saw
-         mousedown and mouseup on different elements and dispatched no
-         click: the icon simply did not respond. A press holds the timer,
-         a mouse release goes back to hover timing, and only real keyboard
-         focus still opens at once. */
       onPointerDown={() => {
         if (timer.current) window.clearTimeout(timer.current);
       }}
@@ -296,16 +272,11 @@ export function RailFlyout({
         <FlyoutOpenContext.Provider value={hover && open}>
           {hover && children}
         </FlyoutOpenContext.Provider>
-        {/* the rail's first row is the avatar, and the flyout's first row
-            (8px in) lands on it from 4px down. Expanded, there is no rail
-            to line up with, and the first row takes a top edge's room */}
         <div
           aria-hidden={!shown}
           className={cn(
             "absolute top-1 bottom-2 left-2 flex w-72 flex-col gap-2 overflow-hidden bg-raised pb-2",
             hover ? "pt-2" : "pt-3.5",
-            /* the flyout sits exactly where the expanded panel sits, so
-               switching modes moves nothing but whether it stays */
             "rounded-2xl border border-border/60",
             hover
               ? "z-30 shadow-lg transition-[opacity,transform] duration-200 ease-out"
@@ -316,7 +287,6 @@ export function RailFlyout({
                 : "pointer-events-none -translate-x-2 opacity-0"),
           )}
         >
-          {/* the hover flyout's sync row is the rail's own chip, drawn over it */}
           <NavPanel route={route} settings={settings} syncRow={!hover} />
         </div>
       </PortalContainerProvider>

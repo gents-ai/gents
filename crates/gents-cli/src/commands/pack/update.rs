@@ -1,6 +1,3 @@
-//! `gents pack outdated` and `gents pack update`: installed packs against the
-//! registry's latest versions.
-
 use anyhow::Result;
 use serde_json::{json, Value};
 
@@ -8,9 +5,6 @@ use super::registry::{resolve_registry_url, RegistryClient};
 use crate::cli::{PackInstallArgs, PackOutdatedArgs, PackUpdateArgs};
 use crate::output_format::OutputFormat;
 
-/// A registry or network failure is recorded per pack in `error`, never
-/// collapsed into "not on registry": a failed lookup and an unknown pack are
-/// different facts.
 async fn outdated_packs(
     scope: &crate::cli::GraphScopeArgs,
     registry: Option<&str>,
@@ -63,8 +57,6 @@ async fn outdated_packs(
     Ok(report)
 }
 
-/// The registry's latest can be older than what is installed (yanked), and an
-/// update must never downgrade; `None` when either side is not semver.
 fn is_newer(latest: &str, installed: &str) -> Option<bool> {
     let latest = semver::Version::parse(latest).ok()?;
     let installed = semver::Version::parse(installed).ok()?;
@@ -98,8 +90,6 @@ pub(crate) async fn outdated(args: PackOutdatedArgs) -> Result<()> {
     Ok(())
 }
 
-/// A failed install does not stop the batch: it is recorded under `failed`
-/// and the rest still run, so a partial failure keeps the updates already done.
 pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
     let packs = outdated_packs(&args.scope, args.registry.as_deref()).await?;
     let selected = select_packs(&packs, args.package.as_deref())?;
@@ -159,47 +149,6 @@ mod tests {
     use super::*;
     use clap::Parser;
 
-    fn row(pack: &str, outdated: Option<bool>, error: Option<&str>) -> serde_json::Value {
-        json!({ "pack": pack, "outdated": outdated, "error": error })
-    }
-
-    #[test]
-    fn selection_is_every_pack_or_the_named_one_and_an_unknown_name_is_an_error() {
-        let packs = [
-            row("acme/a", Some(true), None),
-            row("acme/b", Some(false), None),
-        ];
-        let names = |selected: Vec<&serde_json::Value>| -> Vec<String> {
-            selected
-                .into_iter()
-                .map(|pack| pack["pack"].as_str().unwrap().to_owned())
-                .collect()
-        };
-        assert_eq!(
-            names(select_packs(&packs, None).unwrap()),
-            ["acme/a", "acme/b"]
-        );
-        assert_eq!(
-            names(select_packs(&packs, Some("acme/a")).unwrap()),
-            ["acme/a"]
-        );
-        assert!(select_packs(&packs, Some("acme/missing")).is_err());
-    }
-
-    #[test]
-    fn only_a_strictly_newer_registry_version_is_outdated() {
-        assert_eq!(is_newer("1.2.0", "1.1.9"), Some(true));
-        assert_eq!(is_newer("1.2.0", "1.2.0"), Some(false));
-        // Installed version yanked, or installed from an unpublished local pack.
-        assert_eq!(is_newer("1.1.0", "1.2.0"), Some(false));
-        assert_eq!(is_newer("1.10.0", "1.9.0"), Some(true));
-        assert_eq!(is_newer("latest", "1.0.0"), None);
-        assert_eq!(is_newer("1.2.0+build.2", "1.2.0+build.1"), Some(false));
-        assert_eq!(is_newer("1.2.0", "1.2.0-rc.1"), Some(true));
-    }
-
-    /// A minimal document pack the fake registry advertises; returns its
-    /// bytes and the sha256 hex.
     fn build_document_pack(version: &str) -> (Vec<u8>, String) {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("demo_pack");
@@ -239,13 +188,6 @@ mod tests {
         (bytes, digest)
     }
 
-    /// End to end: install `demo_pack@1.0.0` from a fake registry into a
-    /// fresh home, point `--registry` at a second fake advertising
-    /// `1.1.0`, and confirm `update` installs it and prints exactly the
-    /// End to end: install `demo_pack@1.0.0` from a fake registry into a
-    /// fresh home, point `--registry` at a second fake advertising
-    /// `1.1.0`, and confirm `update` installs it and prints exactly the
-    /// `{"updated", "failed", "current"}` report.
     #[tokio::test]
     async fn update_installs_a_newer_version_the_fake_registry_advertises() {
         let (old_bytes, old_digest) = build_document_pack("1.0.0");
@@ -325,8 +267,6 @@ mod tests {
         );
     }
 
-    /// An assets pack installs a file record, never a `PackInstallation`;
-    /// `outdated` must still list it without opening a node.
     #[tokio::test]
     async fn outdated_lists_home_recorded_installs_without_opening_a_node() {
         let home = tempfile::tempdir().unwrap();

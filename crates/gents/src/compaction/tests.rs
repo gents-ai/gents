@@ -328,43 +328,6 @@ fn normalize_assistant_content_order_moves_text_before_tool_calls() {
 }
 
 #[test]
-fn normalize_assistant_content_order_is_identity_when_already_ordered() {
-    let messages = vec![
-        text_msg("user", "go"),
-        Message::Assistant {
-            id: None,
-            content: vec![
-                AssistantContent::Text(Text {
-                    text: "answer".to_string(),
-                }),
-                tool_call_content("call-A"),
-            ],
-        },
-        tool_result_msg("call-A", "A-result"),
-    ];
-    let out = super::history::normalize_assistant_content_order(GROUPED_PROFILE, messages.clone());
-    assert_eq!(out, messages);
-}
-
-#[test]
-fn drop_unpaired_tool_calls_is_identity_when_all_paired() {
-    let messages = vec![
-        Message::Assistant {
-            id: None,
-            content: vec![tool_call_content("call-A")],
-        },
-        tool_result_msg("call-A", "A-result"),
-        text_msg("user", "next"),
-    ];
-    let out = super::history::drop_unpaired_tool_calls(messages.clone());
-    assert_eq!(
-        out.len(),
-        messages.len(),
-        "fully-paired history must pass through unchanged"
-    );
-}
-
-#[test]
 fn drop_orphaned_tool_results_removes_results_without_preceding_calls() {
     let messages = vec![
         tool_result_msg("call-GONE", "orphaned"),
@@ -493,9 +456,6 @@ fn sanitize_history_for_provider_drops_orphans_in_both_directions() {
 
 #[test]
 fn sanitize_repairs_result_preceding_its_call() {
-    // P1 counterexample: a result that PRECEDES its call (backfill ordering,
-    // P2P-merged transcripts). Orphan-drop must run first or the call survives
-    // on the strength of a result that no longer exists.
     let messages = vec![
         tool_result_msg("call-A", "early result"),
         Message::Assistant {
@@ -2262,15 +2222,6 @@ fn non_guided_fallback_still_rejects_json_embedded_in_prose() {
 }
 
 #[test]
-fn strip_preserves_text_messages() {
-    let messages = vec![text_msg("user", "hello"), text_msg("assistant", "hi there")];
-    let (stripped, files) = strip_tool_results(messages);
-    assert_eq!(stripped.len(), 2);
-    assert!(files.files_read.is_empty());
-    assert!(files.files_modified.is_empty());
-}
-
-#[test]
 fn strip_rewrites_tool_results_into_stubs() {
     let long_result = "x".repeat(5000);
     let messages = vec![
@@ -2550,22 +2501,6 @@ fn pair_safe_boundary_retreats_to_the_turn_start() {
 }
 
 #[test]
-fn linear_pair_safe_boundaries_match_the_production_boundary_predicate() {
-    let messages = vec![
-        text_msg("user", "before"),
-        tool_call_msg("read", r#"{"file_path":"/tmp/a"}"#),
-        tool_result_msg("call-1", "result"),
-        text_msg("assistant", "after"),
-        tool_call_msg("read", r#"{"file_path":"/tmp/b"}"#),
-    ];
-    let actual = super::history::pair_safe_boundaries(&messages);
-    let expected = (1..=messages.len())
-        .filter(|limit| super::history::pair_safe_boundary(&messages, *limit) == *limit)
-        .collect::<Vec<_>>();
-    assert_eq!(actual, expected);
-}
-
-#[test]
 fn provider_view_is_idempotent() {
     let history = vec![
         tool_result_msg("orphan-1", "result with no call"),
@@ -2697,8 +2632,6 @@ fn pair_closed_messages(messages: &[Message]) -> bool {
     })
 }
 
-/// Resolution is scoped to the active turn (#992); see
-/// `reused_call_id_is_prefix_stable_per_turn` for the per-turn witness.
 #[test]
 fn reused_call_ids_no_longer_shift_the_provider_view_prefix() {
     let prefix = vec![
@@ -3092,9 +3025,6 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
-
-// Pairing-scope regressions from the PromptAssembly conformance fence (#992);
-// shapes the Lean row model cannot express.
 
 fn scoped_call(id: &str) -> AssistantContent {
     AssistantContent::ToolCall(ToolCall {

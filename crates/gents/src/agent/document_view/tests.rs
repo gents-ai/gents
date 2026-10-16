@@ -29,9 +29,6 @@ fn test_identity(name: &str) -> KeyIdentity {
     KeyIdentity::load_or_create(path, None).unwrap()
 }
 
-/// Install the canonical context/tools/profile/backend chain for a test
-/// agent_config through the shared desired-state owner and bind it as the
-/// node's explicit default.
 async fn bind_default_agent_backend(
     node: &Arc<defra_node::EmbeddedNode>,
     node_did: &str,
@@ -110,7 +107,6 @@ async fn load_document_runtime_view_includes_referenced_documents() {
         view.node.value.default_agent_id.as_deref(),
         Some(default_agent_id.as_str())
     );
-    // agent_config -> context -> tools, agent_config -> inference profile -> backend.
     assert!(view.agents.contains_key(&default_agent_id));
     let agent_config = &view.agents[&default_agent_id].value;
     let context_id = agent_config
@@ -145,9 +141,6 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
         .await
         .expect("initial document view");
 
-    // Load the initial view, replace the agent_config's Tools document with a
-    // read-only file surface through the common Tools writer, then reload
-    // through the shared desired-state owner.
     let tools_id = format!("{default_agent_id}:tools");
     let tools_doc_id = view.tools[&tools_id].doc_id.clone();
     let mut tools_doc = view.tools[&tools_id].value.clone();
@@ -189,7 +182,6 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     .await
     .is_ok_and(|outcome| outcome == ControlUpdateOutcome::FullReload));
 
-    // Hot reload must pull the patched Tools document.
     let reloaded = load_document_runtime_view(&node, identity.did())
         .await
         .expect("reloaded document view");
@@ -217,8 +209,6 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     assert!(tool_names.contains(&"list_files".to_string()));
 }
 
-/// Explicitly selected same-node skills appear in the prompt CATALOG, and
-/// `load_skill` returns the full body on demand.
 #[tokio::test]
 async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     use crate::llm::tool::Tool;
@@ -230,8 +220,6 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     let default_agent_id = crate::default_agent_id_for_node(identity.did());
     bind_default_agent_backend(&node, identity.did(), &default_agent_id).await;
 
-    // Principal-scoped skill referencing one in-ceiling tool and one
-    // ungranted tool (exercises the degrade note).
     let create_skill = format!(
         r#"mutation {{ create_Skill(input: {{
             skill_id: "skill-research",
@@ -286,7 +274,6 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
         .tool_surfaces
         .get(&default_agent_id)
         .expect("tool surface");
-    // The preamble holds the CATALOG, not the skill body.
     let preamble = LayeredPromptBuilder::new(agent_config.as_ref(), tool_surface.as_ref(), &[])
         .preamble()
         .to_string();
@@ -307,7 +294,6 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
         "skill BODY must NOT be in the catalog (loaded on demand): {preamble}"
     );
 
-    // mcp_enabled=false: an out-of-ceiling ref is genuinely unavailable.
     let ceiling = crate::skills::skill_tool_ceiling(tool_surface.tool_names(), &[], false);
     let load_skill = crate::skills::LoadSkillTool::new(agent_config.skills.clone(), ceiling);
     let loaded = load_skill
@@ -326,8 +312,6 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     );
 }
 
-/// Validates the raw GraphQL mutations the CLI `config skill` commands and
-/// the Codex shim use against the live Skill schema.
 #[tokio::test]
 async fn skill_crud_mutations_round_trip() {
     let node = test_node().await;
@@ -410,8 +394,6 @@ async fn apply_control_update_hot_reloads_skill() {
         .expect("reloaded view after skill create");
     assert!(view.skills.contains_key("s-reload"), "skill added to view");
 
-    // Any config notification reloads the candidate; the scoped loader must
-    // exclude skills owned by another node.
     let foreign = "mutation { create_Skill(input: { skill_id: \"s-foreign\", node_did: \"did:key:zOther\",  name: \"F\", enabled: true }) { _docID } }";
     let resp = node.execute(foreign).await;
     let foreign_doc_id = created_skill_doc_id(resp.data.as_ref()).expect("foreign Skill _docID");
@@ -430,7 +412,6 @@ async fn apply_control_update_hot_reloads_skill() {
         .unwrap();
     assert!(!view.skills.contains_key("s-foreign"));
 
-    // Deletion drops it from the view after the full reload.
     let delete =
         r#"mutation { delete_Skill(filter: { skill_id: { _eq: "s-reload" } }) { _docID } }"#;
     assert!(!node.execute(delete).await.has_errors());
@@ -447,7 +428,6 @@ async fn apply_control_update_hot_reloads_skill() {
     );
 }
 
-/// Seed a `Tools` row directly with raw GraphQL (replicated-row path).
 async fn seed_raw_tools(
     node: &defra_node::EmbeddedNode,
     node_did: &str,
@@ -483,8 +463,6 @@ async fn resolve_quarantines_behavior_with_empty_agent_target_id() {
     let default_agent_id = crate::default_agent_id_for_node(node_did);
     bind_default_agent_backend(&node, node_did, &default_agent_id).await;
 
-    // The Tools row carries an empty target id — invalid per
-    // Tools::validate(); resolution must quarantine the agent_config.
     let tools_id = format!("{default_agent_id}:tools");
     seed_raw_tools(node.as_ref(), node_did, &tools_id, &[""]).await;
 
@@ -697,7 +675,6 @@ async fn create_event_trigger(
     event_source_id
 }
 
-/// Reserved-graph and unresolved collection notifications drive a full reload.
 #[tokio::test]
 async fn apply_control_update_full_reloads_reserved_graph_triggers() {
     let node = test_node().await;
@@ -713,8 +690,6 @@ async fn apply_control_update_full_reloads_reserved_graph_triggers() {
         .await
         .expect("initial document view");
 
-    // A GraphRevision notification is a reserved graph collection: FullReload
-    // regardless of view-local visibility.
     let outcome = apply_control_update(
         node.as_ref(),
         identity.did(),
@@ -726,7 +701,6 @@ async fn apply_control_update_full_reloads_reserved_graph_triggers() {
     .unwrap();
     assert_eq!(outcome, ControlUpdateOutcome::FullReload);
 
-    // An unknown physical collection identifier also forces a full resync.
     let outcome = apply_control_update(
         node.as_ref(),
         identity.did(),
@@ -741,8 +715,6 @@ async fn apply_control_update_full_reloads_reserved_graph_triggers() {
     node.shutdown().await;
 }
 
-/// Usage observations are written on every provider response; they must
-/// never reload the runtime view.
 #[tokio::test]
 async fn usage_collection_write_never_reloads_the_runtime_view() {
     let node = test_node().await;
@@ -954,7 +926,6 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
         "expected no unavailable schedules, got {:?}",
         snapshot.unavailable_schedules
     );
-    // Active schedules are keyed by the trigger that fires them.
     let resolved = snapshot
         .active_schedules
         .get("trigger-resolve-active")
@@ -1050,8 +1021,6 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
     let default_agent_id = crate::default_agent_id_for_node(node_did);
     bind_default_agent_backend(&node, node_did, &default_agent_id).await;
 
-    // Disabled task — trigger should be unavailable even though the task
-    // document exists.
     create_task_bound(
         &node,
         node_did,
@@ -1071,7 +1040,6 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
         "serial",
     )
     .await;
-    // Trigger whose task_id does not match any Task document.
     create_event_trigger(
         &node,
         node_did,
@@ -1198,8 +1166,6 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
     let default_agent_id = crate::default_agent_id_for_node(node_did);
     bind_default_agent_backend(&node, node_did, &default_agent_id).await;
 
-    // Disabled task — schedule should be unavailable even though the task
-    // document exists.
     create_task_bound(
         &node,
         node_did,
@@ -1219,7 +1185,6 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
         "serial",
     )
     .await;
-    // Schedule whose task_id does not match any Task document.
     create_schedule_with_concurrency(
         &node,
         node_did,
@@ -1249,7 +1214,6 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
         "expected no active schedules, got {:?}",
         snapshot.active_schedules.keys().collect::<Vec<_>>()
     );
-    // Unavailable schedules are keyed by their firing trigger.
     assert!(
         snapshot
             .unavailable_schedules
@@ -1275,8 +1239,6 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
     let default_agent_id = crate::default_agent_id_for_node(node_did);
     bind_default_agent_backend(&node, node_did, &default_agent_id).await;
 
-    // Enabled task bound to the ready default agent_config — should land in
-    // active_tasks.
     create_task_bound(
         &node,
         node_did,
@@ -1286,8 +1248,6 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
         true,
     )
     .await;
-    // Disabled task — should NOT land in active_tasks even though its
-    // agent_config is ready.
     create_task_bound(
         &node,
         node_did,
@@ -1297,8 +1257,6 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
         false,
     )
     .await;
-    // Task bound to an agent_id that does not resolve to any agent_config
-    // document — should NOT land in active_tasks.
     create_task_bound(
         &node,
         node_did,
@@ -1352,9 +1310,6 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
     assert!(resolved.output_schema_ref.is_none());
 }
 
-/// Install the canonical chain and bind it as the node's default, then swap
-/// the chain's InferenceBackend to the ChatGptCodex provider so resolution
-/// requires a ChatGPT OAuthCredential.
 async fn bind_subscription_backend(
     node: &Arc<defra_node::EmbeddedNode>,
     node_did: &str,
@@ -1674,7 +1629,6 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
         ToolCeiling::readonly(),
         crate::backend_health::BackendHealthMap::new(),
     );
-    // One agent, its backend pointed at A (no reference) or at B.
     let ready_on = |account_ref: Option<String>| {
         let node = node.clone();
         let did = did.clone();
@@ -1771,7 +1725,6 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     let on_a = format!("{x}:inference");
     let on_b = format!("{x}:inference-b");
     let y = "agent_config-y".to_string();
-    // X runs on B's backend, or on A with its compaction profile on B; Y runs on A.
     let reasons = |compaction_on_b: bool| {
         let node = node.clone();
         let did = did.clone();
@@ -1860,9 +1813,6 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     rejected_only_x(reasons(true).await, Reason::ToolConfigurationInvalid);
 }
 
-/// Install the canonical chain and bind it as the node's default, then swap
-/// the chain's InferenceBackend to the ClaudeCliSubscription provider so
-/// resolution requires a Claude OAuthCredential.
 async fn bind_default_agent_claude_backend(
     node: &Arc<defra_node::EmbeddedNode>,
     node_did: &str,
@@ -1983,7 +1933,6 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
         "agent_config must start unavailable without a credential"
     );
 
-    // Runtime codex-login: create the credential, then drive the incremental control update.
     let credential = crate::oauth_credential::OAuthCredential {
         doc_id: None,
         credential_id: crate::oauth_credential::oauth_credential_id(
@@ -2069,8 +2018,6 @@ fn finding_decl() -> crate::document_config::WriteToolDecl {
         output_obligation: None,
     }
 }
-
-
 #[tokio::test]
 async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
     let node = test_node().await;
@@ -2119,8 +2066,6 @@ async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
         .datastore_tool_surfaces
         .contains_key("experiment-writes"));
 
-    // Reassigning the surface to another node must revoke the grant now, not
-    // at the next process restart.
     let reassign = format!(
         r#"mutation {{ update_DatastoreToolSurface(
             docID: "{doc_id}", input: {{ node_did: "did:key:zOtherOwner" }}

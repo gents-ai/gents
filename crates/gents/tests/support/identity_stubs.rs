@@ -47,9 +47,6 @@ impl NodeIdentity for StubNodeIdentity {
     }
 }
 
-/// Deterministic signer for persistence-path tests whose fixtures use
-/// readable, non-cryptographic DIDs; cryptographic admission tests use a real
-/// `KeyIdentity`.
 #[allow(dead_code)]
 pub(crate) struct SigningStubNodeIdentity {
     did: String,

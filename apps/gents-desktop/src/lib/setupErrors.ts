@@ -1,6 +1,5 @@
 import { errorText } from "./errorText";
 
-/** The bridge's error code on a failure, when it carries one. */
 export function bridgeErrorCode(cause: unknown): string | null {
   if (!cause || typeof cause !== "object") return null;
   const code = (cause as { code?: unknown }).code;
@@ -9,8 +8,6 @@ export function bridgeErrorCode(cause: unknown): string | null {
 
 const INTERNAL_DETAIL = /https?:\/\/|graphql|\/api\/v\d/i;
 
-/** Replaces messages carrying endpoint URLs or internal GraphQL errors;
-    the detail goes to the console log. */
 export function setupErrorMessage(
   cause: unknown,
   fallback = "Something went wrong. Try again.",

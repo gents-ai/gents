@@ -194,8 +194,6 @@ mod tests {
         assert!(decided.contains("calibrated yes"), "{decided}");
     }
 
-    /// `comparison_table` reads each gate from its own field: an
-    /// undetermined `min_effect` and a skipped `cost_ok` print their own words.
     #[tokio::test]
     async fn the_gates_line_prints_an_undetermined_min_effect_and_a_skipped_cost_gate() {
         let fixture = Fixture::new().await;
@@ -284,7 +282,6 @@ mod tests {
         assert_eq!(json["rows"][0]["mean_diff_bp"], 5_000);
         assert!(json["policy"].is_null(), "{json}");
 
-        // With --policy, the breakdown and the case carry its outcome.
         for extra in [
             &["--by", "stage", "--json", "--policy", "defaults"][..],
             &["--case", "val-a", "--json", "--policy", "defaults"],
@@ -319,7 +316,6 @@ mod tests {
             );
         }
 
-        // A breakdown with no row says so instead of printing a bare header.
         for (breakdown, expected) in [
             (
                 super::super::render::Breakdown::Check(Vec::new()),

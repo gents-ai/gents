@@ -1,4 +1,3 @@
-/** Which agent a context page was opened from; Back returns there. */
 const origins = new Map<string, string>();
 
 export function rememberContextOrigin(contextId: string, agentId: string) {

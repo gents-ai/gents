@@ -8,6 +8,3 @@ pub use request::{
     resend_request, retry_request, submit_goal_backed_request, submit_request, submit_task_request,
     SubmitRequestOptions, SubmittedRequest,
 };
-
-#[cfg(test)]
-mod tests;

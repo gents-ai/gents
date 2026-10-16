@@ -1,6 +1,3 @@
-# TRUST BASIS: this attention index grants neither graph progress nor tool
-# authority; creation provenance is immutable and terminal content is never
-# rewritten.
 type MailboxItem @branchable {
     item_key: String @index(unique: true) @immutable
     requester_did: String @index @immutable

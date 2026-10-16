@@ -1,4 +1,3 @@
-//! How a pack travels: as a `.pack` file (see [`format`]).
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -14,13 +13,10 @@ pub use format::{
     EXTENSION, FORMAT, FORMAT_VERSION, HEADER_ENTRY, MEDIA_TYPE,
 };
 
-/// The namespace a pack is published under when its manifest names none.
 pub const DEFAULT_NAMESPACE: &str = "gents";
 
-/// Hard cap on a pack's compressed size: 1 GiB.
 pub const MAX_PACK_BYTES: usize = 1024 * 1024 * 1024;
 
-/// Bound against decompression bombs; sizes are untrusted.
 pub const MAX_DECOMPRESSED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 pub const MAX_ENTRIES: usize = 4096;
@@ -111,7 +107,6 @@ impl PackArchive {
         })
     }
 
-    /// What the file claimed to be, now verified.
     pub fn header(&self) -> &PackHeader {
         &self.header
     }

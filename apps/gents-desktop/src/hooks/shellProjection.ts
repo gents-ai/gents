@@ -36,7 +36,6 @@ function trackedRequestIdForSession(
   return null;
 }
 
-/** Every store the shell is projected from. */
 export type ShellStores = {
   selection: SelectionStore;
   session: SessionStore;

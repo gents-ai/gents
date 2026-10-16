@@ -1,31 +1,9 @@
 import Proofs.Recovery.Sweeps.ToolCalls
 
-/-!
-# Startup Restart Disposition for Running Tool Rows (#937)
-
-Total, executable model of the startup classifier in
-`recover_stuck_running_tool_calls` (`tool_call_lifecycle/recovery.rs`), which
-`ToolCallLifecycle::recover_all` consults per row. Native contract:
-
-* a native background tool with a resolvable parent is terminalized from the
-  host owner's stop verdict (`ManagedExec.stopOutcome`): an unobserved stop
-  (unrecorded, pid reused, already exited) settles as `processLost`, never as
-  an interruption; after an observed stop every terminal disposition owes a
-  durable completion notification and coalesced wake;
-* a session-message row is always left running — no host process, no deadline;
-  its caused request's terminal later terminalizes it through the completion
-  observer;
-* an unresolved exact physical parent defers all terminalization, including
-  deadline expiry; deadline expiry otherwise takes precedence for resolvable
-  parents.
-
-Scope, matching Rust: caused-request terminal precedence runs *before* this
-classifier (`sessionMessageRecoverySweep`); the parent is observed before
-`RequestLifecycle::recover_all` (tool recovery is wired first in
-`agent/runtime/startup.rs`), so an orphaned `processing` parent still observes
-as live here — the request sweep and periodic `terminalParentOwnedToolSweep`
-(#837) close that loop afterwards.
--/
+/-! Models `ToolCallLifecycle::recover_all` startup classification. Native
+background rows use the host stop verdict and require durable completion
+notification after terminalization. Missing parents defer writes; session
+message rows remain running for their caused-request completion observer. -/
 
 namespace Recovery
 
@@ -274,13 +252,6 @@ theorem session_message_row_left_running
   · simp [restartDisposition, h_owner]
   · simp [restartDisposition, h_owner, h_session]
 
-/-! ## Exhaustive characterizations
-
-Every field of `RestartRow` is finite, so these are proved by exhausting the
-full 160-row input space (2 await modes × 2 tool kinds × 5 parent observations
-× 2 deadline flags × 4 stop outcomes) — they are complete characterizations of
-the classifier, not spot checks. -/
-
 theorem restart_interrupt_iff_native_background_resolvable_parent
     (row : RestartRow) :
     restartDisposition row =
@@ -301,8 +272,6 @@ theorem leave_running_iff_preserved_shapes (row : RestartRow) :
   cases awaitMode <;> cases sessionMessage <;> cases parent <;>
     cases deadlineExpired <;> cases process <;> decide
 
-/-- Terminalized rows land on terminal tool-call states, feeding
-    `toolCallRecoverySweep`'s convergence contract. -/
 theorem terminalize_lands_terminal
     (row : RestartRow) (cause : ToolRecoveryCause)
     (_h : restartDisposition row = .terminalize cause) :

@@ -496,8 +496,6 @@ fn modeled_title_fields(name: &str) -> (Vec<(StreamPayload, String, u32, u32)>, 
     (fields, outcome)
 }
 
-/// Rig emits one reasoning part per event; the owned accumulator joins these
-/// same-ID events into the single multi-part block of the Lean raw witness.
 fn provider_events(
     fields: &[(StreamPayload, String, u32, u32)],
     complete: bool,

@@ -7,7 +7,6 @@ use defra_node::EmbeddedNode;
 use crate::backend_provider::BackendProviderKind;
 use crate::config::ResolvedAgent;
 
-/// A built provider completion client, tagged by its provider/wire-API branch.
 pub(crate) enum BackendClient {
     OpenAiChatCompletions(
         rig::providers::openai::CompletionsClient<
@@ -298,8 +297,6 @@ pub(crate) async fn build_backend_client(
     }
 }
 
-/// Each concrete `rig` client type is monomorphized separately by Rust, so
-/// this match cannot become a plain function.
 macro_rules! with_backend_client {
     ($client:expr, |$c:ident| $body:expr) => {
         match $client {

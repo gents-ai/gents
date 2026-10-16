@@ -19,13 +19,6 @@ export type WrittenAgent = {
   newName: string;
 };
 
-/**
- * Writes an agent draft: a new context lands with the agent in one apply;
- * an edit to an existing agent is one patch of changed fields only (so a
- * concurrent edit to another field of a shared context is not
- * overwritten); a new agent on an edited existing context patches the
- * context with the agent applied; anything else saves the agent alone.
- */
 export async function writeAgentDraft({
   changeConfig,
   deployment,
@@ -88,8 +81,6 @@ export async function writeAgentDraft({
     if (JSON.stringify(before.skillIds) !== JSON.stringify(next.skillIds))
       changedFields.skill_ids = fields.skill_ids;
   }
-  /* one component apply is one transaction: a new context and the agent
-     pointing at it land together or not at all */
   if (creating)
     await changeConfig("applyConfigComponents", {
       document: {
@@ -108,7 +99,6 @@ export async function writeAgentDraft({
       },
     });
   else if (target && edited && !draftMode)
-    /* one patch call, one transaction, changed fields only */
     await changeConfig("patchConfigComponents", {
       nodeDid: deployment.nodeDid,
       patches: [
@@ -131,8 +121,6 @@ export async function writeAgentDraft({
       ],
     });
   else if (target && edited) {
-    /* the agent has no document to patch yet: patch the context, with the
-       agent applied */
     await changeConfig("patchConfigComponents", {
       nodeDid: deployment.nodeDid,
       patches: [
@@ -148,7 +136,6 @@ export async function writeAgentDraft({
   return { creating, contextId, newName };
 }
 
-/** What a save did to the contexts, said after it. */
 export function contextOutcome(
   deployment: NodeView,
   agent: AgentView,

@@ -434,8 +434,6 @@ theorem inter_resolvedIn_eq_inter_resolvedInTurn (l : List MessageRow) :
         rwa [callsIn_cons_result row rest callId key hk] at hdisj
       rw [resolvedIn_cons_result row rest callId key hk,
         resolvedInTurn_cons_result row rest callId key hk]
-      -- Both sides insert the same id; the tails agree by induction after
-      -- erasing it, and `callId` itself is in `callIds` either way.
       apply Finset.ext
       intro c
       by_cases hc : c = callId
@@ -453,9 +451,6 @@ theorem inter_resolvedIn_eq_inter_resolvedInTurn (l : List MessageRow) :
       rw [hk] at howned
       rw [resolvedIn_cons_assistant row rest callIds' hk,
         resolvedInTurn_cons_assistant row rest callIds' hk, Finset.inter_empty]
-      -- A new announcement ends the turn. Everything the tail resolves is owned
-      -- by that announcement or a later one, all inside `callsIn rest`, which
-      -- `UniqueCallIds` keeps disjoint from `callIds`.
       have hsub : resolvedIn rest ⊆ callIds' ∪ callsIn rest :=
         resolvedIn_subset_of_resultsOwned rest callIds' howned
       have hdisjPair : Disjoint callIds callIds' ∧ Disjoint callIds (callsIn rest) := by
@@ -526,8 +521,6 @@ theorem filterCallsByTurn_eq_filterCallsBy (l : List MessageRow) :
       have hcallsSub : callIds ⊆ callsIn (row :: rest) := by
         rw [callsIn_cons_assistant row rest callIds hk]
         exact Finset.subset_union_left
-      -- `R` decides this row's announcements exactly as the global set does,
-      -- and the crux confines them to this turn.
       have hinter : callIds ∩ R = callIds ∩ resolvedInTurn rest := by
         have hstep : callIds ∩ R = callIds ∩ resolvedIn rest := by
           apply Finset.ext; intro c
@@ -553,8 +546,6 @@ theorem filterCallsByTurn_eq_filterCallsBy (l : List MessageRow) :
       have huniq' := (uniqueCallIds_cons_result row rest callId key hk).mp huniq
       have hdisj' : Disjoint pending (callsIn rest) := by
         rwa [callsIn_cons_result row rest callId key hk] at hdisj
-      -- The closed call belongs to an earlier announcement, so `UniqueCallIds`
-      -- keeps it out of everything the tail announces.
       have hnotCall : callId ∉ callsIn rest :=
         fun hc => Finset.disjoint_left.mp hdisj' howned.1 hc
       have hRrest : ∀ c ∈ callsIn rest, (c ∈ R ↔ c ∈ resolvedIn rest) := by

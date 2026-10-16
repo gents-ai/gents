@@ -16,7 +16,6 @@ export const distanceFromFoot = (scroller: HTMLElement) =>
 
 const EDGE_PX = 4;
 
-// The owner is mounted for the hook's life.
 export function useScrollEdges(owner: RefObject<HTMLElement | null>) {
   const [edges, setEdges] = useState({ above: false, below: false });
   useEffect(() => {
@@ -40,9 +39,6 @@ export function useScrollEdges(owner: RefObject<HTMLElement | null>) {
   return edges;
 }
 
-// While `paused` it does not follow; when the pause ends, where the box
-// actually is decides again, and it is left there, so the row just closed
-// stays in view.
 export function useFollowNewest(
   owner: RefObject<HTMLElement | null>,
   { rows, paused, enabled }: { rows: number; paused: boolean; enabled: boolean },
@@ -131,21 +127,10 @@ export function holdRow(el: Element | null) {
   el?.dispatchEvent(new CustomEvent("transcript:hold", { bubbles: true }));
 }
 
-// The reader's place, held: at the foot the view follows whatever grows;
-// elsewhere it holds the row under the reading line. Enforced from a
-// ResizeObserver on the content, so a correction lands in the frame of the
-// change. The mode changes only on the reader's own input; a row opening or
-// closing announces itself with `transcript:hold` and is held while it
-// moves. Scroll anchoring is off (WebKit has none; Chromium's would correct
-// some changes twice). The row is found again by its key when drawn anew.
 export function useFollowTail(scroller: HTMLElement | null, subject: string | null) {
   const following = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
   const settleRef = useRef<(() => void) | null>(null);
-  // Near the foot, following resumes only for a reader coming down to it: a
-  // scroll that leaves the foot gently is still within reach of it for its
-  // first frames, and pinning it back there would cancel the scroll the
-  // reader is making.
   const leaving = useRef(false);
 
   useLayoutEffect(() => {
@@ -212,11 +197,6 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     let intentUntil = 0;
     let tailAt = -Infinity;
     let tailWay = 0;
-    // How far the view moved since this module last set it, if the reader
-    // moved it, else 0; a reader's move carries their intent on. Past the
-    // input's window a move carrying on the reader's last direction is
-    // theirs too (animated scrolls go on moving after the window ends); one
-    // going up onto the foot is the browser clamping.
     const readerMoved = () => {
       const since = scroller.scrollTop - (settled.get(scroller) ?? scroller.scrollTop);
       const way = Math.sign(since);
@@ -235,7 +215,6 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       return since;
     };
     leaving.current = false;
-    /* Holding the scrollbar, the reader is placing the view themselves. */
     let dragging = false;
     const reconcile = () => {
       if (dragging) return;
@@ -436,8 +415,6 @@ export function useOlderPages(
     }
   }, [oldestKey, scroller, settles]);
 
-  // A layout effect: a subject's cleanup takes the content's offset off
-  // before the next subject's first layout, where the view is put at its foot.
   useLayoutEffect(() => {
     const viewport = scroller;
     if (!viewport || !subject) return;
@@ -468,8 +445,6 @@ export function useOlderPages(
         viewport.scrollHeight - viewport.clientHeight,
       );
       setScroll(viewport, target);
-      // A write that fell short by more than WebKit's rounding was dropped;
-      // the rows go back out of sight to be retried at the next rest.
       if (target - viewport.scrollTop > 2) {
         content.style.marginTop = `${-hidden}px`;
         unhideTimer = window.setTimeout(unhide, TAIL_MS);
@@ -518,7 +493,6 @@ export function useOlderPages(
       try {
         await latest.current.load();
       } catch {
-        // The paging owner reports read errors; leave scroll and retry intent intact.
       }
       if (disposed || hold.current !== held) return;
       held.settled = true;

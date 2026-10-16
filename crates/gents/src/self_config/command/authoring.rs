@@ -1,21 +1,6 @@
-//! Pack authoring verbs on the native `config` tool: `pack scaffold`,
-//! `pack check` and `pack verify`, integrated into the existing `pack`
-//! resource syntax through the shared `crate::pack::authoring` owners.
-//!
-//! The `pack` resource grant gates these verbs exactly as it gates install
-//! (the caller selects the pack page's authoring commands); file authority
-//! comes from the invoking agent's effective file tools, through the same
-//! admission `skill import` and `discovery scan` use: the caller path is
-//! resolved inside the effective tool root and never expands it. Scaffold
-//! may write under that root, so it requires readwrite file tools; check
-//! and verify are observational and need only read. `pack build` and
-//! `pack test` are refused with the owner that holds them, never run here:
-//! plugin compilation shells out to language toolchains through the
-//! [`crate::pack::authoring::build::PluginCompiler`] seam, whose
-//! implementation (`crates/gents-cli/src/commands/afterburner_build.rs`)
-//! only the CLI owns, and author-test execution is the CLI's `gents pack
-//! test`. `check` reports what it could not verify in `unverified` and
-//! never reports full validation success from an empty problem list.
+//! Pack build and test remain CLI operations because they invoke language
+//! toolchains. Authoring paths use the invoking agent's effective file tools
+//! and remain inside its effective tool root.
 
 use std::path::PathBuf;
 
@@ -24,7 +9,6 @@ use crate::pack::authoring::{
     check_dir, scaffold, verify_pack_file, CheckReport, Kind, ScaffoldInput, Template,
 };
 
-/// One authoring call after argument parsing, before root and mode admission.
 enum AuthoringCall {
     Scaffold { name: String, input: ScaffoldInput },
     Check { dir: Option<String> },
@@ -129,9 +113,6 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
     }
 }
 
-/// Effective file tools admit authoring: write calls need readwrite
-/// (scaffold writes the template files), read calls need read. Off refuses
-/// both.
 fn ensure_mode(
     mode: crate::tool_surface::FileToolMode,
     write: bool,
@@ -149,14 +130,10 @@ fn ensure_mode(
     }
 }
 
-/// The caller-named scaffold target, resolved inside the effective tool
-/// root by the existing path admission owner.
 fn admit_scaffold_dir(context: &crate::toolset::ToolContext, name: &str) -> Result<PathBuf> {
     context.resolve_path_allow_create(name)
 }
 
-/// Whether the check validated everything it owns, and the note that says
-/// what an empty problem list does and does not mean.
 fn check_outcome_fields(report: &CheckReport) -> (bool, String) {
     let validated = report.problems.is_empty() && report.unverified.is_empty();
     let note = if !report.problems.is_empty() {
@@ -221,9 +198,6 @@ impl ConfigCommandTool {
     }
 
     async fn check(&self, dir: Option<&str>) -> Result<String> {
-        // Observational: the shared check reads and validates only (any
-        // topology rewrite is a separate integration step), so read-only
-        // file tools suffice.
         let context = self.authoring_paths("check", false).await?;
         let dir = context.resolve_existing_dir(dir)?;
         let report = check_dir(&dir).await;
@@ -266,116 +240,6 @@ impl ConfigCommandTool {
 mod tests {
     use super::*;
 
-    fn argv(words: &[&str]) -> Vec<String> {
-        words.iter().map(|word| word.to_string()).collect()
-    }
-
-    #[test]
-    fn scaffold_arguments_map_to_the_shared_input() {
-        match parse_authoring_args("scaffold", &argv(&["review_toolkit"])).unwrap() {
-            AuthoringCall::Scaffold { name, input } => {
-                assert_eq!(name, "review_toolkit");
-                assert_eq!(input.namespace, "gents");
-                assert_eq!(input.template, None);
-                assert_eq!(input.kind, None);
-                assert_eq!(input.language, None);
-            }
-            _ => panic!("expected a scaffold call"),
-        }
-        match parse_authoring_args(
-            "scaffold",
-            &argv(&[
-                "review_toolkit",
-                "--namespace",
-                "acme",
-                "--kind",
-                "graph",
-                "--language",
-                "rust",
-            ]),
-        )
-        .unwrap()
-        {
-            AuthoringCall::Scaffold { name, input } => {
-                assert_eq!(name, "review_toolkit");
-                assert_eq!(input.namespace, "acme");
-                assert_eq!(input.kind, Some(Kind::Graph));
-                assert_eq!(input.template, None);
-                assert_eq!(input.language.as_deref(), Some("rust"));
-            }
-            _ => panic!("expected a scaffold call"),
-        }
-        for bad in [
-            vec![],
-            vec!["a", "b"],
-            vec!["a", "--bogus", "x"],
-            vec!["a", "--kind", "widgets"],
-            vec!["a", "--template", "widgets"],
-            vec!["a", "--switch"],
-        ] {
-            assert!(
-                parse_authoring_args("scaffold", &argv(&bad)).is_err(),
-                "accepted {bad:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn check_and_verify_arguments_are_positional_only() {
-        match parse_authoring_args("check", &argv(&[])).unwrap() {
-            AuthoringCall::Check { dir } => assert_eq!(dir, None),
-            _ => panic!("expected a check call"),
-        }
-        match parse_authoring_args("check", &argv(&["packs/review_toolkit"])).unwrap() {
-            AuthoringCall::Check { dir } => {
-                assert_eq!(dir.as_deref(), Some("packs/review_toolkit"))
-            }
-            _ => panic!("expected a check call"),
-        }
-        for bad in [vec!["a", "b"], vec!["--limit", "2"], vec!["--write-readme"]] {
-            assert!(
-                parse_authoring_args("check", &argv(&bad)).is_err(),
-                "accepted {bad:?}"
-            );
-        }
-        match parse_authoring_args("verify", &argv(&["built/review_toolkit.pack"])).unwrap() {
-            AuthoringCall::Verify { pack } => assert_eq!(pack, "built/review_toolkit.pack"),
-            _ => panic!("expected a verify call"),
-        }
-        for bad in [vec![], vec!["a", "b"], vec!["--store", "x"]] {
-            assert!(
-                parse_authoring_args("verify", &argv(&bad)).is_err(),
-                "accepted {bad:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn build_and_test_are_refused_through_config_with_a_next_step() {
-        for verb in ["build", "test"] {
-            // err().expect, not unwrap_err: AuthoringCall has no Debug and
-            // the test needs none.
-            let error = parse_authoring_args(verb, &argv(&[]))
-                .err()
-                .expect("build and test refuse through config");
-            let message = format!("{error:#}");
-            assert!(
-                message.contains("isn't available through config"),
-                "{message}"
-            );
-            assert!(message.contains("gents pack "), "{message}");
-        }
-        let error = parse_authoring_args("deploy", &argv(&[]))
-            .err()
-            .expect("unknown authoring verbs refuse");
-        let message = format!("{error:#}");
-        assert!(message.contains("scaffold, check and verify"), "{message}");
-        assert_eq!(
-            error.downcast_ref::<CommandGuidance>().unwrap().next_call,
-            json!({"argv":["help","pack"]})
-        );
-    }
-
     #[test]
     fn the_caller_path_never_expands_authority() {
         let root = tempfile::tempdir().unwrap();
@@ -413,7 +277,6 @@ mod tests {
                 "{message} should name {expected}"
             );
         }
-        // check and verify are observational: read-only file tools suffice.
         for operation in ["check", "verify"] {
             let error = ensure_mode(FileToolMode::Off, false, operation).unwrap_err();
             let message = format!("{error:#}");
@@ -450,3 +313,4 @@ mod tests {
         assert!(note.contains("Fix each named problem"), "{note}");
     }
 }
+

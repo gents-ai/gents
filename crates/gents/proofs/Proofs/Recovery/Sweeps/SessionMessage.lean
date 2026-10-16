@@ -14,8 +14,6 @@ def sessionMessageRecoverySweep : RecoverySweep :=
     "tool_call_lifecycle_recover_session_message_rows"
     "background_completion::settle_running_session_message_rows" .periodic
 
-/-- What a kill (`cancel_process` or the operator kill) observes about the
-    request a running session-message row caused. -/
 inductive KillObservation where
   | causedTerminal
   | causedLiveLocal
@@ -52,7 +50,6 @@ def KillAction.endsRowNow : KillAction → Bool
   | .interruptCaused => false
   | _ => true
 
-/-- A kill never waits on a peer or on a request it cannot name. -/
 theorem kill_waits_only_on_a_local_terminal (obs : KillObservation) :
     (killAction obs).endsRowNow = false ↔ obs = .causedLiveLocal := by
   cases obs <;> simp [killAction, KillAction.endsRowNow]

@@ -5,7 +5,6 @@ use crate::lifecycle::queue::goal_continuation_identity;
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 use serde_json::json;
 
-/// The reported reset, in seconds after 2030-01-01T00:00:00Z.
 const T: i64 = 3600;
 
 struct Reset {

@@ -1,5 +1,3 @@
-//! Adapt runtime snapshots to the stock pager's child-aware append channel.
-//! Receipts contain offsets and hashes only, never another output buffer.
 use super::{payload_fingerprint, CursorAdvance, NovelProjectionEvent, RequestCursor};
 use serde_json::json;
 
@@ -54,9 +52,6 @@ fn append_projection(
             );
         }
         if end >= previous.end {
-            // Live ring windows move forward; final captures start at zero
-            // and may reorder stdout/stderr, so verify the old window before
-            // treating the new text as a continuation.
             let same_stream = start > old_start
                 || text
                     .get(
@@ -72,8 +67,6 @@ fn append_projection(
             }
         }
     }
-    // A persisted capture is not necessarily the live interleaved stream:
-    // emit a labelled snapshot rather than a guessed delta.
     (
         format!("\n[Captured output snapshot; stream continuity unavailable]\n{text}"),
         receipt,

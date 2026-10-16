@@ -1,10 +1,3 @@
-//! Pins the generated backend-health transition rows to the real prober owners
-//! in `crates/gents/src/backend_health.rs`: the Lean theorems prove the
-//! semantics and the in-crate test replays every row through `step_backend`,
-//! so this pin keeps only row shape — production-default K coverage, the B1
-//! witness row, owner-vocabulary state strings, and the owner's routing veto
-//! projection.
-
 use super::*;
 
 pub(super) fn generated_backend_health_cases_pin_threshold_and_veto_shape() {
@@ -13,7 +6,6 @@ pub(super) fn generated_backend_health_cases_pin_threshold_and_veto_shape() {
         !cases.is_empty(),
         "Lean must emit backend health transition cases"
     );
-    // The production prober default must stay covered by the emitted rows.
     assert_eq!(
         gents::BackendProberOptions::default().failure_threshold_k,
         3,
@@ -74,8 +66,6 @@ pub(super) fn generated_backend_health_cases_pin_threshold_and_veto_shape() {
         );
     }
 
-    // Totality over the measured-health vocabulary: every owner state must
-    // appear as a start state among the emitted rows.
     for state in owner_states {
         assert!(
             cases.iter().any(|case| case.start_state == state.as_str()),

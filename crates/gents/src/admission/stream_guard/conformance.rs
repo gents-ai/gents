@@ -1,5 +1,3 @@
-//! Executes Lean-derived scheduling scenarios against the real stream wrapper.
-
 use std::{sync::Arc, time::Duration};
 
 use futures::{future::BoxFuture, StreamExt};
@@ -74,7 +72,6 @@ async fn lean_storage_gate_scenarios_drive_stream_finalization() {
             () = &mut owner => panic!("{}: finalizer completed before storage return", case.name),
             () = tokio::time::sleep(Duration::from_secs(5)) => panic!("{}: finalizer never started", case.name),
         }
-        // A real sibling awaits the held gate without polling `owner` again.
         let pending_return = if case.storage_returns {
             return_tx.send(()).unwrap();
             None
@@ -127,8 +124,6 @@ impl StreamGuardLifecycle for NativeFinalizer {
     }
 }
 
-/// The same positive model scenario through native transactions and the
-/// canonical gate.
 #[tokio::test]
 async fn lean_independent_completion_releases_native_canonical_gate() {
     let cases: Vec<Case> = serde_json::from_str(include_str!(

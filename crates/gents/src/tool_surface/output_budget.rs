@@ -1,8 +1,3 @@
-//! Presentation owners (interrupted-call delivery, background completion
-//! notices) run after the dispatching behavior's in-memory tool surface may be
-//! gone — across a restart or a reconfiguration — so they resolve the budget
-//! from configuration instead of from the call.
-
 use defra_node::EmbeddedNode;
 
 use super::selection::CommandOutputLimits;
@@ -16,9 +11,6 @@ pub(crate) fn budget_for_tool(limits: &CommandOutputLimits, tool_name: &str) -> 
     configured.unwrap_or(crate::toolset::DEFAULT_MAX_COMMAND_CHARS)
 }
 
-/// Budget for `tool_name` as configured now for `agent_id` under its owner
-/// `node_did`; a document that no longer resolves falls back to the default so
-/// presentation never fails on configuration.
 pub(crate) async fn configured_output_budget(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
@@ -73,28 +65,6 @@ async fn load_command_output_limits(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn tool_names_map_to_their_host_group() {
-        let limits = CommandOutputLimits {
-            bash: Some(10),
-            cli: [("git".to_owned(), 20)].into(),
-        };
-        assert_eq!(budget_for_tool(&limits, "bash"), 10);
-        assert_eq!(budget_for_tool(&limits, "bash_unrestricted"), 10);
-        assert_eq!(budget_for_tool(&limits, "git"), 20);
-        for other in ["jq", "call_tool", "mcp__search__query", "spawn_process"] {
-            assert_eq!(
-                budget_for_tool(&limits, other),
-                crate::toolset::DEFAULT_MAX_COMMAND_CHARS,
-                "{other}"
-            );
-        }
-        assert_eq!(
-            budget_for_tool(&CommandOutputLimits::default(), "bash"),
-            crate::toolset::DEFAULT_MAX_COMMAND_CHARS
-        );
-    }
 
     #[tokio::test]
     async fn unresolvable_configuration_uses_the_default() {

@@ -1,6 +1,3 @@
-//! A running trial's [`LiveSnapshot`]: read out of its own home while the
-//! stages run, and once more when they end.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 

@@ -10,7 +10,6 @@ import { dockScopeOf, useDockFor } from "./workspace";
 import { useFleet } from "../hooks/useFleet";
 import { useDragReorder } from "../hooks/useDragReorder";
 
-/* the window bar's tabs and the dock's card are drawn apart, and joined by these */
 const DOCK_PANEL_ID = "dock-panel";
 const dockTabId = (surface: string) => `dock-tab-${surface}`;
 
@@ -216,16 +215,11 @@ export function DockTabs({
                 </span>
                 <TabBadge surface={s} sessionId={sessionId} />
               </button>
-              {/* the close is always there for the tab showing, on hover for
-                  the rest. A tablist holds only tabs, so it is the pointer's
-                  way to close; the keyboard's is Delete on the tab. */}
               <button
                 type="button"
                 aria-hidden
                 tabIndex={-1}
                 title={`Close ${s.title}`}
-                /* the tab captures the pointer for dragging, which would
-                     redirect this button's click to the tab */
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => closeTab(s.id)}
                 className={cn(
@@ -240,7 +234,6 @@ export function DockTabs({
           );
         })}
       </div>
-      {/* hides the dock and keeps its tabs; the session menu shows it again */}
       <Hint label="Hide panel">
         <Button
           variant="ghost"
@@ -256,8 +249,6 @@ export function DockTabs({
   );
 }
 
-/* a tab's count from the fleet; a number, so the tab re-renders only when
-   it changes */
 function TabBadge({
   surface,
   sessionId,

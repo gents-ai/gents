@@ -172,7 +172,6 @@ export function ManagedRuntimeAuthorityPicker({
           </Button>
         </div>
       </div>
-      {/* the one thing kept in view: what read / write lets through */}
       {toolCeiling === "readwrite" ? (
         <p className="text-xs text-muted-foreground">
           Commands run as you; the tool root is not a sandbox.

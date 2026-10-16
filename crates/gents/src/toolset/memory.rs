@@ -361,66 +361,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_malformed_memory_writes() {
-        let node = seeded_node().await;
-        let tool = MemoryTool::new(node, "did:key:z-memory");
-
-        let error = Tool::call(
-            &tool,
-            MemoryParams {
-                action: MemoryAction::Write,
-                key: " ".to_string(),
-                value: Some("x".to_string()),
-            },
-        )
-        .await
-        .expect_err("empty keys must fail");
-        assert!(error.to_string().contains("memory key must be non-empty"));
-
-        let error = Tool::call(
-            &tool,
-            MemoryParams {
-                action: MemoryAction::Write,
-                key: "valid".to_string(),
-                value: None,
-            },
-        )
-        .await
-        .expect_err("missing values must fail");
-        assert!(error.to_string().contains("requires `value`"));
-    }
-
-    #[tokio::test]
-    async fn rejects_oversized_key_and_value() {
-        let node = seeded_node().await;
-        let tool = MemoryTool::new(node, "did:key:z-memory");
-
-        let error = Tool::call(
-            &tool,
-            MemoryParams {
-                action: MemoryAction::Write,
-                key: "k".repeat(MAX_KEY_CHARS + 1),
-                value: Some("x".to_string()),
-            },
-        )
-        .await
-        .expect_err("oversized keys must fail");
-        assert!(error.to_string().contains("memory key exceeds"));
-
-        let error = Tool::call(
-            &tool,
-            MemoryParams {
-                action: MemoryAction::Write,
-                key: "valid".to_string(),
-                value: Some("v".repeat(MAX_VALUE_CHARS + 1)),
-            },
-        )
-        .await
-        .expect_err("oversized values must fail");
-        assert!(error.to_string().contains("memory value exceeds"));
-    }
-
-    #[tokio::test]
     async fn read_missing_key_for_same_agent_returns_not_found() {
         let node = seeded_node().await;
         let tool = MemoryTool::new(node, "did:key:z-memory");

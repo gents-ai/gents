@@ -1,14 +1,8 @@
 import Proofs.Recovery.Sweeps.Requests
 import Proofs.Recovery.Sweeps.Inference
 
-/-!
-# Startup recovery ordering: requests before inference calls (#1001)
-
-`inferenceCallRecoverySweep` is parent-gated (`recovery_outcome` in
-`crates/gents/src/admission/recovery.rs`): live parents are skipped, so its
-convergence depends on the request sweep running first. Native fence:
-`tests/conformance/recovery_sweeps.rs::startup_recovery_order_terminalizes_crash_orphaned_calls`.
--/
+/-! The inference sweep skips calls with live parents, so crash-orphaned calls
+converge only after request recovery. Startup must run the request sweep first. -/
 
 namespace Recovery
 
