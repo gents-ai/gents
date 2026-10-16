@@ -1120,6 +1120,19 @@ async fn terminalization_cost_is_independent_of_principal_output() {
 }
 
 #[tokio::test]
+#[ignore = "manual terminalization scale measurement"]
+async fn terminalization_scale_grid() {
+    let grid = std::env::var("TERMINALIZE_SCALE").unwrap_or_else(|_| "24:4096:0,24:4096:40".into());
+    for point in grid.split(',') {
+        let values = point
+            .split(':')
+            .map(|v| v.parse::<usize>().unwrap())
+            .collect::<Vec<_>>();
+        terminalization_with_principal_output(values[0], values[1], values[2]).await;
+    }
+}
+
+#[tokio::test]
 async fn background_output_query_work_is_independent_of_principal_history() {
     use crate::session::canonical_rows::{
         output_segment_create_variables, request_output_segments_query,

@@ -222,6 +222,45 @@ fn mutation_composite_version_accepts_unique_newest_composite() {
     assert_eq!(commit.cid, "bafy-new");
 }
 
+#[test]
+#[ignore = "manual native GraphQL envelope benchmark"]
+fn native_data_envelope_payload_size_benchmark() {
+    let data = serde_json :: json ! ({ "AgentOutputSegment" : (0 .. 128) . map (| index | { serde_json :: json ! ({ "_docID" : format ! ("segment-{index}") , "payload" : "x" . repeat (64 * 1024) }) }) . collect ::< Vec < _ >> () });
+    let mut copied = Vec::new();
+    let mut moved = Vec::new();
+    for iteration in 0..12 {
+        let measure = |copy| {
+            let native = Some(data.clone());
+            let start = std::time::Instant::now();
+            let envelope = if copy {
+                serde_json :: json ! ({ "data" : native . unwrap_or (Value :: Null) })
+            } else {
+                into_data_envelope(native)
+            };
+            let ms = start.elapsed().as_secs_f64() * 1000.0;
+            std::hint::black_box(envelope);
+            ms
+        };
+        let (copy_ms, move_ms) = if iteration % 2 == 0 {
+            (measure(true), measure(false))
+        } else {
+            let move_ms = measure(false);
+            (measure(true), move_ms)
+        };
+        if iteration > 0 {
+            copied.push(copy_ms);
+            moved.push(move_ms);
+        }
+    }
+    copied.sort_by(f64::total_cmp);
+    moved.sort_by(f64::total_cmp);
+    let result = serde_json :: json ! ({ "payload_bytes" : 128 * 64 * 1024 , "baseline_median_ms" : copied [5] , "updated_median_ms" : moved [5] , "includes_database_reads" : false , "includes_fixture_clone" : false , });
+    if let Some(path) = std::env::var_os("GENTS_ENVELOPE_BENCHMARK_OUTPUT") {
+        std::fs::write(path, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
+    }
+    tracing :: info ! (% result , "native GraphQL envelope benchmark");
+}
+
 #[tokio::test]
 async fn concurrent_mutations_share_the_node_write_path() {
     const WRITES: usize = 32;

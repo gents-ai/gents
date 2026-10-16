@@ -2599,6 +2599,156 @@ mod tests {
             .to_owned()
     }
 
+    #[test]
+    #[ignore = "manual canonical session-coordinate benchmark"]
+    fn session_coordinate_lookup_size_benchmark() {
+        let mut measurements = Vec::new();
+        for count in [1_usize, 500, 10_000] {
+            let rows = (0 .. count) . map (| sequence | { serde_json :: json ! ({ "_docID" : format ! ("header-{sequence}") , "message_key" : format ! ("key-{sequence}") , "sequence" : sequence , }) }) . collect :: < Vec < _ > > () ;
+            let coordinates = (0..count)
+                .map(|sequence| (format!("key-{sequence}"), u32::try_from(sequence).unwrap()))
+                .collect::<Vec<_>>();
+            let mut baseline = Vec::new();
+            let mut indexed = Vec::new();
+            let mut construction = Vec::new();
+            for iteration in 0..6 {
+                let start = std::time::Instant::now();
+                let cache = SessionHeaderRows::from(rows.clone());
+                let build_ms = start.elapsed().as_secs_f64() * 1000.0;
+                let scan = || {
+                    let start = std::time::Instant::now();
+                    for (key, sequence) in &coordinates {
+                        let matches = rows
+                            .iter()
+                            .filter(|row| {
+                                row.get("message_key").and_then(serde_json::Value::as_str)
+                                    == Some(key.as_str())
+                                    || row.get("sequence").and_then(serde_json::Value::as_u64)
+                                        == Some(u64::from(*sequence))
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(std::hint::black_box(matches).len(), 1);
+                    }
+                    start.elapsed().as_secs_f64() * 1000.0
+                };
+                let lookup = || {
+                    let start = std::time::Instant::now();
+                    for (key, sequence) in &coordinates {
+                        let matches = cache.coordinate_matches(key, *sequence).collect::<Vec<_>>();
+                        assert_eq!(std::hint::black_box(matches).len(), 1);
+                    }
+                    start.elapsed().as_secs_f64() * 1000.0
+                };
+                let (scan_ms, lookup_ms) = if iteration % 2 == 0 {
+                    (scan(), lookup())
+                } else {
+                    let lookup_ms = lookup();
+                    (scan(), lookup_ms)
+                };
+                if iteration > 0 {
+                    baseline.push(scan_ms);
+                    indexed.push(lookup_ms);
+                    construction.push(build_ms);
+                }
+            }
+            for values in [&mut baseline, &mut indexed, &mut construction] {
+                values.sort_by(f64::total_cmp);
+            }
+            measurements . push (serde_json :: json ! ({ "headers" : count , "lookups" : count , "baseline_median_ms" : baseline [2] , "indexed_median_ms" : indexed [2] , "construction_with_row_clone_median_ms" : construction [2] , })) ;
+        }
+        let result = serde_json :: json ! ({ "measurements" : measurements , "includes_database_reads" : false });
+        if let Some(path) = std::env::var_os("GENTS_COORDINATE_BENCHMARK_OUTPUT") {
+            std::fs::write(path, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
+        }
+        tracing :: info ! (% result , "session coordinate lookup benchmark");
+    }
+
+    #[tokio::test]
+    #[ignore = "manual canonical request-size benchmark"]
+    async fn cached_output_reconstruction_request_size_benchmark() {
+        use gents_protocol::output::{MessageBlock, PayloadPresentation, PresentedPayload};
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        let request = "request-size-benchmark";
+        let payload = "x".repeat(64 * 1024);
+        for sources in [1, 32, 128] {
+            let mut rows = Vec::new();
+            let mut headers = Vec::new();
+            for index in 0..sources {
+                let key = format!("source-{index}");
+                let doc_id = format!("close-{index}");
+                let segment = authored_segments(request, &key, &[&payload]).pop().unwrap();
+                let mut message = header(
+                    &format!("header-{index}"),
+                    &segment.session_id,
+                    Some(request),
+                    MessagePublication::RequestExecution {
+                        execution_generation: "observed-generation".into(),
+                    },
+                );
+                message.message.node_did = segment.node_did.clone();
+                message.message.requester_did = None;
+                message.message.role = MessageRole::User;
+                message.message.native_id = None;
+                message.message.sequence = index;
+                message.message.blocks = vec![MessageBlock::Text {
+                    text: PresentedPayload {
+                        output: PayloadRef {
+                            close_doc_id: doc_id.clone(),
+                            stream: 0,
+                        },
+                        presentation: PayloadPresentation::Full,
+                    },
+                }];
+                rows.push(super::super::canonical_rows::OutputSegmentRow { doc_id, segment });
+                headers.push(message);
+            }
+            let mut cache = ReadCache::default();
+            cache.requests.insert(request.into(), Arc::new(rows.into()));
+            let expected = gents_protocol::message::Message::user(&payload);
+            let mut samples = Vec::new();
+            for pass in 0..6 {
+                let started = std::time::Instant::now();
+                for message in &headers {
+                    let selected = load_referenced_segments(
+                        ReadAccess::Node(&node),
+                        message,
+                        Some(request),
+                        "did:test:test",
+                        None,
+                        &mut cache,
+                    )
+                    .await
+                    .unwrap();
+                    let observed = selected
+                        .iter()
+                        .map(|row| ObservedSegment {
+                            doc_id: &row.doc_id,
+                            segment: &row.segment,
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        reconstruct_message(&observed, &[], &[], &message.message).unwrap(),
+                        expected
+                    );
+                }
+                if pass > 0 {
+                    samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            tracing::info!(
+                sources,
+                payload_bytes = payload.len(),
+                median_ms = samples[2],
+                min_ms = samples[0],
+                max_ms = samples[4],
+                "cached canonical reconstruction benchmark"
+            );
+        }
+        node.shutdown().await;
+    }
+
     fn authored_segments(
         request_doc_id: &str,
         key: &str,
