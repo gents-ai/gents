@@ -150,6 +150,7 @@ fn contract_source_paths() -> Vec<PathBuf> {
     let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut paths = vec![
         source_root.join("contract.rs"),
+        source_root.join("host/protocol.rs"),
         source_root.join("../../gents-desktop-core/src/error.rs"),
         source_root.join("../../gents-desktop-core/src/home_reset.rs"),
         source_root.join("tauri_commands/chat.rs"),
@@ -177,6 +178,9 @@ fn export_all(dir: &Path) -> Result<(), String> {
     }
 
     export_types!(
+        crate::host::protocol::ClientMessage,
+        crate::host::protocol::ClientCommand,
+        crate::host::protocol::HostMessage,
         DesktopInitRequest,
         ManagedServerStartRequest,
         ManagedServerRestartRequest,
@@ -320,6 +324,14 @@ fn export_all(dir: &Path) -> Result<(), String> {
     );
 
     commands::export(dir)?;
+    let protocol = format!(
+        "// Generated from gents-desktop-bridge::host::protocol. Do not edit.\n\nexport const CLIENT_HOST_VERSION = {};\nexport const CLIENT_HOST_MAX_FRAME_BYTES = {};\nexport const CLIENT_HOST_MAX_PENDING_CALLS = {};\n",
+        crate::host::protocol::PROTOCOL_VERSION,
+        crate::host::protocol::MAX_FRAME_BYTES,
+        crate::host::protocol::MAX_PENDING_CALLS,
+    );
+    std::fs::write(dir.join("ClientHostProtocol.ts"), protocol)
+        .map_err(|error| error.to_string())?;
     normalize_generated_types(dir)?;
     Ok(())
 }
@@ -361,6 +373,27 @@ fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
     assert!(
         timeline.contains("itemKey"),
         "per-variant rename_all should camelCase enum fields; got:\n{timeline}"
+    );
+
+    let client_message =
+        std::fs::read_to_string(tmp.path().join("ClientMessage.ts")).expect("ClientMessage.ts");
+    assert!(
+        client_message.contains("\"kind\": \"hello\"")
+            && client_message.contains("\"kind\": \"call\""),
+        "{client_message}"
+    );
+    let client_command =
+        std::fs::read_to_string(tmp.path().join("ClientCommand.ts")).expect("ClientCommand.ts");
+    assert!(
+        client_command.contains("\"name\": \"desktop_session_snapshot\"")
+            && client_command.contains("\"args\":"),
+        "{client_command}"
+    );
+    let session_args = std::fs::read_to_string(tmp.path().join("SessionSnapshotArgs.ts"))
+        .expect("SessionSnapshotArgs.ts");
+    assert!(
+        session_args.contains("nodeDid:") && session_args.contains("sessionId:"),
+        "{session_args}"
     );
 
     let bootstrap = std::fs::read_to_string(tmp.path().join("DesktopBootstrapSummary.ts"))

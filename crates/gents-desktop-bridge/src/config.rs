@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use gents_desktop_core::client::DesktopPaths;
+
 use crate::snapshot::projection::SnapshotGrants;
 
 #[derive(Debug, Clone)]
@@ -65,4 +67,15 @@ pub struct AppMeta {
 pub struct TracingConfig {
     pub filter: Option<String>,
     pub console: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedBridgePolicy {
+    pub desktop_paths: DesktopPaths,
+    pub node_home: Option<PathBuf>,
+    pub bootstrap: BootstrapPolicy,
+    pub app_meta: AppMeta,
+    pub snapshot_grants: SnapshotGrants,
+    pub managed_server: ManagedServerPolicy,
+    pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
 }

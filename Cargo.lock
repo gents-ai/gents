@@ -4648,6 +4648,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "gents-client-host"
+version = "0.20.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "clap",
+ "futures",
+ "gents",
+ "gents-desktop-bridge",
+ "gents-desktop-core",
+ "libc",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "gents-codex-protocol"
 version = "0.20.0"
 dependencies = [
@@ -4679,8 +4698,10 @@ dependencies = [
  "anyhow",
  "async-trait",
  "blake3",
+ "bytes",
  "chrono",
  "dirs 5.0.1",
+ "futures",
  "gents",
  "gents-chatgpt-login",
  "gents-claude-login",

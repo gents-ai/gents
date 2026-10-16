@@ -8,22 +8,11 @@ use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::{AppHandle, Emitter, Runtime, State};
 use tokio::sync::watch;
 
-use crate::config::{
-    AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, NodeHomePolicy,
-};
+use crate::config::{BootstrapPolicy, BridgeConfig, HomePolicy, NodeHomePolicy};
 use crate::snapshot::projection::SnapshotGrants;
 use crate::types::ClientUpdateEvent;
 
-#[derive(Debug, Clone)]
-pub struct ResolvedBridgePolicy {
-    pub desktop_paths: DesktopPaths,
-    pub node_home: Option<PathBuf>,
-    pub bootstrap: BootstrapPolicy,
-    pub app_meta: AppMeta,
-    pub snapshot_grants: SnapshotGrants,
-    pub managed_server: ManagedServerPolicy,
-    pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
-}
+pub use crate::config::ResolvedBridgePolicy;
 
 #[derive(Debug, Clone)]
 pub enum ClientStartProgress {
