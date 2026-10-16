@@ -20,7 +20,7 @@ import {
   preferences,
   zoomLevel,
 } from "../preferences";
-import { stepZoom } from "../lib/zoom";
+import { onZoomKeys, stepZoom, type ZoomAction } from "../lib/zoom";
 
 export function usePlatformSetup() {
   const { openExternalUrl } = useApp().actions;
@@ -38,10 +38,12 @@ export function usePlatformSetup() {
   useEffect(() => followOtherWindows(), []);
   useEffect(() => {
     if (!inNativeShell()) return;
+    const step = (action: ZoomAction) =>
+      preferences.setZoom(stepZoom(zoomLevel(), action));
     const stopFollowing = followZoom(setWebviewZoom);
-    const stopListening = onZoomMenu((action) =>
-      preferences.setZoom(stepZoom(zoomLevel(), action)),
-    );
+    const stopListening = isMacTauriShell()
+      ? onZoomMenu(step)
+      : onZoomKeys(window, step);
     return () => {
       stopFollowing();
       stopListening();
