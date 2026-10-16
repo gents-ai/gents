@@ -18,7 +18,7 @@ use crate::managed_exec::{
 pub(super) struct Services(Mutex<BTreeMap<String, Service>>);
 
 struct Service {
-    process: ManagedProcess,
+    process: Option<ManagedProcess>,
     data: Value,
     pack_digest: String,
     log_path: PathBuf,
@@ -83,21 +83,24 @@ impl Services {
             .collect();
         for old_key in obsolete {
             if let Some(mut previous) = services.remove(&old_key) {
-                previous.process.terminate().await;
+                previous.terminate().await;
             }
         }
         if let Some(service) = services.get_mut(&key) {
-            if service.process.has_exited()? {
+            if service
+                .process
+                .as_mut()
+                .map(ManagedProcess::has_exited)
+                .transpose()?
+                .unwrap_or(true)
+            {
+                service.terminate().await;
                 let error = anyhow::anyhow!("plugin service exited; inspect {} and restart the runtime. Previous actions may have executed; do not replay writes blindly", service.log_path.display());
                 return optional_start(Err(error), declaration.optional, input).map(|_| ());
             }
             input.insert("service".into(), service.data.clone());
             return Ok(());
         }
-        anyhow::ensure!(
-            services.len() < 8,
-            "runtime managed-plugin service limit reached (8)"
-        );
         let archive = crate::pack_store::PackStore::new(home).open(digest)?;
         anyhow::ensure!(
             archive
@@ -108,6 +111,13 @@ impl Services {
                 .any(|plugin| plugin == &record.declaration),
             "installed service declaration does not match its owner pack; reinstall the pack"
         );
+        if services.len() >= 8 {
+            return optional_start(
+                Err(anyhow::anyhow!("runtime managed-plugin service limit reached (8); restart the runtime to release cached services")),
+                declaration.optional,
+                input,
+            ).map(|_| ());
+        }
         let root = home.join(crate::home::PLUGIN_SERVICES_DIR_NAME);
         std::fs::create_dir_all(&root)?;
         let state = tempfile::Builder::new()
@@ -156,6 +166,12 @@ fn optional_start(
 }
 
 impl Service {
+    async fn terminate(&mut self) {
+        if let Some(mut process) = self.process.take() {
+            process.terminate().await;
+        }
+    }
+
     async fn start(
         argv: Vec<String>,
         state: &Path,
@@ -201,7 +217,7 @@ impl Service {
             }
         });
         let mut service = Self {
-            process,
+            process: Some(process),
             data: Value::Null,
             pack_digest: digest.to_owned(),
             log_path,
@@ -222,7 +238,7 @@ impl Service {
                 serde_json::from_slice(&line).context("invalid service readiness JSON")?;
             anyhow::ensure!(value.is_object(), "service readiness must be a JSON object");
             anyhow::ensure!(
-                !service.process.has_exited()?,
+                !service.process.as_mut().unwrap().has_exited()?,
                 "service exited during startup"
             );
             Ok::<_, anyhow::Error>(value)
@@ -233,7 +249,7 @@ impl Service {
         match ready {
             Ok(value) => service.data = value,
             Err(error) => {
-                service.process.terminate().await;
+                service.terminate().await;
                 let detail = String::from_utf8_lossy(&tail.lock().unwrap()).into_owned();
                 anyhow::bail!("{error:#}; service stderr: {detail}");
             }
@@ -355,6 +371,8 @@ mod tests {
             .get_mut("test/other/old-spec")
             .unwrap()
             .process
+            .as_mut()
+            .unwrap()
             .has_exited()
             .unwrap());
         assert_ne!(unsafe { libc::kill(old_pid, 0) }, 0);
@@ -377,7 +395,7 @@ mod tests {
         .await
         .unwrap();
         let pid = service.data["pid"].as_i64().unwrap() as i32;
-        assert!(!service.process.has_exited().unwrap());
+        assert!(!service.process.as_mut().unwrap().has_exited().unwrap());
         drop(service);
         for _ in 0..100 {
             if unsafe { libc::kill(pid, 0) } != 0 {
@@ -386,6 +404,257 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("managed service survived owner drop");
+    }
+
+    #[tokio::test]
+    async fn exited_service_keeps_identity_until_cleanup_and_then_stays_retired() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut service = Service::start(
+            vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "printf '{\"pid\":%s}\\n' $$; exec sleep 60".into(),
+            ],
+            dir.path(),
+            "identity",
+            "digest",
+            2,
+        )
+        .await
+        .unwrap();
+        let pid = service.data["pid"].as_i64().unwrap() as i32;
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !service.process.as_mut().unwrap().has_exited().unwrap() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                )
+            },
+            0
+        );
+        assert_eq!(unsafe { info.si_pid() }, pid);
+        service.terminate().await;
+        assert!(service.process.is_none());
+        assert_ne!(unsafe { libc::kill(pid, 0) }, 0);
+        service.terminate().await;
+        assert!(service.process.is_none());
+    }
+
+    #[tokio::test]
+    async fn invalid_readiness_kills_term_resistant_descendants() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = Service::start(
+            vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                r#"/bin/sh -c 'trap "" TERM; echo $$ > descendant; exec sleep 60' &
+while [ ! -s descendant ]; do sleep 0.01; done
+echo invalid-json
+wait"#
+                    .into(),
+            ],
+            dir.path(),
+            "descendants",
+            "digest",
+            2,
+        )
+        .await;
+        assert!(result.is_err());
+        let pid: i32 = std::fs::read_to_string(dir.path().join("descendant"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_stopped(pid).await;
+    }
+
+    async fn assert_stopped(pid: i32) {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while unsafe { libc::kill(pid, 0) } == 0 {
+                #[cfg(target_os = "linux")]
+                if std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                    stat.rsplit_once(") ")
+                        .is_some_and(|(_, fields)| fields.starts_with("Z "))
+                }) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("TERM-resistant descendant survived cleanup");
+    }
+
+    #[tokio::test]
+    async fn cancelled_cached_retirement_kills_descendants_without_restarting() {
+        let home = tempfile::tempdir().unwrap();
+        let mut record: InstalledPlugin = serde_json::from_value(serde_json::json!({
+            "namespace":"test", "name":"service", "version":"1", "digest":"sha256:test", "language":"rust",
+            "owner_pack_coordinate":"test/cancel", "owner_pack_digest":"digest",
+            "declaration":{"name":"service", "description":"test", "artifact":"plugin.afb", "language":"rust", "input_schema":{"type":"object"},
+                "service":{"argv":["must-not-restart"], "startup_timeout_secs":1, "optional":true}}
+        })).unwrap();
+        let mut granted = crate::plugin::Manifold::sealed();
+        granted.child_process = true;
+        record.granted = Some(granted);
+        let key = format!(
+            "test/cancel/{}",
+            super::super::store::content_digest_hex(
+                &serde_json::to_vec(record.declaration.service.as_ref().unwrap()).unwrap()
+            )
+        );
+        let mut service = Service::start(
+            vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                r#"/bin/sh -c 'trap "" TERM; echo $$ > descendant; exec sleep 60' &
+while [ ! -s descendant ]; do sleep 0.01; done
+printf '{"pid":%s}\n' $$
+wait"#
+                    .into(),
+            ],
+            home.path(),
+            "cancel",
+            "digest",
+            2,
+        )
+        .await
+        .unwrap();
+        let pid = service.data["pid"].as_i64().unwrap() as i32;
+        let descendant: i32 = std::fs::read_to_string(home.path().join("descendant"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !service.process.as_mut().unwrap().has_exited().unwrap() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let services = Services::default();
+        services.0.lock().await.insert(key.clone(), service);
+        assert!(tokio::time::timeout(
+            Duration::from_millis(20),
+            services.prepare(home.path(), &record, &mut serde_json::json!({}))
+        )
+        .await
+        .is_err());
+        assert!(services.0.lock().await[&key].process.is_none());
+        assert_stopped(descendant).await;
+        let mut input = serde_json::json!({});
+        services
+            .prepare(home.path(), &record, &mut input)
+            .await
+            .unwrap();
+        assert_eq!(input["service"]["status"], "unavailable");
+        assert!(input["service"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("service exited"));
+        assert!(!home
+            .path()
+            .join(crate::home::PLUGIN_SERVICES_DIR_NAME)
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn capacity_failure_is_optional_but_archive_mismatch_is_not() {
+        let home = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        std::fs::create_dir(source.path().join("plugins")).unwrap();
+        let mut granted = crate::plugin::Manifold::sealed();
+        granted.child_process = true;
+        std::fs::write(source.path().join("README.md"), "# Capacity fixture").unwrap();
+        let services = Services::default();
+        for index in 0..8 {
+            let service = Service::start(
+                vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    "echo '{}'; exec sleep 60".into(),
+                ],
+                home.path(),
+                "capacity",
+                "other",
+                2,
+            )
+            .await
+            .unwrap();
+            services
+                .0
+                .lock()
+                .await
+                .insert(format!("other/{index}"), service);
+        }
+        std::fs::write(
+            source.path().join("plugins/plugin.afb"),
+            super::super::tests::build_plugin_afb(super::super::tests::ECHO_WAT),
+        )
+        .unwrap();
+        for optional in [false, true] {
+            let declaration = serde_json::json!({
+                "name":"service", "description":"test", "artifact":"plugins/plugin.afb", "language":"rust",
+                "input_schema":{"type":"object"}, "manifold":granted,
+                "service":{"argv":["missing-runtime"],"startup_timeout_secs":1,"optional":optional}
+            });
+            let manifest = serde_json::json!({
+                "manifest_version":1,"namespace":"test","name":"capacity","version":"1.0.0",
+                "description":"test","authors":["test"],"tags":[],"kind":"plugins",
+                "assets":["README.md","plugins/plugin.afb"],"plugins":[declaration]
+            });
+            std::fs::write(
+                source.path().join("manifest.json"),
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+            let (bytes, _) = crate::pack_archive::pack_dir(source.path()).unwrap();
+            let stored = crate::pack_store::PackStore::new(home.path())
+                .import(bytes.as_slice(), None)
+                .unwrap();
+            let mut record: InstalledPlugin = serde_json::from_value(serde_json::json!({
+                "namespace":"test", "name":"service", "version":"1", "digest":"sha256:test", "language":"rust",
+                "owner_pack_coordinate":"test/capacity", "owner_pack_digest":stored.header.digest,
+                "declaration":declaration, "granted":granted
+            })).unwrap();
+            let mut input = serde_json::json!({});
+            let result = services.prepare(home.path(), &record, &mut input).await;
+            if optional {
+                result.unwrap();
+                assert_eq!(input["service"]["status"], "unavailable");
+                assert_eq!(input["service"]["code_executed"], false);
+                assert!(input["service"]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("limit reached"));
+            } else {
+                assert!(result.unwrap_err().to_string().contains("limit reached"));
+            }
+            record.declaration.service.as_mut().unwrap().argv = vec!["tampered".into()];
+            assert!(services
+                .prepare(home.path(), &record, &mut serde_json::json!({}))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("does not match"));
+        }
+        assert!(!home
+            .path()
+            .join(crate::home::PLUGIN_SERVICES_DIR_NAME)
+            .exists());
     }
 
     #[tokio::test]

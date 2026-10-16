@@ -23,6 +23,47 @@ impl ManagedChild {
         }
     }
 
+    pub(super) fn has_exited(&self) -> std::io::Result<bool> {
+        if self.finished {
+            return Ok(true);
+        }
+        let pid = self
+            .pgid
+            .ok_or_else(|| std::io::Error::other("managed child has no process id"))?;
+        // Keep the leader waitable so its PID/PGID cannot be reused before group cleanup.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(unsafe { info.si_pid() } != 0)
+    }
+
+    pub(super) async fn terminate_service(&mut self) {
+        if self.finished {
+            return;
+        }
+        if let Some(pgid) = self.pgid {
+            let _ = signal_process_group(pgid, libc::SIGTERM);
+            tokio::time::sleep(TERM_GRACE).await;
+            // Kill descendants before reaping the leader, even when it exited on TERM.
+            let _ = signal_process_group(pgid, libc::SIGKILL);
+        }
+        if matches!(
+            tokio::time::timeout(KILL_GRACE, self.inner.wait()).await,
+            Ok(Ok(_))
+        ) {
+            self.finished = true;
+        }
+    }
+
     pub(super) fn pgid(&self) -> Option<i32> {
         self.pgid
     }
