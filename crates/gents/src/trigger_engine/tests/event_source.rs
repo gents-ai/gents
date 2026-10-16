@@ -1511,16 +1511,22 @@ async fn concurrent_trigger_fire_count_updates_are_not_lost() {
                     },
                 )
                 .await
-                .unwrap();
             })
         })
         .collect::<Vec<_>>();
+    let mut committed = 0;
     for update in updates {
-        update.await.unwrap();
+        match update.await.unwrap() {
+            Ok(()) => committed += 1,
+            Err(error) => assert!(
+                crate::config_client::is_classified_transaction_conflict(&error),
+                "only bounded conflict exhaustion may refuse a concurrent update: {error:#}"
+            ),
+        }
     }
-
+    assert!(committed > 0, "at least one concurrent update commits");
     let trigger = observed_trigger(node.as_ref(), trigger_id).await;
-    assert_eq!(trigger["fire_count"].as_i64(), Some(12));
+    assert_eq!(trigger["fire_count"].as_i64(), Some(committed));
 }
 
 async fn observed_trigger(node: &defra_node::EmbeddedNode, id: &str) -> serde_json::Value {

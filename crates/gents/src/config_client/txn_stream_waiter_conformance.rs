@@ -1,8 +1,8 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc,
 };
 use std::task::{Context, Poll};
 
@@ -112,6 +112,7 @@ async fn lean_stream_waiter_schedules_match_the_canonical_write_gate() {
                     .expect("fill remaining permits so the modeled waiter is next"),
             );
         }
+        tokio::task::yield_now().await;
         let stream_acquired = Arc::new(AtomicBool::new(false));
         let generator_dropped = Arc::new(AtomicBool::new(false));
         let yielded = Arc::new(AtomicUsize::new(0));
@@ -225,11 +226,23 @@ async fn lean_stream_waiter_schedules_match_the_canonical_write_gate() {
             }
         }
 
+        let owner_operation = actual_owner(&gate);
+        let tracked_operations: Vec<_> = gate
+            .owners
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .values()
+            .map(|owner| owner.operation.as_str())
+            .collect();
         assert_eq!(
             case.gate_held,
-            actual_owner(&gate) != "none",
-            "{}",
-            case.name
+            owner_operation != "none",
+            "{}: mapped owner={owner_operation}, tracked operations={tracked_operations:?}, \
+             available permits={}, flush guard={}, stream acquired={}",
+            case.name,
+            gate.permits.available_permits(),
+            flush_guard.is_some(),
+            stream_acquired.load(Ordering::Acquire)
         );
         assert_eq!(
             case.initial_guard_held,

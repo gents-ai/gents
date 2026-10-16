@@ -204,7 +204,6 @@ fn app_collections_empty_collections_soft_skips() {
     );
 }
 
-
 #[test]
 fn foreign_node_did_still_hard_fails_whole_peer_load() {
     let signed_endpoint = EnrollmentEndpointEntry {

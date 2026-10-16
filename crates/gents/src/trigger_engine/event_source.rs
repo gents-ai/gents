@@ -414,12 +414,6 @@ impl EventSource {
     }
 
     #[cfg(test)]
-    pub(crate) fn with_reconcile_debounce(mut self, debounce: Duration) -> Self {
-        self.reconcile_debounce = debounce;
-        self
-    }
-
-    #[cfg(test)]
     pub(crate) fn subscribed_collections(&self) -> Vec<String> {
         let mut v: Vec<String> = self.desired_collections.iter().cloned().collect();
         v.sort();

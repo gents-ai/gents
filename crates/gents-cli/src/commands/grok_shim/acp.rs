@@ -2587,7 +2587,6 @@ mod tests {
         assert_eq!(error_code_for(&unknown), -32601);
     }
 
-
     #[test]
     fn internal_and_param_errors_map_to_their_codes() {
         let missing_session = required_session_id(&json!({})).expect_err("missing session id");
@@ -2900,7 +2899,6 @@ mod tests {
             "the whole staging directory must be cleaned up, not abandoned"
         );
     }
-
 
     #[tokio::test]
     async fn session_new_writes_the_grok_record_the_resume_picker_needs() {

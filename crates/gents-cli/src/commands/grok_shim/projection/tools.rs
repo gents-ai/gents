@@ -1137,7 +1137,6 @@ mod tests {
         assert_eq!(meta["subagentBackground"], false);
     }
 
-
     #[test]
     fn other_suppressed_families_render_nothing() {
         for name in ["todo", "bg-plumbing", "goal", "scheduler", "workflow"] {

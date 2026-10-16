@@ -445,7 +445,7 @@ async fn queued_usage_write_rechecks_removed_or_disabled_account_under_gate() {
         let account = UsageAccount::for_credential(&original);
         let queued = Arc::new(tokio::sync::Notify::new());
         let acquired = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let writer = access
+        let (writer, fillers) = access
             .transact_write("test.hold_usage_gate", |txn| {
                 let node = node.clone();
                 let account = account.clone();
@@ -453,6 +453,12 @@ async fn queued_usage_write_rechecks_removed_or_disabled_account_under_gate() {
                 let queued = queued.clone();
                 let acquired = acquired.clone();
                 Box::pin(async move {
+                    let gate_node = Arc::clone(&node);
+                    let fillers =
+                        crate::config_client::ConfigApplyTxn::fill_mutation_write_gate_for_test(
+                            gate_node.as_ref(),
+                        )
+                        .await;
                     let writing_queued = queued.clone();
                     let writing_acquired = acquired.clone();
                     let writer = tokio::spawn(async move {
@@ -491,11 +497,12 @@ async fn queued_usage_write_rechecks_removed_or_disabled_account_under_gate() {
                         ))
                         .await?;
                     }
-                    Ok(writer)
+                    Ok((writer, fillers))
                 })
             })
             .await
             .unwrap();
+        drop(fillers);
         tokio::time::timeout(std::time::Duration::from_secs(10), writer)
             .await
             .unwrap()

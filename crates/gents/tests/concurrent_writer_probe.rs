@@ -178,7 +178,6 @@ async fn encrypted_branchable_writers_at_varying_admission_widths() -> Result<()
     measure_encrypted_admission(64, &[1, 2, 4, 8, 16, 32, 64], "native-admission-sweep").await
 }
 
-
 async fn measure_encrypted_admission(
     writers: usize,
     capacities: &[usize],

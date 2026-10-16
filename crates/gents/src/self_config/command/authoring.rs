@@ -281,7 +281,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn an_unverified_check_never_reports_full_validation() {
         let report = |problems: Vec<String>, unverified: Vec<&'static str>| CheckReport {

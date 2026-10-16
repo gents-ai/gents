@@ -314,17 +314,14 @@ async fn copy_and_verify(
         if exists(stage)? {
             fs::remove_dir_all(stage)?;
         }
-        fs::create_dir(stage)?;
+        let target_options =
+            crate::storage_backend::regolith_options().with_encryption_key(*key.0);
+        source.copy_snapshot_to(stage, &target_options, &mut || {
+            progress("store_encryption_copy");
+        })?;
         fs::set_permissions(stage, fs::metadata(data)?.permissions())?;
-        let destination = RegolithStore::open_with_options(
-            stage,
-            crate::storage_backend::regolith_options().with_encryption_key(*key.0),
-        )?;
-        let copied = copy_values(&source, &destination, progress).await;
-        let verified = match copied {
-            Ok(()) => verify_values(&source, &destination, progress).await,
-            Err(error) => Err(error),
-        };
+        let destination = RegolithStore::open_with_options(stage, target_options)?;
+        let verified = verify_values(&source, &destination, progress).await;
         let closed = destination.close().await;
         drop(destination);
         verified?;
@@ -339,38 +336,6 @@ async fn copy_and_verify(
     drop(source);
     result?;
     closed?;
-    Ok(())
-}
-
-async fn copy_values(
-    source: &dyn Store,
-    destination: &dyn Store,
-    progress: &mut (dyn FnMut(&'static str) + Send),
-) -> Result<()> {
-    let read = source.new_txn(true).await?;
-    let mut entries = read.iterator(IterOptions::default()).await?;
-    let mut write = destination.new_txn(false).await?;
-    let mut bytes = 0;
-    let mut count = 0;
-    while let Some(entry) = entries.next().await? {
-        write.set(&entry.key, &entry.value).await?;
-        bytes += entry.key.len() + entry.value.len();
-        count += 1;
-        if bytes >= 1024 * 1024 || count >= 1024 {
-            write.commit().await?;
-            progress("store_encryption_copy");
-            write = destination.new_txn(false).await?;
-            bytes = 0;
-            count = 0;
-        }
-    }
-    write.commit().await?;
-    if count > 0 {
-        progress("store_encryption_copy");
-    }
-    entries.close().await?;
-    drop(entries);
-    read.discard();
     Ok(())
 }
 

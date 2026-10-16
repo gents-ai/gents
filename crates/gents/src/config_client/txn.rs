@@ -91,13 +91,20 @@ impl LocalConfigAccess {
         tokio::spawn(
             async move {
                 #[cfg(test)]
-                if let Some(pause) = local_operation_pause {
+                if let Some(pause) = local_operation_pause.as_ref() {
                     pause.reached.notify_one();
                     pause.release.notified().await;
                 }
                 let result = operation(Arc::clone(&node)).await;
                 drop(node);
                 drop(gate);
+                #[cfg(test)]
+                if let Some(completed) = local_operation_pause
+                    .as_ref()
+                    .and_then(|pause| pause.completed.as_ref())
+                {
+                    completed.notify_one();
+                }
                 let _ = send.send(result);
             }
             .with_subscriber(dispatcher)
@@ -180,6 +187,11 @@ struct MutationWriteGuard {
     gate: Arc<MutationWriteGate>,
     _permit: tokio::sync::OwnedSemaphorePermit,
     lease_id: u64,
+}
+
+#[cfg(test)]
+pub(crate) struct MutationWriteGateFillers {
+    _guards: Vec<MutationWriteGuard>,
 }
 
 impl Drop for MutationWriteGuard {
@@ -600,6 +612,7 @@ struct SuccessfulMutationFault {
 struct LocalOperationPause {
     reached: Arc<tokio::sync::Notify>,
     release: Arc<tokio::sync::Notify>,
+    completed: Option<Arc<tokio::sync::Notify>>,
 }
 
 #[cfg(test)]
@@ -1112,7 +1125,33 @@ impl<'a> ConfigApplyTxn<'a> {
         future: F,
     ) -> F::Output {
         LOCAL_OPERATION_PAUSE
-            .scope(Arc::new(LocalOperationPause { reached, release }), future)
+            .scope(
+                Arc::new(LocalOperationPause {
+                    reached,
+                    release,
+                    completed: None,
+                }),
+                future,
+            )
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn with_owned_local_operation_completion<F: Future>(
+        reached: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        completed: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> F::Output {
+        LOCAL_OPERATION_PAUSE
+            .scope(
+                Arc::new(LocalOperationPause {
+                    reached,
+                    release,
+                    completed: Some(completed),
+                }),
+                future,
+            )
             .await
     }
 
@@ -1301,6 +1340,30 @@ impl<'a> ConfigApplyTxn<'a> {
             cleanup_scheduled: None,
         });
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn fill_mutation_write_gate_for_test(
+        node: &EmbeddedNode,
+    ) -> MutationWriteGateFillers {
+        let gate = mutation_write_gate(node);
+        let held = gate
+            .owners
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len();
+        let mut fillers = Vec::with_capacity(MUTATION_WRITE_GATE_CAPACITY.saturating_sub(held));
+        for _ in held..MUTATION_WRITE_GATE_CAPACITY {
+            fillers.push(
+                gate.acquire(
+                    WriteOperation::new("test.write_gate_capacity_filler")
+                        .expect("static write operation"),
+                )
+                .await
+                .expect("fill the remaining write admission permits"),
+            );
+        }
+        MutationWriteGateFillers { _guards: fillers }
     }
 
     #[cfg(test)]

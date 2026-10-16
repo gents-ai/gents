@@ -241,7 +241,6 @@ fn malformed_external_capture_json_is_rejected_before_import() {
     );
 }
 
-
 #[tokio::test]
 async fn negative_external_capture_imports_reject_bad_mappings_without_partial_rows() -> Result<()>
 {

@@ -1902,7 +1902,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn an_existing_run_frozen_from_another_plan_is_refused() {
         use crate::eval::CellSpec;

@@ -73,7 +73,6 @@ fn timeline_arguments_use_physical_binding_and_undelivered_output_stays_absent()
     assert_eq!(projected.result, None);
 }
 
-
 #[test]
 fn timeline_rejects_reused_native_id_on_a_different_physical_tool() {
     let (mut row, message) = admitted();

@@ -603,8 +603,6 @@ mod tests {
     use super::*;
 
     #[test]
-
-    #[test]
     fn process_control_requester_absence_is_exact_not_empty_string() {
         let owner = ProcessControlScope {
             request_id: "request-1".to_string(),

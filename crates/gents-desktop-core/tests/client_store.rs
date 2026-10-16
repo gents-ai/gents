@@ -16,7 +16,6 @@ fn focused_request_id_defaults_to_none() {
     assert!(store.focused_request_id().is_none());
 }
 
-
 #[test]
 fn request_lifecycle_is_the_only_turn_state_owner() {
     let store = ClientStore::from_rows(ClientStoreRows {
