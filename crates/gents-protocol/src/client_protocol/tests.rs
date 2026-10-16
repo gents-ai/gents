@@ -66,4 +66,3 @@ fn unordered_turn_rejects_ambiguous_tips() {
     ];
     assert_eq!(derive_turn(&ambiguous), None);
 }
-

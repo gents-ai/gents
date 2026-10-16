@@ -38,4 +38,3 @@ pub struct ToolSurfaceExplanationView {
     pub mcp_services_online: bool,
     pub surface: gents::tool_surface::ToolSurfaceExplanation,
 }
-

@@ -55,4 +55,3 @@ pub fn admit_operator_input(entry: &PlannedEntry, input: Value) -> Result<Map<St
     }
     Ok(input)
 }
-

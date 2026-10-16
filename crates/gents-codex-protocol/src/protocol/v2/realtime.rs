@@ -33,9 +33,7 @@ pub struct ThreadRealtimeStartParams {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ThreadRealtimeStartTransport {
     Websocket,
-    Webrtc {
-        sdp: String,
-    },
+    Webrtc { sdp: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq)]

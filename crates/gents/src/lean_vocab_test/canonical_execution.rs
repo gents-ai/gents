@@ -324,7 +324,11 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         closing: LeanCanonicalSegment,
         message: LeanCanonicalMessage<LeanPayloadSpec>,
     },
-    AdvanceCompactionCursor { actor: u64, now: u64, cursor: u64 },
+    AdvanceCompactionCursor {
+        actor: u64,
+        now: u64,
+        cursor: u64,
+    },
     RevokeCorrupt {
         actor: u64,
         now: u64,

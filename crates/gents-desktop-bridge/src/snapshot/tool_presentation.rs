@@ -617,5 +617,4 @@ write_file: wrote 4 bytes to file.txt"#,
             } if stdout == "ran tests" && stderr == "failed"
         ));
     }
-
 }

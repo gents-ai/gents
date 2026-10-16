@@ -1791,4 +1791,3 @@ mod shim_host_tests {
         let _ = server.await;
     }
 }
-

@@ -6,17 +6,12 @@ use defra_node::EmbeddedNode;
 use crate::hook::BackgroundExecutionRegistry;
 use crate::tool_call_lifecycle::{AwaitMode, CancelCause, ToolCallLifecycle};
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CancelBackgroundToolCallOutcome {
-    Cancelled {
-        live_execution_cancelled: bool,
-    },
+    Cancelled { live_execution_cancelled: bool },
     Lost,
     Unverified,
-    AlreadyTerminal {
-        state: String,
-    },
+    AlreadyTerminal { state: String },
     NotBackground,
     NotFound,
 }
@@ -163,7 +158,6 @@ mod tests {
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     use std::time::Duration;
     use tokio_util::sync::CancellationToken;
-
 
     async fn claimed_request(
         node: &Arc<EmbeddedNode>,
@@ -332,7 +326,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&data_path);
     }
 
-
     #[tokio::test]
     async fn cancel_without_live_worker_never_reports_an_unobserved_stop() {
         use crate::tool_call_lifecycle::admission_fixture::{
@@ -406,7 +399,6 @@ mod tests {
             let _ = std::fs::remove_dir_all(admission.path);
         }
     }
-
 
     async fn owned_cancel_persists_custom_completion_reason_for_redrive() {
         use crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;

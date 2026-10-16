@@ -61,8 +61,6 @@ fn bind_input<'a>(
     }
 }
 
-
-
 #[test]
 fn read_write_never_meets_to_unrestricted() {
     for behavior in [
@@ -79,10 +77,6 @@ fn read_write_never_meets_to_unrestricted() {
         );
     }
 }
-
-
-
-
 
 #[test]
 fn read_write_binds_ready_placement_under_operator_root() {
@@ -469,8 +463,6 @@ fn persisted_cwd_must_stay_under_placement() {
     );
 }
 
-
-
 #[test]
 fn write_and_integrate_authority_require_the_configured_principal() {
     let workspace = ready_workspace();
@@ -499,8 +491,6 @@ fn write_and_integrate_authority_require_the_configured_principal() {
     )
     .is_ok());
 }
-
-
 
 #[test]
 fn principal_and_placement_identity_mismatches_fail_closed() {

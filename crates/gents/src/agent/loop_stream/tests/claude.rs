@@ -50,7 +50,8 @@ async fn signed_claude_tool_round_trip_with_scope(
     assert_eq!(collected.final_text.as_deref(), Some("done"));
 
     let request_doc_id = lifecycle.request().doc_id.clone();
-    let sends = captured_claude_sends(&node, &request_doc_id, &request_commit_cid, scope_kind).await;
+    let sends =
+        captured_claude_sends(&node, &request_doc_id, &request_commit_cid, scope_kind).await;
     let captured_body = &sends[1];
     let messages = captured_body["messages"].as_array().expect("Messages body");
     let assistant = messages
@@ -283,31 +284,45 @@ fn claude_sse_for_blocks(blocks: &[serde_json::Value]) -> String {
     for (index, block) in blocks.iter().enumerate() {
         match block["type"].as_str().expect("block type") {
             "thinking" => {
-                events.push(serde_json::json!({"type":"content_block_start","index":index,
-                    "content_block":{"type":"thinking","thinking":""}}));
-                events.push(serde_json::json!({"type":"content_block_delta","index":index,
-                    "delta":{"type":"thinking_delta","thinking":block["thinking"]}}));
-                events.push(serde_json::json!({"type":"content_block_delta","index":index,
-                    "delta":{"type":"signature_delta","signature":block["signature"]}}));
+                events.push(
+                    serde_json::json!({"type":"content_block_start","index":index,
+                    "content_block":{"type":"thinking","thinking":""}}),
+                );
+                events.push(
+                    serde_json::json!({"type":"content_block_delta","index":index,
+                    "delta":{"type":"thinking_delta","thinking":block["thinking"]}}),
+                );
+                events.push(
+                    serde_json::json!({"type":"content_block_delta","index":index,
+                    "delta":{"type":"signature_delta","signature":block["signature"]}}),
+                );
             }
             "redacted_thinking" => {
-                events.push(serde_json::json!({"type":"content_block_start","index":index,
-                    "content_block":{"type":"redacted_thinking","data":block["data"]}}));
+                events.push(
+                    serde_json::json!({"type":"content_block_start","index":index,
+                    "content_block":{"type":"redacted_thinking","data":block["data"]}}),
+                );
             }
             "tool_use" => {
-                events.push(serde_json::json!({"type":"content_block_start","index":index,
+                events.push(
+                    serde_json::json!({"type":"content_block_start","index":index,
                     "content_block":{"type":"tool_use","id":block["id"],"name":block["name"],
-                        "input":{}}}));
-                events.push(serde_json::json!({"type":"content_block_delta","index":index,
+                        "input":{}}}),
+                );
+                events.push(
+                    serde_json::json!({"type":"content_block_delta","index":index,
                     "delta":{"type":"input_json_delta",
-                        "partial_json":block["input"].to_string()}}));
+                        "partial_json":block["input"].to_string()}}),
+                );
             }
             other => panic!("no SSE encoding for {other}"),
         }
         events.push(serde_json::json!({"type":"content_block_stop","index":index}));
     }
-    events.push(serde_json::json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},
-        "usage":{"input_tokens":10,"output_tokens":5}}));
+    events.push(
+        serde_json::json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},
+        "usage":{"input_tokens":10,"output_tokens":5}}),
+    );
     events.push(serde_json::json!({"type":"message_stop"}));
     events
         .into_iter()
@@ -372,7 +387,11 @@ async fn run_claude_fixture_turns(
             lifecycle.request(),
             &request_commit_cid,
             "claude-sonnet-5".to_owned(),
-            Some(crate::BackendProviderKind::ClaudeCliSubscription.as_str().to_owned()),
+            Some(
+                crate::BackendProviderKind::ClaudeCliSubscription
+                    .as_str()
+                    .to_owned(),
+            ),
         ),
         Some(&capture_factory),
     )

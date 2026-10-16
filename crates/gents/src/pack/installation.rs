@@ -1,4 +1,3 @@
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -731,7 +730,8 @@ pub struct InstalledPack {
     pub digest: String,
 }
 
-pub async fn list_installed_packs(    access: &ConfigAccess,
+pub async fn list_installed_packs(
+    access: &ConfigAccess,
     owner: &str,
 ) -> Result<Vec<InstalledPack>> {
     let response = access

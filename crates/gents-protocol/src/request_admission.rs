@@ -1138,4 +1138,3 @@ fn optional_scalar<T: std::fmt::Display>(fields: &mut Vec<String>, name: &str, v
         fields.push(format!("{name}: {value}"));
     }
 }
-

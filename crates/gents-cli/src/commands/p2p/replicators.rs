@@ -152,5 +152,3 @@ pub(super) async fn p2p_replicators_remove(args: P2pReplicatorRemoveArgs) -> Res
     }))?;
     Ok(())
 }
-
-

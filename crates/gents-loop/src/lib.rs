@@ -1,4 +1,3 @@
-
 pub mod account_usage;
 pub mod backend_provider;
 pub mod claude_messages_body;
@@ -42,7 +41,9 @@ pub enum ToolChoice {
     Auto,
     None,
     Required,
-    Specific { function_names: Vec<String> },
+    Specific {
+        function_names: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

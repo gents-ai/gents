@@ -1069,7 +1069,8 @@ async fn retire_incompatible_home<R: Runtime>(
             if !full_reset {
                 run_native(native_service(app, state)?, |service| service.uninstall()).await?;
             }
-            let native = run_native(native_service(app, state)?, |service| service.status()).await?;
+            let native =
+                run_native(native_service(app, state)?, |service| service.status()).await?;
             ensure_managed_runtime_stopped(native.is_active_or_transitioning())?;
             ensure_home_not_served(home).await?;
             Some(lock_home_for_retirement(home)?)
@@ -1585,9 +1586,7 @@ enum PortReadiness {
     Ready(ManagedServerStatus),
     Foreign(ForeignRuntime),
     Booting,
-    Outdated {
-        version: Option<String>,
-    },
+    Outdated { version: Option<String> },
     Occupied(u16),
     NotListening,
 }

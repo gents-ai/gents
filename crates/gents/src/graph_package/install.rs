@@ -170,7 +170,10 @@ pub enum GraphRunSelector<'a> {
         name: &'a str,
         coordinate: Option<&'a str>,
     },
-    Pinned { graph_id: &'a str, digest: &'a str },
+    Pinned {
+        graph_id: &'a str,
+        digest: &'a str,
+    },
 }
 
 pub async fn select_run_plan(

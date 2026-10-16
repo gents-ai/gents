@@ -1,4 +1,3 @@
-
 use crate::llm::message::Message;
 #[cfg(test)]
 use crate::llm::message::{Text, UserContent};

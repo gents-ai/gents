@@ -171,4 +171,3 @@ pub async fn delete_event_source_config(
     core.delete_event_source(&request.event_source_id, &request.node_did)
         .await
 }
-

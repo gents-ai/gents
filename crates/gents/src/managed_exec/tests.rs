@@ -338,11 +338,7 @@ fn windows_process_is_running(pid: u32) -> std::io::Result<bool> {
 #[tokio::test]
 async fn managed_exec_delivers_stdin_and_closes_the_pipe() {
     let outcome = run_managed_exec(ManagedExecRequest {
-        argv: vec![
-            "/bin/sh".to_string(),
-            "-c".to_string(),
-            "wc -c".to_string(),
-        ],
+        argv: vec!["/bin/sh".to_string(), "-c".to_string(), "wc -c".to_string()],
         cwd: PathBuf::from("/"),
         deadline_at: Some(Utc::now() + chrono::Duration::seconds(10)),
         cancellation_token: CancellationToken::new(),

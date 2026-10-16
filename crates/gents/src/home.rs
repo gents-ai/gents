@@ -959,8 +959,4 @@ mod tests {
         );
         assert!(home.join("data/MANIFEST").is_file());
     }
-
-
-
-
 }

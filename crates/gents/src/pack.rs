@@ -767,7 +767,8 @@ mod tests {
             "description": "reads pages", "authors": ["tests"], "kind": "plugins",
             "assets": ["README.md", "plugins/format_check.afb"],
             "inference_slots": slots, "plugins": [plugin],
-        })).unwrap()
+        }))
+        .unwrap()
     }
 
     #[test]
@@ -778,13 +779,18 @@ mod tests {
                 serde_json::json!([{"name":"remote_ocr", "description":"d",
                     "optional":case["optional"],
                     "agents":if case["agent_free"].as_bool().unwrap() {vec![]} else {vec!["scan"]}}])
-            } else { serde_json::json!([]) };
+            } else {
+                serde_json::json!([])
+            };
             let mut manifest = plugins_pack(slots, Some("remote_ocr"));
             manifest.metadata.kind = PackKind::Documents;
             manifest.config = Some("config.json".to_owned());
             manifest.metadata.assets.push("config.json".to_owned());
-            assert_eq!(validate_pack_manifest(&manifest).is_ok(),
-                case["expected"].as_bool().unwrap(), "{case}");
+            assert_eq!(
+                validate_pack_manifest(&manifest).is_ok(),
+                case["expected"].as_bool().unwrap(),
+                "{case}"
+            );
         }
     }
 }

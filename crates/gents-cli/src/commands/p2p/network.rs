@@ -387,18 +387,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-
-
-
-
-
-
-
-
-
-
-
-
     fn make_row(
         peer_id: &str,
         status: Option<&str>,

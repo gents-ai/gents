@@ -339,23 +339,31 @@ pub struct EventSource {
     pub tags: Vec<String>,
 }
 
-/// Completion conditions for documents sharing an event correlation. Shared
-/// validation requires correlation and expected_count or timeout_secs; graph
-/// compilation additionally requires expected_count >= 2 and refuses
+/// Completion conditions for documents sharing an event correlation.
+/// Existing group deduplication, bounds, and durable ownership remain authoritative.
+/// Shared validation requires correlation and expected_count or timeout_secs.
+/// Counts/timeouts must be positive; min_count defaults to 1 and cannot exceed
+/// a known expected count. Source-field counts are validated on delivery too.
+/// Graph compilation additionally requires expected_count >= 2 and refuses
 /// latest_only concurrency on every graph edge (Lean
-/// `GraphPipeline.graphEdgeValid`).
+/// `GraphPipeline.graphEdgeValid`); shared types do not widen graph semantics.
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EventGroup {
-    /// Fixed count or source-field count, never both.
+    /// Fixed count or count supplied by each source document, never both.
+    /// Absence retains existing timeout-driven grouping, subject to validation.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub expected_count: Option<EventGroupCount>,
-    /// Group-wait time, not the task deadline.
+    /// Time to wait for the group, not the task execution deadline.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub timeout_secs: Option<i64>,
+    /// Minimum group size accepted on timeout; unset uses the existing default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub min_count: Option<i64>,
@@ -483,4 +491,3 @@ impl EventSource {
         Ok(())
     }
 }
-

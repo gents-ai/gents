@@ -766,4 +766,3 @@ pub(crate) fn tail_window(value: &str, max_bytes: usize) -> &str {
     }
     &value[start..]
 }
-

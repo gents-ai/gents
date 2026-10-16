@@ -1,4 +1,3 @@
-
 use gents::document_config::Task;
 use gents::prompt::LayeredPromptBuilder;
 use gents::template::{render_template, task_node_ctx, TemplateError, TemplateScope};

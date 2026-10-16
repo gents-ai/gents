@@ -59,4 +59,3 @@ pub(super) async fn tools_set(args: ToolsSetArgs) -> Result<()> {
         &json!({"doc_id": doc_id, "tools_id": tools.tools_id, "node_did": tools.node_did}),
     )
 }
-

@@ -582,4 +582,3 @@ async fn output_source_index_backfills_existing_rows_and_retains_conflicts() {
     }
     node.shutdown().await;
 }
-

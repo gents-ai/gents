@@ -685,5 +685,4 @@ mod tests {
             CLIENT_COLLECTIONS.iter().copied().collect::<BTreeSet<_>>()
         );
     }
-
 }

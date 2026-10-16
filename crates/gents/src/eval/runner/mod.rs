@@ -420,7 +420,8 @@ pub(crate) async fn execute_frozen(
         if cancel_requested(&frozen.run_dir, &cancel) {
             break;
         }
-        if let Some(backoff) = retried.iter()
+        if let Some(backoff) = retried
+            .iter()
             .map(|attempt| backoff_for(options, *attempt))
             .max()
         {

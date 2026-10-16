@@ -1,4 +1,3 @@
-
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -135,8 +134,6 @@ mod tests {
         serve_fake_pack, FAKE_PASSWORD, FAKE_TOKEN, FAKE_USERNAME,
     };
 
-
-
     #[tokio::test]
     async fn login_exchanges_a_password_for_a_token_the_fake_registry_issued() {
         let (base_url, _state) =
@@ -267,6 +264,4 @@ mod tests {
         );
         assert_eq!(token, FAKE_TOKEN);
     }
-
-
 }

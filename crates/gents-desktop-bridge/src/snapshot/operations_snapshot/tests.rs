@@ -156,4 +156,3 @@ fn native_executor_correlation_respects_window_and_tool_name() {
         "missing started_at must not correlate a native executor"
     );
 }
-

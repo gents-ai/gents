@@ -221,5 +221,4 @@ pub(super) async fn session_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

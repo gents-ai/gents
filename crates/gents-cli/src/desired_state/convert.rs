@@ -44,4 +44,3 @@ pub(crate) fn export_bundle_from_manifest(
     manifest_from_export_bundle(&bundle)?;
     Ok(super::DesiredApplyBundle::from_trusted_bundle(bundle))
 }
-

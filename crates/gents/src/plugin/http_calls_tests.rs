@@ -1,4 +1,3 @@
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -384,7 +383,8 @@ async fn loopback_and_private_targets_are_refused_unless_named_literally() {
         assert!(refusal.contains("internal address"), "{id}: {refusal}");
         assert!(refusal.contains("exact IP literal"), "{id}: {refusal}");
     }
-    assert!(error(&results, "mapped").contains("add [::ffff:127.0.0.1] to"),
+    assert!(
+        error(&results, "mapped").contains("add [::ffff:127.0.0.1] to"),
         "{}",
         error(&results, "mapped")
     );

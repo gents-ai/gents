@@ -117,8 +117,14 @@ pub(super) fn authentic_root(row: &AgentRequestRow, owner_did: &str) -> bool {
         && row.runtime_issuer_did.as_deref() == Some(target)
         && row.requester_did.as_deref() == Some(target)
         && row.runtime_source_request_id == row.caused_by_trigger_id
-        && matches!(row.caused_by_trigger_kind.as_deref(), Some("event" | "schedule"))
-        && row.caused_by_trigger_doc_id.as_deref().is_some_and(|id| !id.is_empty())
+        && matches!(
+            row.caused_by_trigger_kind.as_deref(),
+            Some("event" | "schedule")
+        )
+        && row
+            .caused_by_trigger_doc_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty())
 }
 
 pub(super) struct AssignmentHead {

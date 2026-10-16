@@ -77,8 +77,6 @@ fn take_due_group_batch(
     batch
 }
 
-
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct GroupTrackingKey {
     consumer_key: String,

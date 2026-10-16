@@ -207,4 +207,3 @@ fn count_health_status(totals: &mut McpPoolTotals, status: Option<&str>) {
         None => totals.unknown += 1,
     }
 }
-

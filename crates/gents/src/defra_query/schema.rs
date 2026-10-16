@@ -238,8 +238,14 @@ mod tests {
     fn suggestions_never_include_restricted_fields() {
         let schema = CollectionSchema {
             fields: vec![
-                SchemaField { name: "backend_id".into(), type_name: "String".into() },
-                SchemaField { name: "auth".into(), type_name: "JSON".into() },
+                SchemaField {
+                    name: "backend_id".into(),
+                    type_name: "String".into(),
+                },
+                SchemaField {
+                    name: "auth".into(),
+                    type_name: "JSON".into(),
+                },
             ],
         };
         let candidates: Vec<String> = schema

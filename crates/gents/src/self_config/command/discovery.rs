@@ -120,4 +120,3 @@ fn parse_sources(argv: &[String]) -> Result<Vec<RequestedSource>> {
     );
     Ok(sources)
 }
-

@@ -204,8 +204,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
             .all(|input| input.acknowledged && !input.policy_allows));
         for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
             for owner in PolicyDeniedOwner::ALL {
-                let (node, hook, writer, mut lifecycle) =
-                    owned_test_hook_with_policy(policy).await;
+                let (node, hook, writer, mut lifecycle) = owned_test_hook_with_policy(policy).await;
                 let root = tempfile::tempdir().unwrap();
                 let denied = owner.denied_call(&node, root.path());
                 let model = ScriptedModel::new_turns(vec![
@@ -243,7 +242,9 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
                     ).await;
 
                 let rows = crate::config_client::ConfigAccess::local(node.clone())
-                    .execute("query { AgentToolCall { lifecycle_state started_at tool_failure_class } }")
+                    .execute(
+                        "query { AgentToolCall { lifecycle_state started_at tool_failure_class } }",
+                    )
                     .await
                     .unwrap();
                 let rows = rows["data"]["AgentToolCall"].as_array().unwrap();
@@ -408,10 +409,7 @@ async fn tool_does_not_execute_when_provider_stalls_before_turn_closure() {
     futures::pin_mut!(stream);
     let first = stream.next().await.expect("should observe tool intent");
     assert!(
-        matches!(
-            first,
-            Ok(LoopStreamItem::ToolCall { .. })
-        ),
+        matches!(first, Ok(LoopStreamItem::ToolCall { .. })),
         "first item should be streamed intent: {first:?}"
     );
     assert!(
@@ -633,8 +631,7 @@ async fn plugin_image_result_seen_by(
 async fn plugin_image_parts_reach_the_provider_whole() {
     const IMAGE_BYTES: usize = 900_000;
     let result =
-        plugin_image_result_seen_by(crate::BackendProviderKind::AnthropicApiKey, IMAGE_BYTES)
-            .await;
+        plugin_image_result_seen_by(crate::BackendProviderKind::AnthropicApiKey, IMAGE_BYTES).await;
     assert_eq!(result.len(), 2, "one text part and one image part");
     assert_eq!(tool_result_text(&result[0]), r#"{"height":2,"width":2}"#);
     let ToolResultContent::Image(image) = &result[1] else {
@@ -717,10 +714,7 @@ async fn plugin_image_parts_become_a_note_where_the_provider_refuses_them() {
     let result =
         plugin_image_result_seen_by(crate::BackendProviderKind::OpenAiCompatible, 64).await;
     assert_eq!(
-        result
-            .iter()
-            .map(tool_result_text)
-            .collect::<Vec<_>>(),
+        result.iter().map(tool_result_text).collect::<Vec<_>>(),
         vec![
             r#"{"height":2,"width":2}"#,
             gents_loop::loop_stream::TOOL_RESULT_IMAGE_OMITTED,
@@ -977,7 +971,11 @@ async fn completed_terminalization_scans_request_output_once_for_many_tools() {
     node.shutdown().await;
 }
 
-async fn terminalization_with_principal_output(turns: usize, output_bytes: usize, noise: usize) -> std::time::Duration {
+async fn terminalization_with_principal_output(
+    turns: usize,
+    output_bytes: usize,
+    noise: usize,
+) -> std::time::Duration {
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let mut script = (0..turns)
         .map(|turn| {
@@ -1076,8 +1074,10 @@ async fn terminalization_with_principal_output(turns: usize, output_bytes: usize
                         crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
                     )
                     .with_variables(
-                        crate::session::canonical_rows::transcript_message_create_variables(&message)
-                            .unwrap(),
+                        crate::session::canonical_rows::transcript_message_create_variables(
+                            &message,
+                        )
+                        .unwrap(),
                     ),
                     defra_node::ExecuteRetryPolicy::default(),
                 )
@@ -1258,8 +1258,6 @@ async fn background_output_query_work_is_independent_of_principal_history() {
             .unwrap(),
             crate::background_tools::CanonicalToolOutputObservation::Closed(output)
         );
-
-
     }
     assert_eq!(
         work[0], work[1],
@@ -1298,11 +1296,8 @@ impl ToolDyn for ComposedChild {
                 .await;
                 return Ok("\"slow done\"".into());
             }
-            let local = tokio::time::timeout(
-                Duration::from_millis(50),
-                std::future::pending::<()>(),
-            )
-            .await;
+            let local =
+                tokio::time::timeout(Duration::from_millis(50), std::future::pending::<()>()).await;
             assert!(local.is_err());
             Err(ToolError::ReportedFailure {
                 class: crate::tool_call_lifecycle::FailureClass::External,
@@ -1383,8 +1378,10 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
         ("late", "failed"),
     ] {
         assert!(
-            rows.as_array().unwrap().iter().any(|row| row["tool_name"] == name
-                && row["lifecycle_state"] == state),
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["tool_name"] == name && row["lifecycle_state"] == state),
             "{name} {state}: {rows}"
         );
     }
@@ -1417,7 +1414,10 @@ impl ToolDyn for ComposingParent {
             for (ordinal, name, arguments) in &self.children {
                 let outcome = dispatcher.call(*ordinal, name, arguments).await;
                 assert!(
-                    !matches!(outcome, Err(gents_loop::tool_effects::ToolEffectError::Fatal(_))),
+                    !matches!(
+                        outcome,
+                        Err(gents_loop::tool_effects::ToolEffectError::Fatal(_))
+                    ),
                     "{name} #{ordinal} ended the parent"
                 );
                 let completed = matches!(
@@ -1492,8 +1492,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
             };
             for name in names {
                 let ordinal = children.len() as u32 + 1;
-                let arguments =
-                    serde_json::json!({"admit": case["admitted"], "ordinal": ordinal});
+                let arguments = serde_json::json!({"admit": case["admitted"], "ordinal": ordinal});
                 children.push((ordinal, name, arguments.to_string()));
                 expected.insert(ordinal, (case.clone(), case["expected"] == true));
             }

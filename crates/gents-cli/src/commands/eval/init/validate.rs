@@ -1,4 +1,3 @@
-
 use std::collections::BTreeSet;
 
 use gents::document_config::{EvalCapture, EvalCase, EvalDefinition, EvalSplit};

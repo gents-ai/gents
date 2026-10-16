@@ -169,4 +169,3 @@ fn resolve_hostname() -> String {
         .map(|host| host.to_string_lossy().to_string())
         .unwrap_or_else(|_| DEFAULT_HOSTNAME.to_string())
 }
-

@@ -12,6 +12,8 @@ use super::{SelfConfigCore, SelfConfigError, PREVIEW_GRAPH_TOOL_NAME};
 #[serde(deny_unknown_fields)]
 pub struct PreviewGraphParams {
     pub intent: GraphIntent,
+    /// Proposal-only capability shapes. These are not loaded from the
+    /// authoritative pack catalog and confer no execution authority.
     pub proposed_capabilities: Vec<StageCapability>,
 }
 

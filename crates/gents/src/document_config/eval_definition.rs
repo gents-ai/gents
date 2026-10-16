@@ -158,7 +158,10 @@ pub enum EvalCapture {
         #[serde(default)]
         fields: Vec<String>,
     },
-    File { name: String, glob: String },
+    File {
+        name: String,
+        glob: String,
+    },
 }
 
 impl EvalCapture {

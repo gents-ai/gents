@@ -2228,10 +2228,7 @@ async fn plugin_resolution_surfaces(
         digest: None,
         input_fields: Vec::new(),
     };
-    assert_eq!(
-        absent.plugin_resolutions(),
-        &[(plugin_ref.clone(), None)]
-    );
+    assert_eq!(absent.plugin_resolutions(), &[(plugin_ref.clone(), None)]);
     assert_eq!(
         installed.plugin_resolutions(),
         &[(plugin_ref, Some(record.clone()))]

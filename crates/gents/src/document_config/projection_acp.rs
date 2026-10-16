@@ -92,4 +92,3 @@ pub fn parse_projection_resource_map(
     }
     Ok(map)
 }
-

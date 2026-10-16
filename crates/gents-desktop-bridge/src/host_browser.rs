@@ -220,5 +220,4 @@ mod tests {
         assert!(!is_openable("https:"));
         assert!(!is_openable("not-a-url"));
     }
-
 }

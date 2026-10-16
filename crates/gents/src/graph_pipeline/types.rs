@@ -17,8 +17,11 @@ pub enum PortCardinality {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct PortSpec {
     pub name: String,
+    /// Existing DefraDB collection carried on this port.
     pub collection: String,
+    /// Stable schema reference used for compile-time compatibility checks.
     pub schema: String,
+    /// Source field used by event-trigger correlation and fan-in.
     pub correlation_field: String,
     pub cardinality: PortCardinality,
     #[serde(default)]
@@ -26,24 +29,29 @@ pub struct PortSpec {
     pub required: bool,
 }
 
+/// What runs a graph node: an agent turn, or a plugin with no model.
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
 )]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum StageTarget {
+    /// An agent node: the Task's agent, prompt and tools run as a model turn.
     Task { task_id: String },
+    /// A plugin node: deterministic WASM execution of an installed plugin.
     Plugin {
-        /// `namespace/name` of the installed plugin; a pack's own plugin is
-        /// qualified to `ns/name` when the pack loads.
+        /// `namespace/name` of the installed plugin. A pack names its own
+        /// plugin by `name`, and loading the pack qualifies it.
         plugin: String,
-        /// `sha256:<hex>` of the artifact that runs; a pack's own plugin is
-        /// pinned when the pack is loaded, and compiling an unpinned one fails.
+        /// `sha256:<hex>` of the artifact that runs. A pack's own plugin is
+        /// pinned when the pack is loaded; compiling an unpinned one fails.
+
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "typescript", ts(optional = nullable))]
         digest: Option<String>,
-        /// Total attempts a failed call may get; a retry never follows a call
-        /// whose results were written.
+        /// How many times a failed call may run in all; absent is once. A
+        /// retry never follows a call whose results were written.
+
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "typescript", ts(optional = nullable))]
         max_attempts: Option<u32>,
@@ -68,15 +76,17 @@ impl StageTarget {
     }
 }
 
-/// Operator-approved interface around a Task or an installed plugin. The
-/// model can select a capability revision but cannot author its agent, prompt,
-/// tools, model, output permissions, or the plugin that runs.
+/// Operator-approved interface around a Task or an installed plugin.
+///
+/// The model can select a capability revision, but cannot author the Task's
+/// agent, prompt, tools, model, or output permissions, nor the plugin that runs.
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct StageCapability {
-    /// Every caller, including the owner, needs explicit allowed_callers
-    /// admission and ACP.
+    /// Owner of this capability and its referenced task. Every caller,
+    /// including this owner, needs explicit allowed_callers admission and ACP.
     pub node_did: String,
     pub capability_id: String,
     pub revision: String,
@@ -103,9 +113,12 @@ pub struct StageCapability {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub allowed_callers: Vec<String>,
+    /// Optional graph execution ceiling; does not select a different agent
+    /// or inference profile from the referenced task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub workspace_authority: Option<WorkspaceAuthority>,
+    /// UI/discovery metadata; explicit task/capability references define topology.
     #[serde(
         default,
         deserialize_with = "crate::document_config::deserialize_default_on_null",
@@ -189,33 +202,46 @@ pub struct EntryBinding {
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub input_contract: Option<String>,
     pub to: PortRef,
+    /// JSON Schema for the operator-facing input this entry accepts. Absent
+    /// means the entry takes an unvalidated JSON object, as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(type = "unknown", optional = nullable))]
     pub input_schema: Option<serde_json::Value>,
+    /// Host-computed facts and a pack plugin that shape the operator input
+    /// into this entry's actual seed before a run starts. Absent means the
+    /// admitted operator input is the entry input directly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub prepare: Option<EntryPrepare>,
 }
 
+/// Host facts collected before a prepare plugin runs, and the plugin that
+/// turns them plus the admitted operator input into this entry's seed and
+/// any evidence documents.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EntryPrepare {
+    /// Collected in order before the plugin runs.
     pub host: Vec<HostInput>,
-    /// This pack's plugin by name; qualified to `ns/name` when the pack loads.
+    /// This pack's plugin by name; qualified to `ns/name` when the pack is
+    /// loaded.
     pub plugin: String,
     /// `sha256:<hex>` of the artifact that runs; pinned when the pack loads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub digest: Option<String>,
+    /// Collections the plugin's returned documents may be created in.
     pub writes: Vec<String>,
 }
 
+/// One host-computed fact a prepare step hands to the plugin.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum HostInput {
+    /// The Git diff between two admitted operator input fields.
     GitDiff {
         repository_field: String,
         base_field: String,
@@ -223,7 +249,7 @@ pub enum HostInput {
         unified_context_lines: u32,
         rename_similarity_percent: u8,
     },
-    /// Read-only workspace over the `GitDiff` head; requires an earlier
+    /// A read-only workspace over the `GitDiff` head; requires an earlier
     /// `GitDiff` in the same `host` list.
     ReadOnlyWorkspace,
 }
@@ -257,7 +283,9 @@ pub struct GraphLimits {
     pub max_edges: u32,
     pub max_depth: u32,
     pub max_fan_out: u32,
+    /// Whole-run ceiling enforced by the durable GraphRun reconciler.
     pub max_total_invocations: u32,
+    /// Wall-clock run bound enforced from the durable `GraphRun.started_at`.
     pub max_runtime_secs: u64,
 }
 
@@ -284,6 +312,7 @@ pub struct GraphIntent {
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<ResultContract>>", optional = nullable))]
     pub results: Vec<ResultContract>,
     pub limits: GraphLimits,
+    /// UI/discovery metadata; explicit task/capability references define topology.
     #[serde(
         default,
         deserialize_with = "crate::document_config::deserialize_default_on_null",

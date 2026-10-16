@@ -1,4 +1,3 @@
-
 use anyhow::{Context, Result};
 
 use crate::commands::chat::{
@@ -112,4 +111,3 @@ impl Turn for ScriptedTurn {
         false
     }
 }
-

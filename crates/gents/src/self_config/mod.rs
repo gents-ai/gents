@@ -116,7 +116,6 @@ fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
     serde_json::to_string_pretty(outcome).map_err(|error| anyhow!("serialize outcome: {error}"))
 }
 
-
 fn anchored_request(
     target: SelfConfigTarget,
     field: &'static str,
@@ -566,7 +565,6 @@ fn automation_target(kind: &str) -> Result<SelfConfigTarget> {
         }
     }
 }
-
 
 /// Model-facing tri-state for agent edits. A present JSON null is `Clear`;
 /// the property must be absent to stay `Omitted`.

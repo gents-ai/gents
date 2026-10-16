@@ -114,4 +114,3 @@ async fn create(args: DocumentCreateArgs) -> Result<()> {
     let doc_id = extract_mutation_doc_id(&response, &args.collection)?;
     print_json(&json!({ "collection": args.collection, "doc_id": doc_id }))
 }
-

@@ -162,4 +162,3 @@ pub(super) async fn workspace_root_rm(args: ConfigShowArgs) -> Result<()> {
     print_json(&json!({ "deleted": deleted, "root_path": root_path }))?;
     Ok(())
 }
-

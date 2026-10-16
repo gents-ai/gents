@@ -29,4 +29,3 @@ fn runtime_fleet_slots_url(graphql: &str) -> Result<String> {
     url.set_fragment(None);
     Ok(url.to_string())
 }
-

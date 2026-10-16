@@ -529,4 +529,3 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
     );
     summary
 }
-

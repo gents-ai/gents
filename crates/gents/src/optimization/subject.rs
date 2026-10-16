@@ -591,9 +591,7 @@ pub(crate) mod tests {
             .unwrap();
         let two = materialize_candidate(&baseline, OWNER, "New text.\n", &dirs.path().join("two"))
             .unwrap();
-        assert_eq!(
-            one.digest, two.digest
-        );
+        assert_eq!(one.digest, two.digest);
 
         let same =
             materialize_candidate(&baseline, OWNER, FIXTURE_PROMPT, &dirs.path().join("same"))

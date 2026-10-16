@@ -1,4 +1,3 @@
-
 use gents::compaction::sanitize_history_for_provider;
 use gents::llm::message::{
     AssistantContent, Image, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
@@ -1649,7 +1648,6 @@ fn generated_claude_body_cases_drive_the_body_builder() {
     }
 }
 
-
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -1749,7 +1747,6 @@ fn owned_loop_entry_points_are_registered() {
          reviewed against the sanitize-at-entry chokepoint"
     );
 }
-
 
 #[test]
 fn empty_skill_catalog_contributes_no_reminders() {

@@ -1,4 +1,3 @@
-
 use gents::rendered_request::{
     capture_key as derive_capture_key, AssemblyBuildPath, AssemblyTrace, ProvenanceManifest,
     RenderedCompletionRequest, RenderedRequestSource, CAPTURE_VERSION,

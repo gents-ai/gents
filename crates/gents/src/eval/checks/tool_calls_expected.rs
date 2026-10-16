@@ -422,9 +422,7 @@ mod tests {
         );
         assert_eq!(verdict.score_bp, Some(0));
         let text = feedback(&verdict);
-        assert!(
-            text.contains(r#"1. search {"q":"disk"} -> failed"#)
-        );
+        assert!(text.contains(r#"1. search {"q":"disk"} -> failed"#));
         assert!(text.contains("write_finding: wrong tool"));
     }
 

@@ -1,7 +1,5 @@
 use super::*;
 
-
-
 #[tokio::test]
 async fn dispatch_renders_goal_objective_with_the_request_template_scope() {
     let mut task = resolved_task("work on {{ event.item }} for {{ args.owner }}");
@@ -42,7 +40,6 @@ async fn dispatch_renders_goal_objective_with_the_request_template_scope() {
         ))]
     );
 }
-
 
 #[tokio::test]
 async fn latest_only_goal_fire_retry_does_not_supersede_its_own_request() {

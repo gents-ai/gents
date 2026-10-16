@@ -94,4 +94,3 @@ pub trait RemoteP2pAdmin: Send + Sync {
         timeout: Option<std::time::Duration>,
     ) -> RemoteP2pAdminResult<()>;
 }
-

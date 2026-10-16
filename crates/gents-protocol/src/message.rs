@@ -13,8 +13,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum Message {
-    System { content: String },
-    User { content: Vec<UserContent> },
+    System {
+        content: String,
+    },
+    User {
+        content: Vec<UserContent>,
+    },
     Assistant {
         id: Option<String>,
         content: Vec<AssistantContent>,
@@ -121,7 +125,9 @@ pub enum ReasoningContent {
         signature: Option<String>,
     },
     Encrypted(String),
-    Redacted { data: String },
+    Redacted {
+        data: String,
+    },
     Summary(String),
 }
 

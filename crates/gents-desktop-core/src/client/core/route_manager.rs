@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -1002,18 +1001,4 @@ fn ensure_pairing_status<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 }

@@ -178,4 +178,3 @@ pub fn release_binding(mut binding: WorkspaceBindingDoc) -> WorkspaceBindingDoc 
     binding.lifecycle_state = BINDING_RELEASED.to_string();
     binding
 }
-

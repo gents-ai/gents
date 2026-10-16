@@ -1,4 +1,3 @@
-
 mod accepted;
 mod result;
 pub use result::{

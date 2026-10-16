@@ -576,4 +576,3 @@ fn fallback_words(source: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod owned_tests;
-

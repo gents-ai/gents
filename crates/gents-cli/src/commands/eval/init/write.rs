@@ -1,4 +1,3 @@
-
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -360,8 +359,6 @@ fn resolve_through_existing_ancestor(path: &Path) -> std::io::Result<PathBuf> {
     }
     Ok(resolved)
 }
-
-
 
 pub(crate) fn readme(
     assembled: &Assembled,

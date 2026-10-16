@@ -1,8 +1,6 @@
 use super::*;
 use crate::rig_compat::classify_completion_error;
 
-
-
 #[test]
 fn tool_streaming_errors_are_permanent_until_retry_metadata_exists() {
     let error = rig::agent::StreamingError::Tool(rig::tool::ToolSetError::ToolNotFoundError(
@@ -20,8 +18,6 @@ fn tool_streaming_errors_are_permanent_until_retry_metadata_exists() {
         "tool failures stay permanent until tools expose retry-safe health/idempotency metadata"
     );
 }
-
-
 
 #[test]
 fn provider_transport_send_failure_is_retryable_even_with_status_like_url_digits() {
@@ -44,8 +40,6 @@ fn provider_transport_send_failure_is_retryable_even_with_status_like_url_digits
     );
 }
 
-
-
 #[test]
 fn provider_error_uses_precise_status_matching_for_permanent_statuses() {
     let error =
@@ -64,8 +58,6 @@ fn provider_error_uses_precise_status_matching_for_permanent_statuses() {
         "precise provider 400 statuses are still permanent request-shape failures"
     );
 }
-
-
 
 #[test]
 fn vllm_tool_call_invalid_escape_400_is_retryable() {
@@ -87,8 +79,6 @@ fn vllm_tool_call_invalid_escape_400_is_retryable() {
     assert!(classified.is_retryable());
 }
 
-
-
 #[test]
 fn provider_error_loose_status_digits_do_not_force_permanent_failure() {
     let error =
@@ -107,8 +97,6 @@ fn provider_error_loose_status_digits_do_not_force_permanent_failure() {
         "plain numeric substrings must not be treated as HTTP status codes"
     );
 }
-
-
 
 #[test]
 fn openai_compatible_http_400_is_permanent_bad_request() {
@@ -132,14 +120,6 @@ fn openai_compatible_http_400_is_permanent_bad_request() {
     );
 }
 
-
-
-
-
-
-
-
-
 #[test]
 fn anthropic_account_rate_limit_is_a_non_retryable_usage_limit() {
     // #1422: the subscription seat was capped for hours, not throttled.
@@ -157,8 +137,6 @@ fn anthropic_account_rate_limit_is_a_non_retryable_usage_limit() {
          This request would exceed your account's rate limit. Please try again later."
     );
 }
-
-
 
 fn http_402(body: String) -> InferenceError {
     classify_completion_error(&rig::agent::StreamingError::Completion(

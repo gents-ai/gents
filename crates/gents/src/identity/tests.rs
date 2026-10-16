@@ -165,7 +165,9 @@ async fn verify_resolves_did_key_without_prior_registration() {
     let result = node_b.verify(&raw_did, payload, &signature).await;
     assert!(result.unwrap_or_default());
 
-    let tampered_result = node_b.verify(&raw_did, b"tampered payload", &signature).await;
+    let tampered_result = node_b
+        .verify(&raw_did, b"tampered payload", &signature)
+        .await;
     assert!(!matches!(tampered_result, Ok(true)));
 
     let garbage_result = node_b

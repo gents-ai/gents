@@ -849,20 +849,6 @@ fn graphql_string_literal(value: &str) -> String {
 mod tests {
     use super::*;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     #[test]
     fn validate_graphql_filter_fragment_accepts_real_filters() {
         for filter in [

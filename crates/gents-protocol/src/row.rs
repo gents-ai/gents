@@ -511,4 +511,3 @@ pub struct ToolServiceHealthStateRow {
     #[serde(default)]
     pub updated_at: Option<String>,
 }
-

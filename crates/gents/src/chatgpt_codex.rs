@@ -809,8 +809,6 @@ mod tests {
         assert_eq!(terminal.send_count(), 1);
     }
 
-
-
     async fn send_through(status: u16) -> Arc<CountingBearer> {
         let bearer = CountingBearer::new("tok");
         let client =
@@ -844,12 +842,6 @@ mod tests {
         );
     }
 
-
-
-
-
-
-
     #[tokio::test]
     async fn injects_fresh_bearer_on_each_request() {
         let bearer = CountingBearer::new("tok-123");
@@ -877,8 +869,6 @@ mod tests {
             "refreshed once per request"
         );
     }
-
-
 
     #[test]
     fn chatgpt_codex_headers_advertise_codex_version_and_sse_accept() {

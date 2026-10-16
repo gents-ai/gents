@@ -304,4 +304,3 @@ fn usage_fields(
         None => (String::new(), String::new(), String::new()),
     }
 }
-

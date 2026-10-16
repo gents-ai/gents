@@ -268,8 +268,9 @@ pub(super) fn build_rendered_timeline(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_rendered_timeline, render_tool_call, MessageReconstructionView,
-        MessageView, ReconstructionState, RenderedTimelineItem, ToolCallView,
+    use super::{
+        build_rendered_timeline, render_tool_call, MessageReconstructionView, MessageView,
+        ReconstructionState, RenderedTimelineItem, ToolCallView,
     };
 
     fn user_message(key: &str, sequence: i64, content: &str) -> MessageView {

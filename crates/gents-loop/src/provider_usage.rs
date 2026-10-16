@@ -1,4 +1,3 @@
-
 use rig::completion::Usage;
 
 pub fn charged_usage_total(usage: Usage) -> u64 {

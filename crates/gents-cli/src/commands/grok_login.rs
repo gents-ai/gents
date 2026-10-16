@@ -81,4 +81,3 @@ pub(crate) fn grok_login_result_json(outcome: &GrokLoginOutcome) -> Value {
         "id_token": credential.id_token.as_ref().map(|_| "<redacted>"),
     })
 }
-

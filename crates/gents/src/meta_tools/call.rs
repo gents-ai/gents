@@ -620,5 +620,4 @@ mod tests {
             "total byte count must be reported: {capped}"
         );
     }
-
 }

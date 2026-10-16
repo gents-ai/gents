@@ -535,11 +535,9 @@ impl AcpService {
                         .to_string(),
                 }))
             }
-            other => {
-                Err(anyhow::Error::new(ShapedMethodNotFound {
-                    message: format!("method {other:?} is not supported by the Gents Grok shim"),
-                }))
-            }
+            other => Err(anyhow::Error::new(ShapedMethodNotFound {
+                message: format!("method {other:?} is not supported by the Gents Grok shim"),
+            })),
         }
     }
 

@@ -195,4 +195,3 @@ mod tests;
 
 #[cfg(test)]
 mod config_model_tests;
-

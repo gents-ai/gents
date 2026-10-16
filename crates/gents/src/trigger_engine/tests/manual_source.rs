@@ -576,10 +576,8 @@ async fn dispatch_rejects_manual_intent_with_trigger_id() {
         other => panic!("expected Rejected for malformed Manual intent, got {other:?}"),
     }
     assert!(materializer.calls().is_empty());
-    assert!(
-        matches!(
-            result_captured.lock().unwrap().as_ref(),
-            Some(FireResult::Rejected { .. })
-        ),
-    );
+    assert!(matches!(
+        result_captured.lock().unwrap().as_ref(),
+        Some(FireResult::Rejected { .. })
+    ),);
 }

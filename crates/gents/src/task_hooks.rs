@@ -41,9 +41,7 @@ pub(crate) fn effective_timeout_secs(hook: &TaskHook) -> u64 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum HookCommandResult {
-    Exited {
-        code: Option<i64>,
-    },
+    Exited { code: Option<i64> },
     LaunchFailed,
     TimedOut,
     Interrupted,

@@ -642,10 +642,7 @@ mod tests {
         rows.verdicts.push(second);
         let report = build(&run, &rows.trials, &rows.verdicts, &definition, &[]).unwrap();
         let slot = &report.cells[0].slots[0];
-        assert_eq!(
-            (slot.class, slot.score_bp),
-            (SlotClass::Fail, Some(5_000))
-        );
+        assert_eq!((slot.class, slot.score_bp), (SlotClass::Fail, Some(5_000)));
     }
 
     #[test]
@@ -770,9 +767,7 @@ mod tests {
         let mut rows = Rows::default().add(RUN, at("base", "disk", 0, 1), pass());
         rows.verdicts[0].run_id = "other".into();
         let reason = refusal(build(&run, &rows.trials, &rows.verdicts, &definition, &[]));
-        assert!(
-            reason.starts_with("verdict ") && reason.contains("belongs to run other")
-        );
+        assert!(reason.starts_with("verdict ") && reason.contains("belongs to run other"));
 
         let ghost = Rows::default().add(RUN, at("ghost", "disk", 0, 1), pass());
         let reason = refusal(build(&run, &ghost.trials, &[], &definition, &[]));
@@ -780,9 +775,7 @@ mod tests {
 
         let elsewhere = Rows::default().add(RUN, at("base", "elsewhere", 0, 1), pass());
         let reason = refusal(build(&run, &elsewhere.trials, &[], &definition, &[]));
-        assert!(
-            reason.contains("did not freeze case \"elsewhere\"")
-        );
+        assert!(reason.contains("did not freeze case \"elsewhere\""));
         assert_eq!(
             trial_id(RUN, at("base", "elsewhere", 0, 1)),
             elsewhere.trials[0].identity.trial_id
@@ -819,4 +812,3 @@ mod tests {
         assert!(report.cells[0].slots[1].verdicts.is_empty());
     }
 }
-

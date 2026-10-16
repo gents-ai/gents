@@ -55,7 +55,9 @@ pub(crate) enum CodexShimHealth {
         bound_agent_id: String,
         reason: String,
     },
-    Disabled { reason: String },
+    Disabled {
+        reason: String,
+    },
 }
 
 impl CodexShimHealth {

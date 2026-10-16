@@ -167,4 +167,3 @@ impl MailboxQuestion {
         Ok(content)
     }
 }
-

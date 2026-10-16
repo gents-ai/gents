@@ -57,4 +57,3 @@ fn validate_case(registry: &CheckRegistry, text: &str, out: &mut dyn Write) -> R
     );
     Ok(())
 }
-

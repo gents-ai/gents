@@ -158,7 +158,7 @@ async fn generated_graph_failure_attribution_traces_drive_real_transactions() {
                 observed.update_generation = initial_generation + generation;
             }
             match event.kind.as_str() {
-                "observed_failure" => {},
+                "observed_failure" => {}
                 "capture" => {
                     let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
                     let result = capture_failure_txn(txn, &observed).await;

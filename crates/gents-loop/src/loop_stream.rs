@@ -1,4 +1,3 @@
-
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -63,6 +62,7 @@ pub use one_shot::{
     OneShotProviderFailure,
 };
 pub use repeated_tool_failure::REPEATED_TOOL_FAILURE_PREFIX;
+pub use request_assembly::resolve_replay_evidence;
 pub use request_assembly::{assemble_new_messages, is_request_context_message};
 pub use request_assembly::{
     assemble_provider_request, association_reduction, provider_messages, provider_view_tagged,
@@ -72,7 +72,6 @@ pub use request_assembly::{
     clamp_request_output_budget, completion_request_input_components, ensure_context_can_dispatch,
     repair_provider_input,
 };
-pub use request_assembly::resolve_replay_evidence;
 use tool_dispatch::admit_tool;
 pub use tool_dispatch::dispatch_tool;
 

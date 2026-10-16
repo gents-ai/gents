@@ -125,5 +125,4 @@ mod tests {
             });
         assert_eq!(classify_tools(&tools, &merged).unwrap(), None);
     }
-
 }

@@ -1,4 +1,3 @@
-
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -263,4 +262,3 @@ pub(super) async fn trial(
         Ok(render::trial_text(&view, out)?)
     }
 }
-

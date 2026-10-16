@@ -242,7 +242,9 @@ mod tests {
         )?;
         let errors = validate_manifest_against_live(&manifest, &access).await?;
         assert!(
-            errors.iter().any(|error| error.contains("template parse error")),
+            errors
+                .iter()
+                .any(|error| error.contains("template parse error")),
             "an unparsable template must fail the pre-flight: {errors:?}"
         );
         Ok(())

@@ -139,8 +139,8 @@ impl WorkspacePathCapability {
                     let entry = entry?;
                     let filename = entry.file_name();
                     let Some(spelling) = filename.to_str() else {
-                    continue;
-                };
+                        continue;
+                    };
                     if alias_key(spelling) != wanted_alias {
                         continue;
                     }

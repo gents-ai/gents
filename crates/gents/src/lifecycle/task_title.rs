@@ -55,4 +55,3 @@ fn slugify_task_label(task_label: &str) -> String {
         slug
     }
 }
-

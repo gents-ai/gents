@@ -1,4 +1,3 @@
-
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -340,4 +339,3 @@ mod run;
 #[cfg(test)]
 pub(crate) mod testing;
 mod watch;
-

@@ -252,27 +252,39 @@ pub fn dedupe_paths(paths: &mut Vec<String>) {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContinuationCheckpoint {
+    /// The current user outcome, not a chronology of the conversation.
     pub goal: String,
+    /// Explicit user requirements and relevant environment constraints.
     #[serde(default)]
     pub constraints_and_preferences: Vec<String>,
+    /// Work actually completed, including concise evidence where useful.
     #[serde(default)]
     pub completed_work: Vec<String>,
+    /// Work actively underway but not yet complete.
     #[serde(default)]
     pub in_progress: Vec<String>,
+    /// Actual blockers, not merely remaining work.
     #[serde(default)]
     pub blockers: Vec<String>,
+    /// Immediate focus, last meaningful action, and the result of that action.
     #[serde(default)]
     pub current_work: Vec<String>,
+    /// Decisions together with their rationale and consequences.
     #[serde(default)]
     pub key_decisions: Vec<String>,
+    /// Errors observed, their cause when known, and their fix or current status.
     #[serde(default)]
     pub errors_and_fixes: Vec<String>,
+    /// Prefix each item with PASS, FAIL, or NOT RUN.
     #[serde(default)]
     pub verification: Vec<String>,
+    /// Mutable, ambiguous, or correctness-critical facts worth re-checking.
     #[serde(default)]
     pub uncertainties: Vec<String>,
+    /// Remaining actions in execution order, with the immediate continuation first.
     #[serde(default)]
     pub next_actions: Vec<String>,
+    /// Exact details necessary to continue, including any unanswered user request.
     #[serde(default)]
     pub critical_context: Vec<String>,
 }

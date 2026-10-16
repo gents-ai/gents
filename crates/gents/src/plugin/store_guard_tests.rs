@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn open_lock_file(home: &Path) -> std::fs::File {

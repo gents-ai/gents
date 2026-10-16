@@ -1,4 +1,3 @@
-
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -136,10 +135,16 @@ fn prompt_result(outcome: TerminalOutcome) -> Result<Value> {
 
 #[derive(Clone)]
 pub(super) enum PromptSender {
-    Live { outbound: AcpOutbound },
-    Replay { inner: Arc<PromptSender> },
+    Live {
+        outbound: AcpOutbound,
+    },
+    Replay {
+        inner: Arc<PromptSender>,
+    },
     #[cfg(test)]
-    Buffer { buffer: Arc<Mutex<Vec<String>>> },
+    Buffer {
+        buffer: Arc<Mutex<Vec<String>>>,
+    },
 }
 
 impl PromptSender {
@@ -2074,8 +2079,6 @@ fn is_background_activity(payload: &Value) -> bool {
         )
     )
 }
-
-
 
 pub(super) fn stop_reason_from_rows(
     lifecycle_state: &str,

@@ -1,4 +1,3 @@
-
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 

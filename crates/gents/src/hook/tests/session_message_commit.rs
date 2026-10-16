@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::config_client::ConfigApplyTxn;
 use crate::identity::NodeIdentity;

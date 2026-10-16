@@ -259,4 +259,3 @@ fn bound_instruction_text_to(bytes: &[u8], budget: usize) -> (String, String) {
         format!("truncated to {end} bytes"),
     )
 }
-

@@ -544,5 +544,4 @@ mod tests {
         assert!(std::fs::read_dir(outside.path()).unwrap().next().is_none());
         assert!(!dir.join("manifest.json").exists());
     }
-
 }

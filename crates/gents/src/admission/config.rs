@@ -148,4 +148,3 @@ pub(crate) enum BackendAvailability {
 pub fn document_configured_from_fields(enabled: bool, probe_status: &str) -> bool {
     enabled && probe_status == HEALTHY_PROBE_STATUS
 }
-

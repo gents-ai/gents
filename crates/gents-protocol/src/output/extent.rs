@@ -166,4 +166,3 @@ pub fn inspect_open_source(
         last_created_at: last_time.map(|t| t.to_rfc3339()),
     })
 }
-

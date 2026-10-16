@@ -249,5 +249,4 @@ mod tests {
             "no launcher means nothing to undo: {changes:?}"
         );
     }
-
 }

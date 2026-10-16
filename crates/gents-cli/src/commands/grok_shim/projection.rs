@@ -1,4 +1,3 @@
-
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -853,9 +852,16 @@ pub(crate) enum CursorAdvance {
         tool_call_id: String,
         status: String,
     },
-    Commands { fingerprint: u64 },
-    CausedSession { key: String, fingerprint: u64 },
-    BackgroundTask { key: String },
+    Commands {
+        fingerprint: u64,
+    },
+    CausedSession {
+        key: String,
+        fingerprint: u64,
+    },
+    BackgroundTask {
+        key: String,
+    },
     BackgroundOutput {
         key: String,
         fingerprint: u64,
@@ -865,13 +871,19 @@ pub(crate) enum CursorAdvance {
         key: String,
         receipt: child_output::OutputReceipt,
     },
-    LiveContent { plan: LiveSegmentPlan },
-    LiveReasoning { plan: LiveSegmentPlan },
+    LiveContent {
+        plan: LiveSegmentPlan,
+    },
+    LiveReasoning {
+        plan: LiveSegmentPlan,
+    },
     DurableChunk {
         message_key: String,
         sent_text: String,
     },
-    MessageHighWater { sequence: i64 },
+    MessageHighWater {
+        sequence: i64,
+    },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1468,11 +1480,7 @@ mod tests {
             .project_request_updates(&request, &mut cursor, None)
             .await
             .expect("second poll");
-        assert_eq!(
-            second.len(),
-            1,
-            "only the unsent text chunk re-emits"
-        );
+        assert_eq!(second.len(), 1, "only the unsent text chunk re-emits");
         assert_eq!(
             second[0].payload["sessionUpdate"], "agent_message_chunk",
             "the retry recovers the text chunk"
@@ -1934,10 +1942,7 @@ mod tests {
             .filter(|event| event.payload["sessionUpdate"] == "tool_call")
             .map(|event| event.payload["toolCallId"].as_str().expect("toolCallId"))
             .collect();
-        assert_eq!(
-            tool_ids,
-            vec!["call-a", "call-z"]
-        );
+        assert_eq!(tool_ids, vec!["call-a", "call-z"]);
         let spawned = first
             .iter()
             .find(|event| event.payload["sessionUpdate"] == "subagent_spawned")
@@ -1984,5 +1989,4 @@ mod tests {
             .expect("third poll");
         assert!(third.is_empty(), "every event is now delivered");
     }
-
 }

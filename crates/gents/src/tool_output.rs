@@ -124,4 +124,3 @@ fn render_value_or_original(
     }
     Ok(ordered)
 }
-

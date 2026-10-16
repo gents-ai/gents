@@ -1,4 +1,3 @@
-
 use std::future::Future;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -474,4 +473,3 @@ fn below(entry: std::io::Result<PathBuf>) -> Result<u64> {
         other => other,
     }
 }
-

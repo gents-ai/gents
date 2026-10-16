@@ -93,4 +93,3 @@ pub(crate) struct ReadToolOutputResponse {
     pub(crate) exited: bool,
     pub(crate) exit_code: Option<i32>,
 }
-

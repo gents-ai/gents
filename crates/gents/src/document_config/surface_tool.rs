@@ -445,4 +445,3 @@ pub(crate) fn validate_surface_tool_names(
     validate_query_tool_declarations(query_tools, cli_tool_names, &extra)?;
     Ok(())
 }
-

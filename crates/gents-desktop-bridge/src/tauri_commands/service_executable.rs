@@ -22,7 +22,10 @@ pub(crate) enum ServiceExecutable {
     InPlace(PathBuf),
     /// Inside a temporary AppImage mount; `installed` is the durable copy a
     /// service definition names.
-    Packaged { source: PathBuf, installed: PathBuf },
+    Packaged {
+        source: PathBuf,
+        installed: PathBuf,
+    },
 }
 
 impl ServiceExecutable {

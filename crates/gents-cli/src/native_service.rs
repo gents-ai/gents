@@ -1442,4 +1442,3 @@ fn ensure_launchd_print_result(output: &CommandOutput) -> Result<()> {
         )
     }
 }
-

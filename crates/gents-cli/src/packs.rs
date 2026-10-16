@@ -178,4 +178,3 @@ pub async fn whoami(home: PathBuf, registry: Option<String>) -> Result<Value> {
     }))
     .await
 }
-

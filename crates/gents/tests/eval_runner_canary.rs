@@ -1,4 +1,3 @@
-
 mod support;
 
 use std::path::{Path, PathBuf};

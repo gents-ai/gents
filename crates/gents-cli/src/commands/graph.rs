@@ -744,4 +744,3 @@ async fn toggle(args: GraphToggleArgs, enabled: bool) -> Result<()> {
     set_graph_enabled_with_access(&access, &actor, &graph_id, enabled).await?;
     print_json(&json!({ "graph_id": graph_id, "enabled": enabled }))
 }
-

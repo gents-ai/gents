@@ -35,9 +35,10 @@ impl ToolDyn for RepeatProbe {
                     FailureClass::ToolReturnedError,
                     "gents_exec: {unparseable\nfixture error".to_string(),
                 ),
-                ("ordinaryFailure", error) => {
-                    (FailureClass::ToolReturnedError, format!("fixture error {error}"))
-                }
+                ("ordinaryFailure", error) => (
+                    FailureClass::ToolReturnedError,
+                    format!("fixture error {error}"),
+                ),
                 ("invalidArguments", _) => {
                     (FailureClass::ArgumentInvalid, "fixture invalid".to_string())
                 }
@@ -51,10 +52,15 @@ impl ToolDyn for RepeatProbe {
 
 async fn tool_call_rows(node: &Arc<defra_node::EmbeddedNode>) -> Vec<serde_json::Value> {
     let response = crate::config_client::ConfigAccess::local(node.clone())
-        .execute("query { AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }")
+        .execute(
+            "query { AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }",
+        )
         .await
         .unwrap();
-    response["data"]["AgentToolCall"].as_array().unwrap().clone()
+    response["data"]["AgentToolCall"]
+        .as_array()
+        .unwrap()
+        .clone()
 }
 
 fn repeat_call(index: usize, event: &serde_json::Value) -> RawStreamingChoice<()> {
@@ -88,7 +94,9 @@ async fn generated_repeated_tool_failure_cases_drive_owned_loop() {
             observed
                 .iter()
                 .zip(&actions)
-                .filter(|(event, action)| **action == "dispatch" && event["outcome"] != "unknownTool")
+                .filter(|(event, action)| {
+                    **action == "dispatch" && event["outcome"] != "unknownTool"
+                })
                 .map(|(event, _)| event.clone())
                 .collect::<std::collections::VecDeque<_>>(),
         ));
@@ -96,7 +104,12 @@ async fn generated_repeated_tool_failure_cases_drive_owned_loop() {
         let mut turns = observed
             .iter()
             .enumerate()
-            .map(|(index, event)| vec![repeat_call(index, event), RawStreamingChoice::FinalResponse(())])
+            .map(|(index, event)| {
+                vec![
+                    repeat_call(index, event),
+                    RawStreamingChoice::FinalResponse(()),
+                ]
+            })
             .collect::<Vec<_>>();
         if ending.is_none() {
             turns.push(vec![
@@ -135,7 +148,10 @@ async fn generated_repeated_tool_failure_cases_drive_owned_loop() {
                 assert!(error.contains("fixture error"), "{name}: {error}");
             }
             (Some("invalidExhausted"), Some(error)) => {
-                assert!(error.contains("invalid_tool_call_budget_exhausted:"), "{error}")
+                assert!(
+                    error.contains("invalid_tool_call_budget_exhausted:"),
+                    "{error}"
+                )
             }
             (None, None) => {}
             other => panic!("{name}: unexpected ending {other:?}"),
@@ -250,14 +266,16 @@ async fn repeated_identical_bash_failure_stops_the_loop() {
         owned_config(64),
     );
     let collected = collect_owned_scripted_stream(
-            stream,
-            &hook,
-            &writer,
-            &mut lifecycle,
-            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
-        )
-        .await;
-    let error = collected.error.expect("the repeated bash failure must stop");
+        stream,
+        &hook,
+        &writer,
+        &mut lifecycle,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await;
+    let error = collected
+        .error
+        .expect("the repeated bash failure must stop");
     assert!(error.contains(REPEATED_TOOL_FAILURE_PREFIX), "{error}");
     assert_eq!(collected.tool_results.len(), 4);
     assert!(collected.tool_results[..3]
@@ -330,13 +348,13 @@ async fn envelope_shaped_errors_from_other_tools_keep_their_hint() {
         owned_config(64),
     );
     let collected = collect_owned_scripted_stream(
-            stream,
-            &hook,
-            &writer,
-            &mut lifecycle,
-            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
-        )
-        .await;
+        stream,
+        &hook,
+        &writer,
+        &mut lifecycle,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 5);
     assert!(collected

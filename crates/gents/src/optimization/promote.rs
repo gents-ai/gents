@@ -238,7 +238,8 @@ pub async fn promote(
                     previous_digest: promotion.previous_digest.clone(),
                 };
                 append_in_txn(txn, job, &entry).await?;
-                Ok(promotion)            })
+                Ok(promotion)
+            })
         })
         .await;
 
@@ -663,10 +664,7 @@ mod tests {
         let again = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
             .await
             .unwrap_err();
-        assert_eq!(
-            promote_refused(&again).unwrap().reason,
-            "not_ready"
-        );
+        assert_eq!(promote_refused(&again).unwrap().reason, "not_ready");
         assert_eq!(
             live_prompt(harness.access()).await.as_deref(),
             Some(BASELINE_PROMPT)

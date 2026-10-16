@@ -1,4 +1,3 @@
-
 use crate::tool_call_lifecycle::{FailureClass, ToolOutcome};
 
 const INVALID_TOOL_CALL_LIMIT: u8 = 8;

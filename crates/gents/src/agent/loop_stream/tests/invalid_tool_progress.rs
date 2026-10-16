@@ -95,7 +95,10 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
         assert_eq!(error.is_some(), ending.is_some(), "{name}: {error:?}");
         match (ending, error) {
             (Some("invalidExhausted"), Some(error)) => {
-                assert!(error.contains("invalid_tool_call_budget_exhausted:"), "{error}")
+                assert!(
+                    error.contains("invalid_tool_call_budget_exhausted:"),
+                    "{error}"
+                )
             }
             (Some("repeatedFailure"), Some(error)) => {
                 assert!(error.contains(REPEATED_TOOL_FAILURE_PREFIX), "{error}")

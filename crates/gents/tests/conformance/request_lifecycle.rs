@@ -37,7 +37,6 @@ fn rust_request_recovery_sweep_writer(from: &str, to: &str) -> Option<&'static s
     }
 }
 
-
 #[tokio::test]
 async fn ordinary_completion_rejects_claimed_without_execution() {
     let db = test_db("ordinary-complete-from-claimed").await;

@@ -1422,7 +1422,6 @@ fn stored_with(windows: Vec<UsageWindow>) -> StoredUsage {
     }
 }
 
-
 const GROK: &str = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
 const CLAUDE: &str = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
 const GROK_BILLING_BODY: &str = r#"{"config":{"creditUsagePercent":30,"currentPeriod":{"start":"2100-01-01T00:00:00Z","end":"2100-01-08T00:00:00Z"}}}"#;

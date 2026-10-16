@@ -1,4 +1,3 @@
-
 pub const NODE_NAME: &str = "Node";
 pub const NODE: &str = include_str!("../schemas/agent/node.graphql");
 pub const AGENT_NAME: &str = "Agent";
@@ -351,4 +350,3 @@ pub fn is_local_audit_collection(name: &str) -> bool {
 pub fn is_local_only_collection(name: &str) -> bool {
     LOCAL_ONLY_COLLECTION_NAMES.contains(&name)
 }
-

@@ -89,4 +89,3 @@ impl LiveInferenceSettings {
         config["inference_execution"][0]["max_turns"] = json!(self.max_turns);
     }
 }
-

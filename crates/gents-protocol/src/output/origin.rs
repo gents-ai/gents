@@ -129,4 +129,3 @@ pub fn resolve_origin<'a>(
         current = origin;
     }
 }
-

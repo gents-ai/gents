@@ -637,4 +637,3 @@ async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
 async fn event_group_eligibility_matches_lean_generated_contract_cases() {
     dispatch_contract::event_group_eligibility_matches_lean_generated_contract_cases().await;
 }
-

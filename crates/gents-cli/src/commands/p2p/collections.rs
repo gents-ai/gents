@@ -173,5 +173,3 @@ pub(super) async fn p2p_collections_sync_versions(args: P2pSyncVersionsArgs) -> 
     }))?;
     Ok(())
 }
-
-

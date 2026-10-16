@@ -116,4 +116,3 @@ fn build_fleet_snapshot(generated_at: DateTime<Utc>, envelope: FleetEnvelope) ->
         agents,
     }
 }
-

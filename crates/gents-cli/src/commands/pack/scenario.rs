@@ -4450,5 +4450,4 @@ mod tests {
         manifest.init.tool_root = Some(".".into());
         validate_manifest(&manifest).expect("declared tool_root is enough");
     }
-
 }

@@ -63,4 +63,3 @@ fn try_inverse(
     }
     Ok(StreamOption::EndOfStream)
 }
-

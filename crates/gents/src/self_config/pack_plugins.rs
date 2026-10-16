@@ -3,9 +3,7 @@ use super::*;
 fn plugin_discovery_calls(plugins: &[(String, String)]) -> Vec<serde_json::Value> {
     plugins
         .iter()
-        .map(|(namespace, name)| {
-            json!({"argv": ["plugin", "get", format!("{namespace}/{name}")]})
-        })
+        .map(|(namespace, name)| json!({"argv": ["plugin", "get", format!("{namespace}/{name}")]}))
         .collect()
 }
 

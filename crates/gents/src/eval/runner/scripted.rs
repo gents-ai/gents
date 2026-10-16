@@ -166,4 +166,3 @@ fn evidence(locator: TrialLocator, stages: Vec<StageEvidence>) -> TrialEvidence 
     };
     TrialEvidence::new(locator, stages, TrialUsage::default(), anchor)
 }
-

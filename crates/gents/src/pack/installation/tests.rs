@@ -598,7 +598,8 @@ async fn an_explicit_dependency_survives_its_dependent() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["coordinate"], "fixture/review_graph");
     assert_eq!(
-        rows[0]["required_by"], Value::Null,
+        rows[0]["required_by"],
+        Value::Null,
         "an explicit install is never auto-released"
     );
 

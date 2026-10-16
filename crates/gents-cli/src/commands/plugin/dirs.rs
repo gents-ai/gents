@@ -25,4 +25,3 @@ pub(super) fn dispatch(command: PluginDirsCommand) -> Result<()> {
         }
     }
 }
-

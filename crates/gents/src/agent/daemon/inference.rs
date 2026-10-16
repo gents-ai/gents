@@ -908,9 +908,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
 
 #[cfg(test)]
 pub(super) mod tests {
-    use super::{
-        stream_failure_reason, AgentDaemon, MaxTurnsProvenance,
-    };
+    use super::{stream_failure_reason, AgentDaemon, MaxTurnsProvenance};
     use crate::agent::completion_retry::CompletionRetryProfileFields;
     use crate::agent::runtime::StartupBarrier;
     use crate::backend_provider::BackendProviderKind;

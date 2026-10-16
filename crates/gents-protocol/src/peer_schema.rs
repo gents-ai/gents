@@ -115,4 +115,3 @@ pub fn compare_replicated_schema(
         })
     }
 }
-

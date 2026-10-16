@@ -2289,4 +2289,3 @@ fn decode_signature(field: &str, value: &str) -> Result<Vec<u8>> {
     );
     Ok(signature)
 }
-

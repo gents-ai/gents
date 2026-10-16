@@ -1,4 +1,3 @@
-
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};

@@ -16,9 +16,9 @@ pub struct WorkspaceRootDocument {
     pub enabled: Option<bool>,
 }
 
-    /// Published filesystem policy after canonical resolution and the process
-    /// ceiling meet; `configured` also records an explicit ceiling that failed
-    /// resolution so explicit policy cannot fall back to self-admission.
+/// Published filesystem policy after canonical resolution and the process
+/// ceiling meet; `configured` also records an explicit ceiling that failed
+/// resolution so explicit policy cannot fall back to self-admission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceRootPolicy {
     pub configured: bool,

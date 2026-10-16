@@ -1,4 +1,3 @@
-
 use std::io::{self, Write};
 
 use gents::optimization::{Decision, JobState, JobView, JournalEntry, PolicyV2};

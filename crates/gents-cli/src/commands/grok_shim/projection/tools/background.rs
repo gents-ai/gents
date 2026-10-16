@@ -1,4 +1,3 @@
-
 use super::{observed_status, ToolCallRow, ToolCallStatus};
 use serde_json::{json, Value};
 

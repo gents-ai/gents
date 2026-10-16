@@ -133,4 +133,3 @@ pub async fn approve_managed_client_enrollment(
 pub fn initialized_home(path: &Path) -> bool {
     path.join(crate::INIT_CONFIG_FILE_NAME).is_file()
 }
-

@@ -33,7 +33,9 @@ pub enum ReviewTarget {
     UncommittedChanges,
 
     #[serde(rename_all = "camelCase")]
-    BaseBranch { branch: String },
+    BaseBranch {
+        branch: String,
+    },
 
     #[serde(rename_all = "camelCase")]
     Commit {
@@ -42,5 +44,7 @@ pub enum ReviewTarget {
     },
 
     #[serde(rename_all = "camelCase")]
-    Custom { instructions: String },
+    Custom {
+        instructions: String,
+    },
 }

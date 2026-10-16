@@ -1062,13 +1062,15 @@ async fn expired_stored_deadline_blocks_old_publication_and_tool_admission_after
             escape_graphql_string(&doc_id)
         );
         let response = node.execute(&query).await;
-        assert!(!response.has_errors(), "{collection}: {:?}", response.errors);
         assert!(
-            response.data.as_ref().unwrap()[collection]
-                .as_array()
-                .unwrap()
-                .is_empty()
+            !response.has_errors(),
+            "{collection}: {:?}",
+            response.errors
         );
+        assert!(response.data.as_ref().unwrap()[collection]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 }
 

@@ -2097,4 +2097,3 @@ async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
         "surface must be evicted once it is owned by another node"
     );
 }
-

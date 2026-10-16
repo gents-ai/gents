@@ -1,4 +1,3 @@
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::Write;
@@ -418,4 +417,3 @@ async fn revise(
         }
     }
 }
-

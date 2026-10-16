@@ -227,4 +227,3 @@ pub(super) fn stamp_pack_origin(
     }
     serde_json::from_value(value).context("decoding provenance-stamped pack configuration")
 }
-

@@ -108,5 +108,3 @@ fn print_table_row<const N: usize>(
         .join("  ");
     writeln!(writer, "{line}").context("writing p2p templates table row")
 }
-
-

@@ -661,4 +661,3 @@ impl ProvenanceManifest {
         self
     }
 }
-

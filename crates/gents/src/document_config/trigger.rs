@@ -73,6 +73,7 @@ pub struct TriggerObservation {
     pub fire_count: Option<i64>,
 }
 
+/// Shared concurrency vocabulary for all task-trigger entry points.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
 )]

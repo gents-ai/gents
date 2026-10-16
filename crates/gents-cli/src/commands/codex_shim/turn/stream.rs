@@ -493,9 +493,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                     tokio::time::sleep(state.poll_interval).await;
                     continue;
                 }
-                gents::session::CanonicalRequestOutput::TerminalNoMessage => {
-                    None
-                }
+                gents::session::CanonicalRequestOutput::TerminalNoMessage => None,
                 gents::session::CanonicalRequestOutput::Denied
                 | gents::session::CanonicalRequestOutput::Conflicted
                 | gents::session::CanonicalRequestOutput::Invalid

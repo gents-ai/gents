@@ -472,23 +472,21 @@ fn tagged_provider_view_uses_emitted_source_index_for_equal_assistant_rows() {
     let first = tag(1);
     let second = tag(2);
     let identical = Message::assistant("same native bytes");
-    let projected = super::provider_view_tagged(
-        vec![
-            TaggedMessage {
-                message: identical.clone(),
-                source: Some(first.clone()),
-                physical_header: None,
-                block_indices: Vec::new(),
-            },
-            TaggedMessage::unassociated(Message::user("between")),
-            TaggedMessage {
-                message: identical,
-                source: Some(second.clone()),
-                physical_header: None,
-                block_indices: Vec::new(),
-            },
-        ],
-    )
+    let projected = super::provider_view_tagged(vec![
+        TaggedMessage {
+            message: identical.clone(),
+            source: Some(first.clone()),
+            physical_header: None,
+            block_indices: Vec::new(),
+        },
+        TaggedMessage::unassociated(Message::user("between")),
+        TaggedMessage {
+            message: identical,
+            source: Some(second.clone()),
+            physical_header: None,
+            block_indices: Vec::new(),
+        },
+    ])
     .expect("source-indexed projection");
     assert_eq!(projected[0].source.as_ref(), Some(&first));
     assert_eq!(projected[2].source.as_ref(), Some(&second));
@@ -774,7 +772,6 @@ async fn repair_sanitizes_poisoned_tool_args_in_loaded_history() {
     );
 }
 
-
 fn sole_user_text(message: &Message) -> String {
     match message {
         Message::User { content } => match content.as_slice() {
@@ -942,8 +939,7 @@ fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
         .map(TaggedMessage::unassociated)
         .collect();
     let mut new_messages = Vec::new();
-    super::repair_provider_input(&mut history, &mut new_messages)
-    .unwrap();
+    super::repair_provider_input(&mut history, &mut new_messages).unwrap();
     let repaired = history
         .iter()
         .chain(new_messages.iter())
@@ -991,8 +987,7 @@ fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
         .map(TaggedMessage::unassociated)
         .collect();
 
-    super::repair_provider_input(&mut history, &mut new_messages)
-    .unwrap();
+    super::repair_provider_input(&mut history, &mut new_messages).unwrap();
 
     assert!(matches!(
         history.as_slice(),
@@ -1085,9 +1080,17 @@ async fn drive_generated_turn_input(
     let (node, hook, writer, mut lifecycle, docs) = owned_test_hook_with_folded_case(case).await;
     let head = lifecycle.request().clone();
     assert_eq!(
-        lifecycle.folded_selection().iter().map(|row| row.request_doc_id.clone()).collect::<Vec<_>>(),
-        case.folded.iter().map(|row| docs[&row.request_id].clone()).collect::<Vec<_>>(),
-        "{}: native claim selects the modeled queue", case.name,
+        lifecycle
+            .folded_selection()
+            .iter()
+            .map(|row| row.request_doc_id.clone())
+            .collect::<Vec<_>>(),
+        case.folded
+            .iter()
+            .map(|row| docs[&row.request_id].clone())
+            .collect::<Vec<_>>(),
+        "{}: native claim selects the modeled queue",
+        case.name,
     );
     let model = ScriptedModel::new(vec![
         RawStreamingChoice::Message("answered".to_string()),
@@ -1114,7 +1117,11 @@ async fn drive_generated_turn_input(
         let compaction_node = node.clone();
         let request_doc_id = head.doc_id.clone();
         config.turn_compactor = Some(Arc::new(move |request| {
-            *saw.lock().unwrap() = request.messages.iter().map(|row| row.message.clone()).collect();
+            *saw.lock().unwrap() = request
+                .messages
+                .iter()
+                .map(|row| row.message.clone())
+                .collect();
             let published_before_reduction = published_before_reduction.clone();
             let node = compaction_node.clone();
             let request_doc_id = request_doc_id.clone();
@@ -1131,7 +1138,9 @@ async fn drive_generated_turn_input(
                     .unwrap()
                     .len();
                 Ok(TurnCompactionOutcome::Reduced {
-                    messages: vec![TaggedMessage::unassociated(Message::user("compacted prompt"))],
+                    messages: vec![TaggedMessage::unassociated(Message::user(
+                        "compacted prompt",
+                    ))],
                     reduction_key: "folded-first-turn".to_string(),
                 })
             })
@@ -1161,21 +1170,42 @@ async fn drive_generated_turn_input(
     .await;
     assert_eq!(collected.error, None, "{}", case.name);
 
-    let expected_input = case.provider_input.iter().cloned().map(Message::user).collect::<Vec<_>>();
+    let expected_input = case
+        .provider_input
+        .iter()
+        .cloned()
+        .map(Message::user)
+        .collect::<Vec<_>>();
     let histories = model.seen_histories().await;
-    assert_eq!(histories.len(), 1, "{}: one inference answers every message", case.name);
+    assert_eq!(
+        histories.len(),
+        1,
+        "{}: one inference answers every message",
+        case.name
+    );
     if first_turn_compaction {
         let saw = compactor_saw.lock().unwrap().clone();
-        assert!(saw.ends_with(&expected_input), "{}: compaction input", case.name);
+        assert!(
+            saw.ends_with(&expected_input),
+            "{}: compaction input",
+            case.name
+        );
         assert_eq!(
             *published_before_reduction.lock().unwrap(),
             case.authored.len(),
             "{}: the admitted input is accepted before any reduction",
             case.name
         );
-        assert_eq!(histories[0].last(), Some(&Message::user("compacted prompt")));
+        assert_eq!(
+            histories[0].last(),
+            Some(&Message::user("compacted prompt"))
+        );
     } else {
-        assert!(histories[0].ends_with(&expected_input), "{}: provider order", case.name);
+        assert!(
+            histories[0].ends_with(&expected_input),
+            "{}: provider order",
+            case.name
+        );
     }
 
     let scoped_doc_id = crate::graphql::escape_graphql_string(&head.doc_id);
@@ -1187,7 +1217,12 @@ async fn drive_generated_turn_input(
     assert!(!observed.has_errors(), "{:?}", observed.errors);
     let observed = observed.data.unwrap();
     let headers = observed["AgentMessage"].as_array().unwrap();
-    assert_eq!(headers.len(), case.authored.len(), "{}: authored entries", case.name);
+    assert_eq!(
+        headers.len(),
+        case.authored.len(),
+        "{}: authored entries",
+        case.name
+    );
     for (header, authored) in headers.iter().zip(&case.authored) {
         assert_eq!(
             header["message_key"],
@@ -1206,7 +1241,12 @@ async fn drive_generated_turn_input(
         )
         .await
         .unwrap();
-        assert_eq!(native, Message::user(authored.content.clone()), "{}", case.name);
+        assert_eq!(
+            native,
+            Message::user(authored.content.clone()),
+            "{}",
+            case.name
+        );
     }
     for doc in docs.values() {
         let response = crate::graphql::graphql_with_transaction_retry(
@@ -1221,7 +1261,12 @@ async fn drive_generated_turn_input(
         .unwrap();
         let row = &response.data.unwrap()["AgentRequest"][0];
         assert_eq!(row["lifecycle_state"], "superseded", "{}", case.name);
-        assert_eq!(row["superseded_by_request_doc_id"], head.doc_id.as_str(), "{}", case.name);
+        assert_eq!(
+            row["superseded_by_request_doc_id"],
+            head.doc_id.as_str(),
+            "{}",
+            case.name
+        );
     }
 
     let history = crate::session::load_sequenced_history_for_request(

@@ -1,4 +1,3 @@
-
 use std::future::Future;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -19,7 +18,9 @@ pub enum ToolOutcome {
         denial: Option<CommandPolicyDenial>,
         text: String,
     },
-    TimedOut { deadline_at: Option<DateTime<Utc>> },
+    TimedOut {
+        deadline_at: Option<DateTime<Utc>>,
+    },
     Cancelled,
 }
 

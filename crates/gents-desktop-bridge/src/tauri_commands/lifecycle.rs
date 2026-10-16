@@ -346,8 +346,7 @@ async fn wait_for_start_inflight(state: &DesktopAppState) -> Result<(), BridgeEr
         };
         match wait_for_client_start_progress(progress_rx).await {
             Ok(()) => {}
-            Err(_) => {
-            }
+            Err(_) => {}
         }
     }
 }
@@ -681,8 +680,6 @@ pub async fn desktop_observer_metrics(
 mod tests {
     use super::*;
 
-
-
     #[tokio::test]
     async fn a_stalled_client_start_keeps_the_store_locked_until_its_core_closes() {
         let lifecycle = Arc::new(tokio::sync::Mutex::new(()));
@@ -754,8 +751,6 @@ mod tests {
             .await
             .expect("a retry proceeds once the late core is closed");
     }
-
-
 
     #[test]
     fn an_older_client_store_fails_start_as_an_incompatible_local_store() {
@@ -1078,6 +1073,4 @@ mod tests {
         );
         assert!(!paths.peer_directory_path().exists());
     }
-
-
 }

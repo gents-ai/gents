@@ -263,7 +263,8 @@ enum ReductionResultState {
 }
 
 impl ReductionResult {
-    pub fn provider_messages(&self) -> Result<&[Message]> {        match &self.state {
+    pub fn provider_messages(&self) -> Result<&[Message]> {
+        match &self.state {
             ReductionResultState::ProviderViewRepaired { messages } => Ok(messages),
             ReductionResultState::Decided(outcome) => match outcome {
                 ReductionOutcome::NotNeeded { messages } => Ok(messages),

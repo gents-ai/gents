@@ -410,4 +410,3 @@ pub fn render_result(value: Value) -> Result<String> {
         ),
     )?)
 }
-

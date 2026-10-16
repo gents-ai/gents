@@ -173,5 +173,5 @@ fn looks_like_tool_call_markup(text: &str) -> bool {
         "</arg_value>",
     ]
     .iter()
-        .any(|marker| trimmed.contains(marker))
+    .any(|marker| trimmed.contains(marker))
 }

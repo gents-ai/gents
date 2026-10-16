@@ -1,4 +1,3 @@
-
 use anyhow::Context as _;
 use clap::Parser;
 use gents::config_client::read_desired_state_record_in_txn;

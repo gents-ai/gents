@@ -132,5 +132,4 @@ mod tests {
                 .expect_err(&format!("{coordinate:?} must be refused"));
         }
     }
-
 }

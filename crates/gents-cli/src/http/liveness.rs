@@ -296,10 +296,6 @@ mod tests {
         );
     }
 
-
-
-
-
     fn tool_activity(
         request_id: &str,
         started_offset_secs: i64,

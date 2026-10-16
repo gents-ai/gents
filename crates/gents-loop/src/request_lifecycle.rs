@@ -1,4 +1,3 @@
-
 #[async_trait::async_trait]
 pub trait RequestLifecycleControl: Send + Sync {
     /// Revalidate between provider turns so a superseded execution stops

@@ -375,4 +375,3 @@ fn build_context_indicator(
         last_compacted_at: context_budget.latest_compaction_at.clone(),
     }
 }
-

@@ -1,4 +1,3 @@
-
 use std::{char::REPLACEMENT_CHARACTER, collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
@@ -52,7 +51,6 @@ impl ToolCallKind {
             ToolCallKind::Other => "other",
         }
     }
-
 
     pub(super) fn from_tool_name(tool_name: &str) -> Self {
         match tool_name {
@@ -260,7 +258,6 @@ impl AvailableCommandsUpdate {
     }
 }
 
-
 pub(super) fn suppressed_tool_family(tool_name: &str) -> Option<&'static str> {
     match tool_name {
         "todo" | "todos" => Some("todo"),
@@ -292,7 +289,6 @@ pub(super) fn is_active_agent_message_meta(meta: Option<&Value>) -> bool {
     object.get("version").and_then(Value::as_u64) == Some(TOOL_META_VERSION)
         && object.get("kind").and_then(Value::as_str) == Some(TOOL_META_KIND_ACTIVE_AGENT_MESSAGE)
 }
-
 
 pub(super) async fn project_tools(
     node: &Arc<EmbeddedNode>,
@@ -542,11 +538,9 @@ impl ToolCallRow {
         if let Some(id) = self.tool_call_id.as_deref().and_then(nonempty) {
             return Some(id.to_string());
         }
-        nonempty(&self.tool_call_key).map(|key| {
-            match key.split_once(':') {
-                Some((_, tail)) if !tail.is_empty() => tail.to_string(),
-                _ => key.to_string(),
-            }
+        nonempty(&self.tool_call_key).map(|key| match key.split_once(':') {
+            Some((_, tail)) if !tail.is_empty() => tail.to_string(),
+            _ => key.to_string(),
         })
     }
 
@@ -766,7 +760,6 @@ fn available_commands(rows: &[ToolCallRow]) -> Vec<String> {
     tools
 }
 
-
 pub(crate) fn wait_for_exit_not_supported() -> Value {
     json!({
         "code": JSONRPC_METHOD_NOT_SUPPORTED,
@@ -800,7 +793,6 @@ pub(crate) fn handle_terminal_client_method(method: &str) -> std::result::Result
         })),
     }
 }
-
 
 fn tool_calls_query(request: &gents_protocol::row::AgentRequestRow) -> Result<String> {
     let scope = gents::session::session_scope_filter(
@@ -926,7 +918,6 @@ mod tests {
             (doc_id.to_string(), self)
         }
     }
-
 
     #[test]
     fn native_task_output_follows_registration_and_keeps_large_snapshot() {

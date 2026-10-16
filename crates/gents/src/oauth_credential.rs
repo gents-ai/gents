@@ -1,4 +1,3 @@
-
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -71,9 +70,7 @@ pub enum OAuthRefreshKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OAuthAuthProblem {
     Missing,
-    WrongMode {
-        found_mode: String,
-    },
+    WrongMode { found_mode: String },
     Expired,
     NotEntitled,
     Other(String),

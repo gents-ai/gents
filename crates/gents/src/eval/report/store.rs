@@ -339,9 +339,7 @@ mod tests {
         let error = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-1")
             .await
             .unwrap_err();
-        assert!(
-            report_refused(&error).is_some_and(|refusal| refusal.0.contains("parsing"))
-        );
+        assert!(report_refused(&error).is_some_and(|refusal| refusal.0.contains("parsing")));
     }
 
     #[tokio::test]

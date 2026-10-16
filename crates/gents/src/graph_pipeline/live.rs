@@ -49,4 +49,3 @@ pub(crate) fn is_live_for(
         graph_artifact_revision_digest(consumer_id).as_deref() == Some(digest.as_str())
     })
 }
-

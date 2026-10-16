@@ -1589,12 +1589,6 @@ mod tests {
         assert!(next_round - first >= 1_000, "{first} {next_round}");
     }
 
-
-
-
-
-
-
     fn started(run_id: &str, round: Option<u32>, split: EvalSplit) -> JournalEntry {
         JournalEntry::RunStarted {
             run_id: run_id.into(),
@@ -1725,8 +1719,6 @@ mod tests {
         assert_eq!(prior_runs(&resumed, &rerun), prior_runs(twin, &rerun));
     }
 
-
-
     #[test]
     fn trial_tokens_saturate_and_skip_unfinished_trials() {
         use crate::eval::{Anchor, TrialCompletion, TrialIdentity, TrialUsage};
@@ -1781,14 +1773,6 @@ mod tests {
         policy.max_rounds = 3;
         check_policy(&request(), &policy, &definition()).unwrap();
     }
-
-
-
-
-
-
-
-
 
     #[test]
     fn the_seen_digests_are_the_baseline_and_every_earlier_candidate() {

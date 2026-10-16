@@ -1,4 +1,3 @@
-
 use anyhow::{anyhow, Result};
 use gents::optimization::{Proposal, ProposalInput, Proposer};
 use tokio::sync::Mutex;
@@ -111,5 +110,3 @@ fn parse_reply(reply: &str) -> Result<Proposal, String> {
     serde_json::from_str(block)
         .map_err(|error| format!("the json block is not {{\"text\", \"rationale\"}}: {error}"))
 }
-
-

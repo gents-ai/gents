@@ -327,8 +327,6 @@ mod tests {
         .unwrap()
     }
 
-
-
     fn two_slots() -> PackManifest {
         manifest(json!([
             {"name":"coordinator","description":"plans","agents":["plan"]},

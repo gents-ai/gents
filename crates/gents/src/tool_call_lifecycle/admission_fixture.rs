@@ -1,4 +1,3 @@
-
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use defra_node::EmbeddedNode;

@@ -404,5 +404,4 @@ mod tests {
         );
         server.abort();
     }
-
 }

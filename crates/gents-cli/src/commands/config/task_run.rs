@@ -411,5 +411,4 @@ mod tests {
         assert!(resolve_invocation_key("task", false, None).is_ok());
         assert!(resolve_invocation_key("task", false, Some(" ")).is_err());
     }
-
 }

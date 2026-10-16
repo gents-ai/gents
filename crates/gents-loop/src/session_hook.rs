@@ -1,4 +1,3 @@
-
 use async_trait::async_trait;
 use gents_protocol::message::Message;
 

@@ -1,4 +1,3 @@
-
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -145,10 +144,7 @@ impl StreamPlan {
 pub enum StreamResponse {
     Stream(StreamScript),
     HoldHeaders(StreamScript),
-    HttpStatus {
-        status: u16,
-        body: String,
-    },
+    HttpStatus { status: u16, body: String },
 }
 
 impl StreamResponse {

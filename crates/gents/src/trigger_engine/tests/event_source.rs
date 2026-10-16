@@ -1619,12 +1619,12 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
     let fired = fired_trigger.expect("Trigger.last_status never became \"fired\"");
     assert_eq!(fired["last_status"].as_str(), Some("fired"));
     assert_eq!(fired["fire_count"].as_i64(), Some(1));
-    assert_eq!(fired["last_fired_source_doc_id"].as_str(), Some(fired_source_doc_id.as_str()));
-    assert!(fired["last_attempt_at"].as_str().is_some());
     assert_eq!(
-        fired["last_error"],
-        serde_json::Value::Null,
+        fired["last_fired_source_doc_id"].as_str(),
+        Some(fired_source_doc_id.as_str())
     );
+    assert!(fired["last_attempt_at"].as_str().is_some());
+    assert_eq!(fired["last_error"], serde_json::Value::Null,);
     assert_eq!(fired["task_id"].as_str(), Some("task-webhook"));
     assert_eq!(
         fired["source"]["event_source_id"].as_str(),
@@ -1994,10 +1994,7 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
         .expect("next_fire timed out on the second fan-out intent")
         .expect("next_fire returned None instead of emitting the second intent");
 
-    assert_eq!(
-        first.trigger_id.as_deref(),
-        Some("trigger-alpha"),
-    );
+    assert_eq!(first.trigger_id.as_deref(), Some("trigger-alpha"),);
     assert_eq!(second.trigger_id.as_deref(), Some("trigger-beta"));
     let first_doc_id = first
         .event_vars
@@ -2007,9 +2004,7 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
         .event_vars
         .get("source_doc_id")
         .and_then(|v| v.as_str());
-    assert_eq!(
-        first_doc_id, second_doc_id,
-    );
+    assert_eq!(first_doc_id, second_doc_id,);
 
     cancel.cancel();
 }
@@ -2077,10 +2072,7 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
         .await
         .expect("next_fire timed out")
         .expect("next_fire returned None instead of emitting a FireIntent");
-    assert_eq!(
-        intent.trigger_id.as_deref(),
-        Some("trigger-b-matches"),
-    );
+    assert_eq!(intent.trigger_id.as_deref(), Some("trigger-b-matches"),);
 
     let maybe_extra = tokio::time::timeout(Duration::from_millis(300), source.next_fire()).await;
     assert!(

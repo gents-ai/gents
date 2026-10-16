@@ -46,10 +46,7 @@ pub enum LoginAccountResponse {
     #[serde(rename = "apiKey", rename_all = "camelCase")]
     ApiKey {},
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
-    Chatgpt {
-        login_id: String,
-        auth_url: String,
-    },
+    Chatgpt { login_id: String, auth_url: String },
     #[serde(rename = "chatgptDeviceCode", rename_all = "camelCase")]
     ChatgptDeviceCode {
         login_id: String,

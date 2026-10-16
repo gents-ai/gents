@@ -63,4 +63,3 @@ pub(crate) fn revision_artifact_ids(plan: &GraphPlan) -> Result<Vec<(Collection,
     }
     Ok(ids)
 }
-

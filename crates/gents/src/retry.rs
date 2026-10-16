@@ -52,4 +52,3 @@ pub fn retries_exhausted(policy: &RetryPolicy, last_error: &InferenceError) -> I
         last_error: last_error.to_string(),
     }
 }
-

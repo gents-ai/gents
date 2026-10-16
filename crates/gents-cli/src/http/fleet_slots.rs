@@ -682,5 +682,4 @@ mod tests {
         assert_eq!(snapshot.totals.available, 5);
         assert_eq!(snapshot.totals.max, 6);
     }
-
 }

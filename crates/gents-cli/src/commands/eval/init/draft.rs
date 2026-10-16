@@ -72,4 +72,3 @@ fn is_json_fence(fence: &str) -> bool {
         .strip_prefix("```")
         .is_some_and(|info| info.trim().eq_ignore_ascii_case("json"))
 }
-

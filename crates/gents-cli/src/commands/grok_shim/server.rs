@@ -1558,7 +1558,6 @@ mod tests {
         }
     }
 
-
     /// Canonicalize the chosen short test root: on macOS `/tmp` is a symlink
     /// to `/private/tmp` and the socket-parent walk refuses symlinked
     /// components, so resolve the platform's system temp symlink once here.
@@ -2076,7 +2075,6 @@ mod tests {
         assert_clean_stop(&handle);
         let _ = std::fs::remove_dir_all(&root);
     }
-
 
     #[tokio::test]
     async fn the_production_spawn_lifetime_publishes_serves_and_cleans_up() {

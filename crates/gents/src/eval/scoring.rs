@@ -254,7 +254,13 @@ mod tests {
     use super::*;
     use crate::document_config::EvalTier;
 
-    fn v(id: &str, stage: usize, kind: OutcomeKind, score: Option<u32>, weight: u32) -> VerdictView {
+    fn v(
+        id: &str,
+        stage: usize,
+        kind: OutcomeKind,
+        score: Option<u32>,
+        weight: u32,
+    ) -> VerdictView {
         VerdictView {
             verdict_id: id.into(),
             stage_index: stage,
@@ -289,7 +295,10 @@ mod tests {
         let reversed = latest_verdicts(vec![regrade("v3"), regrade("v2"), original]);
         assert_eq!(forward.len(), 1, "one verdict per (stage, check)");
         assert_eq!(forward, reversed, "the survivor never depends on row order");
-        assert_eq!(forward[0].verdict_id, "v3", "the lexicographic maximum verdict_id wins");
+        assert_eq!(
+            forward[0].verdict_id, "v3",
+            "the lexicographic maximum verdict_id wins"
+        );
     }
 
     #[test]
@@ -319,4 +328,3 @@ mod tests {
         );
     }
 }
-

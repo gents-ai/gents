@@ -457,5 +457,4 @@ mod tests {
             assert_eq!(summary.updated, timestamp(Some("2026-09-04T00:00:00Z")));
         }
     }
-
 }

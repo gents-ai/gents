@@ -1,4 +1,3 @@
-
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -47,9 +46,7 @@ pub enum JobState {
     ReadyToPromote,
     NothingToPromote,
     Exhausted,
-    Failed {
-        reason: String,
-    },
+    Failed { reason: String },
     Promoted,
     Stale,
     Reverted,
@@ -587,10 +584,7 @@ mod tests {
             let before = job.journal.clone();
             append(&access, &mut job, entry.clone()).await.unwrap();
             assert_eq!(job.journal.len(), before.len() + 1);
-            assert_eq!(
-                &job.journal[..before.len()],
-                &before[..]
-            );
+            assert_eq!(&job.journal[..before.len()], &before[..]);
             assert_eq!(job.journal.last(), Some(&entry));
         }
         let loaded = load_job(&access, OWNER, "job-2").await.unwrap().unwrap();

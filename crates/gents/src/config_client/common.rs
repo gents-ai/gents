@@ -46,5 +46,3 @@ pub fn mint_recreate_identity(add_doc: &serde_json::Value) -> serde_json::Value 
     }
     doc
 }
-
-

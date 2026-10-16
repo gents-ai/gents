@@ -53,9 +53,7 @@ tokio::task_local! {
 
 enum RequestGuard {
     Unbound(UnboundActiveGuard),
-    Active {
-        _guard: ActiveGuard,
-    },
+    Active { _guard: ActiveGuard },
 }
 
 pub(crate) async fn scope_slot_capacity<F: Future>(

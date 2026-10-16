@@ -1117,10 +1117,7 @@ fn refused_latest_request_observation_keeps_the_failed_turn_reason_retry_and_pro
         None,
     )
     .expect("snapshot");
-    assert_eq!(
-        snapshot.latest_request_id.as_deref(),
-        Some("req-2"),
-    );
+    assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-2"),);
     assert_eq!(snapshot.turn_state.as_deref(), Some("failed"));
     let outcome = snapshot.latest_request_outcome.expect("request outcome");
     assert_eq!(outcome.failure_reason.as_deref(), Some(refusal_reason));

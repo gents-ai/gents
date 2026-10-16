@@ -139,8 +139,7 @@ async fn load_page_canonical_dependencies(
         let rows = parse_canonical_rows(&data, AGENT_MESSAGE_NAME, decode_transcript_message_row)?;
         queried_rows = queried_rows.saturating_add(rows.len());
         match rows.len() {
-            0 => {
-            }
+            0 => {}
             1 => {
                 let origin = rows.into_iter().next().expect("one row checked");
                 if origin.doc_id != origin_id

@@ -285,7 +285,7 @@ impl RequestLifecycle {
 }
 
 #[cfg(test)]
-# [cfg (test)]
+#[cfg(test)]
 pub(crate) async fn revoke_execution_generation(
     node: &std::sync::Arc<EmbeddedNode>,
     row: &AgentRequestRow,

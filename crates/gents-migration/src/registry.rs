@@ -84,7 +84,6 @@ impl<'a> Registry<'a> {
     }
 }
 
-
 #[derive(Debug, Clone)]
 pub struct BaselineCollectionOwned {
     pub name: String,
@@ -193,7 +192,6 @@ impl DynamicRegistry {
         (baseline, steps)
     }
 }
-
 
 macro_rules! baseline_entry {
     ($name:expr, $sdl:expr, $version:literal) => {
@@ -755,7 +753,6 @@ pub static DEFAULT_REGISTRY: Registry<'static> = Registry {
 pub fn fixture_lens_wasm() -> &'static [u8] {
     include_bytes!(env!("GENTS_LENS_FIXTURE_ADD_LABEL_WASM_PATH"))
 }
-
 
 pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::AGENT_REQUEST_NAME,

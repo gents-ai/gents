@@ -220,14 +220,20 @@ pub fn reconstruct_dense_prefix(
 #[derive(Clone, Debug, PartialEq)]
 pub enum LiveView {
     Absent,
-    Live { streams: Vec<LiveStream> },
-    Settling { streams: Vec<LiveStream> },
+    Live {
+        streams: Vec<LiveStream>,
+    },
+    Settling {
+        streams: Vec<LiveStream>,
+    },
     Loading,
     Denied,
     Conflicted,
     Invalid,
     Retracted,
-    RetainedPartial { streams: Vec<LiveStream> },
+    RetainedPartial {
+        streams: Vec<LiveStream>,
+    },
     Published {
         message: TranscriptMessage,
         native: Message,
@@ -996,4 +1002,3 @@ fn project_fork(
     let origin = lookup_observed(observation, origin_message_doc_id)?;
     origin::validate_fork_metadata(fork, origin).map_err(|_| LiveView::Invalid)
 }
-

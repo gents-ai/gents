@@ -226,5 +226,4 @@ mod tests {
             assert!(c.file_name().is_some() ^ c.dir_name().is_some());
         }
     }
-
 }

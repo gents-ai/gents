@@ -30,7 +30,8 @@ use crate::session_hook::NoopSessionHook;
 const IDLE: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Default)]
-struct WireAttempt {    hold_headers: bool,
+struct WireAttempt {
+    hold_headers: bool,
     events: Vec<(Duration, String)>,
     hang: bool,
     finalize_delay: Duration,

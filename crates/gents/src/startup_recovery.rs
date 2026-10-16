@@ -1,4 +1,3 @@
-
 use defra_node::EmbeddedNode;
 
 use crate::admission::{InferenceCall, InferenceCallRecoveryReport};

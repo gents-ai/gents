@@ -1,4 +1,3 @@
-
 use std::fmt;
 
 use serde::de::DeserializeOwned;
@@ -13,7 +12,6 @@ pub const FRAME_PREFIX_BYTES: usize = 4;
 pub const LEADER_PROTOCOL_VERSION: u32 = 1;
 
 pub const LEADER_BINARY_VERSION: &str = concat!("gents-", env!("CARGO_PKG_VERSION"));
-
 
 #[derive(Debug)]
 pub enum ProtocolError {
@@ -81,7 +79,6 @@ impl From<serde_json::Error> for ProtocolError {
         ProtocolError::InvalidFrame(error.to_string())
     }
 }
-
 
 pub async fn read_frame<R>(reader: &mut R) -> Result<Vec<u8>, ProtocolError>
 where
@@ -210,7 +207,6 @@ where
     Ok(filled)
 }
 
-
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ClientCapabilities {
     #[serde(default)]
@@ -269,8 +265,13 @@ pub enum ClientEnvelope {
         #[serde(default)]
         capabilities: ClientCapabilities,
     },
-    Acp { payload: String },
-    Control { request_id: String, command: Value },
+    Acp {
+        payload: String,
+    },
+    Control {
+        request_id: String,
+        command: Value,
+    },
     Ping,
     Disconnect,
 }
@@ -291,7 +292,6 @@ impl ClientEnvelope {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LeaderCapabilities {
@@ -353,9 +353,14 @@ pub enum ServerEnvelope {
         leader_capabilities: LeaderCapabilities,
     },
     LeaderReady,
-    Acp { payload: String },
+    Acp {
+        payload: String,
+    },
     Pong,
-    Error { code: i32, message: String },
+    Error {
+        code: i32,
+        message: String,
+    },
     ShuttingDown {
         reason: ShutdownReason,
         #[serde(default)]
@@ -401,7 +406,6 @@ impl ServerEnvelope {
         )
     }
 }
-
 
 #[cfg(test)]
 mod tests {

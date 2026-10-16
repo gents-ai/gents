@@ -53,4 +53,3 @@ macro_rules! signing_payload_impl {
 
 signing_payload_impl!(NetworkRecord);
 signing_payload_impl!(EndpointRecord);
-

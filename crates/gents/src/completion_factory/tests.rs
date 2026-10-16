@@ -861,4 +861,3 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
     })
     .await;
 }
-

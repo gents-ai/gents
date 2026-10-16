@@ -308,5 +308,3 @@ pub(crate) fn current_call_join() -> Option<CurrentCallJoin> {
         .ok()
         .flatten()
 }
-
-

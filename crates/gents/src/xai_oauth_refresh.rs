@@ -109,4 +109,3 @@ fn parse_error_message(body: &str) -> String {
         .unwrap_or(body)
         .to_string()
 }
-

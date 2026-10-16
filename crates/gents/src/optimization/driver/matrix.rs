@@ -1,4 +1,3 @@
-
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1162,9 +1161,8 @@ async fn an_inconclusive_round_is_rerun_on_a_new_seed_and_ends_inconclusive() {
         ]
     );
     assert_eq!(
-        decided.2,
-            *decision,
-                Decision::Inconclusive(InconclusiveReason::Insufficient)
+        decided.2, *decision,
+        Decision::Inconclusive(InconclusiveReason::Insufficient)
     );
     let mut seeds = Vec::new();
     for run_id in &decided.1 {

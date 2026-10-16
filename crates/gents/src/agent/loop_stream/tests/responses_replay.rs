@@ -8,7 +8,12 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
     fn sse(events: &[serde_json::Value]) -> String {
         events
             .iter()
-            .map(|event| format!("event: {}\ndata: {event}\n\n", event["type"].as_str().unwrap()))
+            .map(|event| {
+                format!(
+                    "event: {}\ndata: {event}\n\n",
+                    event["type"].as_str().unwrap()
+                )
+            })
             .collect()
     }
     fn completed(output: serde_json::Value) -> serde_json::Value {
@@ -45,7 +50,9 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
         body: axum::body::Bytes,
     ) -> axum::response::Response {
         let mut state = state.lock().unwrap();
-        state.1.push(serde_json::from_slice(&body).unwrap_or_default());
+        state
+            .1
+            .push(serde_json::from_slice(&body).unwrap_or_default());
         let body = state.0.pop_front().unwrap_or_default();
         axum::response::Response::builder()
             .header("content-type", "text/event-stream")

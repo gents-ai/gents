@@ -144,4 +144,3 @@ impl<S: tracing::Subscriber> Filter<S> for RateLimitFilter {
         }
     }
 }
-

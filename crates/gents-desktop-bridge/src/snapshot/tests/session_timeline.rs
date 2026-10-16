@@ -609,23 +609,21 @@ fn only_the_authored_prompt_row_owns_the_request_turn() {
     let snapshot =
         build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
             .expect("snapshot");
-    assert!(
-        matches!(
-            &snapshot.timeline_items[..],
-            [
-                RenderedTimelineItem::UserMessage {
-                    owns_turn: false,
-                    request_id: Some(context_request),
-                    ..
-                },
-                RenderedTimelineItem::UserMessage {
-                    owns_turn: true,
-                    request_id: Some(prompt_request),
-                    ..
-                },
-            ] if context_request == "req-1" && prompt_request == "req-1"
-        )
-    );
+    assert!(matches!(
+        &snapshot.timeline_items[..],
+        [
+            RenderedTimelineItem::UserMessage {
+                owns_turn: false,
+                request_id: Some(context_request),
+                ..
+            },
+            RenderedTimelineItem::UserMessage {
+                owns_turn: true,
+                request_id: Some(prompt_request),
+                ..
+            },
+        ] if context_request == "req-1" && prompt_request == "req-1"
+    ));
 }
 
 #[test]
