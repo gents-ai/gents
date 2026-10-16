@@ -497,7 +497,6 @@ mod tests {
         }
     }
 
-    /// What the interview hands the pilot: the pack of [`cases`], written.
     async fn drafted(init: &InitContext<'_>) -> InitOutcome {
         let draft = super::super::draft::parse_reply(&block(&cases()))
             .unwrap()
@@ -514,8 +513,6 @@ mod tests {
             rounds: 1,
         }
     }
-
-    /// Every trial passes but `val-a`'s.
 
     async fn pilot_runs(fixture: &Fixture) -> Vec<gents::eval::RunRecord> {
         load_runs(&fixture.ctx.access, &fixture.ctx.owner)
