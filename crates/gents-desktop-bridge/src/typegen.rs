@@ -330,10 +330,12 @@ fn export_all(dir: &Path) -> Result<(), String> {
 
     commands::export(dir)?;
     let protocol = format!(
-        "// Generated from gents-desktop-bridge::host::protocol. Do not edit.\n\nexport const CLIENT_HOST_VERSION = {};\nexport const CLIENT_HOST_MAX_FRAME_BYTES = {};\nexport const CLIENT_HOST_MAX_PENDING_CALLS = {};\n",
+        "// Generated from gents-desktop-bridge::host::protocol. Do not edit.\n\nexport const CLIENT_HOST_VERSION = {};\nexport const CLIENT_HOST_MAX_FRAME_BYTES = {};\nexport const CLIENT_HOST_MAX_PENDING_CALLS = {};\nexport const CLIENT_HOST_COMMANDS = {} as const;\n",
         crate::host::protocol::PROTOCOL_VERSION,
         crate::host::protocol::MAX_FRAME_BYTES,
         crate::host::protocol::MAX_PENDING_CALLS,
+        serde_json::to_string(crate::host::protocol::ClientCommand::NAMES)
+            .map_err(|error| error.to_string())?,
     );
     std::fs::write(dir.join("ClientHostProtocol.ts"), protocol)
         .map_err(|error| error.to_string())?;
