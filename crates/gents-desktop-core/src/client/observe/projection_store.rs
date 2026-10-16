@@ -521,7 +521,7 @@ fn same_provenance_inputs(before: &ClientStore, after: &ClientStore) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+mod reload_tests {
     use super::*;
     use crate::client::store::ClientStoreRows;
     use gents_protocol::row::AgentRequestRow;
