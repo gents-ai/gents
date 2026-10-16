@@ -21,7 +21,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "node ../../scripts/clean-desktop-package-dist.mjs && tsc -p tsconfig.json"
+    "build": "node ../../scripts/clean-desktop-package-dist.mjs && tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
   },
   "peerDependencies": {
     "@source-inc/gents-desktop-tokens": "0.20.0",

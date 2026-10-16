@@ -39,6 +39,42 @@ rank_timing_packages() {
   ' "$units_json" > "$output_json"
 }
 
+self_test() {
+  local fixture_root
+  fixture_root=$(mktemp -d "${TMPDIR:-/tmp}/gents-build-attribution-test.XXXXXX")
+  trap 'rm -rf -- "$fixture_root"' RETURN
+
+  local fixture_html="$fixture_root/timing.html"
+  local units_json="$fixture_root/units.json"
+  local packages_json="$fixture_root/packages.json"
+  printf '%s\n' \
+    '<html>' \
+    'const UNIT_DATA = [' \
+    '  {"name":"alpha","version":"1.0.0","duration":1.25,"features":["std"]},' \
+    '  {"name":"alpha","version":"1.0.0","duration":0.75,"features":["derive"]},' \
+    '  {"name":"beta","version":"2.0.0","duration":3.0,"features":[]}' \
+    '];' \
+    '</html>' > "$fixture_html"
+
+  extract_timing_units "$fixture_html" "$units_json"
+  rank_timing_packages "$units_json" "$packages_json"
+  jq -e '
+    length == 2
+    and .[0].name == "beta"
+    and .[0].duration_seconds == 3
+    and .[1].name == "alpha"
+    and .[1].duration_seconds == 2
+    and .[1].units == 2
+    and .[1].features == ["derive", "std"]
+  ' "$packages_json" >/dev/null
+  echo "build attribution parser self-test passed"
+}
+
+if [[ "${1:-}" == "self-test" ]]; then
+  self_test
+  exit 0
+fi
+
 for tool in cargo jq rustc; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "missing required tool: $tool" >&2

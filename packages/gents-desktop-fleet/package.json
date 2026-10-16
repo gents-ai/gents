@@ -30,7 +30,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "node ../../scripts/clean-desktop-package-dist.mjs && tsc -p tsconfig.json"
+    "build": "node ../../scripts/clean-desktop-package-dist.mjs && tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
   },
   "peerDependencies": {
     "react": "^19.0.0",
