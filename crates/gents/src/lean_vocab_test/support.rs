@@ -142,6 +142,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) readiness_publication_cases: Vec<LeanReadinessPublicationCase>,
     pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
     pub(crate) eval_outcome_cases: Vec<LeanEvalOutcomeCase>,
+    pub(crate) eval_document_capture_cases: Vec<LeanEvalDocumentCaptureCase>,
     pub(crate) optimization_cases: LeanOptimizationCases,
     pub(crate) publish_if_cases: Vec<LeanPublishIfCase>,
     pub(crate) tool_policy_cases: Vec<LeanToolPolicyCase>,
@@ -1454,6 +1455,10 @@ pub(crate) fn lean_apply_reconcile_case(name: &str) -> &'static LeanApplyReconci
 
 pub(crate) fn lean_eval_outcome_cases() -> &'static [LeanEvalOutcomeCase] {
     &lean_contract_snapshot().eval_outcome_cases
+}
+
+pub(crate) fn lean_eval_document_capture_cases() -> &'static [LeanEvalDocumentCaptureCase] {
+    &lean_contract_snapshot().eval_document_capture_cases
 }
 
 pub(crate) fn lean_optimization_cases() -> &'static LeanOptimizationCases {

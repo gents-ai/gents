@@ -1669,7 +1669,8 @@ pub(super) fn documents_capture_query(
 ) -> Result<String> {
     validate_collection_identifier(collection)?;
     anyhow::ensure!(
-        !gents_protocol::schemas::is_credential_collection(collection),
+        !gents_protocol::schemas::is_credential_collection(collection)
+            || collection == gents_protocol::schemas::INFERENCE_BACKEND_NAME,
         "credential collection {collection:?} cannot be retained as eval capture evidence"
     );
     validate_filter_names(filter)?;
@@ -2143,7 +2144,7 @@ mod tests {
     }
 
     #[test]
-    fn document_captures_reject_credential_bearing_collections() {
+    fn document_captures_reject_secret_fields_and_oauth_documents() {
         let error = documents_capture_query(
             "InferenceBackend",
             &json!({"node_did": {"_eq": "did:test"}}),
@@ -2152,7 +2153,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("InferenceBackend"));
-        assert!(error.to_string().contains("credential collection"));
+        assert!(error.to_string().contains("restricted"));
 
         let error = documents_capture_query(
             "InferenceBackend",
@@ -2161,7 +2162,7 @@ mod tests {
             "did:test",
         )
         .unwrap_err();
-        assert!(error.to_string().contains("credential collection"));
+        assert!(error.to_string().contains("restricted"));
 
         let error = documents_capture_query(
             "OAuthCredential",
@@ -2180,6 +2181,105 @@ mod tests {
         )
         .unwrap();
         assert!(safe.contains("task_id display_name"));
+    }
+
+    #[test]
+    fn generated_document_capture_cases_match_lean() {
+        use std::collections::BTreeSet;
+
+        let cases = crate::lean_vocab_test::lean_eval_document_capture_cases();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let mut filter_fields = Vec::new();
+            crate::defra_query::query::collect_filter_field_keys(&case.filter, &mut filter_fields);
+            assert_eq!(
+                filter_fields.into_iter().collect::<BTreeSet<_>>(),
+                case.filter_fields.iter().cloned().collect::<BTreeSet<_>>(),
+                "{case:?}"
+            );
+            let query =
+                documents_capture_query(&case.collection, &case.filter, &case.fields, "did:test");
+            assert_eq!(query.is_ok(), case.allowed, "{case:?}: {query:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn l1_backend_capture_grades_metadata_without_retaining_auth() {
+        let home = EmbeddedHome::create_temp("eval-backend-metadata")
+            .await
+            .unwrap();
+        let plan = DesiredStateApplyPlan::new(vec![desired(
+            Collection::InferenceBackend,
+            json!({
+                "node_did": home.did(), "backend_id": "metadata-backend", "name": "metadata",
+                "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:9/v1",
+                "auth": {"kind": "api_key", "key": "eval-secret-sentinel"}, "enabled": true
+            }),
+        )])
+        .unwrap();
+        apply(
+            &ConfigAccess::local(home.node.clone()),
+            "eval.test.backend_metadata",
+            &plan,
+        )
+        .await
+        .unwrap();
+
+        let case: Value = serde_json::from_slice(&std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(
+                "tests/fixtures/configurator_evals/ladder/l1_inference/cases/val_minimal_limits.json",
+            ),
+        ).unwrap()).unwrap();
+        let stage = &case["stages"][1];
+        let capture: Capture = serde_json::from_value(
+            stage["capture"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|capture| capture["name"] == "backends")
+                .unwrap()
+                .clone(),
+        )
+        .unwrap();
+        let mut evidence = crate::eval::runner::ScriptedExecutor::passed_evidence(
+            home.did(),
+            "configure",
+            "session-metadata",
+            Vec::new(),
+        )
+        .stages
+        .remove(0);
+        evidence.captures = run_captures(
+            &home.node,
+            home.did(),
+            "session-metadata",
+            home.path(),
+            &[capture],
+        )
+        .await;
+        let CaptureResult::Documents { rows } = &evidence.captures["backends"] else {
+            panic!("backend metadata capture must contain documents");
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["backend_id"], "metadata-backend");
+        assert!(rows[0].get("auth").is_none());
+        assert!(!serde_json::to_string(&evidence.captures)
+            .unwrap()
+            .contains("eval-secret-sentinel"));
+
+        let check = stage["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["check"] == "captured_rows_count")
+            .unwrap();
+        let registry = crate::eval::checks::CheckRegistry::builtin();
+        let verdict = registry
+            .get("captured_rows_count")
+            .unwrap()
+            .evaluate(&check["params"], &evidence);
+        assert_eq!(verdict.kind, OutcomeKind::Passed, "{:?}", verdict.raw);
+        home.node.shutdown().await;
     }
 
     /// The matched files and the matches that were refused, for a glob that ran.
