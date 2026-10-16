@@ -187,6 +187,14 @@ impl TerminalEvents {
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(&self.data) else {
             return;
         };
+        let responses_token_limit = value.get("type").and_then(serde_json::Value::as_str)
+            == Some("response.incomplete")
+            && value
+                .get("response")
+                .and_then(|response| response.get("incomplete_details"))
+                .and_then(|details| details.get("reason"))
+                .and_then(serde_json::Value::as_str)
+                == Some("max_output_tokens");
         self.token_limit_reached |= match self.protocol {
             ProviderStreamProtocol::ChatCompletions => {
                 value
@@ -205,7 +213,7 @@ impl TerminalEvents {
                         .and_then(serde_json::Value::as_str)
                         == Some("max_tokens")
             }
-            ProviderStreamProtocol::Responses => false,
+            ProviderStreamProtocol::Responses => responses_token_limit,
         };
         self.terminal = match self.protocol {
             ProviderStreamProtocol::ChatCompletions => value
@@ -221,6 +229,7 @@ impl TerminalEvents {
                 }),
             ProviderStreamProtocol::Responses => {
                 value.get("type").and_then(serde_json::Value::as_str) == Some("response.completed")
+                    || responses_token_limit
             }
             ProviderStreamProtocol::Anthropic => {
                 value.get("type").and_then(serde_json::Value::as_str) == Some("message_stop")
@@ -233,6 +242,69 @@ impl TerminalEvents {
 mod tests {
     use super::*;
     use bytes::Bytes;
+
+    #[tokio::test]
+    async fn responses_terminal_evidence_matches_lean() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            delimited: bool,
+            event_type: String,
+            reason: Option<String>,
+            termination: Option<String>,
+        }
+        let cases: Vec<Case> = serde_json::from_str(include_str!(
+            "../../gents/tests/fixtures/responses_termination.json"
+        ))
+        .unwrap();
+        for case in cases {
+            let event = serde_json::json!({
+                "type": case.event_type,
+                "response": {
+                    "incomplete_details": case.reason.as_ref().map(|reason| {
+                        serde_json::json!({"reason": reason})
+                    })
+                }
+            });
+            let payload = format!("data: {event}{}", if case.delimited { "\n\n" } else { "" });
+            for split in 0..=payload.len() {
+                let activity = Arc::new(ProviderActivity::default());
+                let body: http_client::sse::BoxedStream = Box::pin(futures::stream::iter([
+                    Ok(Bytes::copy_from_slice(&payload.as_bytes()[..split])),
+                    Ok(Bytes::copy_from_slice(&payload.as_bytes()[split..])),
+                ]));
+                let response = http_client::Response::builder()
+                    .status(200)
+                    .body(body)
+                    .unwrap();
+                let received = guard_response(
+                    response,
+                    Some(ProviderStreamProtocol::Responses),
+                    Some(activity.clone()),
+                )
+                .into_body()
+                .collect::<Vec<_>>()
+                .await;
+                assert_eq!(
+                    received.iter().any(Result::is_err),
+                    case.termination.is_none(),
+                    "{} {:?} delimited={} split={split}",
+                    case.event_type,
+                    case.reason,
+                    case.delimited
+                );
+                let bytes: Vec<_> = received
+                    .into_iter()
+                    .filter_map(Result::ok)
+                    .flatten()
+                    .collect();
+                assert_eq!(bytes, payload.as_bytes());
+                assert_eq!(
+                    activity.token_limit_reached(),
+                    case.termination.as_deref() == Some("token_limit")
+                );
+            }
+        }
+    }
 
     #[tokio::test]
     async fn token_limit_observation_uses_the_selected_protocol_event() {
