@@ -27,7 +27,7 @@ export const spoken = (command: string): string => {
   return parts.length ? parts.join(" && ") : command.trim();
 };
 
-export const DIFF_MARK: Record<ToolDiffLineKind, string> = {
+const DIFF_MARK: Record<ToolDiffLineKind, string> = {
   added: "+",
   removed: "-",
   context: " ",
@@ -35,6 +35,24 @@ export const DIFF_MARK: Record<ToolDiffLineKind, string> = {
 
 export const diffText = (diff: ToolDiffLineView[]) =>
   diff.map((line) => `${DIFF_MARK[line.kind]}${line.text}`).join("\n");
+
+/** How an edit's lines read: one block when they are all added or all
+    removed, what was replaced and with what when removals precede
+    additions with no context, and a unified diff otherwise. */
+export type DiffShape = "addition" | "removal" | "replacement" | "unified";
+
+export function diffShape(diff: readonly { kind: ToolDiffLineKind }[]): DiffShape {
+  const kinds = diff.map((line) => line.kind);
+  if (kinds.includes("context")) return "unified";
+  const firstAdded = kinds.indexOf("added");
+  const lastRemoved = kinds.lastIndexOf("removed");
+  /* an addition before the last removal is interleaved: a real diff */
+  if (firstAdded !== -1 && lastRemoved !== -1 && firstAdded < lastRemoved)
+    return "unified";
+  if (lastRemoved === -1) return "addition";
+  if (firstAdded === -1) return "removal";
+  return "replacement";
+}
 
 /* a final newline ends the last line; it does not start another */
 export const lineCount = (text: string) =>
