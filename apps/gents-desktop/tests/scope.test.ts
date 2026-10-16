@@ -52,12 +52,13 @@ const ctx = {
 };
 
 describe("nodes in scope", () => {
-  it("sessions default to the working node whatever is selected; the mailbox to every node", () => {
-    expect(nodesInScope(defaultScope("sessions"), ctx)).toEqual([local]);
-    expect(
-      nodesInScope(defaultScope("sessions"), { ...ctx, selectedNodeDid: "did:peer" }),
-    ).toEqual([local]);
+  it("sessions and the mailbox default to every node; recents to the working node whatever is selected", () => {
+    expect(nodesInScope(defaultScope("sessions"), ctx)).toEqual([local, peer]);
     expect(nodesInScope(defaultScope("mailbox"), ctx)).toEqual([local, peer]);
+    expect(nodesInScope(defaultScope("recents"), ctx)).toEqual([local]);
+    expect(
+      nodesInScope(defaultScope("recents"), { ...ctx, selectedNodeDid: "did:peer" }),
+    ).toEqual([local]);
     expect(
       nodesInScope(
         { nodes: "selected", agents: [] },

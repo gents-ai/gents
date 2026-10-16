@@ -179,10 +179,12 @@ test.describe("kit shell", () => {
     await gotoHarness(page);
     const filters = page.getByLabel("Session filters");
     const session = page.getByRole("link", { name: /introduction-and-greetings/ });
+    /* a narrowed list says so under the heading, with its Clear */
+    const narrowed = page.getByTestId("sessions-narrowed");
     await expect(filters).toBeVisible();
     await expect(filters.getByRole("button", { name: "State" })).toBeVisible();
     await expect(filters.getByRole("button", { name: "Started by" })).toBeVisible();
-    await expect(filters.getByRole("button", { name: "Clear filters" })).toHaveCount(0);
+    await expect(narrowed).toHaveCount(0);
 
     await filters.getByRole("combobox", { name: "Agent" }).click();
     await expect(page.getByRole("dialog", { name: "Filter by agent" })).toBeVisible();
@@ -192,16 +194,17 @@ test.describe("kit shell", () => {
     const withSession = page.getByRole("option", { name: /Default\s*1$/ });
     await withSession.click();
     await page.keyboard.press("Escape");
-    await expect(filters.getByRole("button", { name: "Clear filters" })).toBeVisible();
+    await expect(narrowed).toHaveText(/1 of 1 session/);
     await expect(session).toBeVisible();
 
+    
     await filters.getByRole("button", { name: "State" }).click();
     await expect(
       page.getByRole("menuitemcheckbox", { name: /Failed\s*0$/ }),
     ).toHaveAttribute("aria-disabled", "true");
     await page.keyboard.press("Escape");
-    await filters.getByRole("button", { name: "Clear filters" }).click();
-    await expect(filters.getByRole("button", { name: "Clear filters" })).toHaveCount(0);
+    await narrowed.getByRole("button", { name: "Clear filters" }).click();
+    await expect(narrowed).toHaveCount(0);
     await expect(session).toBeVisible();
   });
 

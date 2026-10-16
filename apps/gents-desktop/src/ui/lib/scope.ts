@@ -7,8 +7,9 @@ export type Scope = { nodes: NodeScope; agents: readonly string[] };
 
 export type ScopedView = "sessions" | "mailbox" | "recents";
 
+
 export const defaultScope = (view: ScopedView): Scope => ({
-  nodes: view === "mailbox" ? "all" : "working",
+  nodes: view === "recents" ? "working" : "all",
   agents: [],
 });
 

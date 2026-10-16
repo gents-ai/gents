@@ -1,7 +1,7 @@
 import { CircleMinus, CircleX, Clock } from "lucide-react";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
-import { isLive, turnLabel } from "@/lib/live";
+import { stateOf, turnLabel } from "@/lib/live";
 
 export function SessionStatus({
   turnState,
@@ -11,14 +11,15 @@ export function SessionStatus({
   className?: string;
 }) {
   const label = turnLabel(turnState) ?? "Finished";
+  const state = stateOf(turnState);
   const glyph =
-    turnState === "waitingForClaim" ? (
+    state === "waiting" ? (
       <Clock className="size-3.5 text-muted-foreground" />
-    ) : isLive(turnState) ? (
+    ) : state === "working" ? (
       <Spinner className="text-foreground" />
-    ) : turnState === "failed" ? (
+    ) : state === "failed" ? (
       <CircleX className="size-3.5 text-destructive" />
-    ) : turnState === "interrupted" || turnState === "superseded" ? (
+    ) : state === "stopped" ? (
       <CircleMinus className="size-3.5 text-muted-foreground" />
     ) : (
       <span className="size-2 rounded-full border border-muted-foreground/60" />

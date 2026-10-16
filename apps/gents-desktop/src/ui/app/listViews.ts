@@ -11,16 +11,23 @@ import { browserStorage, storedStrings } from "@/lib/storage";
 
 export type ListViews = {
   sessionFilter: SessionFilter;
+  
   sessionNodes: string[] | null;
   mailboxNodes: string[];
   mailboxKinds: string[];
+  /** the sessions whose started sessions the person opened in the list, by
+      session key, newest last */
+  openSessions: string[];
 };
+
+const OPEN_KEPT = 300;
 
 const initial = (): ListViews => ({
   sessionFilter: emptyFilter,
   sessionNodes: null,
   mailboxNodes: [],
   mailboxKinds: [],
+  openSessions: [],
 });
 
 export function restoreListViews(stored: unknown): ListViews {
@@ -35,6 +42,7 @@ export function restoreListViews(stored: unknown): ListViews {
       : null,
     mailboxNodes: storedStrings(saved.mailboxNodes),
     mailboxKinds: storedStrings(saved.mailboxKinds),
+    openSessions: storedStrings(saved.openSessions).slice(-OPEN_KEPT),
   };
 }
 
@@ -51,6 +59,7 @@ export const listViews = {
   setSessionFilter(sessionFilter: SessionFilter) {
     store.setState({ sessionFilter });
   },
+  
   setSessionNodes(sessionNodes: string[] | null) {
     store.setState({ sessionNodes });
   },
@@ -59,6 +68,14 @@ export const listViews = {
   },
   setMailboxKinds(mailboxKinds: string[]) {
     store.setState({ mailboxKinds });
+  },
+  toggleOpenSession(key: string) {
+    const was = store.getState().openSessions;
+    store.setState({
+      openSessions: was.includes(key)
+        ? was.filter((k) => k !== key)
+        : [...was, key].slice(-OPEN_KEPT),
+    });
   },
 };
 

@@ -85,7 +85,7 @@ export function NavPanel({
           aria-current={workingCurrent ? "page" : undefined}
           data-testid="working-node"
           className={cn(
-            "group mr-3 mb-2 ml-[14px] flex h-7 items-center gap-3 rounded-lg text-sm transition-colors",
+            "group mr-3 mb-2 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm transition-colors",
             workingCurrent && "text-ink",
           )}
         >
@@ -120,7 +120,7 @@ export function NavPanel({
         <a
           href={href({ name: "nodes" })}
           data-testid="no-working-node"
-          className="group mr-3 mb-2 ml-[14px] flex h-7 items-center gap-3 rounded-lg text-sm text-muted-foreground transition-colors hover:text-foreground"
+          className="group mr-3 mb-2 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
           <span className="grid size-7 shrink-0 place-items-center rounded-full ring-1 ring-dashed ring-border">
             <Waypoints className="size-3.5" />
@@ -272,6 +272,7 @@ export function RailFlyout({
         <FlyoutOpenContext.Provider value={hover && open}>
           {hover && children}
         </FlyoutOpenContext.Provider>
+        
         <div
           aria-hidden={!shown}
           className={cn(
