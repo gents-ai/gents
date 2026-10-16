@@ -1,11 +1,6 @@
-//! `show`: a job as its journal states it, with every decision recomputed
-//! from the `EvalVerdict` rows of the runs it names. The journal's summary is
-//! a convenience; these rows are the authority (spec section 5, ruling R1).
-//!
-//! A decision is recomputed through the driver's own decision path, so an
-//! invalidated run is left out exactly as the driver leaves it out, and the
-//! seed still follows every run the decision names. The view renders through
-//! serde: a decision's reason is its snake_case name (ruling C2).
+//! Historical decisions are comparable only under the frozen evaluation
+//! instrument. Missing or changed definitions leave the journal visible but
+//! unchecked; run invalidation remains a separate observation.
 
 use anyhow::Result;
 use serde::Serialize;
@@ -25,9 +20,8 @@ pub struct DecisionView {
     pub mode: Mode,
     pub run_ids: Vec<String>,
     pub journaled: Decision,
-    /// `None` when the job's definition was deleted or no longer validates
-    /// (`JobView::definition_changed`): with no instrument there is nothing
-    /// to recompute from, and the journaled decision stands unchecked.
+    /// `None` when the installed definition differs from the frozen instrument.
+    /// The journaled decision remains visible without recomputation.
     pub recomputed: Option<Decision>,
     /// The rows no longer support what the journal says. False when nothing
     /// was recomputed.
@@ -43,10 +37,8 @@ pub struct JobView {
     pub state: JobState,
     pub checkpoint: Option<Checkpoint>,
     pub rounds_used: u32,
-    /// The installed definition no longer matches the one the job froze, so
-    /// the recomputations below read a different instrument, or it was
-    /// deleted or no longer validates, so nothing is recomputed (ruling
-    /// T34-4 finalizes such a job as `Failed(definition_changed)`).
+    /// The installed definition was edited, deleted, or no longer validates.
+    /// Decisions cannot be compared across different instruments.
     pub definition_changed: bool,
     pub decisions: Vec<DecisionView>,
 }
@@ -76,6 +68,7 @@ pub async fn show(access: &ConfigAccess, owner: &str, job_id: &str) -> Result<Jo
         Some(definition) => definition_ref(definition)? != origin.definition,
         None => true,
     };
+    let definition = definition.filter(|_| !definition_changed);
 
     let mut decisions = Vec::new();
     for entry in &job.journal {
@@ -191,15 +184,13 @@ mod tests {
         );
     }
 
-    /// I1: a definition edited after the job froze is flagged, and every
-    /// decision is still recomputed against what is installed now.
     #[tokio::test]
-    async fn a_definition_edited_after_the_job_is_flagged_as_changed() {
+    async fn an_edited_definition_cannot_recompute_historical_decisions() {
         let (harness, request) = accepting_harness("show-edited").await;
         harness
             .install(vec![(
                 Collection::EvalDefinition,
-                definition(DEFINITION, "captured_rows_count", &VALIDATION_CASES, 2),
+                definition(DEFINITION, "captured_rows_count", &["replacement-case"], 2),
             )])
             .await;
         let view = show(harness.access(), OWNER, &request.job_id)
@@ -210,7 +201,9 @@ mod tests {
         assert!(
             view.decisions
                 .iter()
-                .all(|decision| decision.recomputed.is_some()),
+                .all(|decision| decision.recomputed.is_none()
+                    && !decision.mismatch
+                    && !decision.invalidated),
             "{:#?}",
             view.decisions
         );
