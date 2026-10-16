@@ -126,7 +126,7 @@ impl ClientCore {
 
             let observer_subscription = node.subscribe_document_changes();
 
-            let (selected_node_did, _) = watch::channel::<Option<String>>(None);
+            let observation_scope = super::observation_scope::ObservationScope::new();
 
             let initial_snapshot = {
                 load_full_snapshot_with_peer_records(node.as_ref(), &records, node_identity.did())
@@ -182,7 +182,7 @@ impl ClientCore {
                 sync_state.clone(),
                 node_identity.did().to_string(),
                 observer_subscription,
-                selected_node_did.subscribe(),
+                observation_scope.subscribe(),
             );
             let (p2p_control, p2p_control_rx) = mpsc::channel(8);
             let p2p_supervisor = spawn_p2p_supervisor_task(
@@ -207,7 +207,7 @@ impl ClientCore {
                 observer: tokio::sync::Mutex::new(Some(observer)),
                 sync_state,
                 p2p_supervisor: tokio::sync::Mutex::new(Some(p2p_supervisor)),
-                selected_node_did,
+                observation_scope,
                 request_patch_signatures: tokio::sync::Mutex::new(std::collections::HashMap::new()),
                 p2p_control: tokio::sync::Mutex::new(Some(p2p_control)),
                 shutdown_completion: tokio::sync::Mutex::new(None),

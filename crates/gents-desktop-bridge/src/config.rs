@@ -11,6 +11,9 @@ pub struct BridgeConfig {
     pub app_meta: AppMeta,
     pub snapshot_grants: SnapshotGrants,
     pub managed_server: ManagedServerPolicy,
+    /// Allows local frontends to use the chat client through private IPC.
+    /// This is independent of the embedding webview's projection grants.
+    pub client_host: bool,
     pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
 }
 
@@ -27,6 +30,7 @@ impl Default for BridgeConfig {
             },
             snapshot_grants: SnapshotGrants::core_only(),
             managed_server: ManagedServerPolicy::Disabled,
+            client_host: false,
             store_key_custody: gents::store_key::StoreKeyCustodyChoice::default(),
         }
     }
@@ -77,5 +81,6 @@ pub struct ResolvedBridgePolicy {
     pub app_meta: AppMeta,
     pub snapshot_grants: SnapshotGrants,
     pub managed_server: ManagedServerPolicy,
+    pub client_host: bool,
     pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
 }

@@ -2,6 +2,11 @@ mod connection;
 #[cfg(unix)]
 pub mod local;
 pub mod protocol;
+#[cfg(unix)]
+mod service;
+
+#[cfg(unix)]
+pub use service::ClientHostService;
 
 use std::sync::Arc;
 
@@ -40,6 +45,7 @@ impl ClientHost {
                     ..SnapshotGrants::default()
                 },
                 managed_server: ManagedServerPolicy::Disabled,
+                client_host: false,
                 store_key_custody: core.options().store_key_custody,
             },
             core,

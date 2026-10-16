@@ -21,7 +21,7 @@ pub async fn serve(paths: DesktopPaths) -> Result<()> {
         }
     });
     let result = listener
-        .serve(Arc::new(ClientHost::new(core.clone())), stop)
+        .serve_until_idle(Arc::new(ClientHost::new(core.clone())), stop)
         .await;
     signal.abort();
     let _ = signal.await;

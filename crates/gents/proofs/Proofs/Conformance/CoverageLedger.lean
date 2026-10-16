@@ -1088,6 +1088,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "client_observation_scope_cases"
+      "ClientObservationScopeCases"
+      "client::core::observation_scope::tests::generated_attachment_traces_keep_every_frontend_observable")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "client_data_publication_cases"
       "ClientDataNoticeDeliveryCases"
       "client::observe::projection_store::reload_tests::generated_notice_delivery_never_regresses_watchers")

@@ -252,12 +252,28 @@ async fn run_detached_client_start<R: Runtime>(
     match start_result {
         Ok((core, _lifecycle_guard)) => {
             let core = Arc::new(core);
+            #[cfg(unix)]
+            let mut client_host = if state.policy.client_host {
+                match crate::host::ClientHostService::start(core.clone()).await {
+                    Ok(host) => Some(host),
+                    Err(error) => {
+                        tracing::warn!(%error, "local client attachments are unavailable");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             let orphan = {
                 let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
                 let orphan = if bridge.core.is_none() {
                     let updates_task = spawn_client_update_task(app.clone(), Arc::clone(&core));
                     bridge.install_core(Arc::clone(&core));
                     bridge.updates_task = Some(updates_task);
+                    #[cfg(unix)]
+                    {
+                        bridge.client_host = client_host.take();
+                    }
                     None
                 } else {
                     // Shutdown or another install won the slot. Drop our open
@@ -269,6 +285,12 @@ async fn run_detached_client_start<R: Runtime>(
             };
 
             if let Some(orphan_core) = orphan {
+                #[cfg(unix)]
+                if let Some(host) = client_host {
+                    if let Err(error) = host.shutdown().await {
+                        tracing::warn!(%error, "closing orphan client attachments failed");
+                    }
+                }
                 tracing::warn!(
                     "desktop client start: core already installed after open; shutting down orphan"
                 );
@@ -401,37 +423,53 @@ pub(super) async fn exclude_client(
             drop(lifecycle_guard);
             continue;
         }
+        #[cfg(unix)]
+        let client_host;
         let (core, updates_task) = {
             let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+            #[cfg(unix)]
+            {
+                client_host = bridge.client_host.take();
+            }
             (bridge.core.take(), bridge.updates_task.take())
         };
         if let Some(task) = updates_task {
             task.abort();
         }
-        if let Some(core) = core {
-            return shutdown_excluded_core(core, lifecycle_guard, |core| async move {
-                core.shutdown()
+        return shutdown_excluded_client(lifecycle_guard, async move {
+            #[cfg(unix)]
+            let attachments_result = match client_host {
+                Some(host) => host
+                    .shutdown()
                     .await
-                    .map_err(|error| BridgeError::untyped(error.to_string()))
-            })
-            .await;
-        }
-        return Ok(lifecycle_guard);
+                    .map_err(|error| BridgeError::untyped(error.to_string())),
+                None => Ok(()),
+            };
+            let core_result = match core {
+                Some(core) => core
+                    .shutdown()
+                    .await
+                    .map_err(|error| BridgeError::untyped(error.to_string())),
+                None => Ok(()),
+            };
+            #[cfg(unix)]
+            attachments_result?;
+            core_result
+        })
+        .await;
     }
 }
 
-async fn shutdown_excluded_core<F, Fut>(
-    core: Arc<ClientCore>,
+async fn shutdown_excluded_client<Fut>(
     lifecycle_guard: ClientLifecycleGuard,
-    shutdown: F,
+    shutdown: Fut,
 ) -> Result<ClientLifecycleGuard, BridgeError>
 where
-    F: FnOnce(Arc<ClientCore>) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<(), BridgeError>> + Send + 'static,
 {
     let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-        let result = shutdown(core).await;
+        let result = shutdown.await;
         let _ = finished_tx.send((lifecycle_guard, result));
     });
     let (lifecycle_guard, result) = finished_rx
@@ -676,6 +714,10 @@ pub async fn desktop_observer_metrics(
     }))
 }
 
+#[cfg(all(test, unix))]
+#[path = "lifecycle/host_tests.rs"]
+mod host_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -854,7 +896,7 @@ mod tests {
         let access_released_signal = Arc::clone(&access_released);
         let owner_return_allowed = Arc::clone(&allow_owner_return);
         let waiter = tokio::spawn(async move {
-            shutdown_excluded_core(core, lifecycle_guard, move |core| async move {
+            shutdown_excluded_client(lifecycle_guard, async move {
                 shutdown_started.notify_one();
                 shutdown_allowed.notified().await;
                 core.shutdown()

@@ -1,5 +1,6 @@
 mod bootstrap;
 mod enrollment;
+mod observation_scope;
 mod p2p_ops;
 mod route_manager;
 mod supervisor;
@@ -35,6 +36,7 @@ use super::query::{
 use crate::remote_admin::PairingErrorClass;
 
 pub use enrollment::EnrollmentRequestResult;
+pub use observation_scope::ClientObservationAttachment;
 pub use sync_state::RuntimeSchemaObservation;
 pub use writes::RefreshedRequestProjection;
 
@@ -286,7 +288,7 @@ pub struct ClientCore {
     observer: Mutex<Option<ObserverHandle>>,
     sync_state: sync_state::ClientSyncStateOwner,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
-    selected_node_did: watch::Sender<Option<String>>,
+    observation_scope: observation_scope::ObservationScope,
     request_patch_signatures: tokio::sync::Mutex<HashMap<String, (usize, usize, u64)>>,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
     shutdown_completion: Mutex<Option<watch::Receiver<Option<std::result::Result<(), String>>>>>,
@@ -443,15 +445,19 @@ impl ClientCore {
     }
 
     pub fn set_selected_node_did(&self, node_did: Option<String>) {
-        self.selected_node_did.send_replace(node_did);
+        self.observation_scope.select(node_did);
     }
 
     pub fn selected_node_did(&self) -> Option<String> {
-        self.selected_node_did.borrow().clone()
+        self.observation_scope.current()
     }
 
     pub fn selected_node_did_rx(&self) -> watch::Receiver<Option<String>> {
-        self.selected_node_did.subscribe()
+        self.observation_scope.subscribe()
+    }
+
+    pub fn observe_all_nodes(&self) -> Result<ClientObservationAttachment> {
+        self.observation_scope.attach()
     }
 
     pub async fn peer_records(&self) -> Vec<PeerRecord> {

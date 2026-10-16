@@ -48,6 +48,8 @@ where
         bail!("unsupported client protocol; expected version {PROTOCOL_VERSION}");
     }
 
+    let _observation = host.core.observe_all_nodes()?;
+
     // Subscribe before acknowledging initialization: a first snapshot can then
     // overlap updates without leaving a snapshot-to-live observation gap.
     let mut store = host.core.store_change_updates();

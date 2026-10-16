@@ -64,14 +64,32 @@ impl LocalListener {
     }
 
     pub async fn serve(self, host: Arc<ClientHost>, stop: CancellationToken) -> Result<()> {
+        self.serve_with_idle_timeout(host, stop, None).await
+    }
+
+    pub async fn serve_until_idle(
+        self,
+        host: Arc<ClientHost>,
+        stop: CancellationToken,
+    ) -> Result<()> {
+        self.serve_with_idle_timeout(host, stop, Some(Duration::from_secs(180)))
+            .await
+    }
+
+    async fn serve_with_idle_timeout(
+        self,
+        host: Arc<ClientHost>,
+        stop: CancellationToken,
+        idle_timeout: Option<Duration>,
+    ) -> Result<()> {
         let mut attachments = JoinSet::new();
-        let idle = tokio::time::sleep(Duration::from_secs(180));
+        let idle = tokio::time::sleep(idle_timeout.unwrap_or(Duration::from_secs(180)));
         tokio::pin!(idle);
         let result: Result<()> = async {
             loop {
                 tokio::select! {
                     _ = stop.cancelled() => break,
-                    _ = &mut idle, if attachments.is_empty() => break,
+                    _ = &mut idle, if idle_timeout.is_some() && attachments.is_empty() => break,
                     accepted = self.listener.accept() => {
                         let (stream, _) = accepted?;
                         if attachments.len() >= 64 { continue; }
@@ -79,14 +97,15 @@ impl LocalListener {
                     }
                     done = attachments.join_next(), if !attachments.is_empty() => {
                         report_attachment(done);
-                        if attachments.is_empty() {
-                            idle.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(180));
+                        if let Some(timeout) = idle_timeout.filter(|_| attachments.is_empty()) {
+                            idle.as_mut().reset(tokio::time::Instant::now() + timeout);
                         }
                     }
                 }
             }
             Ok(())
-        }.await;
+        }
+        .await;
         stop.cancel();
         while let Some(done) = attachments.join_next().await {
             report_attachment(Some(done));
