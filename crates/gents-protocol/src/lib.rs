@@ -3,6 +3,8 @@ pub mod chatgpt_oauth;
 pub mod client_protocol;
 pub mod enrollment;
 pub mod event_delivery;
+pub mod goal;
+pub mod goal_control;
 pub mod graphql;
 pub mod mailbox_question;
 pub mod message;

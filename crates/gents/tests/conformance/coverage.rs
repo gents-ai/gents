@@ -1629,6 +1629,34 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalTransitionCases".to_string(),
         ));
     }
+    for (cases, category, domain) in [
+        (
+            &snapshot.goal_client_control_cases,
+            "goal_client_control_cases",
+            "GoalClientControlCases",
+        ),
+        (
+            &snapshot.goal_client_start_cases,
+            "goal_client_start_cases",
+            "GoalClientStartCases",
+        ),
+        (
+            &snapshot.goal_client_receipt_cases,
+            "goal_client_receipt_cases",
+            "GoalClientReceiptCases",
+        ),
+        (
+            &snapshot.goal_observation_cases,
+            "goal_observation_cases",
+            "GoalObservationCases",
+        ),
+    ] {
+        assert!(
+            !cases.is_empty(),
+            "{domain} must export its executable cases"
+        );
+        emitted.insert((category.to_owned(), domain.to_owned()));
+    }
     if !lean_goal_create_cases().is_empty() {
         emitted.insert((
             "goal_create_cases".to_string(),

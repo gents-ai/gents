@@ -306,7 +306,7 @@ fn agent_id_for_write(requested_agent_id: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn ensure_peer_chat_ready_at(
+pub(super) fn ensure_peer_chat_ready_at(
     node_did: &str,
     peer_record: Option<&PeerRecord>,
     now: DateTime<Utc>,
@@ -447,7 +447,7 @@ impl ClientCore {
         }
     }
 
-    fn session_queue_access(&self, node_did: &str) -> ConfigAccess {
+    pub(super) fn session_queue_access(&self, node_did: &str) -> ConfigAccess {
         self.operator_graphql(node_did)
             .map(ConfigAccess::Graphql)
             .unwrap_or_else(|| ConfigAccess::local(self.node_arc()))
@@ -609,7 +609,7 @@ impl ClientCore {
         }
     }
 
-    async fn peer_record_for_chat_write(
+    pub(super) async fn peer_record_for_chat_write(
         &self,
         node_did: &str,
         now: DateTime<Utc>,
@@ -636,7 +636,7 @@ impl ClientCore {
         Ok(None)
     }
 
-    async fn request_authority(
+    pub(super) async fn request_authority(
         &self,
         node_did: &str,
         record: Option<&PeerRecord>,
@@ -705,7 +705,7 @@ impl ClientCore {
         ))
     }
 
-    fn requester_did(&self, record: &PeerRecord) -> String {
+    pub(super) fn requester_did(&self, record: &PeerRecord) -> String {
         if record.is_enrollment() {
             self.node_identity.did().to_string()
         } else {

@@ -15,6 +15,7 @@ export type ChatTranscriptPanelProps = {
   onRetryMessage?: (requestId: string) => void | Promise<void>;
   retryUnavailableHint?: string | null;
   onLoadOlder?: () => Promise<boolean>;
+  showGoal?: boolean;
 };
 
 export const TRANSCRIPT_PAGE_SIZE = 40;
@@ -71,6 +72,7 @@ export function ChatTranscriptPanel({
   onRetryMessage,
   retryUnavailableHint,
   onLoadOlder,
+  showGoal = true,
 }: ChatTranscriptPanelProps) {
   const transcriptPanelRef = useRef<HTMLElement | null>(null);
   const [autoFollowTranscript, setAutoFollowTranscript] = useState(true);
@@ -377,7 +379,7 @@ export function ChatTranscriptPanel({
     >
       {selectedSessionId && (session || timelineItems.length > 0) ? (
         <div className="message-list">
-          {session?.goal ? (
+          {showGoal && session?.goal ? (
             <article className="message-card" data-testid="durable-goal-card">
               <div className="message-role">
                 durable goal · {session.goal.status ?? "unknown"}

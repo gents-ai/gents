@@ -192,6 +192,11 @@ fn export_all(dir: &Path) -> Result<(), String> {
         PendingMessageEditRequest,
         PendingQueueEditRequest,
         PendingQueueEditResult,
+        SessionGoalView,
+        GoalControlView,
+        GoalControlAction,
+        GoalControlRequest,
+        GoalControlResult,
         PendingQueueEntryView,
         MailboxItemRequest,
         gents_protocol::mailbox_question::MailboxQuestion,
@@ -363,6 +368,12 @@ fn list_ts_files(dir: &Path) -> Result<Vec<String>, String> {
 fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
     let tmp = tempfile::tempdir().expect("tempdir");
     export_all(tmp.path()).expect("export");
+    let goal = std::fs::read_to_string(tmp.path().join("GoalControlAction.ts"))
+        .expect("GoalControlAction.ts");
+    assert!(
+        goal.contains("\"kind\": \"pause\"") && goal.contains("tokenBudget: string"),
+        "goal controls must retain their tagged request shape and exact budget strings: {goal}"
+    );
 
     let timeline = std::fs::read_to_string(tmp.path().join("RenderedTimelineItem.ts"))
         .expect("RenderedTimelineItem.ts");

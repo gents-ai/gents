@@ -101,6 +101,8 @@ const RUNTIME_COLLECTIONS: &[&str] = &[
     "NodeReadiness",
     "AgentRequest",
     "AgentSessionInputEdit",
+    "AgentSessionGoalControl",
+    "GoalObservation",
     "AgentOutputSegment",
     "AgentSession",
     "AgentMessage",
@@ -159,6 +161,8 @@ const DESKTOP_CONFIG_COLLECTIONS: &[&str] = &[
 const CHAT_REQUEST_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentSessionInputEdit",
+    "AgentSessionGoalControl",
+    "GoalObservation",
     "AgentOutputSegment",
     "AgentSession",
     "AgentMessage",

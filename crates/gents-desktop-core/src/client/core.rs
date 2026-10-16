@@ -1,5 +1,6 @@
 mod bootstrap;
 mod enrollment;
+mod goal;
 mod observation_scope;
 mod p2p_ops;
 mod route_manager;

@@ -1,3 +1,4 @@
+use super::super::session_commands::{unanswered_commands, CommandKind, Sweep};
 use super::*;
 use crate::identity::KeyIdentity;
 use crate::lean_vocab_test::{
@@ -448,10 +449,14 @@ async fn unanswered_sweep_discovers_malformed_command_for_transactional_validati
         .unwrap();
     let doc_id = crate::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap();
 
-    let unanswered =
-        unanswered_commands(&fixture.node, fixture.identity.as_ref(), Sweep::Unanswered)
-            .await
-            .unwrap();
+    let unanswered = unanswered_commands(
+        CommandKind::InputEdit,
+        &fixture.node,
+        fixture.identity.as_ref(),
+        Sweep::Unanswered,
+    )
+    .await
+    .unwrap();
     assert_eq!(unanswered, vec![doc_id.clone()]);
     assert!(process_command(&fixture.node, &fixture.identity, &doc_id)
         .await

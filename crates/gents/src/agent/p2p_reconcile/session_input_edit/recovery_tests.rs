@@ -5,6 +5,7 @@ use gents_protocol::request_admission::{
 };
 use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::session_input_edit::{PendingMessageEdit, PendingQueueEdit};
+use tokio_util::sync::CancellationToken;
 
 async fn temp_home(p2p: bool) -> EmbeddedHome {
     let tempdir = tempfile::tempdir().unwrap();
@@ -142,7 +143,7 @@ async fn future_issued_command_defers_without_receipt_then_applies() {
     assert_eq!(requests(&home.node).await, before);
 
     let cancel = CancellationToken::new();
-    let worker = tokio::spawn(run_session_input_edit_reconciler(
+    let worker = tokio::spawn(run_session_command_reconciler(
         home.node.clone(),
         home.identity.clone(),
         cancel.clone(),
@@ -277,7 +278,7 @@ async fn reconcile_until_verified(
     id: &str,
 ) -> SessionInputEditReceipt {
     let cancel = CancellationToken::new();
-    let worker = tokio::spawn(run_session_input_edit_reconciler(
+    let worker = tokio::spawn(run_session_command_reconciler(
         home.node.clone(),
         home.identity.clone(),
         cancel.clone(),

@@ -644,6 +644,11 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/Client.lean` | Barrel for client turn-state derivation and client theorems |
 | `Proofs/ClientShell.lean` | Barrel for multi-session shell workflow modules |
 | `Proofs/ClientShell/ObservationScope.lean` | Shared client observation focus while external frontend attachments are present; the last detachment restores current shell intent. |
+| `Proofs/GoalAutomation/ClientControl.lean` | Goal revision checks and client edit, pause, and resume through the existing Goal owners. |
+| `Proofs/GoalAutomation/ClientMutation.lean` | Atomic signed command receipts, replay, and stale session and Goal revision rejection. |
+| `Proofs/GoalAutomation/ClientStart.lean` | Atomic session reservation, Goal creation, and first request publication. |
+| `Proofs/GoalAutomation/Observation.lean` | Signed Goal projections bound to the canonical physical session and requester. |
+| `Proofs/Session/CommandAuthority.lean` | Shared session command signature, enrollment, route, and ownership requirements. |
 | `Proofs/CommandPolicy.lean` | Barrel for command/tool execution policy validation, sandbox, env, and safety proofs |
 | `Proofs/ToolExecution.lean` | MCP/tool preflight and retry eligibility boundary model |
 | `Proofs/ManagedExec.lean` | Barrel for managed native executor state, executable transitions, liveness properties, and tool composition |

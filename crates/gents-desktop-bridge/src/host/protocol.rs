@@ -35,6 +35,12 @@ pub enum ClientCommand {
     SessionSnapshot(SessionSnapshotArgs),
     #[serde(rename = "desktop_session_live_delta")]
     SessionLiveDelta(SessionLiveDeltaArgs),
+    #[serde(rename = "desktop_session_goal")]
+    SessionGoal(SessionGoalArgs),
+    #[serde(rename = "desktop_goal_control")]
+    GoalControl {
+        request: crate::types::GoalControlRequest,
+    },
     #[serde(rename = "desktop_chat_send")]
     Send { request: ChatSendRequest },
     #[serde(rename = "desktop_pending_queue_edit")]
@@ -51,6 +57,8 @@ impl ClientCommand {
         "desktop_peer_enroll_status",
         "desktop_session_snapshot",
         "desktop_session_live_delta",
+        "desktop_session_goal",
+        "desktop_goal_control",
         "desktop_chat_send",
         "desktop_pending_queue_edit",
         "desktop_session_rename",
@@ -60,7 +68,10 @@ impl ClientCommand {
     pub fn is_read(&self) -> bool {
         matches!(
             self,
-            Self::Snapshot {} | Self::SessionSnapshot(_) | Self::SessionLiveDelta(_)
+            Self::Snapshot {}
+                | Self::SessionSnapshot(_)
+                | Self::SessionLiveDelta(_)
+                | Self::SessionGoal(_)
         )
     }
 }
@@ -77,6 +88,13 @@ pub struct SessionSnapshotArgs {
     pub timeline_limit: Option<usize>,
     #[ts(optional = nullable)]
     pub timeline_before_item_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionGoalArgs {
+    pub node_did: String,
+    pub session_id: String,
 }
 
 #[derive(Debug, Deserialize, TS)]

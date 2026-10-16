@@ -1,5 +1,8 @@
 import type { PendingQueueEditRequest } from "../generated/PendingQueueEditRequest.js";
 import type { PendingQueueEditResult } from "../generated/PendingQueueEditResult.js";
+import type { GoalControlRequest } from "../generated/GoalControlRequest.js";
+import type { GoalControlResult } from "../generated/GoalControlResult.js";
+import type { SessionGoalView } from "../generated/SessionGoalView.js";
 import type { OauthProvider } from "../transport.js";
 import type { ConfigComponentsApplyRequest } from "../generated/ConfigComponentsApplyRequest.js";
 import type { ConfigComponentsPatchRequest } from "../generated/ConfigComponentsPatchRequest.js";
@@ -95,6 +98,11 @@ export type ManagedServerAuthorityInput = {
 };
 
 export type DesktopApiAdapter = {
+  fetchSessionGoal: (
+    nodeDid: string,
+    sessionId: string,
+  ) => Promise<SessionGoalView | null>;
+  controlGoal: (request: GoalControlRequest) => Promise<GoalControlResult>;
   fetchDesktopSnapshot: () => Promise<DesktopClientSnapshot>;
   initLocalStandardRuntime: (request: {
     label: string;

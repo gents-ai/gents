@@ -7,6 +7,7 @@ const BRIDGE_ERROR_CODES = new Set<BridgeErrorCode>([
   "clientNotRunning",
   "clientStartFailed",
   "notFound",
+  "projectionPending",
   "invalidArgument",
   "unsupported",
   "endpointUnreachable",

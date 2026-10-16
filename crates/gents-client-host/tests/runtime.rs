@@ -22,11 +22,34 @@ mod support;
 use fake_llm::{ChatAction, FakeLlm};
 use support::Attachment;
 
+#[derive(Clone, Copy)]
+enum Journey {
+    Conversation,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    Editor,
+    Goal,
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_client_submits_signed_input_and_observes_live_and_durable_output() -> Result<()> {
     let temp = tempfile::tempdir()?;
-    let result = exercise(temp.path(), false).await;
+    let result = exercise(temp.path(), Journey::Conversation).await;
     result.with_context(|| {
+        ["runtime.log", "runtime.err", "client-host.log"]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn enrolled_client_starts_pauses_and_resumes_the_current_goal_turn() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::Goal).await.with_context(|| {
         ["runtime.log", "runtime.err", "client-host.log"]
             .map(|name| {
                 format!(
@@ -42,12 +65,14 @@ async fn native_client_submits_signed_input_and_observes_live_and_durable_output
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_preserves_live_session_and_draft_across_window_reload() -> Result<()> {
     let temp = tempfile::tempdir()?;
-    exercise(temp.path(), true).await.with_context(|| {
-        std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default()
-    })
+    exercise(temp.path(), Journey::Editor)
+        .await
+        .with_context(|| {
+            std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default()
+        })
 }
 
-async fn exercise(root: &Path, editor: bool) -> Result<()> {
+async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let cli = Path::new(env!("CARGO_BIN_EXE_gents-client-host"))
         .parent()
         .context("native binary directory")?
@@ -226,9 +251,16 @@ async fn exercise(root: &Path, editor: bool) -> Result<()> {
         .and_then(|agents| agents.iter().find(|agent| agent["isDefault"] == true))
         .and_then(|agent| agent["agentId"].as_str())
         .context("runtime default agent")?;
-    let receipt = client.call(id, "desktop_chat_send", json!({"request":{
-        "nodeDid":node_did,"agentId":agent_id,"content":"Return the fixture response.","delivery":"queue"
-    }})).await;
+    let receipt = if matches!(journey, Journey::Goal) {
+        client.call(id, "desktop_goal_control", json!({"request": {
+            "nodeDid":node_did, "agentId":agent_id,
+            "action":{"kind":"create", "objective":"Return the fixture response.", "tokenBudget":"1000"}
+        }})).await
+    } else {
+        client.call(id, "desktop_chat_send", json!({"request":{
+            "nodeDid":node_did,"agentId":agent_id,"content":"Return the fixture response.","delivery":"queue"
+        }})).await
+    };
     id += 1;
     let session = receipt["sessionId"].as_str().context("submitted session")?;
     let request = receipt["requestId"].as_str().context("submitted request")?;
@@ -286,16 +318,7 @@ async fn exercise(root: &Path, editor: bool) -> Result<()> {
     .context("the canonical session header was not observed")?;
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            let projection = client
-                .call(
-                    id,
-                    "desktop_session_snapshot",
-                    json!({
-                        "nodeDid":node_did,"sessionId":session,"timelineLimit":40
-                    }),
-                )
-                .await;
-            id += 1;
+            let projection = read_session(&mut client, &mut id, node_did, session).await?;
             let live = projection["timelineItems"].as_array().is_some_and(|items| {
                 items.iter().any(|item| {
                     item["kind"] == "liveAssistant"
@@ -316,7 +339,49 @@ async fn exercise(root: &Path, editor: bool) -> Result<()> {
     })
     .await
     .context("live output was not observed before provider completion")??;
-    if editor {
+    if matches!(journey, Journey::Goal) {
+        let mut view = wait_goal(&mut client, &mut id, node_did, session, "active").await?;
+        ensure!(view["goal"]["goalId"] == receipt["goalId"]);
+        for status in ["paused", "active", "paused"] {
+            let result = client
+                .call(
+                    id,
+                    "desktop_goal_control",
+                    json!({"request": {
+                        "nodeDid":node_did, "sessionId":session,
+                        "sessionDocId":view["sessionDocId"], "expected":view["goal"]["revision"],
+                        "action":{"kind":if status == "paused" { "pause" } else { "resume" }}
+                    }}),
+                )
+                .await;
+            id += 1;
+            ensure!(
+                result["goalId"] == receipt["goalId"] && result["requestId"].is_null(),
+                "a goal control while the current turn is running must not publish another request"
+            );
+            view = wait_goal(&mut client, &mut id, node_did, session, status).await?;
+            let requests = access.execute(&format!(r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}},
+                session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ lifecycle_state interrupt_requested_at }} }}"#,
+                gents::graphql::escape_graphql_string(node_did), gents::graphql::escape_graphql_string(session))).await?;
+            let rows = requests["data"]["AgentRequest"]
+                .as_array()
+                .context("goal request rows")?;
+            ensure!(
+                rows.len() == 1
+                    && rows[0]["lifecycle_state"] == "processing"
+                    && rows[0]["interrupt_requested_at"].is_null(),
+                "goal controls must preserve the current owned turn"
+            );
+        }
+        let projection = read_session(&mut client, &mut id, node_did, session).await?;
+        ensure!(
+            projection["sessionId"] == session
+                && projection["nodeDid"] == node_did
+                && projection["goal"].is_null(),
+            "ordinary client routes must not replicate raw Goal documents"
+        );
+    }
+    if matches!(journey, Journey::Editor) {
         let extension_root = std::env::var_os("GENTS_VSCODE_ROOT")
             .context("Set GENTS_VSCODE_ROOT to the extension checkout before running editor-e2e")?;
         let extension_root = Path::new(&extension_root);
@@ -349,16 +414,7 @@ async fn exercise(root: &Path, editor: bool) -> Result<()> {
     let mut last_projection = Value::Null;
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            let projection = client
-                .call(
-                    id,
-                    "desktop_session_snapshot",
-                    json!({
-                        "nodeDid":node_did,"sessionId":session,"timelineLimit":40
-                    }),
-                )
-                .await;
-            id += 1;
+            let projection = read_session(&mut client, &mut id, node_did, session).await?;
             let durable = projection["timelineItems"].as_array().is_some_and(|items| {
                 items.iter().any(|item| {
                     item["kind"] == "assistantMessage"
@@ -374,6 +430,23 @@ async fn exercise(root: &Path, editor: bool) -> Result<()> {
     })
     .await
     .with_context(|| format!("canonical completed output was not observed: {last_projection}"))??;
+    if matches!(journey, Journey::Goal) {
+        wait_goal(&mut client, &mut id, node_did, session, "paused").await?;
+        let requests = access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}},
+            session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ request_id }} }}"#,
+                gents::graphql::escape_graphql_string(node_did),
+                gents::graphql::escape_graphql_string(session)
+            ))
+            .await?;
+        ensure!(
+            requests["data"]["AgentRequest"]
+                .as_array()
+                .is_some_and(|rows| rows.len() == 1),
+            "the paused goal must finish its current turn without a continuation"
+        );
+    }
     let requests = provider.captured_chat_requests();
     let user_rounds = requests
         .iter()
@@ -400,6 +473,69 @@ async fn exercise(root: &Path, editor: bool) -> Result<()> {
     stop(&mut host).await?;
     stop(&mut runtime).await?;
     Ok(())
+}
+
+async fn read_session(
+    client: &mut Attachment,
+    id: &mut u32,
+    node_did: &str,
+    session: &str,
+) -> Result<Value> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let result = client
+                .try_call(
+                    *id,
+                    "desktop_session_snapshot",
+                    json!({
+                        "nodeDid":node_did, "sessionId":session, "timelineLimit":40
+                    }),
+                )
+                .await;
+            *id += 1;
+            match result {
+                Ok(projection) => return Ok(projection),
+                Err(error)
+                    if error.code == gents_desktop_bridge::BridgeErrorCode::ProjectionPending =>
+                {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                Err(error) => return Err(anyhow::Error::from(error)),
+            }
+        }
+    })
+    .await
+    .context("session projection did not reach a current read fence")?
+}
+
+async fn wait_goal(
+    client: &mut Attachment,
+    id: &mut u32,
+    node_did: &str,
+    session: &str,
+    status: &str,
+) -> Result<Value> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let view = client
+                .call(
+                    *id,
+                    "desktop_session_goal",
+                    json!({"nodeDid":node_did,"sessionId":session}),
+                )
+                .await;
+            *id += 1;
+            if view["nodeDid"] == node_did
+                && view["sessionId"] == session
+                && view["goal"]["status"] == status
+            {
+                return view;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .context("the signed goal observation did not reach the client")
 }
 
 async fn wait_ready(child: &mut Child, path: &Path) -> Result<Value> {

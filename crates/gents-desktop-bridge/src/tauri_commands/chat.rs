@@ -2,6 +2,32 @@ use crate::error::BridgeError;
 use tauri::State;
 
 use crate::commands::{rename_session, send_chat_message};
+
+#[tauri::command]
+pub async fn desktop_session_goal(
+    node_did: String,
+    session_id: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<Option<crate::types::SessionGoalView>, BridgeError> {
+    let Some(core) = current_core(&state) else {
+        return Ok(None);
+    };
+    crate::commands::session_goal(&core, &node_did, &session_id)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
+}
+
+#[tauri::command]
+pub async fn desktop_goal_control(
+    request: crate::types::GoalControlRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<crate::types::GoalControlResult, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    crate::commands::control_goal(&core, request)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
+}
 use crate::snapshot::build_session_live_delta;
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{

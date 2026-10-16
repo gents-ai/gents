@@ -18,3 +18,5 @@ pub use manage::{
     upsert_trigger_on, ManualTaskInvocation,
 };
 pub use setup::PeerMutationResult;
+
+pub(crate) use chat::prepare_request_submission;

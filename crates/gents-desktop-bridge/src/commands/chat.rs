@@ -84,7 +84,7 @@ pub async fn send_chat_message(
     })
 }
 
-fn chat_folder(raw: Option<&str>) -> Result<Option<String>> {
+pub(super) fn chat_folder(raw: Option<&str>) -> Result<Option<String>> {
     let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };

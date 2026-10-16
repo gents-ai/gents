@@ -6,6 +6,8 @@ use ts_rs::TS;
 pub enum BridgeErrorCode {
     ClientNotRunning,
     ClientStartFailed,
+    /// The read could not publish against the current observation fence.
+    ProjectionPending,
     NotFound,
     InvalidArgument,
     Unsupported,
@@ -24,6 +26,7 @@ impl BridgeErrorCode {
         match self {
             Self::ClientNotRunning => "clientNotRunning",
             Self::ClientStartFailed => "clientStartFailed",
+            Self::ProjectionPending => "projectionPending",
             Self::NotFound => "notFound",
             Self::InvalidArgument => "invalidArgument",
             Self::Unsupported => "unsupported",
@@ -41,7 +44,8 @@ impl BridgeErrorCode {
     pub fn retryable(self) -> bool {
         matches!(
             self,
-            Self::ClientStartFailed
+            Self::ProjectionPending
+                | Self::ClientStartFailed
                 | Self::EndpointUnreachable
                 | Self::Backend
                 | Self::Pairing
@@ -125,6 +129,15 @@ impl From<&str> for BridgeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unpublished_read_fence_remains_a_retryable_observation() {
+        let error = BridgeError::new(BridgeErrorCode::ProjectionPending, "read fence changed");
+        let value = serde_json::to_value(error).unwrap();
+        assert_eq!(value["code"], "projectionPending");
+        assert_eq!(value["retryable"], true);
+        assert!(value["endpoint"].is_null());
+    }
 
     #[test]
     fn endpoint_unreachable_carries_the_endpoint_as_a_structured_field() {

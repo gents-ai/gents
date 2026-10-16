@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use gents_desktop_bridge::host::protocol;
+use gents_desktop_bridge::BridgeError;
 use gents_desktop_core::client::DesktopPaths;
 use serde_json::{json, Value};
 use std::process::Stdio;
@@ -59,14 +60,28 @@ impl Attachment {
     }
 
     pub async fn call(&mut self, id: u32, name: &str, args: Value) -> Value {
+        self.try_call(id, name, args)
+            .await
+            .unwrap_or_else(|error| panic!("{name}: {error}"))
+    }
+
+    pub async fn try_call(
+        &mut self,
+        id: u32,
+        name: &str,
+        args: Value,
+    ) -> Result<Value, BridgeError> {
         self.send(json!({"kind":"call", "id":id, "command":{"name":name, "args":args}}))
             .await;
         loop {
             let response = self.next().await;
             if response["kind"] == "response" {
                 assert_eq!(response["id"], id);
-                assert!(response["error"].is_null(), "{response}");
-                return response["result"].clone();
+                if !response["error"].is_null() {
+                    return Err(serde_json::from_value(response["error"].clone())
+                        .expect("typed bridge error"));
+                }
+                return Ok(response["result"].clone());
             }
         }
     }

@@ -52,6 +52,8 @@ const COMMANDS: &[&str] = &[
     "desktop_tool_surface_explain",
     "desktop_chat_send",
     "desktop_pending_queue_edit",
+    "desktop_session_goal",
+    "desktop_goal_control",
     "desktop_session_rename",
     "desktop_mailbox_list",
     "desktop_mailbox_start_request",

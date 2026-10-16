@@ -1,4 +1,4 @@
-use crate::error::BridgeError;
+use crate::error::{BridgeError, BridgeErrorCode};
 use crate::snapshot::{
     apply_session_timeline_page_with_query, build_session_snapshot_for_node_with_transcript,
 };
@@ -158,7 +158,8 @@ pub async fn session_snapshot(
         {
             Ok(Some(projection)) => Some(projection),
             Ok(None) => {
-                return Err(BridgeError::untyped(
+                return Err(BridgeError::new(
+                    BridgeErrorCode::ProjectionPending,
                     "selected request projection became stale; refresh is pending",
                 ));
             }

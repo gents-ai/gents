@@ -73,6 +73,10 @@ import Proofs.Conformance.GoalClaimedPublication
 import Proofs.Conformance.GoalResetResume
 import Proofs.Conformance.GoalRequestHead
 import Proofs.Conformance.GoalEdit
+import Proofs.Conformance.GoalClientControl
+import Proofs.Conformance.GoalClientMutation
+import Proofs.Conformance.GoalClientStart
+import Proofs.Conformance.GoalObservation
 import Proofs.Conformance.GraphFailureAttribution
 import Proofs.Conformance.GraphLogicalInvocation
 import Proofs.Conformance.RequestExecutionLease
@@ -115,6 +119,10 @@ def snapshotJson : String :=
     ++ "\"goal_request_head_cases\":"
       ++ Conformance.GoalRequestHeadContracts.casesJson ++ ","
     ++ "\"goal_edit_cases\":" ++ Conformance.GoalEditContracts.casesJson ++ ","
+    ++ "\"goal_client_control_cases\":" ++ Conformance.GoalClientControlContracts.casesJson ++ ","
+    ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
+    ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
+    ++ "\"goal_observation_cases\":" ++ Conformance.GoalObservationContracts.casesJson ++ ","
     ++ "\"goal_objective_whitespace_codepoints\":"
       ++ Conformance.GoalEditContracts.whitespaceCodepointsJson ++ ","
     ++ "\"graph_logical_invocation_cases\":"
