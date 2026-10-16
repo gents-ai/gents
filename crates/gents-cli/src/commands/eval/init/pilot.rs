@@ -442,7 +442,7 @@ mod tests {
     use super::super::tests::draft_block;
     use super::super::validate::tests::dossier;
     use super::super::validate::{assemble, validate, Floors};
-    use super::super::write::write_pack;
+    use super::super::write::{commit, stage};
     use super::*;
     use crate::commands::eval::testing::Fixture;
 
@@ -503,9 +503,11 @@ mod tests {
             .unwrap();
         let assembled = assemble(&draft, None, &init.owner, &init.dossier.slot).unwrap();
         validate(&assembled, init.registry, &init.dossier, &init.floors).unwrap();
-        let written = write_pack(&assembled, SUMMARY, &init.dossier, &init.out, false)
+        let staged = stage(&assembled, SUMMARY, &init.dossier, None)
             .await
             .unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let written = commit(staged, &init.out, false, home.path()).unwrap();
         InitOutcome {
             written: Some(written),
             assembled: Some(assembled),
