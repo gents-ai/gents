@@ -603,6 +603,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     }
     for (category, domain, cases) in [
         (
+            "goal_edit_cases",
+            "GoalEditCases",
+            &snapshot.goal_edit_cases,
+        ),
+        (
             "artifact_mode_meet_cases",
             "ArtifactModeMeetCases",
             &snapshot.artifact_mode_meet_cases,
@@ -692,6 +697,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "graph_invocation_publication_cases".to_string(),
             "GraphInvocationPublicationCases".to_string(),
+        ));
+    }
+    if !snapshot.goal_objective_whitespace_codepoints.is_empty() {
+        emitted.insert((
+            "goal_objective_whitespace_codepoints".to_string(),
+            "GoalObjectiveWhitespace".to_string(),
         ));
     }
     if !snapshot.goal_request_head_cases.is_empty() {
