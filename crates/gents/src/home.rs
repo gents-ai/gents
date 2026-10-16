@@ -45,6 +45,7 @@ pub const PACKS_DIR_NAME: &str = "packs";
 pub const ALLOWED_DIRS_FILE_NAME: &str = "allowed-dirs.json";
 pub const PLUGIN_APPROVALS_DIR_NAME: &str = "plugin-approvals";
 pub const PLUGINS_DIR_NAME: &str = "plugins";
+pub const PLUGIN_SERVICES_DIR_NAME: &str = "plugin-services";
 pub const REGISTRY_DIR_NAME: &str = "registry";
 pub const CODEX_UI_DIR_NAME: &str = "codex-ui";
 pub const EVAL_DIR_NAME: &str = "eval";
@@ -58,6 +59,7 @@ pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     P2P_SECRET_KEY_FILE_NAME,
     PACKS_DIR_NAME,
     PLUGINS_DIR_NAME,
+    PLUGIN_SERVICES_DIR_NAME,
     ALLOWED_DIRS_FILE_NAME,
     PLUGIN_APPROVALS_DIR_NAME,
     REGISTRY_DIR_NAME,

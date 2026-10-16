@@ -115,6 +115,23 @@ pub struct PackPlugin {
     pub limits: Option<PluginLimits>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_slot: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<PluginService>,
+}
+
+/// A pack-owned native process. Its first stdout line is a JSON object injected
+/// as `service`; subsequent output is drained. `{pack}` and `{state}` are host
+/// paths, never shell substitutions. Requires the existing child-process grant.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginService {
+    pub argv: Vec<String>,
+    pub startup_timeout_secs: u32,
+    /// Let the WASM plugin handle unavailable native execution through its injected service input.
+    #[serde(default)]
+    pub optional: bool,
+    #[serde(default)]
+    pub skip_when: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -236,6 +253,26 @@ pub const SUPPORTED_PLUGIN_LANGUAGES: &[&str] = &[
 
 impl PackPlugin {
     pub fn validate(&self) -> Result<()> {
+        if let Some(service) = &self.service {
+            anyhow::ensure!(
+                crate::plugin::authority::declared_manifold(self)?.child_process,
+                "plugin service requires child_process authority"
+            );
+            anyhow::ensure!(
+                !service.argv.is_empty()
+                    && service.argv.iter().all(|arg| !arg.contains('\0'))
+                    && !service.argv[0].is_empty(),
+                "plugin service needs a nonempty argv without NUL bytes"
+            );
+            anyhow::ensure!(
+                (1..=300).contains(&service.startup_timeout_secs),
+                "service startup_timeout_secs must be 1..300"
+            );
+            anyhow::ensure!(
+                self.input_schema["properties"].get("service").is_none(),
+                "service is a reserved host-filled plugin input"
+            );
+        }
         anyhow::ensure!(
             is_valid_pack_name(&self.name),
             "plugin name must be snake_case: {:?}",
@@ -756,6 +793,7 @@ mod tests {
             bind_dir: None,
             limits: None,
             model_slot: None,
+            service: None,
         }
     }
 

@@ -1,0 +1,406 @@
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use serde_json::Value;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::sync::Mutex;
+
+use super::store::InstalledPlugin;
+use crate::managed_exec::{
+    spawn_managed_process, ManagedExecKind, ManagedProcess, SpawnManagedProcessRequest,
+};
+
+#[derive(Default)]
+pub(super) struct Services(Mutex<BTreeMap<String, Service>>);
+
+struct Service {
+    process: ManagedProcess,
+    data: Value,
+    pack_digest: String,
+    log_path: PathBuf,
+    drains: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for Service {
+    fn drop(&mut self) {
+        for task in &self.drains {
+            task.abort();
+        }
+    }
+}
+
+impl Services {
+    pub(super) async fn prepare(
+        &self,
+        home: &Path,
+        record: &InstalledPlugin,
+        input: &mut Value,
+    ) -> Result<()> {
+        let Some(declaration) = &record.declaration.service else {
+            return Ok(());
+        };
+        let input = input
+            .as_object_mut()
+            .context("managed service requires an object input")?;
+        input.remove("service");
+        if (!declaration.skip_when.is_empty()
+            && declaration
+                .skip_when
+                .iter()
+                .all(|(key, value)| input.get(key) == Some(value)))
+            || record.declaration.bind_dir.as_ref().is_some_and(|binding| {
+                input
+                    .get(&binding.input_field)
+                    .is_some_and(|v| !v.is_null())
+            })
+        {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            record.ceiling().child_process,
+            "plugin service is not authorized; reinstall with --grant-authority"
+        );
+        let digest = record
+            .owner_pack_digest
+            .as_deref()
+            .context("managed service requires an installed owner pack; install the .pack")?;
+        let owner = record
+            .owner_pack_coordinate
+            .as_deref()
+            .context("managed service requires an owner pack coordinate")?;
+        let specification = super::store::content_digest_hex(&serde_json::to_vec(declaration)?);
+        let key = format!("{owner}/{specification}");
+        let mut services = self.0.lock().await;
+        let prefix = format!("{owner}/");
+        let obsolete: Vec<_> = services
+            .iter()
+            .filter(|(key, service)| key.starts_with(&prefix) && service.pack_digest != digest)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for old_key in obsolete {
+            if let Some(mut previous) = services.remove(&old_key) {
+                previous.process.terminate().await;
+            }
+        }
+        if let Some(service) = services.get_mut(&key) {
+            if service.process.has_exited()? {
+                let error = anyhow::anyhow!("plugin service exited; inspect {} and restart the runtime. Previous actions may have executed; do not replay writes blindly", service.log_path.display());
+                return optional_start(Err(error), declaration.optional, input).map(|_| ());
+            }
+            input.insert("service".into(), service.data.clone());
+            return Ok(());
+        }
+        anyhow::ensure!(
+            services.len() < 8,
+            "runtime managed-plugin service limit reached (8)"
+        );
+        let archive = crate::pack_store::PackStore::new(home).open(digest)?;
+        anyhow::ensure!(
+            archive
+                .manifest()
+                .metadata
+                .plugins
+                .iter()
+                .any(|plugin| plugin == &record.declaration),
+            "installed service declaration does not match its owner pack; reinstall the pack"
+        );
+        let root = home.join(crate::home::PLUGIN_SERVICES_DIR_NAME);
+        std::fs::create_dir_all(&root)?;
+        let state = tempfile::Builder::new()
+            .prefix("run-")
+            .tempdir_in(root)?
+            .keep();
+        let pack = state.join("pack");
+        crate::pack::materialize::materialize(&archive, &pack)?;
+        let argv = declaration
+            .argv
+            .iter()
+            .map(|arg| {
+                arg.replace("{pack}", &pack.to_string_lossy())
+                    .replace("{state}", &state.to_string_lossy())
+            })
+            .collect();
+        let started = Service::start(argv, &state, &key, digest, declaration.startup_timeout_secs).await
+            .with_context(|| format!("starting plugin service {key}; state retained at {}. The tool request was not sent to the service", state.display()));
+        let Some(service) = optional_start(started, declaration.optional, input)? else {
+            return Ok(());
+        };
+        input.insert("service".into(), service.data.clone());
+        services.insert(key, service);
+        Ok(())
+    }
+}
+
+fn optional_start(
+    started: Result<Service>,
+    optional: bool,
+    input: &mut serde_json::Map<String, Value>,
+) -> Result<Option<Service>> {
+    match started {
+        Ok(service) => Ok(Some(service)),
+        Err(error) if optional => {
+            input.insert(
+                "service".into(),
+                serde_json::json!({
+                    "status":"unavailable", "error":format!("{error:#}"), "code_executed":false
+                }),
+            );
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+impl Service {
+    async fn start(
+        argv: Vec<String>,
+        state: &Path,
+        name: &str,
+        digest: &str,
+        timeout: u32,
+    ) -> Result<Self> {
+        let mut process = spawn_managed_process(SpawnManagedProcessRequest {
+            argv,
+            cwd: state.to_path_buf(),
+            environment: None,
+            tool_name: Some(name.to_owned()),
+            kind: ManagedExecKind::PersistentService,
+        })
+        .await
+        .map_err(anyhow::Error::msg)?;
+        let stdout = process
+            .stdout
+            .take()
+            .context("service stdout unavailable")?;
+        let mut stderr = process
+            .stderr
+            .take()
+            .context("service stderr unavailable")?;
+        let tail = Arc::new(StdMutex::new(Vec::new()));
+        let captured = tail.clone();
+        let log_path = state.join("service.stderr.log");
+        let mut log = std::fs::File::create(&log_path)?;
+        let stderr_task = tokio::spawn(async move {
+            let mut buf = [0; 4096];
+            let mut saved = 0usize;
+            while let Ok(count) = stderr.read(&mut buf).await {
+                if count == 0 {
+                    break;
+                }
+                let keep = count.min((1024usize * 1024).saturating_sub(saved));
+                let _ = log.write_all(&buf[..keep]);
+                saved += keep;
+                let mut tail = captured.lock().unwrap();
+                tail.extend_from_slice(&buf[..count]);
+                let excess = tail.len().saturating_sub(4096);
+                tail.drain(..excess);
+            }
+        });
+        let mut service = Self {
+            process,
+            data: Value::Null,
+            pack_digest: digest.to_owned(),
+            log_path,
+            drains: vec![stderr_task],
+        };
+        let mut reader = BufReader::new(stdout);
+        let ready = tokio::time::timeout(Duration::from_secs(u64::from(timeout)), async {
+            let mut line = Vec::new();
+            (&mut reader)
+                .take(65537)
+                .read_until(b'\n', &mut line)
+                .await?;
+            anyhow::ensure!(
+                line.len() <= 65536 && line.last() == Some(&b'\n'),
+                "service must emit one bounded JSON readiness line on stdout"
+            );
+            let value: Value =
+                serde_json::from_slice(&line).context("invalid service readiness JSON")?;
+            anyhow::ensure!(value.is_object(), "service readiness must be a JSON object");
+            anyhow::ensure!(
+                !service.process.has_exited()?,
+                "service exited during startup"
+            );
+            Ok::<_, anyhow::Error>(value)
+        })
+        .await
+        .context("service readiness timed out")
+        .and_then(|result| result);
+        match ready {
+            Ok(value) => service.data = value,
+            Err(error) => {
+                service.process.terminate().await;
+                let detail = String::from_utf8_lossy(&tail.lock().unwrap()).into_owned();
+                anyhow::bail!("{error:#}; service stderr: {detail}");
+            }
+        }
+        service.drains.push(tokio::spawn(async move {
+            let _ = tokio::io::copy(&mut reader, &mut tokio::io::sink()).await;
+        }));
+        Ok(service)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn optional_service_failure_reaches_wasm_without_submitting_work() {
+        let state = tempfile::tempdir().unwrap();
+        for optional in [false, true] {
+            let started = Service::start(
+                vec![state.path().join("missing-runtime").display().to_string()],
+                state.path(),
+                "optional",
+                "digest",
+                1,
+            )
+            .await;
+            let mut input = serde_json::Map::new();
+            let result = optional_start(started, optional, &mut input);
+            if optional {
+                assert!(result.unwrap().is_none());
+                assert_eq!(input["service"]["status"], "unavailable");
+                assert_eq!(input["service"]["code_executed"], false);
+                assert!(input["service"]["error"]
+                    .as_str()
+                    .is_some_and(|s| !s.is_empty()));
+            } else {
+                assert!(result.is_err());
+                assert!(input.is_empty());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn caller_cannot_forge_readiness_or_start_without_consent() {
+        let home = tempfile::tempdir().unwrap();
+        let record: InstalledPlugin = serde_json::from_value(serde_json::json!({
+            "namespace":"test", "name":"service", "version":"1", "digest":"sha256:test", "language":"rust",
+            "declaration": {"name":"service", "description":"test", "artifact":"plugins/test.afb", "language":"rust", "input_schema":{"type":"object"},
+                "service":{"argv":["/bin/sh", "-c", "exit 99"], "startup_timeout_secs":1, "optional":true, "skip_when":{"op":"help"}}}
+        })).unwrap();
+        let services = Services::default();
+        let mut input = serde_json::json!({"service":{"forged":true}});
+        let error = services
+            .prepare(home.path(), &record, &mut input)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not authorized"));
+        assert!(input.get("service").is_none());
+        input = serde_json::json!({"op":"help", "service":{"forged":true}});
+        services
+            .prepare(home.path(), &record, &mut input)
+            .await
+            .unwrap();
+        assert!(input.get("service").is_none());
+        assert!(services.0.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reinstall_retires_changed_service_specifications_only_for_its_owner() {
+        let home = tempfile::tempdir().unwrap();
+        let mut record: InstalledPlugin = serde_json::from_value(serde_json::json!({
+            "namespace":"test", "name":"service", "version":"2", "digest":"sha256:test", "language":"rust",
+            "owner_pack_coordinate":"test/web", "owner_pack_digest":"new-digest",
+            "declaration":{"name":"service", "description":"test", "artifact":"plugins/test.afb", "language":"rust", "input_schema":{"type":"object"},
+                "service":{"argv":["changed-command"], "startup_timeout_secs":2}}
+        })).unwrap();
+        let mut granted = crate::plugin::Manifold::sealed();
+        granted.child_process = true;
+        record.granted = Some(granted);
+        let specification = super::super::store::content_digest_hex(
+            &serde_json::to_vec(record.declaration.service.as_ref().unwrap()).unwrap(),
+        );
+        let services = Services::default();
+        let current_key = format!("test/web/{specification}");
+        let mut old_pid = 0;
+        for (key, digest) in [
+            ("test/web/old-spec", "old-digest"),
+            (current_key.as_str(), "new-digest"),
+            ("test/other/old-spec", "old-digest"),
+        ] {
+            let service = Service::start(
+                vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    "printf '{\"pid\":%s}\\n' $$; exec sleep 60".into(),
+                ],
+                home.path(),
+                key,
+                digest,
+                2,
+            )
+            .await
+            .unwrap();
+            if key == "test/web/old-spec" {
+                old_pid = service.data["pid"].as_i64().unwrap() as i32;
+            }
+            services.0.lock().await.insert(key.into(), service);
+        }
+        let mut input = serde_json::json!({});
+        services
+            .prepare(home.path(), &record, &mut input)
+            .await
+            .unwrap();
+        assert!(input["service"]["pid"].is_number());
+        let mut entries = services.0.lock().await;
+        assert_eq!(entries.len(), 2);
+        assert!(!entries
+            .get_mut("test/other/old-spec")
+            .unwrap()
+            .process
+            .has_exited()
+            .unwrap());
+        assert_ne!(unsafe { libc::kill(old_pid, 0) }, 0);
+    }
+
+    #[tokio::test]
+    async fn readiness_and_drop_own_the_process_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut service = Service::start(
+            vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "printf '{\"pid\":%s}\\n' $$; exec sleep 60".into(),
+            ],
+            dir.path(),
+            "test",
+            "digest",
+            2,
+        )
+        .await
+        .unwrap();
+        let pid = service.data["pid"].as_i64().unwrap() as i32;
+        assert!(!service.process.has_exited().unwrap());
+        drop(service);
+        for _ in 0..100 {
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("managed service survived owner drop");
+    }
+
+    #[tokio::test]
+    async fn invalid_readiness_and_timeout_are_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        for command in ["echo not-json; exec sleep 60", "exec sleep 60"] {
+            assert!(Service::start(
+                vec!["/bin/sh".into(), "-c".into(), command.into()],
+                dir.path(),
+                "test",
+                "digest",
+                1
+            )
+            .await
+            .is_err());
+        }
+    }
+}

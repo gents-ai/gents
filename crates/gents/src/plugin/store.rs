@@ -440,6 +440,7 @@ mod tests {
                 bind_dir: None,
                 limits: None,
                 model_slot: None,
+                service: None,
             },
             granted: None,
             instructions: None,

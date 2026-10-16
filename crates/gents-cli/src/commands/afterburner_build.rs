@@ -401,6 +401,7 @@ mod tests {
             bind_dir: None,
             limits: None,
             model_slot: None,
+            service: None,
         };
         gents::plugin::PluginRunner::compile(&bytes, &plugin).unwrap_or_else(|error| {
             panic!("a compiled python bundle runs under every bound a call applies: {error:#}")

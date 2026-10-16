@@ -366,6 +366,10 @@ pub(crate) struct ManagedProcess {
 }
 
 impl ManagedProcess {
+    pub(crate) fn has_exited(&mut self) -> std::io::Result<bool> {
+        self.child.inner.try_wait().map(|status| status.is_some())
+    }
+
     pub(crate) async fn terminate(&mut self) {
         #[cfg(unix)]
         {

@@ -182,6 +182,7 @@ pub struct PluginExecutor {
     models: Option<Arc<dyn ModelResolver>>,
     admitted: kovan_map::HopscotchMap<String, Arc<Admitted>>,
     admitted_bytes: AtomicU64,
+    services: super::service::Services,
 }
 
 impl std::fmt::Debug for PluginExecutor {
@@ -233,6 +234,7 @@ impl PluginExecutor {
             models: None,
             admitted: kovan_map::HopscotchMap::new(),
             admitted_bytes: AtomicU64::new(0),
+            services: super::service::Services::default(),
         }
     }
 
@@ -450,6 +452,13 @@ impl PluginExecutor {
             );
             let record = &current;
             let admitted = self.admit(record)?;
+            let mut input = input.clone();
+            if record.declaration.service.is_some() {
+                if let Some(object) = input.as_object_mut() { object.remove("service"); }
+                if bound.is_none() {
+                    self.services.prepare(self.home.as_deref().context("service requires a runtime home")?, record, &mut input).await?;
+                }
+            }
             let (model, binding_note) = self.model_session(record).await?;
             let calls = HostCalls {
                 model,
