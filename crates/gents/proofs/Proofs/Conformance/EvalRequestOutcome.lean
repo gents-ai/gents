@@ -14,17 +14,20 @@ private def reasons : List (Option String) :=
     some "provider execution lease expired", some "execution lease expired unexpectedly",
     some "execution lease expired before renewal commit admission", some "503"]
 
-private def states : List RequestState :=
-  [.completed, .failed, .interrupted, .dead, .superseded, .processing]
+private def states : List (Option RequestState) :=
+  [none, some .workspaceBindingPending, some .pending, some .claimed, some .processing,
+    some .completed, some .failed, some .interrupted, some .dead, some .superseded]
 
-private def row (state : RequestState) (deadline budget inference tool : Bool)
+private def row (state : Option RequestState) (deadline budget inference tool : Bool)
     (requestReason inferenceReason : Option String) : String :=
   let requestReason := if budget then some "invalid_tool_call_budget_exhausted" else requestReason
   let evidence : RequestEvidence := ⟨state, deadline, budget,
     (requestReason.toList ++ inferenceReason.toList).any executionLeaseFailure,
     inference || inferenceReason.any (· != ""), tool⟩
   let outcome := classifyRequestOutcome evidence
-  "{\"state\":" ++ jsonString state.toDefraDB ++
+  "{\"state\":" ++ jsonOptionalString (state.map RequestState.toDefraDB) ++
+  ",\"observed_terminal_state\":" ++
+    jsonOptionalString ((observedTerminalState state).map RequestState.toDefraDB) ++
   ",\"deadline\":" ++ boolJson deadline ++
   ",\"inference_failed\":" ++ boolJson inference ++
   ",\"tool_failed\":" ++ boolJson tool ++
@@ -43,8 +46,8 @@ def casesJson : String := jsonArray <|
               (some "execution lease expired", some "503")].map fun (requestReason, inferenceReason) =>
                 row state deadline budget inference tool requestReason inferenceReason) ++
   (reasons.flatMap fun reason =>
-    [row .failed false false false false reason none,
-      row .failed false false false false none reason])
+    [row (some .failed) false false false false reason none,
+      row (some .failed) false false false false none reason])
 
 end Conformance.EvalRequestOutcome
 
