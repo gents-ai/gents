@@ -409,7 +409,7 @@ export function TaskEditor({
             value={args}
             onChange={(e) => setArgs(e.target.value)}
             rows={3}
-            className="w-96 max-md:w-full font-mono text-xs"
+            className="max-h-48 w-96 max-md:w-full font-mono text-xs"
           />
         </Row>
         {lastRun && (
