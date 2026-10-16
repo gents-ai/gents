@@ -1,7 +1,13 @@
 import type { Locator, Page } from "@playwright/test";
 import { expect, gotoHarness, test } from "./desktopTest";
 
-type Cost = { rects: number; writes: number; rows: number; grew: boolean };
+type Cost = {
+  rects: number;
+  writes: number;
+  rows: number;
+  grew: boolean;
+  scrolls: number;
+};
 
 function scroller(page: Page) {
   return page.locator('[data-slot="scroll-area-viewport"][data-following]');
@@ -10,9 +16,16 @@ function scroller(page: Page) {
 async function cost(viewport: Locator, act: "scroll" | "chunk"): Promise<Cost> {
   return viewport.evaluate(async (scroller, act) => {
     const rect = Element.prototype.getBoundingClientRect;
+    const point = document.elementFromPoint;
+    if (act === "scroll") document.elementFromPoint = () => null;
     const position = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
     let rects = 0;
     let writes = 0;
+    let scrolls = 0;
+    const onScroll = () => {
+      scrolls += 1;
+    };
+    scroller.addEventListener("scroll", onScroll);
     const height = scroller.scrollHeight;
     Element.prototype.getBoundingClientRect = function (this: Element) {
       rects += 1;
@@ -28,9 +41,13 @@ async function cost(viewport: Locator, act: "scroll" | "chunk"): Promise<Cost> {
     });
     try {
       if (act === "scroll") {
-        scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
-        position.set!.call(scroller, position.get!.call(scroller) - 20);
-        scroller.dispatchEvent(new Event("scroll"));
+        const before = position.get!.call(scroller) as number;
+        const delta = before >= 20 ? -20 : 20;
+        await new Promise<void>((resolve) => {
+          scroller.addEventListener("scroll", () => resolve(), { once: true });
+          scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: delta }));
+          position.set!.call(scroller, before + delta);
+        });
       } else {
         window.__GENTS_MOBILE_PERFORMANCE__!.streamText(
           "\n\nMore of the reply, long enough to wrap onto a second line in the column.",
@@ -45,10 +62,13 @@ async function cost(viewport: Locator, act: "scroll" | "chunk"): Promise<Cost> {
       return {
         rects,
         writes,
+        scrolls,
         rows: scroller.querySelectorAll("[data-timeline-key]").length,
         grew: scroller.scrollHeight > height,
       };
     } finally {
+      document.elementFromPoint = point;
+      scroller.removeEventListener("scroll", onScroll);
       Element.prototype.getBoundingClientRect = rect;
       delete (scroller as Partial<HTMLElement>).scrollTop;
     }
@@ -87,7 +107,7 @@ test.describe("what a transcript scroll costs", () => {
       .waitFor();
   });
 
-  test("measures a bounded number of boxes per event, however long the session", async ({
+  test("bounds fallback measurements per native scroll event as the session grows", async ({
     page,
   }, testInfo) => {
     const viewport = scroller(page);
@@ -114,6 +134,7 @@ test.describe("what a transcript scroll costs", () => {
 
     for (const at of [short, long]) {
       expect(at.chunk.grew).toBe(true);
+      expect(at.scroll.scrolls).toBe(1);
       expect(at.scroll.rects).toBeLessThanOrEqual(16);
       expect(at.chunk.rects).toBeLessThanOrEqual(16);
 
