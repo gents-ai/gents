@@ -2,7 +2,7 @@ import type {
   BackendUsageView,
   UsageWindowView,
 } from "@source-inc/gents-desktop-client";
-import { FactRow } from "./editors";
+import { FactRow, LongFactRow } from "./editors";
 
 function shortDuration(ms: number) {
   const total = Math.max(0, Math.floor(ms / 60_000));
@@ -73,7 +73,7 @@ export function UsageRows({ view }: { view?: BackendUsageView }) {
       ) : (
         <FactRow label="Reported">{view?.note ?? "unknown"}</FactRow>
       )}
-      {read && <FactRow label="Last read">{read}</FactRow>}
+      {read && <LongFactRow label="Last read">{read}</LongFactRow>}
     </>
   );
 }

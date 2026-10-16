@@ -1785,7 +1785,7 @@ pub(crate) fn refresh_packaged_install<R: Runtime>(
             tracing::info!(
                 target: "gents_desktop::managed_server",
                 runtime = %executable.service_path().display(),
-                "reinstalling the stopped agent service, whose definition names a runtime that moved"
+                "reinstalling the stopped node service, whose definition names a runtime that moved"
             );
             service.stop(false).map_err(native_error)?;
             return service.install().map_err(native_error);
@@ -1823,7 +1823,7 @@ pub(crate) async fn restart_outdated_managed_job<R: Runtime>(
     tracing::info!(
         target: "gents_desktop::managed_server",
         version = version.as_deref().unwrap_or("unknown"),
-        "restarting the agent service, whose runtime predates this app"
+        "restarting the node service, whose runtime predates this app"
     );
     state.managed_server.lock().await.starting = true;
     emit_status(app, state).await;
@@ -2762,7 +2762,7 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
     if let (Some(core), Some(node_did)) = (current_core(&state), previous_did.as_deref()) {
         if let Err(error) = core.mark_managed_runtime_restarting(node_did).await {
             let message = format!(
-                "The agent was stopped, but desktop restart bookkeeping failed: {error:#}. Retry Restart Agent."
+                "The node was stopped, but desktop restart bookkeeping failed: {error:#}. Retry Restart Node."
             );
             state.managed_server.lock().await.last_error = Some(message.clone());
             emit_status(&app, &state).await;
@@ -2781,7 +2781,7 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
         ensure_default_port_identity(&node_home)
             .await
             .map_err(|mut error| {
-                error.message = format!("Your agent was stopped; {}", error.message);
+                error.message = format!("Your node was stopped; {}", error.message);
                 error
             })?;
         run_native(launchable_native_service(&app, &state)?, |service| {

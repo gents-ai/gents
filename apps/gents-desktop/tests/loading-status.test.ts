@@ -218,7 +218,7 @@ describe("session loading projection", () => {
     ).toMatchObject({
       phase: "failed",
       detail:
-        "The agent refused the session history: peer pairing does not match requester and agent.",
+        "The node refused the session history: peer pairing does not match requester and agent.",
       action: "retryHydration",
     });
   });

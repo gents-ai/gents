@@ -14,6 +14,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
+import { Input } from "@gents/ui/components/input";
 import { setupErrorMessage } from "../../../lib/setupErrors";
 import { optionalInteger, requiredHttpUrl, str, useDraft, problemOf } from "./draft";
 import {
@@ -26,7 +27,7 @@ import {
   TagsRow,
 } from "./editors";
 import { DeleteButton } from "./ListDetail";
-import { Group, Row } from "./rows";
+import { Group, Row, StackedRow } from "./rows";
 import { ProviderLogo } from "../ProviderLogo";
 import { useApp } from "@/app/AppContext";
 import { toastFailure } from "@/lib/failure";
@@ -420,21 +421,7 @@ export function BackendEditor({
           wide
         />
         {probe && <FactRow label="Last probe">{probe}</FactRow>}
-        <FactRow
-          label="Advertised models"
-          description="Runtime discovery owns this catalog. Select a model on a profile."
-          mono
-        >
-          {(discoveredModels ?? backend.models).length ? (
-            <span className="flex flex-col gap-1 whitespace-normal">
-              {(discoveredModels ?? backend.models).map((model) => (
-                <span key={model}>{model}</span>
-              ))}
-            </span>
-          ) : (
-            "No catalog yet — refresh models"
-          )}
-        </FactRow>
+        <AdvertisedModels models={discoveredModels ?? backend.models} />
         <NumberRow
           id={id("connect-timeout")}
           label="Connect timeout seconds"
@@ -519,5 +506,54 @@ export function BackendEditor({
         />
       )}
     </>
+  );
+}
+
+const FILTER_FROM = 8;
+
+function AdvertisedModels({ models }: { models: readonly string[] }) {
+  const [filter, setFilter] = useState("");
+  /* a refresh can shorten the catalog below the filter's threshold, which
+     hides the input; a hidden filter must not keep narrowing */
+  const needle = models.length >= FILTER_FROM ? filter.trim().toLowerCase() : "";
+  const shown = needle
+    ? models.filter((model) => model.toLowerCase().includes(needle))
+    : models;
+  const count = `${models.length} model${models.length === 1 ? "" : "s"}`;
+  return (
+    <StackedRow
+      label="Advertised models"
+      description={
+        models.length
+          ? `${count}. Runtime discovery owns this catalog; choose a model on a profile.`
+          : "No catalog yet. Refresh models to read it."
+      }
+    >
+      {models.length ? (
+        <div className="grid gap-2">
+          {models.length >= FILTER_FROM ? (
+            <Input
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+              placeholder="Filter models"
+              aria-label="Filter models"
+            />
+          ) : null}
+          <ul
+            aria-label="Advertised models"
+            className="max-h-56 overflow-y-auto rounded-xl border border-border/60 p-1 font-mono text-xs text-muted-foreground"
+          >
+            {shown.map((model) => (
+              <li key={model} className="truncate rounded-md px-3 py-1.5" title={model}>
+                {model}
+              </li>
+            ))}
+            {shown.length === 0 ? (
+              <li className="px-3 py-1.5 font-sans">No model matches.</li>
+            ) : null}
+          </ul>
+        </div>
+      ) : null}
+    </StackedRow>
   );
 }

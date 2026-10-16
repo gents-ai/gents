@@ -217,7 +217,7 @@ test.describe("kit shell", () => {
     await expect(page.getByText("Network", { exact: true })).toHaveCount(0);
 
     await openConfig(page);
-    await expect(page.getByText("Agent details")).toBeVisible();
+    await expect(page.getByText("Node details")).toBeVisible();
   });
 
   test("closing sync diagnostics does not stack with the add agent dialog", async ({

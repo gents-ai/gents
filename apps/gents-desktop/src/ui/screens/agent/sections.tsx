@@ -1,7 +1,6 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import type { ComponentType } from "react";
 import {
-  Bot,
   FolderOpen,
   ListChecks,
   Package,
@@ -10,6 +9,7 @@ import {
   Radio,
   Sparkles,
   Timer,
+  Waypoints,
   Workflow,
   Wrench,
   Zap,
@@ -50,7 +50,13 @@ export const isListed = (section: AgentSection): section is AgentSection & Liste
   !("under" in section);
 
 export const SECTIONS: AgentSection[] = [
-  { group: "Configure", id: "agent", label: "Agent", icon: Bot, Panel: AgentPanel },
+  {
+    group: "Configure",
+    id: "agent",
+    label: "Node",
+    icon: Waypoints,
+    Panel: AgentPanel,
+  },
   {
     group: "Configure",
     id: "agents",

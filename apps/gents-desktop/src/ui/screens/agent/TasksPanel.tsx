@@ -10,6 +10,7 @@ import {
   AreaRow,
   DraftActions,
   FactRow,
+  LongFactRow,
   NumberRow,
   RefRow,
   SwitchRow,
@@ -373,7 +374,11 @@ export function TaskEditor({
         <FactRow label="Total fires">{task.recentRuns.totalFires}</FactRow>
         <FactRow label="Last attempt">{when(task.recentRuns.lastAttemptAt)}</FactRow>
         <FactRow label="Last status">{task.recentRuns.lastStatus ?? "—"}</FactRow>
-        <FactRow label="Last error">{task.recentRuns.lastError ?? "—"}</FactRow>
+        {task.recentRuns.lastError ? (
+          <LongFactRow label="Last error">{task.recentRuns.lastError}</LongFactRow>
+        ) : (
+          <FactRow label="Last error">—</FactRow>
+        )}
         <FactRow label="Wired to">
           {task.recentRuns.scheduleCount} schedules · {task.recentRuns.eventCount}{" "}
           events

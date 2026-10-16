@@ -95,8 +95,8 @@ export function Fact({
 }) {
   return (
     <span
-      title={title}
-      className={`max-w-[28rem] truncate text-sm text-muted-foreground max-md:max-w-full max-md:break-all max-md:whitespace-normal ${mono ? "font-mono text-xs" : ""}`}
+      title={title ?? (typeof children === "string" ? children : undefined)}
+      className={`max-w-[28rem] truncate text-sm text-muted-foreground max-md:max-w-full max-md:break-all max-md:whitespace-normal md:[[data-slot=field-row]>&]:max-w-[min(28rem,50%)] md:[[data-slot=field-row]>&]:shrink-0 ${mono ? "font-mono text-xs" : ""}`}
     >
       {children ?? "—"}
     </span>
