@@ -13,10 +13,6 @@ pub(crate) enum BackendResolutionMode {
     ConfigWrite,
 }
 
-pub(crate) fn default_backend_max_queue_depth() -> i64 {
-    100
-}
-
 pub(crate) fn resolve_backend_config_with_preset(
     preset: Option<BackendPresetArg>,
     explicit_endpoint: Option<&str>,
