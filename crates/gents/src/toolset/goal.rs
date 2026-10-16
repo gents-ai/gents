@@ -13,9 +13,14 @@ pub struct GetGoalArgs {}
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateGoalArgs {
-    pub status: String,
+    #[serde(default)]
+    pub status: Option<String>,
     #[serde(default)]
     pub reason: Option<String>,
+    #[serde(default)]
+    pub objective: Option<String>,
+    #[serde(default)]
+    pub token_budget: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -102,21 +107,31 @@ impl Tool for UpdateGoalTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Update the current durable goal only when it is genuinely complete or durably blocked. Blocked requires the same condition across at least three consecutive goal turns; the runtime enforces the threshold.".to_string(),
+            description: "Edit the active goal's objective or token budget, or mark it complete or blocked. Omit status when editing. Completion requires the objective to be achieved; blocked requires the same condition across at least three consecutive goal turns.".to_string(),
             parameters: json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                     "status": {
                         "type": "string",
-                        "enum": ["complete", "blocked"]
+                        "enum": ["active", "complete", "blocked"]
                     },
                     "reason": {
                         "type": "string",
                         "description": "Concise completion evidence or the repeated blocking condition."
+                    },
+                    "objective": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Revised objective for the active goal. Omit to keep it."
+                    },
+                    "token_budget": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": i64::MAX,
+                        "description": "Positive aggregate goal budget. Omit to keep it."
                     }
-                },
-                "required": ["status"]
+                }
             }),
         }
     }

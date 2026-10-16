@@ -38,6 +38,7 @@ import Proofs.ScopeTemplates
 import Proofs.Triggers
 import Proofs.Goals
 import Proofs.GoalAutomation
+import Proofs.GoalAutomation.Edit
 import Proofs.GoalAutomation.OperatorResume
 import Proofs.GoalAutomation.ClaimedPublication
 import Proofs.GoalAutomation.ResetResume

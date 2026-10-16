@@ -71,6 +71,7 @@ import Proofs.Conformance.GoalOperatorResume
 import Proofs.Conformance.GoalClaimedPublication
 import Proofs.Conformance.GoalResetResume
 import Proofs.Conformance.GoalRequestHead
+import Proofs.Conformance.GoalEdit
 import Proofs.Conformance.GraphFailureAttribution
 import Proofs.Conformance.GraphLogicalInvocation
 import Proofs.Conformance.RequestExecutionLease
@@ -113,6 +114,9 @@ def snapshotJson : String :=
       ++ Conformance.GraphFailureAttributionContracts.traceCasesJson ++ ","
     ++ "\"goal_request_head_cases\":"
       ++ Conformance.GoalRequestHeadContracts.casesJson ++ ","
+    ++ "\"goal_edit_cases\":" ++ Conformance.GoalEditContracts.casesJson ++ ","
+    ++ "\"goal_objective_whitespace_codepoints\":"
+      ++ Conformance.GoalEditContracts.whitespaceCodepointsJson ++ ","
     ++ "\"graph_logical_invocation_cases\":"
       ++ Conformance.GraphLogicalInvocationContracts.casesJson ++ ","
     ++ "\"graph_invocation_publication_cases\":"

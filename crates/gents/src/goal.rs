@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 
 mod claimed_publication;
+mod edit;
 mod operator_resume;
 mod readiness_gate;
 mod request_head;
@@ -16,6 +17,7 @@ mod reset_resume;
 pub(crate) use claimed_publication::{
     publish_claimed_continuation, stop_claimed_continuation_for_unavailable_agent,
 };
+pub(crate) use edit::{edit_active_goal, GoalEdit};
 pub use operator_resume::{
     resume_goal_on_account, resume_goal_request, GoalResumeOnReceipt, GoalResumeReceipt,
 };
@@ -2321,6 +2323,10 @@ async fn set_goal_in_txn(
     token_budget: Option<Option<i64>>,
     auto_resume: Option<bool>,
 ) -> Result<GoalDocument> {
+    anyhow::ensure!(
+        objective.is_none_or(|value| !value.trim().is_empty()),
+        "goal objective must be non-empty"
+    );
     let existing = load_canonical_goal_in_txn(txn, node_did, session_id).await?;
     let objective = objective
         .map(str::trim)

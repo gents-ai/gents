@@ -770,6 +770,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_claimed_publication_cases_drive_real_transactions",
         },
         ConformanceConsumer::RustTest {
+            id: "goal::edit::contract_tests::generated_goal_edit_cases_drive_real_transactions",
+            package: "gents",
+            source_path: "crates/gents/src/goal/edit/contract_tests.rs",
+            module_path: "goal::edit::contract_tests",
+            function: "generated_goal_edit_cases_drive_real_transactions",
+        },
+        ConformanceConsumer::RustTest {
+            id: "goal::edit::contract_tests::generated_goal_objective_whitespace_matches_native_character_classification",
+            package: "gents",
+            source_path: "crates/gents/src/goal/edit/contract_tests.rs",
+            module_path: "goal::edit::contract_tests",
+            function: "generated_goal_objective_whitespace_matches_native_character_classification",
+        },
+        ConformanceConsumer::RustTest {
             id: "goal::operator_resume::contract_tests::generated_goal_operator_resume_cases_drive_real_transactions",
             package: "gents",
             source_path: "crates/gents/src/goal/operator_resume/contract_tests.rs",
