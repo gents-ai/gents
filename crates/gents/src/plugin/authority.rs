@@ -49,6 +49,9 @@ pub fn describe_manifold(manifold: &Manifold) -> Option<String> {
 
 pub fn describe_plugin_authority(plugin: &PackPlugin, manifold: &Manifold) -> Option<String> {
     let mut parts: Vec<String> = describe_manifold(manifold).into_iter().collect();
+    if plugin.service.is_some() {
+        parts.push("runs a pack-owned native service with this OS user’s authority".to_owned());
+    }
     if let Some(binding) = &plugin.bind_dir {
         parts.push(
             match binding.access {

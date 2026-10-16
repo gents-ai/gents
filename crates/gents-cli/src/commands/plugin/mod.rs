@@ -140,6 +140,7 @@ pub(crate) fn declaration_from_artifact(
         bind_dir: None,
         limits: None,
         model_slot: None,
+        service: None,
     })
 }
 

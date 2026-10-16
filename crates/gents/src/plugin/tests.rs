@@ -486,6 +486,7 @@ fn plugin_named(name: &str, language: &str) -> PackPlugin {
         bind_dir: None,
         limits: None,
         model_slot: None,
+        service: None,
     }
 }
 
@@ -730,6 +731,7 @@ fn a_plugin_whose_artifact_is_not_a_readable_afb_is_refused() {
         bind_dir: None,
         limits: None,
         model_slot: None,
+        service: None,
     };
     let error = PluginRunner::compile(b"not an afb", &plugin).expect_err("must be refused");
     assert!(format!("{error:#}").contains("broken"), "{error:#}");

@@ -598,6 +598,7 @@ pub mod http_calls;
 pub mod install;
 pub mod model_calls;
 mod rounds;
+mod service;
 pub mod store;
 pub mod tool;
 pub(crate) mod tool_calls;
