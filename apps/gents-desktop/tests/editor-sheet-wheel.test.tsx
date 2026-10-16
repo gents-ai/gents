@@ -10,7 +10,6 @@ import {
 } from "@gents/ui/components/select";
 import { EditorSheet } from "../src/ui/screens/agent/EditorSheet";
 
-/* a sheet opened from inside another, as a agent's profile is */
 function Stacked({
   onCloseBelow = () => {},
   onCloseTop = () => {},
@@ -38,7 +37,6 @@ function wheel(target: Element) {
   return event;
 }
 
-/* jsdom does not scroll; record which element was asked to */
 function watchScrolls() {
   const scrollBy = vi.fn();
   Object.defineProperty(HTMLElement.prototype, "scrollBy", {
@@ -64,7 +62,6 @@ describe("stacked editor sheets", () => {
     const scrollBy = watchScrolls();
     render(<Stacked />);
     const overlays = document.querySelectorAll("[data-slot=sheet-overlay]");
-    /* each stacked sheet draws its own overlay, the top one last */
     expect(overlays).toHaveLength(2);
     wheel(overlays[1]!);
     expect(scrollBy).toHaveBeenCalledTimes(1);
@@ -97,7 +94,6 @@ describe("stacked editor sheets", () => {
     const onCloseTop = vi.fn();
     render(<Stacked onCloseBelow={onCloseBelow} onCloseTop={onCloseTop} />);
     const overlays = document.querySelectorAll("[data-slot=sheet-overlay]");
-    /* the topmost overlay is the one a press over the backdrop lands on */
     const backdrop = overlays[overlays.length - 1]!;
     await act(async () => {
       fireEvent.pointerDown(backdrop, { button: 0, pointerType: "mouse" });

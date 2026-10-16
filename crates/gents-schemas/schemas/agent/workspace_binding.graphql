@@ -1,5 +1,3 @@
-# Append-only lease of a request onto an IsolatedWorkspace. Concurrent
-# ReadOnly bindings are normal; do not fold them into a workspace Bound state.
 type WorkspaceBinding @index(fields: ["owner_node_did", "binding_id"], unique: true) @branchable {
     binding_id: String @index @immutable
     workspace_id: String @index @immutable

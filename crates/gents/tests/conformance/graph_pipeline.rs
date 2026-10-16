@@ -84,11 +84,6 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
     (intent, vec![capability])
 }
 
-/// Give the worker a second, optional input on its own output's collection and
-/// wire its output into it: the smallest graph whose only compile fault is
-/// `Cycle` (one node, one self-edge, every port and binding otherwise valid).
-/// The two-node cycle is covered by
-/// `graph_pipeline::tests::rejects_cycles_and_unreachable_nodes`.
 fn make_cyclic(intent: &mut GraphIntent, capabilities: &mut [StageCapability]) {
     capabilities[0].input_ports.push(PortSpec {
         name: "feedback".to_owned(),
@@ -122,9 +117,6 @@ fn generated_validation_cases_fence_whole_graph_compilation_gate() {
         "Lean must emit the full topology and bounds fault matrix"
     );
 
-    // Single-fault cases pin the concrete diagnostic channel so rejection must
-    // come from the declared gate, not an unrelated compiler check. Multi-fault
-    // cases legitimately emit several codes at once.
     for test_case in cases {
         let (mut intent, mut capabilities) = valid_fixture();
         let mut expected_codes = Vec::new();
@@ -302,10 +294,6 @@ fn port(name: &str, collection: &str, cardinality: PortCardinality, required: bo
     }
 }
 
-/// Two task nodes joined by `extract.finding -> review.finding`. A grouped edge
-/// needs a Many target (the compiler's cardinality rule), so the target port
-/// follows whether the case carries a group; port cardinality is a separate
-/// rule, held valid so delivery and concurrency are the only variables.
 fn edge_fixture(grouped: bool) -> (GraphIntent, Vec<StageCapability>) {
     let target = if grouped {
         PortCardinality::Many
@@ -432,8 +420,6 @@ fn generated_edge_delivery_cases_fence_graph_edge_admission() {
             test_case.name,
             compiled.as_ref().err().map(|error| &error.diagnostics)
         );
-        // The wire name, not the Rust variant, so the channel assertion is
-        // independent of the enum spelling.
         let refused_for_concurrency = compiled.as_ref().err().is_some_and(|error| {
             error.diagnostics.iter().any(|diagnostic| {
                 serde_json::to_value(&diagnostic.code).unwrap() == "invalid_edge_concurrency"

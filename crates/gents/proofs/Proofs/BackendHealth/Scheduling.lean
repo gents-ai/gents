@@ -2,9 +2,8 @@ import Proofs.BackendHealth.State
 
 namespace Proofs.BackendHealth
 
-/-- Revision represents only connection and discovery inputs. Catalogs, probe
-observations, labels and capacity changes do not schedule additional attempts:
-otherwise the prober's own writes could consume the failure threshold. -/
+/-- Revision represents only connection and discovery inputs: otherwise the
+prober's own writes could consume the failure threshold. -/
 structure ProbeConfiguration where
   backendId : Nat
   revision : Nat
@@ -18,9 +17,8 @@ def shouldProbe (known : List ProbeConfiguration) (current : ProbeConfiguration)
 def scheduledProbes (known current : List ProbeConfiguration) (periodic : Bool) : List Nat :=
   (current.filter (shouldProbe known · periodic)).map (·.backendId)
 
-/-- Disabled or removed configurations leave the observed set, so a later
-observed enablement receives an initial probe again. Failed reads must not be
-translated to an empty successful observation. -/
+/-- Disabled or removed configurations leave the observed set; failed reads must
+not be translated to an empty successful observation. -/
 def observedProbeConfigurations (current : List ProbeConfiguration) : List ProbeConfiguration :=
   current.filter (·.enabled)
 

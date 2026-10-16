@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""Structurally lint generated Lean JSON against a supported Rust type subset.
-
-Introduced for the intentionally red #1571 foundation, this check provides an
-early shape diagnostic before native tests compile. Native `lean_vocab_test`
-tests remain the authority for actual serde decoding and behavior. This script
-supports only the small, explicit serde shape subset used by the reachable
-fixture types; unsupported syntax fails closed.
-
-It is a structural lint, not serde or an actual Rust decoder guarantee. It does
-not establish native behavior. Types re-exported from `gents-protocol` own their
-wire format and are checked for presence only.
-"""
+"""Structurally lint generated Lean JSON against a supported Rust type subset."""
 import argparse
 import json
 import re
@@ -55,7 +44,6 @@ INT_RANGES = {
     "u8": (0, 2**8 - 1), "u16": (0, 2**16 - 1),
     "u32": (0, 2**32 - 1), "u64": (0, 2**64 - 1),
     "i32": (-(2**31), 2**31 - 1), "i64": (-(2**63), 2**63 - 1),
-    # Generated contracts target the repository's 64-bit Rust platforms.
     "usize": (0, 2**64 - 1), "isize": (-(2**63), 2**63 - 1),
 }
 
@@ -133,14 +121,11 @@ def parse_fields(body):
 
 
 def strip_comments(text):
-    """Comments may contain commas and brackets, which would corrupt splitting."""
     return re.sub(r"//[^\n]*", "", text)
 
 
 def parse_items(source):
     items = {}
-    # A re-exported protocol type owns its own wire format (often a hand-written
-    # `Deserialize`), so it is checked for presence only.
     for alias in re.findall(r"pub(?:\([^)]*\))?\s+use\s+[A-Za-z0-9_:]+\s+as\s+([A-Za-z0-9_]+)\s*;", source):
         items[alias] = {"kind": "external"}
     pattern = re.compile(

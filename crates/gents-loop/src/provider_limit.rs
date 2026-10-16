@@ -1,44 +1,16 @@
-//! Provider rate-limit classification shared by the owned loop's retry
-//! boundary and the Goal usage-limit transition.
-//!
-//! A rejected provider call is either a throttle, which clears after a short
-//! wait and belongs on the transport ladder, or an exhausted usage or quota
-//! window, which cannot succeed before its reset and must fail the request
-//! with that reset time. Only error text survives Rig's error boundary, so the
-//! native transport appends the relevant response headers to the rejected
-//! body as a marker ([`ProviderLimitHeaders::annotate`]) and this classifier
-//! reads the marker and the provider body together. The marker is transport
-//! metadata: [`persisted_failure_reason`] and [`strip_provider_limit_marker`]
-//! keep it out of recorded and displayed failure text.
-
 use std::fmt;
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
 
-/// A requested wait beyond this is a usage window, not a throttle: sleeping
-/// through it would hold the request for the window instead of reporting it.
-/// Matches oh-my-pi's `LONG_RATE_LIMIT_DELAY_MS` (packages/ai/src/error/rate-limit.ts).
 pub const LONG_RATE_LIMIT_WAIT: Duration = Duration::from_secs(5 * 60);
 
 const MARKER_OPEN: &str = " [provider-limit";
-/// Replaces the marker token inside a provider body, so a body cannot forge
-/// header evidence.
 const MARKER_TOKEN: &str = "[provider-limit";
 const NEUTRALIZED_TOKEN: &str = "[provider limit";
 const USAGE_LIMIT_PREFIX: &str = "provider usage limit reached";
 const DETAIL_MAX_CHARS: usize = 300;
 
-/// Case-insensitive body evidence of an exhausted account window, by source:
-/// - Codex: `usage_limit_reached` and `usage_not_included` error types
-///   (codex-rs/codex-api/src/api_bridge.rs), `insufficient_quota` code
-///   (codex-rs/codex-api/src/sse/responses.rs `is_quota_exceeded_error`),
-///   and OpenAI's "exceeded your current quota" message for that code.
-/// - xAI: `subscription:free-usage-exhausted` on a 429
-///   (grok-build xai-grok-pager/src/app/dispatch/billing.rs).
-/// - Anthropic: "credit balance" billing rejections. Its 429 wording is the
-///   same for throttles and capped subscription seats, so a subscription cap
-///   is recognized only from the unified-limit headers.
 const USAGE_NEEDLES: &[&str] = &[
     "usage limit",
     "usage_limit",
@@ -53,8 +25,6 @@ const USAGE_NEEDLES: &[&str] = &[
 
 const THROTTLE_NEEDLES: &[&str] = &["rate_limit", "rate limit", "too many requests"];
 
-/// Status renderings of Rig's `InvalidStatusCodeWithMessage` and the Claude
-/// Messages error, each followed by the code.
 const STATUS_PREFIXES: &[&str] = &[
     "invalid status code ",
     "invalid status code: ",
@@ -64,30 +34,14 @@ const STATUS_PREFIXES: &[&str] = &[
     "http ",
 ];
 
-/// Rate-limit facts read from a rejected response's headers, as absolute
-/// times so a later reader (the Goal) interprets them against the response
-/// rather than its own clock.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderLimitHeaders {
-    /// Earliest retry the provider allows: `retry-after-ms`, then
-    /// `retry-after` (delta-seconds or HTTP-date).
     pub retry_at: Option<DateTime<Utc>>,
-    /// Latest reset among the exhausted usage windows.
     pub reset_at: Option<DateTime<Utc>>,
-    /// A usage window, not a throttle, rejected the request.
     pub usage_exhausted: bool,
 }
 
 impl ProviderLimitHeaders {
-    /// Reads, besides `retry-after`:
-    /// - Anthropic subscription unified limits: `anthropic-ratelimit-unified-status`
-    ///   and the usage windows `anthropic-ratelimit-unified-<window>-status`
-    ///   (`5h`, `7d`, `7d_<model>`) equal to `rejected`, each with a sibling
-    ///   `-reset` in epoch seconds. `-overage-status` is excluded: seats without
-    ///   extra usage report it `rejected` on ordinary responses.
-    /// - Codex: `x-codex-{primary,secondary}-used-percent` at or above 100 with
-    ///   `x-codex-{primary,secondary}-reset-at` in epoch seconds
-    ///   (codex-rs/codex-api/src/rate_limits.rs `parse_rate_limit_window`).
     pub fn from_headers<'a>(
         headers: impl IntoIterator<Item = (&'a str, &'a str)>,
         now: DateTime<Utc>,
@@ -145,8 +99,6 @@ impl ProviderLimitHeaders {
         self.reset_at = self.reset_at.max(reset);
     }
 
-    /// A rejected response body with the marker token neutralized, followed by
-    /// this marker.
     pub fn annotate(&self, body: &str) -> String {
         format!(
             "{}{}",
@@ -155,7 +107,6 @@ impl ProviderLimitHeaders {
         )
     }
 
-    /// Suffix for a rejected response body; empty when no header applied.
     fn marker(&self) -> String {
         if *self == Self::default() {
             return String::new();
@@ -177,7 +128,6 @@ impl ProviderLimitHeaders {
         marker
     }
 
-    /// `None` unless `marker` is exactly one well-formed marker.
     fn parse_marker(marker: &str) -> Option<Self> {
         let fields = marker.strip_prefix(MARKER_OPEN)?.strip_suffix(']')?;
         let mut limits = Self::default();
@@ -193,9 +143,6 @@ impl ProviderLimitHeaders {
     }
 }
 
-/// Splits `text` into the provider body and the transport's header marker.
-/// The marker is recognized only as the well-formed suffix of a rejected-status
-/// rendering; anywhere else it is provider text and stays in the body.
 pub fn split_provider_limit_marker(text: &str) -> (&str, &str) {
     match split_annotated_body(text) {
         (body, marker) if has_status(&body.to_ascii_lowercase(), None) => (body, marker),
@@ -203,9 +150,6 @@ pub fn split_provider_limit_marker(text: &str) -> (&str, &str) {
     }
 }
 
-/// Splits a body produced by [`ProviderLimitHeaders::annotate`] into the body
-/// and its well-formed marker suffix, so a caller that bounds the body can
-/// reattach the marker intact.
 pub fn split_annotated_body(text: &str) -> (&str, &str) {
     match text.rfind(MARKER_OPEN) {
         Some(start) if ProviderLimitHeaders::parse_marker(&text[start..]).is_some() => {
@@ -215,14 +159,10 @@ pub fn split_annotated_body(text: &str) -> (&str, &str) {
     }
 }
 
-/// `text` without the transport's header marker.
 pub fn strip_provider_limit_marker(text: &str) -> &str {
     split_provider_limit_marker(text).0
 }
 
-/// The failure text to record for a provider attempt: the rendered
-/// [`UsageLimit`] for an exhausted window, which the Goal reclassifies from the
-/// record, otherwise `text` without the header marker.
 pub fn persisted_failure_reason(text: &str, now: DateTime<Utc>) -> String {
     match classify_provider_limit(text, now) {
         Some(ProviderLimit::UsageExhausted(limit)) => limit.to_string(),
@@ -230,11 +170,9 @@ pub fn persisted_failure_reason(text: &str, now: DateTime<Utc>) -> String {
     }
 }
 
-/// An exhausted provider usage window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageLimit {
     pub resets_at: Option<DateTime<Utc>>,
-    /// The provider's own explanation, bounded.
     pub detail: String,
 }
 
@@ -253,18 +191,10 @@ impl fmt::Display for UsageLimit {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderLimit {
-    /// Retry after the hint, or the ladder delay when none was given.
     Throttled { retry_after: Option<Duration> },
-    /// Retrying before the reset cannot succeed.
     UsageExhausted(UsageLimit),
 }
 
-/// Classifies a provider error text; `None` when it is not a rate limit.
-/// A bare 429 is a throttle. Usage evidence is body wording, or rejected usage
-/// headers or a wait beyond [`LONG_RATE_LIMIT_WAIT`] on a rate-limit rejection;
-/// usage headers on any other status (an overloaded 529, a 500) are ignored.
-/// An OpenRouter 402 is classified by `error.metadata.limit_source`
-/// (https://openrouter.ai/docs/api-reference/limits, "Handling 402 errors").
 pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<ProviderLimit> {
     let (body, marker) = split_provider_limit_marker(text);
     let headers = ProviderLimitHeaders::parse_marker(marker).unwrap_or_default();
@@ -310,18 +240,12 @@ pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<Provide
     Some(ProviderLimit::Throttled { retry_after })
 }
 
-/// OpenRouter's 402 cases.
 #[derive(PartialEq)]
 enum PaymentRequired {
-    /// A key cap or the credit balance: no wait helps.
     Exhausted,
-    /// The in-flight spending budget: transient, retry after `Retry-After`.
     InFlight,
 }
 
-/// Branches on `error.metadata.limit_source`, never on `remedy_hint` (log text
-/// per OpenRouter). Without one only the documented "Insufficient credits"
-/// wording counts; an unknown source keeps the generic rules.
 fn openrouter_payment_required(
     lower: &str,
     json: Option<&serde_json::Value>,
@@ -342,7 +266,6 @@ fn openrouter_payment_required(
     }
 }
 
-/// A status rendering followed by a three-digit code (`code` when given).
 fn has_status(lower: &str, code: Option<&str>) -> bool {
     STATUS_PREFIXES.iter().any(|prefix| {
         lower.match_indices(prefix).any(|(at, _)| {
@@ -355,7 +278,6 @@ fn has_status(lower: &str, code: Option<&str>) -> bool {
     })
 }
 
-/// The first `{` through the last `}` of `text`, when that parses as JSON.
 fn embedded_json(text: &str) -> Option<serde_json::Value> {
     let start = text.find('{')?;
     let end = text.rfind('}')?;
@@ -364,7 +286,6 @@ fn embedded_json(text: &str) -> Option<serde_json::Value> {
         .flatten()
 }
 
-/// Codex `error.resets_at` (epoch seconds) or `error.resets_in_seconds`.
 fn json_resets_at(json: &serde_json::Value, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     let error = json.get("error").unwrap_or(json);
     if let Some(at) = error.get("resets_at").and_then(serde_json::Value::as_i64) {
@@ -376,16 +297,12 @@ fn json_resets_at(json: &serde_json::Value, now: DateTime<Utc>) -> Option<DateTi
         .and_then(|seconds| delay_after(now, seconds))
 }
 
-/// Re-reads a [`UsageLimit`] rendering, so classification is idempotent over
-/// the terminal error it produced.
 fn rendered_resets_at(body: &str) -> Option<DateTime<Utc>> {
     let start = body.find("(resets at ")? + "(resets at ".len();
     let end = body[start..].find(')')? + start;
     parse_rfc3339(&body[start..end])
 }
 
-/// `error.message`, xAI's flat `error`, or a top-level `message`; otherwise the
-/// trimmed text.
 fn provider_detail(body: &str, json: Option<&serde_json::Value>) -> String {
     let message = json.and_then(|json| {
         let error = json.get("error");
@@ -403,8 +320,6 @@ fn provider_detail(body: &str, json: Option<&serde_json::Value>) -> String {
     }
 }
 
-/// OpenAI's "Please try again in 11.054s" / "28ms"
-/// (codex-rs/codex-api/src/sse/responses.rs `try_parse_retry_after`).
 fn try_again_in(lower: &str) -> Option<Duration> {
     let rest = lower[lower.find("try again in")? + "try again in".len()..].trim_start();
     let number_len = rest

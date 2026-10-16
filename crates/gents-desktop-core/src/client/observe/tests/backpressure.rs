@@ -40,8 +40,6 @@ async fn committed_history_burst_does_not_force_a_snapshot_reload() {
         .expect("projection alive");
     let before = handle.metrics_snapshot();
 
-    // Match the merge boundary: all revision events are published synchronously
-    // after commit, before a single-threaded mobile executor can drain them.
     for _ in 0..12_000 {
         node.event_bus().publish(update.clone());
     }

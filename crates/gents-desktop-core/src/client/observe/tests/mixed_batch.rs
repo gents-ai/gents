@@ -41,8 +41,8 @@ async fn scoped_missing_document_reload_preserves_other_owner_survivors() {
         subscription,
         selection,
     );
-    // Publishing both invalidations before this single-threaded executor yields
-    // makes one mixed batch, independent of native commit notification timing.
+    // Publishing both invalidations before this executor yields makes one
+    // mixed batch, independent of native commit notification timing.
     node.event_bus()
         .publish(events::Message::update(update.clone()));
     let mut absent = update;

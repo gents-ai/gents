@@ -6,7 +6,6 @@ use crate::oauth_credential::ServingAccount;
 
 use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 
-/// Every profile of `node_did` in this transaction's snapshot.
 pub async fn list_inference_profiles_in_txn(
     txn: &super::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -26,9 +25,6 @@ pub async fn list_inference_profiles_in_txn(
         .collect()
 }
 
-/// Replace a complete inference profile through the common configuration writer.
-/// Sampling and execution settings are references, never a second set of profile
-/// fields. Explicit sparse patches remain owned by the patch API.
 pub async fn write_inference_profile_document(
     access: &ConfigAccess,
     profile: &InferenceProfile,
@@ -58,9 +54,6 @@ pub async fn write_inference_profile_document(
         .await
 }
 
-/// The accounts a agent's turns need: its profile's, then its context's
-/// compaction profile's, the chain readiness walks. A profile or backend
-/// that is not stored is left out.
 pub async fn agent_accounts(
     access: &ConfigAccess,
     node_did: &str,

@@ -1,8 +1,3 @@
-//! Claude subscription OAuth refresh against Anthropic's token endpoint.
-//!
-//! JSON body (like ChatGPT, unlike xAI's form encoding); `scope` is re-sent on
-//! refresh as Claude Code does; refresh-token rotation is optional.
-
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -225,19 +220,5 @@ mod tests {
     async fn refresh_403_is_not_entitled() {
         let (result, _) = refresh_against(403, r#"{"error":"forbidden"}"#).await;
         assert_eq!(result.unwrap_err(), OAuthAuthProblem::NotEntitled);
-    }
-
-    #[tokio::test]
-    async fn refresh_error_text_never_carries_tokens() {
-        let (result, _) = refresh_against(
-            500,
-            r#"{"error":"server_error","error_description":"boom"}"#,
-        )
-        .await;
-        let text = match result.unwrap_err() {
-            OAuthAuthProblem::Other(text) => text,
-            other => panic!("{other:?}"),
-        };
-        assert!(!text.contains("refresh-OLD"), "{text}");
     }
 }

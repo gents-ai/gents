@@ -1,8 +1,3 @@
-//! Row fetch for [`crate::run_timeline`]: loads the persisted documents a
-//! request's timeline is reconstructed from, over either transport
-//! ([`ConfigAccess::Graphql`] or [`ConfigAccess::Local`]). Lifted from the
-//! CLI `trace` command so the desktop client shares one fetcher.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
@@ -22,9 +17,6 @@ use gents_protocol::graphql::graphql_rows_from_response;
 
 const MAX_RUN_ACTIVITY_ROWS: usize = 10_000;
 
-/// Canonical tool payloads in an exact authorized session scope. Runtime
-/// consumers share the timeline's physical intent binding instead of
-/// maintaining another argument reconstruction path.
 pub(crate) async fn load_session_tool_calls(
     access: &ConfigAccess,
     node_did: &str,
@@ -47,9 +39,6 @@ pub(crate) async fn load_session_tool_calls(
     .await
 }
 
-/// Canonical accepted calls for selected physical tool documents in an
-/// authorized session scope. Reads only those tool rows and their accepted
-/// message sequences; deliveries are not resolved.
 pub(crate) async fn load_accepted_tool_calls(
     access: &ConfigAccess,
     node_did: &str,
@@ -154,7 +143,6 @@ pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Resul
                 timeline.background_completion_diagnostics_error = Some(error.to_string());
             }
         }
-        // Best effort, like the diagnostics above: the call rows stand alone.
         if let Err(error) = name_serving_accounts(access, node_did, &mut timeline.events).await {
             tracing::debug!(%error, "timeline call accounts unavailable");
         }
@@ -162,9 +150,6 @@ pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Resul
     Ok(timeline)
 }
 
-/// Label each call with the account its `backend_id` runs on now. A call that
-/// started before that account's sign-in took the slot (a slot reused after
-/// every account was removed) gets none, as does one with no start time.
 async fn name_serving_accounts(
     access: &ConfigAccess,
     node_did: &str,
@@ -206,8 +191,6 @@ async fn name_serving_accounts(
     Ok(())
 }
 
-/// Load the prompt-free subset of ordinary timeline rows needed by live run
-/// observers. One bounded query serves CLI and future bridge projections.
 pub async fn load_run_activity_rows(
     access: &ConfigAccess,
     request_ids: &[String],
@@ -231,8 +214,6 @@ pub async fn load_run_activity_rows(
         .map(String::as_str)
         .filter(|value| !value.trim().is_empty())
         .collect::<BTreeSet<_>>();
-    // Session labels are not identities. Resolve owner/requester scopes from actual
-    // selected request rows before loading any canonical session projection.
     let scope_query = format!(
         "{{ AgentRequest(filter: {{ request_id: {{ _in: [{request_list}] }} }} ) {{ _docID request_id node_did requester_did session_id }} }}"
     );
@@ -393,10 +374,6 @@ pub async fn load_run_timeline_rows(
     let mut tool_calls = Vec::new();
     let mut compactions = Vec::new();
     for (owner, session_id, requester) in &session_scopes {
-        // Snapshot mutable tool rows before loading their immutable admission
-        // dependencies. The opposite order can observe a newly accepted tool
-        // against a message list captured before its atomic publication.
-        // Missing/ambiguous dependencies still fail closed (including replicas).
         let observations = load_timeline_tool_observations_for_session(
             access,
             owner,
@@ -424,8 +401,6 @@ pub async fn load_run_timeline_rows(
                 .await?,
         );
     }
-    // Goal transitions describe the root run's session-scoped objective. Child
-    // sessions have independent goals and are not projected into this timeline.
     let goal_versions = match root_session_id.as_deref() {
         Some(session_id) => {
             load_timeline_goal_versions_for_session(
@@ -464,12 +439,6 @@ pub async fn load_run_timeline_rows(
     }
 
     let request_bindings = timeline_request_bindings(&requests, &request)?;
-    // Direct children may have their own sessions.  Session-wide queries also
-    // return rows for grandchildren (and later continuation requests) that are
-    // not part of this root + direct-child timeline.  Ignore those unrelated
-    // rows. Logical-only rows are legacy/unverified and are quarantined from
-    // provenance-bearing projections; physical-only or mismatched in-scope
-    // claims still fail closed below.
     let in_scope_ids = request_bindings
         .values()
         .map(String::as_str)
@@ -958,7 +927,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(reused.credential.account_ref, None, "the original slot");
-        // The bound is the sign-in's `connected_at`; move it past call-a's start.
         access
             .write(
                 "test.connected_at",

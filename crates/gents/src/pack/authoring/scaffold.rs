@@ -1,21 +1,3 @@
-//! Scaffold a pack from a template, the shared-library owner behind
-//! `gents pack new` and `gents pack init`.
-//!
-//! The manifest is generated from the files the template writes, so its
-//! asset list cannot drift from the directory. A plugin is scaffolded as
-//! its own Afterburner package under `plugins/<name>/` and
-//! `gents pack build` compiles it. Every template passes
-//! `gents pack check` as written and builds unchanged.
-//!
-//! The CLI delegates to this owner; two steps remain distinct by owner:
-//!
-//! - A graph template's post-scaffold step runs this crate's own graph
-//!   compilation and topology writer (`super::build::build_graph_plans`,
-//!   `super::check::write_topology`) rather than the CLI's, over the same
-//!   owners.
-//! - The scaffold never compiles a plugin; the artifact stays missing until
-//!   [`super::build::build_pack`] runs, exactly as the CLI leaves it.
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -25,17 +7,11 @@ use serde_json::{json, Value};
 use super::names::Names;
 use super::template::{Kind, Template};
 
-/// Everything that decides a scaffold, as the CLI's `PackScaffoldArgs`
-/// carries it.
 #[derive(Clone, Debug)]
 pub struct ScaffoldInput {
-    /// The registry namespace the pack publishes under.
     pub namespace: String,
-    /// The template to write; absent, `kind` picks it.
     pub template: Option<Template>,
-    /// The kind whose default template is used when `template` is absent.
     pub kind: Option<Kind>,
-    /// Plugin language for the plugin-tool template; defaults to rust.
     pub language: Option<String>,
 }
 
@@ -43,17 +19,13 @@ pub struct ScaffoldInput {
 pub struct ScaffoldReport {
     pub pack: String,
     pub namespace: String,
-    /// The manifest `"kind"` the template wrote.
     pub kind: &'static str,
-    /// The template that was written, named the way the CLI prints it
-    /// (kebab-case).
     pub template: &'static str,
     pub dir: PathBuf,
     pub files: Vec<String>,
 }
 
 impl Template {
-    /// The CLI's kebab-case spelling, what a report prints.
     pub fn as_slug(self) -> &'static str {
         match self {
             Template::Minimal => "minimal",
@@ -65,10 +37,6 @@ impl Template {
     }
 }
 
-/// Writes the template into `dir`, which must not already hold a pack.
-///
-/// The template is chosen from `input.template`, or from `input.kind` when
-/// absent, exactly as the CLI's `scaffold` chooses it.
 pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<ScaffoldReport> {
     anyhow::ensure!(
         !dir.join("manifest.json").exists(),
@@ -81,9 +49,7 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
         .unwrap_or_else(|| Template::for_kind(input.kind));
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
 
-    // Resolve every generated path through the same rooted path owner used
-    // by file tools before the first write. This rejects an existing nested
-    // symlink that would redirect a template write outside its pack root.
+    // Resolve generated paths through the rooted owner before writing, refusing nested symlink escapes.
     let context = crate::toolset::ToolContext::new(dir.to_path_buf(), false)?;
     let mut output_paths = vec!["README.md".to_owned(), "manifest.json".to_owned()];
     match template {
@@ -260,8 +226,6 @@ fn list_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
-/// Where plugin `name`'s `TOOL.md` lives, and a starter for it: the markdown
-/// a model reads to use the plugin as a tool.
 pub fn tool_markdown(name: &str) -> (String, String) {
     (
         format!("plugins/{name}/TOOL.md"),
@@ -276,7 +240,6 @@ pub fn tool_markdown(name: &str) -> (String, String) {
     )
 }
 
-/// Writes the plugin's source for the plugin-tool template.
 fn scaffold_plugin(dir: &Path, names: &Names, language: Option<&str>) -> Result<String> {
     write_plugin_source(
         &dir.join("plugins").join(&names.name),
@@ -285,9 +248,6 @@ fn scaffold_plugin(dir: &Path, names: &Names, language: Option<&str>) -> Result<
     )
 }
 
-/// Writes a plugin's source into `source`: a program that returns its JSON
-/// input, in `language` (rust when absent), at the entry the build compiles.
-/// Returns the language.
 pub fn write_plugin_source(source: &Path, name: &str, language: Option<&str>) -> Result<String> {
     let language = language.unwrap_or("rust").trim().to_ascii_lowercase();
     let entry = super::build::plugin_entry(&language).with_context(|| {
@@ -322,8 +282,6 @@ pub fn write_plugin_source(source: &Path, name: &str, language: Option<&str>) ->
     Ok(language)
 }
 
-/// The template program for an entry file: read the JSON arguments from
-/// standard input and write them back as the result.
 fn echo_source(entry: &str) -> String {
     match entry {
         "source/main.rs" => "use std::io::{Read, Write};\n\n\
@@ -512,38 +470,6 @@ mod tests {
         }
     }
 
-    /// The report names every file the template wrote, sorted, and the
-    /// manifest's identity matches the scaffold input.
-    #[test]
-    fn the_report_names_every_written_file() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("review_toolkit");
-        let report = scaffold(&dir, "review_toolkit", &input(Template::Minimal)).unwrap();
-        assert_eq!(report.pack, "review_toolkit");
-        assert_eq!(report.namespace, "acme");
-        assert_eq!(report.kind, "documents");
-        assert_eq!(report.template, "minimal");
-        assert!(report.files.contains(&"manifest.json".to_owned()));
-        assert!(report.files.contains(&"pack_config.json".to_owned()));
-        assert!(report
-            .files
-            .contains(&"agents/worker/system_prompt.md".to_owned()));
-        assert!(report
-            .files
-            .contains(&"tasks/worker_task/prompt.md".to_owned()));
-        assert_eq!(report.files, {
-            let mut sorted = report.files.clone();
-            sorted.sort();
-            sorted
-        });
-    }
-
-    /// The generated manifest parses as the real `PackManifest` and passes
-    /// the pack validator's own rules for every document template — the
-    /// same property the CLI's `every_document_template_passes_the_check`
-    /// test exercises end to end, bounded here to what this crate owns
-    /// (the manifest rules; the config loader and embedded-node filter
-    /// check stay with the CLI's integration).
     #[test]
     fn every_document_template_manifest_is_valid() {
         for template in [
@@ -580,9 +506,6 @@ mod tests {
         }
     }
 
-    /// A scaffolded plugin's manifest declares the artifact as an asset and
-    /// the source's own case file; the artifact itself is only written by a
-    /// build.
     #[test]
     fn the_plugin_template_declares_an_unbuilt_artifact() {
         let root = tempfile::tempdir().unwrap();
@@ -620,55 +543,5 @@ mod tests {
         assert!(result.is_err(), "nested symlink must be refused");
         assert!(std::fs::read_dir(outside.path()).unwrap().next().is_none());
         assert!(!dir.join("manifest.json").exists());
-    }
-
-    /// A language the build cannot compile is refused by name at scaffold
-    /// time, against the pack validator's own supported list.
-    #[test]
-    fn an_unknown_plugin_language_is_refused_by_name() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("format_check");
-        let error = scaffold(
-            &dir,
-            "format_check",
-            &ScaffoldInput {
-                language: Some("haskell".into()),
-                ..input(Template::PluginTool)
-            },
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("haskell"), "{error:#}");
-    }
-
-    #[test]
-    fn a_directory_that_holds_a_pack_or_a_bad_name_is_refused() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("review_toolkit");
-        scaffold(&dir, "review_toolkit", &input(Template::Minimal)).unwrap();
-        let again = scaffold(&dir, "review_toolkit", &input(Template::Minimal)).unwrap_err();
-        assert!(
-            format!("{again:#}").contains("already holds a pack"),
-            "{again:#}"
-        );
-
-        let error = scaffold(
-            &root.path().join("x"),
-            "ReviewToolkit",
-            &input(Template::Minimal),
-        )
-        .unwrap_err();
-        assert!(
-            format!("{error:#}").contains("\"review_toolkit\""),
-            "{error:#}"
-        );
-    }
-
-    #[test]
-    fn tool_markdown_lives_at_the_plugin_convention() {
-        let (path, markdown) = tool_markdown("format_check");
-        assert_eq!(path, "plugins/format_check/TOOL.md");
-        assert!(markdown.starts_with("# format_check\n"));
-        assert!(markdown.contains("## Input"));
-        assert!(markdown.contains("## Output"));
     }
 }

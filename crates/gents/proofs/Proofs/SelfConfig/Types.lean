@@ -3,11 +3,9 @@ import Proofs.ConfigDocuments
 namespace SelfConfig
 
 abbrev Target := ConfigDocuments.Collection
-/-- Existing self-config families plus their extracted subdocuments. Pack-owned
-callback modules, keys, graph definitions, and placements do not become writable
-merely because the shared catalog knows about them. `AgentTarget` is a
-`tools` document (#2058): the configurator authors the agents allowlist through
-the same desired-state owner `config apply` uses for `Tools.agents`. -/
+/-- Pack-owned callback modules, keys, graph definitions, and placements do not
+become writable merely because the shared catalog knows about them. `AgentTarget`
+is a `tools` document (#2058). -/
 def allTargets : List Target :=
   [.agent, .agentContext, .compaction, .tools, .agentTarget, .inferenceProfile,
    .inferenceSampling, .inferenceExecution, .inferenceRetryPolicy,
@@ -23,9 +21,9 @@ def defaultCategories : List String := ["agent", "tools", "profile"]
 abbrev FieldKey := String
 abbrev allFields := ConfigDocuments.Collection.fields
 
-/-- Identity/provenance and module material are operator-managed. Nested auth
-references remain editable; raw-key and OAuth-account protection belong to the
-typed auth guard (`SelfConfig.authGuard`, enforced in Rust `validate`). -/
+/-- Identity/provenance and module material are operator-managed; nested auth
+references stay editable and raw-key/OAuth-account protection is enforced by
+the Rust `validate` typed auth guard. -/
 def protectedKey (t : Target) (k : FieldKey) : Bool :=
   (t == .task && k == "agent_id") || k == t.uniqueField || ["node_did", "created_at", "updated_at", "created_by",
     "artifact_bytes", "canonical_args", "signer_did", "provenance"].contains k
@@ -48,7 +46,6 @@ theorem writable_fields_nodup : ∀ t ∈ allTargets, (writableFields t).Nodup :
 theorem unique_field_protected :
     ∀ t ∈ allTargets, t.uniqueField ∈ protectedFields t := by decide
 
-/-- The ownership key is never writable. -/
 theorem node_did_never_writable :
     ∀ t ∈ allTargets, "node_did" ∉ writableFields t := by decide
 
@@ -63,7 +60,6 @@ theorem datastore_owner_and_identity_protected :
     "node_did" ∉ writableFields .datastoreToolSurface ∧
     "surface_id" ∉ writableFields .datastoreToolSurface := by decide
 
-/-- Observations cannot be introduced by a self-config patch. -/
 theorem observations_not_writable :
     ∀ t ∈ allTargets, ∀ k ∈ ["probe_status", "last_probe", "fire_count",
       "next_run_at", "publication_status", "published_at"],

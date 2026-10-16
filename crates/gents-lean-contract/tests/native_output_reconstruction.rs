@@ -1,23 +1,3 @@
-//! Native conformance boundary for canonical-output stream reconstruction
-//! (#1571). The generated `canonical_output_projection_cases` drive the actual
-//! `gents_protocol::output::reconstruction::{reconstruct_stream,
-//! reconstruct_presented_payload}` through the runtime's generated DTO
-//! vocabulary (`lean_vocab_test/canonical_output.rs`); nothing here restates a
-//! policy constant or a fixture expectation.
-//!
-//! Boundary scope: for a concrete reference, `reconstruct_stream` observes one
-//! sealed payload closure — a closing record, its extent, denial evidence and
-//! duplicate raw records — and itself reports `AccessDenied`, `UnresolvedClose`
-//! and `MissingSegment`. What stays above this boundary is the projection's
-//! *view classification* (whether an observation renders as loading, denied,
-//! absent, live, settling, retracted, retained-partial, or invalid) and
-//! message selection/identity. Cases whose modeled view is such a
-//! classification are excluded by name and reported in the test summary,
-//! never replaced with fake fixtures. Excluded cases whose input carries
-//! concrete header references still get direct primitive probes: the
-//! expectations there come from the input evidence and the protocol's own
-//! error contract, not from a re-modeled policy.
-
 #[path = "../../gents/src/lean_vocab_test/canonical_output.rs"]
 mod runtime_contract;
 
@@ -47,27 +27,14 @@ use runtime_contract::{
     LeanReasoningAuditResult, LeanReasoningPart, LeanReasoningSignatureCase, LeanResultPart,
 };
 
-/// View classes this adapter can exercise through the reconstruction
-/// primitives.
 const EXERCISABLE_VIEWS: [&str; 2] = ["published", "conflicted"];
 
-/// Adapter-level document identity. The Lean NatID world has no DID; every
-/// generated segment and header shares the one runtime agent identity, which
-/// is all the reconstruction primitive requires (`request_doc_id` + `source`
-/// are the real coordinates). This is transport identity, not policy.
 const NODE_DID: &str = "did:key:z6MkLeanConformanceAgent";
 
-/// The NatID → string translation. Injective, so distinct modeled identities
-/// stay distinct physical identities, and idempotent replay (the same modeled
-/// record delivered twice) maps to the same physical document identity — the
-/// exact behavior `raw_exact_record_replay_is_idempotent` proves.
 fn nat(id: u64) -> String {
     format!("nat-{id}")
 }
 
-/// The Lean model measures observation time in whole seconds; the protocol
-/// document carries an RFC 3339 timestamp string. This is a representation
-/// bridge, not a policy choice: the modeled instant is preserved exactly.
 fn rfc3339(seconds: u64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp(
         i64::try_from(seconds).expect("generated timestamp fits i64"),
@@ -77,31 +44,18 @@ fn rfc3339(seconds: u64) -> String {
     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-/// What the adapter does with one generated case's modeled view.
 enum Expected {
-    /// The model publishes a header from this observation; exercised below
-    /// through the actual primitives, input-driven.
     Published,
-    /// The model reports an integrity conflict; the stream primitive must
-    /// surface a record-level conflict when the twins are record facts.
-    /// Message-identity conflicts live above this boundary and are excluded.
     Conflicted,
-    /// The modeled view class is a projection classification above the
-    /// stream-primitive boundary.
     Excluded {
         class: &'static str,
         reason: &'static str,
     },
 }
 
-/// A generated case translated into strict protocol documents: NatIDs become
-/// strings, byte payloads stay bytes, UTF-8 payloads become strings.
 struct TranslatedCase {
     name: String,
-    /// `(doc_id, segment)` observations in generated arrival order.
     segments: Vec<(String, OutputSegment)>,
-    /// Modeled denial evidence, translated verbatim (segment ids and header
-    /// ids share one denial namespace at this boundary).
     denied: Vec<String>,
     dependency_denials: Vec<DependencyDenial>,
     expected: Expected,
@@ -122,10 +76,6 @@ fn view_class(view: &View) -> &'static str {
     }
 }
 
-/// Why a view *classification* is above the `reconstruct_stream` boundary.
-/// The primitive itself still reports `AccessDenied` and incomplete errors
-/// for concrete references; only the verdict (loading vs denied vs absent)
-/// belongs to the projection owner.
 fn exclusion_reason(view: &View) -> &'static str {
     match view {
         View::Loading => {
@@ -176,9 +126,6 @@ fn lean_source(source: &LeanCanonicalSource) -> OutputSource {
             turn,
             attempt,
         } => OutputSource::ProviderTurn {
-            // Lean models the provider scope as its allocation number; the
-            // protocol coordinate is the capture scope label. Every generated
-            // provider record uses scope allocation 1 of the inference loop.
             scope: CaptureScope {
                 kind: CaptureScopeKind::Inference,
                 seq: scope + 1,
@@ -307,11 +254,6 @@ fn lean_presentation(presentation: &LeanPresentation) -> PayloadPresentation {
                         start_byte: *start,
                         end_byte: *end,
                     },
-                    // The Lean presentation literal is raw bytes; the protocol
-                    // literal is runtime-authored text. Presentation equality
-                    // is validated by present_stream/reconstruct_message, not
-                    // by this adapter, which probes the reconstruction
-                    // primitives only.
                     LeanPresentationPart::Literal { bytes } => PresentationPart::Literal {
                         text: String::from_utf8(bytes.clone())
                             .expect("generated presentation literal is UTF-8"),
@@ -445,8 +387,6 @@ fn lean_message(message: &LeanCanonicalMessage<LeanPayloadSpec>) -> TranscriptMe
     }
 }
 
-/// Translate one generated case. Never invents a fact: every protocol value is
-/// a faithful translation of the modeled observation or expectation.
 fn translate_records(
     records: &[LeanCanonicalSegment],
     session: u64,
@@ -490,8 +430,6 @@ fn translate_records(
                             }),
                         })
                         .collect(),
-                    // The flush payload is byte data; the protocol segment
-                    // stores it as the exact UTF-8 string of those bytes.
                     String::from_utf8(flush.payload.clone())
                         .expect("generated flush payload is UTF-8"),
                 ),
@@ -549,8 +487,6 @@ fn translate(case: &LeanCanonicalOutputProjectionCase) -> TranslatedCase {
     }
 }
 
-/// One plain (Full-presentation) payload reference: `reconstruct_stream` must
-/// return exactly the model's native bytes for it.
 fn assert_plain_ref(
     case: &TranslatedCase,
     observations: &[ObservedSegment<'_>],
@@ -577,9 +513,6 @@ fn assert_plain_ref(
     );
 }
 
-/// One presented payload (Text / ToolResult Text): the production
-/// `reconstruct_presented_payload` owner applies the presentation over the
-/// reconstructed stream; the result must be exactly the model's native bytes.
 fn assert_presented(
     case: &TranslatedCase,
     observations: &[ObservedSegment<'_>],
@@ -606,12 +539,6 @@ fn assert_presented(
     );
 }
 
-/// Drive the actual primitives for a published case. The selected header comes
-/// from `case.input.messages` (the adapter asserts the model's published view
-/// is that input envelope; selection itself stays outside this adapter), and
-/// each block is paired directly with its model-derived native block — no
-/// reference-keyed map, because the same reference may appear under different
-/// presentations.
 fn assert_published(case: &LeanCanonicalOutputProjectionCase, translated: &TranslatedCase) {
     let View::Published {
         message: expected_message,
@@ -665,8 +592,6 @@ fn assert_published(case: &LeanCanonicalOutputProjectionCase, translated: &Trans
                     case.name
                 );
                 for (part, native_part) in parts.iter().zip(native_parts) {
-                    // Reasoning parts are plain references (the model requires
-                    // full presentation outside text/tool-output positions).
                     let (reference, bytes) = match (part, native_part) {
                         (
                             ReasoningPart::Text { text, .. },
@@ -684,8 +609,6 @@ fn assert_published(case: &LeanCanonicalOutputProjectionCase, translated: &Trans
                             ReasoningPart::Summary { text },
                             LeanReasoningPart::Summary { payload },
                         ) => (text, payload),
-                        // The generated contract pairs part kinds positionally;
-                        // any other pairing is a translation bug, not a fixture.
                         _ => panic!(
                             "case `{}`: model/generated reasoning part kinds disagree",
                             case.name
@@ -725,8 +648,6 @@ fn assert_published(case: &LeanCanonicalOutputProjectionCase, translated: &Trans
                             probed_parts += 1;
                         }
                         (ToolResultPart::Media(media), LeanResultPart::Media { value }) => {
-                            // Each media part compares against its own paired
-                            // native media value, never the block's first one.
                             if let Some(reference) = media_reference(&media.data) {
                                 assert_plain_ref(
                                     translated,
@@ -783,10 +704,6 @@ fn native_media_bytes(media: &LeanMedia<Vec<u8>>) -> Vec<u8> {
     }
 }
 
-/// Drive `reconstruct_stream` over every sealed source in a conflicted case.
-/// A record-level twin must surface a conflict error. Message-identity twins
-/// are excluded using input evidence before invoking the primitive; a missing
-/// native conflict must never become an automatic coverage exclusion.
 fn assert_conflicted(
     case: &TranslatedCase,
     input: &LeanCanonicalOutputProjectionCase,
@@ -795,8 +712,6 @@ fn assert_conflicted(
         unreachable!("assert_conflicted is only called on conflicted cases")
     };
     let observations = observations(case);
-    // Exclusions must be decided from input facts, never from a native
-    // implementation failing to detect the expected conflict.
     let messages = &input.input.messages;
     if messages.iter().enumerate().any(|(i, message)| {
         messages[i + 1..]
@@ -862,13 +777,6 @@ fn assert_conflicted(
     }
 }
 
-/// Direct primitive checks for excluded cases whose input carries concrete
-/// header references. The reference comes from `case.input.messages`; the
-/// expectation is the protocol's own error contract — `AccessDenied` for a
-/// denied dependency, an incomplete error (`UnresolvedClose`/`MissingSegment`)
-/// for a missing one — never a re-modeled classification. A reference that
-/// fully resolves proves the modeled loading/denied verdict was header-level,
-/// which is exactly the fact above this boundary.
 fn probe_excluded_primitive_facts(
     case: &LeanCanonicalOutputProjectionCase,
     translated: &TranslatedCase,
@@ -1012,10 +920,6 @@ fn generated_canonical_output_cases_drive_native_reconstruction() {
         }
     }
 
-    // Report every exclusion and every direct primitive probe at this named
-    // boundary. Coverage is stated honestly: exactly the generated cases are
-    // accounted for, each either exercised through the primitives or excluded
-    // and reported.
     for exclusion in &exclusions {
         eprintln!("[native_output_reconstruction] {exclusion}");
     }

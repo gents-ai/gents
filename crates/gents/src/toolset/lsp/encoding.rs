@@ -127,7 +127,6 @@ mod tests {
         let line = "hi 😀 there";
         let pos =
             offset_to_position(&format!("{line}\n"), PositionEncoding::Utf16, 1, "there").unwrap();
-        // "hi " = 3, emoji = 2 UTF-16 units, space = 1 → 6
         assert_eq!(pos.character, 6);
         assert_eq!(
             position_to_byte_offset(line, PositionEncoding::Utf16, pos.character).unwrap(),

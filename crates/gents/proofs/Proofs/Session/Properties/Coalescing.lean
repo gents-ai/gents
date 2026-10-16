@@ -220,8 +220,6 @@ theorem trace_preserves_uniqueCoalescedQueueKeys
   | step h_step _ ih =>
       exact ih (transition_preserves_uniqueCoalescedQueueKeys h_step h_unique)
 
-/-- Goal continuations share queue coalescing, but never collide with a
-background-completion key or participate in its notification drain. -/
 theorem goal_queue_is_separate_from_background :
     let entry : QueueEntry := ⟨1, 0, 0, .queue, .goal, .coalesce, some 7, none, .scheduled, none, 0, true⟩
     entry.coalesceWellFormed 7 ∧

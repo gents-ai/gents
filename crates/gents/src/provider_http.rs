@@ -1,5 +1,3 @@
-//! The network terminal beneath every provider completion stack.
-
 use std::future::Future;
 use std::sync::Arc;
 
@@ -17,19 +15,11 @@ use rig::wasm_compat::WasmCompatSend;
 use crate::usage_observation::UsageReporter;
 
 /// Rig's reqwest client, except that a non-success response keeps its
-/// rate-limit headers.
-///
-/// Rig's own `HttpClientExt for reqwest::Client` turns a non-success status
-/// into `InvalidStatusCodeWithMessage(status, body)` before it copies headers,
-/// and only error text crosses Rig's provider and streaming boundaries. This
-/// client returns the same variant with the body annotated by
-/// [`ProviderLimitHeaders::annotate`], so
-/// `gents_loop::provider_limit` can honor `Retry-After` and provider reset
-/// headers.
+/// rate-limit headers: Rig's own implementation discards them before they can
+/// reach `gents_loop::provider_limit`.
 #[derive(Clone, Debug, Default)]
 pub struct ProviderHttpClient {
     inner: ReqwestClient,
-    /// Records each response's usage headers for the account this client serves.
     usage: Option<Arc<UsageReporter>>,
 }
 
@@ -56,7 +46,6 @@ fn observe(usage: &Option<Arc<UsageReporter>>, headers: &HeaderMap, source: Usag
     }
 }
 
-/// The rejected-response error: Rig's variant, body plus header marker.
 pub(crate) fn rejected_response_error(
     status: StatusCode,
     headers: &HeaderMap,

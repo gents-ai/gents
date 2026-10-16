@@ -1,6 +1,3 @@
-//! Lens and plugin engines must share trap handling, survive host signals,
-//! and return guest faults as errors.
-
 use super::{build_plugin_pack, ECHO_WAT};
 use crate::plugin::{PluginBudget, PluginRunner, PluginVerdict};
 
@@ -8,8 +5,6 @@ const CHILD_ENV: &str = "GENTS_PLUGIN_TRAP_HANDLER_SIGNAL_CHILD";
 const TEST_NAME: &str =
     "plugin::tests::trap_handler::a_signal_on_every_thread_after_a_plugin_call_does_not_abort";
 
-/// Loads past the end of its one-page memory. Wasmtime elides the bounds
-/// check and lets the guard page fault, exercising native trap handling.
 const OUT_OF_BOUNDS_WAT: &str = r#"
       (module
         (memory (export "memory") 1)
@@ -28,9 +23,6 @@ extern "C" {
     fn mach_port_deallocate(task: libc::mach_port_t, name: libc::mach_port_t) -> libc::c_int;
 }
 
-/// Delivers `SIGUSR2`, with a handler installed, to every other thread of
-/// this process, the way the kernel may deliver a process-directed signal
-/// such as tokio's `SIGCHLD` to any thread that does not block it.
 fn signal_every_other_thread() {
     // SAFETY: plain libc/mach calls on this process's own threads; the port
     // rights and thread array `task_threads` hands out are released below.
@@ -75,8 +67,6 @@ fn echo_once(runner: &PluginRunner, n: u64) {
     assert_eq!(outcome.output, arguments);
 }
 
-/// Runs in a child process so the signals never reach this binary's other
-/// tests; Lens initializes the shared trap mode before the plugin engine.
 #[test]
 fn a_signal_on_every_thread_after_a_plugin_call_does_not_abort() {
     if std::env::var_os(CHILD_ENV).is_some() {

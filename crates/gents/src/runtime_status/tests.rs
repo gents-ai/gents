@@ -36,9 +36,6 @@ async fn test_node() -> Arc<defra_node::EmbeddedNode> {
 
 #[test]
 fn node_runtime_writer_source_cannot_serialize_readiness_authority() {
-    // The schema-side collection fence is owned by
-    // gents_protocol::schemas::node_runtime_schema_is_diagnostics_only. This
-    // twin catches writer-shaped fields that would compile but fail at runtime.
     let source = include_str!("../runtime_status.rs");
     for forbidden in [
         "row.process_state",

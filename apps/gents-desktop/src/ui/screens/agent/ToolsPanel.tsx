@@ -24,7 +24,6 @@ import { useCallback, useState } from "react";
 import { useApp } from "@/app/AppContext";
 import { Disclosure } from "../../components/Disclosure";
 
-/* the document a draft starts from: read-only files, no commands */
 export function newToolsDocument(deployment: NodeView): Tools {
   return {
     tools_id: newId("tools"),
@@ -36,12 +35,6 @@ export function newToolsDocument(deployment: NodeView): Tools {
 
 const ROOT = "Workspace root";
 
-/**
- * The Canonical JSON field as the Tools document takes it: an object of
- * the fields only it edits, each limit, timeout, target, remote service
- * and datastore surface checked against the node. Throws the first
- * problem; remote services' tool names are trimmed and deduplicated.
- */
 export function parseAdvancedTools(
   text: string,
   deployment: NodeView,
@@ -191,10 +184,8 @@ export function ToolsEditor({
   draft: draftMode,
 }: {
   deployment: NodeView;
-  /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
   tools: Tools;
-  /* a new document that exists only here until Save */
   draft?: { onSaved: (toolsId: string) => void; onCancel: () => void };
 }) {
   const { changeConfig } = useApp().actions;
@@ -385,8 +376,6 @@ export function ToolsEditor({
         }}
       />
       <Group title="Advanced tool groups">
-        {/* the whole document as JSON: an escape hatch, closed by default; open, it
-            shows in full so the page is the only thing that scrolls */}
         <Disclosure summary="Canonical JSON" summaryClassName="px-5 py-4">
           <AreaRow
             id={id("advanced")}

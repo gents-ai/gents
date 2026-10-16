@@ -1,5 +1,3 @@
-//! Runtime-owned P2P pairing reconcile seam.
-
 mod collection_resolution;
 pub mod diff;
 pub mod embedded_impl;

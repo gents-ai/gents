@@ -1,25 +1,11 @@
-//! Looking at a pack without installing it: the shared-library owner behind
-//! `gents pack verify` (a `.pack` file) and `gents pack show --config`'s
-//! loaded-configuration preview.
-//!
-//! Canonical with `crates/gents-cli/src/commands/pack/inspect.rs`. The
-//! registry, store and diff halves of `inspect.rs` stay with the CLI:
-//! they need a home's pack store, registry credentials and a resolved
-//! [`PackSource`], all of which are CLI state. What a caller can ask of a
-//! plain `.pack` file or of a directory archive is owned here.
-
 use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::pack::{load_pack_config, PackInstallOptions, PackManifest};
 use crate::pack_archive::read_pack;
 
-/// The owner a previewed configuration is bound to. Never written anywhere.
 pub const PREVIEW_OWNER: &str = "did:key:zPackShowPlaceholder";
 
-/// Checks a `.pack` file, streaming, without installing or storing
-/// anything. Returns the verified header, the way `gents pack verify`
-/// prints it.
 pub fn verify_pack_file(path: &std::path::Path) -> Result<crate::pack_archive::PackHeader> {
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     read_pack(
@@ -31,12 +17,6 @@ pub fn verify_pack_file(path: &std::path::Path) -> Result<crate::pack_archive::P
     .map(|verified| verified.header)
 }
 
-/// The pack's canonical configuration, loaded exactly like an install would
-/// (for a placeholder owner, since nothing is written), and its
-/// `experiment.json`, interpolated at declared defaults, or `null` when the
-/// pack declares no scenario. The environment is never read: a missing
-/// default is refused so the preview never differs from the pack's own
-/// declared defaults.
 pub fn preview_config(
     manifest: &PackManifest,
     asset: &dyn Fn(&str) -> Result<Vec<u8>>,
@@ -74,8 +54,6 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    /// A compiler seam that records it was asked and refuses: no real
-    /// toolchain in this test.
     struct RefusingCompiler {
         called: std::sync::Arc<std::sync::atomic::AtomicBool>,
     }
@@ -102,8 +80,6 @@ mod tests {
         }
     }
 
-    /// A `.pack` produced by the authoring build verifies, and a tampered
-    /// one does not.
     #[test]
     fn a_built_pack_verifies_and_a_tampered_one_does_not() {
         let dir = tempfile::tempdir().unwrap();
@@ -170,9 +146,6 @@ mod tests {
         );
         assert_eq!(report["scenario"], serde_json::Value::Null);
 
-        // A scenario with an un-defaulted variable is refused: the preview
-        // never reads the environment, so it can never disagree with the
-        // pack's declared defaults.
         std::fs::write(
             root.join("experiment.json"),
             br#"{"endpoint": "${GENTS_PREVIEW_ENDPOINT}"}"#,
@@ -193,7 +166,6 @@ mod tests {
             "{error:#}"
         );
 
-        // A defaulted variable resolves at its default.
         std::fs::write(
             root.join("experiment.json"),
             br#"{"endpoint": "${GENTS_PREVIEW_ENDPOINT:-http://127.0.0.1:1/v1}"}"#,

@@ -1,7 +1,3 @@
-/* The folders plugins may read or write when an agent or a graph names a
-   path (for example "read ~/Documents/x.pdf"). The session's working folder
-   is always readable; a path elsewhere is asked about, or refused in a
-   graph, unless its folder is listed here. */
 import { shortPath } from "@/lib/paths";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { useCallback, useEffect, useState } from "react";
@@ -24,28 +20,23 @@ const ACCESS_LABEL: Record<AllowedFolderAccess, string> = {
 
 export function AllowedFoldersPanel() {
   const { actions } = useApp();
-  /* the desktop's own approvals: paths on this computer */
   const home = useHomeFolder();
   const [folders, setFolders] = useState<AllowedFolders | null>(null);
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const run = useCallback(
-    /* each folder command answers with the list as it now stands */
-    async (command: () => Promise<AllowedFolders>) => {
-      setBusy(true);
-      try {
-        setFolders(await command());
-        return true;
-      } catch (error) {
-        toast.error(errorText(error));
-        return false;
-      } finally {
-        setBusy(false);
-      }
-    },
-    [],
-  );
+  const run = useCallback(async (command: () => Promise<AllowedFolders>) => {
+    setBusy(true);
+    try {
+      setFolders(await command());
+      return true;
+    } catch (error) {
+      toast.error(errorText(error));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   useEffect(() => {
     void run(() => actions.listAllowedFolders());

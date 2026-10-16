@@ -74,13 +74,6 @@ pub(crate) async fn ensure_session_with_agent_id_and_requester_did(
     .await
 }
 
-/// Create-or-preserve the single durable session document inside the caller's
-/// transaction. Scope is exact: agent, session label, requester (absence is
-/// its own scope, not a wildcard) and the agent binding must agree with any
-/// existing document; duplicate rows under one label fail instead of being
-/// silently picked. An existing matching document is preserved untouched —
-/// creation time, title, tags, provenance and observation all stay.
-/// Does not reopen a closed session; the claim-time resume owner does that.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn ensure_session_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
@@ -178,9 +171,8 @@ pub(crate) async fn ensure_session_in_txn(
             .clone(),
     );
     if crate::graphql::single_mutation_document(&created, "create_AgentSession")?.is_none() {
-        // The create may have raced a concurrent publisher; revalidate scope
-        // through the same preserved-document contract so a colliding writer
-        // cannot silently win with a different binding.
+        // Revalidate scope through the same preserved-document contract so a
+        // colliding writer cannot silently win with a different binding.
         let response = txn.execute(&query).await?;
         let rows = response
             .get("data")
@@ -212,13 +204,6 @@ pub(crate) async fn ensure_session_in_txn(
     Ok(true)
 }
 
-/// Claim-time resume owner for a reused session inside the caller's
-/// transaction. Reopening clears `closed_at` without resetting creation time,
-/// title, tags or provenance, and advances the observation activity
-/// monotonically (`max(now, old)`). An open session is left unwritten: the
-/// claim's observation write carries its activity (see
-/// [`touch_session_in_txn`]). Returns whether a closed session was actually
-/// reopened. Scope is exact, mirroring `ensure_session_in_txn`.
 pub(crate) async fn reopen_session_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     session_id: &str,
@@ -237,8 +222,6 @@ pub(crate) async fn reopen_session_in_txn(
         session.node_did,
         node_did.trim()
     );
-    // Exact requester scope: absent requester scope is its own scope, not a
-    // wildcard, and never widens to match a caller.
     match (
         session.requester_did.as_deref(),
         requester_did.map(str::trim),
@@ -272,8 +255,6 @@ pub(crate) async fn reopen_session_in_txn(
     Ok(was_closed)
 }
 
-/// Advance a session's observation activity to `max(now, old)` without
-/// changing its preview or latest request.
 pub(crate) async fn touch_session_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     row: &super::rows::SessionOwnerRow,
@@ -287,9 +268,6 @@ pub(crate) async fn touch_session_in_txn(
     .await
 }
 
-/// Close the session through its existing owner: reread inside a transaction,
-/// set `closed_at`, advance activity, and preserve identity, creation time,
-/// title, provenance, tags and the current observation preview/latest request.
 pub async fn close_session(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
@@ -330,7 +308,6 @@ pub async fn close_session(
     .await
 }
 
-/// Bare scope/identity fields plus `_docID` for in-transaction reads.
 pub(super) const SESSION_SCOPE_FIELDS: &str = "session_id node_did requester_did agent_id \
 created_at closed_at title provenance observation tags _docID";
 
@@ -362,8 +339,6 @@ pub async fn load_agent_session_row_in_txn(
     rows.first().map(decode_session_row).transpose()
 }
 
-/// `max(now, old)` activity value; an absent observation falls back to the
-/// session's creation time, matching the Lean `touch` model.
 pub(super) fn touch_activity_value(row: &super::rows::SessionOwnerRow, now: &str) -> String {
     let old = row
         .session
@@ -380,7 +355,6 @@ pub(super) fn touch_activity_value(row: &super::rows::SessionOwnerRow, now: &str
     }
 }
 
-/// Preserve the observed request and preview while advancing only activity.
 pub(super) fn touched_observation(
     row: &super::rows::SessionOwnerRow,
     now: &str,

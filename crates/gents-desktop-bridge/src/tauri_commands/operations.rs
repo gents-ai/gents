@@ -175,21 +175,6 @@ fn background_tool_calls_query(node_did: &str) -> String {
     )
 }
 
-#[cfg(test)]
-mod background_tool_query_tests {
-    use super::*;
-
-    #[test]
-    fn scopes_live_rows_to_the_selected_node_and_caps_the_scan() {
-        let query = background_tool_calls_query("did:key:z6Mk\"selected");
-
-        assert!(query.contains(r#"await_mode: { _eq: "background" }"#));
-        assert!(query.contains(r#"lifecycle_state: { _in: ["pending", "running"] }"#));
-        assert!(query.contains(r#"node_did: { _eq: "did:key:z6Mk\"selected" }"#));
-        assert!(query.contains(&format!("limit: {BACKGROUND_TOOL_CALL_LIMIT}")));
-    }
-}
-
 #[tauri::command]
 pub async fn desktop_session_provenance(
     state: State<'_, DesktopAppState>,

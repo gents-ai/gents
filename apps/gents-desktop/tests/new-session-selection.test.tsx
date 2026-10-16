@@ -46,7 +46,6 @@ function useHarness(
   );
   const store = stores.selection;
   const deployments = deployment ? [deployment] : [];
-  /* the read the shell would have published */
   applyFleetSnapshot(stores.fleet, {
     bootstrap: {},
     client: { deployments },
@@ -117,7 +116,6 @@ describe("explicit session selection", () => {
     act(() =>
       result.current.store.setState({ mailboxRoute: reply, composingFor: "agent" }),
     );
-    /* a read while the client restarts lists no nodes */
     rerender({ deployment: null });
     expect(result.current.agentId).toBe("setup");
     expect(result.current.store.getState().mailboxRoute).toEqual(reply);

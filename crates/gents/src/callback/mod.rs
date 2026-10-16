@@ -1,9 +1,3 @@
-//! Callback engine: first-seen source creates → journaled host actions.
-//!
-//! Bindings select shared EventSource configuration (first-arrival create semantics).
-//! Invocations are claimable only on `owner_node_did`. `CallbackResult`
-//! is created only after IsolatedWorkspace + WorkspacePlacement are durable.
-
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -50,10 +44,7 @@ pub(super) struct CallbackEngine {
     subscription: Option<events::Subscription>,
     desired_collections: HashSet<String>,
     seen_docs: HashMap<String, HashSet<String>>,
-    /// Per-document bindings, which deliver from their arrival cursor, by
-    /// source collection.
     cursor_bindings: HashMap<String, String>,
-    /// Source collections of grouped bindings, which keep first-seen history.
     group_collections: HashSet<String>,
     collection_id_to_name: HashMap<String, String>,
     group_page_cursors: HashMap<String, String>,

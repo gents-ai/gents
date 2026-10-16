@@ -1,9 +1,6 @@
 use super::support::*;
 use super::*;
 
-/// Missing selection is malformed even when upstream chooser metadata or an
-/// existing session could supply a convenient default. This is an admission
-/// boundary test, not a test of the UI's pre-request model chooser.
 #[tokio::test]
 async fn resolve_agent_rejects_missing_or_blank_explicit_selection() {
     let node = test_node().await;
@@ -26,8 +23,6 @@ async fn resolve_agent_rejects_missing_or_blank_explicit_selection() {
 
 #[tokio::test]
 async fn explicit_agent_resolution_matches_lean_binding_cases() {
-    // Generation alignment/runnability are tested at the router admission
-    // boundary. This owner resolves only explicit selection and binding.
     for name in [
         "default-A-explicit-B-binds-B",
         "existing-A-requested-B-rejected",

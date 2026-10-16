@@ -1,5 +1,3 @@
-/* The setup flows' frame and controls: the page (or the panel when
-   embedded), its title, a choice row, the step navigation and a field. */
 import { ArrowLeft, ArrowRight, Circle, CircleCheck, Moon, Sun } from "lucide-react";
 import type { Server } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
@@ -41,7 +39,6 @@ export function Frame({
       data-testid="setup-screen"
     >
       <div className="px-8">
-        {/* anchored a fixed way down, not centered: a step can grow or shrink without moving its title */}
         <div className="mx-auto w-full max-w-xl pt-[10vh] pb-8">{children}</div>
         <Button
           variant="ghost"

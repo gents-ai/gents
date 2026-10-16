@@ -1,26 +1,16 @@
-//! Folding queued user messages into the turn that claims them (Lean
-//! `SessionQueue.claimFolding`, `consumeFolded`). Each folded message keeps its
-//! own signed request. The claim only selects it; the turn's publication of it
-//! as an authored user message supersedes its row in the same transaction. A
-//! turn that ends before that publication leaves it queued.
-
 use super::*;
 use gents_protocol::request_admission::RequestPurpose;
 
-/// The supersession reason that marks a request as folded into
-/// `superseded_by_request_doc_id`. Other supersessions never carry it.
 pub const FOLDED_REASON: &str = "folded into claimed request";
 
 #[derive(Debug, thiserror::Error)]
 #[error("pending input was changed before it was consumed")]
 pub(crate) struct PendingInputChanged;
 
-/// Authored key of a folded message within its claimed request.
 pub(crate) fn folded_input_key(folded_request_doc_id: &str) -> String {
     format!("folded:{folded_request_doc_id}")
 }
 
-/// A folded message, in queue order, as its claimed turn sends it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FoldedInput {
     pub(crate) request_doc_id: String,
@@ -38,9 +28,6 @@ fn blank(value: Option<&str>) -> bool {
     value.is_none_or(|value| value.trim().is_empty())
 }
 
-/// Lean `QueueEntry.foldsInto`, head side: an interactive user turn that
-/// executes its own content. Trigger, session-message, mailbox-reply and
-/// controller requests keep their own turns.
 pub(crate) fn heads_user_turn(head: &AgentRequest) -> bool {
     head.purpose == RequestPurpose::Normal
         && head.execution_origin.as_deref() == Some(ExecutionOrigin::Interactive.as_str())
@@ -53,12 +40,10 @@ pub(crate) fn heads_user_turn(head: &AgentRequest) -> bool {
         && blank(head.caused_by_parent_tool_call_doc_id.as_deref())
 }
 
-/// The authored key's folded request, when the key names one.
 pub(crate) fn folded_request_doc_id(key: &str) -> Option<&str> {
     key.strip_prefix("folded:").filter(|doc| !doc.is_empty())
 }
 
-/// The queued message an authored publication answers.
 #[derive(Debug, Clone)]
 pub(crate) struct FoldedConsumption {
     pub(crate) folded_request_doc_id: String,
@@ -86,9 +71,6 @@ impl FoldedConsumption {
     }
 }
 
-/// Lean `QueueEntry.foldsInto`, candidate side: a queued user message under
-/// the head's requester authority and execution settings that has never been
-/// claimed, interrupted or retried, and is not expired.
 fn folds_into(
     head: &AgentRequest,
     row: &AgentRequestRow,
@@ -135,9 +117,6 @@ fn folds_into(
         && !blank(row.content.as_deref())
 }
 
-/// Pending messages that may fold into `head`'s claim, for the caller
-/// to verify each one's signed admission before the claim. Queue order and
-/// contiguity are decided by the claim transaction.
 pub(crate) async fn fold_candidates(
     node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
@@ -164,11 +143,6 @@ pub(crate) async fn fold_candidates(
         .collect()
 }
 
-/// Select the run of pending messages directly behind `head` that fold into
-/// it, inside `head`'s claim transaction, which is the cutoff. `admitted`
-/// names the requests whose signed admission the caller verified. The run
-/// follows the native arrival order and stops at the first row that does not
-/// fold, so no request passes one that stays queued. Selection writes nothing.
 pub(crate) async fn select_fold_in_claim_txn(
     txn: &ConfigApplyTxn<'_>,
     head: &AgentRequest,
@@ -196,8 +170,7 @@ pub(crate) async fn select_fold_in_claim_txn(
     let Some(head_position) = order.iter().position(|doc| doc == &head.doc_id) else {
         return Ok(Vec::new());
     };
-    // A row without an arrival has no provable place in the queue, so the
-    // run cannot be shown contiguous past it.
+    // An unarrived row leaves the run's contiguity unprovable.
     if order.len() != doc_ids.len() {
         return Ok(Vec::new());
     }
@@ -225,9 +198,6 @@ pub(crate) async fn select_fold_in_claim_txn(
     Ok(selected)
 }
 
-/// Supersede the folded request its turn is publishing, in the publication
-/// transaction. The request must still be pending: a message interrupted or
-/// otherwise ended after the claim cannot be answered.
 pub(crate) async fn consume_folded_in_txn(
     txn: &ConfigApplyTxn<'_>,
     consumption: &FoldedConsumption,
@@ -328,7 +298,6 @@ pub(crate) async fn consume_folded_in_txn(
     .await
 }
 
-/// A replayed folded publication was consumed by the same request.
 pub(crate) async fn ensure_folded_consumed_in_txn(
     txn: &ConfigApplyTxn<'_>,
     consumption: &FoldedConsumption,
@@ -355,8 +324,6 @@ pub(crate) async fn ensure_folded_consumed_in_txn(
     Ok(())
 }
 
-/// The messages `head`'s turn already published and consumed, in queue order.
-/// A redrive reuses them ahead of its own selection.
 pub(crate) async fn load_consumed_folded_inputs(
     node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,

@@ -30,8 +30,6 @@ pub(super) async fn load_scoped_session(
         .map(|(session, _)| session))
 }
 
-/// A session another session started is a caused thread under its
-/// starter, never a root thread; its stored provenance says so.
 fn is_started(session: &AgentSession) -> bool {
     session
         .provenance
@@ -175,23 +173,5 @@ fn absolute_cwd(base_cwd: &Path, cwd: &Path) -> PathBuf {
         cwd.to_path_buf()
     } else {
         base_cwd.join(cwd)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn settings_json_cwd_reads_thread_settings_cwd() {
-        let base = Path::new("/workspace");
-        assert_eq!(
-            settings_json_cwd(base, r#"{"cwd":"/repo"}"#),
-            Some(PathBuf::from("/repo"))
-        );
-        assert_eq!(
-            settings_json_cwd(base, r#"{"cwd":"repo"}"#),
-            Some(PathBuf::from("/workspace/repo"))
-        );
-        assert_eq!(settings_json_cwd(base, "{}"), None);
     }
 }

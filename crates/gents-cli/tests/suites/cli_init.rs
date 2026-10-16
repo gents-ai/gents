@@ -209,7 +209,6 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
             .map(Vec::len),
         Some(1)
     );
-    // Plain init enables the same self-config preset as the desktop first run.
     let tools = first_graphql_row(&tools_rows, "Tools")?;
     assert_eq!(
         tools
@@ -885,9 +884,6 @@ fn init_accepts_tool_root_for_readonly_defaults() -> Result<()> {
     Ok(())
 }
 
-/// Pin `Tools.host.root` on the default agent's Tools document, as homes
-/// created before init stopped copying the operator root into Tools still
-/// carry, so a serve run can be driven against a live authored grant.
 async fn pin_default_tools_root(
     home_dir: &Path,
     node_did: &str,
@@ -950,8 +946,6 @@ async fn pin_default_tools_root(
     Ok(())
 }
 
-/// A persisted `Tools.host.root` disjoint from a later `--tool-root` must be
-/// refused at startup with a diagnostic naming both roots.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn serve_startup_logs_the_tool_root_that_escapes_the_ceiling() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -1006,9 +1000,6 @@ async fn serve_startup_logs_the_tool_root_that_escapes_the_ceiling() -> Result<(
     Ok(())
 }
 
-/// Service mode drops the console tracing layer, so the exit-error sink the
-/// service manager appends to runtime-errors.log must still carry the
-/// root-admission diagnostic; the presentation-safe bail alone names no root.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn serve_service_mode_writes_the_startup_diagnostic_to_stderr() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -1064,8 +1055,6 @@ async fn serve_service_mode_writes_the_startup_diagnostic_to_stderr() -> Result<
     Ok(())
 }
 
-/// The live `Tools.host.root`, not the root `gents init` recorded, is what
-/// `--tool-root` must admit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn serve_admits_a_narrower_tool_root_after_the_live_root_moved() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -1109,10 +1098,6 @@ async fn serve_admits_a_narrower_tool_root_after_the_live_root_moved() -> Result
     Ok(())
 }
 
-/// A Tools grant that still contains a narrowed operator root must clamp to
-/// the operator root instead of stranding the only behavior: this is the
-/// desktop "Change access" flow for homes whose Tools document pins the wider
-/// root `gents init` recorded.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn serve_clamps_the_default_tools_root_to_a_narrowed_operator_root() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -1141,11 +1126,8 @@ async fn serve_clamps_the_default_tools_root_to_a_narrowed_operator_root() -> Re
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    // Pin the Tools grant at the workspace root, as homes created before init
-    // stopped copying the operator root into Tools still carry.
     pin_default_tools_root(&home_dir, &node_did, workspace_root, tempdir.path()).await?;
 
-    // Narrowing the operator root below the persisted grant must still boot.
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let mut serve = spawn_server_with_env(
@@ -1159,10 +1141,6 @@ async fn serve_clamps_the_default_tools_root_to_a_narrowed_operator_root() -> Re
     Ok(())
 }
 
-/// A home initialized while an explicit WorkspaceRoot policy exists must pin
-/// the operator root into `Tools.host.root`: the per-request execution guard
-/// refuses rootless host tools under configured policy, so a blank root would
-/// leave the home ready at startup but refuse every request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -1192,8 +1170,6 @@ async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Re
     let init = run_init_json(&home_dir, &init_args)?;
     let node_did = node_did_from_init(&init)?;
 
-    // Author the explicit policy publishing the workspace root, then re-run
-    // init on the configured home.
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
@@ -1214,8 +1190,6 @@ async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Re
 
     run_init_json(&home_dir, &init_args)?;
 
-    // The pinned Tools root keeps the home servable, so a request must pass
-    // the per-request WorkspaceRoot guard and reach the model.
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
@@ -1359,8 +1333,6 @@ async fn readiness_wait_survives_preflight_listener_closing_before_server_start(
         did,
         Duration::from_secs(5),
     ));
-    // The preflight socket is closed. Connection refusal during this phase
-    // must remain a bounded readiness wait, not fail or report readiness.
     assert!(tokio::time::timeout(Duration::from_millis(50), &mut ready)
         .await
         .is_err());

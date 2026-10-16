@@ -10,7 +10,6 @@ fn eval_run_help_and_a_missing_definition_refuses_before_any_run_directory_exist
 
     let help = run_cli_text(&home_dir, &["eval", "run", "--help"])?;
     assert!(help.contains("--cell"), "{help}");
-    // A stopped run exits 1, so a script never reads it as a success.
     for argv in [
         &["eval", "run", "--help"][..],
         &["eval", "resume", "--help"],
@@ -53,8 +52,6 @@ fn eval_run_help_and_a_missing_definition_refuses_before_any_run_directory_exist
     Ok(())
 }
 
-/// An argv-only mistake spanning flags is a usage error: exit 2, before any
-/// home is read (this home was never initialized).
 #[test]
 fn a_repeated_cell_or_a_stray_or_repeated_profile_exits_2_as_a_usage_error() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -104,9 +101,6 @@ fn a_repeated_cell_or_a_stray_or_repeated_profile_exits_2_as_a_usage_error() -> 
     Ok(())
 }
 
-/// The cancel marker needs no database: it is written before the home is
-/// opened, so a home that cannot be opened (here, never initialized; in use,
-/// an embedded node the hosting process holds) still gets it, exit 0.
 #[test]
 fn eval_cancel_writes_the_marker_before_opening_the_home() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

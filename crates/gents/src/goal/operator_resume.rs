@@ -1,4 +1,3 @@
-//! Operator resume composes the existing Goal and request owners in one transaction.
 use super::*;
 use crate::config_client::ConfigApplyTxn;
 use crate::identity::NodeIdentity;
@@ -184,8 +183,6 @@ async fn existing_resume_receipt_in_txn(
     }))
 }
 
-/// A Goal resumed on another account: the move, `None` when the profile was
-/// already there, and the resume.
 #[derive(Debug, Clone, Serialize)]
 pub struct GoalResumeOnReceipt {
     pub switch: Option<crate::config_client::SwitchReceipt>,

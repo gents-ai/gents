@@ -1,11 +1,3 @@
-//! The live-stream sink seam.
-//!
-//! `StreamProcessor` writes streamed tokens and reasoning to a durable
-//! response document as they arrive. `gents`'s `DefraStreamWriter` (native)
-//! implements the actual write; the loop side only needs these four
-//! operations, moved here so `StreamProcessor` can be generic over `W:
-//! StreamWriter` with no DefraDB dependency.
-
 use gents_protocol::message::Message;
 use gents_protocol::rendered_request::CaptureScope;
 
@@ -22,7 +14,6 @@ pub struct CanonicalPublishedTurn<Accepted> {
     pub accepted_tools: Vec<Accepted>,
 }
 
-/// Native durable publication supplied to the generic stream processor.
 pub trait CanonicalStreamWriter<L: RequestLifecycleControl>: StreamWriter {
     type AcceptedToolCall: Send;
 
@@ -33,7 +24,7 @@ pub trait CanonicalStreamWriter<L: RequestLifecycleControl>: StreamWriter {
         message: &Message,
     ) -> impl std::future::Future<Output = anyhow::Result<String>> + Send;
 
-    /// Atomically validates and publishes one candidate. `None` fences a stale
+    /// Atomically validates and publishes one candidate; `None` fences a stale
     /// candidate and its remaining ordered batch out of provider input.
     fn try_publish_steering_message(
         &self,
@@ -91,7 +82,6 @@ pub trait CanonicalStreamWriter<L: RequestLifecycleControl>: StreamWriter {
 }
 
 pub trait StreamWriter: Send + Sync {
-    /// Schedule private metadata without exposing it as visible reasoning.
     fn mark_pending_output(
         &self,
         _doc_id: &str,
@@ -116,14 +106,10 @@ pub trait StreamWriter: Send + Sync {
         doc_id: &str,
     ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send;
 
-    /// When the next batch of buffered tokens is due to be written, if any
-    /// are buffered. A driver uses it to wake exactly at the deadline
-    /// instead of polling, so a stream that goes quiet mid-batch still
-    /// lands its tokens on time.
-    ///
-    /// `None` means nothing is pending. The default says so, because a
-    /// writer that does not batch has nothing to be due: only a batching
-    /// writer needs to answer this.
+    /// When the next batch of buffered tokens is due, if any; a driver waits
+    /// on this instead of polling so a quiet stream still lands its tokens.
+    /// `None` means nothing is pending (the default: only a batching writer
+    /// has anything due).
     fn next_flush_deadline(
         &self,
         doc_id: &str,

@@ -95,7 +95,6 @@ fn empty_seal_rejects_foreign_pending_commit_and_replays_without_effect() {
     let sealed = seal_writer(&fx, &mut docs, "ws-empty-pending", "req-writer");
     let seal = sealed.workspace.seal_hash.as_deref().unwrap();
     bind_integrate(&mut docs, "ws-empty-pending", "req-int", seal);
-    // A real commit object changes an unowned path, but neither branch moves.
     fs::write(dest.join("README.md"), "unowned effect\n").unwrap();
     git(&dest, &["add", "README.md"]);
     let foreign_tree = git(&dest, &["write-tree"]);

@@ -6,9 +6,6 @@ use gents::{
 use p2p::sync::{DispatchSnapshot, PeerBacklogSnapshot, PushBacklogSnapshot, SyncStatus};
 use storage::stores::PushRetryMarkerStats;
 
-/// Build the pinned DefraDB sync wire snapshot exactly as the runtime owner
-/// publishes it: the upstream `SyncStatus` serialization plus the push-retry
-/// marker block. The populated counters exercise the complete typed mapping.
 fn pinned_upstream_wire() -> serde_json::Value {
     let upstream = SyncStatus {
         push_backlog: PushBacklogSnapshot {
@@ -123,10 +120,6 @@ fn pinned_defradb_sync_status_maps_field_for_field_into_the_typed_snapshot() {
         .adapt(&wire)
         .expect("adapt pinned DefraDB SyncStatus");
 
-    // Whole-snapshot equality is the observability contract: every pinned
-    // DefraDB sync field must reach the typed snapshot under its own name with
-    // its own value. A field missing from the assert list below is a compile
-    // error, so no counter can silently fall back to a default.
     assert_eq!(
         adapted,
         P2pSyncStatusSnapshot {

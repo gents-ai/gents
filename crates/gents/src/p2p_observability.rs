@@ -1,10 +1,3 @@
-//! Downstream contract for DefraDB P2P sync diagnostics.
-//!
-//! DefraDB owns the sync implementation and its wire snapshot. This module is
-//! the deliberately small adapter seam where the agent binds that upstream
-//! contract into operator-facing status and metrics. Keeping a typed snapshot
-//! here prevents those surfaces from reaching into untyped JSON independently.
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -139,8 +132,6 @@ impl P2pSyncStatusAdapter for JsonP2pSyncStatusAdapter {
     }
 }
 
-/// Observe DefraDB sync facts through the native node adapter. This reports
-/// transport facts without deriving client health or runtime readiness.
 pub async fn observe_embedded_sync_status(
     node: &crate::defra_node::EmbeddedNode,
 ) -> anyhow::Result<P2pSyncStatusSnapshot> {

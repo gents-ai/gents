@@ -1,9 +1,5 @@
 import { expect, gotoHarness, test } from "./desktopTest";
 
-/* While a reply streams at the foot, the transcript only ever moves down
-   with it. The Thinking line's spinner swaps a glyph every 100 ms; in
-   WebKit each swap laid the page out again and stepped the view back 2 px,
-   so everything above the line shook. */
 test("following a reply, the view never steps back while the spinner turns", async ({
   page,
 }, testInfo) => {

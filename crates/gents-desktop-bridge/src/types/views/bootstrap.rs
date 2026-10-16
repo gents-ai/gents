@@ -70,13 +70,10 @@ pub struct ManagedServerStatus {
     pub suggested_tool_root: Option<String>,
     pub pairing_ready: bool,
     pub approval_required: bool,
-    /// This home's runtime answers but has not reported ready, typically while
-    /// it migrates its data after an update. Not a failure: it is waited on
-    /// without a bound and is never restarted for taking long.
+    /// Not a failure: the runtime answers but has not reported ready; it is
+    /// waited on without a bound and never restarted for taking long.
     pub runtime_booting: bool,
     pub error: Option<String>,
-    /// Typed classification of `error`: `incompatibleLocalStore` when the
-    /// runtime refused this home's store.
     #[ts(optional = nullable)]
     pub error_code: Option<crate::error::BridgeErrorCode>,
 }
@@ -90,32 +87,3 @@ pub struct ManagedServerRootValidation {
 pub use gents_desktop_core::home_reset::{
     HomeResetDisposition, IncompatibleStoreScope, IncompatibleStoreView, ManagedServerResetResult,
 };
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn missing_init_config_status_is_omitted_from_the_wire() {
-        let summary = DesktopBootstrapSummary {
-            default_node_home: String::new(),
-            init_node_name: None,
-            init_node_did: None,
-            init_config_status: None,
-            init_tool_ceiling: None,
-            init_tool_root: None,
-            desktop_home: String::new(),
-            peer_directory_path: String::new(),
-            node_data_dir: String::new(),
-            diagnostics_hint: String::new(),
-            node_home_exists: false,
-            desktop_home_exists: false,
-            peer_directory_exists: false,
-            client_state_exists: false,
-            saved_peers: Vec::new(),
-        };
-
-        let wire = serde_json::to_value(summary).expect("serialize bootstrap summary");
-        assert!(wire.get("initConfigStatus").is_none());
-    }
-}

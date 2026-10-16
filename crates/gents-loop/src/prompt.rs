@@ -1,9 +1,3 @@
-//! The compaction-summary rendering the loop needs when it resumes a
-//! session with prior compaction checkpoints. `gents::prompt` owns full
-//! preamble assembly (`LayeredPromptBuilder`, tied to the native `skills`
-//! catalog); only this reminder-formatting slice is shared, so it lives
-//! here and `gents::prompt::LayeredPromptBuilder::system_reminder` calls it.
-
 use gents_protocol::message::{Message, Text, UserContent};
 
 pub fn system_reminder(text: &str) -> Message {
@@ -28,7 +22,6 @@ pub fn join_compaction_summaries(compaction_summaries: &[String]) -> String {
     compaction_summaries.join("\n\n---\n\n")
 }
 
-/// Render durable compaction summaries exactly as they appear in provider input.
 pub fn compaction_summary_message(compaction_summaries: &[String]) -> Option<Message> {
     if compaction_summaries.is_empty() {
         return None;

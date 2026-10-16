@@ -2,9 +2,8 @@
 import type { TaskHookPhase } from "./TaskHookPhase.js";
 
 /**
- * A task-owned host command, using the behavior's HostTools.root (runtime cwd
- * when absent) and inherited host environment. No input projection, prompt
- * interpolation, callback reference, or workspace-specific argument schema.
+ * A task-owned host command, using the behavior's HostTools.root and inherited
+ * host environment.
  */
 export type TaskHook = {
 /**
@@ -12,14 +11,11 @@ export type TaskHook = {
  */
 hook_id: string, phase: TaskHookPhase,
 /**
- * Executable followed by literal arguments. Must be nonempty. PATH lookup
- * and relative paths use ordinary host process semantics. For shell syntax,
- * explicitly invoke a shell, e.g. ["sh", "-c", "./prepare.sh && ./verify.sh"].
+ * Executable followed by literal arguments; PATH lookup and relative
+ * paths use ordinary host process semantics.
  */
 command: Array<string>,
 /**
- * Per-command timeout in seconds. Absent/null uses 120; explicit values
- * must be between 1 and 86400. Launch failure, timeout, and nonzero exit are
- * hook errors.
+ * Per-command timeout in seconds; absent uses 120, explicit 1..=86400.
  */
 timeout_secs?: number | null, };

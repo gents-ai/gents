@@ -314,7 +314,6 @@ pub(crate) struct ValidatedPendingEdit {
     creates: Vec<AgentRequestCreate>,
 }
 
-/// Storage errors abort the transaction; a policy rejection contains no writes.
 pub(crate) async fn validate_pending_user_edit_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
@@ -390,7 +389,6 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PersistedReplacements {
     None,
-    /// Every replacement exists with its own signed admission; holds their physical IDs.
     Exact(Vec<String>),
     Conflicting,
 }

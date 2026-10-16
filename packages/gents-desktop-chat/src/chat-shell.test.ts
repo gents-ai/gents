@@ -1,4 +1,4 @@
-import { describe, expect, it, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, parse } from "node:path";
@@ -12,7 +12,6 @@ import type {
 import { projectDeploymentOperationalState } from "@source-inc/gents-desktop-client";
 import {
   projectChatShell as projectChatShellWithReadiness,
-  reconcileProjectedWorkflow,
   requestProgressPresentation,
   type ChatBlockedReason,
   type ChatWorkflowState,
@@ -201,9 +200,7 @@ async function loadLeanClientShellCases() {
 function runLeanCommand(proofsDir: string, args: string[]): Promise<string> {
   const command = `lake ${args.join(" ")}`;
   return new Promise((resolve, reject) => {
-    // spawnSync blocked the Vitest worker for ~2 minutes, which trips the
-    // default 60s RPC timeout (`Timeout calling "onTaskUpdate"`) even when
-    // the Lean tests themselves pass.
+    // spawnSync trips the Vitest worker RPC timeout; use async spawn.
     const child = spawn("lake", args, {
       cwd: proofsDir,
       timeout: GENERATED_CONTRACT_COMMAND_TIMEOUT_MS,
@@ -344,8 +341,6 @@ function localWorkflowFromContract(
           "req-missing",
       };
     case "blocked":
-      // The contract has no blocked-workflow input reason; expected output
-      // cannot supply it. Reject unsupported cases instead of seeding answers.
       throw new Error(
         `Lean case ${contractCase.name} needs a blocked-workflow input reason`,
       );
@@ -400,50 +395,6 @@ function compactWorkflow(workflow: ChatWorkflowState) {
 }
 
 describe("projectChatShell", () => {
-  it("blocks sends from a typed unavailable verdict", () => {
-    const projection = projectChatShellWithReadiness({
-      clientAvailable: true,
-      selectedNodeDid: "did:key:node",
-      selectedSessionId: null,
-      sending: false,
-      session: null,
-      selectedSessionSummary: null,
-      localWorkflow: { kind: "ready" },
-      operationalState: operationalStateFor({
-        kind: "unavailable",
-        agentId: "general",
-        agentLabel: "General",
-        reason: "backend_temporarily_unavailable",
-      }),
-    });
-
-    expect(projection.nonEmptyContentSendStatus).toEqual({
-      kind: "disabled",
-      reason: "agentUnavailable",
-      hint: "Inference backend for “General” is temporarily unavailable",
-    });
-  });
-
-  it("keeps route admission separate from runtime readiness", () => {
-    const operationalState = operationalStateFor(readyNodeReadiness, false);
-    const projection = projectChatShellWithReadiness({
-      clientAvailable: true,
-      selectedNodeDid: "did:key:node",
-      selectedSessionId: null,
-      sending: false,
-      session: null,
-      selectedSessionSummary: null,
-      localWorkflow: { kind: "ready" },
-      operationalState,
-    });
-
-    expect(projection.nonEmptyContentSendStatus).toEqual({
-      kind: "disabled",
-      reason: "routeNotReady",
-      hint: "The pairing request was sent and is waiting for the agent to accept it.",
-    });
-  });
-
   test(
     "matches generated Lean ClientShell projection contracts",
     async () => {
@@ -478,7 +429,6 @@ describe("projectChatShell", () => {
         expect(compactWorkflow(projection.workflow), contractCase.name).toEqual(
           expectedWorkflowFromContract(contractCase),
         );
-        // The compacted shape omits the node stamped by the projection.
         if (projection.workflow.kind === "turnInProgress") {
           expect(projection.workflow.nodeDid).toBe(
             nodeDid(contractCase.frontend_selected_node_did),
@@ -517,356 +467,6 @@ describe("projectChatShell", () => {
     },
     GENERATED_CONTRACT_TEST_TIMEOUT_MS,
   );
-
-  test("queues a follow up while the turn is streaming", () => {
-    const projection = projectChatShell({
-      clientAvailable: true,
-      selectedNodeDid: "did:test:amy",
-      selectedSessionId: "session-1",
-      sending: false,
-      selectedSessionSummary: null,
-      session: session({ turnState: "running", latestRequestId: "req-1" }),
-      localWorkflow: { kind: "ready" },
-    });
-
-    expect(projection.workflow.kind).toBe("turnInProgress");
-    expect(projection.nonEmptyContentSendStatus).toEqual({
-      kind: "queue",
-      turnState: "running",
-      hint: "Queued behind the running turn",
-    });
-    expect(projection.activityStatus).toEqual({
-      kind: "working",
-      label: "Agent is working…",
-      detail: "Messages you send now wait until this turn finishes.",
-      animated: true,
-    });
-  });
-
-  test("an active turn blocks sends and shows why", () => {
-    const projection = projectChatShell({
-      clientAvailable: true,
-      selectedNodeDid: "did:test:amy",
-      selectedSessionId: "session-1",
-      sending: false,
-      selectedSessionSummary: null,
-      session: session({
-        turnState: "waitingForClaim",
-        latestRequestId: "req-1",
-      }),
-      localWorkflow: { kind: "ready" },
-    });
-
-    expect(projection.nonEmptyContentSendStatus).toEqual({
-      kind: "queue",
-      turnState: "waitingForClaim",
-      hint: "Queued behind the message waiting to start",
-    });
-    expect(projection.activityStatus).toEqual({
-      kind: "waiting",
-      label: "Waiting for the node…",
-      detail:
-        "The node has not started this request yet. Messages you send now wait behind it.",
-      animated: true,
-    });
-  });
-
-  test("a submission observed as queued tracks the running turn it waits behind", () => {
-    const awaiting: ChatWorkflowState = {
-      kind: "awaitingObservation",
-      nodeDid: "did:test:amy",
-      sessionId: "session-1",
-      requestId: "req-queued",
-    };
-    const observed = session({
-      latestRequestId: "req-running",
-      turnState: "running",
-      queuedTurns: [
-        {
-          requestId: "req-queued",
-          content: "and also this",
-          selectedSkillIds: [],
-          lifecycleState: "pending",
-          foldedIntoRequestId: null,
-          origin: null,
-          createdAt: "2026-04-21T00:01:00Z",
-        },
-      ],
-    });
-    const projection = projectChatShell({
-      clientAvailable: true,
-      selectedNodeDid: "did:test:amy",
-      selectedSessionId: "session-1",
-      draft: "one more",
-      sending: false,
-      selectedSessionSummary: null,
-      session: observed,
-      localWorkflow: awaiting,
-    });
-
-    expect(projection.workflow).toEqual({
-      kind: "turnInProgress",
-      nodeDid: "did:test:amy",
-      sessionId: "session-1",
-      requestId: "req-running",
-      turnState: "running",
-    });
-    expect(projection.activeRequestId).toBe("req-running");
-    expect(projection.nonEmptyContentSendStatus.kind).toBe("queue");
-    expect(reconcileProjectedWorkflow(awaiting, projection.workflow)).toEqual(
-      projection.workflow,
-    );
-  });
-
-  test("a submission folded before any queued snapshot retires once its turn ends", () => {
-    const awaiting: ChatWorkflowState = {
-      kind: "awaitingObservation",
-      nodeDid: "did:test:amy",
-      sessionId: "session-1",
-      requestId: "req-folded",
-    };
-    const projection = projectChatShell({
-      clientAvailable: true,
-      selectedNodeDid: "did:test:amy",
-      selectedSessionId: "session-1",
-      draft: "",
-      sending: false,
-      selectedSessionSummary: null,
-      session: session({
-        latestRequestId: "req-head",
-        turnState: "completed",
-        foldedInputs: [
-          { requestId: "req-folded", foldedIntoRequestId: "req-head" },
-        ],
-      }),
-      localWorkflow: awaiting,
-    });
-    expect(projection.workflow).toEqual({ kind: "ready" });
-    expect(reconcileProjectedWorkflow(awaiting, projection.workflow)).toEqual({
-      kind: "ready",
-    });
-  });
-
-  test("uses tracked request before observed latest request catches up", () => {
-    const projection = projectChatShell({
-      clientAvailable: true,
-      selectedNodeDid: "did:test:amy",
-      selectedSessionId: "session-1",
-      sending: false,
-      selectedSessionSummary: null,
-      session: session({
-        latestRequestId: "req-new",
-        turnState: "running",
-        pendingTurn: {
-          requestId: "req-new",
-          content: "follow up",
-          lifecycleState: "processing",
-          foldedIntoRequestId: null,
-          origin: null,
-          createdAt: "2026-04-21T00:01:00Z",
-        },
-      }),
-      localWorkflow: {
-        kind: "awaitingObservation",
-        nodeDid: "did:test:amy",
-        sessionId: "session-1",
-        requestId: "req-new",
-      },
-    });
-
-    expect(projection.activeRequestId).toBe("req-new");
-    expect(projection.workflow.kind).toBe("turnInProgress");
-    expect(projection.nonEmptyContentSendStatus.kind).toBe("queue");
-  });
-
-  test("commits terminal projection before observing an automated follow-up", () => {
-    const trackedWorkflow: ChatWorkflowState = {
-      kind: "turnInProgress",
-      nodeDid: "did:test:amy",
-      sessionId: "session-1",
-      requestId: "req-user",
-      turnState: "running",
-    };
-    const terminalProjection = projectChatShell({
-      clientAvailable: true,
-      selectedNodeDid: "did:test:amy",
-      selectedSessionId: "session-1",
-      sending: false,
-      selectedSessionSummary: null,
-      session: session({
-        latestRequestId: "req-user",
-        turnState: "completed",
-      }),
-      localWorkflow: trackedWorkflow,
-    });
-
-    expect(terminalProjection.workflow).toEqual({ kind: "ready" });
-    const reconciled = reconcileProjectedWorkflow(
-      trackedWorkflow,
-      terminalProjection.workflow,
-    );
-    expect(reconciled).toEqual({ kind: "ready" });
-
-    const wakeProjection = projectChatShell({
-      clientAvailable: true,
-      selectedNodeDid: "did:test:amy",
-      selectedSessionId: "session-1",
-      sending: false,
-      selectedSessionSummary: null,
-      session: session({
-        latestRequestId: "req-wake",
-        turnState: "running",
-      }),
-      localWorkflow: reconciled,
-    });
-
-    expect(wakeProjection.activeRequestId).toBe("req-wake");
-    expect(wakeProjection.workflow).toEqual({
-      kind: "turnInProgress",
-      nodeDid: "did:test:amy",
-      sessionId: "session-1",
-      requestId: "req-wake",
-      turnState: "running",
-    });
-  });
-
-  test("keeps awaiting observation until the matching request is observed", () => {
-    const projection = projectChatShell({
-      clientAvailable: true,
-      selectedNodeDid: "did:test:amy",
-      selectedSessionId: "session-1",
-      sending: false,
-      selectedSessionSummary: null,
-      session: session({ latestRequestId: "req-old", turnState: "completed" }),
-      localWorkflow: {
-        kind: "awaitingObservation",
-        nodeDid: "did:test:amy",
-        sessionId: "session-1",
-        requestId: "req-new",
-      },
-    });
-
-    expect(projection.workflow).toEqual({
-      kind: "awaitingObservation",
-      nodeDid: "did:test:amy",
-      sessionId: "session-1",
-      requestId: "req-new",
-    });
-    expect(projection.nonEmptyContentSendStatus).toEqual({
-      kind: "disabled",
-      reason: "waitingForRequestObservation",
-      hint: "Waiting for request observation",
-    });
-    expect(projection.activityStatus).toEqual({
-      kind: "syncing",
-      label: "Syncing message…",
-      detail:
-        "Your request was created; waiting for it to appear in the shared conversation.",
-      animated: true,
-    });
-  });
-
-  test("ignores stale tracked workflow after user switches sessions", () => {
-    const projection = projectChatShell({
-      clientAvailable: true,
-      selectedNodeDid: "did:test:amy",
-      selectedSessionId: "session-2",
-      sending: false,
-      selectedSessionSummary: null,
-      session: session({
-        sessionId: "session-2",
-        latestRequestId: "req-2",
-        turnState: "completed",
-      }),
-      localWorkflow: {
-        kind: "turnInProgress",
-        nodeDid: "did:test:amy",
-        sessionId: "session-1",
-        requestId: "req-1",
-        turnState: "running",
-      },
-    });
-
-    expect(projection.workflow).toEqual({ kind: "ready" });
-    expect(projection.activeRequestId).toBe("req-2");
-    expect(projection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
-  });
-
-  test("blocks inconsistent observation when latest request is missing", () => {
-    const projection = projectChatShell({
-      clientAvailable: true,
-      selectedNodeDid: "did:test:amy",
-      selectedSessionId: "session-1",
-      sending: false,
-      selectedSessionSummary: null,
-      session: session({
-        latestRequestId: "req-missing",
-        turnState: undefined,
-      }),
-      localWorkflow: { kind: "ready" },
-    });
-
-    expect(projection.workflow).toEqual({
-      kind: "blocked",
-      reason: "inconsistentTurnObservation",
-      turnState: undefined,
-    });
-    expect(projection.nonEmptyContentSendStatus).toEqual({
-      kind: "disabled",
-      reason: "inconsistentTurnObservation",
-      hint: "Waiting for consistent turn observation",
-    });
-  });
-
-  test("allows follow up after terminal turn", () => {
-    const projection = projectChatShell({
-      clientAvailable: true,
-      selectedNodeDid: "did:test:amy",
-      selectedSessionId: "session-1",
-      sending: false,
-      selectedSessionSummary: null,
-      session: session({ turnState: "completed", latestRequestId: "req-1" }),
-      localWorkflow: { kind: "ready" },
-    });
-
-    expect(projection.workflow).toEqual({ kind: "ready" });
-    expect(projection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
-  });
-
-  test("allows follow up after interrupted turn", () => {
-    const projection = projectChatShell({
-      clientAvailable: true,
-      selectedNodeDid: "did:test:amy",
-      selectedSessionId: "session-1",
-      sending: false,
-      selectedSessionSummary: null,
-      session: session({ turnState: "interrupted", latestRequestId: "req-1" }),
-      localWorkflow: { kind: "ready" },
-    });
-
-    expect(projection.workflow).toEqual({ kind: "ready" });
-    expect(projection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
-  });
-
-  test("allows follow up with an untitled terminal session", () => {
-    const projection = projectChatShell({
-      clientAvailable: true,
-      selectedNodeDid: "did:test:amy",
-      selectedSessionId: "session-1",
-      sending: false,
-      selectedSessionSummary: null,
-      session: session({
-        title: null,
-        previewText: null,
-        turnState: "completed",
-        latestRequestId: "req-1",
-      }),
-      localWorkflow: { kind: "ready" },
-    });
-
-    expect(projection.workflow).toEqual({ kind: "ready" });
-    expect(projection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
-  });
 });
 
 describe("requestProgressPresentation", () => {

@@ -1,28 +1,9 @@
 import Proofs.Triggers.Types
 
-/-!
-Shared durable event-group identity and clock.
-
-`EventGroupState` replaces the trigger-only group-state vocabulary: one durable
-first-seen/quiescence clock serves task triggers and callback bindings through
-the existing event engine. The consumer is a typed trigger or callback-binding
-reference under its `node_did`. The durable group key derives from the owner,
-consumer kind/id, effective delivery configuration key and correlation;
-identical trigger and binding ids cannot alias because the consumer kind is
-part of the key and of its derivation input, and a binding id is never placed
-in a field whose semantics still say trigger id. Per-document and per-group
-concurrency gating keep their existing scopes. `reconcile` models the
-single-writer, query-then-create critical section. Store visibility and fair
-rescans remain explicit environment assumptions rather than being smuggled
-into an "exactly once" claim.
--/
-
 namespace Triggers.Groups
 
 def maxGroupDocs : Nat := 256
 
-/-! Authored event grouping is shared by ordinary triggers and graph edges.
-Resolved candidates below retain the existing deduplication/timeout owner. -/
 inductive ExpectedCount where
   | fixed (count : Int)
   | sourceField (field : String)
@@ -46,14 +27,12 @@ def GroupConfig.valid (g : GroupConfig) (correlation : String) : Bool :=
     | some (.fixed count) =>
       0 < count && count <= maxGroupDocs && g.minimumCount.getD 1 <= count
 
-/-- Dynamic counts resolve before the existing candidate eligibility check. -/
 def ExpectedCount.resolve (e : ExpectedCount) (fields : String → Option Int) : Option Nat :=
   let value := match e with
     | .fixed n => some n
     | .sourceField field => fields field
   value.bind (fun n => if 0 < n then some n.toNat else none)
 
-/-- Graph-only constraints narrow the common group; they do not copy its type. -/
 def GroupConfig.validForGraph (g : GroupConfig) (correlation : String)
     (concurrency : ConcurrencyMode) : Bool :=
   g.valid correlation && concurrency != .latestOnly &&
@@ -66,7 +45,6 @@ theorem empty_group_rejected (correlation : String) :
     (GroupConfig.mk none none none).valid correlation = false := by
   simp [GroupConfig.valid]
 
-/-- Authored fixed counts fail shared admission before any delivery attempt. -/
 theorem oversized_fixed_group_rejected (g : GroupConfig) (correlation : String) (count : Int)
     (he : g.expected = some (.fixed count)) (hb : (maxGroupDocs : Int) < count) :
     g.valid correlation = false := by
@@ -92,13 +70,6 @@ theorem fixed_nonpositive_rejected (n : Int) (h : n <= 0)
     ExpectedCount.resolve (.fixed n) fields = none := by
   simp [ExpectedCount.resolve, not_lt.mpr h]
 
-
-/-!
-Typed delivery consumer under its owner node. Both consumer kinds share
-the one durable first-seen/quiescence clock keyed by `EventGroupKey`; there is
-no separate callback grouping clock and `CallbackResult` is not a clock.
--/
-
 inductive EventConsumer where
   | trigger (triggerId : String)
   | callbackBinding (bindingId : String)
@@ -112,8 +83,6 @@ def EventConsumer.kind : EventConsumer → String
   | .trigger _ => "trigger"
   | .callbackBinding _ => "callback_binding"
 
-/-- Durable group identity: owner node, typed consumer, effective delivery
-configuration key, correlation. -/
 structure EventGroupKey where
   nodeDid : String
   consumer : EventConsumer
@@ -121,14 +90,10 @@ structure EventGroupKey where
   correlation : String
   deriving DecidableEq, Repr
 
-/-- Derivation input for the durable `group_key`. The consumer kind precedes
-the raw id, so equal trigger and binding ids derive different keys. -/
 def EventGroupKey.derivation (key : EventGroupKey) : List String :=
   [key.nodeDid, key.consumer.kind, key.consumer.id,
     key.consumerConfigKey, key.correlation]
 
-/-- The durable key derivation includes every discriminator, without ambiguous
-string concatenation. Hashing/storage must preserve this structured encoding. -/
 theorem derivation_injective (left right : EventGroupKey)
     (h : left.derivation = right.derivation) : left = right := by
   rcases left with ⟨la, lc, lf, lr⟩
@@ -136,23 +101,12 @@ theorem derivation_injective (left right : EventGroupKey)
   cases lc <;> cases rc <;>
     simp_all [EventGroupKey.derivation, EventConsumer.kind, EventConsumer.id]
 
-/-- Equal raw trigger and callback-binding ids under one owner, delivery
-configuration and correlation name different durable groups. The derivation
-never collapses a binding id into a field whose semantics say trigger id. -/
 theorem equal_raw_ids_different_kinds_do_not_alias
     (nodeDid configKey correlation rawId : String) :
     EventGroupKey.mk nodeDid (.trigger rawId) configKey correlation ≠
       EventGroupKey.mk nodeDid (.callbackBinding rawId) configKey correlation := by
   intro hEq
   exact EventConsumer.noConfusion (congrArg EventGroupKey.consumer hEq)
-
-/-!
-Concurrency gate identity. Per-document trigger delivery gates on the trigger
-reference alone; per-group delivery and all callback-binding delivery gate on
-the full typed group key. The old trigger-kind component is gone: `trigger_id`
-is the logical trigger key within its `node_did`, so the typed consumer plus
-owner is the whole gate identity.
--/
 
 structure TriggerWideKey where
   nodeDid : String
@@ -180,8 +134,6 @@ def triggerGateKey (mode : FireMode) (nodeDid triggerId configKey correlation : 
         , consumerConfigKey := configKey
         , correlation := correlation }
 
-/-- Callback-binding delivery is group-scoped through the same gate vocabulary;
-the binding never occupies a trigger-id field. -/
 def bindingGateKey (nodeDid bindingId configKey correlation : String) :
     ConcurrencyGateKey :=
   .correlated
@@ -204,7 +156,6 @@ theorem per_group_different_correlation_is_different_gate_scope
   have hKey := ConcurrencyGateKey.correlated.inj hEq
   exact h (congrArg EventGroupKey.correlation hKey)
 
-/-- Equal raw ids keep distinct concurrency scopes across consumer kinds. -/
 theorem equal_raw_ids_different_gate_scopes
     (nodeDid configKey correlation rawId : String) :
     triggerGateKey .perGroup nodeDid rawId configKey correlation ≠
@@ -237,8 +188,6 @@ def Candidate.eligible (candidate : Candidate) : Bool :=
             (candidate.timedOut && candidate.minimumCount <= candidate.actualCount))
     | none => candidate.timedOut && candidate.minimumCount <= candidate.actualCount
 
-/-- Resolve authored counts into the existing runtime candidate. A malformed
-source count is an error, never silently converted into a timeout-only group. -/
 def resolveCandidate (config : GroupConfig) (correlationField : String)
     (key : EventGroupKey) (fields : String → Option Int)
     (actual : Nat) (timedOut : Bool) : Option Candidate :=
@@ -259,8 +208,6 @@ theorem invalid_source_count_rejected (config : GroupConfig) (field correlationF
     resolveCandidate config correlationField key fields actual timedOut = none := by
   simp [resolveCandidate, he, ExpectedCount.resolve, hf]
 
-/-- Oversized source counts fail resolution rather than leaving a permanently
-ineligible candidate in the grouping owner. -/
 theorem oversized_source_count_rejected (config : GroupConfig) (field correlationField : String)
     (key : EventGroupKey) (fields : String → Option Int) (actual : Nat) (timedOut : Bool)
     (value : Int) (he : config.expected = some (.sourceField field))
@@ -270,8 +217,6 @@ theorem oversized_source_count_rejected (config : GroupConfig) (field correlatio
   have hb : ¬ value.toNat <= maxGroupDocs := by omega
   simp [resolveCandidate, he, ExpectedCount.resolve, hf, hp, hb]
 
-/-- All successfully resolved expected counts share the ordinary trigger bound;
-graph composition only needs to add its minimum cardinality. -/
 theorem resolved_expected_count_bounded (config : GroupConfig) (correlationField : String)
     (key : EventGroupKey) (fields : String → Option Int) (actual : Nat) (timedOut : Bool)
     (candidate : Candidate) (count : Nat)
@@ -295,18 +240,9 @@ theorem resolved_expected_count_bounded (config : GroupConfig) (correlationField
         · simp at h
   · simp at h
 
-/-- Durable group-state marker keyed by the typed group key. The same marker
-owner materializes trigger and callback-binding delivery groups once. -/
 structure MarkerState where
   materialized : List EventGroupKey
   deriving DecidableEq, Repr
-
-/-!
-Timeout eligibility reads an immutable durable first-seen clock shared by
-trigger and callback-binding consumers. The process cache may contain the same
-value or be absent after restart/capacity eviction; absence falls back to the
-durable value and cannot change the deadline.
--/
 
 structure TimeoutObservation where
   durableFirstSeen : Nat
@@ -344,11 +280,6 @@ theorem timeout_restart_preserves_deadline
 def MarkerState.has (state : MarkerState) (key : EventGroupKey) : Bool :=
   state.materialized.contains key
 
-/--
-Executable refinement of the process-local critical section.  Production
-holds the key lock while querying the durable group state and creating the
-delivery group.  The state changes only after a successful create.
--/
 def reconcile (state : MarkerState) (candidate : Candidate) : MarkerState :=
   if candidate.eligible && !state.has candidate.key then
     { materialized := candidate.key :: state.materialized }

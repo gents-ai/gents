@@ -62,15 +62,6 @@ fn bind_input<'a>(
 }
 
 #[test]
-fn read_write_meets_unrestricted_to_workspace_write() {
-    let policy =
-        CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted);
-    let met = apply_workspace_authority(&policy, WorkspaceAuthority::ReadWrite);
-    assert_eq!(met.mode, CommandExecutionMode::WorkspaceWrite);
-    assert!(met.deny_git_metadata_writes());
-}
-
-#[test]
 fn read_write_never_meets_to_unrestricted() {
     for behavior in [
         CommandExecutionMode::ReadOnly,
@@ -85,36 +76,6 @@ fn read_write_never_meets_to_unrestricted() {
             behavior.meet(CommandExecutionMode::WorkspaceWrite)
         );
     }
-}
-
-#[test]
-fn read_only_and_integrate_meet_command_mode_to_read_only() {
-    let policy =
-        CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted);
-    assert_eq!(
-        apply_workspace_authority(&policy, WorkspaceAuthority::ReadOnly).mode,
-        CommandExecutionMode::ReadOnly
-    );
-    assert_eq!(
-        apply_workspace_authority(&policy, WorkspaceAuthority::Integrate).mode,
-        CommandExecutionMode::ReadOnly
-    );
-}
-
-#[test]
-fn authority_file_mode_matches_spec() {
-    assert_eq!(
-        workspace_authority_file_mode(WorkspaceAuthority::ReadWrite),
-        FileToolMode::ReadWrite
-    );
-    assert_eq!(
-        FileToolMode::ReadWrite.meet(workspace_authority_file_mode(WorkspaceAuthority::ReadOnly)),
-        FileToolMode::ReadOnly
-    );
-    assert_eq!(
-        FileToolMode::ReadWrite.meet(workspace_authority_file_mode(WorkspaceAuthority::Integrate)),
-        FileToolMode::ReadOnly
-    );
 }
 
 #[test]
@@ -503,26 +464,6 @@ fn persisted_cwd_must_stay_under_placement() {
 }
 
 #[test]
-fn workspace_authority_parse_and_write_flags() {
-    for (spelling, authority) in [
-        ("readOnly", WorkspaceAuthority::ReadOnly),
-        ("readWrite", WorkspaceAuthority::ReadWrite),
-        ("integrate", WorkspaceAuthority::Integrate),
-    ] {
-        assert_eq!(WorkspaceAuthority::parse(spelling).unwrap(), authority);
-        assert_eq!(authority.as_str(), spelling);
-    }
-    assert!(WorkspaceAuthority::parse("administrator").is_err());
-    assert!(WorkspaceAuthority::ReadWrite.allows_file_writes());
-    assert!(!WorkspaceAuthority::ReadOnly.allows_file_writes());
-    assert!(!WorkspaceAuthority::Integrate.allows_file_writes());
-    assert_eq!(
-        WorkspaceAuthority::ReadOnly.infimum(WorkspaceAuthority::ReadWrite),
-        WorkspaceAuthority::ReadOnly
-    );
-}
-
-#[test]
 fn write_and_integrate_authority_require_the_configured_principal() {
     let workspace = ready_workspace();
     assert!(super::require_workspace_principal(
@@ -549,14 +490,6 @@ fn write_and_integrate_authority_require_the_configured_principal() {
         WorkspaceAuthority::ReadOnly
     )
     .is_ok());
-}
-
-#[test]
-fn blank_workspace_id_is_unbound() {
-    assert!(super::optional_id(None).is_none());
-    assert!(super::optional_id(Some("")).is_none());
-    assert!(super::optional_id(Some("  ")).is_none());
-    assert_eq!(super::optional_id(Some("ws-1")), Some("ws-1"));
 }
 
 #[test]

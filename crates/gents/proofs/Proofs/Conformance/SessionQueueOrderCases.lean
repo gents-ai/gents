@@ -4,8 +4,6 @@ namespace Conformance.SessionQueueOrder
 
 open ClientShell.SessionTurn Conformance.ClientShellContracts.SessionTurnCases
 
-/-- Arrivals come from the native queue owner, independently of which entries
-remain pending when the desktop's earlier request snapshot is projected. -/
 def scenarios : List (String × List Nat × List Nat) :=
   [ ("replacement_keeps_original_slot", [4, 3], [4, 3])
   , ("replacement_taken_before_pending_read", [4, 3], [3])

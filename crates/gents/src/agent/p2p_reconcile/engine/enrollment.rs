@@ -59,9 +59,8 @@ pub(super) fn enrollment_base_row(
     {
         return None;
     }
-    // Enrollment authority owns the full base route. The document is only a
-    // materialization witness; hostile row fields cannot alter its endpoint,
-    // scope, or transport identity.
+    // Enrollment authority owns the full base route; the document is only a
+    // materialization witness.
     row.peer_id = Some(entry.endpoint.desired_id.clone());
     row.node_did = Some(self_did.to_string());
     row.collections = None;
@@ -80,7 +79,7 @@ pub(super) fn local_data_plane_row(
         return None;
     }
     // A local data-plane document may choose only the non-protocol collection
-    // overlay. Current enrollment remains the transport and identity gate.
+    // overlay; enrollment remains the transport and identity gate.
     row.peer_id = Some(entry.endpoint.peer_id.clone());
     row.node_did = Some(self_did.to_string());
     row.replicator_addresses = Some(vec![entry.endpoint.address.clone()]);

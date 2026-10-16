@@ -1,10 +1,3 @@
-//! Registry for recovery sweeps that must run on the live daemon tick.
-//!
-//! Lean owns the sweep vocabulary (`RecoverySweep.sweepId`, cadence, and
-//! `rustFunction`). Rust owns the executable registry the daemon iterates.
-//! Keeping the mapping explicit here makes new periodic sweeps discoverable by
-//! conformance tests instead of burying them as ad hoc calls in the observer.
-
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 
@@ -30,7 +23,6 @@ const TASK_HOOK_SWEEP_IDS: &[&str] = &["task_hook_recover_interrupted_cleanup"];
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PeriodicRecoverySweepMetadata {
     pub sweep_ids: &'static [&'static str],
-    /// Fully-qualified Rust function name emitted in the Lean contract.
     pub rust_function: &'static str,
 }
 
@@ -41,9 +33,7 @@ pub enum PeriodicRecoverySweepOutcome {
     OrphanedBackgroundTools(OrphanedBackgroundToolReport),
     BackgroundCompletionSideEffects(BackgroundCompletionSideEffectReport),
     InferenceCalls(InferenceCallRecoveryReport),
-    /// Session-message rows settled from their caused requests.
     SessionMessageRows(usize),
-    /// Task hook records whose recovered cleanup started.
     TaskHookRecords(usize),
 }
 
@@ -111,8 +101,6 @@ const PERIODIC_RECOVERY_SWEEP_METADATA: &[PeriodicRecoverySweepMetadata] = &[
         sweep_ids: SESSION_MESSAGE_SWEEP_IDS,
         rust_function: "background_completion::settle_running_session_message_rows",
     },
-    // Runs after request repair so a request whose lease expired since the
-    // last tick has its terminal before its cleanup runs.
     PeriodicRecoverySweepMetadata {
         sweep_ids: TASK_HOOK_SWEEP_IDS,
         rust_function: "task_hooks::recover_task_hook_records",

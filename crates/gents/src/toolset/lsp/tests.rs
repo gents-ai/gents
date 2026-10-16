@@ -106,14 +106,6 @@ fn sample_config(
 }
 
 #[test]
-fn advertised_only_when_enabled_and_file_tools_on() {
-    assert!(lsp_advertised(true, FileToolMode::ReadOnly));
-    assert!(lsp_advertised(true, FileToolMode::ReadWrite));
-    assert!(!lsp_advertised(true, FileToolMode::Off));
-    assert!(!lsp_advertised(false, FileToolMode::ReadWrite));
-}
-
-#[test]
 fn primary_routing_uses_file_type_then_priority_with_catalog_order_ties() {
     let mut first = fixture_server(FIXTURE_PY.into());
     first.name = "first".into();

@@ -1,8 +1,3 @@
-//! Live enrollment e2e: a throwaway `gents server` plus a fresh desktop
-//! `ClientCore`. This is the production phone/desktop pairing path — HTTP
-//! `/status` offer, operator approve, two-leg client route — not the
-//! hand-installed replicators used by the live desktop fixture.
-
 #[path = "cli_enrollment/contract.rs"]
 mod contract;
 mod support;
@@ -51,9 +46,6 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-enroll-{}", Uuid::new_v4().simple());
-    // The nonce only makes the runtime request findable by prompt. Reply
-    // content is model-chosen: a live model may decline to echo a token, so
-    // replication is asserted against the runtime's own terminal output.
     let prompt = format!(
         "Enrollment check {}: in one short sentence, say hello to the newly paired desktop.",
         Uuid::new_v4().simple()
@@ -124,8 +116,6 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
                 "fresh desktop should surface the unpaired request as pending; got {active:?}"
             );
 
-            // Pushing the persisted request again is idempotent: the runtime
-            // still sees one request and approves it.
             core.resend_status_enrollment(&pending.request_id)
                 .await
                 .context("resending the persisted enrollment request")?;
@@ -407,12 +397,6 @@ async fn wait_for_runtime_agent_request(
     }
 }
 
-/// Poll the canonical request-output owner until the runtime request reaches a
-/// terminal lifecycle with visible selected content. Terminal selection lives
-/// on `AgentRequest.terminal_output`; the exact physical request row is decoded
-/// through the canonical `AgentRequestRow` owner and its presentation is
-/// reconstructed from the selected canonical header and its segments — never
-/// from inline message content or a response document.
 async fn wait_for_complete_agent_response(
     graphql: &str,
     request_id: &str,
@@ -446,8 +430,6 @@ async fn wait_for_complete_agent_response(
         if let Ok(row) = first_graphql_row(&response, "AgentRequest") {
             let request: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone())
                 .context("decoding canonical AgentRequest row")?;
-            // Requester/session lineage must survive the runtime round trip
-            // before the terminal output is observed for this physical row.
             anyhow::ensure!(
                 request.session_id.as_deref() == Some(session)
                     && request
@@ -532,18 +514,12 @@ async fn wait_for_complete_agent_response(
     }
 }
 
-/// The runtime-selected terminal header (`AgentRequest.terminal_output`) and
-/// its presented text.
 #[derive(Debug, Clone)]
 struct RuntimeTerminalReply {
     header_doc_id: String,
     text: String,
 }
 
-/// The presented text of the exact terminal header the runtime selected, once
-/// the client holds the completed request selecting that header and the header
-/// reconstructs Ready. No other message of the request (the user prompt, an
-/// earlier assistant turn) can stand in for it.
 fn client_selected_reply(
     requests: &[AgentRequestRow],
     messages: &[TranscriptMessageRow],
@@ -582,8 +558,6 @@ async fn wait_for_client_complete_response(
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        // Match desktop_session_snapshot: transcript rows deliberately do not
-        // live in the global observer. Read the app's bounded, scoped page.
         core.ensure_session_hydration_started(session_id, node_did)
             .await?;
         let page = gents_desktop_core::client::load_session_transcript_page(
@@ -742,9 +716,6 @@ async fn query_collection_dids(
         .collect())
 }
 
-/// Negative control for `client_selected_reply`: with the reply text also
-/// present in the user prompt and an earlier assistant turn of the same
-/// request, only the runtime-selected header of the completed request counts.
 #[test]
 fn client_reply_requires_the_runtime_selected_terminal_header() {
     use gents_protocol::output::{

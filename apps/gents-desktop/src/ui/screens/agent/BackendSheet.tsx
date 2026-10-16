@@ -1,4 +1,3 @@
-/* A backend's full editor beside the page that references it. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { EditorSheet } from "./EditorSheet";
 import { BackendEditor } from "./BackendEditor";
@@ -50,7 +49,6 @@ export function BackendSheet({
       {backend && (
         <BackendEditor
           key={backend.backendId}
-
           deployment={deployment}
           backend={backend}
           accounts={accounts}

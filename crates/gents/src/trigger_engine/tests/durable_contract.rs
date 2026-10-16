@@ -891,8 +891,6 @@ fn handoff_binding() -> gents_protocol::event_delivery::EventConsumer {
     }
 }
 
-/// Admits `doc_id` for the `handoff` binding through the invocation owner,
-/// freezing `version` as its source version.
 async fn admit_callback_arrival(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     doc_id: &str,
@@ -1023,7 +1021,6 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         }
         let entry: Arrival = decode(&case["entry"]);
         let doc_id = documents[&entry.identity.source_doc_id].clone();
-        // An uncommitted admission leaves no invocation behind.
         if case["admission_commit"].as_bool() == Some(true) {
             admit_callback_arrival(&node, &doc_id, "v1").await;
             if case["edit_after_admission"].as_bool().unwrap() {

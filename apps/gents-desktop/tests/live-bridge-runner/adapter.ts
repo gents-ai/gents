@@ -40,8 +40,7 @@ export function createRunnerAdapter(runner: LiveBridgeRunner): DesktopApiAdapter
   });
 }
 
-/* an operation the bridge runner serves no route for: a live run that
-   reaches it fails saying so */
+/* an operation the bridge runner serves no route for */
 const unsupported = (operation: string) => () =>
   Promise.reject(new Error(`the live bridge runner has no route for ${operation}`));
 
@@ -245,10 +244,9 @@ export function createFixtureHelpers(runner: {
   postJson: <T>(path: string, body: unknown) => Promise<T>;
 }) {
   return {
-    /** Write an agent document on the *remote* node.  The write triggers P2P
-     *  replication so the same document becomes visible on the desktop node.
-     *  This is the D1/D2 cross-node witness — write-on-A, read-on-B.
-     *  Requires GENTS_TAURI_LIVE=1 (enforced server-side). */
+    /** Write an agent document on the remote node; the write triggers P2P
+     *  replication so the same document becomes visible on the desktop node
+     *  (write-on-A, read-on-B). Requires GENTS_TAURI_LIVE=1. */
     saveAgentConfigOnRemote: async (request: AgentSaveRequest) =>
       runner.postJson<{ ok: boolean }>(
         "/desktop/test-fixture/remote-save-agent",

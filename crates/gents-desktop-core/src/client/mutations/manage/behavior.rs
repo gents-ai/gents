@@ -160,8 +160,6 @@ mod tests {
         )
         .await
         .is_err());
-        // The shared closure owns local target references; foreign destinations
-        // remain governed by delegation admission, not global label lookup.
         let target = json!({
             "node_did":"did:test:alpha","target_id":"target","target_node_did":"did:test:alpha","agent_id":"review","name":"reviewer"
         });

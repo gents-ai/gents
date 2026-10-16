@@ -1,8 +1,3 @@
-//! Domain-specific error types for the Gents runtime.
-//!
-//! Replaces bare `anyhow::Result` on public boundaries with typed errors
-//! so callers can distinguish retryable failures from permanent ones.
-
 use thiserror::Error;
 
 use crate::provider_limit::{classify_provider_limit, strip_provider_limit_marker, ProviderLimit};
@@ -97,7 +92,6 @@ pub enum InferenceError {
 }
 
 impl InferenceError {
-    /// Whether this error is worth retrying with backoff.
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
@@ -130,45 +124,27 @@ pub enum HookError {
     SessionNotInitialized,
 }
 
-/// HTTP statuses an identical retry cannot fix: request-shape and auth
-/// failures, plus 426 Upgrade Required, where the provider demands a newer
-/// client (Grok's subscription proxy gates on `x-grok-client-version`) and
-/// resending the same request re-fails. Rate limits and usage caps are
-/// classified earlier, above this list.
 const PERMANENT_HTTP_STATUSES: &[u16] = &[400, 401, 403, 404, 422, 426];
 
-/// What failed in an owned-loop stream, read from the provider client's error
-/// at the `rig_compat` boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoopFailureCause {
-    /// A provider call failed; `reason` renders the call error alone.
     Completion {
         failure: CompletionFailure,
         reason: String,
     },
-    /// The turn budget ran out.
     MaxTurns,
-    /// Another prompt failure, such as cancellation.
     Prompt,
-    /// The tool set failed.
     Tool,
 }
 
-/// The kind of a failed provider call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompletionFailure {
-    /// The HTTP transport failed.
     Http,
-    /// The provider, or the loop on its behalf, reported this message.
     Provider(String),
-    /// The request could not be encoded, addressed or built.
     Request,
-    /// The provider response could not be decoded.
     Response,
 }
 
-/// A terminal failure of the owned loop's stream. Display and source chain
-/// are the provider client's error, which failure reasons persist verbatim.
 #[derive(Debug)]
 pub struct LoopStreamError {
     cause: LoopFailureCause,
@@ -190,7 +166,6 @@ impl LoopStreamError {
         &self.cause
     }
 
-    /// The provider-reported message, if the provider call reported one.
     pub fn provider_message(&self) -> Option<&str> {
         match &self.cause {
             LoopFailureCause::Completion {
@@ -218,7 +193,6 @@ impl std::error::Error for LoopStreamError {
     }
 }
 
-/// Classify a loop failure whose full rendering is `message`.
 pub fn classify_loop_failure(cause: &LoopFailureCause, message: &str) -> InferenceError {
     let msg = strip_provider_limit_marker(message).to_string();
 
@@ -265,10 +239,6 @@ pub fn classify_loop_failure(cause: &LoopFailureCause, message: &str) -> Inferen
                     {
                         InferenceError::PermanentFailure { reason }
                     } else {
-                        // Every other provider error (5xx, connection resets,
-                        // timeouts, "overloaded", "temporarily unavailable", or
-                        // anything unrecognized) is treated as transient: an
-                        // unknown failure is retried rather than given up on.
                         InferenceError::TransientFailure { reason }
                     }
                 }
@@ -276,7 +246,6 @@ pub fn classify_loop_failure(cause: &LoopFailureCause, message: &str) -> Inferen
                 CompletionFailure::Response => InferenceError::TransientFailure { reason },
             }
         }
-        // Tool and prompt errors are permanent (not retryable).
         LoopFailureCause::MaxTurns | LoopFailureCause::Prompt | LoopFailureCause::Tool => {
             InferenceError::PermanentFailure { reason: msg }
         }
@@ -297,15 +266,6 @@ fn message_has_any_status(message: &str, statuses: &[u16]) -> bool {
         .any(|status| error_message_has_status(message, *status))
 }
 
-/// Detects vLLM's intermittent 400 raised when its tool-call parser cannot
-/// `json.loads` the model's streamed tool arguments. The response body carries a
-/// Python `json.decoder.JSONDecodeError`, which always renders with the positional
-/// signature `"... line L column C (char N)"`, wrapped in a `"BadRequestError"`
-/// envelope. We key off that signature rather than the variable leading phrase
-/// (`Expecting ',' delimiter`, `Invalid \escape`, `Expecting property name`, ...) so
-/// every decode variant is covered without depending on backslash escaping in the
-/// wire body. Genuine request-shape 400s (e.g. `duplicate field max_tokens`) lack the
-/// JSONDecodeError signature and stay permanent.
 pub(crate) fn provider_message_is_tool_call_json_parse_failure(message: &str) -> bool {
     message.contains("BadRequestError")
         && message.contains(" line ")
@@ -313,20 +273,10 @@ pub(crate) fn provider_message_is_tool_call_json_parse_failure(message: &str) ->
         && message.contains("(char ")
 }
 
-/// The Claude Messages parser fails closed on any `tool_use` block it cannot
-/// map onto the surface (unknown name, duplicate id, malformed input,
-/// overlapping block). That is bad model output, not transport: it belongs on
-/// the resample lane next to the vLLM tool-call parse 400 above.
 pub(crate) fn provider_message_is_fail_closed_tool_use(message: &str) -> bool {
     message.contains("fail-closed: ") && message.contains("tool_use")
 }
 
-/// A provider rejected replayed reasoning. Anthropic reports a thinking block
-/// whose `signature` no longer binds its prefix or cannot be verified as
-/// "Invalid `signature` in `thinking` block", and a tool-loop assistant turn
-/// sent without its thinking as "Expected `thinking` or `redacted_thinking`";
-/// OpenAI-style Responses providers report undecryptable `encrypted_content`.
-/// Resending the same body fails the same way, so this is never resampled.
 pub(crate) fn provider_message_is_reasoning_rejection(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("expected `thinking`")

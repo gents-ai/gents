@@ -1,4 +1,3 @@
-// Soft-cap justified: shared test harness for runtime integration tests. Splitting further would fragment fixture reuse (mock HTTP server, bind helpers, wait utilities must stay co-located with the tests that pair them).
 use super::super::*;
 use crate::identity::{KeyIdentity, NodeIdentity};
 use std::io::{Read, Write};
@@ -139,12 +138,8 @@ async fn fetch_runtime_status_if_present(
     })
 }
 
-/// Waits for a phase the runtime comes to rest in.
-///
-/// Each iteration is a database round trip, which can take longer than the
-/// watcher holds a phase it is only passing through, so a phase such as
-/// `debouncing` is unobservable here however long the deadline is. Assert those
-/// through the reconcile-phase event stream instead.
+/// Waits for a phase the runtime rests in; pass-through phases are
+/// unobservable here.
 pub(super) async fn wait_for_runtime_reconcile_phase(
     node: &defra_node::EmbeddedNode,
     node_did: &str,
@@ -208,10 +203,6 @@ pub(super) async fn wait_for_runtime_process_state(
     expected_process_state: &str,
 ) {
     let escaped_node_did = escape_graphql_string(node_did);
-    // A fresh embedded backend can spend several seconds in schema recovery
-    // when the full package suite is saturating the host. The assertion is on
-    // the eventual state, not startup latency; production readiness has its
-    // own health and timeout boundaries.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
         let query = format!(
@@ -342,11 +333,9 @@ pub(super) struct HttpRequestData {
 }
 
 pub(super) fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<HttpRequestData> {
-    // macOS accepts inherit the listener's nonblocking mode; a read timeout
-    // alone does not stop an early WouldBlock from closing the fixture socket.
+    // macOS accepts inherit the listener's nonblocking mode; the read timeout
+    // alone cannot stop an early WouldBlock from closing the fixture socket.
     stream.set_nonblocking(false)?;
-    // Avoid turning scheduler starvation in the full parallel test suite into
-    // a synthetic provider failure after accept() but before all headers land.
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     let mut buffer = Vec::new();
     let mut temp = [0u8; 1024];
@@ -589,10 +578,6 @@ pub(super) async fn wait_for_inference_call_state(
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        // A request can own both its main inference and optional title call.
-        // Neither DefraDB nor this assertion promises an implicit row order,
-        // so observe the complete request-owned set instead of whichever row
-        // an unordered `limit: 1` happens to return.
         if rows.iter().any(|row| {
             row.get("call_state")
                 .and_then(Value::as_str)

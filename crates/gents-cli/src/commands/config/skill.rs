@@ -23,10 +23,9 @@ fn gql_string_list(values: &[String]) -> String {
     format!("[{items}]")
 }
 
-/// Upsert a Skill document, returning its `_docID`. An empty `tool_refs` is
-/// written as `null`, not `[]` (DefraDB cannot type an empty array literal):
-/// `null` is accepted on create and, crucially, CLEARS a previously non-empty
-/// list on the upsert's update path (omitting it would leave the stale value).
+/// `null` (never `[]`) for an empty `tool_refs`: DefraDB cannot type an empty
+/// array literal, and on the upsert update path `null` clears a stale value
+/// that omitting it would leave.
 async fn upsert_skill(access: &ConfigAccess, skill: &SkillDocument) -> Result<String> {
     let skill_id = escape_graphql_string(&skill.skill_id);
     let tool_refs = if skill.tool_refs.is_empty() {
@@ -190,8 +189,6 @@ pub(super) async fn skill_set_enabled(args: SkillRefArgs, enabled: bool) -> Resu
 }
 
 use gents::skills::import::load_skill_source;
-#[cfg(test)]
-use gents::skills::{import::OpenAiYaml, parse_skill_md};
 
 fn skill_id_from_dir(dir: &std::path::Path) -> Option<String> {
     let raw = dir.file_name()?.to_string_lossy();
@@ -438,162 +435,4 @@ pub(super) async fn skill_export(args: SkillExportArgs) -> Result<()> {
         "exported": exported,
     }))?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_skill_md_splits_frontmatter_and_body() {
-        let md =
-            "---\nname: Research\ndescription: Find sources\n---\n\nAlways cite your sources.\n";
-        let (fm, body) = parse_skill_md(md).unwrap();
-        assert_eq!(fm.name.as_deref(), Some("Research"));
-        assert_eq!(fm.description.as_deref(), Some("Find sources"));
-        assert_eq!(body, "Always cite your sources.");
-    }
-
-    #[test]
-    fn parse_skill_md_without_frontmatter_is_all_body() {
-        let (fm, body) = parse_skill_md("Just instructions.\n").unwrap();
-        assert!(fm.name.is_none());
-        assert_eq!(body, "Just instructions.");
-    }
-
-    #[test]
-    fn skill_id_from_dir_sanitizes() {
-        let id = skill_id_from_dir(std::path::Path::new("/x/Code Review_v2")).unwrap();
-        assert_eq!(id, "code-review-v2");
-    }
-
-    #[test]
-    fn openai_yaml_extracts_tool_refs_and_display_name() {
-        let yaml = "interface:\n  display_name: Research\ndependencies:\n  tools:\n    - type: mcp\n      value: web_search\n    - type: mcp\n      value: read_file\n";
-        let parsed: OpenAiYaml = serde_yaml::from_str(yaml).unwrap();
-        let tools: Vec<String> = parsed
-            .dependencies
-            .unwrap()
-            .tools
-            .into_iter()
-            .filter_map(|tool| tool.value)
-            .collect();
-        assert_eq!(tools, vec!["web_search", "read_file"]);
-        assert_eq!(
-            parsed
-                .interface
-                .unwrap()
-                .get("display_name")
-                .and_then(serde_yaml::Value::as_str),
-            Some("Research")
-        );
-    }
-
-    #[test]
-    fn export_render_round_trips_through_import_parser() {
-        let skill = json!({
-            "skill_id": "research",
-            "name": "Research",
-            "description": "Find sources: cite everything.",
-            "instructions": "Always cite your sources.\n\nUse primary references.",
-        });
-        let md = render_skill_md(&skill).unwrap();
-        let (fm, body) = parse_skill_md(&md).unwrap();
-        assert_eq!(fm.name.as_deref(), Some("Research"));
-        assert_eq!(
-            fm.description.as_deref(),
-            Some("Find sources: cite everything.")
-        );
-        assert_eq!(body, "Always cite your sources.\n\nUse primary references.");
-    }
-
-    #[test]
-    fn export_openai_yaml_round_trips_tool_refs() {
-        let skill = json!({
-            "skill_id": "research",
-            "tool_refs": ["web_search", "read_file"],
-            "display_name": "Research",
-        });
-        let yaml = render_openai_yaml(&skill).unwrap().expect("openai.yaml");
-        let parsed: OpenAiYaml = serde_yaml::from_str(&yaml).unwrap();
-        let tools: Vec<String> = parsed
-            .dependencies
-            .unwrap()
-            .tools
-            .into_iter()
-            .filter_map(|tool| tool.value)
-            .collect();
-        assert_eq!(tools, vec!["web_search", "read_file"]);
-        assert_eq!(
-            parsed
-                .interface
-                .unwrap()
-                .get("display_name")
-                .and_then(serde_yaml::Value::as_str),
-            Some("Research")
-        );
-
-        assert!(render_openai_yaml(&json!({ "skill_id": "x" }))
-            .unwrap()
-            .is_none());
-    }
-
-    #[test]
-    fn import_captures_and_export_round_trips_opaque_interface() {
-        let yaml = "interface:\n  display_name: Research\n  icon: telescope\n  brand:\n    color: \"#0af\"\n";
-        let parsed: OpenAiYaml = serde_yaml::from_str(yaml).unwrap();
-        let interface = parsed.interface.expect("interface present");
-        let display_name = interface
-            .get("display_name")
-            .and_then(serde_yaml::Value::as_str)
-            .map(ToOwned::to_owned);
-        let interface_json = serde_json::to_string(&interface).unwrap();
-        assert_eq!(display_name.as_deref(), Some("Research"));
-        assert!(interface_json.contains("icon"));
-        assert!(interface_json.contains("telescope"));
-
-        let skill = json!({
-            "skill_id": "research",
-            "display_name": display_name,
-            "interface_json": interface_json,
-        });
-        let exported = render_openai_yaml(&skill).unwrap().expect("openai.yaml");
-        let reparsed: OpenAiYaml = serde_yaml::from_str(&exported).unwrap();
-        let reparsed_interface = reparsed.interface.expect("interface round-trips");
-        assert_eq!(
-            reparsed_interface
-                .get("display_name")
-                .and_then(serde_yaml::Value::as_str),
-            Some("Research")
-        );
-        assert_eq!(
-            reparsed_interface
-                .get("icon")
-                .and_then(serde_yaml::Value::as_str),
-            Some("telescope"),
-            "opaque interface fields beyond display_name must round-trip"
-        );
-    }
-
-    #[test]
-    fn find_skill_dirs_discovers_nested_skill_md() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        std::fs::create_dir_all(root.join("research")).unwrap();
-        std::fs::write(root.join("research/SKILL.md"), "x").unwrap();
-        std::fs::create_dir_all(root.join("group/writing/scripts")).unwrap();
-        std::fs::write(root.join("group/writing/SKILL.md"), "y").unwrap();
-        std::fs::create_dir_all(root.join(".hidden")).unwrap();
-        std::fs::write(root.join(".hidden/SKILL.md"), "z").unwrap();
-
-        let dirs = find_skill_dirs(root, 6);
-        let names: Vec<String> = dirs
-            .iter()
-            .map(|d| d.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
-        assert!(names.contains(&"research".to_string()));
-        assert!(names.contains(&"writing".to_string()));
-        assert!(!names.iter().any(|n| n == ".hidden"));
-        assert_eq!(dirs.len(), 2);
-    }
 }

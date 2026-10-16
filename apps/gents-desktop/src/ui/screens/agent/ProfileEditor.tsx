@@ -1,6 +1,3 @@
-/* One inference profile's editor: the backend and model it runs, the
-   model's recommended settings and how far they may be changed, and who
-   uses it. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
 import { dependentsWarning } from "./dependents";
@@ -48,7 +45,6 @@ import { useApp } from "@/app/AppContext";
 import { useModelRecommendation } from "./useModelRecommendation";
 import { Disclosure } from "../../components/Disclosure";
 
-/* agents named in Used by before the rest are counted */
 const USERS_SHOWN = 3;
 
 function settingsForDraft(
@@ -84,10 +80,6 @@ function settingsForDraft(
   };
 }
 
-/* the profile a draft starts from: the one asked for if its account (if
-   any) is usable, else the first usable backend that advertises a model,
-   moved to its provider's default account (the first enabled one in the
-   resolver order the list keeps), and its first model */
 export function newProfileDocument(
   deployment: NodeView,
   backendId?: string,
@@ -125,10 +117,8 @@ export function ProfileEditor({
   draft: draftMode,
 }: {
   deployment: NodeView;
-  /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
   profile: InferenceProfile;
-  /* a new profile that exists only here until Create */
   draft?: { onSaved: (profileId: string) => void; onCancel: () => void };
 }) {
   const {
@@ -184,8 +174,6 @@ export function ProfileEditor({
       const effectiveSamplingId =
         next.samplingId.trim() ||
         (hasSamplingValues ? `${profile.profile_id}-sampling` : "");
-      /* the fields' problems are said there and hold the save back; what
-         has no field here is checked as it is read */
       const {
         contextWindow,
         maxOutputTokens,
@@ -204,7 +192,6 @@ export function ProfileEditor({
         providerIdleSecs,
         deadlineSecs,
       } = profileNumbers(next, profileContext(next));
-
       const sampling = deployment.inferenceSampling.find(
         (row) => row.sampling_id === effectiveSamplingId,
       );
@@ -303,7 +290,6 @@ export function ProfileEditor({
     modelName: d.draft.modelName,
     backend: selectedBackend,
     advertised: advertisedModel,
-    /* a model the person just picked takes its recommended settings */
     onChosen: (next) => {
       const defaults = recommendedInferenceSettings(next);
       d.set("contextWindow", defaults.contextWindow);
@@ -318,7 +304,6 @@ export function ProfileEditor({
         d.set("samplingId", `${profile.profile_id}-sampling`);
     },
   });
-  /* what the problems and the numbers are read against */
   const profileContext = (draft: ProfileDraft): ProfileContext => ({
     deployment,
     contextMax: recommendation?.contextWindow
@@ -373,9 +358,7 @@ export function ProfileEditor({
       )
     : null;
   const id = (f: string) => `${profile.profile_id}-${f}`;
-  /* the backend's full editor, open beside the model */
   const [besideBackend, setBesideBackend] = useState<string | null>(null);
-  /* New backend… from the Backend field: the onboarding's provider step, in place */
   const [addingBackend, setAddingBackend] = useState<
     ((id: string | null) => void) | null
   >(null);
@@ -455,7 +438,6 @@ export function ProfileEditor({
             d.set("backendId", v);
             d.set("modelName", modelName);
           }}
-          /* a disabled or missing account's backend only while it is the current one */
           items={deployment.inferenceBackends
             .filter(
               (b) =>
@@ -527,8 +509,6 @@ export function ProfileEditor({
               alwaysExpanded
             />
           </div>
-          {/* The backend does not advertise these limits for this model, so
-              there is no model-aware bound; the profile value still applies. */}
           {!recommendation.contextWindow && (
             <NumberRow
               id={id("context-window")}
@@ -720,7 +700,6 @@ export function ProfileEditor({
   );
 }
 
-/* "claude-sonnet-5 · via Anthropic · 2 agents" */
 export function modelSentence(deployment: NodeView, p: InferenceProfile) {
   const backend = deployment.inferenceBackends.find(
     (b) => b.backendId === p.backend_id,

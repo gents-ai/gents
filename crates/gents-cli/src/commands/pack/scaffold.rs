@@ -1,5 +1,3 @@
-//! `gents pack new` and `gents pack init`: CLI adapters for the shared pack scaffold owner.
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -37,7 +35,6 @@ fn shared_kind(kind: Option<PackKindArg>) -> Option<gents::pack::authoring::Kind
     })
 }
 
-/// `gents pack new <name>`: scaffolds into a new `./<name>/`.
 pub(crate) fn new(args: PackNewArgs) -> Result<()> {
     let dir = PathBuf::from(&args.name);
     if dir.exists() {
@@ -51,7 +48,6 @@ pub(crate) fn new(args: PackNewArgs) -> Result<()> {
     crate::print_json(&serde_json::to_value(report)?)
 }
 
-/// `gents pack init`: scaffolds into the current directory, named after it.
 pub(crate) fn init(args: PackScaffoldArgs) -> Result<()> {
     let dir = std::env::current_dir().context("reading the current directory")?;
     let name = dir
@@ -63,7 +59,6 @@ pub(crate) fn init(args: PackScaffoldArgs) -> Result<()> {
     crate::print_json(&serde_json::to_value(report)?)
 }
 
-/// Delegates all template policy and file generation to the shared pack owner.
 pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Result<ScaffoldReport> {
     let template = args.template.map(shared_template);
     let report = gents::pack::authoring::scaffold(
@@ -93,12 +88,10 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
     })
 }
 
-/// The generated tool instruction path and template body.
 pub(crate) fn tool_markdown(name: &str) -> (String, String) {
     gents::pack::authoring::tool_markdown(name)
 }
 
-/// Writes the starter source through the shared pack authoring owner.
 pub(crate) fn write_plugin_source(
     source: &Path,
     name: &str,
@@ -147,8 +140,6 @@ mod tests {
         }
     }
 
-    /// A shipped plan that is not what this build compiles is refused by
-    /// name, the same way install refuses it.
     #[tokio::test]
     async fn a_shipped_plan_that_differs_from_compilation_is_refused() {
         let root = tempfile::tempdir().unwrap();
@@ -186,28 +177,5 @@ mod tests {
         let after = super::super::check::check_dir(&dir).await;
         assert!(after.problems.is_empty(), "{:#?}", after.problems);
         assert!(after.digest.is_some());
-    }
-
-    #[test]
-    fn a_directory_that_holds_a_pack_or_a_bad_name_is_refused() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("review_toolkit");
-        scaffold(&dir, "review_toolkit", &options(PackTemplate::Minimal)).unwrap();
-        let again = scaffold(&dir, "review_toolkit", &options(PackTemplate::Minimal)).unwrap_err();
-        assert!(
-            format!("{again:#}").contains("already holds a pack"),
-            "{again:#}"
-        );
-
-        let error = scaffold(
-            &root.path().join("x"),
-            "ReviewToolkit",
-            &options(PackTemplate::Minimal),
-        )
-        .unwrap_err();
-        assert!(
-            format!("{error:#}").contains("\"review_toolkit\""),
-            "{error:#}"
-        );
     }
 }

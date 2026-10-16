@@ -7,10 +7,8 @@ use tokio::sync::Notify;
 
 use crate::background_tools::{LiveOutputStream, LiveToolOutputWriter};
 
-// After the direct child exits, the finite OS pipe can still contain its
-// output. Drain that buffer, but do not let an orphan descendant that inherited
-// the pipe write forever. This is not a cap on pre-exit command output, and
-// time spent committing canonical output does not consume the read budget.
+// After the direct child exits, drain the OS pipe but do not let an orphan
+// descendant that inherited it write forever.
 const POST_EXIT_DRAIN_READ_BUDGET: Duration = Duration::from_millis(100);
 const POST_EXIT_DRAIN_BYTE_BUDGET: usize = 2 * 1024 * 1024;
 
@@ -83,8 +81,6 @@ async fn read_capped<R>(
         let exited_before_read = child_exited.load(std::sync::atomic::Ordering::Acquire);
         let read_started = Instant::now();
         let next = if exited_before_read {
-            // A scheduling delay can exhaust the wait budget while bytes or
-            // EOF are already ready. The byte budget still bounds ready writers.
             match reader.read(&mut buf).now_or_never() {
                 Some(result) => result,
                 None => {

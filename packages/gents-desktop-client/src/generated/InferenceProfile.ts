@@ -2,10 +2,8 @@
 import type { ReasoningEffort } from "./ReasoningEffort.js";
 
 /**
- * Complete selectable inference preset. Multiple profiles may select different
+ * Complete selectable inference preset; multiple profiles may select different
  * models or efforts through the same backend without duplicating credentials.
- * Sampling and execution settings live in their owning subobjects, referenced
- * by `sampling_id`/`execution_id`; unset references use canonical defaults.
  */
 export type InferenceProfile = { node_did: string, profile_id: string, display_name?: string | null, description?: string | null,
 /**
@@ -13,33 +11,16 @@ export type InferenceProfile = { node_did: string, profile_id: string, display_n
  */
 backend_id: string,
 /**
- * Explicit selection from the backend's advertised options, not a model
- * definition. Discovery refreshes must never rewrite this choice.
+ * Explicit selection from the backend's advertised options; discovery
+ * refreshes must never rewrite it.
  */
 model_name: string,
 /**
- * Explicit backend-advertised effort selection. Unset uses the provider
- * default; an unsupported explicit effort is an error.
+ * Explicit backend-advertised effort selection; unset uses the provider default.
  */
 reasoning_effort?: ReasoningEffort | null,
 /**
- * Model-specific context budget override. Resolution must use the selected
- * model's capabilities, never another model's limits from the same backend.
+ * Model-specific context budget override; resolution uses the selected
+ * model's capabilities.
  */
-context_window?: number | null,
-/**
- * Per-response output ceiling for requests through this profile.
- */
-max_output_tokens?: number | null,
-/**
- * Unset leaves optional sampling parameters to the provider defaults.
- */
-sampling_id?: string | null,
-/**
- * Unset uses the existing owned-loop execution defaults.
- */
-execution_id?: string | null,
-/**
- * Optional UI/discovery labels. References, never tags, determine execution.
- */
-tags?: Array<string> | null, };
+context_window?: number | null, max_output_tokens?: number | null, sampling_id?: string | null, execution_id?: string | null, tags?: Array<string> | null, };

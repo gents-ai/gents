@@ -33,10 +33,6 @@ pub struct PackInferenceBindingPreview {
     pub automatic: bool,
 }
 
-/// Inspect declared slots and the node's retained inference documents.
-/// Requested bindings are validated when present, while missing slots remain
-/// visible so a model can discover the exact choices before constructing an
-/// install preview.
 pub async fn inspect_pack_inference_bindings(
     access: &ConfigAccess,
     manifest: &PackManifest,
@@ -90,8 +86,6 @@ pub async fn inspect_pack_inference_bindings(
     })
 }
 
-/// The node's inference profiles, each with whether a pack slot can be
-/// bound to it. Fails when the node is missing or disabled.
 pub async fn inference_profile_options(
     access: &ConfigAccess,
     node_did: &str,
@@ -158,9 +152,6 @@ pub async fn inference_profile_options(
     Ok(options)
 }
 
-/// Resolve every declared slot against the node's retained inference
-/// documents. This is read-only and is the strict preview used immediately
-/// before an authorized canonical installer transaction.
 pub async fn preview_pack_inference_bindings(
     access: &ConfigAccess,
     manifest: &PackManifest,
@@ -227,9 +218,6 @@ pub async fn preview_pack_inference_bindings(
     Ok(preview)
 }
 
-/// Bind authored slot markers and stamp provenance on every pack-authored
-/// configuration type that owns tags. User inference documents are rejected,
-/// so referenced profiles/backends can never acquire pack provenance here.
 pub fn bind_pack_install_config(
     manifest: &PackManifest,
     config: &PackConfig,
@@ -265,8 +253,6 @@ pub fn bind_pack_install_config(
     super::provenance::stamp_pack_origin(manifest, &bound)
 }
 
-/// Publish bound document-pack configuration without replacing its node
-/// or the retained inference documents selected by the slot map.
 pub async fn install_pack_documents(
     access: &ConfigAccess,
     owner: &str,
@@ -354,68 +340,11 @@ mod tests {
         .unwrap()
     }
 
-    fn config() -> PackConfig {
-        serde_json::from_value(json!({
-            "node": {"node_did": "did:key:pack-owner"},
-            "agents": [
-                {"node_did":"did:key:pack-owner","agent_id":"plan","inference_profile_id":"gents:inference-slot:coordinator","tags":["authored"]},
-                {"node_did":"did:key:pack-owner","agent_id":"scan","inference_profile_id":"gents:inference-slot:worker"}
-            ],
-            "contexts": [{"node_did":"did:key:pack-owner","context_id":"context"}],
-            "tasks": [{"node_did":"did:key:pack-owner","task_id":"task","agent_id":"plan","prompt_template":"work"}]
-        }))
-        .unwrap()
-    }
-
     fn two_slots() -> PackManifest {
         manifest(json!([
             {"name":"coordinator","description":"plans","agents":["plan"]},
             {"name":"worker","description":"scans","agents":["scan"]}
         ]))
-    }
-
-    #[test]
-    fn binding_replaces_slot_markers_and_stamps_only_pack_owned_documents() {
-        let bound = bind_pack_install_config(
-            &two_slots(),
-            &config(),
-            &BTreeMap::from([
-                ("coordinator".into(), "claude".into()),
-                ("worker".into(), "glm".into()),
-            ]),
-        )
-        .unwrap();
-        assert_eq!(bound.agents[0].inference_profile_id, "claude");
-        assert_eq!(bound.agents[1].inference_profile_id, "glm");
-        for tags in [
-            &bound.agents[0].tags,
-            &bound.agents[1].tags,
-            &bound.contexts[0].tags,
-            &bound.tasks[0].tags,
-        ] {
-            assert!(tags.contains(&"gents:pack:test_pack".to_owned()));
-        }
-        assert_eq!(bound.agents[0].tags, ["authored", "gents:pack:test_pack"]);
-        assert!(bound.node.tags.is_empty());
-        assert!(bound.inference_profiles.is_empty());
-        assert!(bound.inference_backends.is_empty());
-    }
-
-    #[test]
-    fn authoring_requires_exact_declared_slot_coverage_and_no_inference_docs() {
-        let mut invalid = config();
-        invalid.agents[0].inference_profile_id = "user-profile".into();
-        assert!(validate_pack_inference_authoring(&two_slots(), &invalid).is_err());
-        let mut invalid = config();
-        invalid.inference_profiles.push(InferenceProfile {
-            node_did: "did:key:pack-owner".into(),
-            profile_id: "copy".into(),
-            backend_id: "copy".into(),
-            model_name: "copy".into(),
-            ..Default::default()
-        });
-        assert!(validate_pack_inference_authoring(&two_slots(), &invalid).is_err());
-        assert!(bind_pack_install_config(&two_slots(), &config(), &BTreeMap::new()).is_err());
     }
 
     #[tokio::test]

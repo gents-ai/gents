@@ -1,11 +1,6 @@
 use super::*;
 use crate::hook::{decide_persistence_outcome, FailurePolicy, PolicyDecision};
 
-/// A tool call the session hook owns in `on_tool_call` instead of ordinary
-/// dispatch: it may commit its effect, detach, await or terminate the loop
-/// there. Every such route is a row of [`HookOwnedTool::ROUTES`], so a composed
-/// plugin child is refused for each by construction (Lean
-/// `ToolPolicy.PluginCalls.supported`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HookOwnedTool {
     GetGoal,
@@ -85,8 +80,6 @@ impl DefraSessionHook {
         _history: &[Message],
         _context: Option<&Message>,
     ) -> HookAction {
-        // StreamProcessor owns publication through the active request lease.
-        // The hook has no authority to create transcript rows at admission.
         self.state.lock().await.reset_after_user_message();
         self.record_success();
         HookAction::Continue
@@ -290,9 +283,6 @@ impl DefraSessionHook {
             .await
             .contains_key(internal_call_id);
         let persist_result: anyhow::Result<HookAction> = async {
-            // Managed terminals terminate the turn; they carry no model-facing
-            // text and never thread back to the provider. A plugin child's
-            // terminal is its own: its parent ends only through its own envelope.
             if matches!(
                 outcome,
                 ToolOutcome::TimedOut { .. } | ToolOutcome::Cancelled
@@ -340,8 +330,6 @@ impl DefraSessionHook {
                 });
             }
 
-            // The outcome arrives as data, so there is nothing to classify or
-            // strip: the model-facing text is the only text there is.
             let result = outcome.model_facing_text();
 
             let tool_call_doc_id = {
@@ -399,8 +387,6 @@ impl DefraSessionHook {
                 .take_prepared_presentation(&tool_call_doc_id, result)
                 .await?;
 
-            // A tool with no prepared presentation is presented as the loop
-            // bounded it, so a replayed transcript carries what the model saw.
             let bounded = presentation
                 .is_none()
                 .then(|| bounded_tool_result_with_presentation(tool_name, result, &self.truncation_limits))

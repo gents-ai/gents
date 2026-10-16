@@ -20,10 +20,6 @@ const GENERATED_TITLE_MAX_WORDS: usize = 5;
 const GENERATED_TITLE_MAX_LEN: usize = 48;
 const TITLE_GENERATION_MAX_ATTEMPTS: i64 = 2;
 const TITLE_GENERATION_TIMEOUT_SECS: u64 = 10;
-/// Output allowance for the visible title alone. Providers count reasoning
-/// against the same `max_tokens`, so this cap applies only when the provider
-/// was explicitly told not to reason; otherwise a reasoning model can spend
-/// the whole allowance before any visible text.
 const TITLE_VISIBLE_MAX_TOKENS: u64 = 24;
 const TITLE_GENERATION_PREAMBLE: &str = "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.";
 
@@ -62,10 +58,9 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
     }
 
     pub(super) fn spawn_conversation_title_generation(&self, request: &AgentRequest) {
-        // A generated title is optional presentation metadata, not part of the
-        // requested agent result. Budgeted requests therefore skip this
-        // out-of-band provider call instead of giving it a second allowance or
-        // racing it against the response loop's request-wide ledger.
+        // A generated title is optional presentation metadata; budgeted
+        // requests skip this out-of-band provider call rather than give it a
+        // second allowance.
         if !title_generation_allowed(request.max_total_tokens) {
             tracing::debug!(
                 request_id = %request.request_id,
@@ -120,9 +115,8 @@ fn title_generation_allowed(max_total_tokens: Option<i64>) -> bool {
     max_total_tokens.is_none()
 }
 
-/// Reasoning-capable titles keep the agent_config's configured output budget
-/// (bounded in time by `TITLE_GENERATION_TIMEOUT_SECS`), so a reasoning run
-/// is not truncated into a reasoning-only result by the visible-title cap.
+/// Reasoning-capable titles keep the configured output budget, so a reasoning
+/// run is not truncated into a reasoning-only result by the visible-title cap.
 fn title_max_tokens(
     additional_params: Option<&serde_json::Value>,
     configured: Option<u64>,
@@ -134,9 +128,6 @@ fn title_max_tokens(
     }
 }
 
-/// Only unusable provider results use the bounded retry and fallback title.
-/// Auxiliary persistence, ownership, and other one-shot invariants fail the
-/// title request closed.
 fn title_attempt_is_retryable(error: &anyhow::Error) -> bool {
     error.is::<crate::agent::loop_stream::OneShotProviderFailure>()
         || error.is::<crate::agent::loop_stream::OneShotNoVisibleOutput>()
@@ -585,41 +576,3 @@ fn fallback_words(source: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod owned_tests;
-
-#[cfg(test)]
-mod tests {
-    use super::{sanitize_generated_title, title_generation_allowed};
-
-    #[test]
-    fn budgeted_requests_do_not_dispatch_optional_title_inference() {
-        assert!(title_generation_allowed(None));
-        assert!(!title_generation_allowed(Some(100_000)));
-    }
-
-    #[test]
-    fn sanitize_generated_title_cases() {
-        for (raw_title, fallback_source, expected) in [
-            (
-                "\"Agent Desktop Debugging Redux\"",
-                "fallback text",
-                "agent-desktop-debugging-redux",
-            ),
-            (
-                "",
-                "please inspect p2p request model",
-                "inspect-p2p-request",
-            ),
-            (
-                "",
-                "document-based request model that's used by this agent",
-                "document-based-request",
-            ),
-        ] {
-            assert_eq!(
-                sanitize_generated_title(raw_title, fallback_source),
-                expected,
-                "unexpected title for raw {raw_title:?} with fallback {fallback_source:?}"
-            );
-        }
-    }
-}

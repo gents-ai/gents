@@ -5,9 +5,8 @@ elan_home="${ELAN_HOME:-$HOME/.elan}"
 export ELAN_HOME="$elan_home"
 mkdir -p "$elan_home"
 
-# Multiple self-hosted runner processes share the same account and can enter
-# the installer together. Re-enter under a host lock so proxy creation is
-# atomic, then skip the network installer when a usable elan already exists.
+# Re-enter under a host lock so concurrent self-hosted runner processes share
+# one atomic install.
 if [[ "${GENTS_ELAN_INSTALL_LOCKED:-0}" != "1" ]] && command -v lockf >/dev/null 2>&1; then
   script_dir="$(cd "$(dirname "$0")" && pwd)"
   exec lockf -k "$elan_home/.gents-install.lock" \

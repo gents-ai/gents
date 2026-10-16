@@ -1,26 +1,3 @@
-//! Layered prompt construction for KV cache reuse.
-//!
-//! The prompt is assembled in a fixed order so vLLM's automatic prefix
-//! caching can reuse KV computation across turns:
-//!
-//! ```text
-//! ┌─────────────────────────────────────┐
-//! │ Layer 1: Static system prompt       │  ← cached globally, never changes
-//! │ Layer 2: Agent context              │  ← cached per-agent, set at init
-//! ├─────────────────────────────────────┤
-//! │ Layer 3: Compaction summaries       │  ← cached between compactions
-//! ├─────────────────────────────────────┤
-//! │ Layer 4: Conversation messages      │  ← grows each turn
-//! └─────────────────────────────────────┘
-//! ```
-//!
-//! Layers 1-2 form the preamble (Rig's system prompt). They're set once
-//! at daemon startup and locked for the session lifetime. Tool definitions
-//! live in Rig's separate `tools` field, also fixed at startup.
-//!
-//! Agent updates flow through `<system-reminder>` tags injected into
-//! conversation messages — never by mutating the preamble.
-
 use crate::llm::message::Message;
 #[cfg(test)]
 use crate::llm::message::{Text, UserContent};
@@ -62,9 +39,8 @@ pub struct BuiltPrompt {
 }
 
 impl BuiltPrompt {
-    /// Representation-only view for consumers that need native messages.
-    /// Continuation evidence remains on `messages` until the owned provider
-    /// boundary narrows one prepared request for estimate, capture and send.
+    /// Continuation evidence stays on `messages` until the owned provider boundary
+    /// narrows one prepared request for estimate, capture and send.
     pub fn native_messages(&self) -> Vec<Message> {
         self.messages
             .iter()
@@ -182,9 +158,6 @@ impl PromptBuilder for LayeredPromptBuilder {
     }
 }
 
-// Moved to gents-loop (G-1): compaction needs this reminder when it resumes
-// a session with prior checkpoints, with no dependency on the native skills
-// catalog `LayeredPromptBuilder` otherwise carries.
 pub use gents_loop::prompt::{
     compaction_summary_message, continuation_checkpoint_reminder, join_compaction_summaries,
 };
@@ -232,8 +205,6 @@ pub(crate) fn build_preamble_with_targets(
     parts.join("\n\n")
 }
 
-/// Thin wrapper that builds a preamble with no agent targets.
-/// Kept for existing tests that exercise preamble construction without targets.
 #[cfg(test)]
 fn build_preamble(
     system_prompt: &str,

@@ -5,11 +5,6 @@ pub(super) struct SideEffects {
     pub(super) created_wake: bool,
 }
 
-/// Append a background tool's completion notification and its coalesced
-/// wake, written at `wake`'s hop: a native process continues its session, and
-/// a session-message row's completion is caused by the request it caused. A
-/// wake over the woken principal's bound is still written, after its
-/// notification, and refused at admission.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn append_background_tool_completion(
     node: &std::sync::Arc<EmbeddedNode>,
@@ -22,8 +17,6 @@ pub(crate) async fn append_background_tool_completion(
     reason: Option<&str>,
     wake: crate::lifecycle::RequestHopCause,
 ) -> Result<()> {
-    // Load the parent request up front so the completion notification is stamped
-    // with the parent session's owning node_did.
     let parent_request = crate::request_binding::load_agent_request(node, parent_request_id)
         .await?
         .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
@@ -42,9 +35,7 @@ pub(crate) async fn append_background_tool_completion(
     let render = |budget: usize| {
         tool_completion_presentation(&tool_call_id, tool_name, status, result, reason, budget)
     };
-    // A published notice is replayed exactly (Lean ToolDelivery
-    // notification replay), so a redrive renders with the budget that notice
-    // was rendered under, not whatever the configuration says now.
+    // Replays must preserve the published notice byte-for-byte.
     let published_budget = existing_text
         .as_deref()
         .and_then(|stored| published_notification_budget(stored, &render));
@@ -91,9 +82,6 @@ pub(crate) async fn append_background_tool_completion(
     Ok(())
 }
 
-/// The stored text of an already published notice, or `None` when it cannot
-/// be read, which leaves the atomic publication owner to reject a
-/// conflicting replay.
 async fn stored_notification_text(
     node: &EmbeddedNode,
     parent: &crate::AgentRequest,
@@ -117,10 +105,6 @@ async fn stored_notification_text(
     message.rag_text()
 }
 
-/// The summary budget an already published notice was rendered under: the
-/// unescaped length of its `<result>` body, with or without a truncation
-/// marker, whichever re-renders the stored text exactly. `None` when it
-/// matches neither.
 fn published_notification_budget(
     stored: &str,
     render: &impl Fn(usize) -> (String, Vec<gents_protocol::output::PresentationPart>),
@@ -161,8 +145,6 @@ async fn load_tool_call_id(node: &EmbeddedNode, tool_call_doc_id: &str) -> Resul
         .context("background tool notification lifecycle omitted tool_call_id")
 }
 
-/// Marker discovery supplies only an ID; the atomic owner reloads receipt and
-/// Goal together before deciding whether any wake can be published.
 pub(super) async fn ensure_notification_delivery(
     node: &std::sync::Arc<EmbeddedNode>,
     parent: &crate::AgentRequest,

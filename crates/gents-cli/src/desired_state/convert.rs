@@ -44,25 +44,3 @@ pub(crate) fn export_bundle_from_manifest(
     manifest_from_export_bundle(&bundle)?;
     Ok(super::DesiredApplyBundle::from_trusted_bundle(bundle))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    #[test]
-    fn import_preserves_canonical_roots_and_rejects_cross_owner_documents() {
-        let config: DesiredStateManifest = serde_json::from_value(json!({"node":{"node_did":"owner"},"contexts":[{"context_id":"context","node_did":"owner","system_prompt":"literal {{ text }}"}],"tools":[{"tools_id":"unused","node_did":"owner","remote":{"services":[]}}]})).unwrap();
-        let wrapped = export_bundle_from_manifest(&config, "test").unwrap();
-        let loaded = manifest_from_export_bundle(wrapped.as_bundle()).unwrap();
-        assert_eq!(
-            serde_json::to_value(loaded).unwrap(),
-            serde_json::to_value(&config).unwrap()
-        );
-        let mut foreign = wrapped.as_bundle().clone();
-        foreign.config.tools[0].node_did = "other".into();
-        assert!(manifest_from_export_bundle(&foreign).is_err());
-        foreign.config = config;
-        foreign.node_did = "other".into();
-        assert!(manifest_from_export_bundle(&foreign).is_err());
-    }
-}

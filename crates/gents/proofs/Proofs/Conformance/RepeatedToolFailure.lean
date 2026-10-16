@@ -6,7 +6,6 @@ open CompletionRetry.RepeatedToolFailure Conformance.Contracts
 
 structure Case where
   name : String
-  /-- Calls in provider order, each with the outcome it returns if dispatched. -/
   events : List Event
   deriving Repr
 
@@ -57,7 +56,6 @@ private def eventJson (event : Event) : String :=
   ",\"outcome\":" ++ jsonString (outcomeString event.outcome) ++
   ",\"error\":" ++ jsonOptionalNat event.error ++ "}"
 
-/-- Expected actions and ending are computed by the model for each trace. -/
 private def caseJson (c : Case) : String :=
   let (actions, ending) := run {} c.events
   "{\"name\":" ++ jsonString c.name ++

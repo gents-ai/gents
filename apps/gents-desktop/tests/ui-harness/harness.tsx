@@ -29,7 +29,6 @@ const harness =
           : undefined,
       });
 
-// Exercise retry/error UX through the same adapter boundary as native IPC.
 if (backend === "deterministic" && params.get("configApplyFailure") === "once") {
   const apply = harness.adapter.applyConfigComponents;
   let fail = true;

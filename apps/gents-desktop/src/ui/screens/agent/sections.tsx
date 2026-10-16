@@ -1,11 +1,3 @@
-/* The agent configuration screen's sections, grouped by what the person is
-   doing (gents-design config flows). Each is a route (`agent/<id>`), so a
-   section is linkable, and a section in the sidebar names its group, label
-   and mark. A route that has no entry of its own (an older link, or a page
-   reached from another section) names the entry it lights up instead.
-   Contexts have no entry: each agent edits its own instructions and
-   tools, and the Agents list links to unused contexts, so the `contexts`
-   route stays for those links. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import type { ComponentType } from "react";
 import {
@@ -39,16 +31,13 @@ import { TriggersPanel } from "./TriggersPanel";
 
 export type SectionPanelProps = {
   deployment: NodeView;
-  /** the document the route opens, when it names one */
   item?: string;
 };
 
 type Listed = {
-  /** the sidebar's group */
   group: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
-  /** how many the sidebar shows beside the label */
   count?: (deployment: NodeView) => number;
 };
 
@@ -60,7 +49,6 @@ export type AgentSection = {
 export const isListed = (section: AgentSection): section is AgentSection & Listed =>
   !("under" in section);
 
-/** The sections, in sidebar order; groups show in the order their first section does. */
 export const SECTIONS: AgentSection[] = [
   { group: "Configure", id: "agent", label: "Agent", icon: Bot, Panel: AgentPanel },
   {
@@ -90,8 +78,6 @@ export const SECTIONS: AgentSection[] = [
     count: (d) => d.inferenceBackends.length,
     Panel: ProfilesPanel,
   },
-  /* a backend opens on its own; the list is the Providers page, with each
-     backend's profiles under it */
   {
     id: "inference",
     under: "profiles",

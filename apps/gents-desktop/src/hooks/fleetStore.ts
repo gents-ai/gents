@@ -17,46 +17,33 @@ export const sessionKeyOf = (session: {
 }): SessionKey =>
   `${session.nodeDid}\u0000${session.sessionId}\u0000${session.requesterDid ?? ""}`;
 
-/** A node as screens draw it: what a deployment says about itself, without
-    the sessions and mailbox items it lists. */
 export type NodeView = Omit<DeploymentView, "sessions" | "mailboxItems">;
 
 export type FleetState = {
-  /** the nodes in the snapshot's order */
   nodeKeys: readonly NodeKey[];
   nodes: Readonly<Record<NodeKey, NodeView>>;
   sessions: Readonly<Record<SessionKey, SessionSummary>>;
-  /** each node's sessions, in the order it lists them */
   sessionsOf: Readonly<Record<NodeKey, readonly SessionSummary[]>>;
-  /** first listed session with this id on each node, matching route selection */
   byNodeSessionId: Readonly<Record<NodeKey, ReadonlyMap<string, SessionSummary>>>;
-  /** each node's mailbox items, in the order it lists them */
   mailboxOf: Readonly<Record<NodeKey, readonly MailboxItemView[]>>;
-  /** the session that handed each worker out, on whatever node lists it */
   parentOf: Readonly<Record<SessionKey, SessionSummary>>;
-  /** the sessions each session handed out, on any node */
   workersOf: Readonly<Record<SessionKey, readonly SessionSummary[]>>;
-  /** a session by its id alone, where only the id is known (a route) */
   bySessionId: Readonly<Record<string, SessionSummary>>;
 };
 
 export type FleetStore = StoreApi<FleetState>;
 
-/** The node with this DID; null when the client cannot see it. */
 export const nodeOf = (fleet: FleetState, nodeDid: string | null | undefined) =>
   nodeDid ? (fleet.nodes[nodeKeyOf({ nodeDid })] ?? null) : null;
 
-/** The first node in the snapshot's order; null before there is one. */
 export const firstNode = (fleet: FleetState) => {
   const first = fleet.nodeKeys[0];
   return first ? (fleet.nodes[first] ?? null) : null;
 };
 
-/** The node with this DID, or the first node while it is not listed. */
 export const nodeOrFirst = (fleet: FleetState, nodeDid: string | null | undefined) =>
   nodeOf(fleet, nodeDid) ?? firstNode(fleet);
 
-/** A session as the node with this DID lists it. */
 export function listedSession(
   fleet: FleetState,
   nodeDid: string | null | undefined,
@@ -82,13 +69,6 @@ export function createFleetStore() {
   return createStore<FleetState>(() => EMPTY);
 }
 
-/**
- * Applies a read of the fleet. Until the bridge says which documents
- * changed, each read is the whole fleet; it is reconciled here, once, by
- * key, so an unchanged node, session or mailbox item keeps its identity
- * and a screen that reads it by key does not re-render. Derived indexes
- * are rebuilt only from entities that changed identity.
- */
 export function applyFleetSnapshot(store: FleetStore, snapshot: DesktopClientSnapshot) {
   store.setState((prev) => reconcile(prev, snapshot));
 }
@@ -107,7 +87,6 @@ function reconcile(prev: FleetState, snapshot: DesktopClientSnapshot): FleetStat
     const own = listed.map((session) => {
       const sessionKey = sessionKeyOf(session);
       const kept = keep(prev.sessions[sessionKey], session);
-      /* a session listed by two nodes is the first node's */
       sessions[sessionKey] ??= kept;
       return kept;
     });
@@ -144,7 +123,6 @@ function reconcile(prev: FleetState, snapshot: DesktopClientSnapshot): FleetStat
     mailboxOf: sameRecord(prev.mailboxOf, mailboxOf) ? prev.mailboxOf : mailboxOf,
     ...lineage,
   };
-  /* a read that changed nothing leaves the state, so no one is notified */
   return (Object.keys(next) as (keyof FleetState)[]).every(
     (key) => next[key] === prev[key],
   )
@@ -152,8 +130,6 @@ function reconcile(prev: FleetState, snapshot: DesktopClientSnapshot): FleetStat
     : next;
 }
 
-/* The bridge names a worker's starting session exactly (node, session,
-   requester), on whatever node lists it. */
 function lineageOf(sessions: Record<SessionKey, SessionSummary>, prev: FleetState) {
   const parentOf: Record<SessionKey, SessionSummary> = {};
   const workers: Record<SessionKey, SessionSummary[]> = {};
@@ -178,12 +154,10 @@ function lineageOf(sessions: Record<SessionKey, SessionSummary>, prev: FleetStat
   };
 }
 
-/* the previous object when the read says the same thing */
 function keep<T>(prev: T | undefined, next: T): T {
   return prev !== undefined && equal(prev, next) ? prev : next;
 }
 
-/* the previous list when it holds the same objects in the same order */
 function keepList<T>(prev: readonly T[] | undefined, next: readonly T[]): readonly T[] {
   return prev &&
     prev.length === next.length &&
@@ -192,7 +166,6 @@ function keepList<T>(prev: readonly T[] | undefined, next: readonly T[]): readon
     : next;
 }
 
-/* the same keys, each holding the same object */
 function sameRecord<T>(a: Readonly<Record<string, T>>, b: Readonly<Record<string, T>>) {
   const keys = Object.keys(b);
   return (
@@ -205,13 +178,11 @@ const isPlain = (value: object) => {
   return proto === Object.prototype || proto === null;
 };
 
-/** Equality of JSON values, as the bridge returns them. */
 export function equal(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   if (typeof a !== "object" || typeof b !== "object" || a === null || b === null)
     return false;
   if (Array.isArray(a) !== Array.isArray(b)) return false;
-  /* anything but a plain object or array (a Set, a Date) is equal only to itself */
   if (!Array.isArray(a) && (!isPlain(a) || !isPlain(b))) return false;
   if (Array.isArray(a)) {
     const list = b as unknown[];
@@ -226,9 +197,6 @@ export function equal(a: unknown, b: unknown): boolean {
   );
 }
 
-/** `next`, reusing each part of `prev` it is equal to, so a reader of a part
-    that did not change keeps the same object. Arrays are matched by index;
-    anything but a plain object or array is reused only when identical. */
 export function shareUnchanged<T>(prev: unknown, next: T): T {
   if (Object.is(prev, next)) return next;
   if (

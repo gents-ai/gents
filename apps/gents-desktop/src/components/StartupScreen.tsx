@@ -6,8 +6,6 @@ import { Mark } from "../ui/app/Mark";
 import { useStartup } from "../ui/hooks/useClient";
 import { StartupProgress } from "../ui/screens/setup/StartupProgress";
 
-/** Where startup has got to, until the client is ready: the step under
-    way, the managed server's wait, and on failure the ways on. */
 export function StartupScreen({
   configurationPending = false,
   initConfigStatus,
@@ -18,8 +16,6 @@ export function StartupScreen({
   const { actions, lifecycle } = useApp();
   const startup = useStartup();
   if (configurationPending) {
-    /* drawn like the startup progress around it: the mark, one title and
-       one line, no eyebrow */
     return (
       <section
         aria-labelledby="startup-title"

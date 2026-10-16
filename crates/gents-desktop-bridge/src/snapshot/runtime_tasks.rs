@@ -83,8 +83,6 @@ pub(super) fn recent_runs_for_task_views(
     })
 }
 
-/// Canonical session indexes are the only list owner. A missing physical head
-/// remains missing; request caches never synthesize sessions or select an older head.
 pub(super) fn session_summaries(
     sessions: &[AgentSession],
     requests: &[AgentRequestRow],
@@ -149,7 +147,6 @@ pub(super) fn session_summaries(
                 .or_else(|| indexed.map(|indexed| indexed.lifecycle_state));
             let trigger_id = request.and_then(|request| request.caused_by_trigger_id.clone());
             let trigger_kind = request.and_then(|request| request.caused_by_trigger_kind.clone());
-            // Durable creation provenance wins over a mutable trigger's display label.
             let task_id = session
                 .provenance
                 .as_ref()
@@ -352,9 +349,8 @@ mod trigger_recent_runs_tests {
 }
 
 /// Resolve immutable creation provenance through the runtime lineage owner,
-/// including causing requests outside the bounded client request cache. One
-/// lineage read serves every summary passed, across deployments; if it fails,
-/// starters stay absent for this snapshot.
+/// including causing requests outside the bounded client request cache; on
+/// failure, starters stay absent for this snapshot.
 pub(super) async fn resolve_summary_starters<'a, R: gents::config_client::ConfigRead + ?Sized>(
     access: &R,
     summaries: impl IntoIterator<Item = &'a mut SessionSummary>,
@@ -381,7 +377,6 @@ pub(super) async fn resolve_summary_starters<'a, R: gents::config_client::Config
         }
     };
     for (summary, parent) in &mut started {
-        // A parent request no store holds stays an absent starter.
         summary.started_by =
             scopes
                 .get(parent.as_str())

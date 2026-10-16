@@ -91,38 +91,25 @@ pub struct StuckWorkDiagnosticView {
     pub stuck_since: Option<String>,
 }
 
-/// One session's agent-message lineage, mapped from the
-/// `gents::session_origin::lineage` owner. It is provenance only: no
-/// hierarchy, cascade or authority follows.
+/// Provenance only: no hierarchy, cascade or authority follows.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionProvenanceView {
     pub session_id: String,
-    /// The session whose request started this one.
     pub started_by: Option<LinkedSessionView>,
-    /// Sessions this session's requests started.
     pub started: Vec<LinkedSessionView>,
-    /// Other sessions this session messaged without starting them.
     pub sent: Vec<LinkedSessionView>,
-    /// Other sessions, besides its starter, that messaged this one.
     pub received: Vec<LinkedSessionView>,
-    /// The sender of each of this session's requests another session caused,
-    /// where that sender is one of the linked sessions.
     pub senders: Vec<TurnSenderView>,
-    /// This session's `agent_new`/`agent_message` calls and the request each
-    /// caused.
     pub calls: Vec<CausedCallView>,
 }
 
-/// Another session and the request that links it to this one.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct LinkedSessionView {
     pub node_did: String,
     pub session_id: String,
     pub requester_did: Option<String>,
-    /// The causing request: in the other session for `started_by` and
-    /// `received`, in this session for `started` and `sent`.
     pub cause_request_doc_id: String,
 }
 
@@ -133,11 +120,9 @@ pub struct TurnSenderView {
     pub sender: LinkedSessionView,
 }
 
-/// A call of this session and the one request it caused.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CausedCallView {
-    /// The calling request and the call's logical id in this session.
     pub request_id: String,
     pub tool_call_id: String,
     pub caused: CausedRequestView,
@@ -154,13 +139,6 @@ pub struct CausedRequestView {
     pub created_at: Option<String>,
 }
 
-/// Result envelope for `desktop_interrupt_request`:
-/// - `accepted = true` iff the bridge latched (or confirmed already-latched)
-///   `interrupt_requested_at` for `request_id`.
-/// - `already_interrupted = true` iff the field was non-null prior to the
-///   call; `accepted` is still `true` in that case.
-/// - `interrupt_requested_at` is the canonical timestamp the bridge observed
-///   on the document after the call.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InterruptRequestResult {
@@ -221,19 +199,8 @@ pub struct InferenceCallSummaryView {
     pub completion_tokens: Option<i64>,
 }
 
-/// One row in the MCP health status panel (panel-278).
-///
-/// Mirrors the persisted `ToolServiceHealthState` collection — the agent's
-/// `health_checker` upserts these every cycle (default 30 s) so the
-/// desktop sees the K-model state evolve over time without needing an
-/// in-process agent runtime.
-///
-/// `status` is the internal `ToolServiceHealthState` vocabulary
-/// (`healthy` / `degraded` / `evicted` / `reconnecting`) so the operator UI
-/// can distinguish back-off from in-flight retry; `display_state` is the
-/// collapsed three-state projection (`healthy` / `stale` / `unreachable`),
-/// projection owned by `ToolServiceHealthState::project` — the panel and
-/// table classify against `display_state` only, never `status`.
+/// Panel and table classify against `display_state` only, never `status`;
+/// the projection lives on `ToolServiceHealthState::project`.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MCPServiceHealthView {
@@ -253,12 +220,6 @@ pub struct MCPServiceHealthView {
     pub updated_at: Option<String>,
 }
 
-/// Result envelope for `desktop_probe_mcp_service`. The probe runs a
-/// one-shot `run_health_check_cycle` against the named service against
-/// a fresh `McpPool` (mirrors `gents mcp probe`) — `failure_count`
-/// always reports `0` here because the cycle starts from an initial
-/// `ServiceModel`. For accumulated K-state, the panel reads the persisted
-/// `ToolServiceHealthState` row via `desktop_list_mcp_services_with_health`.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServiceProbeResult {

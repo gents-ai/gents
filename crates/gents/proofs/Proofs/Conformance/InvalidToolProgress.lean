@@ -47,9 +47,6 @@ private def outcomeCall : Outcome → Nat
   | .skipped => 5
   | .backgroundCompletion => 6
 
-/-- The owned loop composes this allowance with the repetition guard. A
-fixture call's arguments name only its outcome, so equal outcomes are identical
-calls, and every fixture ordinary failure has the same error. -/
 def composedEvents (outcomes : List Outcome) : List CompletionRetry.RepeatedToolFailure.Event :=
   outcomes.map fun o => ⟨outcomeCall o, o, if o = .ordinaryFailure then some 0 else none⟩
 

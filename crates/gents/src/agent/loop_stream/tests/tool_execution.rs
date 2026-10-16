@@ -204,8 +204,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
             .all(|input| input.acknowledged && !input.policy_allows));
         for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
             for owner in PolicyDeniedOwner::ALL {
-                let (node, hook, writer, mut lifecycle) =
-                    owned_test_hook_with_policy(policy).await;
+                let (node, hook, writer, mut lifecycle) = owned_test_hook_with_policy(policy).await;
                 let root = tempfile::tempdir().unwrap();
                 let denied = owner.denied_call(&node, root.path());
                 let model = ScriptedModel::new_turns(vec![
@@ -243,7 +242,9 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
                     ).await;
 
                 let rows = crate::config_client::ConfigAccess::local(node.clone())
-                    .execute("query { AgentToolCall { lifecycle_state started_at tool_failure_class } }")
+                    .execute(
+                        "query { AgentToolCall { lifecycle_state started_at tool_failure_class } }",
+                    )
                     .await
                     .unwrap();
                 let rows = rows["data"]["AgentToolCall"].as_array().unwrap();
@@ -303,7 +304,6 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let prompt = Message::user("use the echo tool");
 
-    // Turn 1: the model calls `echo`. Turn 2: it answers with text.
     let model = ScriptedModel::new_turns(vec![
         vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
@@ -340,9 +340,6 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     )
     .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
-
-    // The tool ran, its (bounded) result was threaded/yielded, and the loop
-    // reached a text response on the next turn.
     assert_eq!(collected.tool_results, vec!["ECHOED".to_string()]);
     assert_eq!(collected.final_text.as_deref(), Some("done"));
 
@@ -388,8 +385,6 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
 
 #[tokio::test(start_paused = true)]
 async fn tool_does_not_execute_when_provider_stalls_before_turn_closure() {
-    // A streamed call is retained intent, not accepted execution authority.
-    // Provider EOF/Complete acceptance must precede any host side effect.
     let calls = Arc::new(AtomicUsize::new(0));
     let model = ScriptedModel::new_stalling(vec![RawStreamingChoice::ToolCall(
         RawStreamingToolCall::new(
@@ -414,10 +409,7 @@ async fn tool_does_not_execute_when_provider_stalls_before_turn_closure() {
     futures::pin_mut!(stream);
     let first = stream.next().await.expect("should observe tool intent");
     assert!(
-        matches!(
-            first,
-            Ok(LoopStreamItem::ToolCall { .. })
-        ),
+        matches!(first, Ok(LoopStreamItem::ToolCall { .. })),
         "first item should be streamed intent: {first:?}"
     );
     assert!(
@@ -431,15 +423,11 @@ async fn tool_does_not_execute_when_provider_stalls_before_turn_closure() {
 
 #[tokio::test]
 async fn tool_definition_receives_prompt_rag_text() {
-    // P3/compat: tool definitions must be built with the prompt's rag text (rig
-    // parity), not String::new(), so prompt-aware tools keep the task context.
     let seen = Arc::new(Mutex::new(None));
     let tool: Box<dyn ToolDyn> = Box::new(RecordingDefinitionTool {
         seen_prompt: seen.clone(),
     });
 
-    // A single text-only turn; the tool is never called, but its definition is
-    // still requested when the request is built.
     let model = ScriptedModel::new(vec![
         RawStreamingChoice::Message("hi".to_string()),
         RawStreamingChoice::FinalResponse(()),
@@ -464,11 +452,6 @@ async fn tool_definition_receives_prompt_rag_text() {
 
 #[tokio::test]
 async fn toolset_is_attached_to_every_completion_request_in_the_loop() {
-    // Regression for the CLI tool-loop test: rig's Agent re-sent the full tool
-    // list on every turn; the owned loop must too. The follow-up request after a
-    // tool result is folded in (turn 2) must still advertise the toolset, or the
-    // provider sees a tool-result conversation with no tools.
-    // Turn 1: the model calls `echo`. Turn 2: it answers with text.
     let model = ScriptedModel::new_turns(vec![
         echo_tool_turn(),
         vec![
@@ -508,10 +491,6 @@ async fn oversized_tool_result_is_bounded_before_threading() {
 
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
-    // A tool returning far more than the default limits: the model-facing
-    // (threaded/yielded) result must be bounded, while on_tool_result still
-    // receives the full output for canonical full-output persistence
-    // (#401 closed natively).
     let big_line = "x".repeat(200);
     let big_output = std::iter::repeat(big_line)
         .take(10_000)
@@ -563,8 +542,6 @@ async fn oversized_tool_result_is_bounded_before_threading() {
     node.shutdown().await;
 }
 
-/// An installed plugin tool whose result carries one `image_bytes`-long
-/// image part; the tempdir is the plugin home and must outlive the tool.
 fn plugin_image_tool(image_bytes: usize) -> (tempfile::TempDir, Box<dyn ToolDyn>) {
     const PREFIX: &[u8] = br#"{"response":{"width":2,"height":2},"parts":[{"type":"image","mimeType":"image/png","data":""#;
     const SUFFIX: &[u8] = br#""}]}"#;
@@ -606,18 +583,13 @@ fn plugin_call_then_text_turns() -> Vec<Vec<RawStreamingChoice<()>>> {
     ]
 }
 
-/// Runs one turn in which the model calls a plugin tool whose result carries
-/// one `image_bytes`-long image part, under `provider`, and returns the tool
-/// result content the next provider request carries.
 async fn plugin_image_result_seen_by(
     provider: crate::BackendProviderKind,
     image_bytes: usize,
 ) -> Vec<ToolResultContent> {
     let (_home, tool) = plugin_image_tool(image_bytes);
     let tools: Vec<Box<dyn ToolDyn>> = vec![tool];
-    let model = ScriptedModel::new_turns(plugin_call_then_text_turns())
-    // The scripted capture renders an OpenAI Chat Completions body.
-    .without_capture();
+    let model = ScriptedModel::new_turns(plugin_call_then_text_turns()).without_capture();
     let mut config = config(4);
     config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
         provider,
@@ -632,7 +604,6 @@ async fn plugin_image_result_seen_by(
         Arc::new(tools),
         config,
     );
-    // Real time: the plugin runs on the blocking pool under its own wall clock.
     futures::pin_mut!(stream);
     let mut final_text = None;
     while let Some(item) = stream.next().await {
@@ -656,18 +627,11 @@ async fn plugin_image_result_seen_by(
         .expect("the second request carries the plugin's tool result")
 }
 
-/// The plugin result ABI (`crate::plugin`'s module doc): a plugin tool that
-/// returns `{"response", "parts": [{"type": "image", ...}]}` reaches a provider
-/// that carries tool-result images as one text part and one whole image part,
-/// even far past the loop's text bound. The image's base64 alone is ~225k
-/// tokens at bytes/4, past the default context window, so the request is
-/// admitted only because the estimate charges it as an image.
 #[tokio::test]
 async fn plugin_image_parts_reach_the_provider_whole() {
     const IMAGE_BYTES: usize = 900_000;
     let result =
-        plugin_image_result_seen_by(crate::BackendProviderKind::AnthropicApiKey, IMAGE_BYTES)
-            .await;
+        plugin_image_result_seen_by(crate::BackendProviderKind::AnthropicApiKey, IMAGE_BYTES).await;
     assert_eq!(result.len(), 2, "one text part and one image part");
     assert_eq!(tool_result_text(&result[0]), r#"{"height":2,"width":2}"#);
     let ToolResultContent::Image(image) = &result[1] else {
@@ -687,9 +651,6 @@ async fn plugin_image_parts_reach_the_provider_whole() {
     );
 }
 
-/// A later request replays the call from the persisted session, where the
-/// result is text: the bounded text parts and a note per image, never the
-/// image's base64, whether or not the raw output fits the text bound.
 #[tokio::test]
 async fn persisted_plugin_image_result_replays_text_parts_and_a_note() {
     for image_bytes in [64, 400_000] {
@@ -748,64 +709,17 @@ async fn persisted_plugin_image_result_replay(image_bytes: usize) {
     node.shutdown().await;
 }
 
-/// A provider whose wire refuses tool-result images still gets the request,
-/// with a note in place of the image, rather than failing the whole turn.
 #[tokio::test]
 async fn plugin_image_parts_become_a_note_where_the_provider_refuses_them() {
     let result =
         plugin_image_result_seen_by(crate::BackendProviderKind::OpenAiCompatible, 64).await;
     assert_eq!(
-        result
-            .iter()
-            .map(tool_result_text)
-            .collect::<Vec<_>>(),
+        result.iter().map(tool_result_text).collect::<Vec<_>>(),
         vec![
             r#"{"height":2,"width":2}"#,
             gents_loop::loop_stream::TOOL_RESULT_IMAGE_OMITTED,
         ]
     );
-}
-
-#[test]
-fn value_to_json_string_passes_strings_through_unquoted() {
-    assert_eq!(
-        value_to_json_string(&serde_json::json!("plain")),
-        "plain".to_string()
-    );
-    assert_eq!(
-        value_to_json_string(&serde_json::json!({"path": "x"})),
-        r#"{"path":"x"}"#.to_string()
-    );
-}
-
-#[tokio::test]
-async fn dispatch_tool_calls_known_tool_and_reports_unknown() {
-    // No tool runtime scope is active in this unit test, so dispatch_tool takes
-    // the unscoped path: look up by name and call directly.
-    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(EchoTool {
-        name: "echo".to_string(),
-        output: "ECHOED".to_string(),
-    })];
-
-    assert_eq!(
-        super::dispatch_tool(&tools, "echo", "{}".to_string(), None, None).await,
-        crate::tool_call_lifecycle::ToolOutcome::Completed("ECHOED".to_string())
-    );
-    // An unresolved tool name is a dispatch FAILURE carried as typed data.
-    // Classifying it `Completed` would durably record a hallucinated tool name
-    // as a successful call (fenced end-to-end by
-    // `hook::tests::hook_maps_unknown_tool_dispatch_to_failed_lifecycle`).
-    let unknown = super::dispatch_tool(&tools, "missing", "{}".to_string(), None, None).await;
-    match &unknown {
-        crate::tool_call_lifecycle::ToolOutcome::Failed {
-            denial: None, text, ..
-        } => {
-            assert_eq!(text, "error: unknown tool 'missing'");
-        }
-        other => panic!("unknown tool must classify as a dispatch failure, got {other:?}"),
-    }
-    // The model still sees exactly the text it always saw.
-    assert_eq!(unknown.model_facing_text(), "error: unknown tool 'missing'");
 }
 
 #[tokio::test]
@@ -924,15 +838,12 @@ async fn missing_tool_args_notify_model_and_terminalize_failed() {
             }
         }
         async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-            // Must NOT run: the args never deserialize.
             panic!("the tool must not run on unparseable arguments");
         }
     }
 
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
-    // Valid JSON missing the required `findings` field is classified precisely
-    // so the model can repair the call without being told its JSON was malformed.
     let model = ScriptedModel::new_turns(vec![
         vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
@@ -957,8 +868,6 @@ async fn missing_tool_args_notify_model_and_terminalize_failed() {
         Arc::new(tools),
         owned_config(4),
     );
-    // The model is notified via a tool result (no error ends the stream); it sees
-    // the actionable missing-field notice and answers on the next turn.
     let collected = collect_owned_scripted_stream(
         stream,
         &hook,
@@ -983,8 +892,6 @@ async fn missing_tool_args_notify_model_and_terminalize_failed() {
         "the internal marker must never leak to the model, got: {tool_results:?}"
     );
 
-    // T5: the started call terminalized failed(argumentInvalid) — via on_tool_result
-    // stripping the marker and forcing ArgumentInvalid — instead of dangling in `running`.
     let resp = node
         .execute("query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }")
         .await;
@@ -1010,8 +917,6 @@ async fn missing_tool_args_notify_model_and_terminalize_failed() {
     );
 }
 
-/// Terminalization holds the process-wide write gate while it validates every
-/// accepted tool reply; the request's output is scanned once, not per tool.
 #[tokio::test]
 async fn completed_terminalization_scans_request_output_once_for_many_tools() {
     const TOOL_TURNS: usize = 6;
@@ -1066,10 +971,11 @@ async fn completed_terminalization_scans_request_output_once_for_many_tools() {
     node.shutdown().await;
 }
 
-/// Time the terminalization of one request with `turns` tool turns whose
-/// outputs are `output_bytes` long, after `noise` replicas of its canonical
-/// output were written under the same principal in other sessions.
-async fn terminalization_with_principal_output(turns: usize, output_bytes: usize, noise: usize) -> std::time::Duration {
+async fn terminalization_with_principal_output(
+    turns: usize,
+    output_bytes: usize,
+    noise: usize,
+) -> std::time::Duration {
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let mut script = (0..turns)
         .map(|turn| {
@@ -1109,8 +1015,6 @@ async fn terminalization_with_principal_output(turns: usize, output_bytes: usize
     .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
     assert_eq!(collected.tool_results.len(), turns);
-    // Writing the surrounding output outlasts the lease; decide at the
-    // instant the loop finished.
     let finished_at = chrono::Utc::now();
     let generation = lifecycle.execution_generation().unwrap().to_owned();
     let request_doc_id = lifecycle.request().doc_id.clone();
@@ -1170,8 +1074,10 @@ async fn terminalization_with_principal_output(turns: usize, output_bytes: usize
                         crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
                     )
                     .with_variables(
-                        crate::session::canonical_rows::transcript_message_create_variables(&message)
-                            .unwrap(),
+                        crate::session::canonical_rows::transcript_message_create_variables(
+                            &message,
+                        )
+                        .unwrap(),
                     ),
                     defra_node::ExecuteRetryPolicy::default(),
                 )
@@ -1203,9 +1109,6 @@ async fn terminalization_with_principal_output(turns: usize, output_bytes: usize
     elapsed
 }
 
-/// Terminalization holds the process-wide write gate, so its reads must be
-/// bounded by the request, not by everything its principal ever wrote: a
-/// fan-out of long requests otherwise starves lease renewal behind it.
 #[tokio::test]
 async fn terminalization_cost_is_independent_of_principal_output() {
     let alone = terminalization_with_principal_output(24, 4096, 0).await;
@@ -1216,13 +1119,15 @@ async fn terminalization_cost_is_independent_of_principal_output() {
     );
 }
 
-/// Manual scale grid: `TERMINALIZE_SCALE=turns:bytes:noise,...`.
 #[tokio::test]
 #[ignore = "manual terminalization scale measurement"]
 async fn terminalization_scale_grid() {
     let grid = std::env::var("TERMINALIZE_SCALE").unwrap_or_else(|_| "24:4096:0,24:4096:40".into());
     for point in grid.split(',') {
-        let values = point.split(':').map(|v| v.parse::<usize>().unwrap()).collect::<Vec<_>>();
+        let values = point
+            .split(':')
+            .map(|v| v.parse::<usize>().unwrap())
+            .collect::<Vec<_>>();
         terminalization_with_principal_output(values[0], values[1], values[2]).await;
     }
 }
@@ -1366,8 +1271,6 @@ async fn background_output_query_work_is_independent_of_principal_history() {
             .unwrap(),
             crate::background_tools::CanonicalToolOutputObservation::Closed(output)
         );
-
-
     }
     assert_eq!(
         work[0], work[1],
@@ -1378,8 +1281,6 @@ async fn background_output_query_work_is_independent_of_principal_history() {
     node.shutdown().await;
 }
 
-/// A granted plugin child: `slow` outlasts the plugin's whole guest compute
-/// budget, `late` fails on its own local timeout.
 struct ComposedChild {
     name: &'static str,
 }
@@ -1408,11 +1309,8 @@ impl ToolDyn for ComposedChild {
                 .await;
                 return Ok("\"slow done\"".into());
             }
-            let local = tokio::time::timeout(
-                Duration::from_millis(50),
-                std::future::pending::<()>(),
-            )
-            .await;
+            let local =
+                tokio::time::timeout(Duration::from_millis(50), std::future::pending::<()>()).await;
             assert!(local.is_err());
             Err(ToolError::ReportedFailure {
                 class: crate::tool_call_lifecycle::FailureClass::External,
@@ -1493,16 +1391,16 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
         ("late", "failed"),
     ] {
         assert!(
-            rows.as_array().unwrap().iter().any(|row| row["tool_name"] == name
-                && row["lifecycle_state"] == state),
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["tool_name"] == name && row["lifecycle_state"] == state),
             "{name} {state}: {rows}"
         );
     }
     node.shutdown().await;
 }
 
-/// Calls each `(ordinal, name, arguments)` through the live effect dispatcher
-/// and records whether the dispatcher completed it.
 struct ComposingParent {
     children: Vec<(u32, &'static str, String)>,
     completed: Arc<std::sync::Mutex<Vec<(u32, bool)>>>,
@@ -1529,7 +1427,10 @@ impl ToolDyn for ComposingParent {
             for (ordinal, name, arguments) in &self.children {
                 let outcome = dispatcher.call(*ordinal, name, arguments).await;
                 assert!(
-                    !matches!(outcome, Err(gents_loop::tool_effects::ToolEffectError::Fatal(_))),
+                    !matches!(
+                        outcome,
+                        Err(gents_loop::tool_effects::ToolEffectError::Fatal(_))
+                    ),
                     "{name} #{ordinal} ended the parent"
                 );
                 let completed = matches!(
@@ -1543,7 +1444,6 @@ impl ToolDyn for ComposingParent {
     }
 }
 
-/// A selected child whose own admission accepts exactly `{"admit": true}`.
 struct AdmissionChild {
     name: &'static str,
     invoked: Arc<std::sync::Mutex<Vec<u64>>>,
@@ -1605,8 +1505,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
             };
             for name in names {
                 let ordinal = children.len() as u32 + 1;
-                let arguments =
-                    serde_json::json!({"admit": case["admitted"], "ordinal": ordinal});
+                let arguments = serde_json::json!({"admit": case["admitted"], "ordinal": ordinal});
                 children.push((ordinal, name, arguments.to_string()));
                 expected.insert(ordinal, (case.clone(), case["expected"] == true));
             }

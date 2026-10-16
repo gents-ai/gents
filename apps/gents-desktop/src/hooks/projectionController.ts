@@ -52,14 +52,6 @@ function requestedWork(scope: DesktopUpdateRefreshScope) {
   }
 }
 
-/**
- * The sole owner of shell projection reads.
- *
- * Requests are merged in one microtask/trailing queue. A full session read
- * supersedes a live delta, delta continuity failure promotes to a full bounded
- * DefraDB projection, and terminal session state schedules the fleet/index
- * projection exactly once. React only receives the resulting bounded view.
- */
 export function createProjectionController({
   currentSessionId,
   refreshSnapshot,
@@ -116,14 +108,8 @@ export function createProjectionController({
             next?.turnState &&
             isTerminalTurnState(next.turnState)
           ) {
-            // Terminal tracking can dispose this owner. Start the index read
-            // now, but do not block later session reads on its completion.
             snapshots.push(refreshIndex());
           }
-          // The empty composer chooses its agent from the fleet/config
-          // projection. Refresh it when leaving a session so an operator-side
-          // default change made during the completed turn is visible before
-          // the next session is created.
           if (!sessionId && !(work & SNAPSHOT)) {
             snapshots.push(refreshIndex());
           }
@@ -135,8 +121,6 @@ export function createProjectionController({
       } catch (error) {
         onError(error);
       }
-      // Foreground/full refresh must show the selected chat without waiting
-      // for the unrelated fleet/index projection.
       if (work & SNAPSHOT) {
         try {
           snapshots.push(refreshIndex());

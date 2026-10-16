@@ -20,14 +20,10 @@ pub(super) struct ShimState {
 
 pub(super) type Outbound = mpsc::UnboundedSender<String>;
 
-/// Codex threads default to memory disabled: this shim does not wire the Codex
-/// memory feature, so reporting it as enabled would be dishonest (#494).
 pub(crate) const DEFAULT_MEMORY_MODE: &str = "disabled";
 
 #[derive(Default)]
 pub(crate) struct CodexSidecar {
-    /// Empty threads created by this shim remain process-local until their
-    /// first AgentRequest lets the runtime materialize the canonical session.
     pub(crate) created: BTreeMap<String, String>,
     pub(crate) cwd: BTreeMap<String, PathBuf>,
     pub(crate) loaded: BTreeSet<String>,
@@ -77,8 +73,6 @@ pub(super) struct RootContinuationStreamControl {
 }
 
 impl ShimState {
-    /// LocalSelf admission proves signer = requester = target node.
-    /// Child streams instead carry their actual committed requester explicitly.
     pub(super) fn local_requester_did(&self) -> &str {
         self.node_did.as_ref()
     }

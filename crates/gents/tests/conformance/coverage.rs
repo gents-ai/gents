@@ -27,10 +27,6 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
 
     assert_lean_transition_is_legal("RuntimeReconcile", "applying", "idle");
     assert_lean_transition_is_legal("RuntimeReconcile", "idle", "debouncing");
-    // PairingReconcile is no longer a state-machine contract: Lean models it as
-    // resource reconciliation (ReconcileState/Transition) exported through
-    // `pairing_reconcile_cases`, and the retired idle/diverged/converged/crashed
-    // phase machine must not be re-asserted here.
     assert_lean_transition_is_legal("Persistence.failClosed", "committing", "uncommitted");
     assert_lean_transition_is_legal("Persistence.failOpen", "committing", "lost");
     assert_lean_transition_is_legal("StorageObservation.failClosed", "noMutation", "inFlight");
@@ -196,8 +192,6 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
     assert_eq!(lean_recovery_sweep_cases().len(), 32);
-    // The synthetic RecoveryEquivalence contract was deleted from Lean; the
-    // recovery sweep cases above are the actual recovery guarantee.
     assert_eq!(lean_transcript_cases().len(), 11);
     assert_eq!(lean_composed_invariant_witnesses().len(), 4);
 }
@@ -241,8 +235,6 @@ async fn agent_tool_call_carries_only_generic_background_fields() {
     ] {
         assert!(names.contains(field), "AgentToolCall missing field {field}");
     }
-    // A started session is an ordinary background row: no child binding,
-    // delegation, cancel mirror or claim fence is persisted on the call.
     for field in [
         "child_request_id",
         "spawn_target_did",
@@ -480,9 +472,6 @@ fn lean_feature_matrix_covers_every_declared_required_surface() {
 #[test]
 fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     let snapshot = lean_contract_snapshot();
-    // This set records fixture groups that decoded successfully. It does not
-    // establish native consumption; only registered consumers and the ledger's
-    // consumer entries may make that claim.
     let mut emitted = BTreeSet::new();
     for (category, domain, present) in [
         (
@@ -2010,8 +1999,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         ledger_domains.insert((entry.category.clone(), entry.domain.clone()));
         for surface in &entry.surfaces {
             assert!(
-                // One fixture family can exercise distinct production owners.
-                // Repeating the same consumer on the same surface is still an error.
                 ledger_observations.insert((
                     entry.category.clone(),
                     entry.domain.clone(),

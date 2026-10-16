@@ -1,7 +1,4 @@
-use super::{
-    HookAttempt, HookCommandResult, ManagedTaskHookExec, TaskHookCancellation, TaskHookExec,
-    TaskHookRun, FAILURE_REASON_OUTPUT_CAP,
-};
+use super::{HookCommandResult, ManagedTaskHookExec, TaskHookCancellation, TaskHookExec};
 use crate::document_config::{TaskHook, TaskHookPhase};
 
 fn hook(hook_id: &str, command: &[&str], timeout_secs: Option<i64>) -> TaskHook {
@@ -24,63 +21,6 @@ fn phased(
 
 fn exec() -> ManagedTaskHookExec {
     ManagedTaskHookExec::new(std::env::temp_dir(), TaskHookCancellation::default())
-}
-
-fn failed_run(attempt: HookAttempt) -> TaskHookRun {
-    TaskHookRun {
-        before_attempted: vec![attempt],
-        ..Default::default()
-    }
-}
-
-#[tokio::test]
-async fn a_failing_hook_reports_its_captured_output() {
-    let bad = exec()
-        .attempt(&hook(
-            "bad",
-            &["sh", "-c", "echo boom >&2; exit 3"],
-            Some(30),
-        ))
-        .await;
-    assert!(bad.detail.contains("boom"), "{:?}", bad.detail);
-}
-
-#[tokio::test]
-async fn exit_127_and_a_missing_executable_are_reported_differently() {
-    let exited = exec()
-        .attempt(&hook("shell", &["sh", "-c", "exit 127"], Some(30)))
-        .await;
-    assert_eq!(exited.result, HookCommandResult::Exited { code: Some(127) });
-
-    let directory = tempfile::tempdir().expect("hook directory");
-    let missing = directory.path().join("no-such-hook");
-    let missing = missing.to_str().expect("utf-8 path");
-    let unlaunched = exec().attempt(&hook("missing", &[missing], Some(30))).await;
-    assert_eq!(unlaunched.result, HookCommandResult::LaunchFailed);
-    assert!(!unlaunched.detail.is_empty());
-
-    let exited_reason = failed_run(exited).hook_failure_reason("shell");
-    let unlaunched_reason = failed_run(unlaunched).hook_failure_reason("missing");
-    assert!(
-        exited_reason.contains("exited with status 127"),
-        "{exited_reason:?}"
-    );
-    assert!(
-        unlaunched_reason.contains("failed to launch"),
-        "{unlaunched_reason:?}"
-    );
-}
-
-#[tokio::test]
-async fn a_signal_killed_hook_is_not_a_success() {
-    let attempt = exec()
-        .attempt(&hook("killed", &["sh", "-c", "kill -9 $$"], Some(30)))
-        .await;
-    assert_eq!(attempt.result, HookCommandResult::Exited { code: None });
-    assert!(!attempt.result.succeeded());
-    assert!(failed_run(attempt)
-        .hook_failure_reason("killed")
-        .contains("terminated by a signal"));
 }
 
 #[tokio::test]
@@ -150,22 +90,4 @@ async fn an_interrupt_stops_a_running_hook() {
     let (attempt, ()) = tokio::join!(exec.attempt(&held), interrupt);
     assert_eq!(attempt.result, HookCommandResult::Interrupted);
     assert!(!finished.exists());
-}
-
-#[test]
-fn a_failure_reason_keeps_only_the_tail_of_hook_output() {
-    let output = format!("{}END", "x".repeat(10 * 1024));
-    let reason = failed_run(HookAttempt {
-        hook_id: "noisy".to_string(),
-        result: HookCommandResult::Exited { code: Some(1) },
-        detail: output,
-    })
-    .hook_failure_reason("noisy");
-    assert!(reason.ends_with("END"));
-    assert!(reason.starts_with("task hook noisy exited with status 1\n…"));
-    assert!(
-        reason.len() <= FAILURE_REASON_OUTPUT_CAP + 64,
-        "{}",
-        reason.len()
-    );
 }

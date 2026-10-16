@@ -132,7 +132,6 @@ describe("AgentPicker popover lifetime", () => {
     await screen.findByRole("dialog", { name: "Choose agent" });
     await user.click(screen.getByRole("button", { name: /Create new agent/ }));
 
-    // The closing picker stays mounted for its exit; the sheet must wait.
     expect(screen.getByRole("dialog", { name: "Choose agent" })).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "New agent" })).not.toBeInTheDocument();
 
@@ -170,7 +169,6 @@ describe("AgentPicker popover lifetime", () => {
     await user.click(screen.getByRole("button", { name: "Agent" }));
     expect(screen.getByRole("dialog", { name: "Choose agent" })).toBeVisible();
 
-    // The next ordinary close must not replay the withdrawn create.
     await user.click(screen.getByRole("button", { name: "Agent" }));
     await acknowledgeClose();
     expect(screen.queryByRole("dialog", { name: "New agent" })).not.toBeInTheDocument();

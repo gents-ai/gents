@@ -47,10 +47,7 @@ struct TitleProvider {
     entered: Arc<tokio::sync::Notify>,
     before_second: Option<Arc<tokio::sync::Notify>>,
     third_poll: Option<Arc<tokio::sync::Notify>>,
-    /// Moves the title request's execution generation before any output is
-    /// streamed, so every later auxiliary write is fenced out.
     fence_generation: Option<(Arc<EmbeddedNode>, String, String)>,
-    /// Fails every call with this provider error instead of streaming.
     error: Option<String>,
 }
 
@@ -499,9 +496,6 @@ fn modeled_title_fields(name: &str) -> (Vec<(StreamPayload, String, u32, u32)>, 
     (fields, outcome)
 }
 
-/// Rig emits one reasoning part per event. The owned accumulator joins these
-/// same-ID events into the single multi-part block declared by the Lean raw
-/// witness, without altering any received field bytes or native positions.
 fn provider_events(
     fields: &[(StreamPayload, String, u32, u32)],
     complete: bool,
@@ -543,7 +537,6 @@ fn provider_events(
     events
 }
 
-/// A reasoning model that exhausts its turn before any visible title text.
 fn reasoning_only_events(
     fields: &[(StreamPayload, String, u32, u32)],
 ) -> Vec<RawStreamingChoice<()>> {
@@ -1535,8 +1528,6 @@ async fn reasoning_only_title_retains_each_attempt_and_uses_bounded_fallback() {
     );
 }
 
-/// #2121 item 5: a title on a usage-limited account records each limited
-/// call and falls back to the message title; the turn it names is untouched.
 #[tokio::test]
 async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
     let fixture = TitleFixture::new().await;
@@ -1766,8 +1757,6 @@ async fn title_output_cap_applies_only_when_reasoning_is_disabled_on_the_wire() 
         );
     }
 
-    // A later merge that re-enables thinking wins over the profile's
-    // reasoning-off setting, so the visible-title cap no longer applies.
     agent_config.backend_provider_kind = BackendProviderKind::OpenAiCompatible;
     agent_config.openai_wire_api = chat;
     agent_config.sampling.reasoning_effort = Some(ReasoningEffort::None);

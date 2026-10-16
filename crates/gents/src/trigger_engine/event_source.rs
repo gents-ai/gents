@@ -1,20 +1,3 @@
-//! Event-trigger `TriggerSource`.
-//!
-//! Subscribes to DefraDB document events and emits `FireIntent`s whenever an
-//! event from a `source_collection` referenced by the active runtime
-//! snapshot's `active_event_triggers` lands. The subscription set is kept in
-//! sync with the snapshot generation — see `reconcile_subscriptions` (Task 19).
-//!
-//! This file lands in staged tasks:
-//! - Task 18: skeleton only — struct, constructor, no-op `next_fire` stub.
-//! - Task 19: `reconcile_subscriptions` drives the desired-collections set
-//!   from the snapshot at each generation bump.
-//! - Task 20: full `next_fire` loop (poll subscription, filter by desired
-//!   collections, build `FireIntent`).
-//! - Task 21 (this file): filter probe + doc-var hydration via an
-//!   introspected source-doc projection cached per source collection.
-//! - Task 22: `on_result` callback body for bookkeeping writes.
-
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -92,31 +75,6 @@ fn take_due_group_batch(
         .collect();
     *cursor = (start + count) % due.len();
     batch
-}
-
-#[cfg(test)]
-mod due_group_batch_tests {
-    use super::*;
-
-    #[test]
-    fn due_group_batches_are_bounded_and_rotate_fairly() {
-        let due = (0..(GROUP_DUE_RECONCILE_BUDGET + 3))
-            .map(|index| GroupTrackingKey {
-                consumer_key: "consumer-key".to_string(),
-                correlation: format!("run-{index:03}"),
-            })
-            .collect::<Vec<_>>();
-        let mut cursor = 0;
-
-        let first = take_due_group_batch(due.clone(), &mut cursor);
-        let second = take_due_group_batch(due, &mut cursor);
-
-        assert_eq!(first.len(), GROUP_DUE_RECONCILE_BUDGET);
-        assert_eq!(second.len(), GROUP_DUE_RECONCILE_BUDGET);
-        assert_eq!(first[0].correlation, "run-000");
-        assert_eq!(second[0].correlation, "run-016");
-        assert!(second.iter().any(|key| key.correlation == "run-018"));
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

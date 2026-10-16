@@ -15,13 +15,6 @@ export type DesktopStartupPhase =
   | "client-error"
   | "ready";
 
-/**
- * Sole decision whether startup starts the desktop client. The autostart
- * effect and the startup phase both read it, so startup waits on the client
- * only when something will start it. A local-standard peer is saved before
- * client state exists; while its runtime is not serving there is nothing to
- * connect to, and the shell must offer setup instead of waiting.
- */
 export function shouldAutoStartDesktopClient(
   snapshot: DesktopClientSnapshot,
   localServerAvailable: boolean | null,
@@ -122,8 +115,6 @@ export function projectStartupLoadingStatus(
   }
 }
 
-/** One step of starting Gents, as both progress screens show it: what it
-    is, what is happening while it runs, and where it has got to. */
 export type StartupStep = {
   key: "node" | "connections" | "client";
   label: string;
@@ -131,9 +122,6 @@ export type StartupStep = {
   state: LoadingStepState;
 };
 
-/** The steps a startup status stands for, in order. The node step is
-    there only where this platform manages a node; a home that reaches a
-    remote server names that step for the server instead. */
 export function startupSteps(
   status: StartupLoadingStatus,
   options: { remote?: boolean } = {},
@@ -202,11 +190,6 @@ type SessionLoadingInput = {
   operationalState: DeploymentOperationalState | null;
 };
 
-/**
- * Sole projection for user-visible session waits. It does not invent
- * progress: every state comes from an in-flight local read, signed hydration
- * progress, the application sync owner, or runtime-authored agent readiness.
- */
 export function projectSessionLoadingStatus({
   selectedSessionId,
   selectedNodeDid,

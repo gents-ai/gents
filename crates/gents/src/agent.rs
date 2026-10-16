@@ -51,10 +51,6 @@ pub use builder::{AgentBuilder, GentsBuilder};
 #[cfg(test)]
 pub(crate) use document_view::load_document_runtime_view;
 
-/// Focused daemon seam for a persisted owned request and deterministic model.
-/// It does not exercise RuntimeContext's provider/client assembly, but shares
-/// its tool-surface runtime-policy attachment and the real request lifecycle,
-/// tool dispatch, provider-input, and terminal-state owners.
 #[cfg(test)]
 pub(crate) async fn process_owned_request_with_model_for_test<M>(
     node: Arc<EmbeddedNode>,
@@ -141,8 +137,8 @@ pub trait RuntimeSnapshotObserver: Send + Sync {
         runnable_agent_ids: &[String],
     );
 
-    /// Subscription/seed outcome for this exact configuration. Success is not
-    /// a group-recovery/drain guarantee; errors do not authorize reseeding.
+    /// Success is not a group-recovery/drain guarantee; errors do not authorize
+    /// reseeding.
     fn on_event_sources_reconciled(
         &self,
         generation: u64,
@@ -150,9 +146,8 @@ pub trait RuntimeSnapshotObserver: Send + Sync {
         result: Result<(), &str>,
     );
 
-    /// The request router has durably acknowledged this generation.  This is
-    /// deliberately separate from publication: callers that submit work need
-    /// the router, not merely a resolved snapshot.
+    /// The request router has durably acknowledged this generation; callers
+    /// that submit work need the router, not merely a resolved snapshot.
     fn on_router_generation_activated(&self, _generation: u64, _configuration_fingerprint: &str) {}
 }
 
@@ -173,8 +168,6 @@ pub struct DocumentRuntimeOptions {
     pub startup_build_failure_observer:
         Option<Arc<dyn crate::startup_readiness::StartupBuildFailureObserver>>,
     pub startup_readiness: crate::startup_readiness::StartupReadinessOptions,
-    /// The gents home whose installed plugins this runtime's tools can call.
-    /// Absent means no plugins are installed.
     pub plugin_home: Option<PathBuf>,
     #[cfg(test)]
     pub(crate) router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
@@ -189,8 +182,6 @@ pub(crate) struct DocumentResolveContext {
 }
 
 impl DocumentResolveContext {
-    /// A context over a host with no plugins installed; test construction
-    /// only, since production always carries the runtime's own executor.
     #[cfg(test)]
     pub(crate) fn for_tests(
         identity: Arc<dyn NodeIdentity>,
@@ -236,8 +227,6 @@ pub struct Gents {
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
 }
 
-/// The executor for `home`'s installed plugins, answering the model calls of
-/// a plugin whose slot is bound through this node's inference profiles.
 pub(crate) fn plugin_executor(
     home: Option<PathBuf>,
     models: crate::plugin::model_calls::AccessModels<crate::config_client::ConfigAccess>,
@@ -260,7 +249,6 @@ impl Gents {
                 "Gents runtime requires an EmbeddedNode configured with a node signing DID"
             );
         }
-        // Register the runtime schema through the shared migration engine.
         migration::ensure_all_runtime_migrations(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
         let plugin_models = crate::plugin::model_calls::AccessModels(
@@ -319,10 +307,7 @@ impl Gents {
             startup_readiness: options.startup_readiness,
             #[cfg(test)]
             router_dispatch_probe: options.router_dispatch_probe,
-            // Capture is mandatory (#840): a provider call with no durable
-            // rendered input is a log entry, not a fact record. The public
-            // builder exposes only a fail-closed fault-injection hook, never an
-            // arbitrary sink that could acknowledge without persisting.
+            // Provider calls require durable rendered input to be fact records.
             rendered_request_capture_factory: Some(rendered_request_capture_factory),
             manual_trigger_handle: Arc::new(OnceCell::new()),
             operator_tool_root: options.tool_ceiling.root().map(PathBuf::from),
@@ -330,9 +315,6 @@ impl Gents {
         })
     }
 
-    /// The local prober's measured backend health — the truthful signal
-    /// behind effective availability. Exposed for embedders and for the
-    /// completion-retry path (#631) to make fail-fast-vs-backoff decisions.
     pub fn backend_health(&self) -> BackendHealthMap {
         self.backend_health.clone()
     }
@@ -342,11 +324,8 @@ impl Gents {
     }
 
     /// Returns the resolved runtime node and signing permission boundary.
-    ///
-    /// DefraDB ops issued by this `Gents` are signed by the node identity
-    /// configured on its `EmbeddedNode`. That signer may differ from the
-    /// resolved runtime node identity: the node is the durable write author,
-    /// while the runtime node remains the permission boundary for its agents.
+    /// The node is the durable write author; the runtime node remains the
+    /// permission boundary for its agents.
     pub fn runtime_node(&self) -> &RuntimeNode {
         &self.runtime_node
     }
@@ -359,7 +338,6 @@ impl Gents {
         &self.runtime_node.node_did
     }
 
-    /// Reads this runtime node's account usage from its providers now.
     pub async fn read_usage(
         &self,
         trigger: crate::usage_observation::UsageTrigger,
@@ -388,18 +366,17 @@ impl Gents {
         self.background_execution_registry.clone()
     }
 
-    /// Keep durable records of spawned background processes in `dir`, which
-    /// must belong to this runtime's exclusively locked store, so a restarted
-    /// runtime can prove ownership of a surviving process and stop it. Call
-    /// before the runtime starts.
+    /// Durable records of spawned background processes in `dir`, which must
+    /// belong to this runtime's exclusively locked store; call before the
+    /// runtime starts.
     pub fn with_background_process_records(mut self, dir: PathBuf) -> Self {
         self.background_execution_registry =
             self.background_execution_registry.with_process_records(dir);
         self
     }
 
-    /// Keep durable task hook attempt records in `dir`, which must belong to
-    /// this runtime's exclusively locked store. Call before the runtime starts.
+    /// Durable task hook attempt records in `dir`, which must belong to this
+    /// runtime's exclusively locked store. Call before the runtime starts.
     pub fn with_task_hook_records(mut self, dir: PathBuf) -> Self {
         self.background_execution_registry = self
             .background_execution_registry
@@ -408,8 +385,7 @@ impl Gents {
     }
 
     /// Resolve the exact operational configuration identity used by the
-    /// runtime reconciler. Observers can use this to fence an external config
-    /// transaction without reimplementing the fingerprint's field set.
+    /// runtime reconciler, for fencing an external config transaction.
     pub async fn document_runtime_configuration_fingerprint(&self) -> anyhow::Result<String> {
         let context = self
             .document_runtime_context

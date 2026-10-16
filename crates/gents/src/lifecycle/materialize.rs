@@ -78,8 +78,6 @@ async fn resolve_created_agent_request_doc_id(
         .map(str::to_string)
 }
 
-/// Write one signed pending request. `session_id` names an existing session
-/// the request continues; absent mints a new session.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conversation_title(
     node: &std::sync::Arc<EmbeddedNode>,
@@ -132,8 +130,6 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
     let mutation = &mutation;
 
-    // A trigger fire is not replayable: `event_kind: created` is first-seen, so
-    // dropping this create on a transient conflict loses the stage for good.
     let response = crate::config_client::ConfigAccess::transact_local_write(
         node,
         Some(actor),
@@ -159,9 +155,6 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
     })
 }
 
-/// Retry the complete graph publication transaction on native conflicts. A
-/// first-seen trigger event cannot be replayed, so retrying only its row create
-/// would either lose the stage or bypass a newly committed graph closure.
 async fn publish_graph_root_request(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
@@ -189,14 +182,6 @@ async fn publish_graph_root_request(
     })
 }
 
-/// Build and sign the canonical pending request used by trigger materialization.
-///
-/// Callers which need to stage additional controller documents in the same
-/// transaction can precompute the request/session/retry identity, then pass the
-/// returned immutable create document to their atomic submit seam. The ordinary
-/// trigger path above deliberately keeps its existing create path.
-/// `requester_did` is the requester that owns the existing session a runtime
-/// fire is delivered into; `None` is the target itself.
 #[allow(clippy::too_many_arguments)]
 pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
     node_did: &str,
@@ -291,10 +276,7 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
     build_signed_request(spec, RequestSigner::RegisteredTarget).await
 }
 
-/// The identity fields every writer decides for a fresh `AgentRequest`:
-/// who it is for, what session it belongs to, and what it says.
 pub struct RequestIdentity {
-    /// Defaults to the target node when omitted.
     pub requester_did: Option<String>,
     pub request_id: String,
     pub node_did: String,
@@ -305,10 +287,6 @@ pub struct RequestIdentity {
     pub created_at: String,
 }
 
-/// Causal lineage: the logical and physical identifiers of the request (and,
-/// for `agent_new`/`agent_message`, the tool call) that caused this one,
-/// plus the resulting causal hop (`request_hop`). A request-only link is a
-/// control continuation that copies its predecessor's hop.
 #[derive(Default)]
 pub struct ParentLink {
     pub depth: u32,
@@ -318,8 +296,6 @@ pub struct ParentLink {
     pub parent_tool_call_doc_id: Option<String>,
 }
 
-/// Retry linkage: the failed request this one supersedes, the root of the
-/// retry chain, and the counters carried forward from it.
 pub struct RetryLink {
     pub parent_request_id: Option<String>,
     pub parent_request_doc_id: Option<String>,
@@ -328,25 +304,15 @@ pub struct RetryLink {
     pub max_retries: i64,
 }
 
-/// Every input a writer decides before an `AgentRequestCreate` is built and
-/// signed. This is the single seam every production writer should build
-/// through; `build_signed_request` alone owns which of its fields become
-/// which stamped columns.
 pub struct RequestSpec {
     pub purpose: gents_protocol::request_admission::RequestPurpose,
     pub identity: RequestIdentity,
     pub admission: gents_protocol::request_admission::AgentRequestAdmissionRecord,
     pub initial_lifecycle_state: RequestLifecycleState,
-    /// Correlation/context/kind/id/source-doc lineage of the trigger that
-    /// caused this request. `trigger_doc_id` is carried separately because,
-    /// unlike the rest of `TriggerLineage`, it is not part of the signed
-    /// trigger-provenance payload validated by `validate_trigger_provenance`.
     pub trigger_lineage: TriggerLineage,
     pub trigger_doc_id: Option<String>,
     pub workspace: Option<WorkspaceLineage>,
     pub parent: Option<ParentLink>,
-    /// `None` means this is not a retry: `retry_root_request` defaults to
-    /// this request's own id and `max_retries` to `DEFAULT_REQUEST_MAX_RETRIES`.
     pub retry: Option<RetryLink>,
     pub input: gents_protocol::request_input::RequestInput,
     pub retry_key: Option<String>,
@@ -354,12 +320,6 @@ pub struct RequestSpec {
 }
 
 impl RequestSpec {
-    /// A `RequestSpec` with only identity and admission decided; every
-    /// other field takes the default a writer wants when it isn't a
-    /// trigger-lineage-carrying, workspace-bound, agent-target-linked,
-    /// retried, request. Callers set only what they need
-    /// via struct-update syntax:
-    /// `RequestSpec { retry_key: Some(key), ..RequestSpec::new(RequestPurpose::Normal, identity, admission) }`.
     pub fn new(
         purpose: gents_protocol::request_admission::RequestPurpose,
         identity: RequestIdentity,
@@ -382,24 +342,11 @@ impl RequestSpec {
     }
 }
 
-/// How the built `AgentRequestCreate` is signed: as the already-registered
-/// runtime node named by `spec.identity.node_did` (the common case for
-/// runtime-authored requests), or with an explicit caller-held identity.
 pub enum RequestSigner<'a> {
     RegisteredTarget,
     Identity(&'a dyn crate::identity::NodeIdentity),
 }
 
-/// Build and stamp one `AgentRequestCreate`, unsigned. This is the sole
-/// owner of the mapping from a writer's decisions (`RequestSpec`) to the
-/// DTO's stamped columns; every production writer should build through it
-/// (or `build_signed_request`, below) rather than hand-rolling
-/// `AgentRequestCreate::base` (see below) and stamping fields itself.
-///
-/// Split out from signing so a caller that needs to inspect the built DTO
-/// before deciding whether to persist it (e.g. a retry-key dedupe lookup
-/// keyed on a fingerprint of the pre-signature fields) does not pay for a
-/// signature it may discard.
 pub(crate) fn build_request(
     spec: RequestSpec,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
@@ -484,9 +431,6 @@ pub(crate) fn build_request(
     Ok(create)
 }
 
-/// Sign an `AgentRequestCreate` built by `build_request`, either as the
-/// already-registered runtime node named by `create.node_did` or with
-/// an explicit caller-held identity.
 pub(crate) async fn sign_request(
     create: &mut gents_protocol::request_admission::AgentRequestCreate,
     signer: RequestSigner<'_>,
@@ -502,10 +446,6 @@ pub(crate) async fn sign_request(
     Ok(())
 }
 
-/// Build, stamp, and sign one `AgentRequestCreate` in one call. Equivalent
-/// to `build_request` followed by `sign_request`; use the two-step form
-/// directly when the built DTO must be inspected (e.g. fingerprinted for a
-/// dedupe lookup) before a signature is worth computing.
 pub async fn build_signed_request(
     spec: RequestSpec,
     signer: RequestSigner<'_>,
@@ -515,8 +455,6 @@ pub async fn build_signed_request(
     Ok(create)
 }
 
-/// The parent link is provenance only. The persisted pending request is the
-/// crash-recoverable owner of title inference, including after its parent ends.
 pub(crate) async fn write_pending_title_request(
     node: &std::sync::Arc<EmbeddedNode>,
     parent: &AgentRequest,
@@ -561,23 +499,14 @@ pub(crate) async fn write_pending_title_request(
         .context("title request creation omitted its exact durable request")
 }
 
-/// Why a request exists, for its causal hop (Lean `CausalHop.Cause`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestHopCause {
-    /// A user, trigger or schedule root.
     Root,
-    /// Outward: caused by another session's action at `cause_hop`, a
-    /// `agent_new`/`agent_message` request or steering continuation.
     CrossSession { cause_hop: u32 },
-    /// Return: a session-message completion wake delivering the caused
-    /// request's result back to the calling session.
     Return,
-    /// A retry, goal continuation, user steering or native completion wake.
     Continuation,
 }
 
-/// Lean `CausalHop.nextHop`: `own` is the hop of the request this one
-/// continues in its own session, `0` for a new session.
 pub fn next_request_hop(cause: RequestHopCause, own: u32) -> u32 {
     match cause {
         RequestHopCause::Root => 0,
@@ -586,13 +515,10 @@ pub fn next_request_hop(cause: RequestHopCause, own: u32) -> u32 {
     }
 }
 
-/// Lean `CausalHop.admitHop`.
 pub fn request_hop_within_bound(max_request_hop: u32, hop: u32) -> bool {
     hop <= max_request_hop
 }
 
-/// The calling edge an `agent_new`/`agent_message` request records: the
-/// caller's DID (its requester and signer), request and tool call.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionMessageCause {
     pub(crate) caller_node_did: String,
@@ -604,8 +530,6 @@ pub(crate) struct SessionMessageCause {
     pub(crate) correlation: Option<String>,
 }
 
-/// Where a session-message request runs. The target node's own
-/// agent configures it; nothing is inherited from the caller.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionMessageTarget {
     pub(crate) node_did: String,
@@ -613,12 +537,6 @@ pub(crate) struct SessionMessageTarget {
     pub(crate) session_id: String,
 }
 
-/// Build and sign the request an `agent_new`/`agent_message` call
-/// materializes at `hop` (Lean `DurableLineage.sessionMessageWrite`). This is
-/// the single writer of the calling edge (`caused_by_parent_*`). The caller is
-/// the requester and signer: its own node admits it as LocalSelf, any
-/// other target as Peer under that target's ACP. A steering delivery carries
-/// `queue`, which orders it after the busy session's active request.
 pub(crate) async fn build_session_message_request(
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
@@ -967,20 +885,11 @@ impl RequestLifecycle {
     }
 }
 
-/// Session rows sharing the request's `(node, session)` label, decoded one
-/// row at a time so rows that fail canonical decode stay separable from the
-/// rest. The two boundaries read the same set differently: the claim boundary
-/// refuses on any undecodable row, the refusal boundary treats the label as
-/// ambiguous and leaves the session untouched.
 pub(super) struct LabeledSessionRows {
     pub(super) decoded: Vec<session::SessionOwnerRow>,
     pub(super) undecodable: Vec<anyhow::Error>,
 }
 
-/// Resolve the session rows sharing the request's `(node, session)` label.
-/// Requester scope is deliberately absent from the filter: the claim boundary
-/// must see a foreign-owned label to refuse it, and the refusal boundary must
-/// see it to leave it untouched.
 async fn labeled_session_rows_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
@@ -1010,16 +919,11 @@ async fn labeled_session_rows_in_txn(
     })
 }
 
-/// Materialize the single session through its owner in the claim transaction.
-/// Creation intent is consumed once; request observations come from the exact
-/// authoritative request row after the claim mutation.
 pub(super) async fn apply_request_session_projection(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
     now: &str,
 ) -> Result<()> {
-    // The session belongs to one requester; a request under any other scope
-    // is refused rather than attached (Lean `Enrollment.runtimeRequesterScope`).
     let rows = labeled_session_rows_in_txn(txn, request).await?;
     if let Some(error) = rows.undecodable.into_iter().next() {
         return Err(error
@@ -1099,18 +1003,6 @@ pub(super) async fn apply_request_session_projection(
     Ok(())
 }
 
-/// Project a refused request into its session inside the refusal transaction,
-/// so the failed turn stays reachable from the session after the client stops
-/// tracking it. Guards mirror `AgentSession.advance`: a title-audit request, a
-/// blank scope, an ambiguous label, a foreign requester or agent, or a request
-/// that is not the canonical latest leave the session untouched instead of
-/// failing the refusal; a refusal never reopens a closed session. A labeled
-/// row that fails canonical decode makes the label ambiguous the same way, and
-/// scoped request facts the projection cannot read skip it with a warning: the
-/// refusal boundary is guards over unrelated durable rows, never assertions,
-/// or the pending -> failed write would roll back and the turn would be lost.
-/// The projection's own writes stay atomic with the refusal and still roll it
-/// back on failure.
 pub(crate) async fn project_refused_request_session_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
@@ -1207,140 +1099,6 @@ async fn project_refused_request_onto_session_in_txn(
     Ok(())
 }
 
-#[cfg(test)]
-mod pin_tests {
-    //! Pins today's `AgentRequestCreate::graphql_input_fields()` output for
-    //! each production writer, per fixed inputs, before the writers are
-    //! switched onto `build_signed_request` (#1336 Task 2). Every test here
-    //! uses a deterministic signing identity (a hardcoded raw Ed25519 key,
-    //! shared with the other pinning modules via `lifecycle::test_support`)
-    //! so the emitted `admission_signature` is stable across runs; the only
-    //! other source of nondeterminism in these writers is an internally
-    //! generated `created_at` (and, at the agent-target site, an internally
-    //! generated `session_id`), which each test either normalizes out of
-    //! the comparison or avoids by reproducing the writer's pure
-    //! DTO-construction statements with a fixed timestamp in place of
-    //! `Utc::now()`.
-    //!
-    //! Sites that require a live node beyond signing (parent/tool-call
-    //! lookups, retry-key dedupe queries, claim) are exercised by
-    //! reproducing their DTO-construction statements verbatim rather than
-    //! by invoking the full function, since the field-stamping logic itself
-    //! has no node dependency; see the per-site comment at each test.
-
-    use super::*;
-    use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
-
-    /// Replace the internally generated `created_at` and `admission_signature`
-    /// field text with stable placeholders, so the rest of the field set can
-    /// still be pinned with a literal `assert_eq!` even though the writer
-    /// calls `Utc::now()` (and therefore signs a different payload) on every
-    /// invocation.
-    fn normalize_dynamic_fields(
-        create: &gents_protocol::request_admission::AgentRequestCreate,
-        fields: &str,
-    ) -> String {
-        let created_at_field = format!(
-            "created_at: \"{}\"",
-            escape_graphql_string(&create.created_at)
-        );
-        let signature_field = format!(
-            "admission_signature: \"{}\"",
-            bs58::encode(&create.admission.signature).into_string()
-        );
-        fields
-            .replacen(&created_at_field, "created_at: \"<CREATED_AT>\"", 1)
-            .replacen(&signature_field, "admission_signature: \"<SIGNATURE>\"", 1)
-    }
-
-    // --- Site 1: materialize.rs `build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title` ---
-    // Pure and public; called directly. `created_at`/`admission_signature`
-    // are internally generated (`Utc::now()`), so they are normalized out.
-
-    #[tokio::test]
-    async fn pin_materialize_pending_manual_trigger() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let _identity = pin_fixed_signing_identity(tempdir.path());
-
-        let create =
-            build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
-                PIN_FIXED_DID,
-                "agent-1",
-                "hello agent",
-                ExecutionOrigin::Interactive,
-                TriggerLineage {
-                    trigger_id: None,
-                    trigger_kind: Some("manual".to_string()),
-                    source_doc_id: None,
-                    correlation: None,
-                    trigger_context: None,
-                },
-                Some("My Conversation"),
-                None,
-                "req-materialize-pending-manual",
-                "sess-materialize-pending-manual",
-                None,
-                None,
-                None,
-            )
-            .await
-            .expect("build signed pending manual request");
-
-        let fields = create.graphql_input_fields().expect("graphql_input_fields");
-        let normalized = normalize_dynamic_fields(&create, &fields);
-        assert_eq!(
-            normalized,
-            "request_id: \"req-materialize-pending-manual\", purpose: \"normal\", node_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", agent_id: \"agent-1\", session_id: \"sess-materialize-pending-manual\", retry_root_request: \"req-materialize-pending-manual\", content: \"hello agent\", input: { initial_title: { source: \"task\", text: \"My Conversation\" } }, execution_origin: \"interactive\", caused_by_trigger_kind: \"manual\", created_at: \"<CREATED_AT>\", retry_count: 0, max_retries: 3, request_hop: 0, admission_kind: \"local-self\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", lifecycle_state: \"pending\", failure_reason: \"\""
-        );
-    }
-
-    #[tokio::test]
-    async fn pin_materialize_pending_event_trigger_with_workspace() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let _identity = pin_fixed_signing_identity(tempdir.path());
-
-        let trigger_lineage = TriggerLineage {
-            trigger_id: Some("trigger-1".to_string()),
-            trigger_kind: Some("event".to_string()),
-            source_doc_id: Some("source-doc-1".to_string()),
-            correlation: Some("corr-1".to_string()),
-            trigger_context: Some(r#"{"k":"v"}"#.to_string()),
-        };
-        let workspace_lineage = WorkspaceLineage {
-            workspace_id: Some("ws-1".to_string()),
-            workspace_owner_node_did: Some("did:key:workspace-owner".to_string()),
-            workspace_authority: Some("readWrite".to_string()),
-            workspace_seal_hash: Some("seal-1".to_string()),
-        };
-
-        let create =
-            build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
-                PIN_FIXED_DID,
-                "agent-1",
-                "hello agent",
-                ExecutionOrigin::Scheduled,
-                trigger_lineage,
-                Some("My Conversation"),
-                Some(&workspace_lineage),
-                "req-materialize-pending-event",
-                "sess-materialize-pending-event",
-                Some("retry-key-1"),
-                None,
-                Some("trigger-doc-1"),
-            )
-            .await
-            .expect("build signed pending event-triggered workspace-bound request");
-
-        let fields = create.graphql_input_fields().expect("graphql_input_fields");
-        let normalized = normalize_dynamic_fields(&create, &fields);
-        assert_eq!(
-            normalized,
-            "request_id: \"req-materialize-pending-event\", purpose: \"normal\", node_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", agent_id: \"agent-1\", session_id: \"sess-materialize-pending-event\", retry_root_request: \"req-materialize-pending-event\", retry_key: \"retry-key-1\", content: \"hello agent\", input: { initial_title: { source: \"task\", text: \"My Conversation\" } }, execution_origin: \"scheduled\", caused_by_trigger_id: \"trigger-1\", caused_by_trigger_doc_id: \"trigger-doc-1\", caused_by_trigger_kind: \"event\", caused_by_correlation: \"corr-1\", caused_by_trigger_context: \"{\\\"k\\\":\\\"v\\\"}\", caused_by_source_doc_id: \"source-doc-1\", created_at: \"<CREATED_AT>\", retry_count: 0, max_retries: 3, request_hop: 0, workspace_id: \"ws-1\", workspace_owner_node_did: \"did:key:workspace-owner\", workspace_authority: \"readWrite\", workspace_seal_hash: \"seal-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"trigger-1\", runtime_source_kind: \"automated-trigger\", lifecycle_state: \"workspaceBindingPending\", failure_reason: \"\""
-        );
-    }
-}
-
-/// Canonical identity shared by automated and manually invoked Task fires.
 pub fn task_fire_key(identity: &gents_protocol::trigger_delivery::FireIdentity) -> String {
     crate::trigger_engine::durable::fire_key(identity)
 }
@@ -1350,8 +1108,6 @@ pub struct TaskDeliveryAdmission {
     pub duplicate: bool,
 }
 
-/// Admits a Task fire and its signed request atomically. An existing target may
-/// be busy; its request stays pending until the session claim owner admits it.
 pub async fn write_task_delivery(
     access: &crate::config_client::ConfigAccess,
     fire: &gents_protocol::trigger_delivery::TriggerFire,

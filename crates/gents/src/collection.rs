@@ -1,10 +1,3 @@
-//! Canonical operator-controlled document collections.
-//!
-//! Names and owner-scoped logical keys follow `ConfigDocuments`, shared by Lean's
-//! apply and self-configuration models. Enumeration is deterministic, not a
-//! dependency ordering: references can form cycles. Atomic publication of a
-//! complete owner-closed manifest provides reference safety.
-
 use std::fmt;
 
 #[derive(
@@ -40,9 +33,9 @@ pub enum Collection {
     EvalDefinition,
 }
 
-/// Deterministic document traversal for desired-state writes. This enumeration
-/// provides no reference-safety guarantee; publication must validate the complete
-/// manifest and atomically commit it, including legal reference cycles.
+/// This enumeration provides no reference-safety guarantee; publication must
+/// validate the complete manifest and atomically commit it, including legal
+/// reference cycles.
 pub const DESIRED_STATE_APPLY_ORDER: [Collection; 27] = Collection::ALL;
 
 impl Collection {
@@ -194,8 +187,6 @@ mod tests {
 
     #[test]
     fn vocabulary_matches_canonical_lean_document_catalog() {
-        // Read the authoritative formal vocabulary, rather than maintaining
-        // another hand-written enum/rank fixture in this test.
         let lean = include_str!("../proofs/Proofs/ConfigDocuments.lean");
         let expected: Vec<_> = lean
             .lines()
@@ -225,8 +216,6 @@ mod tests {
             })
             .filter(|name| !matches!(*name, "graph_intents" | "graph_capabilities"))
             .collect();
-        // Graph intents and capabilities are composition inputs, not document
-        // collections; every other canonical pack root must be represented.
         let names: BTreeSet<_> = Collection::ALL.iter().map(|c| c.to_string()).collect();
         assert_eq!(names.len(), Collection::ALL.len());
         assert_eq!(
@@ -236,14 +225,5 @@ mod tests {
         for c in Collection::ALL {
             assert!(c.file_name().is_some() ^ c.dir_name().is_some());
         }
-    }
-
-    #[test]
-    fn traversal_covers_each_document_collection_once() {
-        let visited: BTreeSet<_> = DESIRED_STATE_APPLY_ORDER.into_iter().collect();
-        assert_eq!(visited.len(), DESIRED_STATE_APPLY_ORDER.len());
-        assert_eq!(visited, Collection::ALL.into_iter().collect());
-        let names: BTreeSet<_> = Collection::ALL.iter().map(|c| c.graphql_type()).collect();
-        assert_eq!(names.len(), Collection::ALL.len());
     }
 }

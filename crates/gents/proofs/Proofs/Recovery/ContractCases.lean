@@ -65,10 +65,6 @@ def orphanedBackgroundRecoveryCase
     notificationReason := notificationReason
   }
 
-/-- Session-message recovery witness: the recovering owner observed `cause`
-    for a running `agent_new`/`agent_message` row. The exported post-state
-    and notification reason are computed by the model, and the observed cause
-    is exported so the native fixture builds that exact premise. -/
 def sessionMessageRecoveryCase
     (name : String) (cause : ToolRecoveryCause) : RecoverySweepCase :=
   let row : ToolCallRecoveryRow :=
@@ -87,9 +83,6 @@ def sessionMessageRecoveryCase
     notificationReason := cause.notificationReason
   }
 
-/-- Task hook record witness. The native fixture builds the exact premise:
-    `parentTerminal` is whether the request is resolved, `executionRegistered`
-    whether a live executor holds the record. -/
 def taskHookRecordRecoveryCase
     (name : String) (requestResolved liveExecution : Bool) : RecoverySweepCase :=
   let row : TaskHookRecordRow :=
@@ -237,17 +230,6 @@ def recoverySweepCases : List RecoverySweepCase :=
       "task_hook_record_live_execution_deferred" true true
   ]
 
-/-! ## Restart disposition witnesses (#937)
-
-Finite rows for the startup classifier in
-`recover_stuck_running_tool_calls`. Unlike `recoverySweepCases`, the
-`disposition`/`cause`/`terminalState`/notification fields are **computed from
-`Recovery.restartDisposition`**, so these rows cannot drift from the model:
-changing a classifier branch changes the emitted JSON and fails the Rust
-consumer. The leave-running rows are the previously inexpressible outcomes —
-session-message bridges (`Request.CausalHop`) and detached/clean-complete bridges that startup
-recovery must preserve. -/
-
 def restartDispositionCase
     (name : String)
     (awaitMode : ToolExecution.AwaitMode)
@@ -357,8 +339,6 @@ def restartDispositionCases : List RestartDispositionCase :=
       (deadlineExpired := true)
   ]
 
-/-- The witness family covers every disposition, including expired rows whose
-    missing physical parent defers classification. -/
 theorem restartDispositionCases_cover_every_disposition :
     (restartDispositionCases.filter
         (fun witness => witness.disposition = "leave_running")).length = 9 ∧
@@ -366,8 +346,6 @@ theorem restartDispositionCases_cover_every_disposition :
         (fun witness => witness.disposition = "terminalize")).length = 7 := by
   native_decide
 
-/-- Every terminal native background witness with a resolvable parent owes a
-    completion notification and coalesced wake. -/
 theorem restartDispositionCases_notifications_pinned :
     (restartDispositionCases.filter
         (fun witness => witness.notificationReason.isSome)).map
@@ -406,8 +384,6 @@ theorem restartDispositionCases_notifications_pinned :
         ) ] := by
   native_decide
 
-/-- Leave-running rows carry no cause and no terminal state — the row is
-    preserved verbatim. -/
 theorem restartDispositionCases_leave_running_rows_carry_no_terminal :
     ∀ witness ∈ restartDispositionCases,
       witness.disposition ≠ "terminalize" →

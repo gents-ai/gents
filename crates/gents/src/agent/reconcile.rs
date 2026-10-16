@@ -337,9 +337,6 @@ where
     ) -> Result<()> {
         resolved_snapshot.validate_node_readiness_source()?;
 
-        // Complete the entire recreation plan before registering generations
-        // or spawning executors. Invalid snapshots have no observable side
-        // effects on either readiness standing or slot ownership.
         let mut recreated_agent_ids = Vec::new();
         for (agent_id, agent) in &resolved_snapshot.agents {
             let tool_surface = resolved_snapshot
@@ -421,28 +418,22 @@ where
             staged.abort().await;
             return Err(ActiveSnapshotReceiverClosed.into());
         }
-        // Publish the new source before changing the active dispatcher set.
-        // The router observes this generation skew and stops dequeuing until
-        // the active snapshot watch catches up, so no request can enter the
-        // handoff gap between retiring the old slots and installing the new.
+        // Publish the new source before changing the active dispatcher set: the
+        // router stops dequeuing until the snapshot watch catches up, closing
+        // the old/new slot handoff gap.
         if let Err(error) = self
             .runtime_status
             .readiness()
             .publish_snapshot(next_snapshot.as_ref())
             .await
         {
-            // The candidate snapshot owns dispatcher clones for every staged
-            // slot. Drop it before joining rollback so closing the staged
-            // owners also closes their request channels.
             drop(next_snapshot);
             staged.abort().await;
             return Err(error).context("publish node readiness before active generation");
         }
 
-        // Source publication is deliberately ordered before the dispatcher
-        // watch. Install the matching admission generation while the router is
-        // fenced by source skew; if the sole watch owner disappears, restore
-        // the prior admission registry, retain prior supervisor ownership, and
+        // Admission runs while the router is fenced by source skew; if the sole
+        // watch owner disappears, restore the prior admission registry and
         // terminate reconcile so the runtime lifecycle closes admission.
         self.admission_registry
             .reconcile(generation, &next_snapshot.backend_admission_configs);
@@ -484,9 +475,6 @@ where
 
         self.current_snapshot = next_snapshot.clone();
         self.active_slots = next_slots;
-        // Watch publication succeeded, so commit the candidate slot ownership
-        // and transfer every retiring handle into the supervisor-owned join
-        // set before reporting success.
         for slot in retired_slots {
             let _ = slot.state_tx.send(AgentSlotState::Retiring);
             drop(slot.dispatcher);

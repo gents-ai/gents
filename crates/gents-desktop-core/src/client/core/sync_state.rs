@@ -13,20 +13,12 @@ use gents_protocol::peer_schema::{
 use serde_json::Value;
 
 use super::{p2p_health_materially_changed, ClientPeerStatus, ClientSyncStateSnapshot, P2PHealth};
-#[cfg(test)]
-use crate::client::load_peer_directory_snapshot;
-#[cfg(test)]
-use crate::client::peer_directory::PersistBarrier;
 use crate::client::peer_directory::RemovalCause;
 use crate::client::{PeerDirectory, PeerRecord};
 
 type LastErrorPatch = (Option<String>, Option<String>);
 
 /// The sole in-process owner of configured-peer and transport observations.
-///
-/// Status-changing mutations publish a coherent snapshot. The watch channel
-/// coalesces raw clock updates while still waking the bridge for product state,
-/// route, pairing retry, or configured-peer changes.
 ///
 /// Replicated-schema compatibility is a live observation between two running
 /// nodes, owned here, and deliberately not part of the signed enrollment
@@ -39,11 +31,8 @@ pub(in crate::client) struct ClientSyncStateOwner {
     tx: watch::Sender<ClientSyncStateSnapshot>,
     directory: Arc<RwLock<PeerDirectory>>,
     advertised_enrollment_labels: Arc<StdRwLock<BTreeMap<String, String>>>,
-    /// Collection versions only change when this process registers schemas
-    /// at startup, so the first successful read is reused.
     local_replicated_schema: Arc<tokio::sync::OnceCell<ReplicatedSchema>>,
     schema_observation_sequence: Arc<std::sync::atomic::AtomicU64>,
-    /// Newest recorded observation sequence per peer ID.
     schema_observation_latest: Arc<std::sync::Mutex<BTreeMap<String, u64>>>,
 }
 
@@ -169,11 +158,6 @@ impl ClientSyncStateOwner {
         Ok(())
     }
 
-    #[cfg(test)]
-    async fn set_directory_persist_barrier(&self, barrier: Option<PersistBarrier>) {
-        self.directory.write().await.set_persist_barrier(barrier);
-    }
-
     pub(super) async fn has_pending_removal(&self, expected: &PeerRecord) -> bool {
         self.directory.read().await.has_pending_removal(expected)
     }
@@ -240,30 +224,6 @@ impl ClientSyncStateOwner {
         Ok(replaced)
     }
 
-    #[cfg(test)]
-    pub(super) async fn upsert_for_test(&self, record: PeerRecord) -> anyhow::Result<()> {
-        let mut directory = self.directory.write().await;
-        directory.upsert(record).await?;
-        self.publish_persisted_directory(directory.records().to_vec());
-        Ok(())
-    }
-
-    #[cfg(test)]
-    async fn upsert_with_publication_barrier(
-        &self,
-        record: PeerRecord,
-        persisted: Arc<tokio::sync::Notify>,
-        release: Arc<tokio::sync::Notify>,
-    ) -> anyhow::Result<()> {
-        let mut directory = self.directory.write().await;
-        directory.upsert(record).await?;
-        let records = directory.records().to_vec();
-        persisted.notify_one();
-        release.notified().await;
-        self.publish_persisted_directory(records);
-        Ok(())
-    }
-
     pub(super) async fn set_pairing_ready(
         &self,
         expected: &PeerRecord,
@@ -278,30 +238,6 @@ impl ClientSyncStateOwner {
             .await?;
         if record.is_some() {
             self.publish_persisted_directory(directory.records().to_vec());
-        }
-        Ok(record)
-    }
-
-    #[cfg(test)]
-    async fn set_pairing_ready_with_publication_barrier(
-        &self,
-        expected: &PeerRecord,
-        ready: bool,
-        persisted: Arc<tokio::sync::Notify>,
-        release: Arc<tokio::sync::Notify>,
-    ) -> anyhow::Result<Option<PeerRecord>> {
-        let mut directory = self.directory.write().await;
-        if !directory.records().iter().any(|record| record == expected) {
-            return Ok(None);
-        }
-        let record = directory
-            .set_pairing_ready(&expected.peer_id, ready)
-            .await?;
-        if record.is_some() {
-            let records = directory.records().to_vec();
-            persisted.notify_one();
-            release.notified().await;
-            self.publish_persisted_directory(records);
         }
         Ok(record)
     }
@@ -346,12 +282,10 @@ impl ClientSyncStateOwner {
         });
     }
 
-    /// Capture the configured peers of `runtime_did` routed through
-    /// `endpoint`, plus a sequence number, before that endpoint's `/status`
-    /// is fetched. `None` when no current route matches, so a fetch can only
-    /// be recorded against the generation of the endpoint it came from.
-    /// Finishing records only on peers still in that generation and never
-    /// behind a newer observation.
+    /// Capture configured peers plus a sequence number before the endpoint's
+    /// `/status` is fetched; a fetch may only be recorded against the
+    /// generation of the endpoint it came from, and finishing records only on
+    /// peers still in that generation and never behind a newer observation.
     pub(super) fn begin_runtime_schema_observation(
         &self,
         runtime_did: &str,
@@ -375,8 +309,6 @@ impl ClientSyncStateOwner {
         })
     }
 
-    /// Compare the fetched `/status` with this node's replicated collection
-    /// versions and record the result for the peers captured by `observation`.
     pub(super) async fn finish_runtime_schema_observation(
         &self,
         local: &Arc<defra_node::EmbeddedNode>,
@@ -387,7 +319,7 @@ impl ClientSyncStateOwner {
         self.record_runtime_schema(observation, local, status)
     }
 
-    /// Compare without recording. Enrollment uses this before the offer is
+    /// Compare without recording; enrollment uses this before the offer is
     /// authenticated, so an unverified `/status` cannot set or clear skew.
     pub(super) async fn compare_runtime_schema(
         &self,
@@ -456,37 +388,16 @@ impl ClientSyncStateOwner {
         observed
     }
 
-    /// Patch one diagnostic only while both the durable peer generation and
-    /// the previously observed diagnostic still match. Delayed projection
-    /// work cannot use this path to overwrite newer supervisor state.
     #[cfg(test)]
-    pub(super) fn compare_and_set_last_error(
-        &self,
-        expected: &PeerRecord,
-        expected_error: &Option<String>,
-        next_error: Option<String>,
-    ) -> bool {
-        self.tx.send_if_modified(|state| {
-            if !state.directory.iter().any(|record| record == expected) {
-                return false;
-            }
-            let Some(status) = state
-                .peers
-                .iter_mut()
-                .find(|status| status.peer_id == expected.peer_id && status.addr == expected.addr)
-            else {
-                return false;
-            };
-            if status.last_error != *expected_error || status.last_error == next_error {
-                return false;
-            }
-            status.last_error = next_error;
-            true
-        })
+    pub(super) async fn upsert_for_test(&self, record: PeerRecord) -> anyhow::Result<()> {
+        let mut directory = self.directory.write().await;
+        directory.upsert(record).await?;
+        self.publish_persisted_directory(directory.records().to_vec());
+        Ok(())
     }
 
     /// Replace transport observations only for the exact currently persisted
-    /// deployment. This path can never create or resurrect directory state.
+    /// deployment; this path cannot create or resurrect directory state.
     pub(super) fn replace_peer(&self, expected: &PeerRecord, status: ClientPeerStatus) -> bool {
         self.tx.send_if_modified(|state| {
             if !state.directory.iter().any(|record| record == expected)
@@ -604,15 +515,11 @@ pub struct RuntimeSchemaObservation {
 }
 
 impl RuntimeSchemaObservation {
-    /// The GraphQL endpoint of the bound route; its `/status` is the only
-    /// payload this observation may record.
     pub fn endpoint(&self) -> Option<&str> {
         self.endpoint.as_deref()
     }
 }
 
-/// Endpoints match when they parse to the same URL, so formatting such as
-/// scheme or host case and an explicit default port cannot unbind a route.
 fn same_endpoint(configured: Option<&str>, target: Option<&str>) -> bool {
     match (configured, target) {
         (None, None) => true,
@@ -626,8 +533,6 @@ fn same_endpoint(configured: Option<&str>, target: Option<&str>) -> bool {
     }
 }
 
-/// Bind `status` to `runtime_did` and compare its advertised versions.
-/// `null` means the runtime has not read its own node yet and is not a skew.
 fn compare_runtime_status(
     local: &ReplicatedSchema,
     runtime_did: &str,
@@ -696,37 +601,6 @@ pub(super) fn conservative_status(record: &PeerRecord) -> ClientPeerStatus {
 mod tests {
     use super::*;
 
-    fn peer(peer_id: &str) -> ClientPeerStatus {
-        ClientPeerStatus {
-            peer_id: peer_id.to_string(),
-            label: peer_id.to_string(),
-            node_did: format!("did:key:{peer_id}"),
-            addr: format!("endpoint:{peer_id}"),
-            dial_succeeded: false,
-            last_error: None,
-            pairing: Vec::new(),
-            routes: Vec::new(),
-        }
-    }
-
-    fn record(peer_id: &str) -> PeerRecord {
-        let mut record = PeerRecord::new(
-            peer_id,
-            format!("endpoint:{peer_id}"),
-            format!("did:key:{peer_id}"),
-        );
-        record.peer_id = peer_id.to_string();
-        record
-    }
-
-    fn assert_one_status_per_record(snapshot: &ClientSyncStateSnapshot) {
-        assert_eq!(snapshot.directory.len(), snapshot.peers.len());
-        assert!(snapshot.directory.iter().all(|record| snapshot
-            .peers
-            .iter()
-            .any(|status| status.peer_id == record.peer_id)));
-    }
-
     #[test]
     fn configured_peer_mutation_callers_cannot_bypass_the_owner() {
         fn without_trailing_test_module(source: &str) -> &str {
@@ -758,599 +632,5 @@ mod tests {
                 "{name} retained a direct PeerDirectory mutation seam"
             );
         }
-    }
-
-    fn replicated_schema(session_version: &str) -> ReplicatedSchema {
-        gents::agent::p2p_reconcile::CLIENT_COLLECTIONS
-            .iter()
-            .map(|name| {
-                let version = if *name == "AgentSession" {
-                    session_version.to_string()
-                } else {
-                    format!("bafy-{name}")
-                };
-                (
-                    (*name).to_string(),
-                    gents_protocol::peer_schema::ReplicatedCollectionIdentity {
-                        version_id: version,
-                        branchable: true,
-                        policy_resource: None,
-                    },
-                )
-            })
-            .collect()
-    }
-
-    fn status(node_did: &str, schema: &ReplicatedSchema) -> Value {
-        serde_json::json!({ "node_did": node_did, STATUS_REPLICATED_SCHEMA_FIELD: schema })
-    }
-
-    #[tokio::test]
-    async fn runtime_schema_skew_is_recorded_per_peer_until_that_runtime_matches() {
-        let runtime = record("a");
-        let (_tempdir, owner) =
-            ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
-        let local = replicated_schema("bafy-session");
-        let mut updates = owner.subscribe();
-        let next_release = status(&runtime.node_did, &replicated_schema("bafy-next-release"));
-
-        let observation = owner
-            .begin_runtime_schema_observation(&runtime.node_did, None)
-            .expect("configured route");
-        let error = owner
-            .record_runtime_schema(&observation, &local, &next_release)
-            .unwrap_err();
-        assert!(format!("{error:#}").contains("AgentSession"), "{error:#}");
-        assert!(updates.has_changed().unwrap());
-        let skew = updates
-            .borrow_and_update()
-            .peer_schema_skew
-            .get("a")
-            .cloned();
-        assert_eq!(
-            skew.map(|skew| skew.collections),
-            Some(vec!["AgentSession".to_string()])
-        );
-
-        let observation = owner
-            .begin_runtime_schema_observation(&runtime.node_did, None)
-            .expect("configured route");
-        owner
-            .record_runtime_schema(&observation, &local, &next_release)
-            .unwrap_err();
-        assert!(
-            !updates.has_changed().unwrap(),
-            "same skew is not republished"
-        );
-
-        let observation = owner
-            .begin_runtime_schema_observation(&runtime.node_did, None)
-            .expect("configured route");
-        owner
-            .record_runtime_schema(&observation, &local, &status(&runtime.node_did, &local))
-            .unwrap();
-        assert!(owner.snapshot().peer_schema_skew.is_empty());
-    }
-
-    #[test]
-    fn route_endpoints_compare_as_parsed_urls() {
-        let configured = Some("http://127.0.0.1:9181/api/v0/graphql");
-        for equivalent in [
-            "HTTP://127.0.0.1:9181/api/v0/graphql",
-            "http://127.0.0.1:9181/api/v0/graphql",
-        ] {
-            assert!(same_endpoint(configured, Some(equivalent)), "{equivalent}");
-        }
-        assert!(same_endpoint(
-            Some("http://localhost:80/api/v0/graphql"),
-            Some("http://LOCALHOST/api/v0/graphql"),
-        ));
-        assert!(!same_endpoint(
-            configured,
-            Some("http://127.0.0.1:9182/api/v0/graphql")
-        ));
-        assert!(!same_endpoint(configured, None));
-    }
-
-    #[tokio::test]
-    async fn observation_binds_to_the_route_endpoint() {
-        let runtime = record("a");
-        let (_tempdir, owner) =
-            ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
-        assert!(owner
-            .begin_runtime_schema_observation(
-                &runtime.node_did,
-                Some("http://other/api/v0/graphql")
-            )
-            .is_none());
-        assert!(owner
-            .begin_runtime_schema_observation("did:key:unconfigured", None)
-            .is_none());
-    }
-
-    #[tokio::test]
-    async fn a_late_older_observation_cannot_overwrite_a_newer_one() {
-        let runtime = record("a");
-        let (_tempdir, owner) =
-            ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
-        let local = replicated_schema("bafy-session");
-
-        let older = owner
-            .begin_runtime_schema_observation(&runtime.node_did, None)
-            .expect("configured route");
-        let newer = owner
-            .begin_runtime_schema_observation(&runtime.node_did, None)
-            .expect("configured route");
-        owner
-            .record_runtime_schema(&newer, &local, &status(&runtime.node_did, &local))
-            .unwrap();
-        owner
-            .record_runtime_schema(
-                &older,
-                &local,
-                &status(&runtime.node_did, &replicated_schema("bafy-old-runtime")),
-            )
-            .unwrap_err();
-        assert!(owner.snapshot().peer_schema_skew.is_empty());
-    }
-
-    #[tokio::test]
-    async fn runtime_schema_observation_is_bound_to_the_runtime_identity() {
-        let runtime = record("a");
-        let (_tempdir, owner) =
-            ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
-        let local = replicated_schema("bafy-session");
-        let observation = owner
-            .begin_runtime_schema_observation(&runtime.node_did, None)
-            .expect("configured route");
-
-        let error = owner
-            .record_runtime_schema(
-                &observation,
-                &local,
-                &status("did:key:port-reuse", &replicated_schema("bafy-other")),
-            )
-            .unwrap_err();
-        assert!(format!("{error:#}").contains("did:key:port-reuse"));
-        assert!(owner.snapshot().peer_schema_skew.is_empty());
-
-        let unpublished = serde_json::json!({
-            "node_did": runtime.node_did,
-            STATUS_REPLICATED_SCHEMA_FIELD: null,
-        });
-        owner
-            .record_runtime_schema(&observation, &local, &unpublished)
-            .unwrap_err();
-        assert!(owner.snapshot().peer_schema_skew.is_empty());
-
-        let old_build = serde_json::json!({ "node_did": runtime.node_did });
-        owner
-            .record_runtime_schema(&observation, &local, &old_build)
-            .unwrap_err();
-        assert!(!owner.snapshot().peer_schema_skew["a"].advertised);
-    }
-
-    #[tokio::test]
-    async fn runtime_schema_skew_follows_peer_generation() {
-        let runtime = record("a");
-        let (_tempdir, owner) =
-            ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
-        let local = replicated_schema("bafy-session");
-        let skewed = status(&runtime.node_did, &replicated_schema("bafy-other"));
-
-        let first = owner
-            .begin_runtime_schema_observation(&runtime.node_did, None)
-            .expect("configured route");
-        let in_flight = owner
-            .begin_runtime_schema_observation(&runtime.node_did, None)
-            .expect("configured route");
-        owner
-            .record_runtime_schema(&first, &local, &skewed)
-            .unwrap_err();
-        let mut replaced = runtime.clone();
-        replaced.addr = "endpoint:a-replaced".to_string();
-        owner.upsert_for_test(replaced.clone()).await.unwrap();
-        assert!(
-            owner.snapshot().peer_schema_skew.is_empty(),
-            "a replaced route generation starts unobserved"
-        );
-
-        owner
-            .record_runtime_schema(&in_flight, &local, &skewed)
-            .unwrap_err();
-        assert!(
-            owner.snapshot().peer_schema_skew.is_empty(),
-            "an observation begun against the old generation is fenced"
-        );
-
-        let current = owner
-            .begin_runtime_schema_observation(&runtime.node_did, None)
-            .expect("configured route");
-        owner
-            .record_runtime_schema(&current, &local, &skewed)
-            .unwrap_err();
-        assert!(owner.snapshot().peer_schema_skew.contains_key("a"));
-        let configured = owner
-            .records()
-            .into_iter()
-            .find(|record| record.peer_id == "a")
-            .expect("replaced peer is configured");
-        let removed = owner
-            .queue_removal(&configured, RemovalCause::Operator)
-            .await
-            .unwrap();
-        assert!(removed.is_some());
-        assert!(
-            owner.snapshot().peer_schema_skew.is_empty(),
-            "a removed peer no longer reports skew"
-        );
-    }
-
-    #[tokio::test]
-    async fn stale_removal_cannot_tombstone_or_hide_a_repaired_generation() {
-        let original = record("a");
-        let (tempdir, owner) =
-            ClientSyncStateOwner::for_test(vec![original.clone()], vec![peer("a")]).await;
-        let mut repaired = original.clone();
-        repaired.addr = "endpoint:a-repaired".to_string();
-        repaired.pairing_ready = true;
-        let persisted = Arc::new(tokio::sync::Notify::new());
-        let release = Arc::new(tokio::sync::Notify::new());
-
-        let repair_owner = owner.clone();
-        let repair_persisted = persisted.clone();
-        let repair_release = release.clone();
-        let repair = tokio::spawn(async move {
-            repair_owner
-                .upsert_with_publication_barrier(repaired, repair_persisted, repair_release)
-                .await
-        });
-        persisted.notified().await;
-
-        let removal_owner = owner.clone();
-        let removal_expected = original;
-        let stale_expected = removal_expected.clone();
-        let removal = tokio::spawn(async move {
-            removal_owner
-                .queue_removal(&removal_expected, RemovalCause::Operator)
-                .await
-        });
-        tokio::task::yield_now().await;
-        assert!(
-            !removal.is_finished(),
-            "removal must wait for persistence and publication to finish under one owner lock"
-        );
-
-        release.notify_one();
-        repair.await.unwrap().unwrap();
-        assert!(removal.await.unwrap().unwrap().is_none());
-
-        let (persisted, pending_removals) =
-            load_peer_directory_snapshot(&tempdir.path().join("peers.json"))
-                .await
-                .unwrap();
-        let snapshot = owner.snapshot();
-        assert_eq!(persisted[0].addr, "endpoint:a-repaired");
-        assert_eq!(snapshot.directory[0].addr, "endpoint:a-repaired");
-        assert_one_status_per_record(&snapshot);
-        assert!(pending_removals.is_empty());
-
-        let mut stale_status = peer("a");
-        stale_status.addr = "endpoint:a-repaired".to_string();
-        stale_status.dial_succeeded = true;
-        assert!(!owner.replace_peer(&stale_expected, stale_status));
-        assert!(!owner.snapshot().peers[0].dial_succeeded);
-    }
-
-    #[tokio::test]
-    async fn cancelled_persist_does_not_change_memory_watch_or_durable_directory() {
-        let original = record("a");
-        let (tempdir, owner) =
-            ClientSyncStateOwner::for_test(vec![original.clone()], vec![peer("a")]).await;
-        let updates = owner.subscribe();
-        let written = Arc::new(tokio::sync::Notify::new());
-        let release = Arc::new(tokio::sync::Notify::new());
-        owner
-            .set_directory_persist_barrier(Some(PersistBarrier {
-                written: written.clone(),
-                release,
-            }))
-            .await;
-
-        let mut cancelled_record = record("cancelled");
-        cancelled_record.addr = "endpoint:never-committed".to_string();
-        let cancelled_owner = owner.clone();
-        let operation =
-            tokio::spawn(async move { cancelled_owner.upsert_for_test(cancelled_record).await });
-        written.notified().await;
-        operation.abort();
-        assert!(operation.await.unwrap_err().is_cancelled());
-
-        assert_eq!(owner.records(), vec![original.clone()]);
-        assert!(!updates.has_changed().expect("watch remains open"));
-        let (persisted, _) = load_peer_directory_snapshot(&tempdir.path().join("peers.json"))
-            .await
-            .unwrap();
-        assert_eq!(persisted, vec![original]);
-
-        owner.set_directory_persist_barrier(None).await;
-        owner.upsert_for_test(record("later")).await.unwrap();
-        let (persisted, _) = load_peer_directory_snapshot(&tempdir.path().join("peers.json"))
-            .await
-            .unwrap();
-        assert_eq!(
-            persisted
-                .iter()
-                .map(|record| record.peer_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a", "later"]
-        );
-    }
-
-    #[tokio::test]
-    async fn live_owner_rejects_an_offline_initializer_on_the_same_directory() {
-        let (tempdir, owner) = ClientSyncStateOwner::for_test(Vec::new(), Vec::new()).await;
-        let path = tempdir.path().join("peers.json");
-
-        let error = crate::client::initialize_local_standard_peer(
-            &path,
-            "Competing initializer",
-            "endpoint:other",
-            "did:key:other",
-            "http://127.0.0.1:1/api/v0/graphql",
-            "/tmp/test-node-home",
-        )
-        .await
-        .expect_err("live owner lease must reject an offline writer");
-        assert!(error.to_string().contains("already owned"));
-        assert!(owner.records().is_empty());
-
-        drop(owner);
-        let initialized = crate::client::initialize_local_standard_peer(
-            &path,
-            "Offline initializer",
-            "endpoint:other",
-            "did:key:other",
-            "http://127.0.0.1:1/api/v0/graphql",
-            "/tmp/test-node-home",
-        )
-        .await
-        .expect("offline initializer may write after live owner exits");
-        assert_eq!(initialized.node_did, "did:key:other");
-    }
-
-    #[tokio::test]
-    async fn delayed_refresh_warning_cannot_clobber_newer_supervisor_status() {
-        let expected = record("a");
-        let activation_warning = Some("activation warning".to_string());
-        let mut activated = peer("a");
-        activated.dial_succeeded = true;
-        activated.last_error.clone_from(&activation_warning);
-        let (_tempdir, owner) =
-            ClientSyncStateOwner::for_test(vec![expected.clone()], vec![activated]).await;
-
-        let mut supervised = peer("a");
-        supervised.dial_succeeded = true;
-        supervised.last_error = Some("new supervisor diagnostic".to_string());
-        supervised.routes.push(super::super::ClientRouteStatus {
-            route_id: "route-new".to_string(),
-            direction: "runtime-to-client".to_string(),
-            directory_id: "a".to_string(),
-            transport_peer_id: Some("transport-a".to_string()),
-            address: Some("endpoint:a".to_string()),
-            template: Some("client".to_string()),
-            desired: true,
-            applied: true,
-            live_match: true,
-            filter_summary: "owner-scoped".to_string(),
-            last_error: None,
-            retry_count: 0,
-            last_retry_at: None,
-            last_retry_error_class: None,
-        });
-        assert!(owner.replace_peer(&expected, supervised.clone()));
-
-        assert!(!owner.compare_and_set_last_error(
-            &expected,
-            &activation_warning,
-            Some("activation warning; delayed refresh warning".to_string()),
-        ));
-        assert_eq!(owner.snapshot().peers, vec![supervised]);
-    }
-
-    #[tokio::test]
-    async fn readiness_publication_preserves_newer_transport_and_route_observations() {
-        let (_tempdir, owner) =
-            ClientSyncStateOwner::for_test(vec![record("a")], vec![peer("a")]).await;
-        let persisted = Arc::new(tokio::sync::Notify::new());
-        let release = Arc::new(tokio::sync::Notify::new());
-
-        let readiness_owner = owner.clone();
-        let expected = owner.records()[0].clone();
-        let readiness_expected = expected.clone();
-        let readiness_persisted = persisted.clone();
-        let readiness_release = release.clone();
-        let readiness = tokio::spawn(async move {
-            readiness_owner
-                .set_pairing_ready_with_publication_barrier(
-                    &readiness_expected,
-                    true,
-                    readiness_persisted,
-                    readiness_release,
-                )
-                .await
-        });
-        persisted.notified().await;
-
-        let mut newest = peer("a");
-        newest.dial_succeeded = true;
-        newest.routes.push(super::super::ClientRouteStatus {
-            route_id: "route-new".to_string(),
-            direction: "runtime-to-client".to_string(),
-            directory_id: "a".to_string(),
-            transport_peer_id: Some("transport-a".to_string()),
-            address: Some("endpoint:a".to_string()),
-            template: Some("client".to_string()),
-            desired: true,
-            applied: true,
-            live_match: true,
-            filter_summary: "owner-scoped".to_string(),
-            last_error: None,
-            retry_count: 0,
-            last_retry_at: None,
-            last_retry_error_class: None,
-        });
-        assert!(owner.replace_peer(&expected, newest.clone()));
-
-        release.notify_one();
-        readiness.await.unwrap().unwrap().expect("peer remains");
-        let snapshot = owner.snapshot();
-        assert!(snapshot.directory[0].pairing_ready);
-        assert_eq!(snapshot.peers, vec![newest]);
-    }
-
-    #[tokio::test]
-    async fn persisted_directory_insert_and_rotation_keep_conservative_status_invariant() {
-        let (_tempdir, owner) = ClientSyncStateOwner::for_test(Vec::new(), Vec::new()).await;
-        let mut updates = owner.subscribe();
-        let mut configured = record("a");
-
-        owner.upsert_for_test(configured.clone()).await.unwrap();
-        assert!(updates.has_changed().expect("watch remains open"));
-        let inserted = updates.borrow_and_update().clone();
-        assert_one_status_per_record(&inserted);
-        assert!(!inserted.peers[0].dial_succeeded);
-
-        configured.addr = "endpoint:a-rotated".to_string();
-        configured.pairing_ready = false;
-        owner.upsert_for_test(configured).await.unwrap();
-        assert!(updates.has_changed().expect("watch remains open"));
-        let rotated = updates.borrow_and_update().clone();
-        assert_one_status_per_record(&rotated);
-        assert_eq!(rotated.peers[0].addr, "endpoint:a-rotated");
-        assert!(!rotated.peers[0].dial_succeeded);
-    }
-
-    #[tokio::test]
-    async fn peer_only_mutation_publishes_one_coherent_revision() {
-        let (_tempdir, owner) =
-            ClientSyncStateOwner::for_test(vec![record("b")], vec![peer("b")]).await;
-        let mut updates = owner.subscribe();
-
-        owner.upsert_for_test(record("a")).await.unwrap();
-
-        assert!(updates.has_changed().expect("watch remains open"));
-        let snapshot = updates.borrow_and_update().clone();
-        assert_one_status_per_record(&snapshot);
-        assert_eq!(
-            snapshot
-                .peers
-                .iter()
-                .map(|peer| peer.peer_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a", "b"]
-        );
-        assert_eq!(snapshot.transport, P2PHealth::default());
-    }
-
-    #[tokio::test]
-    async fn enrollment_generation_rotation_resets_disk_and_watch_readiness() {
-        let (tempdir, owner) = ClientSyncStateOwner::for_test(Vec::new(), Vec::new()).await;
-        let mut updates = owner.subscribe();
-        let first = owner
-            .upsert_enrollment_peer(
-                "server-peer",
-                "Server",
-                "iroh://ticket",
-                "did:key:owner",
-                "network-a",
-                "request-a",
-                "digest-a",
-                "did:key:admin",
-                1,
-                "2099-09-29T00:00:00Z",
-            )
-            .await
-            .unwrap();
-        let ready = owner
-            .set_pairing_ready(&first, true)
-            .await
-            .unwrap()
-            .expect("enrollment remains configured");
-        assert!(ready.pairing_ready);
-        let rotated = owner
-            .upsert_enrollment_peer(
-                "server-peer",
-                "Server",
-                "iroh://ticket",
-                "did:key:owner",
-                "network-b",
-                "request-b",
-                "digest-b",
-                "did:key:admin",
-                2,
-                "2099-10-29T00:00:00Z",
-            )
-            .await
-            .unwrap();
-        assert!(!rotated.pairing_ready);
-        assert_eq!(rotated.pairing_network_id.as_deref(), Some("network-b"));
-        assert_eq!(
-            rotated.enrollment_request_digest.as_deref(),
-            Some("digest-b")
-        );
-        assert_eq!(rotated.enrollment_authorization_sequence, Some(2));
-        assert!(updates.has_changed().expect("watch remains open"));
-        let snapshot = updates.borrow_and_update().clone();
-        assert_eq!(snapshot.directory, vec![rotated.clone()]);
-        assert!(!snapshot.directory[0].pairing_ready);
-        let (persisted, _) = load_peer_directory_snapshot(&tempdir.path().join("peers.json"))
-            .await
-            .unwrap();
-        assert_eq!(persisted, vec![rotated]);
-    }
-
-    #[tokio::test]
-    async fn unchanged_peer_mutation_does_not_publish() {
-        let existing = peer("a");
-        let (_tempdir, owner) =
-            ClientSyncStateOwner::for_test(vec![record("a")], vec![existing.clone()]).await;
-        let updates = owner.subscribe();
-
-        let expected = owner.records()[0].clone();
-        owner.replace_peer(&expected, existing);
-
-        assert!(!updates.has_changed().expect("watch remains open"));
-    }
-
-    #[tokio::test]
-    async fn retry_countdown_updates_raw_status_without_republishing_ui_state() {
-        let (_tempdir, owner) = ClientSyncStateOwner::for_test(Vec::new(), Vec::new()).await;
-        let mut updates = owner.subscribe();
-        let first = P2pSyncStatusSnapshot {
-            pending_dags: 1,
-            next_pending_retry_in_ms: Some(1_000),
-            ..P2pSyncStatusSnapshot::default()
-        };
-        owner.replace_database_observation(P2PHealth::default(), Some(first), None);
-        assert!(updates.has_changed().expect("watch remains open"));
-        updates.borrow_and_update();
-
-        let second = P2pSyncStatusSnapshot {
-            pending_dags: 1,
-            next_pending_retry_in_ms: Some(900),
-            ..P2pSyncStatusSnapshot::default()
-        };
-        owner.replace_database_observation(P2PHealth::default(), Some(second), None);
-
-        assert!(!updates.has_changed().expect("watch remains open"));
-        assert_eq!(
-            owner
-                .snapshot()
-                .database_sync
-                .expect("database observation")
-                .next_pending_retry_in_ms,
-            Some(900)
-        );
     }
 }

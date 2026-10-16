@@ -19,7 +19,6 @@ const profiles = [
   { profile_id: "down", display_name: "Down", model_name: "down", usable: false },
 ];
 
-/* no packs, signed out of the registry, these plugins able to call a model */
 function show(plugins: { plugin: string; slot: string; profile: string | null }[]) {
   return renderIn(
     testApp({

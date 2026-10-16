@@ -369,8 +369,6 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
         .expect("canonical accepted tool publication");
     assert_eq!(published.accepted_tools.len(), 1);
 
-    // Publication between the tool snapshot and immutable dependency reads
-    // must not introduce a tool whose admission was absent from that snapshot.
     let later_messages = resolve_timeline_messages_for_session(
         &access,
         "did:test:timeline",
@@ -435,9 +433,6 @@ fn direct_child_without_tool_lineage_is_valid_but_half_bridge_is_rejected() {
     assert!(error.to_string().contains("incomplete parent tool lineage"));
 }
 
-/// Resolving one accepted call reads only its accepted message: an unrelated,
-/// unresolvable message elsewhere in the same session fails the session-wide
-/// reader but not this exact binding.
 #[tokio::test]
 async fn accepted_tool_arguments_read_only_the_accepted_message() {
     use crate::tool_call_lifecycle::admission_fixture::{

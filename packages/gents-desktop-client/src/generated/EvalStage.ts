@@ -6,25 +6,19 @@ import type { EvalFixtureDocument } from "./EvalFixtureDocument.js";
 
 export type EvalStage = { stage_id: string, prompt: string,
 /**
- * A document written instead of a prompt: the stage's request is whatever
- * the pack's own EventTrigger fires for it.
+ * A document written instead of a prompt.
  */
 seed?: EvalFixtureDocument | null, deadline_secs: number,
 /**
- * Keep observing after the stage's request ends, within `deadline_secs`,
- * until no request in the trial home is running: the work the subject
- * started (trigger fires, agent sessions, later messages into its own
- * session) is part of the stage. The stage's evidence then covers every
- * later request of the trial session, and captures read the settled home.
+ * Keep observing after the request ends, until the trial home is quiet;
+ * evidence then covers every later request of the session.
  */
 settle?: boolean | null,
 /**
- * Continuation prods for a settling stage whose subject ends its turn
- * before it is done.
+ * Continuation prods for a settling stage.
  */
 continuation?: EvalContinuation | null,
 /**
- * Append the previous stage's check feedback to this prompt. This is an
- * explicit assisted-eval condition; ordinary stages receive no grader feedback.
+ * Append previous stage check feedback to this prompt.
  */
 review_previous?: boolean | null, checks?: Array<EvalCheckRef> | null, capture?: Array<EvalCapture> | null, };

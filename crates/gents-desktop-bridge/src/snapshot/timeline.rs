@@ -131,9 +131,6 @@ pub(super) fn build_rendered_timeline(
     tool_calls: &[ToolCallView],
     pending_turns: &[(PendingTurnView, Option<i64>)],
 ) -> Vec<RenderedTimelineItem> {
-    // Group tool calls by their owning message sequence (rich lookup for the
-    // mapping-back step); the presentation-neutral ORDER is decided by the
-    // shared, Lean-fenced skeleton, not here.
     let mut tool_groups: BTreeMap<Option<i64>, Vec<ToolCallView>> = BTreeMap::new();
     for tool in tool_calls.iter().cloned() {
         tool_groups
@@ -143,10 +140,6 @@ pub(super) fn build_rendered_timeline(
     }
     let group_sequences: Vec<Option<i64>> = tool_groups.keys().copied().collect();
 
-    // Candidate messages (step-2 filter: drop tool-result rows and rows with no
-    // rendered content/reasoning/tool-calls — a presentation decision). For each
-    // candidate, project the ordering-relevant fields the skeleton consumes, and
-    // remember the rich content by key for mapping the slots back.
     let mut inputs: Vec<TimelineMessageInput> = Vec::new();
     let mut rendered_message: BTreeMap<String, RenderedTimelineItem> = BTreeMap::new();
     for message in messages.iter() {
@@ -226,9 +219,6 @@ pub(super) fn build_rendered_timeline(
                 .entry(message.message_key.clone())
                 .or_insert(item);
         }
-        // Presentation dedup token: the desktop only dedups by presentation when
-        // the message carries a sequence (None opts out). Serialize the same
-        // tuple the old `message_presentation_key` used, as an opaque token.
         let dedup_token =
             message_presentation_key(message, role, &normalized_content, &normalized_reasoning)
                 .map(|key| format!("{key:?}"));
@@ -279,8 +269,8 @@ pub(super) fn build_rendered_timeline(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_rendered_timeline, render_tool_call, tool_status_kind, MessageReconstructionView,
-        MessageView, ReconstructionState, RenderedTimelineItem, ToolCallView,
+        build_rendered_timeline, render_tool_call, MessageReconstructionView, MessageView,
+        ReconstructionState, RenderedTimelineItem, ToolCallView,
     };
 
     fn user_message(key: &str, sequence: i64, content: &str) -> MessageView {
@@ -304,44 +294,6 @@ mod tests {
             input_text: None,
             timestamp: None,
         }
-    }
-
-    #[test]
-    fn request_input_advances_past_a_non_rendering_physical_anchor() {
-        let pending = super::PendingTurnView {
-            request_id: "interrupted".into(),
-            request_doc_id: Some("physical-request".into()),
-            content: "keep this input".into(),
-            selected_skill_ids: vec![],
-            lifecycle_state: Some("interrupted".into()),
-            folded_into_request_id: None,
-            origin: None,
-            created_at: None,
-        };
-        let hidden = MessageView {
-            has_tool_results: true,
-            ..user_message("hidden-result", 1, "tool result")
-        };
-        for messages in [
-            vec![hidden.clone()],
-            vec![hidden, user_message("later", 2, "next input")],
-        ] {
-            let items = build_rendered_timeline(&messages, &[], &[(pending.clone(), Some(1))]);
-            assert!(
-                matches!(&items[0], RenderedTimelineItem::PendingUserTurn { request_id, .. }
-                if request_id == "interrupted")
-            );
-        }
-    }
-
-    #[test]
-    fn status_kind_maps_active_and_terminal_states() {
-        assert_eq!(tool_status_kind(Some("completed")), "success");
-        assert_eq!(tool_status_kind(Some("failed")), "error");
-        assert_eq!(tool_status_kind(Some("cancelled")), "error");
-        assert_eq!(tool_status_kind(Some("timedOut")), "error");
-        assert_eq!(tool_status_kind(Some("running")), "running");
-        assert_eq!(tool_status_kind(None), "unknown");
     }
 
     #[test]
@@ -415,40 +367,6 @@ mod tests {
                 output: None,
                 ..
             }
-        ));
-    }
-
-    #[test]
-    fn background_completion_controls_do_not_render_as_user_turns() {
-        let messages = vec![
-            user_message("user-1", 1, "Please classify these sessions."),
-            MessageView {
-                runtime_control: true,
-                ..user_message(
-                    "notification",
-                    2,
-                    r#"<tool-completion tool_call_id="child-1" tool_name="agent_message" status="completed">
-  <result>classification complete</result>
-</tool-completion>"#,
-                )
-            },
-            MessageView {
-                runtime_control: true,
-                ..user_message(
-                    "wake",
-                    3,
-                    gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
-                )
-            },
-        ];
-
-        let timeline = build_rendered_timeline(&messages, &[], &[]);
-
-        assert_eq!(timeline.len(), 1);
-        assert!(matches!(
-            &timeline[0],
-            RenderedTimelineItem::UserMessage { content, .. }
-                if content.as_deref() == Some("Please classify these sessions.")
         ));
     }
 

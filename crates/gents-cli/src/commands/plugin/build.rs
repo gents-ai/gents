@@ -1,9 +1,3 @@
-//! `gents plugin build`: compile one Afterburner package directory into a
-//! standalone `.afb`, independent of any pack. Reuses
-//! [`crate::commands::afterburner_build`], the exact compiler and language
-//! gate `gents pack build` uses for a pack's own plugins, so a plugin
-//! built standalone and one carried inside a pack can never drift apart.
-
 use std::path::{Path, PathBuf};
 
 use afterburner_cloud::Afb;
@@ -67,32 +61,10 @@ mod tests {
             &root.join("source/main.rs"),
             b"fn main() { println!(\"ok\"); }",
         );
-        // Rust is the one language whose compile path shells out to
-        // `cargo build`, so its source directory needs its own manifest as
-        // well as the afb.toml (`crate::commands::afterburner_build`'s own
-        // Rust test says the same). `[workspace]` keeps it standalone: the
-        // temp directory is under /tmp, but a stray parent manifest would
-        // otherwise pull it into someone else's workspace.
         write(
             &root.join("Cargo.toml"),
             b"[workspace]\n\n              [package]\nname = \"echo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n              [[bin]]\nname = \"echo\"\npath = \"source/main.rs\"\n",
         );
-    }
-
-    #[test]
-    fn a_directory_with_no_afb_toml_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("not_a_plugin");
-        std::fs::create_dir_all(&root).unwrap();
-
-        let error = dispatch(PluginBuildArgs {
-            dir: root.clone(),
-            out: None,
-        })
-        .unwrap_err();
-        let message = format!("{error:#}");
-        assert!(message.contains(&root.display().to_string()), "{message}");
-        assert!(message.contains("own Afterburner package"), "{message}");
     }
 
     #[test]

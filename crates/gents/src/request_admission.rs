@@ -1,8 +1,5 @@
-//! Final, fresh `AgentRequest` authority check.
-//!
-//! The daemon calls this immediately before the claim transaction.  Watcher
-//! delivery, replication, queue residence, and caller-authored lineage are not
-//! authority.
+//! Final, fresh `AgentRequest` authority check. Watcher delivery, replication,
+//! queue residence, and caller-authored lineage are not authority.
 
 use std::sync::Arc;
 
@@ -61,9 +58,6 @@ impl std::error::Error for AgentRequestAdmissionError {
 
 type AdmissionResult<T> = std::result::Result<T, AgentRequestAdmissionError>;
 
-/// Runtime-owned final claim projection. The conformance suite calls this same
-/// seam so the Lean-generated admission matrix fences the decision used by the
-/// durable verifier rather than only a protocol-local copy.
 pub fn final_claim_admission_disposition(
     observation_available: bool,
     observation: AgentRequestAdmissionObservation,
@@ -140,10 +134,6 @@ fn deny_if(condition: bool, message: &'static str) -> AdmissionResult<()> {
     }
 }
 
-/// Authenticate a runtime-authored local-self row before an in-process caller
-/// claims it. This is the one-shot counterpart of the daemon's final boundary:
-/// possession of the target key authors the request, while a fresh durable
-/// reload proves the row still matches that signature before claim.
 pub(crate) async fn verify_fresh_local_self_request(
     node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
@@ -207,9 +197,6 @@ pub async fn sign_agent_request_create(
         .map_err(anyhow::Error::msg)
 }
 
-/// Persist a fail-closed rejection before claim. This transition is shared by
-/// hostile-row ingest and final authority verification; ordinary lifecycle
-/// failure starts only after a successful claim.
 pub(crate) async fn terminalize_pending_request_rejection(
     node: &Arc<EmbeddedNode>,
     doc_id: &str,
@@ -274,12 +261,9 @@ pub(crate) async fn terminalize_pending_request_rejection(
                             .await?;
                         }
                         // A row that fails this decode keeps its refusal but
-                        // loses the session projection: hostile ingest rows,
-                        // and version-skewed rows from a paired runtime whose
-                        // `input` carries fields this build does not know
-                        // (RequestInput denies unknown fields) or whose
-                        // content is null. The refusal already persists in
-                        // this transaction, so the skip is warned, not fatal.
+                        // loses the session projection; the refusal already
+                        // persists in this transaction, so the skip is
+                        // warned, not fatal.
                         match serde_json::from_value::<AgentRequestRow>(row.clone())
                             .map_err(anyhow::Error::from)
                             .and_then(crate::watcher::AgentRequest::try_from)
@@ -309,9 +293,6 @@ pub(crate) async fn terminalize_pending_request_rejection(
     .map(|_| ())
 }
 
-/// Sign a target-runtime-authored request with the already-registered runtime
-/// node. Runtime startup and initialized-home loaders register this exact
-/// identity before any request authoring path becomes available.
 pub async fn sign_agent_request_create_as_registered_target(
     request: &mut gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<()> {
@@ -343,8 +324,6 @@ impl AgentRequestAdmissionVerifier {
         }
     }
 
-    /// Reload and authenticate the exact durable row. This is the final
-    /// linearization point before `claim_with_identity`.
     pub(crate) async fn verify_fresh(
         &self,
         request: &AgentRequest,
@@ -455,8 +434,6 @@ impl AgentRequestAdmissionVerifier {
                         .context("fresh enrollment request admission projection")
                         .map_err(AgentRequestAdmissionError::unavailable)?;
                     if let Some(current) = current {
-                        // Production always samples after the async authority
-                        // reload. Tests may inject this final observation only.
                         let observed_at = test_observed_at.unwrap_or_else(Utc::now);
                         observation.current_approval =
                             row.node_did.as_deref() == Some(current.owner_node.as_str());
@@ -573,8 +550,6 @@ impl AgentRequestAdmissionVerifier {
     }
 }
 
-/// The title branch is the existing runtime-local-control admission with a
-/// parent-only signed link. Parent lifecycle and lease state are not inputs.
 fn verify_title_request_shape(
     row: &AgentRequestRow,
     admission: &AgentRequestAdmissionRecord,
@@ -620,7 +595,6 @@ fn verify_title_request_shape(
     )
 }
 
-/// Signed input remains subordinate to the resolved context and issuance owner.
 async fn verify_request_input(
     node: &Arc<EmbeddedNode>,
     row: &AgentRequestRow,
@@ -662,10 +636,6 @@ async fn verify_request_input(
     let runtime_control = admission.kind == AgentRequestAdmissionKind::RuntimeInternal
         && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl);
     if let Some(queue) = &input.queue {
-        // A steering append is also a session-message delivery: it carries
-        // the caller's full request and tool call edge (Lean
-        // `DurableLineage.sessionMessageWrite`). Other runtime queue sources
-        // stay local-control only.
         let session_message_steering = queue.source == QueueSource::Steering
             && row.caused_by_parent_request_doc_id.is_some()
             && row.caused_by_parent_tool_call_doc_id.is_some();
@@ -724,9 +694,6 @@ async fn verify_request_input(
     Ok(())
 }
 
-/// Lean `CausalHop.admitHop`: the signed hop (`request_hop`) is within
-/// the target node's `max_request_hop`. The check reads only the signed
-/// row and the target's own configuration; it never walks lineage.
 async fn request_hop_admitted(node: &EmbeddedNode, row: &AgentRequestRow) -> AdmissionResult<bool> {
     let hop = row.request_hop.unwrap_or(0);
     let Ok(hop) = u32::try_from(hop) else {
@@ -745,7 +712,6 @@ async fn request_hop_admitted(node: &EmbeddedNode, row: &AgentRequestRow) -> Adm
     ))
 }
 
-/// The target node's `max_request_hop`, defaulted when unset.
 pub(crate) async fn max_request_hop(node: &EmbeddedNode, node_did: &str) -> anyhow::Result<u32> {
     Ok(crate::document_config::load_node(node, node_did)
         .await?
@@ -845,7 +811,6 @@ async fn load_exact_parent_request(
     Ok(row)
 }
 
-/// Read the existing canonical configuration owner in one scoped snapshot.
 pub(crate) async fn load_request_context(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -983,10 +948,6 @@ async fn verify_automated_trigger_source(
     )
 }
 
-/// Verify the original immutable request payload and its declared admission
-/// branch. Historical receipt authentication does not re-admit execution or
-/// require today's enrollment, TTL, lifecycle, or backend readiness. The
-/// operation's owner separately checks its expected node/source scope.
 pub fn verify_request_receipt_signature(row: &AgentRequestRow) -> Result<()> {
     let admission = row_admission(row)?;
     admission.validate_canonical_fields()?;
@@ -1006,8 +967,6 @@ pub fn verify_request_receipt_signature(row: &AgentRequestRow) -> Result<()> {
     Ok(())
 }
 
-/// Audit attribution authenticates immutable provenance, not current execution
-/// authority. A terminal parent or expired child lease cannot erase received usage.
 pub(crate) fn verify_historical_title_receipt(
     title: &AgentRequestRow,
     parent: &AgentRequestRow,
@@ -1031,12 +990,6 @@ pub(crate) fn verify_historical_title_receipt(
     Ok(())
 }
 
-/// Authenticate an already-authored runtime local-control receipt. This is
-/// not fresh execution admission: terminal/expired children remain receipts.
-/// The caller separately binds the exact goal, parent docID and sequence and
-/// authorizes its own operation; no execution capability is returned here.
-/// `expected_requester_did` is the requester of the parent it continues in the
-/// same session (Lean `Enrollment.runtimeRequesterScope`).
 pub(crate) fn verify_runtime_local_control_receipt(
     row: &AgentRequestRow,
     expected_target_did: &str,
@@ -1158,9 +1111,8 @@ fn required_row_string<'a>(value: Option<&'a str>, field: &str) -> AdmissionResu
     })
 }
 
-/// Complete immutable request signature projection shared by fresh admission
-/// and transaction-scoped historical receipt readers. Lifecycle is included
-/// for callers decoding the row, but is not part of the signed payload.
+/// Lifecycle is included for callers decoding the row, but is not part of the
+/// signed payload.
 pub const SIGNED_REQUEST_FIELDS: &str = r#"
 _docID lifecycle_state request_id purpose node_did requester_did agent_id session_id
                 retry_parent_request retry_parent_request_doc_id retry_root_request retry_key
@@ -1523,9 +1475,6 @@ mod tests {
             .to_owned()
     }
 
-    /// A session row sharing the refused request's label that fails canonical
-    /// decode makes the label ambiguous: the refusal persists and leaves the
-    /// row untouched instead of rolling the pending -> failed write back.
     #[tokio::test]
     async fn refusal_survives_undecodable_session_rows_sharing_its_label() {
         let temp = tempfile::tempdir().unwrap();
@@ -1609,9 +1558,6 @@ mod tests {
         node.shutdown().await;
     }
 
-    /// Scoped request facts the projection cannot interpret — an invalid
-    /// `created_at`, or duplicate `request_id` roots — skip the session
-    /// projection; they must not roll back the refusal write.
     #[tokio::test]
     async fn refusal_survives_unreadable_scoped_request_facts() {
         let temp = tempfile::tempdir().unwrap();
@@ -1708,8 +1654,6 @@ mod tests {
         node.shutdown().await;
     }
 
-    /// Capture warn-level tracing emitted on the current thread, so the
-    /// version-skew decode skip is asserted as observable, not just absent.
     #[derive(Clone)]
     struct WarnCapture(Arc<std::sync::Mutex<String>>);
 
@@ -1733,9 +1677,6 @@ mod tests {
         }
     }
 
-    /// A refused row whose `input` carries fields this build does not know —
-    /// a version-skewed paired runtime — keeps its refusal, loses the session
-    /// projection, and says so: the skip must be observable in the field.
     #[test]
     fn version_skewed_refused_row_keeps_its_refusal_and_warns_on_the_skipped_projection() {
         crate::test_support::enable_scoped_event_capture();

@@ -1,5 +1,3 @@
-//! Native EVM surface: chain keys, JSON-RPC, and generated tools.
-
 pub(crate) mod call_tool;
 pub(crate) mod calls;
 pub mod keys;

@@ -1,6 +1,3 @@
-//! Isolated-workspace overlay: load identity + local placement, bind the
-//! request-scoped tool root, and fail closed when the authority cannot run.
-
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
@@ -22,7 +19,6 @@ use super::documents::{
 
 static PROCESS_OPERATOR_TOOL_ROOT: RwLock<Option<PathBuf>> = RwLock::new(None);
 
-/// Process `--tool-root` used by spawn provision, callback, and overlay.
 pub(crate) fn install_process_operator_tool_root(root: Option<PathBuf>) {
     *PROCESS_OPERATOR_TOOL_ROOT
         .write()
@@ -68,8 +64,6 @@ pub(crate) struct WorkspaceOverlay {
     pub seal_hash: Option<String>,
 }
 
-/// Bound overlays always yield `Some`, including empty `{}` manifests.
-/// Unbound requests (`None`) fall through to the live cwd→tool-root walk.
 pub(crate) fn frozen_instruction_manifest_from_overlay(
     overlay: Option<&WorkspaceOverlay>,
 ) -> Option<&str> {
@@ -94,7 +88,6 @@ pub(crate) fn workspace_authority_file_mode(authority: WorkspaceAuthority) -> Fi
     }
 }
 
-/// Signed reference scope; admission authenticates where the tuple came from.
 pub(crate) fn request_workspace_owner(request: &AgentRequest) -> Result<&str> {
     gents_protocol::request_admission::validate_workspace_reference(
         request.workspace_id.as_deref(),
@@ -128,8 +121,6 @@ pub(crate) fn require_workspace_principal(
     Ok(())
 }
 
-/// Ordinary unbound requests stay on the behavior tool root. Artifact execution
-/// requires a valid sealed binding before the request can dispatch any tool.
 #[inline(never)]
 pub(crate) async fn resolve_request_workspace_overlay(
     node: &Arc<EmbeddedNode>,
@@ -195,15 +186,12 @@ async fn resolve_request_workspace_overlay_on_host(
     Ok(Some(overlay))
 }
 
-/// Admission uses the same workspace owner without creating a binding or grant.
 pub(crate) async fn validate_request_workspace_input(
     node: &Arc<EmbeddedNode>,
     request: &AgentRequest,
     artifact_requested: bool,
 ) -> Result<()> {
     let operator_root = process_operator_tool_root();
-    // A sealed writer may only complete its interrupted terminal flush. The
-    // daemon checks this same exact receipt owner before considering any tools.
     if super::runtime::writer_request_already_sealed(node, request).await? {
         let workspace_id = request
             .workspace_id
@@ -236,8 +224,8 @@ async fn load_request_workspace_overlay(
     operator_tool_root: Option<&Path>,
     sandbox_enforced: bool,
 ) -> Result<Option<(IsolatedWorkspaceRecord, WorkspaceOverlay)>> {
-    // Enforce the model's host eligibility before database reads, binding,
-    // grant allocation or provider dispatch, not after a wasted model turn.
+    // Host eligibility is enforced before DB reads, binding, grant allocation
+    // and provider dispatch, not after a wasted model turn.
     if artifact_requested && !sandbox_enforced {
         bail!("artifact_write requires an enforceable artifact sandbox on this host");
     }
@@ -269,8 +257,8 @@ async fn load_request_workspace_overlay(
     let request_cwd = request_workspace_cwd(request);
     let sealed = crate::toolset::normalize_workspace_lifecycle_state(&workspace.lifecycle_state)
         == Some("sealed");
-    // Reject before binding or provider dispatch: absence of a grant must never
-    // let an artifact-selected request fall through legacy CLI/LSP launch paths.
+    // Reject before binding or provider dispatch: a missing grant must never
+    // let an artifact-selected request fall through legacy CLI/LSP paths.
     if artifact_requested && (!sealed || authority != WorkspaceAuthority::ReadOnly) {
         bail!("artifact_write requires a sealed ReadOnly workspace binding");
     }

@@ -1,5 +1,3 @@
-//! `RemoteP2pAdmin` trait definition, error types, and value types.
-
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -31,9 +29,6 @@ pub struct RemoteReplicator {
     pub id: Option<String>,
     pub collections: Vec<String>,
     pub address: Option<String>,
-    /// `None` means the remote admin response omitted filter visibility. This
-    /// is distinct from `Some(empty)`, which authoritatively reports an
-    /// unfiltered replicator.
     #[serde(default)]
     pub filters: Option<defra_p2p_adapter::ReplicationFilters>,
 }
@@ -98,11 +93,4 @@ pub trait RemoteP2pAdmin: Send + Sync {
         collection_id: &str,
         timeout: Option<std::time::Duration>,
     ) -> RemoteP2pAdminResult<()>;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn _assert_trait_object_safe(_: &dyn RemoteP2pAdmin) {}
 }

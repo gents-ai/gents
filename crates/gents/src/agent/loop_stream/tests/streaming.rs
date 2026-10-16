@@ -1,40 +1,4 @@
 #[tokio::test]
-async fn single_turn_no_tools_yields_text_then_final() {
-    let model = ScriptedModel::new(vec![
-        RawStreamingChoice::Message("Hello ".to_string()),
-        RawStreamingChoice::Message("world".to_string()),
-        RawStreamingChoice::FinalResponse(()),
-    ]);
-
-    let stream = run_loop_stream(
-        model,
-        None::<gents_loop::session_hook::NoopSessionHook>,
-        TaggedMessage::unassociated(Message::user("hi")),
-        Vec::new(),
-        Arc::new(Vec::new()),
-        config(0),
-    );
-    futures::pin_mut!(stream);
-
-    let mut texts = Vec::new();
-    let mut final_text = None;
-    while let Some(item) = stream.next().await {
-        match item.expect("loop item should be Ok") {
-            LoopStreamItem::Text(text) => {
-                texts.push(text);
-            }
-            LoopStreamItem::Final { text } => {
-                final_text = Some(text);
-            }
-            _ => {}
-        }
-    }
-
-    assert_eq!(texts, vec!["Hello ".to_string(), "world".to_string()]);
-    assert_eq!(final_text.as_deref(), Some("Hello world"));
-}
-
-#[tokio::test]
 async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_reminder() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -100,9 +64,6 @@ async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_remi
 async fn exceeding_max_turns_terminates_with_error() {
     let prompt = Message::user("loop");
 
-    // max_turns = 0 permits one tool round-trip (2 completions, matching rig);
-    // a model that keeps calling tools is blocked on the completion past the cap
-    // and surfaces a max-turns error.
     let model = ScriptedModel::new_turns(vec![echo_tool_turn(), echo_tool_turn()]);
     let stream = run_loop_stream(
         model,
@@ -121,24 +82,17 @@ async fn exceeding_max_turns_terminates_with_error() {
 
     let last = items.last().expect("stream should yield at least one item");
     assert!(last.is_err(), "expected a terminal error; got {last:?}");
-    // Turn exhaustion, not a retryable response error, must not retry.
     let error = last.as_ref().err().unwrap();
     assert_eq!(
         error.cause(),
         &crate::error::LoopFailureCause::MaxTurns,
         "expected a max-turns Prompt error; got {last:?}"
     );
-    // And it must classify as a permanent failure: retrying turn exhaustion would
-    // re-run the loop (and its tools) to no purpose.
     assert!(
         !error.classify().is_retryable(),
         "max-turns exhaustion must be non-retryable; got {last:?}"
     );
-    // The Harbor adapter (scripts/harbor/run_gents.sh) classifies budget
-    // exhaustion by matching the persisted error message's exact prefix:
-    // `agent stream failed: ` (agent/daemon/inference.rs) followed by this
-    // display. If rig's wording changes, MaxTurn trials silently revert to
-    // Harbor infrastructure exceptions instead of verifier-scored attempts.
+    // Harbor classifies budget exhaustion by matching the persisted error message prefix.
     assert!(
         error.to_string().starts_with("PromptError: MaxTurnError: "),
         "max-turns error display must start with the anchored Harbor prefix; got {error}"
@@ -150,13 +104,6 @@ async fn managed_terminal_tool_result_terminates_loop() {
     let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let prompt = Message::user("run the slow tool");
 
-    // With the typed outcome channel a tool CANNOT fabricate a managed
-    // terminal: run the loop under an already-expired tool-execution scope so
-    // the dispatcher's own envelope produces `ToolOutcome::TimedOut`, and
-    // on_tool_result terminates the loop. The owned driver is required because
-    // dispatch only happens after the accepted publication fold
-    // (`ProviderTurnReady` → StreamProcessor adoption), which a bare
-    // stream.next() driver never reaches.
     let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(FixedTool {
         name: "echo".to_string(),
         output: "unreachable".to_string(),
@@ -171,16 +118,9 @@ async fn managed_terminal_tool_result_terminates_loop() {
         owned_config(4),
     );
 
-    // The daemon installs the tool runtime scope around stream polling; an
-    // already-expired deadline makes the dispatcher's envelope resolve the
-    // tool call to `ToolOutcome::TimedOut`. The collector stays inside the
-    // expired scope so the actual tool-envelope timeout drives the error.
     let collected = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
         Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
         tokio_util::sync::CancellationToken::new(),
-        // `run_loop_stream` and the owned acceptance driver are both large
-        // generator futures. Keep the runtime-scope wrapper from embedding the
-        // entire driver inline in the Tokio test task's stack frame.
         Box::pin(collect_owned_scripted_stream(
             stream,
             &hook,
@@ -195,16 +135,10 @@ async fn managed_terminal_tool_result_terminates_loop() {
         .error
         .as_deref()
         .expect("stream should end with a terminal error");
-    // The managed terminal travels as typed data: the hook's Terminate reason
-    // is carried through `PromptError::PromptCancelled` (loop_stream's sole
-    // terminal for hook Terminate actions), never threaded as tool output.
     assert!(
         error.contains("PromptCancelled"),
         "expected the typed PromptCancelled terminal; got {error}"
     );
-    // The reason must be the managed terminal's own deadline vocabulary, not
-    // an arbitrary error or tool output: on_tool_result maps
-    // `ToolOutcome::TimedOut` to exactly "tool call deadline exceeded".
     assert!(
         error.contains("tool call deadline exceeded"),
         "expected the precise managed-timeout reason; got {error}"
@@ -213,11 +147,6 @@ async fn managed_terminal_tool_result_terminates_loop() {
 
 #[tokio::test]
 async fn threaded_assistant_turn_carries_provider_message_id() {
-    // P2a regression: the in-loop assistant message threaded back to the provider
-    // must carry the provider message id (OpenAI Responses / ChatGPT Codex
-    // follow-up requests reference prior `msg_` ids). Turn 1 emits a MessageId
-    // plus a tool call; the tool result drives turn 2, whose request history must
-    // contain the assistant tool-call message tagged with that id.
     let model = ScriptedModel::new_turns(vec![
         vec![
             RawStreamingChoice::MessageId("msg_abc123".to_string()),

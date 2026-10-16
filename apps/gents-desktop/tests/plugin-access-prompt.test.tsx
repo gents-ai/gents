@@ -57,7 +57,6 @@ const question = {
   isDir: false,
 };
 
-/* the bridge's watch fires the change event; nothing may read on a timer */
 const announceQueueChange = () => {
   const handler = windowListeners.get("desktop://plugin-approvals-changed");
   if (!handler) throw new Error("the prompt never subscribed to the change event");
@@ -152,7 +151,6 @@ describe("PluginAccessPrompt", () => {
     pending.mockImplementation(async () => {
       reads += 1;
       if (reads === 1) return { requests: [question] };
-      /* the host read its queue before the answer reached it */
       return new Promise((resolve) => (late = resolve));
     });
     show();
@@ -193,8 +191,6 @@ describe("PluginAccessPrompt", () => {
     registration.autoResolve = false;
     show();
     await waitFor(() => expect(windowListeners.size).toBe(1));
-    /* the first listing must not race ahead of the subscription, or a change
-       in that gap arrives on no listener */
     expect(pending).not.toHaveBeenCalled();
     expect(subscribe).not.toHaveBeenCalled();
     await act(async () => registration.resolve!(unlisten));

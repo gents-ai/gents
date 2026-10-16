@@ -62,8 +62,6 @@ fn generated_workspace_path_alias_cases_drive_real_git_delta() {
             (&base_paths, "base_prefixes"),
             (&tree_paths, "tree_prefixes"),
         ] {
-            // Fence the host alias observations against the actual path spellings;
-            // the Rust test does not replay the Lean decision predicate.
             assert_eq!(
                 serde_json::to_value(prefixes(leaf_paths)).unwrap(),
                 case[key]
@@ -128,7 +126,6 @@ fn unchanged_non_utf8_git_entry_does_not_widen_changed_path_admission() {
         super::super::adapter::validate_tree_delta(&fx.repo, &base, &tree(&other, &old), &cap)
             .is_ok()
     );
-    // Changing the opaque basename must fail at the UTF-8 admission boundary.
     let error =
         super::super::adapter::validate_tree_delta(&fx.repo, &base, &tree(&other, &other), &cap)
             .unwrap_err();

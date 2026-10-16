@@ -1,11 +1,8 @@
-/* macOS two-finger history swipes, recognised natively and reported as
-   progress in [-1, 1]: positive is back. The handle travels with the
-   fingers and fills; lifting past COMMIT navigates, short of it settles.
-
-   AppKit's tracker takes over the scroll stream once it starts, so the
-   webview keeps native told whether the content under the pointer can
-   still scroll sideways: content scrolls first and the swipe arms at its
-   edge, as in Safari and Chrome. */
+// macOS two-finger history swipes, recognised natively and reported as
+// progress in [-1, 1] (positive is back). AppKit's tracker takes over the
+// scroll stream once it starts, so the webview keeps native told whether
+// the content under the pointer can still scroll sideways: content scrolls
+// first and the swipe arms at its edge.
 import { useEffect, useRef } from "react";
 import { listenToWindow, reportSwipeScrollEdges } from "../../lib/nativeShell";
 import { isMacTauriShell } from "../../lib/shellPlatform";
@@ -14,7 +11,6 @@ import { SWIPE_HANDLE_ATTR } from "../app/SwipeHandles";
 
 type SwipeProgress = { amount: number; phase: "moving" | "ended" | "cancelled" };
 
-/* in AppKit's units; Chrome commits at about this distance */
 export const COMMIT = 0.4;
 const TRAVEL_PX = 96;
 
@@ -40,7 +36,6 @@ function hide(el: HTMLElement) {
   delete el.dataset.armed;
 }
 
-/** Whether anything under `start` can still scroll left or right. */
 export function scrollRoom(start: Element | null): { left: boolean; right: boolean } {
   let left = false;
   let right = false;
@@ -55,7 +50,6 @@ export function scrollRoom(start: Element | null): { left: boolean; right: boole
   return { left, right };
 }
 
-/** Keeps native told about sideways scroll room under the pointer. */
 function reportScrollRoom(): () => void {
   let x = -1;
   let y = -1;
@@ -102,8 +96,6 @@ export function useSwipeNav(history: History) {
     const stopReporting = reportScrollRoom();
     let unlisten: (() => void) | undefined;
     let disposed = false;
-    /* AppKit keeps reporting the end phase while it animates the amount
-       after lift, so a gesture settles on its first end only */
     let settled = false;
     void listenToWindow<SwipeProgress>("native-swipe", (payload) => {
       const h = latest.current;

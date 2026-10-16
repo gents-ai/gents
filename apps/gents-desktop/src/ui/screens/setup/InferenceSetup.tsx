@@ -1,7 +1,3 @@
-/* The inference step: choose a provider, connect or sign in, pick a model
-   and its defaults, and save them in one operator transaction. Shared by
-   first run, setup re-entry and adding a backend from the Node screen.
-   Provider/model guidance comes from the versioned Rust contract. */
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { KeyRound, Orbit, Server, Sparkles } from "lucide-react";
 import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
@@ -41,8 +37,6 @@ import {
   type ProviderId,
 } from "./inferenceSetupForm";
 
-/* The runtime confirms a save only after it reconciles the new documents,
-   starts the rebound Node and replicates its readiness back. */
 const SAVE_CONFIRMATION_TIMEOUT_MS = 15_000;
 
 export const PROVIDER_VISUALS: Record<
@@ -72,12 +66,8 @@ export function InferenceSetup({
   purpose: "onboarding" | "add-backend";
   nodeDid?: string;
   onCancel?: () => void;
-  /** back to the step before, when there is one */
   onBack?: () => void;
-  /** opened without this session's provisioning, so a local node's managed
-      runtime may not be serving */
   checkRuntime: boolean;
-  /* a catalog row was chosen, so the form is that provider's inputs only */
   provider?: ProviderId;
 }) {
   const bootstrap = useBootstrap();
@@ -108,24 +98,16 @@ export function InferenceSetup({
     () => edited ?? (providerOption ? connectionDefaults(providerOption) : undefined),
     [edited, providerOption],
   );
-  /* the account a sign-in provider is connected through: discovery and the
-     saved backend name it, so an account signed in after another was set
-     aside is the one configured, not the original */
   const oauthAccountRef =
     connection && oauthProviderFor(connection.authMethod)
       ? (signedIn[provider]?.accountRef ?? null)
       : null;
-  /* reads that answer for another Node, or before a sign-in that changed
-     what they would say, are dropped */
   const [accountReads] = useState(newestWins);
   const setupNodeDid = nodeDid ?? selectedNode?.nodeDid;
   const setupNodeDidRef = useRef(setupNodeDid);
   setupNodeDidRef.current = setupNodeDid;
   const discoveryRevision = useRef(0);
   const currentDiscoveryKey = useRef("");
-  /* Setup re-entry opens at the provider step without first run's
-     provisioning, so a local node's managed runtime may not be serving.
-     Provider sign-in and the final save both write through it. */
   const setupDeployment = useFleet((s) => nodeOf(s, setupNodeDid));
   const requiresManagedRuntime = Boolean(
     checkRuntime &&
@@ -140,7 +122,6 @@ export function InferenceSetup({
     try {
       await actions.ensureLocalServerServing(runtimeFallbackName);
       dispatch({ type: "runtimeGate", gate: "ready" });
-      /* Account lookup goes through the runtime, so repeat it once it serves. */
       if (setupNodeDidRef.current) void observeAccounts(setupNodeDidRef.current);
     } catch (cause) {
       dispatch({
@@ -159,8 +140,6 @@ export function InferenceSetup({
     const current = accountReads.begin();
     const seedSignedIn = purpose !== "add-backend";
     return actions.loadProviderAccounts(nodeDid).then((accounts) => {
-      /* Sign-in remains available if account lookup fails, but only a
-         click starts it: an unknown account may already be connected. */
       if (!accounts) return;
       if (!current() || setupNodeDidRef.current !== nodeDid) return;
       dispatch({ type: "accountsRead", accounts, seedSignedIn });
@@ -213,8 +192,6 @@ export function InferenceSetup({
       const outcome = result.signIn;
       if (outcome.result === "refreshed")
         dispatch({ type: "hint", hint: outcome.hint });
-      /* an added account's backend was created with the account, and a refreshed
-         one already has its backend: nothing to save */
       if (
         purpose === "add-backend" &&
         (outcome.accountRef !== null || outcome.result === "refreshed")
@@ -245,8 +222,6 @@ export function InferenceSetup({
     const oauthProvider = connection ? oauthProviderFor(connection.authMethod) : null;
     if (!nodeDid || !oauthProvider || !actions.canRetryProviderSave) return;
     const pendingProvider = provider;
-    /* with a stored account, a store adds only under a new reference, so a
-       retry returning no reference refreshed the original account */
     const hadStored = accountsOf(oauthProvider).length > 0;
     dispatch({ type: "opStarted", op: "retrySave" });
     try {
@@ -283,8 +258,6 @@ export function InferenceSetup({
     }
   };
 
-  /* set the connected account aside to sign in with another; nothing is
-     removed, and signing in replaces or adds an account as it always does */
   const useAnotherAccount = () => {
     dispatch({ type: "signedOut", provider });
     invalidateDiscovery();
@@ -295,7 +268,6 @@ export function InferenceSetup({
     if (oauthProvider) void actions.cancelProviderSignIn(oauthProvider);
   };
 
-  /* a discovery still out answers for a connection that no longer stands */
   const invalidateDiscovery = () => {
     discoveryRevision.current += 1;
     currentDiscoveryKey.current = "";
@@ -397,9 +369,6 @@ export function InferenceSetup({
       settings,
     });
     await changeConfig("applyConfigComponents", { document: plan.document });
-    // Discovery ran before the backend existed. Running it again publishes the
-    // advertised catalog onto the persisted backend. It stays off the save path;
-    // the runtime prober publishes subscription catalogs if it fails.
     const publishKey = `${currentDiscoveryKey.current}:publish`;
     void Promise.resolve()
       .then(() =>
@@ -473,8 +442,6 @@ export function InferenceSetup({
     if (id !== provider) invalidateDiscovery();
     dispatch({ type: "providerPicked", provider: id, current: provider });
   };
-  /* a provider just chosen starts its sign-in once the catalog, the account
-     read and the runtime allow it, unless an account is already connected */
   useEffect(() => {
     if (
       form.autoSignIn?.provider !== provider ||
@@ -611,7 +578,6 @@ export function InferenceSetup({
         </Title>
       )}
       {catalog && fixedProvider ? (
-        /* the chosen provider's own inputs, no grid */
         <div className="rounded-3xl bg-raised px-5 py-4 shadow-sm ring-1 ring-foreground/5">
           {providerDetails}
         </div>

@@ -1,7 +1,5 @@
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
 
-/* What the run is doing now, read from the tail of the transcript. A step
-   that is running already shows its own loader, so it has no line here. */
 export function activityStatus(
   items: readonly RenderedTimelineItem[],
   stopping: boolean,
@@ -16,10 +14,8 @@ export function activityStatus(
   return "Thinking";
 }
 
-/* A stop is pending for the request being stopped while it is in flight:
-   from the moment the interrupt call is accepted, or once that request's
-   own outcome carries the interrupt. An outcome kept from an earlier
-   request says nothing about this one. */
+/** A stop applies only to its request while in flight, until its interrupt
+ * is accepted or that request's outcome carries it. */
 export function isStopping({
   inFlight,
   requestId,

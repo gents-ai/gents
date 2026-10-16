@@ -7,8 +7,6 @@ use serde_json::Value;
 use super::progress::{observed_tool_status, GentsToolCallProgress};
 use super::projection_state::{AgentProjection, AgentTool, ProjectionStatus};
 
-/// `agent_new` and `agent_message` project as Codex agent items addressed to
-/// the session they start or message. The other agent tools stay tool items.
 pub(super) fn agent_projection(tool: &GentsToolCallProgress) -> Option<AgentProjection> {
     let kind = match tool.tool_name.as_str() {
         AGENT_NEW_TOOL_NAME => AgentTool::New,

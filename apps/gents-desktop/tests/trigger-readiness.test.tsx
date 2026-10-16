@@ -42,7 +42,6 @@ describe("trigger readiness", () => {
     ] as DeploymentView["nodeReadiness"]["agents"]);
     renderIn(testApp(), <TriggersPanel deployment={ready} item="trigger-a" />);
     expect(screen.queryByText("Ready")).toBeNull();
-    /* nothing to say is said with nothing, not an empty line */
     const header = screen.getByRole("heading", { name: "Trigger A" }).parentElement!;
     for (const line of header.querySelectorAll("p"))
       expect(line.textContent?.trim()).not.toBe("");

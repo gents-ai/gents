@@ -6,11 +6,7 @@ export type EvalFixtures = {
 /**
  * Pack-asset digests to materialize in the trial workspace.
  */
-assets?: Array<string> | null, documents?: Array<EvalFixtureDocument> | null,
-/**
- * Inline files, authored with the case, to write into the trial workspace.
- */
-files?: Array<EvalFixtureFile> | null,
+assets?: Array<string> | null, documents?: Array<EvalFixtureDocument> | null, files?: Array<EvalFixtureFile> | null,
 /**
  * App-collection SDL to install in the trial before its documents.
  */

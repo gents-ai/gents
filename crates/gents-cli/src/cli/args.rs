@@ -2373,10 +2373,6 @@ impl BackendPresetArg {
         }
     }
 
-    /// Default model for presets whose endpoint implies a model source. The
-    /// shared DEFAULT_INIT_MODEL_NAME is an HF GGUF repo path: valid for
-    /// llama-server (`-hf`) but not an Ollama tag, so the ollama preset pulls
-    /// the same model through Ollama's `hf.co/` form instead.
     pub(crate) fn default_model_name(self) -> Option<&'static str> {
         match self {
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_MODEL_NAME),
@@ -4297,13 +4293,11 @@ impl EvalCommand {
             Self::Watch(args) => &args.scope,
             Self::Gc(args) => &args.scope,
             Self::Init(args) => &args.scope,
-            // `dispatch` answers `checks` before resolving any home.
             Self::Checks(_) => &NO_SCOPE,
         }
     }
 }
 
-/// The scope of a command that reads no home.
 static NO_SCOPE: EvalScopeArgs = EvalScopeArgs {
     home: None,
     graphql: None,
@@ -4599,8 +4593,6 @@ pub(crate) struct EvalBatchArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-// Each stage's captures come from the eval definition (`EvalStage.capture`),
-// not from this command; `run` passes no run-level fallback.
 #[derive(clap::Args)]
 pub(crate) struct EvalRunArgs {
     pub(crate) definition_id: String,

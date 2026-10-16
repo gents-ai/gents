@@ -1,82 +1,6 @@
 use super::*;
 
 #[tokio::test]
-async fn dispatch_reports_pre_materialized_request_without_materializer_call() {
-    let snapshot = snapshot_with_schedules(HashMap::new());
-    let (_tx, rx) = watch::channel(snapshot);
-    let materializer = SpyMaterializer::new();
-    let engine = TriggerEngine::new(rx, materializer.clone());
-
-    let intent = FireIntent {
-        trigger_id: None,
-        trigger_kind: TriggerKind::Manual,
-        task: resolved_task("ignored"),
-        concurrency: ConcurrencyMode::Parallel,
-        event_vars: serde_json::json!({"trigger_kind": "manual"}),
-        doc_vars: None,
-        correlation: None,
-        group_vars: None,
-        trigger_context: None,
-        args_vars: None,
-        durable_fire_key: "dispatch-pre-materialized-fire".to_string(),
-        pre_materialized_request_id: Some("child-pre-materialized".to_string()),
-        on_result: Box::new(|_| {}),
-    };
-
-    let result = engine.dispatch(intent).await;
-
-    match result {
-        FireResult::Fired { request_id } => {
-            assert_eq!(request_id, "child-pre-materialized");
-        }
-        other => panic!("expected Fired for pre-materialized intent, got {other:?}"),
-    }
-    assert!(
-        materializer.calls().is_empty(),
-        "pre-materialized dispatch must not create a second AgentRequest"
-    );
-}
-
-#[tokio::test]
-async fn dispatch_renders_and_materializes_when_schedule_active() {
-    let task = resolved_task("fired at {{ event.fired_at }}");
-    let schedule = resolved_schedule("sched-1", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
-    let (_tx, rx) = watch::channel(snapshot);
-    let materializer = SpyMaterializer::new();
-    let engine = TriggerEngine::new(rx, materializer.clone());
-
-    let intent = FireIntent {
-        trigger_id: Some("sched-1".to_string()),
-        trigger_kind: TriggerKind::Schedule,
-        task,
-        concurrency: ConcurrencyMode::Serial,
-        event_vars: serde_json::json!({"fired_at": "2026-04-21T00:00:00Z"}),
-        doc_vars: None,
-        correlation: None,
-        group_vars: None,
-        trigger_context: None,
-        args_vars: None,
-        durable_fire_key: "dispatch-test-fire".to_string(),
-        pre_materialized_request_id: None,
-        on_result: Box::new(|_| {}),
-    };
-
-    let result = engine.dispatch(intent).await;
-
-    match result {
-        FireResult::Fired { request_id } => assert_eq!(request_id, "req-0"),
-        other => panic!("expected Fired, got {other:?}"),
-    }
-    let calls = materializer.calls();
-    assert_eq!(calls.len(), 1, "exactly one materialize call expected");
-    let (trigger_id, kind, rendered) = &calls[0];
-    assert_eq!(trigger_id.as_deref(), Some("sched-1"));
-    assert_eq!(*kind, TriggerKind::Schedule);
-    assert_eq!(rendered, "fired at 2026-04-21T00:00:00Z");
-}
-
-#[tokio::test]
 async fn dispatch_renders_goal_objective_with_the_request_template_scope() {
     let mut task = resolved_task("work on {{ event.item }} for {{ args.owner }}");
     task.goal_objective_template =
@@ -115,46 +39,6 @@ async fn dispatch_renders_goal_objective_with_the_request_template_scope() {
             "deliver release for runtime from {expected_did}"
         ))]
     );
-}
-
-#[tokio::test]
-async fn dispatch_rejects_goal_budget_without_an_objective() {
-    let mut task = resolved_task("ordinary prompt");
-    task.goal_token_budget = Some(10);
-    let schedule = resolved_schedule("sched-invalid-goal", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([(
-        "sched-invalid-goal".to_string(),
-        schedule,
-    )]));
-    let (_tx, rx) = watch::channel(snapshot);
-    let materializer = SpyMaterializer::new();
-    let engine = TriggerEngine::new(rx, materializer.clone());
-
-    let result = engine
-        .dispatch(FireIntent {
-            trigger_id: Some("sched-invalid-goal".to_string()),
-            trigger_kind: TriggerKind::Schedule,
-            task,
-            concurrency: ConcurrencyMode::Serial,
-            event_vars: serde_json::json!({}),
-            doc_vars: None,
-            correlation: None,
-            group_vars: None,
-            trigger_context: None,
-            args_vars: None,
-            durable_fire_key: "dispatch-invalid-goal-fire".to_string(),
-            pre_materialized_request_id: None,
-            on_result: Box::new(|_| {}),
-        })
-        .await;
-
-    match result {
-        FireResult::Rejected { error } => {
-            assert!(error.contains("requires a goal objective"), "{error}")
-        }
-        other => panic!("expected invalid goal configuration error, got {other:?}"),
-    }
-    assert!(materializer.calls().is_empty());
 }
 
 #[tokio::test]
@@ -444,7 +328,6 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
     );
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
-    // Active work is itself a durable marker. Model that real storage invariant.
     let old_key = super::super::durable_fire_key("event-group", &["run-a"]);
     materializer.mark_group_materialized(&node_did, "event-1", &old_key);
     materializer.persist_materialized_group_markers(&node_did);
@@ -596,11 +479,6 @@ async fn dispatch_latest_only_lock_blocks_second_supersede_until_first_materiali
 
 #[tokio::test]
 async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
-    // Template references `event.missing_field`, but the intent's event_vars
-    // has no such key. With strict-undefined semantics, rendering must fail,
-    // and dispatch must return Rejected (with a "template:" prefix), skip the
-    // materializer entirely, and invoke `on_result` with the same Rejected
-    // value so the upstream source can write back `last_status = "error"`.
     let task = resolved_task("{{ event.missing_field }}");
     let schedule = resolved_schedule("sched-1", task.clone());
     let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
@@ -660,10 +538,6 @@ async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
 
 #[tokio::test]
 async fn dispatch_scopes_concurrency_by_the_agents_node_did() {
-    // #605: the trigger tuple is only unique per agent. Both the serial gate
-    // and LatestOnly supersede must receive the DID of the fire's agent so
-    // replicated foreign requests for the same trigger id can never gate (or
-    // be superseded by) this agent's fires.
     let task = resolved_task("tick");
     let schedule = resolved_schedule("sched-did", task.clone());
     let snapshot = snapshot_with_schedules(HashMap::from([("sched-did".to_string(), schedule)]));

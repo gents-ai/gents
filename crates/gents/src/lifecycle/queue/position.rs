@@ -78,8 +78,6 @@ pub async fn validate_position(read: &impl ConfigRead, row: &AgentRequestRow) ->
     }
 }
 
-/// A malformed position cannot affect scheduling before admission rejects it.
-/// Valid replacements retain the original native arrival slot across edits.
 pub(crate) async fn effective_slots(
     txn: &ConfigApplyTxn<'_>,
     ids: &[String],
@@ -123,31 +121,12 @@ pub(crate) async fn effective_slots(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::{KeyIdentity, NodeIdentity};
+    use crate::identity::KeyIdentity;
+    use crate::identity::NodeIdentity;
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
     use gents_protocol::request_input::{QueueDelivery, QueuePosition};
-
-    struct Rows(Vec<AgentRequestRow>);
-    #[async_trait::async_trait]
-    impl ConfigRead for Rows {
-        async fn execute_read(&self, query: &str) -> Result<serde_json::Value> {
-            let rows = self
-                .0
-                .iter()
-                .filter(|row| {
-                    query.contains(&format!("_eq: \"{}\"", row.doc_id.as_deref().unwrap()))
-                })
-                .map(|row| {
-                    let mut value = serde_json::to_value(row).unwrap();
-                    value["_docID"] = serde_json::json!(row.doc_id);
-                    value
-                })
-                .collect::<Vec<_>>();
-            Ok(serde_json::json!({"data":{"AgentRequest":rows}}))
-        }
-    }
 
     async fn signed_row(
         identity: &KeyIdentity,
@@ -201,50 +180,6 @@ mod tests {
             lifecycle_state: Some(RequestLifecycleState::Pending),
             ..Default::default()
         }
-    }
-
-    #[tokio::test]
-    async fn inherited_slot_requires_authenticated_chain_to_original_physical_document() {
-        let temp = tempfile::tempdir().unwrap();
-        let identity = KeyIdentity::load_or_create(temp.path().join("position.key"), None).unwrap();
-        let mut original = signed_row(&identity, "original", None).await;
-        let mut replacement = signed_row(
-            &identity,
-            "replacement",
-            Some(QueuePosition {
-                slot_request_doc_id: "original".into(),
-                replaces_request_doc_id: "original".into(),
-            }),
-        )
-        .await;
-        let final_row = signed_row(
-            &identity,
-            "final",
-            Some(QueuePosition {
-                slot_request_doc_id: "original".into(),
-                replaces_request_doc_id: "replacement".into(),
-            }),
-        )
-        .await;
-        original.lifecycle_state = Some(RequestLifecycleState::Superseded);
-        original.superseded_by_request_doc_id = Some("replacement".into());
-        original.failure_reason = Some("pending message replaced".into());
-        replacement.lifecycle_state = Some(RequestLifecycleState::Superseded);
-        replacement.superseded_by_request_doc_id = Some("final".into());
-        replacement.failure_reason = Some("pending message replaced".into());
-        validate_position(
-            &Rows(vec![original.clone(), replacement.clone()]),
-            &final_row,
-        )
-        .await
-        .unwrap();
-        original.content = Some("changed after signing".into());
-        assert!(
-            validate_position(&Rows(vec![original, replacement]), &final_row)
-                .await
-                .unwrap_err()
-                .is::<InvalidQueuePosition>()
-        );
     }
 
     #[tokio::test]

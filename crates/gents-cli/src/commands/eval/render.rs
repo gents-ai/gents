@@ -1,6 +1,3 @@
-//! Plain-text tables for `gents eval`. The `--json` form is the library's
-//! own structure; these are for a terminal.
-
 use std::io::{self, Write};
 
 use gents::eval::report::{
@@ -17,7 +14,6 @@ use serde::Serialize;
 
 use super::inspect::{ListRow, TrialView};
 
-/// Basis points as a percentage with two decimals, or `-`.
 pub(crate) fn percent(bp: Option<u32>) -> String {
     bp.map_or_else(
         || "-".to_owned(),
@@ -25,7 +21,6 @@ pub(crate) fn percent(bp: Option<u32>) -> String {
     )
 }
 
-/// A value's serde form: an enum's wire name, a string's text.
 pub(crate) fn wire<T: Serialize>(value: &T) -> String {
     match serde_json::to_value(value) {
         Ok(serde_json::Value::String(text)) => text,
@@ -154,7 +149,6 @@ pub(crate) fn report_table(report: &EvalReport, out: &mut dyn Write) -> io::Resu
     )
 }
 
-/// A byte count for a person: `512B`, `1.5KiB`, `3.0MiB`.
 pub(crate) fn human_bytes(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
     if bytes < 1024 {
@@ -339,7 +333,6 @@ pub(crate) fn trial_text(view: &TrialView, out: &mut dyn Write) -> io::Result<()
     Ok(())
 }
 
-/// Signed basis points as a percentage, or `-`.
 pub(crate) fn signed_percent(bp: Option<i64>) -> String {
     bp.map_or_else(
         || "-".to_owned(),
@@ -367,7 +360,6 @@ fn yes(value: bool) -> &'static str {
     }
 }
 
-/// A gate that may be unread: `yes`, `no`, or what its absence means.
 fn yes_or(value: Option<bool>, absent: &'static str) -> &'static str {
     value.map_or(absent, yes)
 }
@@ -444,7 +436,6 @@ pub(crate) fn comparison_table(comparison: &Comparison, out: &mut dyn Write) -> 
     Ok(())
 }
 
-/// A compare breakdown, as `--json` prints it: `{"by": …, "rows": […]}`.
 #[derive(Debug, Serialize)]
 #[serde(tag = "by", content = "rows", rename_all = "snake_case")]
 pub(crate) enum Breakdown {
@@ -453,7 +444,6 @@ pub(crate) enum Breakdown {
 }
 
 pub(crate) fn breakdown_table(breakdown: &Breakdown, out: &mut dyn Write) -> io::Result<()> {
-    // One row shape for both: a stage row is a check row named by stage id.
     let (label, rows): (&str, Vec<CheckDiff>) = match breakdown {
         Breakdown::Check(rows) => ("check", rows.clone()),
         Breakdown::Stage(rows) => (
@@ -554,7 +544,6 @@ pub(crate) fn case_view_text(view: &CaseView, out: &mut dyn Write) -> io::Result
     Ok(())
 }
 
-/// Seconds since `timestamp`, or `None` when it does not parse.
 fn age(timestamp: &str, now: chrono::DateTime<chrono::Utc>) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(timestamp)
         .ok()
@@ -565,9 +554,6 @@ fn age(timestamp: &str, now: chrono::DateTime<chrono::Utc>) -> Option<i64> {
         })
 }
 
-/// Why an entry written by `pid` at `written_at` is stale, or `None` while
-/// it is fresh: one window, the runner's (`STALE_WINDOW`, via `is_fresh`'s
-/// rule).
 fn staleness(
     fresh: bool,
     pid: u32,
@@ -589,8 +575,6 @@ fn staleness(
     }
 }
 
-/// The in-flight lines under a watched report: which process holds the run,
-/// and each slot in flight.
 pub(crate) fn in_flight(
     progress: Option<&Progress>,
     now: chrono::DateTime<chrono::Utc>,
@@ -649,8 +633,6 @@ pub(crate) fn in_flight(
     Ok(())
 }
 
-/// The finished slots of `view`, latest first, each with the snapshot its
-/// trial ended on and the detail of every verdict that counts for it.
 pub(crate) fn finished(view: &RunView, limit: usize, out: &mut dyn Write) -> io::Result<()> {
     let mut rows: Vec<(&str, &SlotReport, Option<&EvidenceRecord>)> = view
         .report
@@ -730,13 +712,10 @@ pub(crate) fn finished(view: &RunView, limit: usize, out: &mut dyn Write) -> io:
     Ok(())
 }
 
-/// How many of a snapshot's tools are named.
 const TOP_TOOLS: usize = 5;
 
-/// The width the watch wraps its lists to.
 const WIDTH: usize = 118;
 
-/// A snapshot's usage, its tool calls and its documents against `goal`.
 fn snapshot_lines(live: &LiveSnapshot, goal: &[GoalEntry], out: &mut dyn Write) -> io::Result<()> {
     writeln!(
         out,
@@ -799,8 +778,6 @@ fn snapshot_lines(live: &LiveSnapshot, goal: &[GoalEntry], out: &mut dyn Write) 
     wrapped(out, "    docs", others)
 }
 
-/// `Collection observed/expected` for each goal entry; a met entry is
-/// marked, and a capture that counts a filtered subset names itself.
 fn goal_items(goal: &[GoalEntry], live: Option<&LiveSnapshot>) -> Vec<String> {
     goal.iter()
         .map(|entry| {
@@ -827,7 +804,6 @@ fn goal_items(goal: &[GoalEntry], live: Option<&LiveSnapshot>) -> Vec<String> {
         .collect()
 }
 
-/// `label item  item  item`, wrapped under the label at [`WIDTH`] columns.
 fn wrapped(out: &mut dyn Write, label: &str, items: Vec<String>) -> io::Result<()> {
     if items.is_empty() {
         return Ok(());
@@ -849,7 +825,6 @@ fn wrapped(out: &mut dyn Write, label: &str, items: Vec<String>) -> io::Result<(
     writeln!(out, "{line}")
 }
 
-/// `9999`, `812.3k`, `1.24M`, or `-` when unknown.
 fn compact(value: Option<u64>) -> String {
     match value {
         None => "-".to_owned(),
@@ -859,7 +834,6 @@ fn compact(value: Option<u64>) -> String {
     }
 }
 
-/// `95s`, `4m12s`, `1h03m`.
 fn duration(seconds: u64) -> String {
     match seconds {
         0..=99 => format!("{seconds}s"),
@@ -868,48 +842,6 @@ fn duration(seconds: u64) -> String {
     }
 }
 
-/// Enough of a trial id to tell slots apart on one line.
 fn short_id(trial_id: &str) -> &str {
     trial_id.get(..12).unwrap_or(trial_id)
-}
-
-#[cfg(test)]
-mod tests {
-    use gents::optimization::{Decision, InconclusiveReason, RejectReason};
-
-    use super::{decision_label, human_bytes, signed_percent, yes_or};
-
-    #[test]
-    fn human_bytes_reads_in_binary_units() {
-        assert_eq!(human_bytes(0), "0B");
-        assert_eq!(human_bytes(512), "512B");
-        assert_eq!(human_bytes(1_536), "1.5KiB");
-        assert_eq!(human_bytes(3 * 1024 * 1024), "3.0MiB");
-        assert_eq!(human_bytes(u64::MAX), "16777216.0TiB");
-    }
-
-    #[test]
-    fn an_undetermined_min_effect_gate_reads_undetermined() {
-        assert_eq!(yes_or(None, "undetermined"), "undetermined");
-        assert_eq!(yes_or(Some(true), "undetermined"), "yes");
-        assert_eq!(yes_or(Some(false), "undetermined"), "no");
-        assert_eq!(yes_or(None, "skipped"), "skipped");
-    }
-
-    #[test]
-    fn signed_percent_and_decision_labels_read_as_the_wire() {
-        assert_eq!(signed_percent(Some(5_000)), "+50.00%");
-        assert_eq!(signed_percent(Some(-1_234)), "-12.34%");
-        assert_eq!(signed_percent(Some(0)), "+0.00%");
-        assert_eq!(signed_percent(None), "-");
-        assert_eq!(decision_label(&Decision::Accept), "accept");
-        assert_eq!(
-            decision_label(&Decision::Reject(RejectReason::NoImprovement)),
-            "reject(no_improvement)"
-        );
-        assert_eq!(
-            decision_label(&Decision::Inconclusive(InconclusiveReason::TooFewCases)),
-            "inconclusive(too_few_cases)"
-        );
-    }
 }

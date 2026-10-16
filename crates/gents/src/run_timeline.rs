@@ -32,9 +32,6 @@ pub struct RunTimelineRows {
     pub rendered_request_refs: Vec<TimelineRenderedRequestRef>,
 }
 
-/// Bounded, prompt-free activity rows for a live observer. These reuse the
-/// same durable row vocabulary as [`RunTimelineRows`] without loading message
-/// bodies, tool arguments/results, or full request timelines on every poll.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RunActivityRows {
     #[serde(default)]
@@ -200,14 +197,6 @@ impl RetrySummary {
     }
 }
 
-/// One timeline message row: the strict canonical `AgentMessage` header plus
-/// the reconstructed native message, resolved through the authorized session
-/// output reader (`session::load_canonical_message`). The physical document
-/// identity (`doc_id`) is retained as the only request/row reference; the
-/// logical `request_id` is not repeated (#1425) — request ownership lives on
-/// the physical request document via `request_doc_id`, which the header also
-/// carries. No role/content/reasoning string projection is stored: consumers
-/// read the typed native message or the header role/blocks directly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimelineMessageRow {
     #[serde(default, rename = "_docID", skip_serializing)]
@@ -220,22 +209,13 @@ pub struct TimelineMessageRow {
     pub sequence: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
-    /// The canonical session-scope owner of this header; the reader's
-    /// authorization scope it was resolved under.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_did: Option<String>,
-    /// The canonical protocol header exactly as decoded from `AgentMessage`
-    /// (role, blocks, publication, outcome). Payload bytes are not inlined;
-    /// they are addressed by the header's block references.
     pub header: gents_protocol::output::TranscriptMessage,
-    /// The native message reconstructed from the header's blocks through the
-    /// canonical reader — the typed `gents_protocol::message::Message`.
     pub message: gents_protocol::message::Message,
 }
 
 impl TimelineMessageRow {
-    /// Rebuild one row from an authorized canonical header resolution. The
-    /// physical header doc ID stays the row's physical identity.
     pub(crate) fn from_canonical(
         doc_id: String,
         header: gents_protocol::output::TranscriptMessage,
@@ -294,9 +274,6 @@ pub struct TimelineInferenceCallRow {
     pub queue_depth_at_enqueue: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller_generation: Option<i64>,
-    /// Keyed connection fingerprint of the behavior slot that made the call;
-    /// one `controller_generation` can carry two values across a connection
-    /// change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_config_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -309,8 +286,6 @@ pub struct TimelineInferenceCallRow {
     pub context_accounting_json: Option<String>,
 }
 
-/// One content-addressed historical `Goal` document version reconstructed
-/// through DefraDB's `_commits` + CID query boundary.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineGoalVersionRow {
     #[serde(default, skip_serializing)]
@@ -364,13 +339,8 @@ impl TimelineGoalVersionRow {
     }
 }
 
-/// One `RenderedRequest` capture row, as the timeline reads it.
-///
-/// Deliberately has **no `request_json` field**: the fetch layer never selects
-/// the captured body, so nothing downstream of the timeline — events,
-/// projections, default CLI output — can leak it. The one body read in the
-/// system is the CLI's explicit `--include-body`, which goes straight to the
-/// collection, not through here.
+/// One `RenderedRequest` capture row, as the timeline reads it. Never carries
+/// `request_json`: the fetch layer never selects the captured body.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineRenderedRequestRow {
     #[serde(default, rename = "_docID", skip_serializing)]
@@ -425,8 +395,6 @@ pub struct TimelineToolCallRow {
     pub args: String,
     #[serde(default)]
     pub result: Option<String>,
-    /// `status` is a nullable historical presentation mirror. The canonical
-    /// fetcher overwrites it from `lifecycle_state` before exposing a row.
     #[serde(default, deserialize_with = "empty_string_if_null")]
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -465,8 +433,6 @@ pub struct TimelineToolCallRow {
     pub await_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancel_cause: Option<String>,
-    /// The request this call caused, derived from that request's
-    /// `caused_by_parent_*` edge; never a tool-call column.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child_request_id: Option<String>,
 }
@@ -497,8 +463,6 @@ pub struct TimelineCompactionRow {
     pub created_at: Option<String>,
 }
 
-/// Metadata-only timeline view of a request-local provider reduction. Prompt
-/// payloads remain in `ProviderContextReduction` and `RenderedRequest`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineProviderContextReductionRow {
     #[serde(default, rename = "_docID")]
@@ -531,7 +495,6 @@ pub struct TimelineProviderContextReductionRow {
     pub created_at: Option<String>,
 }
 
-/// Read-only database envelope; all session fields have the canonical protocol owner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineSessionRow {
     #[serde(default, rename = "_docID", skip_serializing)]
@@ -627,14 +590,6 @@ pub struct TimelineRequestEvent {
     pub retry_summary: RetrySummary,
 }
 
-/// A rendered-request capture in the timeline — metadata only, always.
-///
-/// `provenance_status` is derived through the versioned reader:
-/// `"captured_only"` (the manifest's own claim), `"unsupported_manifest"`
-/// (well-formed, unknown version — the row is still listed), `"unavailable"`
-/// (no provenance column), or `"malformed"` (unreadable column; surfaced,
-/// never a panic). `call_id`/`call_seq` are the exact admission join when the
-/// manifest carries one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineRenderedRequestEvent {
     pub capture_key: String,
@@ -701,9 +656,6 @@ pub struct TimelineInferenceCallEvent {
     pub queue_depth_at_enqueue: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub controller_generation: Option<i64>,
-    /// Keyed connection fingerprint of the behavior slot that made the call;
-    /// one `controller_generation` can carry two values across a connection
-    /// change.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend_config_fingerprint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -720,13 +672,10 @@ pub struct TimelineInferenceCallEvent {
     pub started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,
-    /// Label of the account that served the call, resolved when read from
-    /// `backend_id`; absent when the call predates the serving sign-in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
 }
 
-/// The proven state vocabulary recorded at one durable Goal version.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineGoalState {
     pub status: String,
@@ -741,8 +690,6 @@ pub struct TimelineGoalParentState {
     pub state: TimelineGoalState,
 }
 
-/// A semantic Goal transition derived from DefraDB's native version DAG.
-/// Multiple parents are preserved rather than flattened into invented order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineGoalTransitionEvent {
     pub goal_id: String,
@@ -774,14 +721,9 @@ pub struct TimelineMessageEvent {
     pub request_id: Option<String>,
     pub session_id: String,
     pub sequence: i64,
-    /// The canonical `AgentMessage` header doc ID — the physical identity of
-    /// the message document this event was resolved from.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc_id: Option<String>,
-    /// The strict protocol header exactly as resolved through the authorized
-    /// canonical reader (`session::load_canonical_message`).
     pub header: gents_protocol::output::TranscriptMessage,
-    /// The native message reconstructed from the header's blocks.
     pub message: gents_protocol::message::Message,
 }
 
@@ -847,8 +789,6 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
         }
     }
     let mut inference_calls = sorted_inference_calls(rows.inference_calls, &included_request_ids);
-    // The timeline serializes both these rows and derived events. Sanitize once
-    // before either representation is built, not only the event projection.
     for call in &mut inference_calls {
         call.backend_config_fingerprint = crate::admission::exportable_backend_fingerprint(
             call.backend_config_fingerprint.as_deref(),
@@ -955,12 +895,6 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
     }
 
     for message in &rows.messages {
-        // #1425: the logical `request_id` of a message is resolved strictly
-        // through its canonical header's PHYSICAL request document reference
-        // (`header.request_doc_id`) against the root and loaded descendants. A message whose
-        // request_doc_id is missing or does not resolve to a request doc has
-        // NO synthetic request membership — it is simply not part of this
-        // timeline's request-scoped event stream.
         let request_id = resolve_logical_request_id_for_doc(
             message.header.request_doc_id.as_deref(),
             std::iter::once(&rows.request).chain(rows.requests.iter()),
@@ -1085,9 +1019,6 @@ fn goal_transition_events(
                 .collect::<Vec<_>>();
             parents.sort_by(|left, right| left.commit_cid.cmp(&right.commit_cid));
 
-            // Goal documents also receive operational updates for usage and
-            // continuation claims. Only emit creation or a change to the Lean
-            // Goal state; the native commit CID remains the durable witness.
             if !parents.is_empty() && parents.iter().all(|parent| parent.state == state) {
                 return None;
             }
@@ -1117,12 +1048,6 @@ fn goal_transition_events(
         .collect()
 }
 
-/// Whether a caused request is physically corroborated by its calling request
-/// and, for a session message, the exact calling tool-call document.
-///
-/// This is the single shared provenance rule for read-side projections. It
-/// accepts the runtime's modeled request-only control continuations and
-/// otherwise requires matching logical and physical request/tool identities.
 pub fn child_bridge_is_corroborated(
     root_request: &TimelineRequestRow,
     child_request: &TimelineRequestRow,
@@ -1267,12 +1192,6 @@ fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequ
     }));
 }
 
-/// Derive the metadata-only capture event from its row. The scope parse and
-/// the provenance read both go through the shared `gents-protocol` vocabulary;
-/// their failures are surfaced as explicit statuses, never defaults.
-///
-/// Public because the CLI's `trace capture` renders single rows through the
-/// same derivation the timeline uses — one metadata surface, not two.
 pub fn rendered_request_event(row: &TimelineRenderedRequestRow) -> TimelineRenderedRequestEvent {
     let scope = row
         .capture_scope
@@ -1339,9 +1258,6 @@ fn provenance_status_label(status: ProvenanceStatus) -> &'static str {
     }
 }
 
-/// Deterministic same-timestamp ordering for capture events: the numeric
-/// order key when the row's identity facts parse, the capture key otherwise
-/// (unique, so still deterministic — just not meaningfully ordered).
 fn rendered_request_tiebreak(event: &TimelineRenderedRequestEvent) -> String {
     let scope = event
         .capture_scope
@@ -1358,12 +1274,6 @@ fn rendered_request_tiebreak(event: &TimelineRenderedRequestEvent) -> String {
     }
 }
 
-/// Resolve a physical request document reference to its logical `request_id`
-/// through the request rows actually loaded for this timeline. This is the
-/// only request-membership rule for message lineage (#1425): a message whose
-/// `request_doc_id` is absent, or does not resolve to one of the timeline's
-/// request documents, has no logical request membership — no synthesis, no
-/// session fallback.
 fn resolve_logical_request_id_for_doc<'a>(
     request_doc_id: Option<&str>,
     requests: impl Iterator<Item = &'a TimelineRequestRow>,
@@ -1420,11 +1330,6 @@ fn should_include_event(
         .unwrap_or_else(|| event_session_id.is_some() && event_session_id == root_session_id)
 }
 
-/// `(timestamp_millis, family_rank, intra_rank, tiebreak)`. Family ranks are
-/// unserialized internals and only break same-millisecond ties: request 0,
-/// provider_context_reduction 1, rendered_request 2 (both persistence fences
-/// precede the consuming send), inference_call 3, compaction/message 4,
-/// tool_call 5, goal transition 8.
 fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
     match event {
         RunTimelineEvent::Request(event) => (
@@ -1908,10 +1813,6 @@ mod tests {
         }
     }
 
-    /// Captures interleave with the inference calls they precede, the exact
-    /// admission join surfaces on the event, an unknown manifest version is
-    /// reported rather than guessed at, and `inference.2` sorts before
-    /// `inference.10` — the ordering is numeric, not lexical.
     #[test]
     fn rendered_captures_interleave_with_their_inference_calls() {
         let rows = RunTimelineRows {
@@ -1978,7 +1879,6 @@ mod tests {
                     "2026-08-07T12:00:04Z",
                     Some(r#"{"manifest_version":99,"opaque":true}"#.to_string()),
                 ),
-                // Same timestamp: only the numeric order key separates these.
                 rendered_row(
                     "rendered:v1:e-ten",
                     "inference.10",
@@ -2020,13 +1920,13 @@ mod tests {
             kinds,
             vec![
                 "request",
-                "call-1",       // queued 12:00:01
-                "inference.1",  // captured 12:00:02 (turn 0 attempt 0)
-                "compaction.1", // captured 12:00:04, unknown manifest
-                "call-2",       // queued 12:00:05
-                "inference.1",  // captured 12:00:06 (turn 0 attempt 1)
-                "inference.2",  // 12:00:07 — numeric order key…
-                "inference.10", // …not lexical
+                "call-1",
+                "inference.1",
+                "compaction.1",
+                "call-2",
+                "inference.1",
+                "inference.2",
+                "inference.10",
             ]
         );
 
@@ -2152,8 +2052,6 @@ mod tests {
         assert_eq!(rendered.reduction_keys, ["reduction-1", "reduction-2"]);
     }
 
-    /// A capture row whose `request_id` is not part of this timeline (another
-    /// request in the session) stays out of the event stream.
     #[test]
     fn rendered_captures_for_other_requests_are_excluded() {
         let mut row = rendered_row(

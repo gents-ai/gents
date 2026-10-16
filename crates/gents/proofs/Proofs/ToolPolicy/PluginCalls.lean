@@ -2,18 +2,12 @@ import Mathlib.Data.Nat.Basic
 
 namespace ToolPolicy.PluginCalls
 
-/-- Tool delegation is an explicit grant on the installed plugin's selected
-Tools entry, observed by the native call owner rather than taken from guest
-JSON. Only the owned loop supplies a live dispatcher. -/
 def available (selectedGrant liveDispatcher : Bool) : Bool :=
   selectedGrant && liveDispatcher
 
 theorem requires_grant (liveDispatcher : Bool) :
     available false liveDispatcher = false := by simp [available]
 
-/-- The host dispatches every child without a delegation service, so a child
-that is itself an installed plugin, including the same plugin, sees no live
-dispatcher and cannot mint grandchildren. -/
 def childDispatcher : Bool := false
 
 theorem children_cannot_delegate (selectedGrant : Bool) :
@@ -23,11 +17,6 @@ theorem children_cannot_delegate (selectedGrant : Bool) :
 def maxEffects : Nat := 64
 def maxPayloadBytes : Nat := 1048576
 
-/-- How the session hook owns a tool call before ordinary dispatch. Hook-owned
-calls may commit their effect, detach, await or terminate the loop inside the
-before hook; a finite plugin invocation cannot own those transitions, so only
-ordinary dispatch is child-callable and any newly hook-owned route is refused
-by construction. -/
 inductive DispatchRoute where
   | ordinary
   | hookOwned
@@ -37,8 +26,6 @@ def supported : DispatchRoute → Bool
   | .ordinary => true
   | .hookOwned => false
 
-/-- A child runs only when it is on the parent's selected surface, ordinary
-dispatch owns it, and that tool's own admission accepts its arguments. -/
 def childAdmissible (selected : Bool) (route : DispatchRoute) (admitted : Bool) : Bool :=
   selected && supported route && admitted
 
@@ -49,8 +36,6 @@ theorem hook_owned_child_refused (selected admitted : Bool) :
     childAdmissible selected .hookOwned admitted = false := by
   simp [childAdmissible, supported]
 
-/-- The host charges attempted calls before dispatch. Refusals consume a slot
-too, so repeated rejected requests cannot evade the per-invocation ceiling. -/
 def reserve (used : Nat) : Option Nat :=
   if used < maxEffects then some (used + 1) else none
 
@@ -63,9 +48,6 @@ theorem reserved_bounded (used next : Nat) (h : reserve used = some next) :
   next hlt => cases h; omega
   next => contradiction
 
-/-- What the dispatcher observed for one child. `timedOut` and `cancelled`
-are the child's own managed envelope; `fatal` is a durable settlement failure
-or a hook termination decision. -/
 inductive ChildOutcome where
   | completed
   | failed
@@ -81,10 +63,6 @@ inductive Settlement where
   | parentFatal
   deriving DecidableEq, Repr
 
-/-- A child's interruption is terminal for that child only: the host records
-its terminal state and returns an error to the guest. The parent ends through
-its own deadline or cancellation envelope, never by inheriting a child's
-managed terminal. -/
 def settle : ChildOutcome → Settlement
   | .completed => .result
   | .failed | .unavailable | .timedOut | .cancelled => .guestError
@@ -97,9 +75,6 @@ theorem only_fatal_stops_parent (outcome : ChildOutcome) :
     settle outcome = .parentFatal ↔ outcome = .fatal := by
   cases outcome <;> simp [settle]
 
-/-- One served round: guest compute time and the host time serving its
-children. The plugin's wall-clock budget bounds guest compute only; children
-are bounded by the parent tool call's own deadline and cancellation. -/
 def chargedCompute (rounds : List (Nat × Nat)) : Nat :=
   (rounds.map Prod.fst).sum
 
@@ -108,14 +83,6 @@ theorem serving_children_is_not_charged (rounds : List (Nat × Nat)) (served : N
       chargedCompute rounds := by
   simp [chargedCompute, Function.comp_def]
 
-/-- Path consent waits for the operator only for an interactive caller; a
-headless caller is denied. The gate belongs to the operator, not the
-composition (#1318 approval preservation): a child another plugin composes
-suspends and resumes on the approval owner, equivalent to the same gate on a
-directly issued call. Its wait is host serving time, excluded from the guest
-compute clock by `chargedCompute`, and a waiter interrupted by the parent
-request's deadline or cancellation settles child-scoped through `settle`.
-The composed axis stays a parameter so that equivalence is statable. -/
 inductive ConsentRoute where
   | ask
   | deny

@@ -1,12 +1,3 @@
-//! `handoff_delivery`: the runtime's handoff guarantees over a settled trial
-//! home. Every violation is a harness failure, not the subject's.
-//!
-//! The subject configures the automation; the runtime delivers it. Once the
-//! runtime accepted a trigger and fired it, the subject can no longer cause a
-//! fire to lose its request, its outcome or its session, so a violation here
-//! is [`OutcomeKind::Infrastructure`]: no evidence about the subject, and a
-//! finding about Gents with the ids needed to reproduce it.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -19,29 +10,6 @@ use crate::eval::checks::{
 use crate::eval::runner::executor::{CaptureResult, StageEvidence};
 use crate::eval::OutcomeKind;
 
-/// Params name the captures the check reads:
-///
-/// - `requests`: `AgentRequest` rows with `request_id`, `session_id`,
-///   `lifecycle_state` (and `failure_reason` to quote);
-/// - `fires`: `TriggerFire` rows with `fire_key`, `trigger_id`,
-///   `source_doc_id`, `request_id`, `session_id`, `goal_id`, `emit_outcome`;
-/// - `outcomes`: `FireOutcome` rows with `fire_key`, `request_id`,
-///   `session_id`, `terminal_state`;
-/// - `triggers`: `Trigger` rows with `trigger_id`, `session_id_template`,
-///   `last_status`, `last_error`;
-/// - `sources`: captures of the source collections, with `_docID`, whose
-///   fields a `session_id_template` of the form `{{ doc.FIELD }}` names;
-/// - `goals` (optional): `Goal` rows with `goal_id`, `status`;
-/// - `runtime` (optional): `NodeRuntime` rows with `last_reconcile_error`.
-///
-/// Gates, each violation naming its ids: a request not terminal
-/// (`request_not_terminal`); a fire with no request, or naming a request the
-/// home lacks (`fire_without_request`); an outcome-emitting fire whose request
-/// (and Goal, when it has one) ended with no `FireOutcome` for its key
-/// (`fire_without_outcome`); a fire into `{{ doc.FIELD }}` that landed
-/// anywhere but that field's value (`wrong_session`); an outcome naming
-/// another session than its fire (`outcome_session`); a trigger or runtime
-/// reconcile error (`runtime_rejected_config`).
 pub struct HandoffDelivery;
 
 #[derive(Deserialize)]
@@ -59,10 +27,8 @@ struct Params {
     runtime: Option<String>,
 }
 
-/// Violations quoted in the verdict before the rest are only counted.
 const SHOWN: usize = 40;
 
-/// Goal statuses after which a goal-backed fire owes its outcome.
 const ENDED_GOAL: &[&str] = &["complete", "blocked", "budget_limited"];
 
 fn str_field<'a>(row: &'a Value, field: &str) -> Option<&'a str> {
@@ -71,7 +37,6 @@ fn str_field<'a>(row: &'a Value, field: &str) -> Option<&'a str> {
         .filter(|value| !value.is_empty())
 }
 
-/// `FIELD` of a `{{ doc.FIELD }}` template and nothing else.
 fn doc_field(template: &str) -> Option<&str> {
     let inner = template
         .trim()
@@ -148,9 +113,6 @@ impl Check for HandoffDelivery {
             Some(CaptureResult::Documents { rows }) => Some(rows.as_slice()),
             _ => None,
         };
-        // A capture the params name is required. An optional one left out of
-        // the params stays optional, but a named one that failed would
-        // silently disable its gates.
         let required: Vec<&String> = [
             &params.requests,
             &params.fires,
@@ -460,7 +422,6 @@ mod tests {
             verdict.raw
         );
 
-        // A goal-backed fire whose Goal is still active owes nothing yet.
         let CaptureResult::Documents { rows } = evidence.captures.get_mut("fires").unwrap() else {
             unreachable!()
         };

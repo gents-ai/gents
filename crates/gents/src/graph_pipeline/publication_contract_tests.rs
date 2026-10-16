@@ -1,5 +1,3 @@
-//! The GraphRun publication fence composes with signed request staging in one
-//! transaction. Goal claim eligibility has its separate production consumer.
 use super::*;
 use crate::graph_pipeline::logical_invocation_contract_tests::{
     execute, prepare_signed_child, signed_invocation_fixture,
@@ -133,8 +131,6 @@ async fn generated_graph_invocation_publication_traces_drive_real_transactions()
                 }
                 "capture" | "finish" => {
                     assert_eq!(event.cause, Some(90));
-                    // Preserve the real earlier observation through publication;
-                    // changing only its generation would not test stale evidence.
                     let mut observed = cause.clone();
                     observed.update_generation =
                         initial_generation + event.expected_generation.unwrap();
@@ -196,7 +192,6 @@ async fn publication_fence_rejects_a_revision_it_is_not_pinned_to() {
         "unexpected denial: {error:#}"
     );
     txn.discard().await.unwrap();
-    // Discarding the denied publication leaves the durable run unchanged.
     let after = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
         .await
         .unwrap();
@@ -258,8 +253,6 @@ async fn overlapping_native_graph_publication_and_closure_conflict_atomically() 
             .await
             .unwrap();
         let child = prepare_signed_child(&node, &identity, &goal, "valid").await;
-        // Intentionally use two actual native handles: ConfigApplyTxn's local
-        // mutex would serialize begin and never exercise storage conflict checks.
         let publication = node.runner().begin_txn(false).await.unwrap();
         let closure = node.runner().begin_txn(false).await.unwrap();
         let read = format!(
@@ -307,8 +300,6 @@ async fn overlapping_native_graph_publication_and_closure_conflict_atomically() 
                 .len(),
             1
         );
-        // Both conditional mutations already matched. Only the overlapping
-        // native commit boundary can reject the second writer now.
         let (winner, loser) = if publication_first {
             (&publication, &closure)
         } else {

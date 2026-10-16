@@ -1,6 +1,3 @@
-//! Command, permission-set, and event inventory used by bridge consistency
-//! checks. No runtime contract-version handshake is published.
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandContract {
     pub name: String,
@@ -10,48 +7,30 @@ pub struct CommandContract {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionSetContract {
     pub name: String,
-    /// `"read"` or `"mutate"` — never mixed within one set.
     pub kind: String,
 }
 
-/// Production event name emitted by the update pump.
 pub const CLIENT_UPDATED_EVENT: &str = "desktop://client-updated";
-
-/// One-shot auth URL emission during the guided Codex login flow.
 pub const CODEX_LOGIN_URL_EVENT: &str = "desktop://codex-login-url";
 pub const MANAGED_SERVER_UPDATED_EVENT: &str = "desktop://managed-server-updated";
 pub const APP_QUIT_FAILED_EVENT: &str = "desktop://app-quit-failed";
 pub const MANAGED_SERVER_TRAY_START_EVENT: &str = "desktop://managed-server-tray-start";
 pub const MANAGED_SERVER_TRAY_STOP_EVENT: &str = "desktop://managed-server-tray-stop";
 pub const MANAGED_SERVER_TRAY_RESTART_EVENT: &str = "desktop://managed-server-tray-restart";
-
-/// One-shot auth URL emission during the guided Grok login flow.
 pub const GROK_LOGIN_URL_EVENT: &str = "desktop://grok-login-url";
-
-/// One-shot auth URL emission during the guided Claude login flow.
 pub const CLAUDE_LOGIN_URL_EVENT: &str = "desktop://claude-login-url";
-
-/// The plugin approval queue's pending set changed; the prompt re-reads it
-/// through the pending command.
 pub const PLUGIN_APPROVALS_CHANGED_EVENT: &str = "desktop://plugin-approvals-changed";
-
-/// Coarse ping reasons on `desktop://client-updated`.
 pub const EVENT_REASONS: &[&str] = &["store", "health", "lifecycle", "config"];
 
-/// Command → permission-set inventory checked against the plugin and Tauri
-/// permission files.
 pub fn command_inventory() -> Vec<CommandContract> {
     let entries: &[(&str, &str)] = &[
-        // core
         ("desktop_bootstrap_summary", "core"),
         ("desktop_client_snapshot", "core"),
         ("desktop_observer_metrics", "core"),
-        // client-lifecycle
         ("desktop_client_start", "client-lifecycle"),
         ("desktop_client_shutdown", "client-lifecycle"),
         ("desktop_set_selected_node", "client-lifecycle"),
         ("desktop_app_quit", "client-lifecycle"),
-        // runtime-admin
         ("desktop_init_local_standard", "runtime-admin"),
         ("desktop_managed_server_status", "runtime-admin"),
         ("desktop_managed_server_start", "runtime-admin"),
@@ -62,69 +41,51 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_managed_server_validate_root", "runtime-admin"),
         ("desktop_managed_server_open_login_items", "runtime-admin"),
         ("desktop_open_db_explorer", "runtime-admin"),
-        // external-links
         ("desktop_open_external_url", "external-links"),
-        // packs-read
         ("desktop_pack_installed", "packs-read"),
         ("desktop_pack_search", "packs-read"),
         ("desktop_pack_info", "packs-read"),
         ("desktop_pack_whoami", "packs-read"),
         ("desktop_pack_plugin_slots", "packs-read"),
-        // packs-admin
         ("desktop_pack_install", "packs-admin"),
         ("desktop_pack_update", "packs-admin"),
         ("desktop_pack_remove", "packs-admin"),
         ("desktop_pack_login", "packs-admin"),
         ("desktop_pack_logout", "packs-admin"),
         ("desktop_pack_plugin_bind", "packs-admin"),
-        // allowed-dirs-read
         ("desktop_allowed_dirs_list", "allowed-dirs-read"),
         ("desktop_plugin_approvals_pending", "allowed-dirs-read"),
-        // allowed-dirs-admin
         ("desktop_allowed_dirs_add", "allowed-dirs-admin"),
         ("desktop_allowed_dirs_remove", "allowed-dirs-admin"),
         ("desktop_plugin_approval_decide", "allowed-dirs-admin"),
         ("desktop_plugin_approval_subscribe", "allowed-dirs-admin"),
         ("desktop_plugin_approval_unsubscribe", "allowed-dirs-admin"),
-        // session-read
         ("desktop_session_snapshot", "session-read"),
         ("desktop_session_live_delta", "session-read"),
-        // session-control
         ("desktop_session_hydration_retry", "session-control"),
-        // trace-read
         ("desktop_request_timeline", "trace-read"),
-        // tool-surface-read
         ("desktop_tool_surface_explain", "tool-surface-read"),
-        // chat-write
         ("desktop_chat_send", "chat-write"),
         ("desktop_pending_queue_edit", "chat-write"),
         ("desktop_session_rename", "chat-write"),
-        // mailbox-read / mailbox-control
         ("desktop_mailbox_list", "mailbox-read"),
         ("desktop_mailbox_start_request", "mailbox-control"),
         ("desktop_mailbox_dismiss", "mailbox-control"),
-        // resend-control
         ("desktop_request_resend", "resend-control"),
         ("desktop_request_retry", "resend-control"),
-        // fleet-read
         ("desktop_peer_status_fetch", "fleet-read"),
         ("desktop_network_status", "fleet-read"),
-        // workspace-read
         ("desktop_workspace_list", "workspace-read"),
-        // fleet-admin
         ("desktop_peer_remove", "fleet-admin"),
         ("desktop_peer_rename", "fleet-admin"),
         ("desktop_peer_enroll_status", "fleet-admin"),
         ("desktop_p2p_repair", "fleet-admin"),
-        // operations-read
         ("desktop_operations_snapshot", "operations-read"),
         ("desktop_session_provenance", "operations-read"),
         ("desktop_list_backends_with_health", "operations-read"),
         ("desktop_list_mcp_services_with_health", "operations-read"),
         ("desktop_probe_mcp_service", "operations-read"),
-        // interrupt-control
         ("desktop_interrupt_request", "interrupt-control"),
-        // config-write (save/delete/test/auth)
         ("desktop_node_config_save", "config-write"),
         ("desktop_default_agent_set", "config-write"),
         ("desktop_config_components_apply", "config-write"),
@@ -163,7 +124,6 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_provider_account_rename", "config-write"),
         ("desktop_provider_account_remove", "config-write"),
         ("desktop_provider_usage_read", "config-write"),
-        // tasks
         ("desktop_task_save", "tasks"),
         ("desktop_schedule_save", "tasks"),
         ("desktop_schedule_run", "tasks"),
@@ -171,7 +131,6 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_event_source_save", "tasks"),
         ("desktop_event_source_delete", "config-write"),
         ("desktop_task_run", "tasks"),
-        // native-e2e
         ("desktop_native_e2e_config", "native-e2e"),
         ("desktop_native_e2e_status", "native-e2e"),
     ];
@@ -184,11 +143,6 @@ pub fn command_inventory() -> Vec<CommandContract> {
         .collect()
 }
 
-/// Grantable permission sets aligned with `permissions/default.toml` +
-/// `permissions/sets.toml`. Labels:
-/// - `read` / `mutate`: fine-grained sets that must not mix categories
-/// - `bundle`: composed defaults (default) or E2E-only bundles that may
-///   intentionally span command classes (native-e2e)
 pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
     [
         ("default", "bundle"),
@@ -213,7 +167,6 @@ pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
         ("fleet-admin", "mutate"),
         ("operations-read", "read"),
         ("interrupt-control", "mutate"),
-        // Projection section only in v1 (no dedicated IPC allow-* commands).
         ("config-read", "read"),
         ("config-write", "mutate"),
         ("provider-accounts-read", "read"),
@@ -443,17 +396,12 @@ mod tests {
 
     #[test]
     fn no_fine_grained_permission_set_mixes_read_and_mutate() {
-        // Fine-grained sets (read/mutate) must be pure. Bundle sets (default,
-        // full, native-e2e) intentionally compose mixed surfaces.
         let mut kinds = std::collections::BTreeMap::<String, String>::new();
         for set in permission_set_inventory() {
             if let Some(existing) = kinds.insert(set.name.clone(), set.kind.clone()) {
                 assert_eq!(existing, set.kind, "set {} has mixed kinds", set.name);
             }
         }
-        // Independent per-command IO/privilege classification. Privileged
-        // active actions (address probe, service test, repair) classify as
-        // mutate deliberately: set purity tracks privilege, not just IO.
         const COMMAND_KINDS: &[(&str, &str)] = &[
             ("desktop_bootstrap_summary", "read"),
             ("desktop_client_snapshot", "read"),
@@ -585,7 +533,6 @@ mod tests {
                 );
             }
         }
-        // Every command maps to a fine-grained set or the native-e2e test set.
         let allowed_command_sets: std::collections::BTreeSet<_> = permission_set_inventory()
             .into_iter()
             .filter(|s| s.kind == "read" || s.kind == "mutate" || s.name == "native-e2e")

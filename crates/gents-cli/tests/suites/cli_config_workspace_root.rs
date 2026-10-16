@@ -7,14 +7,6 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
-/// Ties Task 3 (WorkspaceRoot schema + directory-projection `allowed_roots`
-/// publication) to Task 4 (the operator CLI): set two roots through `gents
-/// config workspace-root set`, disable one, confirm `list` surfaces both,
-/// `show` round-trips the disabled root's fields, and the live
-/// `WorkspaceRoot` collection — the exact source the directory projection's
-/// snapshot load (`parse_catalog_options` in
-/// crates/gents/src/agent/directory_projection.rs) reads `allowed_roots`
-/// from — filters down to only the enabled path. `rm` then deletes both.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -43,7 +35,6 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
-    // Reject relative paths before ever touching the network.
     let relative_rejection = run_cli_failure_stderr(
         &home_dir,
         &[
@@ -61,7 +52,6 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
         "{relative_rejection}"
     );
 
-    // The enabled root need not exist on disk at all.
     let enabled_root = tempdir.path().join("does_not_exist_yet/enabled_root");
     let enabled_root_str = enabled_root.to_str().context("enabled root utf8")?;
     let disabled_root = tempdir.path().join("disabled_root");
@@ -111,7 +101,6 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
         Some(false)
     );
 
-    // list shows both, enabled flags intact.
     let list = run_cli_json(
         &home_dir,
         &[
@@ -145,7 +134,6 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
         Some(false)
     );
 
-    // show round-trips the disabled root's fields.
     let show = run_cli_json(
         &home_dir,
         &[
@@ -163,11 +151,6 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
     );
     assert_eq!(show.get("enabled").and_then(Value::as_bool), Some(false));
 
-    // The directory projection's snapshot load (`parse_catalog_options` in
-    // directory_projection.rs)
-    // computes `allowed_roots` by querying this exact WorkspaceRoot collection
-    // and filtering on `enabled`; assert that invariant directly against the
-    // live collection the CLI just wrote to.
     let enabled_only = graphql_query(
         &graphql,
         r#"{ WorkspaceRoot(filter: { enabled: { _eq: true } }) { root_path } }"#,
@@ -187,9 +170,6 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
         "allowed_roots' enabled-filter source must publish only the enabled root"
     );
 
-    // Re-setting an existing root exercises the upsert's update branch:
-    // flip the disabled root to enabled with a new display name, and the
-    // enabled-filter source must now publish both roots.
     let reset_disabled = run_cli_json(
         &home_dir,
         &[
@@ -245,7 +225,6 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
         "re-enabling via set must update the existing row, not mint a duplicate"
     );
 
-    // rm deletes both; a second rm reports not-found.
     let rm_enabled = run_cli_json(
         &home_dir,
         &[

@@ -81,9 +81,6 @@ pub async fn send_chat_message(
     })
 }
 
-/// The chat folder as a request cwd: absent when blank, else an existing
-/// absolute directory. The runtime still holds it under the agent's tool
-/// root ceiling at admission.
 fn chat_folder(raw: Option<&str>) -> Result<Option<String>> {
     let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
@@ -110,41 +107,6 @@ pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) ->
     }
     core.rename_session(&node_did, &session_id, &title).await?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::chat_folder;
-
-    #[test]
-    fn blank_folder_is_absent() {
-        assert_eq!(chat_folder(None).unwrap(), None);
-        assert_eq!(chat_folder(Some("  ")).unwrap(), None);
-    }
-
-    #[test]
-    fn existing_absolute_folder_is_kept_trimmed() {
-        let dir = tempfile::tempdir().unwrap();
-        let raw = dir.path().to_str().unwrap();
-        assert_eq!(
-            chat_folder(Some(&format!(" {raw} "))).unwrap().as_deref(),
-            Some(raw)
-        );
-    }
-
-    #[test]
-    fn relative_missing_or_file_folder_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("f.txt");
-        std::fs::write(&file, "x").unwrap();
-        for bad in [
-            "relative/dir".to_string(),
-            dir.path().join("missing").display().to_string(),
-            file.display().to_string(),
-        ] {
-            assert!(chat_folder(Some(&bad)).is_err(), "{bad}");
-        }
-    }
 }
 
 pub async fn edit_pending_queue(

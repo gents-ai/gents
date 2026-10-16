@@ -24,7 +24,7 @@ dsymutil_log="$(mktemp)"
 trap 'rm -f "${symbols_file}" "${lookup_file}" "${dsymutil_log}"' EXIT
 
 # dsymutil needs the linker's local symbol table to resolve the debug map back
-# to object-file DWARF. Refuse a Cargo configuration that stripped too early.
+# to object-file DWARF.
 nm "${binary_path}" > "${symbols_file}"
 gents_rust_symbol_regex='(_ZN(5gents|9gents_cli)|_R[A-Za-z0-9_.$]*_(5gents|9gents_cli))'
 if ! grep -Eq "${gents_rust_symbol_regex}" "${symbols_file}"; then
@@ -67,8 +67,7 @@ if ! grep -q 'crates/gents-cli/src/main.rs' "${lookup_file}"; then
 fi
 
 # Strip the install binary back to its normal release footprint. Re-sign
-# ad-hoc so unsigned workflow dry-runs can launch it; signed releases replace
-# this signature with the Developer ID signature in the following step.
+# ad-hoc so unsigned workflow dry-runs can launch it.
 codesign --remove-signature "${binary_path}" 2>/dev/null || true
 /usr/bin/strip "${binary_path}"
 codesign --force --sign - "${binary_path}"
@@ -82,17 +81,13 @@ fi
 binary_arch="$(awk '{ value=$2; gsub(/[()]/, "", value); print value }' <<< "${binary_uuid}")"
 probe_address=""
 resolved_symbol=""
-# Linker deduplication can make a valid Rust text symbol resolve only as
-# `<deduplicated_symbol>`. Probe a bounded candidate set for a real frame.
 while IFS= read -r candidate_address; do
   [[ -n "${candidate_address}" ]] || continue
   candidate_symbol="$(
     xcrun atos -o "${dwarf_path}" -arch "${binary_arch}" "${candidate_address}" 2>&1 || true
   )"
-  # `atos` demangles legacy Rust symbols but may preserve current Rust-v0
-  # `_R..._5gents` / `_R..._9gents_cli` names. A Rust source location proves
-  # that the dSYM resolved the frame rather than merely echoing a symbol-table
-  # entry; the name markers keep the probe specific to Gents monomorphizations.
+  # A Rust source location proves the dSYM resolved the frame rather than
+  # echoing a symbol-table entry.
   if [[ "${candidate_symbol}" != *"<deduplicated_symbol>"* &&
         "${candidate_symbol}" == *".rs:"* &&
         ( "${candidate_symbol}" == *"gents::"* ||

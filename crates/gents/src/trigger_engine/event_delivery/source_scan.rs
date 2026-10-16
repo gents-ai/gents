@@ -35,8 +35,6 @@ fn document_id(row: &Value) -> Result<&str> {
         .context("event source scan omitted a document ID")
 }
 
-/// DefraDB document IDs remain stable across updates, so changing a field
-/// cannot move an already scanned document across the cursor.
 pub(crate) async fn load_source_rows(
     node: &EmbeddedNode,
     collection: &str,

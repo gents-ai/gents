@@ -1,6 +1,3 @@
-/* The work this session handed out: every session it spawned, on any
-   node, with its state and a way in. The same lineage the sessions list
-   folds under a parent, shown flat beside the parent. */
 import type { SurfaceContext } from "@/app/surfaces";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { href } from "@/lib/router";

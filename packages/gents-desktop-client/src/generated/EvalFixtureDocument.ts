@@ -2,7 +2,7 @@
 
 export type EvalFixtureDocument = { collection: string,
 /**
- * A fixture row. String values equal to `$trial` bind to the trial's DID
- * when installed; object keys and strings containing it stay literal.
+ * `$trial` values bind to the trial's DID at install; keys and other
+ * strings stay literal.
  */
 document: unknown, };

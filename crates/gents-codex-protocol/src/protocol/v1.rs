@@ -23,18 +23,13 @@ pub struct ClientInfo {
     pub version: String,
 }
 
-/// Client-declared capabilities negotiated during initialize.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeCapabilities {
-    /// Opt into receiving experimental API methods and fields.
     #[serde(default)]
     pub experimental_api: bool,
-    /// Opt into `attestation/generate` requests for upstream `x-oai-attestation`.
     #[serde(default)]
     pub request_attestation: bool,
-    /// Exact notification method names that should be suppressed for this
-    /// connection (for example `thread/started`).
     pub opt_out_notification_methods: Option<Vec<String>>,
 }
 
@@ -42,13 +37,8 @@ pub struct InitializeCapabilities {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
     pub user_agent: String,
-    /// Absolute path to the server's $CODEX_HOME directory.
     pub codex_home: AbsolutePathBuf,
-    /// Platform family for the running app-server target, for example
-    /// `"unix"` or `"windows"`.
     pub platform_family: String,
-    /// Operating system for the running app-server target, for example
-    /// `"macos"`, `"linux"`, or `"windows"`.
     pub platform_os: String,
 }
 
@@ -111,13 +101,9 @@ pub struct GitDiffToRemoteResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ApplyPatchApprovalParams {
     pub conversation_id: ThreadId,
-    /// Correlates this approval with patch application lifecycle notifications.
     pub call_id: String,
     pub file_changes: HashMap<PathBuf, FileChange>,
-    /// Optional explanatory reason (e.g. request for extra write access).
     pub reason: Option<String>,
-    /// When set, the agent is asking the user to allow writes under this root
-    /// for the remainder of the session (unclear if this is honored today).
     pub grant_root: Option<PathBuf>,
 }
 
@@ -131,9 +117,7 @@ pub struct ApplyPatchApprovalResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ExecCommandApprovalParams {
     pub conversation_id: ThreadId,
-    /// Correlates this approval with command execution lifecycle notifications.
     pub call_id: String,
-    /// Identifier for this specific approval callback.
     pub approval_id: Option<String>,
     pub command: Vec<String>,
     pub cwd: PathBuf,

@@ -7,8 +7,6 @@ const MAX_PROCESSED_IDS: usize = 10_000;
 pub(super) const GOSSIP_FALLBACK_POLL: Duration = Duration::from_secs(30);
 pub(super) const PROCESSED_REQUEST_COOLDOWN: Duration = Duration::from_secs(30);
 
-/// Delivery mark for one request. `queue_session` is the session whose FIFO
-/// queue the request occupies; title audits bypass that queue and carry none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ProcessedMark {
     pub(super) at: Instant,

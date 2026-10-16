@@ -2,8 +2,6 @@ import Proofs.Transcript.Transition
 
 namespace Transcript
 
-/-- Ordering follows from the append operation and the pre-state sequence bound,
-not an assumed coherent post-state. -/
 theorem append_preserves_ordered (s : TranscriptState) (messageId : MessageId)
     (kind : MessageKind) (h_order : s.OrderedBySequence)
     (h_bound : ∀ row ∈ s.messages, row.sequence < s.nextSeq) :
@@ -83,8 +81,6 @@ theorem assistantKind_references_call (turn : AssistantTurn)
     exact this.elim
   · simp [MessageKind.referencesToolCall, h_call]
 
-/-- The accepted publication transition materializes the immutable assistant
-header and each ordered pending row in the same post-state. -/
 theorem accepted_publication_is_atomic
     {pre post : TranscriptState} {messageId : MessageId} {turn : AssistantTurn}
     (h_publishable : pre.PublishableTurn turn)
@@ -128,8 +124,6 @@ theorem accepted_publication_is_atomic
     ⟨call, h_call_mem, rfl, rfl, ?_⟩, rfl⟩
   exact ⟨header, h_header_mem, h_header_reserves⟩
 
-/-- When no older pending intent remains, the newly published rows expose the
-provider's call order exactly to the dispatch head. -/
 theorem accepted_publication_preserves_call_order
     (s : TranscriptState) (messageId : MessageId) (turn : AssistantTurn)
     (h_pending : s.pendingCallIds = []) :
@@ -150,8 +144,6 @@ theorem accepted_publication_preserves_call_order
   simp [TranscriptState.pendingCallIds, TranscriptState.publishAcceptedAssistant,
     TranscriptState.toolRows, h_prefix, h_suffix]
 
-/-- Dispatch is necessarily a later transition: its pre-state already contains
-both the pending lifecycle row and the reserving assistant header. -/
 theorem dispatch_requires_published_header
     {pre : TranscriptState} {callId : ToolExecution.ToolCallId}
     (h_ready : pre.ReadyToDispatch callId) :
@@ -165,8 +157,6 @@ theorem dispatch_preserves_published_headers
     (s.dispatchToolCall callId).messages = s.messages := by
   rfl
 
-/-- A terminal Partial publication may retain provenance, but none of its new
-rows can satisfy the dispatch boundary. -/
 theorem partial_publication_is_nondispatchable
     {pre : TranscriptState} {messageId : MessageId} {turn : AssistantTurn}
     (h_publishable : pre.PublishableTurn turn)
@@ -180,8 +170,6 @@ theorem partial_publication_is_nondispatchable
     rcases h_new with ⟨publishedId, h_published, rfl⟩
     simp at h_pending
 
-/-- No legal transition retracts or rewrites an existing immutable header.
-Transitions either retain the exact row or append after it. -/
 theorem transition_retains_messages
     {pre post : TranscriptState} (h_step : Transition pre post) :
     ∀ row, row ∈ pre.messages → row ∈ post.messages := by
@@ -220,8 +208,6 @@ theorem trace_retains_messages
       intro row h_mem
       exact ih row (transition_retains_messages h_step row h_mem)
 
-/-- Tool failure after acceptance changes lifecycle state only; the accepted
-assistant header remains durable history. -/
 theorem terminalization_never_retracts_header
     (s : TranscriptState) (callId : ToolExecution.ToolCallId)
     (terminal : ToolExecution.ToolCallState) (header : MessageRow)
@@ -229,8 +215,6 @@ theorem terminalization_never_retracts_header
     header ∈ (s.terminalizeToolCall callId terminal).messages := by
   exact h_header
 
-/-- Duplicate observations execute the same owner and preserve all state,
-including sequence allocation and in-flight ownership. -/
 theorem duplicate_tool_result_observation_noops (s : TranscriptState)
     (callId : ToolExecution.ToolCallId) (messageId : MessageId) (key : ToolResultKey)
     (h_seen : s.hasToolResultKey key = true) :

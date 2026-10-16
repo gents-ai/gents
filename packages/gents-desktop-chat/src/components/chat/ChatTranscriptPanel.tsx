@@ -60,9 +60,6 @@ function timelineChangeSignal(items: RenderedTimelineItem[]) {
 }
 
 function scrollPanelToTip(panel: HTMLElement) {
-  // Instant, not smooth: the panel's CSS smooth-scroll otherwise animates the
-  // jump. A chunk landing mid-animation can leave the scroll short of the tip,
-  // which the scroll handler then misreads as the user disengaging follow.
   panel.scrollTo({ top: panel.scrollHeight, behavior: "instant" });
 }
 
@@ -129,9 +126,6 @@ export function ChatTranscriptPanel({
     transcriptWindow.sessionId === selectedSessionId
       ? transcriptWindow.visibleCount
       : TRANSCRIPT_PAGE_SIZE;
-  // Keep the leading edge stable while the reader is away from the tip. New
-  // streaming items should extend the mounted window, not evict the row they
-  // are currently reading.
   const visibleCount =
     !autoFollowTranscript && transcriptWindow.sessionId === selectedSessionId
       ? baseVisibleCount +
@@ -152,9 +146,6 @@ export function ChatTranscriptPanel({
   );
 
   const lastItem = timelineItems[timelineItems.length - 1];
-  // A send may be observed as pending or already materialized. Prefer the
-  // request identity so that pending -> materialized does not look like a
-  // second send; fall back to the user row identity for partial snapshots.
   const latestUserTurn = useMemo(() => {
     const items = timelineItems;
     for (let index = items.length - 1; index >= 0; index -= 1) {
@@ -337,8 +328,6 @@ export function ChatTranscriptPanel({
     if (upward && panel.scrollTop <= 160) void loadOlderItems();
   }
 
-  // Animated placeholder between send and the assistant's first visible
-  // output — without it the transcript sits inert while the turn runs.
   const turnActive = Boolean(
     session?.turnState && !isTerminalTurnState(session.turnState),
   );

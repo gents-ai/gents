@@ -1,12 +1,5 @@
-/// Bytes of normalized output a completion notification summarizes. The
-/// notification wakes the session; `read_process` pages the full output, so
-/// the summary stays small even when a tool's own output budget is larger.
 pub(crate) const NOTIFICATION_SUMMARY_BYTES: usize = 4000;
 
-/// Build the identical rendered notification while retaining unchanged result
-/// bytes as references to the canonical tool-output stream. Only wrappers,
-/// collapsed whitespace, XML entities and the truncation marker are literals.
-/// `budget` bounds the normalized result bytes shown.
 pub(super) fn tool_completion_presentation(
     tool_call_id: &str,
     tool_name: &str,

@@ -14,9 +14,9 @@ structure Observation where
   preview : Bool
   digestMatches : Bool
   deriving Repr
-/-- Product documents, credentials and protected evaluation material retain their
-owners. DefraDB validates fields and enforces DID/ACP within the transaction;
-this owner models admission and the observed-state preview, not authorization. -/
+/-- Owner models admission and observed-state preview only; DefraDB validates
+fields and enforces DID/ACP within the transaction, and product documents,
+credentials and protected evaluation material retain their owners. -/
 def admitted (op : Operation) (o : Observation) : Bool :=
   o.granted && o.application && !o.blocked && !o.credential && o.bounded &&
   (o.limit > 0 && o.limit ≤ 100) && o.targets ≤ o.limit && (op == .create || o.targets > 0)

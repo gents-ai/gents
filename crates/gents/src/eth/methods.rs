@@ -1,13 +1,7 @@
-//! Builtin read-only JSON-RPC ceiling for `query_methods`.
-//!
-//! Operator allowlists are intersected with this set. Send/sign/debug methods
-//! are rejected even if listed.
-
 use std::collections::BTreeSet;
 
 use anyhow::{bail, Result};
 
-/// Read-only methods safe to expose against a pruned public endpoint.
 pub const BUILTIN_QUERY_METHODS: &[&str] = &[
     "eth_chainId",
     "eth_blockNumber",
@@ -43,9 +37,6 @@ const FORBIDDEN_EXACT: &[&str] = &[
     "eth_unsubscribe",
 ];
 
-/// Normalize and intersect configured methods with the builtin ceiling.
-///
-/// Empty input is deny-all (returns empty). Unknown or send/sign methods fail.
 pub fn validate_query_methods(configured: &[String]) -> Result<Vec<String>> {
     let ceiling: BTreeSet<&str> = BUILTIN_QUERY_METHODS.iter().copied().collect();
     let mut seen = BTreeSet::new();
@@ -66,7 +57,6 @@ pub fn validate_query_methods(configured: &[String]) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// True when `method` is in the intersection of `configured` and the ceiling.
 pub fn method_permitted(method: &str, configured: &[String]) -> Result<bool> {
     let allowed = validate_query_methods(configured)?;
     Ok(allowed.iter().any(|item| item == &normalize_method(method)))
@@ -90,8 +80,6 @@ pub fn reject_forbidden(method: &str) -> Result<()> {
     Ok(())
 }
 
-/// Methods whose last argument is an optional block tag.
-/// Value is the full arity including the block.
 pub fn optional_trailing_block_arity(method: &str) -> Option<usize> {
     match normalize_method(method).as_str() {
         "eth_getBalance" | "eth_getTransactionCount" | "eth_getCode" | "eth_call" => Some(2),

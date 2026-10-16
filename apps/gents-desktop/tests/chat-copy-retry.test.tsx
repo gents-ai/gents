@@ -17,7 +17,6 @@ import type { ShellProjection } from "../src/hooks/shellProjection";
 import { shellStores } from "./shell-fixture";
 import { assistantMessage, sessionSnapshot, userMessage } from "./timeline-fixture";
 
-/** chat actions on session s1 of `deployment`, admitted by the projections given */
 function chatActions(
   api: DesktopApiAdapter,
   projection: {
@@ -186,7 +185,6 @@ describe("error card retry", () => {
     latestRequestId: "req-failed",
     turnState: "failed",
     retryEligibility: { eligible: true, denialReason: null },
-    /* only the failure is read here */
     latestRequestOutcome: {
       failureReason: "provider exploded",
     } as DesktopSessionSnapshot["latestRequestOutcome"],

@@ -413,8 +413,7 @@ describe("setup start on a home this version cannot open", () => {
 
     await userEvent.click(next);
 
-    /* the typed refusal is the incompatible-home flow's: the home is
-       previewed for a reset, and no local agent is created over it */
+    /* the typed refusal is the incompatible-home flow's */
     await waitFor(() => expect(resetManagedServer).toHaveBeenCalledOnce());
     expect(app.stores.client.getState().home.report).not.toBeNull();
     expect(api.initLocalStandardRuntime).not.toHaveBeenCalled();

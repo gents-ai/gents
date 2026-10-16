@@ -15,10 +15,6 @@ use crate::{
 pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
-    // Pack-local schemas first (if `<root>/schemas/` exists) so EventSource
-    // collections and DatastoreToolSurface collections are on the node before
-    // live validate and config writes. Ordinary agent-config roots without
-    // schemas/ are unchanged.
     let schemas = crate::commands::schema::apply_pack_schemas_if_present(&access, &args.root)
         .await
         .context("config apply: pack-local schemas/")?;
@@ -41,7 +37,6 @@ pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
         .is_some_and(crate::commands::schema::PackSchemaPhase::changed)
         && report.status == "noop"
     {
-        // Schema phase did work even though config docs were already live.
         report.status = "applied";
         report.changed = true;
     }
@@ -61,9 +56,6 @@ pub(crate) async fn apply_bound_desired_manifest(
 ) -> Result<ConfigApplyReport> {
     let desired_manifest = &bound.manifest;
 
-    // Probe authored event sources and their bound task templates against the
-    // node schema. The shared apply transaction validates references across the
-    // retained and authored configuration before publishing any document.
     let live_errs =
         desired_state::validate::validate_manifest_against_live(desired_manifest, &access).await?;
     if !live_errs.is_empty() {

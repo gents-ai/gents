@@ -1,10 +1,3 @@
-//! Shared helpers for parsing `ToolServiceRegistry` rows.
-//!
-//! The registry schema allows nullable address fields (`hostname`,
-//! `tailscale_ip`, `lan_ip`, `mcp_path`). Default serde behavior rejects
-//! explicit JSON `null` when deserializing into `String`, so consumers
-//! that model these fields as `String` need a null-tolerant deserializer.
-
 use serde::{Deserialize, Deserializer};
 
 pub(crate) fn null_as_empty_string<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -25,8 +18,8 @@ where
 #[cfg(test)]
 mod tests;
 
-/// Read node-local service configuration, independently of health observations.
-/// Duplicate logical names fail closed rather than selecting an arbitrary route.
+/// Duplicate logical names fail closed rather than selecting an arbitrary
+/// route.
 pub(crate) async fn configured_mcp_services(
     node: &defra_node::EmbeddedNode,
     node_did: &str,

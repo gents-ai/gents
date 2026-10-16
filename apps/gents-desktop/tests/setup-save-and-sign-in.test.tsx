@@ -13,8 +13,6 @@ import { createDesktopUiHarness } from "./ui-harness/desktopHarness";
 
 const NODE_DID = "did:key:z6MkBombadilNode";
 
-/* The harness adapter without a managed runtime to gate on, with every call
-   observable. */
 function setup(
   overrides: Partial<DesktopApiAdapter> = {},
   harness = createDesktopUiHarness({ scenario: "empty-fleet" }),
@@ -246,7 +244,6 @@ describe("a connected account in setup", () => {
     await userEvent.click(screen.getByRole("button", { name: "Use another account" }));
     expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
     expect(screen.queryByText("Connected as me@example.com")).not.toBeInTheDocument();
-    /* nothing is removed, and the sign-in waits for a click */
     expect(api.claudeLogin).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await waitFor(() => expect(api.claudeLogin).toHaveBeenCalledTimes(1));
@@ -291,10 +288,8 @@ describe("a connected account in setup", () => {
     await userEvent.click(await screen.findByTestId("setup-provider-anthropic"));
     expect(await screen.findByText("Connected as me@example.com")).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Use another account" }));
-    /* the runtime keeps the first account and stores the new one beside it */
     accounts.mockResolvedValue([claude(), work]);
     await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
-    /* connected again, now through the new account */
     const find = await screen.findByRole("button", { name: /find models/i });
     discover.mockClear();
     await userEvent.click(find);
@@ -660,10 +655,6 @@ describe("add another account", () => {
 });
 
 describe("setup save", () => {
-  /* #2068: the runtime confirms the rebound default agent only after it
-     reconciles, starts the slot and replicates readiness back. A confirmation
-     that lands after the old five-second budget must still complete the first
-     save. */
   it("completes on the first click when readiness arrives after five seconds", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let appliedAt: number | null = null;

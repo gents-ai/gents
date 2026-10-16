@@ -1,36 +1,19 @@
-//! Provider-reported usage of one provider account, normalized across the
-//! passive channel (response headers) and the on-demand reads.
-//!
-//! Values are what the provider reported, never derived from local token
-//! counts: a missing or malformed value drops its window, so "unknown" stays
-//! unknown and is never shown as a percentage, as exhausted or as unlimited.
-//! Window labels are identities: every source names the same window alike,
-//! so [`UsageReport::merge`] joins a header window and an endpoint window.
-
 use chrono::{DateTime, Datelike, Duration, NaiveTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::provider_limit::{epoch_seconds, parse_rfc3339};
 
-/// A window observed longer ago than this is shown as last-known, not fresh.
 pub const STALE_AFTER: Duration = Duration::minutes(15);
-/// A window observed longer ago than this is not shown at all.
 pub const LAST_KNOWN_FOR: Duration = Duration::minutes(60);
-/// An on-demand read within this window of the last one is skipped.
-// ponytail: one knob for every provider; make it per provider if one endpoint throttles harder.
 pub const READ_SKIP_WINDOW: Duration = Duration::minutes(5);
-/// Unchanged values are not rewritten until the report is this much newer.
 pub const REWRITE_AFTER: Duration = Duration::seconds(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UsageSource {
-    /// Headers of a successful provider response.
     Header,
-    /// An on-demand usage read.
     Endpoint,
-    /// Headers of a rejected provider response.
     Error,
 }
 
@@ -39,7 +22,6 @@ pub struct UsageWindow {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_minutes: Option<i64>,
-    /// Percent of the window used, 0..=100.
     pub used_pct: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets_at: Option<DateTime<Utc>>,
@@ -85,7 +67,6 @@ impl UsageReport {
         self.windows.is_empty() && self.credits.is_none() && self.plan.is_none()
     }
 
-    /// The newest observation in the report.
     pub fn observed_at(&self) -> Option<DateTime<Utc>> {
         let windows = self.windows.iter().map(|window| window.observed_at);
         let credits = self.credits.iter().map(|credits| credits.observed_at);
@@ -93,8 +74,6 @@ impl UsageReport {
         windows.chain(credits).chain(plan).max()
     }
 
-    /// Per window label, and for credits and plan, the newer observation
-    /// wins; on a tie `other` wins. A missing value never clears one.
     pub fn merge(self, other: UsageReport) -> UsageReport {
         let mut windows = self.windows;
         for window in other.windows {
@@ -111,7 +90,6 @@ impl UsageReport {
         }
     }
 
-    /// Equal ignoring every `observed_at`.
     pub fn same_values(&self, other: &UsageReport) -> bool {
         self.values() == other.values()
     }
@@ -139,8 +117,6 @@ fn newer<T>(kept: Option<T>, other: Option<T>, at: fn(&T) -> DateTime<Utc>) -> O
     }
 }
 
-/// The windows worth showing at `now`: none past its reset or older than
-/// [`LAST_KNOWN_FOR`]; older than [`STALE_AFTER`] is [`Freshness::Stale`].
 pub fn visible_windows(report: &UsageReport, now: DateTime<Utc>) -> Vec<(&UsageWindow, Freshness)> {
     report
         .windows
@@ -159,15 +135,6 @@ pub fn visible_windows(report: &UsageReport, now: DateTime<Utc>) -> Vec<(&UsageW
         .collect()
 }
 
-/// Usage windows from a provider response's headers:
-/// - Claude subscription `anthropic-ratelimit-unified-<window>-utilization`
-///   (a 0..1 fraction) and `-reset` (epoch seconds), for `5h`, `7d` and
-///   `7d_<model>`; overage headers are not usage windows.
-/// - Codex `x-codex-{primary,secondary}-{used-percent,window-minutes,reset-at}`,
-///   a window kept only when it carries a value, as Codex does
-///   (codex-rs/codex-api/src/rate_limits.rs), and `x-codex-credits-*`.
-/// - OpenAI API keys `x-ratelimit-{limit,remaining,reset}-{requests,tokens}`:
-///   per-minute headroom, the reset a duration such as `6m0s`.
 pub fn usage_from_headers<'a>(
     headers: impl IntoIterator<Item = (&'a str, &'a str)>,
     source: UsageSource,
@@ -261,9 +228,6 @@ pub fn usage_from_headers<'a>(
     report
 }
 
-/// ChatGPT `GET /wham/usage` (codex-rs/backend-client): `plan_type`,
-/// `rate_limit.{primary,secondary}_window` and `credits`. `None` when the
-/// body has no `rate_limit` object.
 pub fn codex_usage(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
     let rate_limit = body.get("rate_limit").filter(|value| value.is_object())?;
     let mut report = UsageReport::default();
@@ -309,12 +273,6 @@ pub fn codex_usage(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
     Some(report)
 }
 
-/// Grok `GET {cli-chat-proxy}/billing?format=credits` (xai-org/grok-build
-/// `extensions/billing.rs`): one `period` window from
-/// `creditUsagePercent` (0..100) and `currentPeriod`, under `config` or at the
-/// top level, and `subscriptionTier` as the plan. Proto3 JSON omits a zero
-/// percent, so a period without the field is 0 used. `None` for a body with
-/// neither, such as the legacy `monthlyLimit`/`used` shape.
 pub fn grok_billing(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
     let config = body
         .get("config")
@@ -351,11 +309,6 @@ pub fn grok_billing(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
     })
 }
 
-/// OpenRouter `GET /api/v1/key` (documented): a capped key is one window
-/// named by `limit_reset` (`total` when it never resets), resetting at the
-/// next UTC midnight, Monday or first of the month. An uncapped key gives an
-/// empty report: the key has no cap, which says nothing about the account
-/// balance. `None` without a `data` object.
 pub fn openrouter_key(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
     let data = body.get("data").filter(|value| value.is_object())?;
     let mut report = UsageReport::default();
@@ -383,11 +336,6 @@ pub fn openrouter_key(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
     Some(report)
 }
 
-/// Claude `GET /api/oauth/usage`: `five_hour`, `seven_day` and
-/// `seven_day_<model>`, each `{utilization, resets_at}` or null. Utilization
-/// is read as a percent, as the open-source decoders do (verified live on
-/// 2026-10-02: a 7d utilization of 72).
-/// `None` when the body is not an object.
 pub fn claude_oauth_usage(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
     let mut report = UsageReport::default();
     for (key, window) in body.as_object()? {
@@ -416,8 +364,6 @@ pub fn claude_oauth_usage(body: &Value, now: DateTime<Utc>) -> Option<UsageRepor
     Some(report)
 }
 
-/// One label per Claude window for headers (`5h`, `7d`, `7d_<model>`) and
-/// the usage endpoint (`five_hour`, `seven_day`, `seven_day_<model>`).
 fn claude_label(segment: &str) -> Option<String> {
     match segment {
         "5h" | "five_hour" => Some("5h".to_string()),
@@ -453,12 +399,10 @@ fn next_openrouter_reset(reset: &str, now: DateTime<Utc>) -> Option<DateTime<Utc
     Some(Utc.from_utc_datetime(&date.and_time(NaiveTime::MIN)))
 }
 
-/// A provider percent, clamped to 100; `None` for NaN or a negative value.
 fn percent(value: f64) -> Option<f64> {
     (value.is_finite() && value >= 0.0).then_some(value.min(100.0))
 }
 
-/// An OpenAI reset duration: `1s`, `20ms`, `6m0s`, `1h2m3.5s`.
 fn parse_duration(value: &str) -> Option<Duration> {
     let mut rest = value;
     let mut millis = 0.0;

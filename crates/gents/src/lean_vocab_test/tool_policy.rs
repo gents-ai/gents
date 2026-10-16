@@ -1,11 +1,8 @@
 //! Deserialization types for the Lean tool-policy contract rows
-//! (`Proofs/ToolPolicy.ContractCases`). Field names and types mirror the
-//! emitted JSON exactly and decode strictly: contract drift must fail loudly
-//! here instead of being masked by serde defaults.
+//! (`Proofs/ToolPolicy.ContractCases`).
 
 use serde::Deserialize;
 
-/// One `(tool, collection) → fields` write/query grant in the emitted view.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanToolPolicyWriteGrant {
     pub(crate) tool: String,
@@ -13,8 +10,6 @@ pub(crate) struct LeanToolPolicyWriteGrant {
     pub(crate) fields: Vec<String>,
 }
 
-/// Lean `ToolPolicy.ContractCases.SurfaceView`: the JSON projection of one
-/// resolved surface under fixed probes and known key universes.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanToolPolicySurfaceView {
     pub(crate) file_rank: u8,

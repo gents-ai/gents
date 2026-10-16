@@ -1,16 +1,5 @@
-//! Grading: one [`VerdictRow`] per (stage, check) of a case.
-//!
-//! Grading is pure and reads only the case and the trial's evidence. A stage
-//! the evidence never reached, and a stage that failed, still produce a row
-//! for every check the case declared, so a case's denominator does not depend
-//! on how far the trial got.
-//!
-//! Evidence that holds no stage at all is the one case where absence is not a
-//! skipped prerequisite: nothing ran, so nothing about the subject was
-//! observed. Those rows are [`OutcomeKind::Infrastructure`], which scores the
-//! case-trial `NotEvidence` and agrees with
-//! [`crate::eval::runner::completion_is_not_evidence`], the judgement the loop
-//! plans from.
+//! Grading: one [`VerdictRow`] per (stage, check) of a case, pure over the
+//! case and the trial's evidence.
 
 use serde_json::{json, Value};
 
@@ -19,9 +8,8 @@ use crate::eval::checks::{failure_feedback, CheckRegistry};
 use crate::eval::runner::executor::{StageEvidence, TrialEvidence};
 use crate::eval::{classify, EvidenceClass, OutcomeKind, ProviderReason};
 
-/// One graded (stage, check) pair. `raw` is always an object carrying a
-/// `reason_code`; `score_bp` is `None` when the row is not evidence about the
-/// subject.
+/// One graded (stage, check) pair. `score_bp` is `None` when the row is not
+/// evidence about the subject.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerdictRow {
     pub stage_id: String,
@@ -36,19 +24,14 @@ pub struct VerdictRow {
     pub feedback: Option<String>,
 }
 
-/// One row per (stage, check) of `case`, in case order.
-///
-/// `feedback` is passed through from the check unchanged, except on
-/// `stage_failed` rows, where [`failed`] writes it; whether it may be written
-/// is the caller's decision, and `documents::append_verdict` refuses it off the
-/// train split.
+/// One row per (stage, check) of `case`, in case order. Whether `feedback` may
+/// be written to a verdict is the caller's decision;
+/// `documents::append_verdict` refuses it off the train split.
 pub fn grade(
     case: &EvalCase,
     evidence: &TrialEvidence,
     registry: &CheckRegistry,
 ) -> Vec<VerdictRow> {
-    // A trial that observed nothing did not skip its prerequisites: it never
-    // ran. Every row it produces is about the infrastructure, not the subject.
     let observed_nothing = evidence.stages.is_empty();
     let mut rows = Vec::new();
     for stage in &case.stages {
@@ -89,18 +72,10 @@ pub fn grade(
     rows
 }
 
-/// A stage that ended in `kind`. A provider failure with no reason is not
-/// evidence of anything: it is recorded as [`OutcomeKind::Unknown`], which is
-/// how the "no provider outcome without a reason" constraint is enforced.
-///
-/// The `stage_failed` row with `names_failure` carries [`failure_feedback`]: no
-/// check ran, so it is the only place the proposer learns why the stage failed.
-///
-/// A `failure_kind` that does not classify as a failure is malformed evidence:
-/// an executor that reports one is claiming a stage both failed and passed.
-/// Read literally the row would carry no score and
-/// [`crate::eval::scoring`] would floor a passing class at full credit, so it
-/// is recorded as [`OutcomeKind::Unknown`] instead of as free marks.
+/// A stage that ended in `kind`. A `Provider` failure without a reason, and a
+/// `failure_kind` that classifies as passing (malformed evidence), must not
+/// read as a pass: scoring would floor a passing class with no score at full
+/// credit, so both are recorded as [`OutcomeKind::Unknown`].
 fn failed(
     stage: &EvalStage,
     check: &EvalCheckRef,
@@ -143,7 +118,6 @@ fn failed(
     }
 }
 
-/// A stage that ran to completion: the named check reads its evidence.
 fn checked(
     stage: &EvalStage,
     check: &EvalCheckRef,
@@ -175,9 +149,6 @@ fn checked(
     }
 }
 
-/// A row no check produced: its version is `"0"`. Only a `stage_failed` row
-/// carries feedback, attached by [`failed`] to the first acceptance row of its
-/// stage.
 fn synthetic(
     stage: &EvalStage,
     check: &EvalCheckRef,
@@ -243,8 +214,6 @@ mod tests {
         }
     }
 
-    /// The graded rows as scoring reads them. One check per stage in these
-    /// fixtures, so a row's position is its stage's position.
     fn views(rows: &[VerdictRow]) -> Vec<VerdictView> {
         rows.iter()
             .enumerate()
@@ -313,8 +282,6 @@ mod tests {
             .all(|r| r.kind == OutcomeKind::SkippedPrerequisite && r.score_bp == Some(0)));
     }
 
-    /// The proposer reads feedback only; a failed stage runs no check, so its
-    /// synthetic row is where the failure is named.
     #[test]
     fn a_failed_stage_row_carries_feedback_naming_the_failure() {
         let ev = ScriptedExecutor::failed_evidence("did:x", "s1", OutcomeKind::Deadline, None);
@@ -335,9 +302,6 @@ mod tests {
         assert!(feedback.contains("failure_kind deadline"), "{feedback}");
     }
 
-    /// A failed stage yields one row per check but names its failure once, on
-    /// the first acceptance row, since the proposer reads only acceptance rows.
-    /// A stage with no acceptance row names it nowhere.
     #[test]
     fn a_failed_stage_names_its_failure_on_one_acceptance_row_only() {
         let ev = ScriptedExecutor::failed_evidence("did:x", "s1", OutcomeKind::Deadline, None);
@@ -405,10 +369,6 @@ mod tests {
         );
     }
 
-    /// A trial that observed nothing is not a subject that failed to reach its
-    /// stages: scoring must exclude it, and planning must read the same trial
-    /// the same way, or a slot that learned nothing would be scored zero and
-    /// never retried.
     #[test]
     fn a_trial_with_no_evidence_is_infrastructure_and_neither_scores_nor_counts() {
         let case = case(&[
@@ -438,14 +398,9 @@ mod tests {
             case_trial_score(EvalReducer::WeightedMean, &views(&rows)),
             CaseTrialScore::NotEvidence
         );
-        // The same trial, read the way the loop plans from it. Asserted here so
-        // scoring and planning can never disagree about one trial again.
         assert!(completion_is_not_evidence(&completion(&case, &evidence)));
     }
 
-    /// An executor that reports a non-failure kind as a stage's `failure_kind`
-    /// is claiming the stage both failed and passed. Scoring floors a passing
-    /// class with no score at full credit, so the row must not read as a pass.
     #[test]
     fn a_failure_kind_that_does_not_classify_as_a_failure_is_malformed() {
         let evidence = ScriptedExecutor::failed_evidence("did:x", "s1", OutcomeKind::Passed, None);

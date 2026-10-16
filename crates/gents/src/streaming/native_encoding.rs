@@ -1,5 +1,3 @@
-//! Lossless conversion from native messages to payload streams and header plans.
-
 use anyhow::{Context, Result};
 use base64::Engine;
 use gents_protocol::message::{

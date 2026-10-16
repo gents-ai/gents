@@ -110,8 +110,6 @@ theorem invalid_budget_never_creates (request : CreateRequest)
   split <;> simp_all
   split <;> simp_all
 
-/-- Optional durable-goal declaration carried by a reusable Task/demo-pack.
-    A budget has meaning only when the Task also declares a goal objective. -/
 structure TaskGoalDeclaration where
   goalObjective : Option String
   goalTokenBudget : Option Int
@@ -123,10 +121,9 @@ def validTaskGoalDeclaration (declaration : TaskGoalDeclaration) : Bool :=
   | some objective =>
       !(canonicalObjective objective).isEmpty && validBudget declaration.goalTokenBudget
 
-/-- A durable trigger fire must supply a stable fire key. The runtime-facing
-    encoding is length-prefixed so the same node/Task/fire tuple
-    deterministically recovers the same session and request retry identities
-    after a crash without colliding with another node's Task. -/
+/-- The runtime-facing encoding is length-prefixed so the same node/Task/fire
+tuple deterministically recovers the same session and request retry identities
+after a crash without colliding with another node's Task. -/
 structure TaskFireIdentity where
   sessionId : String
   requestId : String
@@ -144,9 +141,8 @@ def taskFireIdentity (nodeDid taskId fireKey : String) : TaskFireIdentity :=
   , requestId := "task-goal-request:" ++ scope
   , retryKey := "task-goal-retry:" ++ scope }
 
-/-- The persisted request binding is the durable recovery witness. Goal and
-    GoalCreationClaim documents are creation-time state and may later be
-    removed without making an already-published request undiscoverable. -/
+/-- Goal and GoalCreationClaim documents are creation-time state and may later
+be removed without making an already-published request undiscoverable. -/
 structure TaskGoalRequestBinding where
   nodeDid : String
   agentId : String
@@ -181,10 +177,9 @@ structure TaskFireRecoveryDecision where
   checkpointable : Bool
   deriving DecidableEq, Repr
 
-/-- Classify the request returned by the globally deterministic request-id
-    lookup. Node DID is part of the expected identity and binding, so a
-    foreign or otherwise mismatched row conflicts rather than being recovered
-    for the local node. -/
+/-- Node DID is part of the expected identity and binding, so a foreign or
+otherwise mismatched row conflicts rather than being recovered for the local
+node. -/
 def decideTaskFireRecovery (expected : TaskGoalRequestBinding)
     (state : TaskFireRecoveryState) : TaskFireRecoveryDecision :=
   match state.request with
@@ -232,9 +227,6 @@ structure TaskPublication where
   retryKey : Option String
   deriving DecidableEq, Repr
 
-/-- Task publication is unchanged when no goal is declared. A valid goal
-    declaration switches publication to the atomic goal+request boundary and
-    carries deterministic identities for retry/reconciliation. -/
 def decideTaskPublication (declaration : TaskGoalDeclaration)
     (nodeDid taskId fireKey : String) : TaskPublication :=
   if !validTaskGoalDeclaration declaration then

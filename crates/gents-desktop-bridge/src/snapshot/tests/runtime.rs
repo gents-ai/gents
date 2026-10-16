@@ -366,7 +366,6 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
             "case {} should surface the trigger bookkeeping timestamp",
             case.name
         );
-        // The single observed attempt passes its status and error through.
         assert_eq!(
             recent_runs.last_status.as_deref(),
             Some("completed"),
@@ -433,9 +432,6 @@ async fn summary_starter_resolves_physical_cause_outside_latest_request_cache() 
     assert_eq!(starter.node_did, crate::tests::support::OPERATOR);
 }
 
-/// Every starter in a fleet snapshot resolves through one batched lineage
-/// read, not one read pair per child session, and children sharing a parent
-/// or pointing at a deleted request keep the per-session outcomes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fleet_snapshot_resolves_all_starters_with_one_query_per_build() {
     let (core, _tmp, parent_a, parent_b) =
@@ -463,8 +459,6 @@ async fn fleet_snapshot_resolves_all_starters_with_one_query_per_build() {
         );
     }
     let reads = crate::tests::support::CountingRead::new(access);
-    // Two deployments whose children share `parent_a`: the snapshot resolves
-    // every deployment's starters in the same read.
     let (first, second) = sessions.split_at(4);
     let mut first = session_summaries(first, &[], crate::tests::support::OPERATOR, &[], &[]);
     let mut second = session_summaries(second, &[], crate::tests::support::OPERATOR, &[], &[]);

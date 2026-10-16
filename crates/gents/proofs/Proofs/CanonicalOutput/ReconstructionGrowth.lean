@@ -31,10 +31,6 @@ theorem uniqueRecord_same_members {α ε : Type} [DecidableEq α]
   have h := uniqueRecord_order_independent missing conflict left.dedup right.dedup hp
   simpa only [uniqueRecord, List.dedup_idem] using h
 
-/-- Immutable arrivals preserve an existing ordinal when every old record is
-retained and no distinct fact is introduced at that ordinal. Exact duplicate
-delivery and arbitrary list reordering are allowed. New ordinals are unrestricted;
-callers apply this to the earlier contiguous prefix, not every later gap. -/
 theorem flushAt_preserved_by_benign_extension
     (before after : List Segment) (writer : Writer) (ordinal : Nat)
     (hretained : ∀ record, record ∈ before → record ∈ after)
@@ -52,8 +48,6 @@ theorem flushAt_preserved_by_benign_extension
         fun h => ⟨hnoNew record h.1 h.2, h.2⟩⟩)
   simp only [flushAt, hlookup]
 
-/-- A preview extension preserves every existing stream's declaration and byte
-prefix. Newly declared streams may appear only after the existing streams. -/
 inductive StreamsGrow : Streams → Streams → Prop
   | nil (after : Streams) : StreamsGrow [] after
   | cons {declaration : Declaration} {before after : List UInt8}
@@ -143,8 +137,6 @@ theorem consumeFlushes_append (initial suffix : List Flush) (before : Streams) :
         | error error => rfl
         | ok next => exact ih next
 
-/-- Once ordinal selection establishes that a later contiguous flush sequence
-extends the earlier one, successful reconstruction cannot rewind any stream. -/
 theorem reconstructed_prefix_grows (initial extended : List Flush)
     (before after : Streams) (hprefix : initial.IsPrefix extended)
     (hbefore : consumeFlushes initial [] = .ok before)

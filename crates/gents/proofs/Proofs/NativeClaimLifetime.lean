@@ -3,17 +3,14 @@ import Proofs.NativeCompletion
 /-!
 # Claimed local-store lifetime
 
-A local store claim is attached to the per-node gate resource, independently
-of the mutation mutex. Access owners retain that resource while live; admitted
-native work, cancellation-safe client shutdown, and detached cleanup retain it
-until they actually return. Read-only
-transactions, renewals, claimed reads, and schema registration retain the
-resource without holding the mutation mutex. `nativeOutstanding` counts
-Gents-owned native dispatch/future lifetime, including a detached dispatch, an
-async schema call, or a single-flight client shutdown whose completion owner
-remains live; timeout/cancellation
-does not establish native completion. This model does not claim eventual
-completion or OS lock behavior.
+A local store claim is attached to the per-node gate resource, independently of
+the mutation mutex: access owners retain it while live; admitted native work,
+cancellation-safe client shutdown, and detached cleanup retain it until they
+return. Read-only transactions, renewals, claimed reads, and schema
+registration retain it without the mutation mutex. `nativeOutstanding` counts
+Gents-owned native dispatch/future lifetime; timeout/cancellation does not
+establish native completion. This model does not claim eventual completion or
+OS lock behavior.
 -/
 namespace NativeClaimLifetime
 
@@ -174,9 +171,6 @@ theorem schema_future_retains_claim_until_actual_return :
       claimHeld before = true ∧ claimHeld after = false := by
   decide
 
-/-- A cancelled shutdown waiter does not terminate the single-flight owner.
-The spawned owner must retain the client core and its store access until the
-observed shutdown future returns. -/
 theorem cancelled_shutdown_waiter_does_not_release_claim_before_owner_returns :
     let before := run clientShutdown [.nativeStarted, .callerCancelled]
     let returned := run before [.nativeReturned]
@@ -188,8 +182,6 @@ theorem cancelled_shutdown_waiter_does_not_release_claim_before_owner_returns :
       after.lifecycleGuardHeld = false ∧ claimHeld after = false := by
   decide
 
-/-- Caller cancellation cannot release the client-lifecycle exclusion before
-the spawned shutdown owner returns and drops the core's store access. -/
 theorem shutdown_exclusion_cannot_release_while_owner_or_access_live :
     let started := run clientShutdown [.nativeStarted, .callerCancelled]
     let earlyRelease := step started .lifecycleGuardReleased

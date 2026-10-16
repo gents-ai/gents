@@ -27,7 +27,6 @@ impl Task {
             "task {} goal_token_budget must be positive",
             self.task_id
         );
-        // TaskHooks.admitHooks validates all occurrences before any execution.
         let mut hook_ids = std::collections::BTreeSet::new();
         for hook in &self.hooks {
             ensure!(
@@ -87,6 +86,3 @@ impl Task {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests;

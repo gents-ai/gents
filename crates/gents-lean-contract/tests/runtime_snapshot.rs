@@ -1,6 +1,3 @@
-// Compile and decode the runtime's actual fixture DTOs independently of gents.
-// This checks the contract transport boundary even while a stacked runtime
-// migration prevents the full runtime crate from compiling.
 #[path = "../../gents/src/lean_vocab_test/support.rs"]
 mod runtime_contract;
 

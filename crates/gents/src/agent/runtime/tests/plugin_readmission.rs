@@ -5,7 +5,6 @@ use super::*;
 
 use std::sync::Arc;
 
-// Detects a deadlock; not a latency assertion.
 const READINESS_DEADLOCK_GUARD: Duration = Duration::from_secs(30);
 
 async fn wait_for_agent_state(
@@ -31,8 +30,7 @@ async fn wait_for_agent_state(
     }
 }
 
-/// Installs the fixture pack's `fixture/list_files` into the plugin store
-/// only, returning the identity an install records.
+/// Installs the fixture pack's `fixture/list_files` into the plugin store.
 fn install_fixture_plugin(plugin_home: &std::path::Path) -> crate::pack::PackIdentity {
     let (_pack_guard, pack_root) =
         crate::test_support::fixture_pack_copy("bind_plugin_fixture", &serde_json::json!({}));
@@ -59,10 +57,6 @@ fn install_fixture_plugin(plugin_home: &std::path::Path) -> crate::pack::PackIde
     )
 }
 
-/// #2338 end to end: a agent_config whose Tools document names a missing plugin
-/// burns its build budget and is demoted; installing that plugin mid-run —
-/// the plugin store, then the plugin-store record every install path writes
-/// — re-admits it on the next reconcile.
 #[tokio::test]
 async fn demoted_agent_is_readmitted_when_its_named_plugin_installs_midrun() {
     let node = test_node().await;

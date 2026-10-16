@@ -1,5 +1,3 @@
-//! `BoundDir` and `PluginRunner::call_bound`.
-
 use super::*;
 
 #[test]
@@ -32,10 +30,6 @@ fn bound_dir_allows_a_path_inside_within() {
     assert_eq!(bound.path(), nested.canonicalize().unwrap().as_path());
 }
 
-/// A lexical `starts_with` on the uncanonicalized path would accept this: as
-/// text, `within/../outside` starts with `within`. Canonicalizing first
-/// (what `BoundDir::new` actually does) resolves the `..` away, so the
-/// comparison sees `outside` sitting beside `within`, not inside it.
 #[test]
 fn bound_dir_refuses_dot_dot_traversal_out_of_within() {
     let root = tempfile::tempdir().expect("tempdir");
@@ -50,10 +44,6 @@ fn bound_dir_refuses_dot_dot_traversal_out_of_within() {
     assert!(format!("{error:#}").contains("outside"));
 }
 
-/// A symlink physically inside `within` whose target lives outside it must
-/// still be refused: `canonicalize` resolves the symlink before the prefix
-/// check runs, so the comparison sees where it actually points, not where
-/// it sits in the directory tree.
 #[test]
 #[cfg(unix)]
 fn bound_dir_refuses_a_symlink_inside_within_pointing_outside() {
@@ -114,10 +104,6 @@ fn call_bound_overwrites_the_declared_input_field_with_the_canonical_bound_path(
     );
 }
 
-/// A missing operator input (`Value::Null`, what a CLI turns an omitted
-/// `--input` into) is not a refusal when the binding itself supplies the
-/// only field the call needs: it is treated as an empty object before
-/// `input_field` is inserted. A non-object, non-null value is still refused.
 #[test]
 fn call_bound_treats_null_arguments_as_an_empty_object() {
     let (mut plugin, afb) = build_plugin_pack("bind_null_pack", ECHO_WAT, None);
@@ -166,9 +152,6 @@ fn admission_refuses_a_bind_dir_plugin_whose_dispatch_path_cannot_enforce_read_o
     assert!(message.contains("read-only"), "{message}");
 }
 
-/// A guest that creates `path` in its one preopen (fd 3) holding `{}`, then
-/// writes `{}` to stdout; stdout stays empty when the create fails, so a
-/// refusal shows as `BadOutput`.
 pub(crate) fn create_file_wat(path: &str) -> String {
     format!(
         r#"(module
@@ -212,9 +195,6 @@ fn call_bound_read_write_lets_the_guest_create_a_file() {
     );
 }
 
-/// A guest that opens `path` (relative to its one preopen, fd 3) with
-/// `oflags`, then copies the file to stdout; stdout stays empty when the
-/// open fails, so a refusal shows as `BadOutput`.
 pub(crate) fn open_and_copy_wat(path: &str, oflags: u32) -> String {
     format!(
         r#"(module

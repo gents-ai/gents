@@ -21,7 +21,6 @@ describe("the selection store", () => {
     });
     expect(store.getState().composingFor).toBe("node-a");
 
-    /* a snapshot settling the same agent is not a move */
     selection.settleAgent(store, "engineer");
     expect(store.getState().mailboxRoute).toEqual(route);
   });

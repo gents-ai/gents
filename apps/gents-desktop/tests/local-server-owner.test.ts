@@ -19,7 +19,6 @@ const status = (state: ManagedServerStatus["state"]) =>
     error: null,
   }) as unknown as ManagedServerStatus;
 
-/* a promise the test settles */
 function later<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => (resolve = done));

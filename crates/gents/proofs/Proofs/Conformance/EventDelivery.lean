@@ -101,8 +101,8 @@ def transitionCases : List TransitionCase :=
     , post   := mkWorld [doc "a"] [doc "a", doc "z"] [] []
     }
   ,
-    -- The generic identity-isolation fixture needs an EventSource adapter with
-    -- two real triggers on one source row; see the coverage-ledger follow-up.
+
+
     { name   := "handle_ready_trigger_preserves_pending_sibling"
     , pre    :=
         mkWorld
@@ -119,8 +119,8 @@ def transitionCases : List TransitionCase :=
           [doc "trigger-ready:doc-a"]
     }
   ,
-    -- The Watcher performs `release` when it delivers a request that overtook
-    -- this delivered one at its session head (`Watcher.releasedBy`).
+
+
     { name   := "release_returns_overtaken_doc"
     , pre    := mkWorld [doc "goal-cont-3"] [] [doc "goal-cont-3"] [doc "goal-cont-3"]
     , action := .release (doc "goal-cont-3")
@@ -142,8 +142,8 @@ structure SourceInstanceRow where
   rescanBoundedBy  : Nat
   deviation        : Option String
 
-/-- Runtime metadata, with Watcher observations restricted to one cooldown
-epoch as documented by boundary.event-delivery.fair-substrate. -/
+
+
 def sourceInstances : List SourceInstanceRow :=
   [ { name := "Watcher"
     , dedupePolicy := DedupePolicy.toContract .ttlCooldown
@@ -257,8 +257,8 @@ def convergenceTraceRowJson (r : ConvergenceTraceRow) : String :=
 def convergenceTracesJson : String :=
   jsonArray (convergenceTraces.map convergenceTraceRowJson)
 
-/-- Input-complete durable clock cases; outputs come from the shared clock and
-existing timeout observation, including cache loss and repeated quiescence. -/
+
+
 structure GroupClockCase where
   name : String
   clock : _root_.EventDelivery.Group.EventGroupState
@@ -294,7 +294,7 @@ def eventGroupClockCasesJson : String :=
 
 def eventGroupClockCaseCount : Nat := groupClockCases.length
 
-/-- Exercise the shared eligibility/key gate before capturing callback input. -/
+
 def eventGroupCaptureCases :
     List (String × _root_.EventDelivery.Group.EventGroupState × Triggers.Groups.Candidate) :=
   let key : Triggers.Groups.EventGroupKey :=

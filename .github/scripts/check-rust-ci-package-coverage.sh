@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# The compile script owns both the commands and their package assignments, so
-# this guard cannot drift away from what CI actually invokes.
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 covered_packages="$({
   for suite in runtime cli desktop support; do

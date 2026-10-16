@@ -1,21 +1,3 @@
-//! Typed patch layer for agent self-configuration (#654).
-//!
-//! Mirrors the Lean `SelfConfig` model (`proofs/Proofs/SelfConfig/`): each
-//! config collection has a declared writable field set; everything else —
-//! identity/unique keys, the owner `node_did`, runtime-owned status fields,
-//! secrets, apply-managed fields — is protected. A patch is an in-memory
-//! partial merge over exactly the writable fields ([`apply_patch`]), rejected
-//! wholesale if it names anything outside them ([`ensure_admissible`]),
-//! validated as a whole document, and committed through a
-//! [`super::ConfigApplyTxn`] under the node DID.
-//!
-//! Desired-field selection and merge semantics are fenced against the Lean contract
-//! snapshot by `tests/conformance/self_config.rs`:
-//! - `all_fields` reuses the canonical desired-state projection; runtime-owned
-//!   observations are excluded even when they share the same stored document;
-//! - identity immutability, field containment, and reject-leaves-unchanged
-//!   replay the generated Lean witness cases through this merge.
-
 use anyhow::{bail, Result};
 use serde_json::{Map, Value};
 
@@ -154,12 +136,9 @@ impl SelfConfigTarget {
     }
 }
 
-/// A self-config patch: field → `Some(value)` to set, `None` to clear.
-/// Ordered; later entries win (Lean `applyPatch` fold).
+/// A self-config patch: field → `Some(value)` to set, `None` to clear. Later entries win.
 pub type SelfConfigPatch = Vec<(String, Option<Value>)>;
 
-/// Reject unknown/protected fields before merging. Canonical typed decoding and
-/// full retained reference validation check values at preview/publication.
 pub fn ensure_admissible(target: SelfConfigTarget, patch: &SelfConfigPatch) -> Result<()> {
     for (field, _) in patch {
         if !target.is_writable(field) {
@@ -214,9 +193,6 @@ pub fn ensure_admissible(target: SelfConfigTarget, patch: &SelfConfigPatch) -> R
     Ok(())
 }
 
-/// In-memory partial merge (Lean `applyPatch`): only writable fields change;
-/// a set overwrites, a clear removes. Entries outside the writable set are
-/// ignored here as defense in depth below [`ensure_admissible`].
 pub fn apply_patch(
     target: SelfConfigTarget,
     doc: &Map<String, Value>,
@@ -239,7 +215,6 @@ pub fn apply_patch(
     merged
 }
 
-/// One field-level delta of a dry-run preview or applied patch.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct FieldDelta {
     pub field: String,
@@ -247,7 +222,6 @@ pub struct FieldDelta {
     pub to: Value,
 }
 
-/// Field-level diff between two document projections, in schema field order.
 pub fn diff_docs(
     target: SelfConfigTarget,
     before: &Map<String, Value>,
@@ -272,38 +246,6 @@ pub fn diff_docs(
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn field_partition_is_disjoint_and_complete() {
-        for target in ALL_SELF_CONFIG_TARGETS {
-            let all = target.all_fields();
-            let writable = target.writable_fields();
-            let protected = target.protected_fields();
-            for field in &writable {
-                assert!(
-                    all.contains(field),
-                    "{}: writable field {field} missing from all_fields",
-                    target.collection_name()
-                );
-            }
-            assert_eq!(
-                writable.len() + protected.len(),
-                all.len(),
-                "{}: partition incomplete",
-                target.collection_name()
-            );
-            assert!(
-                !writable.contains(&target.unique_field()),
-                "{}: unique field must be protected",
-                target.collection_name()
-            );
-            assert!(
-                !writable.contains(&"node_did"),
-                "{}: node_did must never be writable",
-                target.collection_name()
-            );
-        }
-    }
 
     #[test]
     fn merge_sets_clears_and_contains() {

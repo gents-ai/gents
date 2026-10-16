@@ -6,7 +6,6 @@ type Task @branchable @index(fields: ["node_did", "task_id"], unique: true) {
     agent_id: String @index
     prompt_template: String
     emit_outcome: Boolean
-    # Optional durable terminal condition provisioned before a task request is runnable.
     goal_objective_template: String
     goal_token_budget: Int
     hooks: JSON

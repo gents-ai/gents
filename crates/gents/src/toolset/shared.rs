@@ -24,13 +24,6 @@ pub(crate) use context::ToolContext;
 pub(super) use context::ToolError;
 pub(super) use filesystem::{cap_output, render_file_contents};
 
-/// Resolves the effective command timeout for a bash tool call (#985, #1018).
-///
-/// Foreground: an omitted `timeout_secs` applies the tool's configured
-/// default — the same value the schema advertises — and explicit requests are
-/// clamped to the operator's foreground ceiling, which is never below the
-/// default. Background (spawn_process): neither foreground value applies; the
-/// run gets the `BACKGROUND_COMMAND_TIMEOUT_SECS` lifetime budget instead.
 pub(super) fn resolve_command_timeout(
     requested_secs: Option<u64>,
     foreground_default: std::time::Duration,
@@ -51,8 +44,6 @@ pub(super) fn resolve_command_timeout(
     }
 }
 
-/// Scope-aware wrapper: reads whether the current execution was backgrounded
-/// from the task-local tool runtime scope.
 pub(super) fn resolve_command_timeout_in_scope(
     requested_secs: Option<u64>,
     foreground_default: std::time::Duration,

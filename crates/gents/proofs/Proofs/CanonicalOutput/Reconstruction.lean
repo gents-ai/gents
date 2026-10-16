@@ -3,7 +3,6 @@ import Mathlib.Data.List.Dedup
 
 namespace CanonicalOutput
 
-/-- Never select a first/last winner from conflicting visible documents. -/
 private def uniqueRecordRaw {α ε : Type} (missing conflict : ε) : List α → Except ε α
   | [] => .error missing
   | [record] => .ok record
@@ -26,8 +25,6 @@ private theorem uniqueRecordRaw_order_independent {α ε : Type} (missing confli
               | nil => simp at lengths
               | cons r' rs' => rfl
 
-/-- Observations are sets of exact immutable facts. Duplicate delivery of the
-same document is not a twin; a different identity or content remains a conflict. -/
 def uniqueRecord {α ε : Type} [DecidableEq α] (missing conflict : ε)
     (records : List α) : Except ε α := uniqueRecordRaw missing conflict records.dedup
 
@@ -42,11 +39,9 @@ theorem uniqueRecord_eq_ok_iff {α ε : Type} [DecidableEq α]
       | nil => simp [uniqueRecordRaw]
       | cons second tail => simp [uniqueRecordRaw]
 
-/-- Every visible document at this immutable identity has exactly these bytes. -/
 def exactIdentityAt (records : List Segment) (record : Segment) : Bool :=
   (records.filter (fun other => other.id == record.id)).all (fun other => other == record)
 
-/-- Flush timestamps respect ordinal order within a reconstructed source. -/
 def timestampsNondecreasing (records : List Segment) : Bool :=
   records.all fun left => records.all fun right =>
     match left.flush, right.flush with
@@ -135,7 +130,6 @@ inductive ExtentError where
   | invalidClosure
   deriving DecidableEq, Repr
 
-/-- Resolves one ordinal without selecting an arbitrary twin. -/
 def flushAt (records : List Segment) (writer : Writer) (ordinal : Nat) :
     Except ExtentError Flush :=
   match uniqueRecord (.missingOrdinal ordinal) (.conflictingOrdinal ordinal)
@@ -154,13 +148,9 @@ theorem flushAt_order_independent (left right : List Segment) (writer : Writer)
 
 abbrev Streams := List (Declaration × List UInt8)
 
-/-- Signature bytes occupy a separate field at the native reasoning part.
-Within each field, body declarations still have one unique position. -/
 def declarationField (declaration : Declaration) : Nat :=
   if declaration.kind == .signature then 1 else 0
 
-/-- Native declaration positions use lexicographic `(block, part, field)` order.
-Run arrival need not follow this order. -/
 def declarationBefore (left right : Declaration) : Bool :=
   left.block < right.block ||
     (left.block == right.block &&
@@ -190,9 +180,6 @@ theorem signature_kinds_share_position (signature : Declaration)
 def declarationPositionFresh (streams : Streams) (declaration : Declaration) : Bool :=
   streams.all fun existing => !sameDeclarationPosition existing.1 declaration
 
-/-- Runs partition the payload at UTF-8 boundaries, declare streams densely once,
-and never silently truncate an oversized run. Empty continuation writes are not
-progress; only an opening declaration represents a meaningful empty string. -/
 def consumeRuns : List Run → List UInt8 → Streams → Except ExtentError Streams
   | [], [], streams => .ok streams
   | [], _ :: _, _ => .error .malformedRuns
@@ -341,13 +328,11 @@ theorem absent_dependency_denial_is_not_loading (records : List Segment)
       .error (.lookup .denied) := by
   simp [reconstructPayload]
 
-/-- A closed record's sealed stream count, which bounds every reference to it. -/
 def closeStreamCount (closing : Segment) : Nat :=
   match closing.close with
   | some (.closed _ _ streamBytes) => streamBytes.length
   | _ => 0
 
-/-- Close resolution depends on the stream index only through the sealed bound. -/
 theorem resolveClose_other_stream (records : List Segment) (denied : List DocId)
     (closeId : DocId) (stream other : Nat) (closing : Segment)
     (h : resolveClose records denied ⟨closeId, stream⟩ = .ok closing) :
@@ -449,8 +434,6 @@ theorem reconstructPayload_shared_extent (records : List Segment) (denied : List
           · have hs : ¬ other < streams.length := hlen ▸ ho
             simp [closeStreamCount, hcl, ho, List.getElem?_eq_none (Nat.le_of_not_lt hs)]
 
-/-- Recovery inputs retain unique source stream indexes and unique native
-declaration positions. Arrival order is deliberately irrelevant here. -/
 def recoveryDeclarationsValid : List (Nat × Declaration) → Bool
   | [] => true
   | first :: rest =>
@@ -486,10 +469,6 @@ theorem mem_sortRecoveryByPosition_iff (entry : Nat × Declaration)
   | cons head tail ih =>
       simp [sortRecoveryByPosition, mem_insertRecoveryByPosition_iff, ih]
 
-/-- Recovery narrows declarations, not bytes. It never decodes incomplete tool
-arguments or promotes opaque reasoning to text. Duplicate stream IDs or native
-positions are rejected; surviving Text entries are sorted by native position
-while retaining their source stream IDs. -/
 def recoveryText (streams : List (Nat × Declaration)) :
     Except ExtentError (List (Nat × Declaration)) :=
   if recoveryDeclarationsValid streams then
@@ -542,9 +521,6 @@ inductive MessagePublication where
   | fork (origin : DocId)
   deriving DecidableEq, Repr
 
-/-- Forking changes header ownership and publication provenance, not payload
-references. This function is deliberately independent of runtime
-execution/delivery state. -/
 structure Header where
   id : DocId
   session : SessionId

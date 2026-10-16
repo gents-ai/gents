@@ -1,9 +1,3 @@
-//! Declarative, schema-bounded single-collection write tool.
-//!
-//! The declaration owns the tool name and permitted fields; DefraDB owns their
-//! types. Each call writes one document through the configuration transaction
-//! owner and returns its canonical receipt, including runtime-filled metadata.
-
 use std::sync::Arc;
 
 use crate::llm::tool::ToolDefinition;
@@ -62,7 +56,6 @@ impl BoundedWriteTool {
         }
     }
 
-    /// The DatastoreToolSurface that declared this tool, named by refusals.
     pub fn declared_by(mut self, surface_id: Option<String>) -> Self {
         self.surface_id = surface_id;
         self
@@ -113,10 +106,6 @@ impl BoundedWriteTool {
     }
 
     fn build_mutation(&self, args: &Map<String, Value>) -> Result<String> {
-        // `ensure_well_formed` delegates to `WriteToolDecl::validate`, which
-        // validates the collection and every field name as GraphQL identifiers
-        // (the centralized identifier-validation boundary), so bare-identifier
-        // interpolation below is safe without a second per-site check here.
         self.ensure_well_formed()?;
         let types = self.field_types()?;
 

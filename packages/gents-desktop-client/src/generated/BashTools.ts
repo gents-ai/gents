@@ -6,11 +6,7 @@ import type { CommandNetworkMode } from "./CommandNetworkMode.js";
 /**
  * Bash capability and command execution constraints.
  */
-export type BashTools = {
-/**
- * Off, ReadOnly, or Unrestricted. Selects the exposed bash tool.
- */
-mode?: BashMode | null,
+export type BashTools = { mode?: BashMode | null,
 /**
  * Execution restrictions, independent of which bash tool is exposed.
  * Unset retains the existing mode-derived execution policy.
@@ -30,11 +26,7 @@ forbidden_argv_prefixes?: Array<Array<string>> | null,
  * Nonempty replaces the existing read-only executable list. Empty/absent
  * preserves that default, matching the existing contract.
  */
-read_only_commands?: Array<string> | null,
-/**
- * Permit background execution of this selected bash capability.
- */
-background_enabled?: boolean | null,
+read_only_commands?: Array<string> | null, background_enabled?: boolean | null,
 /**
  * Foreground timeout when a call omits `timeout_secs`. Unset uses the
  * host's `--command-timeout-secs` (120s unless the host sets it). Clamped

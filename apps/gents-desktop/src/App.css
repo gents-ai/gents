@@ -20,8 +20,8 @@ body,
   overflow: hidden;
 }
 
-/* Windows uses a web window bar. macOS and Linux reserve native chrome
-   outside the webview, so viewport units describe usable content only. */
+/* macOS and Linux reserve native chrome outside the webview; only Windows
+   uses a web window bar. */
 .titlebar-drag-region {
   display: none;
 }

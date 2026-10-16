@@ -35,7 +35,6 @@ pub(crate) struct LeanClientShellCase {
     pub(crate) desktop_expect_pending_turn: Option<bool>,
 }
 
-/// `ClientShell.SessionTurn.Row`: one request row of a session.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanSessionTurnRow {
@@ -52,8 +51,6 @@ pub(crate) struct LeanSessionTurnRow {
     pub(crate) authored_input_materialized: bool,
 }
 
-/// `SessionTurnCases`: rows in arrival order, the last being newest, and the
-/// turn, queue and folded requests `SessionTurn` computes from them.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanSessionTurnCase {

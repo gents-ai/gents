@@ -52,8 +52,6 @@ export function ManagedRuntimeAuthorityPicker({
 }) {
   const [validating, setValidating] = useState(false);
   const [directoryDraft, setDirectoryDraft] = useState(toolRoot ?? home);
-  /* a committed folder becomes the draft; while one is being validated
-     (null) the draft stays as typed */
   const [committedRoot, setCommittedRoot] = useState(toolRoot);
   if (toolRoot !== committedRoot) {
     setCommittedRoot(toolRoot);
@@ -174,7 +172,6 @@ export function ManagedRuntimeAuthorityPicker({
           </Button>
         </div>
       </div>
-      {/* the one thing kept in view: what read / write lets through */}
       {toolCeiling === "readwrite" ? (
         <p className="text-xs text-muted-foreground">
           Commands run as you; the tool root is not a sandbox.

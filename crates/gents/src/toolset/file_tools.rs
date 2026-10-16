@@ -38,10 +38,9 @@ fn merge_optional_notes(left: Option<String>, right: Option<String>) -> Option<S
     }
 }
 
-/// write_file's stale-content guard, checked under the per-path mutation
-/// lock. Replacing existing bytes requires either the hash the model last
-/// observed or an explicit overwrite, never both. No refusal discloses the
-/// current hash, so a retry cannot replace changed content without re-reading.
+/// Stale-content guard for write_file, checked under the per-path mutation
+/// lock. No refusal discloses the current hash, so a retry cannot replace
+/// changed content without re-reading.
 async fn guard_existing_file_overwrite(
     path: &Path,
     display: &str,
@@ -88,16 +87,11 @@ pub(crate) fn content_hash(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
-/// Per-path serialization for FILE MUTATORS — edit_file's read →
-/// hash-check → match → write sequence AND write_file's hash-check →
-/// overwrite share it:
-/// without it, a concurrent mutation can land inside edit_file's validated
-/// window and be silently overwritten (lost update). Scope: WITHIN this
-/// process, keyed by canonical path (falling back to the resolved path for
-/// not-yet-existing files). External writers are outside the lock — they
-/// are caught by the expected_content_hash check at entry and otherwise
-/// race as ordinary last-writer-wins POSIX writes (#724 documents the
-/// optimistic-concurrency boundary; there is no OS-level file lock).
+/// Per-path serialization for file mutators (edit_file read → hash-check →
+/// match → write; write_file hash-check → overwrite): without it a concurrent
+/// in-process mutation can land inside the validated window and be silently
+/// overwritten. External writers are outside the lock — they are caught by
+/// the expected_content_hash check; there is no OS-level file lock (#724).
 static FILE_MUTATION_LOCKS: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 > = std::sync::LazyLock::new(Default::default);
@@ -781,8 +775,8 @@ impl Tool for EditFileTool {
             }
         };
 
-        // Strict UTF-8: a lossy conversion followed by a full-file rewrite
-        // would silently replace every invalid byte with U+FFFD.
+        // A lossy conversion followed by a full-file rewrite would silently
+        // replace every invalid byte with U+FFFD.
         let raw_text = String::from_utf8(raw).map_err(|error| {
             anyhow!(
                 "{display} is not valid UTF-8 (first invalid byte at offset {}); edit_file only edits UTF-8 text files",

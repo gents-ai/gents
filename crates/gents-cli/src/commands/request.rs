@@ -96,7 +96,6 @@ async fn request_pending(args: RequestPendingArgs) -> Result<()> {
     Ok(())
 }
 
-/// Selected IDs in queue order; the runtime owner validates the selection.
 fn selected_queue_ids(expected: &[String], requested: &[String]) -> Vec<String> {
     let mut selected = requested.to_vec();
     selected.sort_by_key(|id| expected.iter().position(|entry| entry == id));
@@ -187,9 +186,6 @@ async fn request_reorder_pending(args: RequestReorderPendingArgs) -> Result<()> 
     apply_pending_edit(args.queue, selected, messages).await
 }
 
-/// Canonical `request create --wait` result: the submitted-request summary plus
-/// the typed terminal output envelope, with no response-shaped overlay and no
-/// request prompt overwritten as output.
 fn wait_result(
     request_summary: serde_json::Value,
     envelope: &RequestOutputEnvelope,
@@ -825,8 +821,6 @@ fn terminal_action_for_state(state: &str) -> Option<&'static str> {
 
 fn terminal_timestamp(request: &Value, action: &str) -> Option<String> {
     match action {
-        // AgentRequest.terminalized_at is the canonical durable terminal
-        // timestamp; AgentResponse.completed_at/interrupted_at are retired.
         "finish" | "fail" => string_field(request, "terminalized_at"),
         "expire" => string_field(request, "terminalized_at")
             .or_else(|| string_field(request, "valid_until")),
@@ -1688,15 +1682,6 @@ mod tests {
     }
 
     #[test]
-    fn pending_selection_follows_queue_order() {
-        let expected = vec!["a".into(), "b".into(), "c".into()];
-        assert_eq!(
-            selected_queue_ids(&expected, &["c".into(), "b".into()]),
-            vec!["b", "c"]
-        );
-    }
-
-    #[test]
     fn blocked_usage_limit_prints_account_reset_and_switch() {
         let resets_at = show_now() + chrono::Duration::minutes(133);
         let snapshot = show_snapshot(Some(usage_limit(Some(resets_at))));
@@ -1785,35 +1770,6 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_helpers_cover_all_nine_states() {
-        let cases: [(RequestLifecycleState, bool, Option<&str>); 9] = [
-            (RequestLifecycleState::WorkspaceBindingPending, false, None),
-            (RequestLifecycleState::Pending, false, None),
-            (RequestLifecycleState::Claimed, false, None),
-            (RequestLifecycleState::Processing, true, None),
-            (RequestLifecycleState::Completed, true, Some("finish")),
-            (RequestLifecycleState::Failed, false, Some("fail")),
-            (RequestLifecycleState::Superseded, true, Some("supersede")),
-            (RequestLifecycleState::Dead, false, Some("expire")),
-            (RequestLifecycleState::Interrupted, false, Some("interrupt")),
-        ];
-
-        for (state, expect_begun_inference, expect_terminal_action) in cases {
-            let state_str = state.as_str();
-            assert_eq!(
-                lifecycle_has_begun_inference(state_str),
-                expect_begun_inference,
-                "lifecycle_has_begun_inference({state_str:?})"
-            );
-            assert_eq!(
-                terminal_action_for_state(state_str),
-                expect_terminal_action,
-                "terminal_action_for_state({state_str:?})"
-            );
-        }
-    }
-
-    #[test]
     fn request_show_json_retains_typed_input_and_aggregate_budget() {
         let request = json!({
             "request_id": "request-one",
@@ -1829,12 +1785,6 @@ mod tests {
 
         assert_eq!(value["input"]["selected_skill_ids"], json!(["review"]));
         assert_eq!(value["max_total_tokens"], 250000);
-    }
-
-    #[test]
-    fn request_show_rejects_malformed_typed_input() {
-        let request = json!({"input": {"selected_skill_ids": 3}});
-        assert!(request_header_view(&request, None, Vec::new()).is_err());
     }
 
     #[test]

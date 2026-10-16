@@ -38,8 +38,8 @@ impl ConfigCommandTool {
                     }
                 }
                 if errors.is_empty() {
-                    // Revalidate the saved snapshot without publishing it. Marking every
-                    // document as a candidate also runs the owner's affected-field checks.
+                    // Marking every document as a candidate also runs the
+                    // owner's affected-field checks.
                     let plan = DesiredStateApplyPlan::new(references.documents().map(|((collection, _), value)| DesiredStateApplyDocument {
                         collection: *collection, add: value.clone(), update: value.clone(),
                     }).collect())?;

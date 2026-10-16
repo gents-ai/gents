@@ -1,7 +1,3 @@
-//! A draft becomes a definition (assembly) and is held to the contract, the
-//! check catalog and the subject (validation). Every failure is a message the
-//! author can act on; they go back to it verbatim.
-
 use std::collections::BTreeSet;
 
 use gents::document_config::{EvalCapture, EvalCase, EvalDefinition, EvalSplit};
@@ -11,20 +7,15 @@ use serde_json::{json, Value};
 use super::dossier::{runtime_collections, Dossier};
 use super::draft::Draft;
 
-/// A draft the CLI completed into a definition: its id, owner, version and
-/// subject are the CLI's, its cases the author's.
 #[derive(Clone, Debug)]
 pub(crate) struct Assembled {
     pub(crate) definition: EvalDefinition,
 }
 
-/// Minimums the interview settled.
 pub(crate) struct Floors {
     pub(crate) validation_min: usize,
 }
 
-/// Step 2: the definition the draft describes. The author sets neither the
-/// subject nor the comparability version; whatever it carried is ignored.
 pub(crate) fn assemble(
     draft: &Draft,
     definition_id_flag: Option<&str>,
@@ -52,7 +43,6 @@ pub(crate) fn assemble(
         .map_err(|error| vec![format!("the draft is not an eval definition: {error}")])
 }
 
-/// Steps 3 to 6, in order, stopping at the first step with messages.
 pub(crate) fn validate(
     assembled: &Assembled,
     registry: &CheckRegistry,
@@ -75,7 +65,6 @@ pub(crate) fn validate(
     Ok(())
 }
 
-/// Step 4: every check is registered and its params satisfy its schema.
 fn catalog_conformance(definition: &EvalDefinition, registry: &CheckRegistry) -> BTreeSet<String> {
     definition
         .cases
@@ -84,9 +73,6 @@ fn catalog_conformance(definition: &EvalDefinition, registry: &CheckRegistry) ->
         .collect()
 }
 
-/// Step 4 for one case: the single owner of the rule, so `gents eval checks
-/// --validate-case` (a pack's own contract tests) and the author's draft
-/// validation cannot disagree on what the catalog admits.
 pub(crate) fn case_catalog_conformance(
     case: &EvalCase,
     registry: &CheckRegistry,
@@ -144,7 +130,6 @@ fn capture_conformance(definition: &EvalDefinition, dossier: &Dossier) -> BTreeS
                     capture.name()
                 );
                 match capture {
-                    // A stage may create the collections whose schemas it captures.
                     EvalCapture::Schema { .. } => {}
                     EvalCapture::Documents { collection, .. }
                         if gents_protocol::schemas::is_credential_collection(collection) =>
@@ -212,9 +197,6 @@ fn known_collections(dossier: &Dossier) -> String {
     }
 }
 
-/// The field names a DefraDB filter object tests: its keys, through the
-/// `_and`, `_or` and `_not` combinators. A field's own value holds operators
-/// (`_eq`, `_in`, …), not fields, and `_docID` names the document itself.
 fn filter_fields<'a>(filter: &'a Value, keys: &mut BTreeSet<&'a str>) {
     let Some(object) = filter.as_object() else {
         return;
@@ -235,7 +217,6 @@ fn filter_fields<'a>(filter: &'a Value, keys: &mut BTreeSet<&'a str>) {
     }
 }
 
-/// Step 6: every split is populated and validation meets its floor.
 fn split_shape(definition: &EvalDefinition, floors: &Floors) -> BTreeSet<String> {
     let mut messages = BTreeSet::new();
     let count = |split: EvalSplit| {
@@ -275,8 +256,6 @@ fn split_shape(definition: &EvalDefinition, floors: &Floors) -> BTreeSet<String>
     if unique.len() != definition.cases.len() {
         messages.insert("the draft repeats a case_id".to_owned());
     }
-    // A case's id names its sidecar file, so it is checked here, before
-    // anything is written, and not left to the pack loader afterwards.
     for case_id in unique {
         if !gents::pack::is_valid_pack_name(&case_id.replace('-', "_")) {
             messages.insert(format!(
@@ -298,8 +277,6 @@ pub(crate) mod tests {
     pub(crate) const OWNER: &str = "did:key:owner";
     pub(crate) const SLOT: &str = "primary";
 
-    /// The canary subject, with the collection its fixture schema installs at
-    /// trial time.
     pub(crate) fn dossier() -> Dossier {
         Dossier {
             pack_name: "eval_canary".into(),
@@ -339,7 +316,6 @@ pub(crate) mod tests {
         })
     }
 
-    /// One case per split: the smallest draft that validates at floor one.
     pub(crate) fn good() -> Draft {
         Draft {
             definition_id: Some("canary-quality".into()),
@@ -373,7 +349,6 @@ pub(crate) mod tests {
     fn a_good_draft_validates_and_assembly_owns_subject_and_version() {
         assert_eq!(check(&good(), &FLOOR_ONE), Ok(()));
 
-        // What the author set for the subject or the version never lands.
         let reply = format!(
             "```json\n{}\n```",
             json!({
@@ -630,7 +605,6 @@ pub(crate) mod tests {
     fn the_definition_rules_run_before_catalog_captures_and_splits() {
         let mut draft = good();
         draft.cases[1]["case_id"] = json!("train-a");
-        // Also an unknown check and a missing split: only step 3 answers.
         first_stage(&mut draft)["checks"][0]["check"] = json!("no_such");
         let message = only_message(&draft, &Floors { validation_min: 6 });
         assert!(message.contains("duplicate case_id train-a"), "{message}");

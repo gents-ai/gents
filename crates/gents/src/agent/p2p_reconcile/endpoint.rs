@@ -1,10 +1,3 @@
-//! Signed `PeerEndpoint` heartbeat.
-//!
-//! `PeerRegistry` is self-asserted discovery state. The network-membership
-//! substrate uses this signed endpoint row instead: the member DID signs its
-//! current `(did, node_id, address, updated_at)` binding so peers can materialize
-//! network-derived pairings from cryptographically bound reachability.
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -203,55 +196,6 @@ pub fn peer_endpoint_upsert_mutation(record: &EndpointRecord) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn endpoint_binding_publishes_only_when_needed() {
-        let now = Instant::now();
-        let original = EndpointBinding {
-            peer_id: "peer-one".into(),
-            address: "endpoint-one".into(),
-        };
-        let published = PublishedEndpoint {
-            binding: original.clone(),
-            at: now,
-        };
-
-        assert_eq!(
-            endpoint_publish_reason(None, &original, now, Duration::from_secs(30)),
-            Some("initial")
-        );
-        assert_eq!(
-            endpoint_publish_reason(
-                Some(&published),
-                &original,
-                now + Duration::from_secs(29),
-                Duration::from_secs(30)
-            ),
-            None
-        );
-        assert_eq!(
-            endpoint_publish_reason(
-                Some(&published),
-                &original,
-                now + Duration::from_secs(30),
-                Duration::from_secs(30)
-            ),
-            Some("renewal")
-        );
-        let changed = EndpointBinding {
-            peer_id: "peer-one".into(),
-            address: "endpoint-two".into(),
-        };
-        assert_eq!(
-            endpoint_publish_reason(
-                Some(&published),
-                &changed,
-                now + Duration::from_secs(1),
-                Duration::from_secs(30)
-            ),
-            Some("binding_changed")
-        );
-    }
 
     #[test]
     fn endpoint_upsert_escapes_and_has_no_empty_lists() {

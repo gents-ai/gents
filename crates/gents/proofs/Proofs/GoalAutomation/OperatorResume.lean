@@ -101,8 +101,6 @@ theorem target_change_does_not_block_existing_receipt
   | some existing => simp [resumeOn, h]
 
 
-/-- Strengthen the existing GoalSource update guard with its observed sequence.
-The actual fields/transition remain owned by existing Goals.step?. -/
 def controllerWrite (s : Snapshot) (expectedStatus : Goals.Status)
     (expectedSequence : Nat) (action : Goals.Action) : Snapshot :=
   if s.goal.status = expectedStatus ∧ s.sequence = expectedSequence then
@@ -195,8 +193,6 @@ theorem successful_commit_retry_recovers_same_child (s : Snapshot) (r : Request)
     ↓reduceIte, publication.2.1]
   simp [List.find?, sameKey]
 
-/-- Configuration may preserve Active but cannot reactivate an existing Goal.
-The actual non-resume transition remains the existing Goals.step? policy. -/
 def configMaySetStatus (current target : Goals.Status) : Bool :=
   !(current != .active && target == .active)
 
@@ -206,8 +202,6 @@ theorem config_cannot_reactivate (current : Goals.Status) (h : current ≠ .acti
 
 theorem active_config_remains_allowed : configMaySetStatus .active .active = true := rfl
 
-/-- Receipt status observes the transaction result, not a claim that a historical
-acknowledgment reactivated the Goal. This does not change resume transitions. -/
 def receiptStatus (result : Snapshot × Outcome) : Option Goals.Status :=
   match result.2 with
   | .created | .recovered => some result.1.goal.status

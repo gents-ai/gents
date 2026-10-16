@@ -1,6 +1,3 @@
-//! Backend configuration and observation lookups. Logical references are scoped
-//! by their owning node; authentication remains an explicit selection.
-
 use crate::backend_provider::BackendProviderKind;
 pub use crate::document_config::InferenceBackend;
 use crate::document_config::{
@@ -18,8 +15,6 @@ pub const DEFAULT_MAX_QUEUE_DEPTH: i64 = 100;
 pub const HEALTHY_PROBE_STATUS: &str = "healthy";
 pub const UNKNOWN_PROBE_STATUS: &str = "unknown";
 
-/// Effective provider input assembled from one backend connection. Credentials
-/// retain their explicit selection until resolved by the invoking principal.
 #[derive(Debug, Clone)]
 pub struct BackendFields {
     pub backend_id: Option<String>,
@@ -37,7 +32,6 @@ impl InferenceBackend {
         let object = config
             .as_object_mut()
             .context("InferenceBackend must be an object")?;
-        // DefraDB identity and runtime observations are envelopes, never desired config.
         for field in [
             "_docID",
             "_deleted",
@@ -140,8 +134,6 @@ impl InferenceBackend {
 }
 
 impl BackendAuth {
-    /// Resolve only shared credentials. OAuth callers must use the existing
-    /// agent-scoped OAuthCredential owner, not fall back to unauthenticated HTTP.
     pub fn resolve_api_key(&self) -> Result<Option<String>> {
         match self {
             Self::Unauthenticated => Ok(None),
@@ -178,8 +170,6 @@ impl InferenceBackendObservation {
         )
     }
 
-    /// Exact authentication scope: shared credentials do not imply OAuth
-    /// entitlements, and one principal never inherits another's advertised list.
     pub fn catalog_for(&self, principal: Option<&str>) -> Result<Option<&BackendModelCatalog>> {
         let mut catalogs = self
             .catalogs
@@ -194,10 +184,6 @@ impl InferenceBackendObservation {
     }
 }
 
-/// Pure function backing [`InferenceBackendObservation::display_state`]. Lives outside
-/// the impl so the Tauri bridge can call it on raw `(enabled, probe_status)`
-/// pairs from the Lean witness fixtures without constructing a full
-/// `InferenceBackend`.
 pub fn derive_display_state(enabled: bool, probe_status: &str) -> &'static str {
     if !enabled {
         return "disabled";
@@ -253,8 +239,8 @@ pub(crate) async fn lookup_backend_record(
     Ok(records.pop())
 }
 
-/// A stored row whose provider_kind this build does not know (a newer
-/// peer wrote it). Lists skip it; single-document decodes stay strict.
+// A stored row whose provider_kind this build does not know (a newer peer
+// wrote it). Lists skip it; single-document decodes stay strict.
 pub(crate) fn unknown_provider_kind(row: &serde_json::Value) -> Option<&str> {
     let kind = row.get("provider_kind")?.as_str()?;
     (!BackendProviderKind::ALL
@@ -302,8 +288,6 @@ async fn query_backend_records(
         .collect()
 }
 
-/// Administrative enumeration only. Callers resolving a logical reference must
-/// use lookup_backend_record with the owning DID.
 pub(crate) async fn list_backend_records(
     node: &EmbeddedNode,
 ) -> Result<Vec<(String, InferenceBackend)>> {
@@ -328,7 +312,6 @@ pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceB
     )
 }
 
-/// Enumerate enabled configuration only within the selected node.
 pub async fn list_enabled_backends_for_agent(
     node: &EmbeddedNode,
     node_did: &str,
@@ -373,7 +356,6 @@ pub async fn lookup_backend_observation(
     .await
 }
 
-/// Read the existing observation inside a caller's configuration transaction.
 pub async fn lookup_backend_observation_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -431,8 +413,8 @@ async fn write_probe_observation(
     backend_id: &str,
     input: serde_json::Value,
 ) -> Result<()> {
-    // Resolve a unique scoped document before writing; a duplicate logical key
-    // must never cause a multi-document update.
+    // Resolve a unique scoped document first: a duplicate logical key must
+    // never cause a multi-document update.
     let (doc_id, _) = lookup_backend_record(node, node_did, backend_id)
         .await?
         .context("backend observation target does not exist")?;
@@ -450,9 +432,8 @@ async fn write_probe_observation(
     Ok(())
 }
 
-/// Record a successful discovery without overwriting another credential scope.
-/// The connection is checked again in the transaction so an in-flight probe
-/// cannot publish a catalog for a replaced provider/authentication selection.
+// The connection is re-checked in the transaction so an in-flight probe
+// cannot publish a catalog for a replaced provider/authentication selection.
 pub(crate) async fn record_model_catalog(
     node: &std::sync::Arc<EmbeddedNode>,
     backend: &InferenceBackend,
@@ -470,8 +451,6 @@ pub(crate) async fn record_model_catalog(
     .await
 }
 
-/// Publish through the same observation owner for local and remote transactions.
-/// The caller supplies the backend configuration actually used for discovery.
 pub async fn record_model_catalog_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     backend: &InferenceBackend,
@@ -560,10 +539,8 @@ pub async fn record_model_catalog_in_txn(
     Ok(())
 }
 
-/// Publish an operator-side discovery (desktop setup, CLI) of a persisted
-/// backend through the same observation owner as the runtime prober. The
-/// stored value is the typed advertisement only; the credential that
-/// authorized the request has no representation in `BackendModelCatalog`.
+// The credential that authorized discovery has no representation in
+// `BackendModelCatalog`.
 pub async fn record_discovered_catalog_on(
     access: &crate::config_client::ConfigAccess,
     backend: &InferenceBackend,
@@ -583,10 +560,8 @@ pub async fn record_discovered_catalog_on(
     Ok(catalog)
 }
 
-/// Publish an operator discovery made for a connection rather than a stored
-/// backend (desktop setup discovers before it persists). Only same-principal
-/// backends using exactly this provider, endpoint and authentication selection
-/// receive it; returns how many backends were updated.
+// Only same-principal backends matching this provider, endpoint and
+// authentication selection receive the catalog.
 pub async fn record_connection_catalog_on(
     access: &crate::config_client::ConfigAccess,
     owner: &str,
@@ -632,9 +607,7 @@ pub async fn record_connection_catalog_on(
         .await
 }
 
-/// Read-only projection of a backend's observation for its own
-/// authentication scope. Other scopes' advertisements are never exposed as
-/// this backend's entitlement.
+// Other authentication scopes' advertisements must never be exposed.
 pub fn scoped_observation_view(
     observation: Option<&InferenceBackendObservation>,
     owner: &str,
@@ -664,8 +637,8 @@ pub async fn probe_and_promote_enabled_backends(node: &Arc<EmbeddedNode>) {
         }
     };
     for backend in backends {
-        // Agent-scoped credential refresh and discovery remain with the existing
-        // invoking-agent owner. A fleet scan cannot choose an OAuth principal.
+        // Agent-scoped credential refresh stays with the invoking-agent owner;
+        // a fleet scan cannot choose an OAuth principal.
         if matches!(backend.auth, BackendAuth::NodeOAuth { .. }) {
             continue;
         }
@@ -675,9 +648,8 @@ pub async fn probe_and_promote_enabled_backends(node: &Arc<EmbeddedNode>) {
     }
 }
 
-/// Discover one persisted shared-credential backend through the canonical
-/// provider and observation owners. Callers must resolve and authorize the
-/// backend document first; this function never accepts a free-standing URL.
+// The caller must resolve and authorize the backend document first; this
+// function never accepts a free-standing URL.
 pub(crate) async fn discover_shared_backend(
     node: &Arc<EmbeddedNode>,
     backend: &InferenceBackend,

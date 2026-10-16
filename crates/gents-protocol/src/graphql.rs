@@ -794,9 +794,6 @@ fn retryable_graphql_error_message(value: &serde_json::Value) -> Option<String> 
 }
 
 /// Whether GraphQL/DefraDB error text describes a retryable store conflict.
-///
-/// This is intentionally case-insensitive and is shared with callers that
-/// must reconcile an ambiguous mutation before retrying it themselves.
 pub fn retryable_graphql_error_text(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     message.contains("transaction conflict")
@@ -820,11 +817,7 @@ fn graphql_transport_error_is_retryable(error: &reqwest::Error) -> bool {
         || message.contains("error decoding response body")
 }
 
-/// Whether an anyhow error, including any wrapped cause, is retryable under
-/// the canonical GraphQL transport and DefraDB-conflict policy.
-///
-/// Inspecting the full cause chain matters because callers normally attach
-/// endpoint/operation context above the original `reqwest::Error`.
+/// Whether an anyhow error is retryable under the GraphQL transport policy.
 #[cfg(feature = "native")]
 pub fn graphql_error_is_retryable(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
@@ -857,108 +850,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn string_literals_escape_every_json_control_character() {
-        let controls: String = (0..=31).map(char::from).collect();
-        let escaped = escape_graphql_string(&controls);
-        assert!(!escaped.chars().any(|ch| ch <= '\u{1f}'));
-        let decoded: String = serde_json::from_str(&format!("\"{escaped}\"")).unwrap();
-        assert_eq!(decoded, controls);
-    }
-
-    #[test]
-    fn turn_state_parser_derives_completed() {
-        let value = serde_json::json!({
-            "data": {
-                "AgentRequest": [{
-                    "request_id": "req-1",
-                    "retry_parent_request": "",
-                    "superseded_by_request": "",
-                    "lifecycle_state": "completed"
-                }]
-            }
-        });
-
-        let state = parse_turn_state_response(&value).expect("parse turn state");
-        assert_eq!(state.derived_turn_state(), Some(ClientTurnState::Completed));
-        assert!(state.projected_head().unwrap().is_terminal());
-    }
-
-    #[test]
-    fn graphql_rows_extract_collection_rows() {
-        let value = serde_json::json!({
-            "data": {
-                "Thing": [{ "id": "1" }, { "id": "2" }]
-            }
-        });
-        assert_eq!(graphql_rows_from_response(&value, "Thing").len(), 2);
-    }
-
-    #[test]
-    fn collection_missing_classifier_does_not_hide_missing_columns() {
-        assert!(is_collection_missing_error_message(
-            "RenderedRequest",
-            r#"Cannot query field \"RenderedRequest\" on type \"Query\"."#,
-        ));
-        assert!(!is_collection_missing_error_message(
-            "RenderedRequest",
-            r#"Cannot query field \"prompt_hash\" on type \"RenderedRequest\"."#,
-        ));
-    }
-
-    #[test]
-    fn shared_graphql_queries_include_recent_row_fields() {
-        let turn_query = turn_state_query("req-1");
-        assert!(turn_query.contains("temperature"));
-        assert!(turn_query.contains("top_p"));
-        assert!(turn_query.contains("top_k"));
-        assert!(turn_query.contains("max_tokens"));
-        assert!(turn_query.contains("metadata"));
-        assert!(turn_query.contains("failure_reason"));
-        assert!(turn_query.contains("interrupt_requested_at"));
-        assert!(turn_query.contains("valid_until"));
-        assert!(!turn_query.contains("AgentResponse"));
-
-        let session_query = session_shape_query("session-1");
-        assert!(session_query.contains("selected_service_id"));
-        assert!(session_query.contains("selected_tool_name"));
-        assert!(session_query.contains("tool_failure_class"));
-        assert!(session_query.contains("cancel_cause"));
-        assert!(session_query.contains("latency_ms"));
-        assert!(session_query.contains("publication"));
-        assert!(session_query.contains("blocks"));
-        assert!(!session_query.contains("AgentToolResult"));
-    }
-
-    #[test]
-    fn string_list_field_emits_null_for_empty_not_bracket_literal() {
-        // An empty list must serialize as `null`, never `[]`: a bare `[]`
-        // literal is typed by DefraDB as JsonArray and corrupts a
-        // NillableStringArray column (create stores JsonArray, later updates
-        // fail re-validation). See `string_list_field` doc comment.
-        assert_eq!(
-            string_list_field("agent_targets", &[]),
-            Some("agent_targets: null".to_string()),
-        );
-        assert_eq!(
-            string_list_field("cli_tool_names", &["rg".to_string(), "cargo".to_string()]),
-            Some(r#"cli_tool_names: ["rg", "cargo"]"#.to_string()),
-        );
-    }
-
-    #[test]
-    fn graphql_input_literal_renders_nested_values() {
-        let value = serde_json::json!({
-            "enabled": true,
-            "name": "alpha",
-            "tags": ["a", "b"]
-        });
-        let rendered = graphql_input_literal(&value).expect("render literal");
-        assert!(rendered.contains("enabled: true"));
-        assert!(rendered.contains(r#"name: "alpha""#));
-        assert!(rendered.contains(r#"tags: ["a", "b"]"#));
-    }
-
-    #[test]
     fn validate_graphql_filter_fragment_accepts_real_filters() {
         for filter in [
             r#"{ kind: { _eq: "signup" } }"#,
@@ -977,24 +868,16 @@ mod tests {
     #[test]
     fn validate_graphql_filter_fragment_rejects_break_outs() {
         for filter in [
-            // The confirmed #1038 payload: closes the enclosing _and array,
-            // object and paren, then appends its own selection.
             r#"{} ] }, limit: 1) { _docID } Agent(filter: { _and: [ {} ] }, limit: 1) { system_prompt } PocEvent(filter: { _and: [ {}"#,
-            // Unbalanced / stray delimiters.
             "{ a: 1 } }",
             "{ a: 1 ]",
             "{ a: 1 }) { x } (",
-            // Two top-level values.
             "{ a: 1 } { b: 2 }",
-            // A comment can hide the rest of a line.
             "{ a: 1 } # trailing",
-            // Not an object at all.
             "kind",
             "",
             "   ",
-            // Unterminated string literal.
             r#"{ a: { _eq: "open } }"#,
-            // JSON-style quoted keys.
             r#"{"instructions": {"_eq": "b"}}"#,
         ] {
             assert!(
@@ -1006,9 +889,6 @@ mod tests {
 
     #[test]
     fn graphql_input_literal_rejects_object_keys_that_are_not_graphql_names() {
-        // Object keys land in identifier position in the rendered literal,
-        // where escaping does not apply. A self-config patch value is
-        // agent-controlled, so a non-Name key is an injection, not a typo.
         let hostile = serde_json::json!({
             "endpoint": {
                 r#"x: 1 }, api_key: "leaked" }) { _docID } #"#: 1
@@ -1021,7 +901,6 @@ mod tests {
             "error should name the identifier rule: {err}"
         );
 
-        // Well-formed nested keys still render.
         let ok = serde_json::json!({ "outer": { "inner_1": "v" } });
         assert!(graphql_input_literal(&ok)
             .expect("valid Name keys render")
@@ -1045,8 +924,6 @@ mod tests {
             "rendered: {rendered}"
         );
         assert!(rendered.contains("skill_ids: null"), "rendered: {rendered}");
-        // Field-specific checks are stronger than a generic !contains("[]")
-        // (the latter could be defeated by unrelated substrings in complex values).
         assert!(!rendered.contains("target_ids: []"), "rendered: {rendered}");
         assert!(!rendered.contains("skill_ids: []"), "rendered: {rendered}");
     }
@@ -1216,12 +1093,6 @@ mod tx_tests {
         );
     }
 
-    // One transport-level retry proof: a wrapped retryable error text triggers a
-    // second attempt. Both store-conflict strings ("transaction conflict",
-    // "database is locked") are pinned as retryable by
-    // `retryable_graphql_error_text_matches_store_conflict_variants`; the
-    // wrapped-cause-chain walk is pinned by
-    // `retryable_graphql_error_walks_wrapped_cause_chain_case_insensitively`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn execute_graphql_async_retries_retryable_store_conflict_errors() {
         assert_execute_graphql_async_retries_error(

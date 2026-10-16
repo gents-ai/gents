@@ -1,8 +1,3 @@
-/* Who this Node is, at the top of its settings: avatar, name, the facts
-   that do not change (the DID stays in the Identity group below, where it
-   can be copied), and one live line for what it is doing right now,
-   read from the operations snapshot. The line links to the sessions list;
-   the list's own filters do the rest. */
 import { useEffect, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import type {
@@ -26,7 +21,6 @@ function pulse(
 ) {
   const live = sessions.filter((s) => isLive(s.turnState)).length;
   const tools = ops?.backgroundedTools ?? [];
-  /* a started session is a background row of a session-message call */
   const worker = (t: (typeof tools)[number]) =>
     t.toolName === "agent_new" || t.toolName === "agent_message";
   const workers = tools.filter(worker).length;
@@ -54,7 +48,6 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
   const node = deployment.node;
   const name = node.displayName ?? deployment.label;
   const [ops, setOps] = useState<DesktopOperationsSnapshot | null>(null);
-  /* the snapshot changes with every store ping; the session list is the cue */
   const sessions = useFleet((s) => s.sessionsOf[nodeKeyOf(deployment)] ?? NO_SESSIONS);
   useEffect(() => {
     let alive = true;

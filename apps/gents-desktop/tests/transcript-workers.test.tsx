@@ -19,7 +19,6 @@ import { writeSession } from "../src/hooks/sessionStore";
 
 const AGENT = "did:key:parent";
 const PERSON = "did:key:person";
-
 const call = (
   requestId: string,
   toolCallId: string,
@@ -51,7 +50,6 @@ const group = (...tools: RenderedToolCallView[]): RenderedTimelineItem =>
     tools,
   }) as RenderedTimelineItem;
 
-/* call `byToolCall` of request `byRequest` caused `requestId` in `sessionId` */
 const caused = (
   requestId: string,
   sessionId: string,
@@ -79,7 +77,6 @@ const link = (sessionId: string): LinkedSessionView => ({
   causeRequestDocId: "doc-req-1",
 });
 
-/* `started` is the lineage owner's answer: only sessions this one began */
 const view = (
   calls: CausedCallView[],
   started: string[] = calls.map((c) => c.caused.sessionId),
@@ -93,12 +90,8 @@ const view = (
   calls,
 });
 
-/* the agent's node, listing `sessions` */
 const nodeListing = (sessions: unknown[]) => [node({ nodeDid: AGENT, sessions })];
 
-/* An app selecting `sessionId` on the agent's node, which lists
-   `sessions`; one per transcript and session a test passes, as the
-   projection keeps one store across reads. */
 const apps = new WeakMap<RenderedTimelineItem[], Map<string, DesktopApp>>();
 function appFor(
   api: object,
@@ -146,7 +139,6 @@ function useBoth() {
   return useWorkers(useSessionProvenance());
 }
 
-/* the workers of the session `app` selects, under it as the root provides it */
 function renderWorkers(app: DesktopApp) {
   return renderHook(() => useBoth(), { wrapper: withApp(app) });
 }
@@ -160,7 +152,6 @@ describe("agents of a session", () => {
         requesterDid: null,
         title: "Explorer",
       },
-      /* the same label under another requester is another session */
       { nodeDid: AGENT, sessionId: "session-a", requesterDid: PERSON, title: "Other" },
     ] as never);
     expect(all.map((s) => s.sessionId)).toEqual(["session-a"]);
@@ -227,7 +218,6 @@ describe("agents of a session", () => {
   });
 
   it("never makes a steering message into a started session a start", async () => {
-    /* agent_message into a session this one started, while it works */
     const steer = caused("r-steer", "session-a", "processing", "req-2", "call-steer");
     const api = apiWith(async () => view([steer], ["session-a"]));
     const message = call("req-2", "call-steer", "running", "message");
@@ -303,7 +293,6 @@ describe("the provenance owner", () => {
     first();
     second();
     const again = app.actions.watchSessionProvenance();
-    /* the last answer shows at once while the new ask is out */
     expect(app.stores.provenance.getState().shown).not.toBeNull();
     await waitFor(() => expect(api.sessionProvenance).toHaveBeenCalledTimes(2));
     again();
@@ -450,8 +439,6 @@ describe("agent lineage freshness", () => {
   );
 
   it("shows a lineage read that took longer than the stream moved", async () => {
-    /* the first read finds the caused request running; each later read is
-       held until the test lets it answer */
     const held: ((value: SessionProvenanceView) => void)[] = [];
     const api = apiWith(async () =>
       held.length === 0 && api.sessionProvenance.mock.calls.length === 1
@@ -479,7 +466,6 @@ describe("agent lineage freshness", () => {
 
     act(() => observe(2));
     await waitFor(() => expect(held).toHaveLength(1));
-    /* the stream moves again while that read is still out */
     act(() => observe(3));
     await act(async () =>
       held[0]!(view([caused("r-1", "session-1", "processing", "req-1", "call-1")])),

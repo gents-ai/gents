@@ -1,5 +1,5 @@
-/* The OS-managed local node service. The desktop observes and controls it,
-   but does not own its process lifetime. */
+/* The desktop observes and controls the OS-managed local node service, but
+   does not own its process lifetime. */
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { ManagedServerAuthorityInput } from "@source-inc/gents-desktop-client";
@@ -31,7 +31,6 @@ export function LocalServer() {
   const status = stores.localServer.use.status();
   const readFailure = stores.localServer.use.readFailure();
   const wait = stores.localServer.use.wait();
-  /* the tray, or startup, may be starting or stopping it */
   const operating = stores.localServer.use.operation() !== null;
   const statusError = readFailure
     ? `Could not check the background node: ${readFailure}`
@@ -80,8 +79,6 @@ export function LocalServer() {
     try {
       let next = await actions.restartLocalServer(name, authority);
       if (!next.pairingReady) {
-        /* a status read that fails while waiting says why; the wait running
-           out is worded for a restart */
         const paired = await actions
           .awaitLocalServerPairing()
           .catch((cause: unknown) => {
@@ -204,8 +201,6 @@ export function LocalServer() {
         label="Host access"
         description="Reviewed host access, confirmed by the runtime while running. Changing access stops the OS service, saves your choices, and starts it again."
       >
-        {/* not narrower than its facts (up to half the row), which truncate
-            within it rather than spill over the description */}
         <div className="grid justify-items-end gap-1 text-right *:max-w-full max-md:justify-items-start max-md:text-left md:max-w-1/2 md:shrink-0">
           <Fact>{status?.effectiveToolCeiling ?? "—"}</Fact>
           {status?.effectiveToolRoot ? (

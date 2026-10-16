@@ -43,8 +43,6 @@ fn profile(profile_id: &str, backend_id: &str) -> (Collection, Value) {
     )
 }
 
-/// An agent on `profile`; with `compaction`, its context compacts with
-/// that profile.
 fn behavior(agent_id: &str, profile: &str, compaction: Option<&str>) -> Vec<(Collection, Value)> {
     let Some(compaction) = compaction else {
         return vec![(
@@ -70,8 +68,6 @@ fn behavior(agent_id: &str, profile: &str, compaction: Option<&str>) -> Vec<(Col
     ]
 }
 
-/// Accounts A (original) and B (`label-b`); profile `main` on `main_backend`
-/// used by `x` and `y`; `x` compacts with `summ` on `summ_backend`.
 fn documents(main_backend: &str, summ_backend: &str) -> Vec<(Collection, Value)> {
     let mut documents = vec![
         backend(A, None, "Claude"),
@@ -130,7 +126,6 @@ fn call(backend_id: &str, call_kind: &str, failure_reason: String) -> FailedCall
     }
 }
 
-/// The text a usage-limited call records.
 fn recorded(text: &str) -> String {
     persisted_failure_reason(text, now())
 }
@@ -274,8 +269,6 @@ fn a_moved_profile_is_not_replaced_by_its_sibling() {
 fn agents_on_profile_counts_direct_and_compaction_users() {
     let mut documents = documents(B, A);
     documents.extend(behavior("z", "summ", Some("main")));
-    // A pack-installed agent names its bound profile directly
-    // (`bind_pack_install_config` writes the profile id).
     documents.push((
         Collection::Agent,
         json!({"node_did": DID, "agent_id": "pack-w", "inference_profile_id": "main"}),
@@ -491,7 +484,6 @@ async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
     let b = crate::oauth_credential::store_sign_in(&access, sign_in("b"), Some("label-b"))
         .await
         .unwrap();
-    // Seed B's backend id so the fixture's documents name it.
     let b_backend = format!(
         "{}-{}",
         crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
@@ -518,7 +510,6 @@ async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
         })
         .await
         .unwrap();
-    // The failed call ends after B's sign-in connected.
     let at = Utc::now().to_rfc3339();
     let failure = anthropic_rejected();
     let request_failure = escape_graphql_string(&failure);

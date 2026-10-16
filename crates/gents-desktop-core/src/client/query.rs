@@ -63,11 +63,6 @@ pub(super) const SESSION_TRANSCRIPT_TOOL_CALL_ROW_BUDGET: usize = 320;
 #[derive(Debug)]
 pub struct SessionTranscriptQueryPage {
     pub store: ClientStore,
-    /// Immutable dependencies that are not themselves members of the selected
-    /// session page.  In particular fork origins can belong to a parent
-    /// session.  They are deliberately separate from `store`: putting them in
-    /// the page's transcript rows would make a parent message render as a child
-    /// message.
     pub canonical_dependencies: CanonicalTranscriptDependencies,
     pub query_count: u64,
     pub queried_rows: usize,
@@ -77,10 +72,6 @@ pub struct SessionTranscriptQueryPage {
     pub has_newer: bool,
 }
 
-/// Facts received while resolving the selected page's canonical dependencies.
-///
-/// Empty denial lists mean *no denial was received*.  They must not be filled
-/// from an absent GraphQL row: absence is a replication/loading condition.
 #[derive(Debug, Default)]
 pub struct CanonicalTranscriptDependencies {
     pub origin_headers: Vec<gents::session::canonical_rows::TranscriptMessageRow>,
@@ -132,9 +123,6 @@ pub(super) const CHAIN_KEY_BINDING_FIELDS: &str =
     "binding_id node_did address key_backend attestation created_at revoked_at tags";
 pub(super) const MAILBOX_ITEM_FIELDS: &str = "_docID item_key requester_did node_did status kind action title summary payload source_kind source_id session_id request_id graph_run_id cause_doc_id target_node_did target_agent_id expected_collection parent_item_id deadline_at created_at updated_at resolved_at resolved_doc_id";
 
-/// Load the selected request, exact session owner, and only request rows needed
-/// by the selected page and its physical/logical canonical dependencies.
-/// This is the bounded polling fallback for a dropped/coalesced observer event.
 pub async fn load_chat_patch(
     access: &gents::config_client::ConfigAccess,
     node_did: &str,
@@ -627,9 +615,6 @@ where
     parse_row_array(rows, root)
 }
 
-/// Canonical transcript envelopes are strict protocol decodes. Unlike generic
-/// control-plane rows, a malformed immutable fact is an integrity observation
-/// and must not be silently skipped.
 pub(super) fn parse_canonical_rows<T>(
     data: &Value,
     root: &str,

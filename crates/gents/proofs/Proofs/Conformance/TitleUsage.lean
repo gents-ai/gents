@@ -1,15 +1,6 @@
 import Proofs.InferenceCall.UsageProjection
 import Lean
 
-/-!
-# Title usage projection cases
-
-Inputs serialize physical inference-call rows, signed physical request purposes,
-and authenticated typed title provenance. Expected totals and catalog errors
-are evaluated through `InferenceCall.UsageProjection.validateAndProject`.
-Late usage actions use the existing `InferenceCall.Persistence.observeUsage`.
--/
-
 namespace Conformance.TitleUsage
 
 open Lean InferenceCall.UsageProjection

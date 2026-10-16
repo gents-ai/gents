@@ -284,8 +284,7 @@ impl RequestLifecycle {
     }
 }
 
-/// LatestOnly and child deadlines revoke the observed execution through the
-/// same atomic terminal owner. Unlike recovery, revocation may cancel a live lease.
+#[cfg(test)]
 #[cfg(test)]
 pub(crate) async fn revoke_execution_generation(
     node: &std::sync::Arc<EmbeddedNode>,
@@ -690,14 +689,10 @@ async fn terminalize_execution_in_txn(
                     Ok(_) => anyhow::bail!(
                         "NoMessage cannot replace a reconstructable owned assistant header"
                     ),
-                    // Match eligibleOwnedAssistantExists: invalid output
-                    // is retained, but does not become terminal payload.
                     Err(error)
                         if error
                             .downcast_ref::<gents_protocol::output::ReconstructionError>()
                             .is_some() => {}
-                    // Storage/authorization failures are not evidence of
-                    // absence and must roll back the terminal decision.
                     Err(error) => return Err(error),
                 }
             }
@@ -745,8 +740,6 @@ async fn terminalize_execution_in_txn(
     {
         return Ok(TerminalizeResult::Lost);
     }
-    // After the winning request CAS, but in the SAME transaction.
-    // Any missing reply, lost tool CAS or validation error rolls it all back.
     if !title {
         super::terminal_tools::account_tools_in_txn(
             txn,

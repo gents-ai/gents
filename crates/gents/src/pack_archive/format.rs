@@ -1,17 +1,3 @@
-//! The `.pack` file, format version 1.
-//!
-//! A `.pack` is a gzip-compressed POSIX ustar that any archive tool can list.
-//! Its first entry is `pack.json`, the [`PackHeader`] naming what the file
-//! claims to be; every other entry is `manifest.json` or a declared asset, in
-//! [`declared_paths`] order, which is the order the pack digest is computed
-//! over. That ordering is what lets [`read_pack`] verify a pack in one pass
-//! while holding one entry's buffer at a time: it hashes each entry as it
-//! streams past and compares the result with the header at the end.
-//!
-//! Headers are pinned (regular files, mode `0644`, uid and gid `0`, mtime
-//! `0`) and gzip carries no name or timestamp, so the same directory packs to
-//! the same bytes with the same build on any machine.
-
 use std::io::{self, BufRead, Read, Write};
 use std::path::Path;
 
@@ -27,29 +13,19 @@ use crate::pack::{
 
 use super::{MAX_DECOMPRESSED_BYTES, MAX_ENTRIES, MAX_PACK_BYTES};
 
-/// The `format` every `.pack` header carries.
 pub const FORMAT: &str = "gents-pack";
-/// The container version this build reads and writes.
 pub const FORMAT_VERSION: u32 = 1;
-/// The media type a `.pack` is served as.
 pub const MEDIA_TYPE: &str = "application/vnd.gents.pack";
-/// The file extension, without the dot.
 pub const EXTENSION: &str = "pack";
-/// The reserved first entry. It is not an asset and is not part of the digest.
 pub const HEADER_ENTRY: &str = "pack.json";
-/// A header is a handful of short strings; anything larger is not one.
 const MAX_HEADER_BYTES: u64 = 64 * 1024;
 
-/// What a `.pack` claims to be. Every field is checked against the contents
-/// before the pack is accepted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackHeader {
     pub format: String,
     pub format_version: u32,
-    /// The pack digest, `sha256:{hex}`: the pack's identity.
     pub digest: String,
-    /// `{namespace}/{name}`.
     pub coordinate: String,
     pub version: String,
     pub kind: PackKind,
@@ -67,7 +43,6 @@ impl PackHeader {
         }
     }
 
-    /// `{namespace}.{name}-{version}.pack`, for people. Never an identity.
     pub fn file_name(&self) -> String {
         format!(
             "{}-{}.{EXTENSION}",
@@ -77,7 +52,6 @@ impl PackHeader {
     }
 }
 
-/// The hex of a `sha256:{hex}` pack digest, refusing anything else.
 pub fn digest_hex(digest: &str) -> Result<&str> {
     let hex = digest
         .strip_prefix("sha256:")
@@ -89,7 +63,6 @@ pub fn digest_hex(digest: &str) -> Result<&str> {
     Ok(hex)
 }
 
-/// Size and count limits a read or write is held to.
 #[derive(Debug, Clone, Copy)]
 pub struct Bounds {
     pub compressed: u64,
@@ -107,7 +80,6 @@ impl Default for Bounds {
     }
 }
 
-/// A pack that passed [`read_pack`].
 #[derive(Debug)]
 pub struct VerifiedPack {
     pub header: PackHeader,
@@ -115,17 +87,6 @@ pub struct VerifiedPack {
     pub manifest_bytes: Vec<u8>,
 }
 
-/// Reads and verifies a `.pack` stream in one pass.
-///
-/// Refuses, before reading further, anything over `bounds`; an entry that is
-/// not a regular file or whose path a pack may not carry; entries out of
-/// digest order or repeated; a missing or unknown header; a manifest that
-/// fails the rules every pack is held to; any difference between the
-/// entries and the manifest's declared paths; and a header whose digest,
-/// coordinate, version or kind differ from the contents.
-///
-/// `asset` is offered each asset's content as it streams past; whatever it
-/// leaves unread is still hashed. `manifest.json` is returned, not offered.
 pub fn read_pack(
     input: impl Read,
     bounds: Bounds,
@@ -204,8 +165,6 @@ pub fn read_pack(
         }
         paths.push(path);
     }
-    // Read to the end: the gzip trailer carries the CRC that proves the
-    // stream intact, and a copy of the input must hold every byte of it.
     let mut decompressed = archive.into_inner();
     io::copy(&mut decompressed, &mut io::sink()).context("reading the end of the pack")?;
     let mut compressed = decompressed.inner.into_inner();
@@ -263,11 +222,6 @@ pub fn read_pack(
     })
 }
 
-/// Reads just a `.pack`'s header, without verifying the rest of the archive:
-/// the header is the tar's first entry, so this decompresses only up to the
-/// end of it and stops, unlike [`read_pack`] which streams and hashes every
-/// entry. Cheap enough to call before deleting a stored pack, where the full
-/// verification cost would scale with that pack's size for no reason.
 pub fn peek_header(input: impl Read, bounds: Bounds) -> Result<PackHeader> {
     let compressed = io::BufReader::new(BoundedReader::new(input, bounds.compressed, "compressed"));
     let decompressed = BoundedReader::new(
@@ -303,8 +257,6 @@ fn read_header(entry: &mut impl Read) -> Result<PackHeader> {
         bytes.len() as u64 <= MAX_HEADER_BYTES,
         "{HEADER_ENTRY} is larger than {MAX_HEADER_BYTES} bytes"
     );
-    // The version is read before the rest, so a newer file is named as such
-    // rather than reported as a malformed one.
     #[derive(Deserialize)]
     struct Probe {
         format: Option<String>,
@@ -325,14 +277,6 @@ fn read_header(entry: &mut impl Read) -> Result<PackHeader> {
     serde_json::from_slice(&bytes).with_context(|| format!("{HEADER_ENTRY} is malformed"))
 }
 
-/// Packs the directory `dir` into `out` as a `.pack`, returning its header.
-///
-/// The manifest decides what travels: a declared asset the directory lacks is
-/// an error, and an undeclared file is not packed. Files are streamed twice,
-/// once to compute the digest the header must carry and once to write them,
-/// so memory stays one buffer regardless of the pack's size; the second pass
-/// is hashed again, so a file changed between the passes fails the build
-/// instead of producing a pack whose header lies.
 pub fn write_pack(dir: &Path, out: impl Write) -> Result<PackHeader> {
     write_pack_bounded(dir, out, Bounds::default())
 }
@@ -413,7 +357,6 @@ fn write_pack_bounded(dir: &Path, out: impl Write, bounds: Bounds) -> Result<Pac
     Ok(header)
 }
 
-/// Packs `dir` in memory. For small packs and tests; [`write_pack`] streams.
 pub fn pack_dir(dir: &Path) -> Result<(Vec<u8>, PackHeader)> {
     let mut bytes = Vec::new();
     let header = write_pack(dir, &mut bytes)?;
@@ -507,9 +450,6 @@ impl<W: Write> Write for CountingWriter<W> {
     }
 }
 
-/// A [`Read`] that fails the moment more than `limit` bytes come out of it,
-/// so neither a large file nor a gzip stream whose trailer lies about its
-/// size can make a read spend unbounded memory or time.
 struct BoundedReader<R> {
     inner: R,
     limit: u64,

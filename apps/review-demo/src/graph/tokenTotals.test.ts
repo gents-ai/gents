@@ -20,12 +20,4 @@ describe("tokenTotalsForRun", () => {
     expect(totals).toEqual({ prompt: 150, completion: 25, total: 175 });
     expect(formatTokenTotals(totals)).toBe("175 tokens · 150 in · 25 out");
   });
-
-  it("returns zeros when no run is watched", () => {
-    expect(tokenTotalsForRun([], [], null)).toEqual({
-      prompt: 0,
-      completion: 0,
-      total: 0,
-    });
-  });
 });

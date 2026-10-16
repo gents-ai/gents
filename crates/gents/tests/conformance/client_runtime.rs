@@ -42,9 +42,6 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
         .unwrap_or_else(|error| panic!("{} invalid generated process state: {error}", case.name));
         let selected_assigned = case.runnable || case.unavailable || case.startup_demoted;
         let default_agent_id = if selected_assigned { "20" } else { "10" };
-        // Agent "20" is the only agent the generated cases assign; the
-        // unassigned rows keep a valid default ("10") while "20" stays absent
-        // from the runtime projection.
         let sources = vec![AgentReadinessSourceEntry {
             agent_id: default_agent_id.to_string(),
             dispatcher_present: if selected_assigned {
@@ -89,8 +86,6 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
             .agents
             .get("20")
             .unwrap_or_else(|| panic!("{} missing selected agent", case.name));
-        // The generated model projects semantic runtime state, not an
-        // observation lease. Idle age and clock skew cannot change its answer.
         for timestamp in ["1970-01-01T00:00:00Z", "2999-01-01T00:00:00Z"] {
             let mut aged_row = row.clone();
             aged_row.updated_at = timestamp.to_string();

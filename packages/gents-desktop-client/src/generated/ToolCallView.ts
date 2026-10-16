@@ -3,9 +3,4 @@ import type { CommandDenialView } from "./CommandDenialView.js";
 import type { DerivedCancelCauseView } from "./DerivedCancelCauseView.js";
 import type { MessageReconstructionView } from "./MessageReconstructionView.js";
 
-export type ToolCallView = { toolCallKey: string, requestId: string | null, messageSequence: number | null, toolName: string | null, toolCallId: string | null, args: string | null, partialOutputTail: string | null, result: string | null,
-/**
- * Availability of the immutable canonical arguments and result payloads.
- * Tool execution status remains in `lifecycle_state`.
- */
-reconstruction: MessageReconstructionView, status: string | null, lifecycleState: string | null, awaitMode: string | null, startedAt: string | null, deadlineAt: string | null, completedAt: string | null, denial?: CommandDenialView | null, cancelCause?: DerivedCancelCauseView | null, };
+export type ToolCallView = { toolCallKey: string, requestId: string | null, messageSequence: number | null, toolName: string | null, toolCallId: string | null, args: string | null, partialOutputTail: string | null, result: string | null, reconstruction: MessageReconstructionView, status: string | null, lifecycleState: string | null, awaitMode: string | null, startedAt: string | null, deadlineAt: string | null, completedAt: string | null, denial?: CommandDenialView | null, cancelCause?: DerivedCancelCauseView | null, };

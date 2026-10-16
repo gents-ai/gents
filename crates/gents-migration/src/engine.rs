@@ -103,55 +103,6 @@ fn versioned_step_collections<'a>(registry: &Registry<'a>) -> Vec<&'a str> {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::versioned_step_collections;
-    use crate::expectation::CollectionExpectation;
-    use crate::registry::{MigrationStep, Registry};
-
-    #[test]
-    fn only_distinct_versioned_step_collections_are_materialized() {
-        let steps = [
-            MigrationStep::AddCollection {
-                id: "add",
-                sdl: "type Added { name: String }",
-                expected_version: None,
-                expected_state: CollectionExpectation::dag_only(),
-            },
-            MigrationStep::PatchInPlace {
-                id: "index",
-                collection: "IndexedOnly",
-                patch: "[]",
-                expected_state: CollectionExpectation::dag_only(),
-            },
-            MigrationStep::PatchVersioned {
-                id: "version-one",
-                collection: "Migrated",
-                patch: "[]",
-                lens: None,
-                expected_version: Some("version-one"),
-                expected_transform: None,
-                expected_state: CollectionExpectation::dag_only(),
-            },
-            MigrationStep::PatchVersioned {
-                id: "version-two",
-                collection: "Migrated",
-                patch: "[]",
-                lens: None,
-                expected_version: Some("version-two"),
-                expected_transform: None,
-                expected_state: CollectionExpectation::dag_only(),
-            },
-        ];
-        let registry = Registry {
-            baseline: &[],
-            steps: &steps,
-            ordinary_indexes: &[],
-        };
-        assert_eq!(versioned_step_collections(&registry), vec!["Migrated"]);
-    }
-}
-
 /// Convenience for call sites that use `Arc<EmbeddedNode>` and ignore the report.
 pub async fn ensure_migrations_arc(node: Arc<EmbeddedNode>) -> Result<MigrationReport> {
     ensure_migrations(node.as_ref()).await

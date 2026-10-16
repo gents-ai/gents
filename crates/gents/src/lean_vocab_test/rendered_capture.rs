@@ -1,20 +1,5 @@
 use serde::Deserialize;
 
-/// One capture delivery evaluated by `RenderedCapture.capture`.
-///
-/// Every expectation below is computed by the Lean model
-/// (`Proofs/Conformance/ContractCases/RenderedCapture.lean`), and
-/// `RenderedCapture.Scenario.trace_realizes` proves each row is reachable by
-/// legal `Step`s from an `assembled` start, so the rows exercise
-/// `sent_implies_durably_captured`, `sent_requires_a_capture_step`, and
-/// `capture_failure_blocks_send` at those finite endpoints. Matching the
-/// endpoints is not universal runtime refinement; the production transition
-/// ordering is fenced separately against the real owned loop
-/// (`agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send`).
-///
-/// `request`, `prior_binding`, and `durable_after` carry the model's *opaque*
-/// canonical-request identity: equal numbers mean equal canonical JSON, and
-/// nothing else about them is modeled.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanRenderedCaptureCase {
     pub(crate) name: String,
@@ -43,15 +28,11 @@ pub(crate) struct LeanRenderedCaptureStorageCase {
     pub(crate) base_depth: usize,
     pub(crate) max_depth: usize,
     pub(crate) base_verified: bool,
-    /// The references the row's manifest document names, with what the row's
-    /// Lean store holds under each; empty for the other encodings.
     pub(crate) manifest_blocks: Vec<LeanRenderedCaptureManifestBlock>,
     pub(crate) decoded_request: Option<u64>,
     pub(crate) send_permitted: bool,
 }
 
-/// One manifest reference of a storage row: the block it names, the witness
-/// the manifest pins, and the commit the store holds (`None` when absent).
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanRenderedCaptureManifestBlock {
     pub(crate) r#ref: u64,
@@ -59,11 +40,6 @@ pub(crate) struct LeanRenderedCaptureManifestBlock {
     pub(crate) stored_witness: Option<u64>,
 }
 
-/// Two capture keys and whether the model calls them the same fact.
-///
-/// `same_fact` is `decide (left = right)` over the five-component
-/// `RenderedCapture.CaptureKey` tuple, so any component production drops from
-/// the key silently merges two provider attempts into one row.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanRenderedCaptureKeyCase {
     pub(crate) name: String,
@@ -80,9 +56,6 @@ pub(crate) struct LeanRenderedCaptureKeyCase {
     pub(crate) same_fact: bool,
 }
 
-/// One `capture_scope` label vector (#1066): what the shared consumer parser
-/// (`gents_protocol::rendered_request::CaptureScope`) must accept — with the
-/// kind and numeric seq it must recover — or reject, never default.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanCaptureScopeCase {
     pub(crate) label: String,
@@ -91,9 +64,6 @@ pub(crate) struct LeanCaptureScopeCase {
     pub(crate) valid: bool,
 }
 
-/// One ordering verdict over `(kind rank, seq, turn, attempt)`, decided by the
-/// Lean comparison. `inference.10` vs `inference.2` is in the list precisely
-/// so a lexical implementation cannot pass.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanCaptureOrderCase {
     pub(crate) name: String,

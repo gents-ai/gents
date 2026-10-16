@@ -1,4 +1,3 @@
-//! Prompt-free UI details derived from an authorized durable provider capture.
 use super::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -78,8 +77,6 @@ pub async fn load_session_context_details(
         .as_u64()
         .and_then(|value| u32::try_from(value).ok())
     else {
-        // Context details are a best-effort UI projection. Old or partially
-        // replicated rows must not make the session itself unavailable.
         return Ok(None);
     };
     if !(1..=gents_protocol::rendered_request::CAPTURE_VERSION).contains(&capture_version) {
@@ -94,7 +91,6 @@ pub async fn load_session_context_details(
         if provenance["admission"]["call_id"].as_str() != Some(context.call_id.as_str()) {
             return Ok(None);
         }
-        // Other provider shapes require their own audited decomposition.
         if capture["source"].as_str() != Some("openai_chat_completions")
             || context.accounting.estimator != "openai_chat_wire_json_bytes_div_4_v1"
             || context.accounting.components.documents != 0
@@ -151,8 +147,8 @@ fn chat_details(body: &Value, message_tokens: u64) -> Result<SessionContextDetai
             }
         }
     }
-    // Same byte estimator as the accounting owner; assign array-framing
-    // rounding remainder to messages so this partition stays additive.
+    // Assigns the array-framing rounding remainder to messages so this
+    // partition stays additive with the accounting owner's byte estimator.
     let system_prompt_tokens = if system.is_empty() {
         0
     } else {

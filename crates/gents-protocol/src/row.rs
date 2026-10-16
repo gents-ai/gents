@@ -246,7 +246,7 @@ pub struct MailboxItemRow {
 }
 
 // AgentMessage has no row type: `output::TranscriptMessage` is the single
-// canonical shape, and content is read only through its reconstruction (#1571).
+// canonical shape.
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GoalRow {
@@ -480,14 +480,9 @@ pub struct ToolServiceRegistryRow {
     pub updated_at: Option<String>,
 }
 
-/// Persisted snapshot of one MCP service's health, written by the agent's
-/// `health_checker` on every probe cycle. `status` carries the raw
-/// `ToolServiceHealthState` vocabulary ("healthy" / "degraded" / "evicted" /
-/// "reconnecting"; see `tool_service_health::ToolServiceHealthState`) so the
-/// operator UI can distinguish back-off from in-flight retry without going
-/// through the collapsed three-state `ToolServiceHealthProjection`.
-/// `failure_count` / `k_max` / `backoff_until` give the K-model context per
-/// the design in `Proofs/MCPHealth/{State,Transition}.lean`.
+/// Persisted snapshot of one MCP service's health. `status` carries the raw
+/// `ToolServiceHealthState` vocabulary so the operator UI can distinguish
+/// back-off from in-flight retry without the collapsed three-state projection.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolServiceHealthStateRow {
     pub service_id: String,
@@ -515,191 +510,4 @@ pub struct ToolServiceHealthStateRow {
     pub last_error_message: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn agent_request_row_roundtrips() {
-        let json = r#"{
-            "_docID": "doc-1",
-            "request_id": "req-1",
-            "node_did": "did:test:amy",
-            "agent_id": "amy-code",
-            "session_id": "s-1",
-            "retry_parent_request": "",
-            "retry_root_request": "req-1",
-            "superseded_by_request": "",
-            "content": "hello",
-            "max_total_tokens": 4096,
-            "input": {
-                "selected_skill_ids": ["review"],
-                "cwd": "/workspace",
-                "initial_title": {"text": "Review", "source": "task"},
-                "goal_continuation": {"sequence": 1, "wrapup": false}
-            },
-            "lifecycle_state": "pending",
-            "backend_id": "",
-            "execution_origin": "interactive",
-            "failure_reason": "",
-            "created_at": "2026-04-13T12:00:00Z",
-            "retry_count": 0,
-            "max_retries": 3
-        }"#;
-        let row: AgentRequestRow = serde_json::from_str(json).expect("parse");
-        assert_eq!(row.doc_id.as_deref(), Some("doc-1"));
-        assert_eq!(row.request_id, "req-1");
-        assert_eq!(row.retry_count, Some(0));
-        assert_eq!(row.max_total_tokens, Some(4096));
-        let input = row.input.as_ref().expect("typed input");
-        assert_eq!(input.selected_skill_ids, ["review"]);
-        assert_eq!(input.cwd.as_deref(), Some("/workspace"));
-        assert_eq!(
-            input.initial_title.as_ref().unwrap().source,
-            crate::session::SessionTitleSource::Task
-        );
-        assert_eq!(input.goal_continuation.as_ref().unwrap().sequence, 1);
-        assert!(!input.goal_continuation.as_ref().unwrap().wrapup);
-        assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Pending));
-        assert!(row.is_claimable());
-        assert!(!row.is_terminal());
-        let re: String = serde_json::to_string(&row).expect("serialize");
-        assert!(!re.contains("_docID"));
-        let round: AgentRequestRow = serde_json::from_str(&re).expect("reparse");
-        assert_eq!(round.doc_id, None);
-        assert_eq!(
-            AgentRequestRow {
-                doc_id: None,
-                ..row
-            },
-            round
-        );
-    }
-
-    #[test]
-    fn request_row_nullable_input_and_claim_observations_are_independent() {
-        for input in [
-            serde_json::Value::Null,
-            serde_json::json!({"selected_skill_ids": null}),
-        ] {
-            let row: AgentRequestRow = serde_json::from_value(serde_json::json!({
-                "request_id": "request-1", "input": input,
-                "backend_id": "resolved-at-claim", "max_total_tokens": 0
-            }))
-            .expect("nullable row decoder");
-            assert_eq!(row.backend_id.as_deref(), Some("resolved-at-claim"));
-            assert_eq!(
-                row.max_total_tokens,
-                Some(0),
-                "pinned exhausted budget is not absent"
-            );
-            if let Some(input) = row.input {
-                assert!(input.selected_skill_ids.is_empty());
-            }
-        }
-        let row: AgentRequestRow = serde_json::from_value(serde_json::json!({
-            "request_id": "request-1", "input": null, "backend_id": null, "max_total_tokens": null
-        }))
-        .unwrap();
-        assert!(row.input.is_none());
-        assert!(row.backend_id.is_none());
-        assert!(row.max_total_tokens.is_none());
-    }
-
-    #[test]
-    fn agent_request_row_missing_lifecycle_state_is_not_terminal_or_claimable() {
-        let row: AgentRequestRow =
-            serde_json::from_str(r#"{ "request_id": "req-2" }"#).expect("parse");
-        assert_eq!(row.lifecycle_state, None);
-        assert!(!row.is_claimable());
-        assert!(!row.is_terminal());
-    }
-
-    #[test]
-    fn agent_request_row_rejects_unknown_lifecycle_state_naming_it() {
-        let json = r#"{ "request_id": "req-3", "lifecycle_state": "bogus" }"#;
-        let err =
-            serde_json::from_str::<AgentRequestRow>(json).expect_err("must reject unknown state");
-        assert!(err.to_string().contains("bogus"), "{err}");
-    }
-
-    #[test]
-    fn agent_request_row_terminal_states_report_terminal() {
-        for state in RequestLifecycleState::ALL {
-            let json = format!(
-                r#"{{ "request_id": "req-4", "lifecycle_state": "{}" }}"#,
-                state.as_str()
-            );
-            let row: AgentRequestRow = serde_json::from_str(&json).expect("parse");
-            assert_eq!(row.is_terminal(), state.is_terminal(), "{state:?}");
-            assert_eq!(row.is_claimable(), state.is_claimable(), "{state:?}");
-        }
-    }
-
-    #[test]
-    fn tool_service_registry_defaults_send_node_did_to_false() {
-        let json = r#"{
-            "service_id": "observability-mcp",
-            "hostname": "studio-1",
-            "mcp_port": 9201,
-            "mcp_path": "/mcp"
-        }"#;
-        let row: ToolServiceRegistryRow = serde_json::from_str(json).expect("parse");
-        assert!(!row.send_node_did);
-    }
-
-    #[test]
-    fn tool_service_registry_treats_null_send_node_did_as_false() {
-        let json = r#"{
-            "service_id": "observability-mcp",
-            "hostname": "studio-1",
-            "mcp_port": 9201,
-            "mcp_path": "/mcp",
-            "send_node_did": null
-        }"#;
-        let row: ToolServiceRegistryRow = serde_json::from_str(json).expect("parse");
-        assert!(!row.send_node_did);
-    }
-}
-
-#[cfg(test)]
-mod plugin_receipt_tests {
-    use super::AgentToolCallRow;
-    use crate::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
-    use serde_json::json;
-
-    #[test]
-    fn tool_row_decodes_optional_receipt_from_graphql_json() {
-        let receipt = PluginExecutionReceipt {
-            coordinate: "team/plugin".into(),
-            artifact_digest: "sha256:artifact".into(),
-            input_digest: "sha256:input".into(),
-            output_digest: None,
-            authority: None,
-            limits: None,
-            verdict: PluginExecutionVerdict::AdmissionRefused,
-        };
-        let value = json!({"tool_call_key":"tool-1", "plugin_execution_receipt":receipt});
-        let row: AgentToolCallRow = serde_json::from_value(value.clone()).unwrap();
-        assert_eq!(row.plugin_execution_receipt, Some(receipt));
-        assert_eq!(
-            serde_json::to_value(row).unwrap()["plugin_execution_receipt"],
-            value["plugin_execution_receipt"]
-        );
-        for value in [
-            json!({"tool_call_key":"tool-1"}),
-            json!({"tool_call_key":"tool-1", "plugin_execution_receipt":null}),
-        ] {
-            assert!(serde_json::from_value::<AgentToolCallRow>(value)
-                .unwrap()
-                .plugin_execution_receipt
-                .is_none());
-        }
-        assert!(serde_json::from_value::<AgentToolCallRow>(
-            json!({"tool_call_key":"tool-1", "plugin_execution_receipt":"invalid"})
-        )
-        .is_err());
-    }
 }

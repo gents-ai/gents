@@ -1,8 +1,3 @@
-/* Which mark stands for a backend. The provider kind decides for the
-   subscription and router kinds; an OpenAI-compatible endpoint gets a
-   mark only when its URL names the company (an openai.com host, an
-   ollama host or path); a bare local port says nothing, so no mark. The
-   files are the companies' own monochrome SVGs in public/logos. */
 export function providerLogo(
   kind: string | null | undefined,
   endpoint?: string | null,

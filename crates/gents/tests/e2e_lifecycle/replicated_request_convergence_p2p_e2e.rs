@@ -1,28 +1,3 @@
-//! Multi-node e2e for #664 `TerminalConverges` (owner re-drive + P2P apply).
-//!
-//! Single-node conformance (`conformance/replicated_request_convergence.rs`)
-//! fences the owner half of `EmitTerminalDelta` (scope, terminal-only, cap,
-//! DID guards). This file closes the distributed half the review called out:
-//! a real second node must observe the owner's terminal state over P2P, and
-//! the owner re-drive must re-push a higher-priority same-value delta without
-//! forking the peer's view.
-//!
-//! Topology (mirrors `event_trigger_p2p_e2e` / R5 cross-deployment plumbing):
-//!   - Owner: writes + terminalizes + re-drives (no full agent boot required —
-//!     re-drive is a pure lifecycle seam).
-//!   - Peer: passive replica (different DID); only applies owner deltas.
-//!
-//! We deliberately do **not** fault-inject a dropped PushLog (no DefraDB hook
-//! for that yet). The load-bearing checks are:
-//!   1. intermediate `processing` replicates (the #661 peer-visible shape),
-//!   2. owner terminal update converges on the peer,
-//!   3. owner re-drive re-asserts and the peer stays on the same terminal
-//!      (LWW higher-priority same-value write does not regress or fork).
-//!
-//! A second scenario exhausts the durable re-drive budget while the peer is
-//! absent, then proves a full replicator replay repairs the peer without an
-//! unbounded stream of same-value request writes.
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

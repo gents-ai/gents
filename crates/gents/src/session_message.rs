@@ -1,10 +1,3 @@
-//! The agents tools. `agent_new` and `agent_message` start or continue
-//! another agent's session; both materialize one request through the
-//! session-message writer in `lifecycle::materialize`, which records the
-//! calling edge and the causal hop. Every agent is an ordinary agent addressed
-//! directly: the started session runs under its own behavior, and its result
-//! reaches the caller only as a background completion message.
-
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
@@ -50,7 +43,6 @@ pub(crate) struct AgentMessageArgs {
     pub message: Option<String>,
     #[serde(default)]
     pub task: Option<TaskBody>,
-    /// Request interruption of the current turn before queueing the message.
     #[serde(default)]
     pub interrupt: bool,
 }
@@ -96,13 +88,9 @@ impl AgentMessageArgs {
     }
 }
 
-/// How an `agent_message` reached its session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Delivery {
-    /// An idle session received a new request.
     Request,
-    /// A busy session received an agent-authored steering continuation
-    /// queued after its active request.
     Steering,
 }
 
@@ -115,15 +103,11 @@ impl Delivery {
     }
 }
 
-/// A message body rendered for its target: the content, and the Goal a Task
-/// declares, if any.
 pub(crate) struct RenderedBody {
     pub content: String,
     pub goal: Option<(String, Option<i64>)>,
 }
 
-/// The caller's `Tools.agents` group and its resolved targets, read through
-/// the request admission configuration walk. Absent tools leave it disabled.
 pub(crate) async fn load_caller_session_tools(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -137,9 +121,6 @@ pub(crate) async fn load_caller_session_tools(
         .map(Option::unwrap_or_default)
 }
 
-/// Render a message body. A Task is the caller's own configuration: its
-/// prompt template is rendered with `task.input` as `args`, and its Goal
-/// declaration, if any, is rendered for the target session.
 pub(crate) async fn render_body(
     node: &std::sync::Arc<EmbeddedNode>,
     caller_node_did: &str,
@@ -214,10 +195,6 @@ pub(crate) async fn render_body(
     Ok(Ok(RenderedBody { content, goal }))
 }
 
-/// Resolve the session `agent_message` addresses. The caller may address a
-/// session in its own requester scope: one of its own agent's sessions, or a
-/// session an `agent_new` started on a target that is still in its allowlist.
-/// ACP decides whether the resulting write is accepted.
 pub(crate) async fn resolve_send_target(
     node: &Arc<EmbeddedNode>,
     caller_node_did: &str,
@@ -242,8 +219,6 @@ pub(crate) async fn resolve_send_target(
     )
 }
 
-/// Lean `DurableLineage.sessionTargetAllowed`; ACP decides which canonical
-/// sessions are readable before this check, and still authorizes each write.
 fn session_target_allowed(
     session: &gents_protocol::session::AgentSession,
     caller_node_did: &str,
@@ -258,8 +233,6 @@ fn session_target_allowed(
                 && tools.allows(&session.node_did, &session.agent_id)))
 }
 
-/// The scope of a session [`resolve_send_target`] resolved: its requester is
-/// always the calling principal.
 pub(crate) fn target_scope(caller_node_did: &str, target: &SessionMessageTarget) -> SessionScope {
     SessionScope {
         node_did: target.node_did.clone(),
@@ -280,8 +253,6 @@ enum PlannedWrite {
     },
 }
 
-/// A session-message request and how it will be delivered, decided before
-/// the tool row starts running.
 pub(crate) struct Plan {
     session_id: String,
     hop: u32,
@@ -289,7 +260,6 @@ pub(crate) struct Plan {
 }
 
 impl Plan {
-    /// The causal hop the planned request or continuation is written with.
     pub(crate) fn hop(&self) -> u32 {
         self.hop
     }
@@ -302,11 +272,6 @@ impl Plan {
     }
 }
 
-/// Plan one session-message request. An idle or remote session gets a new
-/// request; a busy local session gets a steering append queued after its
-/// active request, unless the caller interrupts that request first, in which
-/// case the message is a new request. A Task Goal is set on a local idle target session with its
-/// request in one transaction.
 pub(crate) async fn plan(
     node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
@@ -342,8 +307,6 @@ pub(crate) async fn plan(
     } else {
         None
     };
-    // Lean `CausalHop.nextHop` of a cross-session cause: past the caller, and
-    // never below the addressed session's current hop.
     let own_hop = match &active {
         Some(active) => active.request_hop.max(
             crate::session::load_session_current_hop(node, &target.node_did, &target.session_id)
@@ -389,8 +352,6 @@ pub(crate) async fn plan(
             token_budget,
         }
     } else {
-        // A busy session is steered: the message is queued after its active
-        // request, which orders the queue and is not the message's origin.
         let steering = active.filter(|_| !interrupt);
         let queue = steering
             .as_ref()
@@ -430,9 +391,6 @@ pub(crate) async fn plan(
     }))
 }
 
-/// The receipt a session-message row answers its invocation with. It names
-/// the exact request the call caused; settlement and cancellation read that
-/// request's document from here.
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub(crate) struct SessionMessageReceipt {
     pub ok: bool,
@@ -446,14 +404,6 @@ pub(crate) struct SessionMessageReceipt {
     pub status: String,
 }
 
-/// Start the pending row, persist its planned request and publish the
-/// receipt naming that request, all in one transaction: a running
-/// session-message row always has a receipt and a caused request.
-///
-/// An embedded commit can be durable although its result was lost, so a
-/// failed commit is decided by the durable row: a running row with its
-/// receipt was delivered, and a pending row was not. Any other observation is
-/// an error, and the row is left to recovery.
 pub(crate) async fn commit(
     node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
@@ -595,9 +545,6 @@ async fn commit_once(
     Ok(receipt)
 }
 
-/// The hop was planned from the target session's current hop before the
-/// transaction; a higher request committed since then would leave the message
-/// below that session's hop, so the commit refuses it instead.
 async fn ensure_planned_hop_current(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     create: &gents_protocol::request_admission::AgentRequestCreate,
@@ -621,8 +568,6 @@ async fn start_dispatch(
         .context("session-message row was altered or is no longer pending")
 }
 
-/// The receipt a session-message row published: `Ok(None)` when the row has
-/// no invocation reply, or its reply is not a session-message receipt.
 pub(crate) async fn load_receipt(
     node: &std::sync::Arc<EmbeddedNode>,
     tool_call_doc_id: &str,
@@ -647,21 +592,12 @@ pub(crate) async fn load_receipt(
         .filter(|receipt| receipt.ok))
 }
 
-/// What a session-message row can observe of the one request it caused.
 pub(crate) enum CausedObservation {
-    /// The receipt names a request carrying the row's lineage.
     Bound(gents_protocol::row::AgentRequestRow),
-    /// The named request is not visible here yet: a peer has not replicated
-    /// it back (Lean premise on `SessionMessageRecoveryCause`).
     NotVisible,
-    /// Lean `SessionMessageRecoveryCause.causedRequestUnbound`: the receipt
-    /// is missing, or names a request that fails the row's lineage.
     Unbound(&'static str),
 }
 
-/// The one request a session-message row caused, read through the row's
-/// receipt and checked against its lineage: a session-message request, new or
-/// steering, carrying the row's full calling edge under this requester.
 pub(crate) async fn observe_caused_request(
     node: &std::sync::Arc<EmbeddedNode>,
     lifecycle: &crate::tool_call_lifecycle::ToolCallLifecycle,
@@ -724,8 +660,6 @@ pub(crate) async fn observe_caused_request(
     Ok(CausedObservation::Bound(caused))
 }
 
-/// Lean `DurableLineage.interruptAllowed`: in 0.20 an agent may interrupt
-/// another session only when the caller's session started it.
 pub fn agent_interrupt_allowed(
     caller_session: &str,
     target_session: &str,
@@ -734,8 +668,6 @@ pub fn agent_interrupt_allowed(
     target_session != caller_session && target_origin_cause == Some(caller_session)
 }
 
-/// Refusal reason when the calling session may not interrupt `target`
-/// (Lean `DurableLineage.interruptAllowed`, through the stored provenance).
 pub async fn interrupt_refusal(
     node: &Arc<EmbeddedNode>,
     caller: &SessionScope,
@@ -752,8 +684,6 @@ pub async fn interrupt_refusal(
     )
 }
 
-/// Stop `target`'s current turn through the single-session interrupt owner.
-/// Returns the interrupted request id, or `None` when the session is idle.
 pub async fn interrupt_session(
     node: &Arc<EmbeddedNode>,
     target: &SessionScope,
@@ -781,7 +711,6 @@ pub async fn interrupt_session(
     Ok(Some(active.request_id))
 }
 
-/// `agent_list`: the currently configured startup targets.
 pub(crate) async fn agent_list(
     _node: &Arc<EmbeddedNode>,
     _caller: &crate::AgentRequest,
@@ -802,20 +731,13 @@ pub(crate) async fn agent_list(
     Ok(serde_json::json!({ "ok": true, "agents": agents }))
 }
 
-/// What a kill did (Lean `Recovery.KillAction`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KillOutcome {
-    /// The caused request had already ended; the row settled from it.
     Settled,
-    /// The local caused request was interrupted; its terminal settles the row.
     Interrupting { request_id: String },
-    /// The row was cancelled now, with a cancelled completion notification.
     Cancelled,
 }
 
-/// `cancel_process` and the operator kill on a running session-message row
-/// (Lean `Recovery.killAction`). A kill never waits on a peer or on a request
-/// it cannot name: those rows are cancelled directly.
 pub(crate) async fn kill(
     node: &std::sync::Arc<EmbeddedNode>,
     lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
@@ -892,8 +814,6 @@ pub(crate) async fn kill(
     Ok(KillOutcome::Cancelled)
 }
 
-/// The logical id of the request that made a session-message call, read from
-/// its physical binding when the row was not loaded with it.
 pub(crate) async fn calling_request_id(
     node: &EmbeddedNode,
     lifecycle: &crate::tool_call_lifecycle::ToolCallLifecycle,
@@ -935,11 +855,6 @@ mod hop_tests {
         }
     }
 
-    /// Lean `DurableLineage.sessionMessageWrite`: a message into an idle
-    /// session is a new request and one into a busy session steers it; both
-    /// climb past their caller without lowering the session's hop, and name
-    /// the calling request and tool call. Steering is queued after the active
-    /// request, which is never its origin.
     #[tokio::test]
     async fn generated_session_message_writes_carry_the_calling_edge() {
         let message = published_session_message(PublishedAdmissionOptions {
@@ -1065,7 +980,6 @@ mod agent_tools_tests {
         (message, caller, caused)
     }
 
-    /// The session a claim of `caused` materializes, with its provenance.
     async fn materialize_session(
         node: &std::sync::Arc<EmbeddedNode>,
         caused: &crate::AgentRequest,
@@ -1117,8 +1031,6 @@ mod agent_tools_tests {
         assert!(!response.has_errors(), "{:?}", response.errors);
     }
 
-    /// Lean `DurableLineage.interruptAllowed` through `gents::session_origin`:
-    /// only the session that started a session may interrupt it.
     #[tokio::test]
     async fn only_the_starting_session_may_interrupt() {
         let (message, caller, caused) = started("agent-interrupt-permission").await;
@@ -1137,7 +1049,6 @@ mod agent_tools_tests {
             .await
             .unwrap()
             .is_some());
-        // The started session may not interrupt the session that started it.
         assert!(interrupt_refusal(&node, &target, &caller)
             .await
             .unwrap()
@@ -1146,8 +1057,6 @@ mod agent_tools_tests {
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }
 
-    /// `agent_interrupt` stops the busy session's turn; `agent_message` with
-    /// `interrupt` plans a new request rather than steering.
     #[tokio::test]
     async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         let (message, caller, caused) = started("agent-interrupt-steer").await;

@@ -1,4 +1,3 @@
-# Selects one shared event source and callback. Empty input_fields exposes no data.
 type CallbackBinding @branchable @index(fields: ["node_did", "binding_id"], unique: true) {
     binding_id: String
     node_did: String @index

@@ -79,7 +79,6 @@ fn lean_requester(id: usize) -> Option<String> {
     (id != 1).then(|| format!("did:test:requester-{id}"))
 }
 
-/// The native rows a `SessionTurn.Row` list stands for, in arrival order.
 fn lean_session_rows(
     session_id: &str,
     rows: &[lean_vocab_test::LeanSessionTurnRow],
@@ -723,9 +722,6 @@ fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
         };
         let mut request = request("req-2", lifecycle);
         request.doc_id = Some("req-2".into());
-        // `has_durable_owner` is the timeline's materialized user-message
-        // owner, not provider-source liveness. A supplied live output already
-        // carries the current execution owner.
         request.execution_generation = case
             .live_output_available
             .then(|| "generation-1".to_string());
@@ -1094,9 +1090,6 @@ fn session_snapshot_projects_failed_request_reason_without_response_storage() {
     assert!(snapshot.retry_eligibility.eligible);
 }
 
-/// A request refused before claim never publishes a transcript row; once the
-/// app stops tracking it, the session observation the runtime advanced at the
-/// refusal is the only fact anchoring the failed turn, its reason and Retry.
 #[test]
 fn refused_latest_request_observation_keeps_the_failed_turn_reason_retry_and_prompt_visible() {
     let refusal_reason =
@@ -1124,11 +1117,7 @@ fn refused_latest_request_observation_keeps_the_failed_turn_reason_retry_and_pro
         None,
     )
     .expect("snapshot");
-    assert_eq!(
-        snapshot.latest_request_id.as_deref(),
-        Some("req-2"),
-        "the observation, not row order, anchors the post-tracking latest request"
-    );
+    assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-2"),);
     assert_eq!(snapshot.turn_state.as_deref(), Some("failed"));
     let outcome = snapshot.latest_request_outcome.expect("request outcome");
     assert_eq!(outcome.failure_reason.as_deref(), Some(refusal_reason));
@@ -1141,8 +1130,7 @@ fn refused_latest_request_observation_keeps_the_failed_turn_reason_retry_and_pro
         snapshot
             .timeline_items
             .iter()
-            .any(|item| matches!(item, RenderedTimelineItem::PendingUserTurn { request_id, .. } if request_id == "req-2")),
-        "the timeline keeps a user-turn stand-in for the refused request"
+            .any(|item| matches!(item, RenderedTimelineItem::PendingUserTurn { request_id, .. } if request_id == "req-2"))
     );
 }
 

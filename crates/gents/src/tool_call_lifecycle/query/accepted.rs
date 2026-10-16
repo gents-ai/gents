@@ -1,5 +1,3 @@
-//! Direct admission lookup of a locally accepted tool call.
-
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
@@ -12,9 +10,6 @@ use crate::streaming::AcceptedToolCall;
 use super::ToolCallLifecycle;
 
 impl ToolCallLifecycle {
-    /// Reconstruct the immutable admission binding of a local direct tool.
-    /// This is not dispatch authorization: the start transition rechecks the
-    /// live request and pending row atomically under the mutation gate.
     #[cfg(test)]
     pub(crate) async fn load_accepted_for_dispatch(
         node: &std::sync::Arc<EmbeddedNode>,

@@ -3,8 +3,6 @@ import Proofs.Enrollment.RequestAdmission
 namespace Conformance.ContractCases
 open Enrollment
 
-/-- Path and origin observations are supplied by their existing validators;
-these cases do not replace those validators with string-prefix authorization. -/
 structure RequestInputCase where
   name : String
   input : RequestInput
@@ -171,8 +169,6 @@ theorem title_creation_cases_pinned :
       (fun c => materializedTitle c.sessionExists c.currentTitle c.input) =
       [some ⟨"Task title", .task⟩, none, some ⟨"My title", .user⟩] := by decide
 
-/-- Canonical input coverage: each optional subtree participates in the signed
-field list, and a one-element delimiter-containing skill is not two skills. -/
 theorem input_encoding_distinguishes_semantics :
     requestInputFields {} ≠ requestInputFields { cwd := some "" } ∧
     requestInputFields {} ≠ requestInputFields { initialTitle := some ⟨"", .user⟩ } ∧

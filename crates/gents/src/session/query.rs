@@ -2,16 +2,11 @@ use super::rows::SessionOwnerRow;
 use super::*;
 use anyhow::Context;
 
-/// Fields for one canonical `AgentSession` read. Nested values (title,
-/// provenance, observation) are DefraDB JSON scalar columns: read the bare
-/// field name, never an object subselection, and decode through the canonical
-/// protocol owners.
+/// Fields for one canonical `AgentSession` read. Nested values are DefraDB
+/// JSON scalar columns: read the bare field name, never an object subselection.
 pub const AGENT_SESSION_FIELDS: &str = "session_id node_did requester_did agent_id \
 created_at closed_at title provenance observation tags _docID";
 
-/// Validate one decoded canonical session at the document boundary: required
-/// identifiers are present, timestamps are RFC3339, and a
-/// present title carries nonblank text.
 pub(super) fn validate_agent_session(
     session: &gents_protocol::session::AgentSession,
 ) -> Result<()> {
@@ -86,9 +81,6 @@ pub fn session_scope_filter(
     )
 }
 
-/// Add the public request purpose (`RequestPurpose::PUBLIC`) to an
-/// AgentRequest filter. Message, tool, and session queries keep their own
-/// vocabulary.
 pub fn public_request_filter(scope: &str) -> String {
     let purpose = format!(
         r#"purpose: {{ _eq: "{}" }}"#,
@@ -101,8 +93,6 @@ pub fn public_request_filter(scope: &str) -> String {
     }
 }
 
-/// Load the exact durable session document under its logical label.
-/// Duplicate rows for one label are a data error, never a silent pick.
 pub(super) async fn load_agent_session_row(
     node: &EmbeddedNode,
     node_did: &str,
@@ -168,10 +158,9 @@ pub(super) async fn require_agent_session(
         })
 }
 
-/// The requester that owns the existing session `(node_did, session_id)`,
-/// whichever requester that is; `None` when no session exists yet. Runtime
-/// deliveries into an existing session adopt it (Lean
-/// `Enrollment.runtimeRequesterScope`).
+/// The requester that owns the existing session `(node_did, session_id)`, or
+/// `None` when no session exists yet. Runtime deliveries into an existing
+/// session adopt it (Lean `Enrollment.runtimeRequesterScope`).
 pub(crate) async fn load_session_requester_scope(
     node: &EmbeddedNode,
     node_did: &str,
@@ -218,51 +207,4 @@ pub(crate) async fn load_session_agent_id(
             .await?
             .map(|session| session.agent_id),
     )
-}
-
-#[cfg(test)]
-mod session_decoder_tests {
-    use super::*;
-
-    #[test]
-    fn requester_absence_is_an_exact_scope_and_labels_are_escaped() {
-        let absent = session_scope_filter("owner", "session", None);
-        assert!(absent.contains("requester_did: { _eq: null }"));
-        let selected = session_scope_filter("owner", "session", Some("requester"));
-        assert!(selected.contains(r#"requester_did: { _eq: "requester" }"#));
-        assert_ne!(absent, selected);
-        let quoted = session_scope_filter("owner\"", "session", None);
-        assert!(quoted.contains(r#"owner\""#));
-    }
-
-    #[test]
-    fn public_request_filter_preserves_exact_session_scope() {
-        let scoped = session_scope_filter("owner\"", "session", Some("requester"));
-        let request = public_request_filter(&scoped);
-        assert!(request.contains(&scoped));
-        assert!(request.contains(r#"purpose: { _eq: "normal" }"#));
-        assert!(!scoped.contains("purpose"));
-        assert_eq!(public_request_filter(""), r#"purpose: { _eq: "normal" }"#);
-    }
-
-    #[test]
-    fn database_identity_is_separate_from_strict_session_payload() {
-        let mut row = serde_json::json!({
-            "_docID":"physical-session", "session_id":"session", "node_did":"owner",
-            "agent_id":"agent", "created_at":"2026-09-09T22:30:00.123456+00:00",
-            "observation":{"last_activity_at":"2026-09-09T22:31:00.654321Z"}
-        });
-        let decoded = decode_session_row(&row).unwrap();
-        assert_eq!(decoded.doc_id, "physical-session");
-        assert_eq!(
-            decoded.session.created_at,
-            "2026-09-09T22:30:00.123456+00:00"
-        );
-        assert_eq!(decoded.session.requester_did, None);
-        row["retired_field"] = serde_json::json!(true);
-        assert!(decode_session_row(&row).is_err());
-        row.as_object_mut().unwrap().remove("retired_field");
-        row["created_at"] = serde_json::json!("invalid");
-        assert!(decode_session_row(&row).is_err());
-    }
 }

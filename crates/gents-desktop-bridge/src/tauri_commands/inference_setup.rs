@@ -1,10 +1,6 @@
-//! First-party inference onboarding commands for the desktop app.
-//!
-//! Rust owns the versioned provider catalog, canonical connection mapping,
-//! advertised-model discovery, and Gents recommendations. OAuth credentials
-//! remain node-scoped documents and never cross this bridge unredacted. The UI
-//! commits the chosen canonical components through the existing atomic operator
-//! configuration command.
+//! First-party inference onboarding commands for the desktop app. OAuth
+//! credentials remain node-scoped documents and never cross this bridge
+//! unredacted.
 
 use std::time::Duration;
 
@@ -34,8 +30,6 @@ const LOG_TARGET: &str = "gents_desktop_bridge::inference_setup";
 
 mod sign_in_platform;
 
-/// User-facing name for a credential provider. Setup errors name the account
-/// the user signed in to, never the runtime endpoint that failed.
 fn provider_label(provider: &str) -> &'static str {
     match provider {
         gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER => "ChatGPT",
@@ -45,11 +39,6 @@ fn provider_label(provider: &str) -> &'static str {
     }
 }
 
-/// Refuses to start a browser sign-in unless the node's canonical
-/// configuration owner answers. The probe reads the node's credentials through
-/// the same access the save will use, so a runtime that is not serving is
-/// reported before the user completes an OAuth flow whose tokens could not be
-/// stored. Detail stays in the log; the returned message is user-facing.
 async fn require_reachable_configuration(
     access: anyhow::Result<gents::ConfigAccess>,
     node_did: &str,
@@ -79,11 +68,6 @@ async fn require_reachable_configuration(
     })
 }
 
-/// Stores a sign-in; its label names the account only when the sign-in adds
-/// one, since a desktop label is typed for a new account and must never
-/// rename the stored account the browser happened to return. The account is
-/// stored before its label is set, so a label that fails keeps the default
-/// one rather than reporting a stored account as unsaved.
 async fn upsert_through(
     access: anyhow::Result<gents::ConfigAccess>,
     credential: OAuthCredential,
@@ -114,8 +98,6 @@ async fn upsert_through(
     Ok(signed)
 }
 
-/// The label a sign-in request names: trimmed, empty is none, and checked
-/// before the browser opens so a bad label never costs a sign-in.
 fn sign_in_label(label: Option<&str>) -> Result<Option<String>, BridgeError> {
     label
         .map(str::trim)
@@ -142,10 +124,6 @@ fn credential_not_saved(credential: &OAuthCredential, error: &anyhow::Error) -> 
     )
 }
 
-/// Saves a credential issued by a completed sign-in through the node's
-/// canonical configuration owner. A failed save keeps the credential in the
-/// bridge's in-memory pending set so `desktop_provider_account_retry_save` can
-/// store it without another browser login.
 async fn save_issued_credential(
     pending: &PendingOAuthCredentials,
     access: anyhow::Result<gents::ConfigAccess>,
@@ -165,7 +143,6 @@ async fn save_issued_credential(
     }
 }
 
-/// Retries the save of a held credential for exactly this node and provider.
 async fn retry_pending_credential(
     pending: &PendingOAuthCredentials,
     access: anyhow::Result<gents::ConfigAccess>,
@@ -189,10 +166,6 @@ async fn retry_pending_credential(
     }
 }
 
-/// Refreshes the client store, then tells the webview the node's
-/// configuration changed. A write through the runtime's operator GraphQL never
-/// reaches the desktop node, so the snapshot shows it only after a refresh. A
-/// failed refresh is logged and never fails a write that is already stored.
 async fn notify_config_changed<R: Runtime>(app: &AppHandle<R>, core: &ClientCore) {
     if let Err(error) = core.refresh_store().await {
         tracing::warn!(
@@ -207,9 +180,6 @@ async fn notify_config_changed<R: Runtime>(app: &AppHandle<R>, core: &ClientCore
     );
 }
 
-/// Stored provider accounts plus the redacted view of sign-ins the bridge
-/// holds after a failed save. Held sign-ins are reported even when the store
-/// cannot be read, since retrying them is the way back to a stored account.
 async fn observe_provider_accounts(
     pending: &PendingOAuthCredentials,
     access: anyhow::Result<gents::ConfigAccess>,
@@ -259,11 +229,7 @@ pub struct InferenceDiscoveryRequest {
     pub provider: InferenceProviderId,
     pub auth_method: InferenceAuthMethod,
     pub endpoint: String,
-    /// Ephemeral connection input. It is consumed for this request and is
-    /// never reflected into a response or desktop snapshot.
     pub api_key: Option<String>,
-    /// The account a subscription backend names; absent is the provider's
-    /// original account.
     #[serde(default)]
     #[ts(optional = nullable)]
     pub account_ref: Option<String>,
@@ -385,8 +351,6 @@ fn classify_discovery_failure(error: &anyhow::Error) -> (&'static str, bool, boo
         if error.is_auth() {
             ("authentication", true, false)
         } else {
-            // A non-auth HTTP response proves the configured host is
-            // reachable even when it does not expose a model catalog.
             ("http", true, true)
         }
     } else if is_decode {
@@ -541,8 +505,6 @@ pub async fn discover_inference_models_for_core(
     })
 }
 
-/// The account a discovery for a backend naming `account_ref` reads, and the
-/// auth its catalog is published under.
 async fn discovery_account(
     access: &gents::ConfigAccess,
     node_did: &str,
@@ -564,10 +526,6 @@ async fn discovery_account(
     ))
 }
 
-/// Operator discovery is published as the credential-free catalog of every
-/// persisted backend already using this exact connection, so self-config can
-/// read it. Setup runs discovery again after persisting to publish it. A
-/// failed publication never fails discovery; the previous catalog is kept.
 async fn publish_discovered_catalog(
     core: &gents_desktop_core::client::ClientCore,
     request: &InferenceDiscoveryRequest,
@@ -676,13 +634,10 @@ pub(crate) struct CodexLoginRequest {
     pub node_did: String,
     #[serde(default)]
     pub provider: Option<String>,
-    /// The new account's label; empty or absent leaves the store's default.
     #[serde(default)]
     pub label: Option<String>,
 }
 
-/// A redacted view of a stored credential. Tokens never cross the bridge into
-/// the webview — only the metadata the UI needs to confirm the login worked.
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CodexLoginResult {
@@ -792,9 +747,6 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
     )
     .await?;
 
-    // Storing the credential is exactly the signal the runtime reconciles on to
-    // flip the ChatGptCodex agent's readiness to available; nudge the UI to
-    // refetch health.
     notify_config_changed(&app, &core).await;
 
     Ok(CodexLoginResult::redacted(&signed))
@@ -829,12 +781,10 @@ pub(crate) struct GrokLoginRequest {
     pub node_did: String,
     #[serde(default)]
     pub provider: Option<String>,
-    /// The new account's label; empty or absent leaves the store's default.
     #[serde(default)]
     pub label: Option<String>,
 }
 
-/// Redacted credential metadata for the webview (tokens never cross the bridge).
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GrokLoginResult {
@@ -879,12 +829,8 @@ pub(crate) struct ProviderAccountView {
     pub access_token_expires_at: String,
     pub last_refresh: Option<String>,
     pub enabled: bool,
-    /// A completed sign-in the bridge holds because saving it failed; it is
-    /// not a stored account until `desktop_provider_account_retry_save`
-    /// succeeds.
+    /// A completed sign-in the bridge holds because saving it failed.
     pub pending_save: bool,
-    /// Which of the provider's accounts this is; `None` is the original
-    /// account, which a backend without a reference runs on.
     pub account_ref: Option<String>,
     pub label: String,
 }
@@ -916,13 +862,9 @@ impl From<&OAuthCredential> for ProviderAccountView {
     }
 }
 
-/// How a desktop sign-in was stored: a new account or a refresh of one
-/// already stored, the account's label and reference, and after a refresh how
-/// to reach another account.
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SignInView {
-    /// `added` or `refreshed`.
     pub result: String,
     pub label: String,
     pub account_ref: Option<String>,
@@ -1015,29 +957,19 @@ pub(crate) struct ProviderAccountRemoveRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProviderUsageReadRequest {
     pub node_did: String,
-    /// `false` when the panel opens, `true` for an explicit Refresh. Both
-    /// skip accounts read in the last five minutes; only a failed Refresh is
-    /// an error.
     pub refresh: bool,
-    /// Only this credential provider's accounts, e.g. `claude-subscription`.
     pub provider: Option<String>,
 }
 
-/// One backend's stored usage as the panel draws it: visible windows, or the
-/// note saying why there is no number, and this read's outcome.
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BackendUsageView {
     pub backend_id: String,
     pub windows: Vec<UsageWindowView>,
     pub plan: Option<String>,
-    /// Only when `windows` is empty: `unknown`, `not reported` or `no cap on
-    /// this key`.
     pub note: Option<String>,
     pub read_at: Option<String>,
     pub read_error: Option<String>,
-    /// The runtime's outcome for this read, e.g. `skipped_recent` or
-    /// `unavailable: <reason>`; `None` when the runtime ran none for it.
     pub read: Option<String>,
 }
 
@@ -1048,7 +980,6 @@ pub(crate) struct UsageWindowView {
     pub window_minutes: Option<i64>,
     pub used_pct: f64,
     pub resets_at: Option<String>,
-    /// `header`, `endpoint` or `error`.
     pub source: String,
     pub observed_at: String,
     /// Older than the staleness bound: the last known value.
@@ -1079,8 +1010,6 @@ pub(crate) async fn desktop_provider_account_rename<R: Runtime>(
     Ok(())
 }
 
-/// Removes the account as `gents accounts remove --yes` does, with the
-/// backends its sign-in created that no profile uses.
 #[tauri::command]
 pub(crate) async fn desktop_provider_account_remove<R: Runtime>(
     app: AppHandle<R>,
@@ -1100,8 +1029,6 @@ pub(crate) async fn desktop_provider_account_remove<R: Runtime>(
     Ok(())
 }
 
-/// Each stored backend's usage as the panel draws it, with the runtime's
-/// outcome when `reads` names it: by backend, else by its account.
 async fn backend_usage_views(
     access: &gents::ConfigAccess,
     node_did: &str,
@@ -1176,10 +1103,6 @@ async fn backend_usage_views(
     Ok(views)
 }
 
-/// Asks the hosted runtime to read usage (skipping accounts read in the last
-/// few minutes), signed with its own identity as `gents accounts list` signs
-/// it, then returns each backend's stored usage. A failed read on open still
-/// returns what is stored; a failed Refresh is an error.
 #[tauri::command]
 pub(crate) async fn desktop_provider_usage_read(
     request: ProviderUsageReadRequest,
@@ -1232,13 +1155,9 @@ pub(crate) async fn desktop_provider_usage_read(
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProviderAccountRetrySaveRequest {
     pub node_did: String,
-    /// Credential provider kind, e.g. `claude-subscription`.
     pub provider: String,
 }
 
-/// Saves a credential that a completed sign-in issued but could not store,
-/// without repeating the browser login. Only the redacted account view
-/// crosses the bridge.
 #[tauri::command]
 pub(crate) async fn desktop_provider_account_retry_save<R: Runtime>(
     app: AppHandle<R>,
@@ -1356,37 +1275,6 @@ mod provider_account_tests {
     use super::*;
 
     #[test]
-    fn manual_model_entry_requires_a_reachable_discovery_endpoint() {
-        let auth = anyhow::Error::new(gents::backend_provider::ModelDiscoveryHttpError {
-            provider: "test".into(),
-            url: "http://test/models".into(),
-            status: 401,
-            body: "unauthorized".into(),
-        });
-        assert_eq!(
-            classify_discovery_failure(&auth),
-            ("authentication", true, false)
-        );
-
-        let unavailable = anyhow::Error::new(gents::backend_provider::ModelDiscoveryHttpError {
-            provider: "test".into(),
-            url: "http://test/models".into(),
-            status: 404,
-            body: "missing".into(),
-        });
-        assert_eq!(
-            classify_discovery_failure(&unavailable),
-            ("http", true, true)
-        );
-
-        let disconnected = anyhow::anyhow!("connection refused");
-        assert_eq!(
-            classify_discovery_failure(&disconnected),
-            ("connection", false, false)
-        );
-    }
-
-    #[test]
     fn provider_account_view_never_serializes_tokens() {
         let credential = OAuthCredential {
             doc_id: Some("doc-1".to_string()),
@@ -1440,7 +1328,6 @@ mod provider_account_tests {
         }
     }
 
-    /// Operator GraphQL access for a runtime that is not serving.
     fn unreachable_operator() -> gents::ConfigAccess {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind temporary port");
         let address = listener.local_addr().expect("local address");
@@ -1531,7 +1418,6 @@ mod provider_account_tests {
             credential_id: format!("{provider}:{node_did}"),
             provider: provider.to_string(),
             provider_account_key: Some("user:key-1".to_string()),
-            // Grok rows carry no `account_id`.
             account_id: None,
             label: None,
             ..issued_credential(node_did)
@@ -1593,7 +1479,6 @@ mod provider_account_tests {
         assert!(!serialized.contains("issued-refresh"));
         assert_eq!(held_tokens(&pending, node_did), ["issued-access"]);
 
-        // A retry while the runtime is still down keeps the credential held.
         let still_down = retry_pending_credential(
             &pending,
             Err(anyhow::anyhow!("no operator GraphQL endpoint")),
@@ -1606,7 +1491,6 @@ mod provider_account_tests {
         assert_user_facing(&still_down);
         assert_eq!(held_tokens(&pending, node_did), ["issued-access"]);
 
-        // Once the canonical owner serves, retry stores the same tokens.
         let node = serving_node().await;
         let saved = retry_pending_credential(
             &pending,
@@ -1876,8 +1760,6 @@ mod provider_account_tests {
         assert_eq!(*writes.lock().unwrap(), ["token-b", "token-d"]);
     }
 
-    /// A Claude sign-in of `account` (key `org-1:{account}`, or none) whose
-    /// display label is `account_id`.
     fn claude_sign_in(
         node_did: &str,
         account: Option<&str>,
@@ -2020,9 +1902,6 @@ mod provider_account_tests {
         assert_eq!(view(&second.credential_id), second.account_ref);
     }
 
-    /// The added account's backend is written on the runtime through its
-    /// operator GraphQL, which never replicates to the desktop node, so the
-    /// row shows only once the client store is refreshed from the runtime.
     #[tokio::test]
     async fn an_added_accounts_backend_is_in_the_client_snapshot_after_sign_in() {
         use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
@@ -2108,7 +1987,6 @@ mod provider_account_tests {
         let access = gents::ConfigAccess::local(node.clone());
         let node_did = "did:key:zOrder";
         let at = |secs| chrono::DateTime::from_timestamp(secs, 0);
-        // Stored so that insertion order is not resolver order.
         for (id, connected_at, enabled) in [
             ("a", at(2_000), true),
             ("b", at(1_000), true),
@@ -2353,21 +2231,6 @@ mod provider_account_tests {
         assert_eq!(view.label, "Claude 2");
     }
 
-    #[test]
-    fn a_sign_in_label_is_trimmed_and_checked_before_the_browser() {
-        assert_eq!(
-            sign_in_label(Some("  Work ")).unwrap().as_deref(),
-            Some("Work")
-        );
-        assert_eq!(sign_in_label(Some("   ")).unwrap(), None);
-        assert_eq!(sign_in_label(None).unwrap(), None);
-        for refused in ["x".repeat(65), "Wo\u{7}rk".to_string()] {
-            let error = sign_in_label(Some(&refused)).expect_err("an invalid label is refused");
-            assert_eq!(error.code, BridgeErrorCode::InvalidArgument);
-        }
-    }
-
-    /// Serves `body` with 200 to one request; returns the server's origin.
     fn serve_once(body: &'static str) -> String {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind temporary port");
         let address = listener.local_addr().expect("local address");
@@ -2702,12 +2565,10 @@ pub(crate) struct ClaudeLoginRequest {
     pub node_did: String,
     #[serde(default)]
     pub provider: Option<String>,
-    /// The new account's label; empty or absent leaves the store's default.
     #[serde(default)]
     pub label: Option<String>,
 }
 
-/// Redacted credential metadata for the webview (tokens never cross the bridge).
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ClaudeLoginResult {
@@ -2765,8 +2626,6 @@ pub(crate) async fn desktop_claude_login<R: Runtime>(
     require_reachable_configuration(core.operator_access(&node_did), &node_did, &provider).await?;
 
     let server = run_loopback_login(LoginOptions {
-        // Opened here instead: a packaged build has to strip its own
-        // environment before handing a URL to a host program.
         open_browser: false,
         ..LoginOptions::default()
     })

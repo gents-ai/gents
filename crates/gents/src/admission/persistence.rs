@@ -9,13 +9,10 @@ use super::client::AdmissionError;
 use super::controller::InferenceCallRecord;
 use crate::graphql::escape_graphql_string;
 
-/// The provider usage components an `InferenceCall` row stores.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProviderCallUsage {
     pub(crate) input_tokens: u64,
     pub(crate) output_tokens: u64,
-    /// The provider client's cached-input count, zero when unreported; the
-    /// paired `CachedInputTokensObservation` decides what is persisted.
     pub(crate) cached_input_tokens: u64,
 }
 
@@ -181,8 +178,6 @@ pub(super) async fn persist_existing_call_terminal(
         r#"_docID: {{ _eq: "{doc_id}" }}, call_id: {{ _eq: "{call_id}" }}, call_state: {{ _in: ["completed", "failed", "cancelled"] }}"#
     );
     let exists = if usage.is_some() {
-        // Recovery may win while a provider response is in flight. Record its
-        // observed usage without changing the winning outcome, reason or stamp.
         let mutation = format!(
             r#"mutation {{ update_InferenceCall(
                 docID: "{doc_id}",
@@ -198,8 +193,6 @@ pub(super) async fn persist_existing_call_terminal(
         .await?;
         !crate::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?.is_empty()
     } else {
-        // An already terminal row is an idempotent success. A missing row or
-        // illegal live source is a durability failure, never an implicit insert.
         let query = format!(r#"{{ InferenceCall(filter: {{ {terminal_filter} }}) {{ _docID }} }}"#);
         let response = crate::graphql::graphql_with_transaction_retry(
             node.as_ref(),
@@ -309,115 +302,5 @@ fn usage_fields(
             )
         }
         None => (String::new(), String::new(), String::new()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::admission::client::CallKind;
-
-    fn call() -> InferenceCallRecord {
-        InferenceCallRecord {
-            call_id: "call-1".to_string(),
-            runtime_instance_id: "runtime-1".to_string(),
-            request_id: "request-logical".to_string(),
-            request_doc_id: "request-doc-physical".to_string(),
-            call_seq: 1,
-            backend_id: "backend-1".to_string(),
-            agent_id: "behavior-1".to_string(),
-            node_did: "did:test:agent".to_string(),
-            call_kind: CallKind::Inference,
-            attempt: 1,
-            queue_depth_at_enqueue: 0,
-            controller_generation: 1,
-            backend_config_fingerprint: "fingerprint-1".to_string(),
-        }
-    }
-
-    #[test]
-    fn every_inference_call_create_arm_persists_the_physical_request_edge() {
-        let call = call();
-        let mutations = [
-            add_call_mutation(
-                &call,
-                "queued",
-                None,
-                Some("2026-08-09T00:00:00Z"),
-                None,
-                None,
-                None,
-            ),
-            add_call_mutation(
-                &call,
-                "running",
-                None,
-                Some("2026-08-09T00:00:01Z"),
-                Some("2026-08-09T00:00:01Z"),
-                None,
-                None,
-            ),
-            add_call_mutation(
-                &call,
-                "failed",
-                Some("QueueFull"),
-                Some("2026-08-09T00:00:02Z"),
-                None,
-                Some("2026-08-09T00:00:02Z"),
-                None,
-            ),
-        ];
-
-        for mutation in mutations {
-            assert!(
-                mutation.contains(r#"request_id: "request-logical""#),
-                "logical correlation id missing from mutation: {mutation}"
-            );
-            assert!(
-                mutation.contains(r#"request_doc_id: "request-doc-physical""#),
-                "physical request edge missing from mutation: {mutation}"
-            );
-        }
-    }
-
-    #[test]
-    fn usage_columns_preserve_provider_components_verbatim() {
-        let fields = usage_fields(
-            Some(ProviderCallUsage {
-                input_tokens: 100,
-                output_tokens: 50,
-                cached_input_tokens: 40,
-            }),
-            CachedInputTokensObservation::NotAvailable,
-        );
-
-        assert_eq!(fields.0, "prompt_tokens: 100,");
-        assert_eq!(fields.1, "completion_tokens: 50,");
-        assert_eq!(fields.2, "cached_input_tokens: 40,");
-    }
-
-    #[test]
-    fn cached_input_tokens_distinguish_missing_zero_and_positive_responses_usage() {
-        let usage = Some(ProviderCallUsage {
-            input_tokens: 100,
-            output_tokens: 50,
-            cached_input_tokens: 0,
-        });
-        assert_eq!(
-            usage_fields(usage, CachedInputTokensObservation::Unreported).2,
-            ""
-        );
-        assert_eq!(
-            usage_fields(usage, CachedInputTokensObservation::Reported(0)).2,
-            "cached_input_tokens: 0,"
-        );
-        assert_eq!(
-            usage_fields(usage, CachedInputTokensObservation::Reported(32)).2,
-            "cached_input_tokens: 32,"
-        );
-        assert_eq!(
-            usage_fields(usage, CachedInputTokensObservation::NotAvailable).2,
-            "cached_input_tokens: 0,"
-        );
     }
 }

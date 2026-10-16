@@ -1,10 +1,4 @@
-/* What a person can do to a worker from the session that started it:
-   stop the one request a row's call caused, the modeled single-request
-   interrupt; the row settles when that request reaches a terminal state.
-   Nothing else stops with it, and nothing this session is doing stops.
-   Telling a worker something is sending its session a message, so it is
-   done there; opening it is the row's arrow. A native background process
-   has no desktop stop (#1969). */
+// Native background processes have no desktop stop control.
 import { createContext, useContext } from "react";
 import { Square } from "lucide-react";
 import type { CausedRequestView } from "@source-inc/gents-desktop-client";
@@ -13,7 +7,6 @@ import { Hint } from "./Hint";
 import { isLive } from "@/lib/live";
 
 export type WorkerActions = {
-  /* interrupt the request a session-message row's call caused */
   interrupt: (request: CausedRequestView) => void;
 };
 
@@ -34,7 +27,6 @@ function StopButton({ name, onStop }: { name: string; onStop: () => void }) {
   );
 }
 
-/* Stop on a session-message row, while the request its call caused runs. */
 export function RequestStop({
   name,
   request,

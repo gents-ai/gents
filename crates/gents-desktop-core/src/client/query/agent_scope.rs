@@ -1,6 +1,5 @@
 use super::*;
 
-/// Load the desktop snapshot projection for one node from the embedded replica.
 pub async fn load_node_scoped_snapshot(node: &EmbeddedNode, node_did: &str) -> Result<ClientStore> {
     let query = snapshot_query(Some(node_did))?;
     let data = execute_local_graphql_query(node, &query, "node-scoped desktop snapshot").await?;

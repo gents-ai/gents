@@ -117,8 +117,6 @@ pub(crate) async fn build_desktop_client_snapshot(
     }
 }
 
-/// The fixture owns both Defra nodes. Overlay the runtime's observed config
-/// onto the desktop projection so its source remains the runtime, not replica.
 async fn overlay_fixture_operator_config(fixture: &LiveBridgeFixture) -> anyhow::Result<()> {
     if let Some(error) = refresh_store_with_timeout(fixture.remote_core().as_ref()).await {
         anyhow::bail!(error);
@@ -150,10 +148,7 @@ pub(crate) async fn build_desktop_session_snapshot(
             .map(|session| session.node_did.clone())
     });
     let node_did = resolved_node_did.as_deref();
-    // A local-standard route is self-authored by the target node. Production
-    // enrollment uses the desktop node instead; this fixture deliberately
-    // bypasses enrollment, so its transcript namespace is the node DID rather
-    // than requester_did:null or the desktop node.
+    // Bypasses enrollment, so the transcript namespace is the node DID.
     let requester_scope = fixture.requester_scope(node_did, session_id, request_id);
     let page = match gents_desktop_core::client::load_session_transcript_page(
         fixture.remote_core().node(),
@@ -309,9 +304,8 @@ async fn build_request_diagnostics(
         .iter()
         .find(|session| session.session_id == session_id)
         .map(|session| session.node_did.clone());
-    // The rendered session uses the same bounded page as the app. Counts use a
-    // separate explicit diagnostic read so acceptance evidence is exact rather
-    // than silently capped by the interactive row budget.
+    // Counts use a separate explicit diagnostic read, uncapped by the
+    // interactive row budget.
     let transcript_page = gents_desktop_core::client::load_session_transcript_page(
         core.node(),
         session_id,

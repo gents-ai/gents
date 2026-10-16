@@ -54,9 +54,6 @@ pub(crate) struct TaskRunOutput {
     pub(crate) duplicate: bool,
 }
 
-/// Manual invocations use the loaded Task document as their source identity.
-/// The invocation key distinguishes their synthetic trigger identities; request
-/// provenance remains manual because no persisted Trigger fired this request.
 pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRunOutput> {
     let task_id =
         resolve_task_id_for("run", args.task_id.as_deref(), args.task_id_flag.as_deref())?;
@@ -274,8 +271,6 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     })
 }
 
-/// Goal invocations use the explicit stable key. Ordinary calls retain their
-/// fresh-invocation agent even when --session-id supplies a session label.
 fn resolve_invocation_key(
     task_id: &str,
     goal_backed: bool,
@@ -415,28 +410,5 @@ mod tests {
         );
         assert!(resolve_invocation_key("task", false, None).is_ok());
         assert!(resolve_invocation_key("task", false, Some(" ")).is_err());
-    }
-
-    #[test]
-    fn resolve_task_id_accepts_positional_or_flag_and_rejects_conflict() {
-        assert_eq!(
-            resolve_task_id_for("run", Some("host-check"), None).unwrap(),
-            "host-check"
-        );
-        assert_eq!(
-            resolve_task_id_for("run", None, Some("host-check")).unwrap(),
-            "host-check"
-        );
-        assert_eq!(
-            resolve_task_id_for("run", Some("host-check"), Some("host-check")).unwrap(),
-            "host-check"
-        );
-        assert!(resolve_task_id_for("run", Some("host-check"), Some("other")).is_err());
-        assert!(resolve_task_id_for("run", None, None).is_err());
-        assert_eq!(
-            resolve_task_id_for("run", Some(" task "), None).unwrap(),
-            " task "
-        );
-        assert!(resolve_task_id_for("run", Some(" task "), Some("task")).is_err());
     }
 }

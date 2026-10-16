@@ -1,11 +1,3 @@
-//! Shared registry resolution for CLI and runtime pack consumers.
-//!
-//! Registry bytes are admitted once: the advertised artifact digest is
-//! checked before parsing or caching, the archive validates its own bounded
-//! contents, and the manifest must match the requested coordinate. Callers
-//! may supply an explicit cache root; runtime callers that do not own a home
-//! directory resolve in memory rather than guessing one.
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -18,10 +10,6 @@ use crate::pack_store::PackStore;
 pub const DEFAULT_REGISTRY_URL: &str = "https://registry.dev.gents.xyz";
 pub const REGISTRY_ENV_VAR: &str = "GENTS_REGISTRY";
 
-/// A registry failure a caller needs to react to, not just report: distinct
-/// from a generic transport error so [`crate::pack_resolve::offline_pack_error`]
-/// can classify it with [`anyhow::Error::chain`] and `downcast_ref`, rather
-/// than pattern-matching on message text this module is free to reword.
 #[derive(Debug, thiserror::Error)]
 pub enum RegistryError {
     #[error(
@@ -53,8 +41,6 @@ pub fn resolve_registry_url(explicit: Option<&str>) -> String {
     DEFAULT_REGISTRY_URL.to_owned()
 }
 
-/// A client for the packs registry. Everything it serves is a pack; a plugin
-/// travels inside one.
 pub struct RegistryClient {
     base_url: String,
     http: reqwest::Client,
@@ -75,10 +61,6 @@ impl RegistryClient {
         }
     }
 
-    /// `{base_url}/api/v1/<segments>`, one canonical builder for every
-    /// registry path: each segment is percent-encoded through
-    /// [`url::PathSegmentsMut::extend`], so a namespace, name or version
-    /// containing a `/` or a space is encoded, never spliced into the path.
     fn api_url(&self, segments: &[&str]) -> Result<reqwest::Url> {
         let mut url = reqwest::Url::parse(&self.base_url)
             .with_context(|| format!("{} is not a valid registry URL", self.base_url))?;
@@ -89,8 +71,6 @@ impl RegistryClient {
         Ok(url)
     }
 
-    /// Whether `url`'s host is a loopback address or `localhost`: it never
-    /// leaves the machine, so plain http there is not a cleartext leak.
     fn host_is_loopback(url: &reqwest::Url) -> bool {
         let Some(host) = url.host_str() else {
             return false;
@@ -98,7 +78,6 @@ impl RegistryClient {
         if host.eq_ignore_ascii_case("localhost") {
             return true;
         }
-        // `host_str` keeps the brackets around an IPv6 address.
         let host = host
             .strip_prefix('[')
             .and_then(|host| host.strip_suffix(']'))
@@ -107,10 +86,7 @@ impl RegistryClient {
             .is_ok_and(|address| address.is_loopback())
     }
 
-    /// Refuses a registry that is neither `https` nor loopback. Every call
-    /// that sends a password or a bearer token goes through this first, so
-    /// a mistyped or misconfigured `http://` registry cannot leak either in
-    /// cleartext.
+    /// Passwords and registry tokens may only travel over HTTPS or loopback HTTP.
     fn require_secure(url: &reqwest::Url) -> Result<()> {
         anyhow::ensure!(
             url.scheme() == "https" || Self::host_is_loopback(url),
@@ -156,7 +132,6 @@ impl RegistryClient {
         self.get_json(&["packs", namespace, name, version]).await
     }
 
-    /// One page of search results; `page` is 1-based.
     pub async fn search(&self, query: &str, page: u32) -> Result<Value> {
         let url = self.api_url(&["packs"])?;
         let response = self
@@ -176,8 +151,6 @@ impl RegistryClient {
         Ok(bytes)
     }
 
-    /// Streams a version into `out` a chunk at a time, refusing it past the
-    /// pack bound, and returns the sha256 hex of what was written.
     pub async fn download_into(
         &self,
         namespace: &str,
@@ -224,7 +197,6 @@ impl RegistryClient {
         Ok(format!("{:x}", hasher.finalize()))
     }
 
-    /// Exchanges a username and password for an API token.
     pub async fn login(&self, username: &str, password: &str) -> Result<String> {
         let url = self.api_url(&["login"])?;
         Self::require_secure(&url)?;
@@ -243,7 +215,6 @@ impl RegistryClient {
             .context("the registry answered a sign-in without a token")
     }
 
-    /// Who `token` signs in as.
     pub async fn me(&self, token: &str) -> Result<Value> {
         let url = self.api_url(&["me"])?;
         Self::require_secure(&url)?;
@@ -257,8 +228,6 @@ impl RegistryClient {
         Self::json_or_error(response, url.as_str()).await
     }
 
-    /// Gives a package to the account `username`; the caller must own it or
-    /// be an admin.
     pub async fn transfer_owner(
         &self,
         token: &str,
@@ -279,7 +248,6 @@ impl RegistryClient {
         Self::json_or_error(response, url.as_str()).await
     }
 
-    /// Yanks a version, or restores it with `undo`.
     pub async fn yank(
         &self,
         token: &str,
@@ -319,9 +287,7 @@ impl RegistryClient {
 #[derive(Debug)]
 pub struct RegistryPack {
     pub archive: PackArchive,
-    /// Canonical digest over declared pack assets, shared with every pack loader.
     pub digest: String,
-    /// Registry artifact digest over the exact compressed archive bytes.
     pub artifact_digest: String,
     pub namespace: String,
     pub name: String,
@@ -419,10 +385,6 @@ pub async fn download_verified_pack(
     Ok(bytes)
 }
 
-/// Resolve the latest registry coordinate and fetch that pack. With a home,
-/// the verified download goes into its [`PackStore`] and a later fetch of the
-/// same version reads the store instead of downloading again. `None` performs
-/// the same admission entirely in memory for runtime consumers without a home.
 pub async fn fetch_pack(
     client: &RegistryClient,
     cache_home: Option<&Path>,
@@ -435,9 +397,6 @@ pub async fn fetch_pack(
         "{}/{}@{}",
         coordinate.namespace, coordinate.name, coordinate.version
     );
-    // The registry names a download by the digest of its bytes, so this
-    // index maps that to the pack digest the store uses; delete it once the
-    // registry advertises pack digests directly.
     let advertised = format!("sha256:{}", coordinate.artifact_digest);
     let index = cache_home
         .map(|home| -> Result<PathBuf> {
@@ -458,19 +417,9 @@ pub async fn fetch_pack(
             let digest = digest.trim();
             if store.contains(digest)? {
                 let archive = store.open(digest)?;
-                // A by-download hit never goes through `import_accepting`,
-                // which is where `PackStore::index` is normally called: index
-                // it here too, so a pack already in the store from an
-                // earlier fetch becomes resolvable by name without another
-                // network round trip.
                 store.index(archive.header())?;
                 Some(archive)
             } else {
-                // The digest this entry named was released from the store
-                // since it was cached (`gents pack remove`, then a reinstall
-                // of the same version): treat it as a miss so the download
-                // below refreshes the mapping instead of failing on a digest
-                // that is simply gone.
                 None
             }
         }
@@ -478,8 +427,6 @@ pub async fn fetch_pack(
     };
     let archive = match (cached, &store, &index, cache_home) {
         (Some(archive), _, _, _) => archive,
-        // With a home, the download streams to disk and into the store, and
-        // the pack is opened from there: no step holds it in memory.
         (None, Some(store), Some(index), Some(home)) => {
             let staging_dir = home.join(crate::home::PACKS_DIR_NAME);
             std::fs::create_dir_all(&staging_dir)
@@ -517,10 +464,6 @@ pub async fn fetch_pack(
             let archive = store.open(&stored.header.digest)?;
             let dir = index.parent().context("download index has no parent")?;
             std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-            // `stage_and_persist` will not overwrite an existing file; drop a
-            // stale entry first (one pointing at a since-released digest) so
-            // the fresh mapping actually lands instead of silently keeping
-            // the old one.
             if let Err(error) = std::fs::remove_file(index) {
                 anyhow::ensure!(
                     error.kind() == std::io::ErrorKind::NotFound,
@@ -554,8 +497,6 @@ pub async fn fetch_pack(
     })
 }
 
-/// Registry tokens saved by `gents pack login`, one per registry URL, in
-/// `{home}/registry/credentials.json`, readable only by its owner.
 pub mod credentials {
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
@@ -572,9 +513,7 @@ pub mod credentials {
             .join("credentials.json.lock")
     }
 
-    /// An exclusive lock held across a read-modify-write of the credentials
-    /// file, so two `gents pack login`/`logout` invocations racing on the
-    /// same home cannot interleave and drop one write.
+    /// Held across the credentials read-modify-write to prevent concurrent updates from overwriting.
     fn exclusive_lock(home: &Path) -> Result<std::fs::File> {
         let path = lock_path(home);
         let dir = path
@@ -625,7 +564,6 @@ pub mod credentials {
         Ok(())
     }
 
-    /// The token saved for `registry`, if any.
     pub fn get(home: &Path, registry: &str) -> Result<Option<String>> {
         Ok(read_all(home)?.remove(registry.trim_end_matches('/')))
     }
@@ -637,7 +575,6 @@ pub mod credentials {
         write_all(home, &tokens)
     }
 
-    /// Forgets the token for `registry`; returns whether there was one.
     pub fn remove(home: &Path, registry: &str) -> Result<bool> {
         let _lock = exclusive_lock(home)?;
         let mut tokens = read_all(home)?;
@@ -668,9 +605,6 @@ pub fn stage_and_persist(dir: &Path, dest: &Path, bytes: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// A minimal fake registry serving exactly one namespace/name/version,
-    /// for [`fetch_pack`] tests: `package` and `version` answer with just
-    /// enough to resolve, and `download` streams `bytes` back verbatim.
     async fn serve_one_pack(
         namespace: &str,
         name: &str,
@@ -712,11 +646,6 @@ mod tests {
         format!("http://{addr}")
     }
 
-    /// A by-download cache hit skips [`PackStore::import_accepting`], the
-    /// usual place a header is indexed by name; it must index the pack
-    /// itself, or a pack already in the store from an earlier fetch stays
-    /// unresolvable by name forever (D1's store-first, zero-network promise
-    /// broken on exactly the packs it exists to speed up).
     #[tokio::test]
     async fn a_by_download_cache_hit_fills_in_a_missing_name_index_entry() {
         let (bytes, header) =
@@ -755,9 +684,6 @@ mod tests {
             "the uncached fetch indexes the pack through `import_accepting`"
         );
 
-        // Simulate a pack the store already held before it ever had a name
-        // index entry: the by-download cache stays untouched, but the name
-        // index has nothing for it.
         let index_entry = home
             .path()
             .join(crate::home::PACKS_DIR_NAME)
@@ -793,10 +719,6 @@ mod tests {
         );
     }
 
-    /// After `gents pack remove` releases a digest, its `by-download` entry
-    /// still names it. The next `fetch_pack` of the same version must not
-    /// fail with "is not in the store"; it must treat the stale entry as a
-    /// miss and download again.
     #[tokio::test]
     async fn a_stale_by_download_entry_after_release_is_treated_as_a_miss() {
         let (bytes, header) = crate::pack_store::test_pack_named("registry_stale_fixture", "1.0.0");
@@ -901,8 +823,6 @@ mod tests {
         let url = client
             .api_url(&["packs", "acme", "weird name/with-slash", "1.0.0"])
             .unwrap();
-        // A literal `/` in a segment must not open a new path component, and
-        // a space must not reach the wire unescaped.
         assert_eq!(
             url.as_str(),
             "https://registry.example/api/v1/packs/acme/weird%20name%2Fwith-slash/1.0.0"

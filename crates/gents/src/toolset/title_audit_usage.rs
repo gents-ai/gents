@@ -1,5 +1,3 @@
-//! Explicit parent-inclusive inference usage over signed title provenance.
-
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
@@ -24,9 +22,8 @@ pub struct ParentAuditUsage {
     pub parent_inclusive_audit: AuditUsageTokens,
 }
 
-/// Failed authentication or malformed usage makes this projection unavailable.
-/// Totals contain observed usage only; an absent provider usage report is not
-/// evidence that the call consumed no tokens.
+/// Unavailable covers failed authentication or malformed usage; an absent
+/// provider usage report is not evidence of zero consumption.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum ParentAuditUsageObservation {
@@ -165,8 +162,8 @@ fn project_catalog(
     })
 }
 
-/// The ordinary total remains parent-physical only. A title call enters the
-/// second total only through its historically verified signed parent link.
+/// A title call enters the parent-inclusive total only through its
+/// historically verified signed parent link.
 pub async fn load_parent_inclusive_audit_usage(
     node: &EmbeddedNode,
     exact_parent: &AgentRequestRow,

@@ -1,5 +1,3 @@
-/* One mailbox item: its kind and status, what it asks, the action it
-   wants and the controls that take it, its deadline and its payload. */
 import {
   ChevronDown,
   CircleCheck,
@@ -41,7 +39,6 @@ import { useFleet } from "@/hooks/useFleet";
 
 type BadgeVariant = ComponentProps<typeof Badge>["variant"];
 
-/* the kind glyph on the rail, its word, and its badge */
 export const KIND: Record<
   string,
   { icon: typeof CircleHelp; label: string; tone?: string; badge: BadgeVariant }
@@ -65,8 +62,6 @@ const STATUS: Record<string, { label: string; badge: BadgeVariant }> = {
   expired: { label: "Expired", badge: "destructive" },
 };
 
-/* a body longer than this folds behind "Show more"; counted rather than
-   measured so the fold does not depend on layout having happened */
 const FOLD_CHARS = 600;
 
 const FOLD_LINES = 10;
@@ -84,7 +79,7 @@ export function Item({
   onSelect: (next: boolean) => void;
   last: boolean;
 }) {
-  /* the node that filed the item names its agent; its session may be listed by any node */
+  // The filer names the agent; a session may be listed by another node.
   const filer = useFleet((state) => nodeOf(state, m.nodeDid));
   const session = useFleet((state) =>
     m.sessionId ? state.bySessionId[m.sessionId] : undefined,
@@ -100,8 +95,6 @@ export function Item({
     label: m.status,
     badge: "outline" as BadgeVariant,
   };
-  /* a kind with its own answer surface renders it; any other item keeps
-     the generic reading view */
   const question = parseQuestion(m);
   const body = [m.summary, m.payload && !question ? payloadMarkdown(m.payload) : null]
     .filter((part): part is string => Boolean(part?.trim()))
@@ -111,8 +104,7 @@ export function Item({
   const Icon = kind.icon;
   const open = () => openItem(m, openMailboxItem);
   const deadline = deadlineOf(m);
-  /* a countdown never reads below zero; a passed deadline shows as overdue
-     until the runtime expires the item */
+  // A passed deadline stays overdue until the runtime expires the item.
   const due = deadline === null ? null : span(Math.max(0, deadline - now));
   const soon = dueSoon(deadline, now);
   const age = when(m.createdAt, now);
@@ -167,9 +159,6 @@ export function Item({
           )}
         />
       </span>
-      {/* the card is its own checkbox: a click on its surface toggles the
-          selection, except on a control inside it or when the click ended
-          a text selection */}
       <article
         className={cn(
           "cursor-default rounded-2xl border bg-raised px-4 pt-3 pb-5 transition-[border-color,box-shadow] duration-150 motion-reduce:transition-none",
@@ -184,9 +173,6 @@ export function Item({
         }}
       >
         <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 max-md:gap-y-2">
-          {/* room for a node behind the agent on every row, so titles
-              line up whether or not this one is remote; the stack keeps
-              to the title's side, the node reaching left */}
           <div className="col-start-1 row-start-1 flex justify-end max-md:self-center md:mt-0.5 md:w-12">
             <NodeAgentStack nodeDid={m.nodeDid} agentId={m.targetAgentId} />
           </div>
@@ -199,8 +185,6 @@ export function Item({
               <h2 className="min-w-0 flex-1 font-heading text-sm font-medium text-pretty wrap-break-word text-heading">
                 {m.title}
               </h2>
-              {/* one centred group, so the chip's icon cannot set the age
-                  off its own baseline */}
               <span className="flex shrink-0 items-center gap-3 text-xs leading-5 text-muted-foreground max-md:hidden">
                 <Due due={due} soon={soon} />
                 {time}
@@ -274,7 +258,6 @@ export function Item({
               </p>
             )}
           </div>
-          {/* open it, where opening means anything */}
           <div className="col-start-3 row-start-1 -mr-1 flex items-center gap-1 max-md:self-center md:-mt-1 md:self-start">
             {openable(m) && (
               <Button
@@ -284,8 +267,6 @@ export function Item({
                 title={openLabel(m)}
                 onClick={() => void open()}
               >
-                {/* the glyph says which: the reply arrow the composer's
-                    chip carries, or the sessions scroll for an open */}
                 {m.action === "ack" ? <ScrollText /> : <CornerDownLeft />}
               </Button>
             )}
@@ -309,19 +290,14 @@ export function Item({
   );
 }
 
-/* ack: there is nothing to do but read it, so opening goes to its source;
-   anything else opens a conversation on it (the desktop's "Open compose") */
 export const openable = (m: MailboxItemView) =>
   Boolean(m.sessionId) || m.action !== "ack";
 
-/* the label says what happens next, not which part of the app opens */
 const openLabel = (m: MailboxItemView) =>
   m.action === "ack" ? "Open" : m.sessionId ? "Reply" : "Reply in new session";
 
 type Extra = { key: string; label: string; run: () => void };
 
-/* what else a person can do with an item, beyond its own action and
-   dismissing it: only actions the contract gives us today */
 function extrasOf(m: MailboxItemView): Extra[] {
   const out: Extra[] = [];
   if (m.action !== "ack" && m.sessionId) {
@@ -365,23 +341,15 @@ export async function openItem(
         ? { name: "session", sessionId: item.sessionId }
         : { name: "session", sessionId: null },
     );
-  } catch {
-    /* reported by the action */
-  }
+  } catch {}
 }
 
-/* the key hint inside a pill: a box inside a box read as two outlines,
-   so the hint is a tint of the button's own colour with no edge */
 export const KEY =
   "ml-0.5 h-4 min-w-4 rounded-md border-transparent! bg-current/12! text-[10px] opacity-100!";
 
-/* what a click inside a card reaches for itself, rather than the card */
 const CONTROLS =
   'button, a, input, textarea, pre, [role="checkbox"], [role="button"], [role="link"]';
 
-/* the one item's action as a split button: the action itself, and a
-   caret for whatever else the item allows, present only when there is
-   something to put in it */
 export function Primary({ item }: { item: MailboxItemView }) {
   const { openMailboxItem } = useApp().actions;
   const extras = extrasOf(item);
@@ -447,8 +415,6 @@ const pretty = (value: string) => {
   }
 };
 
-/* a payload that is JSON reads as a fenced block; anything else is the
-   agent's own markdown */
 const payloadMarkdown = (value: string) => {
   let json: string;
   try {

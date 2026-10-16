@@ -5,8 +5,7 @@ use crate::document_config::Tools;
 
 use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 
-/// Replace a complete Tools document through the common, owner-scoped writer.
-/// Omitted groups revoke their capabilities. Sparse edits belong to the patch API.
+/// Replace a complete Tools document; omitted groups revoke their capabilities.
 pub async fn write_tools_document(access: &ConfigAccess, tools: &Tools) -> Result<String> {
     tools.validate()?;
     access

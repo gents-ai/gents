@@ -1,6 +1,3 @@
-//! Fences for #1764: a result whose encoded response would exceed the host's
-//! read limit is cut to fit and reported truncated, never an error.
-
 use gents_fs_runner::execute_request_with_base;
 use gents_fs_runner::protocol::{
     GlobArgs, GrepArgs, ListFilesArgs, NativeFsRunnerRequest, NativeFsRunnerResponse,
@@ -11,8 +8,6 @@ use serde_json::Value;
 mod support;
 use support::unique_root;
 
-/// Long nested paths and long non-ASCII lines full of characters that JSON
-/// escapes, so both encodings inflate the output.
 fn noisy_tree(label: &str) -> std::path::PathBuf {
     let root = unique_root(label);
     let dir = root.join(format!(
@@ -158,7 +153,6 @@ fn results_within_the_budget_are_unchanged() {
 fn empty_result_with_long_escape_rich_pattern_stays_within_budget() {
     let root = unique_root("long-pattern");
     std::fs::write(root.join("a.txt"), "haystack\n").unwrap();
-    // Just under the pattern limit, and escape-heavy in both JSON encodings.
     let pattern = format!("{}needle/*.txt", "\"é\\".repeat(900));
     assert!(pattern.len() <= 4096);
     for raw_json in [true, false] {
@@ -227,8 +221,6 @@ fn oversized_pattern_is_refused_with_a_bounded_error() {
 #[test]
 fn escape_rich_invalid_pattern_error_is_bounded() {
     let root = unique_root("invalid-pattern");
-    // A pattern within the size limit that fails to compile; its message
-    // echoes the pattern, and the error envelope stays bounded.
     let pattern = format!("[{}", "\"\\\u{1}".repeat(1_000));
     let error = execute_request_with_base(
         root.clone(),

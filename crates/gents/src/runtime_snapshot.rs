@@ -54,9 +54,6 @@ pub(crate) enum EffectiveAgentAdmission<'a> {
     Unassigned,
 }
 
-/// Single agent-admission decision shared by routing and readiness
-/// publication. Explicit unavailability and startup demotion always veto an
-/// installed dispatcher.
 pub(crate) fn effective_agent_admission<'a>(
     dispatcher_present: bool,
     unavailable: Option<&'a UnavailableAgent>,
@@ -91,8 +88,6 @@ pub struct ResolvedTask {
     pub goal_token_budget: Option<i64>,
     #[allow(dead_code)]
     pub output_schema_ref: Option<String>,
-    /// Hooks are explicitly configured host commands carried by Task; no
-    /// second persisted model and no TaskRun lifecycle state here.
     pub hooks: Vec<TaskHook>,
 }
 
@@ -109,8 +104,6 @@ impl ResolvedTask {
 #[derive(Debug, Clone)]
 pub struct ResolvedSchedule {
     pub session_id_template: Option<String>,
-    /// Physical id of the Trigger document whose Schedule source points at
-    /// this schedule; empty when no enabled trigger references it.
     pub trigger_doc_id: String,
     pub schedule_id: String,
     #[allow(dead_code)]
@@ -124,7 +117,6 @@ pub struct ResolvedSchedule {
 
 pub const MAX_EVENT_TRIGGER_GROUP_DOCS: usize = 256;
 
-/// Runtime delivery mode derived from the presence of `EventSource.group`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventTriggerFireMode {
@@ -135,7 +127,6 @@ pub enum EventTriggerFireMode {
 #[derive(Debug, Clone)]
 pub struct ResolvedEventTrigger {
     pub session_id_template: Option<String>,
-    /// Physical id of the Trigger document carrying this event source.
     pub trigger_doc_id: String,
     pub trigger_id: String,
     #[allow(dead_code)]
@@ -156,8 +147,6 @@ pub struct ResolvedEventTrigger {
     pub workspace_authority: Option<String>,
 }
 
-/// Resolved automation projection installed on the runtime snapshot in one
-/// step via [`ResolvedRuntimeSnapshot::with_automation`].
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResolvedAutomation {
     pub(crate) tasks: HashMap<String, ResolvedTask>,
@@ -167,8 +156,6 @@ pub(crate) struct ResolvedAutomation {
     pub(crate) unavailable_event_triggers: HashSet<String>,
 }
 
-/// Seeds the first `next_run_at` cursor for a canonical cadence: interval
-/// schedules are immediately due; cron schedules align to the next match.
 pub(crate) fn seed_schedule_next_run_at(
     cadence: &ScheduleCadence,
     now: DateTime<Utc>,
@@ -183,9 +170,6 @@ pub(crate) fn seed_schedule_next_run_at(
     }
 }
 
-/// Advances a parsed `next_run_at` cursor after a fire attempt: interval
-/// schedules add their interval; cron schedules (latest_only) jump to the
-/// next match after `now`.
 pub(crate) fn advance_schedule_next_run_at(
     cadence: &ScheduleCadence,
     parsed_next_run_at: DateTime<Utc>,
@@ -224,8 +208,6 @@ pub(crate) struct ResolvedRuntimeSnapshot {
 }
 
 impl ResolvedRuntimeSnapshot {
-    /// Validates the runtime-authored identity set before any executor slot is
-    /// started or an active generation is installed.
     pub(crate) fn validate_node_readiness_source(&self) -> Result<()> {
         let canonical = |value: &str| !value.is_empty() && value == value.trim();
         if !canonical(&self.default_agent_id) {
@@ -320,8 +302,6 @@ impl ResolvedRuntimeSnapshot {
         self
     }
 
-    /// Single canonical automation setter: installs resolved tasks, schedules
-    /// and event triggers with their unavailability sets.
     pub(crate) fn with_automation(mut self, automation: ResolvedAutomation) -> Self {
         self.active_tasks = automation.tasks;
         self.active_schedules = automation.schedules;

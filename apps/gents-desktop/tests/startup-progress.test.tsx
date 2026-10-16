@@ -58,7 +58,6 @@ describe("startup progress", () => {
   it("holds a step that finished fast until it has had its time", () => {
     const { rerender } = render(progress(steps("active", "pending", "pending")));
     rerender(progress(steps("complete", "active", "pending")));
-    /* the finished step reads as done while it is held */
     expect(shown()).toHaveTextContent("Start local node");
     act(() => vi.advanceTimersByTime(STEP_DWELL_MS - 50));
     expect(shown()).toHaveTextContent("Start local node");

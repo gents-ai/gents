@@ -1,8 +1,7 @@
 import Mathlib.Data.List.Basic
 namespace ToolPolicy.FieldRead
 /-- DID/ACP and existing filters authorize the native read; document and field
-checks only narrow it. Widths represent UTF-8 scalars. SHA-256 exact-byte
-comparison relies on collision resistance, not a retained snapshot. -/
+checks only narrow it. Widths represent UTF-8 scalars. -/
 def page (widths : List Nat) (offset budget : Nat)
     (authorized declared exact hashPresent hashMatches : Bool) : Option Nat := Id.run do
   let boundaries := widths.scanl (· + ·) 0

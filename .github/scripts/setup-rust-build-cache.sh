@@ -36,9 +36,6 @@ if [[ "${RUSTC_WRAPPER:-}" != "sccache" ]]; then
   shared_cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
   runner_cargo_home="${CARGO_TARGET_ROOT}/.cargo-home/${runner_cache_key}"
   mkdir -p "${runner_cargo_home}"
-  # Cargo and its build scripts can outlive checkout cleanup long enough to
-  # request another rustc process. Keep the wrapper beside the persistent
-  # runner cache instead of pointing those processes back into the checkout.
   direct_wrapper="${runner_cargo_home}/rustc-direct.sh"
   install -m 0755 "${workspace_wrapper}" "${direct_wrapper}"
   for cache_entry in registry git .package-cache .package-cache-mutate; do
@@ -86,9 +83,8 @@ mkdir -p "${SCCACHE_DIR}"
 echo "Using SCCACHE_DIR=${SCCACHE_DIR}"
 echo "Using SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE:-sccache default}"
 sccache --version
-# The host-local daemon is shared by every runner process on a Studio. Never
-# start or recycle it here: GitHub's runner cleanup can kill a workflow-owned
-# daemon underneath a sibling compile. The checked-in launchd service owns it.
+# Never start or recycle the shared host daemon here; the checked-in launchd
+# service owns it.
 service_domain="gui/$(id -u)/com.source.gents.sccache"
 if ! launchctl print "${service_domain}" 2>/dev/null | grep -q 'state = running'; then
   echo "::error::Host sccache launchd service is not running (${service_domain})."

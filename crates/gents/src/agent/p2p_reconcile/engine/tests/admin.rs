@@ -4,31 +4,24 @@ struct MockAdmin {
     replicators: Mutex<BTreeMap<String, RemoteReplicator>>,
     emitted: Mutex<Vec<DiffOp>>,
     connects: Mutex<Vec<Vec<String>>>,
-    /// Filters recorded per `add_replicator` call: (addresses, filters).
     recorded_filters: Mutex<Vec<(Vec<String>, PairingFilters)>>,
     deleted_replicator_collections: Mutex<Vec<Vec<String>>>,
     delete_replicator_not_found: Mutex<bool>,
-    /// Entries returned by `active_peers` (bare peer ids or dial addresses,
-    /// like the real adapters).
     active: Mutex<Vec<String>>,
-    /// When set, `active_peers` fails, exercising the degraded-read path.
     fail_active_peers: bool,
-    /// Test-only barrier proving supervisor cancellation can drop an
-    /// in-flight admin wait instead of waiting for its per-RPC timeout.
+    /// Barrier proving supervisor cancellation can drop an in-flight admin
+    /// wait instead of waiting for its per-RPC timeout.
     active_peers_started: Option<Arc<tokio::sync::Notify>>,
     active_peers_release: Option<Arc<tokio::sync::Notify>>,
-    /// When set, `connect` fails after recording the call — modeling the
-    /// Linux redial-timeout that motivated the active-peer gate.
     fail_connect: bool,
-    /// Optional address-specific barrier used to prove that one stale
-    /// peer's dial does not head-of-line block a ready peer's sweep.
+    /// Address-specific barrier proving one stale peer's dial does not
+    /// head-of-line block a ready peer's sweep.
     blocked_connect_address: Option<String>,
     blocked_connect_started: Option<Arc<tokio::sync::Notify>>,
     blocked_connect_release: Option<Arc<tokio::sync::Notify>>,
     replicator_installed: Option<Arc<tokio::sync::Notify>>,
-    /// Number of upcoming replicator installs to fail. This models the
-    /// torn reconnect-replay window where delete succeeds but reinstall
-    /// transiently fails; the next topology diff must heal it.
+    /// Upcoming replicator installs to fail, modeling the torn reconnect-replay
+    /// window (delete succeeds, reinstall transiently fails).
     fail_add_replicator_attempts: Mutex<usize>,
 }
 
@@ -95,9 +88,8 @@ impl RemoteP2pAdmin for MockAdmin {
         drop(remaining_failures);
         let resolved_filters = mock_live_filters(filters);
         for address in addresses {
-            // Like the real adapter, the transport records the carried
-            // collection set in *id* space; `read_actual` reverse-resolves
-            // it to names for the identity comparison.
+            // Transport records the carried collection set in *id* space like
+            // the real adapter; `read_actual` reverse-resolves it to names.
             self.replicators.lock().unwrap().insert(
                 address.clone(),
                 RemoteReplicator {
@@ -148,10 +140,9 @@ impl RemoteP2pAdmin for MockAdmin {
         Ok(())
     }
 
-    // The subscription set is stored in *id*-space, mirroring the real
-    // adapter: `add_p2p_collections` receives names and persists the resolved
-    // id; `list_p2p_collections` returns those ids. `resolve_collection_id`
-    // maps name → id with a distinct prefix so id == name never holds.
+    // The subscription set is stored in *id*-space, mirroring the real adapter:
+    // `add_p2p_collections` receives names and persists the resolved id;
+    // `list_p2p_collections` returns those ids.
     async fn list_p2p_collections(&self) -> RemoteP2pAdminResult<Vec<String>> {
         Ok(self.collections.lock().unwrap().iter().cloned().collect())
     }
@@ -161,7 +152,6 @@ impl RemoteP2pAdmin for MockAdmin {
     }
 
     async fn resolve_collection_name(&self, id: &str) -> RemoteP2pAdminResult<Option<String>> {
-        // Invert `mock_collection_id`: "col_<name>_id" -> "<name>".
         Ok(id
             .strip_prefix("col_")
             .and_then(|rest| rest.strip_suffix("_id"))
@@ -170,8 +160,6 @@ impl RemoteP2pAdmin for MockAdmin {
 
     async fn add_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
         for collection in collections {
-            // `collection` is a name; the adapter subscribes by id, so the
-            // stored token is the resolved id.
             self.collections
                 .lock()
                 .unwrap()

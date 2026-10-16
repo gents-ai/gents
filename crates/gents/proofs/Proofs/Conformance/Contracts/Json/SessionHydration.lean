@@ -26,8 +26,6 @@ def hydrationRequest : SessionHydration.Request :=
 def hydrationOwnedDocument : SessionHydration.Document :=
   { collection := .agentMessage, id := 1 }
 
-/-- A separately authorized origin dependency is selected exactly even though
-its ownership is not re-derived from the target session. -/
 def hydrationOriginDependency : SessionHydration.Document :=
   { collection := .agentOutputSegment, id := 2 }
 
@@ -222,8 +220,6 @@ def sessionHydrationDecisionCases : List SessionHydrationDecisionCase :=
       pairingRequesterMatches := true, pairingNodeMatches := true, activeMember := true,
       membershipNetworkMatches := true, ownsSession := false } ]
 
-/-- Same logical session, but a different peer/request key cannot reuse the
-closure admitted for the original hydration request. -/
 def hydrationTwinCase : SessionHydrationDecisionCase :=
   { name := "twin", paired := true
   , pairingRequesterMatches := true, pairingNodeMatches := true
@@ -267,8 +263,6 @@ def deniedClosureInput (key : CanonicalOutput.Hydration.DocumentKey) :
   { hydrationClosureInput with access := hydrationClosureInput.access.map fun observation =>
       if observation.key = key then { observation with state := .denied } else observation }
 
-/-- A tool delivery retains its parent call; that parent reaches one decodable
-child, while a forged sibling and a child of an unretained parent stay out. -/
 def hydrationEffectInput : SessionHydration.ClosureInput :=
   { hydrationClosureInput with
     roots := [220]
@@ -280,7 +274,6 @@ def hydrationEffectInput : SessionHydration.ClosureInput :=
       CanonicalOutput.Hydration.Examples.forgedChild,
       CanonicalOutput.Hydration.Examples.unreachableChild] }
 
-/-- A running or undelivered parent is only a session base. -/
 def hydrationBaseParentInput : SessionHydration.ClosureInput :=
   { hydrationEffectInput with
     bases := [.toolCall 300], roots := [], messages := []
@@ -553,8 +546,6 @@ def durableManifestMatches (request : SessionHydration.DurableRequest) : Bool :=
   | none => true
   | some manifest => manifest = hydrationDocumentKeys "doc-" manifest.card
 
-/-- Reconstruct the modeled request from the exact discriminator and compact
-wire fields emitted for the selected conformance cases. -/
 def durableRequestRoundtrip (request : SessionHydration.DurableRequest) :
     SessionHydration.DurableRequest :=
   let served := durableServedCount request
@@ -617,8 +608,6 @@ structure SessionHydrationStartCase where
   hasDocuments : Bool
   nonterminalRequest : Bool
 
-/-- Every receiver-start input combination; expectations come from
-`SessionHydration.canStart`. -/
 def sessionHydrationStartCases : List SessionHydrationStartCase :=
   [false, true].flatMap fun foreignHeader =>
   [false, true].flatMap fun ownedSession =>

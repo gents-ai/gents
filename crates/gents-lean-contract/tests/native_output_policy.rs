@@ -1,6 +1,3 @@
-//! Compile the actual production helpers while the larger runtime migration is
-//! red. These checks do not substitute a Rust simulation for the native owner,
-//! and do not claim database/gate/timer conformance.
 #[path = "../../gents/src/session/canonical_rows.rs"]
 mod canonical_rows;
 #[path = "../../gents-loop/src/execution_policy.rs"]
@@ -16,8 +13,6 @@ fn generated_active_lease_cases_drive_native_admission_and_renewal() {
         LeanRequestExecutionAction as Action, LeanRequestExecutionBoundary as Boundary,
         LeanRequestExecutionLeaseStatus as Status,
     };
-    // Decode this family's existing strict DTO, not a hand-maintained fixture.
-    // Full-snapshot decoder completeness is checked separately by runtime_snapshot.
     let snapshot: serde_json::Value =
         gents_lean_contract::load_contract_snapshot().expect("generate Lean contract");
     let cases: Vec<runtime_contract::LeanRequestExecutionLeaseCase> = serde_json::from_value(
@@ -29,8 +24,6 @@ fn generated_active_lease_cases_drive_native_admission_and_renewal() {
     .expect("strict lease cases");
     let mut exercised = std::collections::BTreeSet::new();
     for case in &cases {
-        // Boundary authorization belongs to the native transaction owner, not
-        // these pure helpers. Only exercise their explicitly modeled domain.
         if !matches!(case.pre.lease.status, Status::Active) {
             continue;
         }

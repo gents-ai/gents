@@ -3,20 +3,10 @@ import { toast } from "sonner";
 import { toastFailure } from "@/lib/failure";
 import { errorText } from "../../../lib/errorText";
 
-/* A reviewable draft. Nothing crosses the bridge until the user explicitly
-   saves; reset restores the last bridge-confirmed value.
-
-   `save` resolves true only once the bridge accepted the write, so a caller
-   that closes or navigates on success never does so after a failure; the
-   error stays on the draft. A new document (`isNew`) is saveable as it
-   stands: prefilled is not the same as saved. */
-/** A draft's problems, each at its field; a field with none is absent. */
 export type Problems<T> = Partial<Record<keyof T & string, string>>;
 
 const NO_PROBLEMS = {};
 
-/** The message a parse throws, or undefined when it passes: the parse
-    helpers below word every problem once, for a field and for a save. */
 export function problemOf(parse: () => unknown): string | undefined {
   try {
     parse();
@@ -28,11 +18,6 @@ export function problemOf(parse: () => unknown): string | undefined {
 
 const hasProblems = (problems: object) => Object.values(problems).some(Boolean);
 
-/**
- * Focuses the first field with a problem, in the order `fields` lists them
- * (field to element id, as drawn). True when the draft has problems, so
- * the save it stood for does not go ahead.
- */
 export function focusFirstProblem(
   problems: Partial<Record<string, string>>,
   fields: Partial<Record<string, string>> = {},
@@ -40,7 +25,6 @@ export function focusFirstProblem(
   if (!hasProblems(problems)) return false;
   const first = Object.keys(fields).find((field) => problems[field]);
   const element = first ? document.getElementById(fields[first]!) : null;
-  /* a field folded away in a disclosure is opened to be shown */
   for (
     let fold = element?.closest("details");
     fold;
@@ -53,12 +37,9 @@ export function focusFirstProblem(
 
 export function useDraft<T extends object>(
   saved: T,
-  /* `intent` is whatever a caller passes to save, for a save with a choice */
   persist: (next: T, intent?: unknown) => Promise<unknown>,
   options: {
     isNew?: boolean;
-    /** what is wrong with a draft, at its fields; a draft with any is not
-        saved, and persist sees only drafts without */
     problems?: (draft: T) => Problems<T>;
   } = {},
 ) {
@@ -76,8 +57,6 @@ export function useDraft<T extends object>(
     );
     baselineRef.current = saved;
     setBaseline(saved);
-    // Object identity changes on every projected snapshot; semantic content is
-    // the bridge-confirmed generation this draft needs to observe.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savedKey]);
   const dirty =
@@ -93,7 +72,6 @@ export function useDraft<T extends object>(
       baselineRef.current = draft;
       setBaseline(draft);
       setCreated(true);
-      /* a persist can say more than Saved, with one follow-up action */
       const said = result as {
         savedToast?: string;
         savedAction?: { label: string; onClick: () => void };
@@ -134,7 +112,6 @@ export function useDraft<T extends object>(
   };
 }
 
-/* one item per line, split on newline or comma */
 export const fromLines = (text: string) =>
   text
     .split(/[\n,]/)
@@ -342,5 +319,4 @@ export function validateCronSchedule(expression: string, timezone: string) {
   };
 }
 
-/* ids for new documents, minted in the handler, never in render */
 export const newId = (prefix: string) => `${prefix}-${Date.now().toString(36)}`;

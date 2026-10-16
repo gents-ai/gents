@@ -1,5 +1,3 @@
-//! Conformance fence for `Proofs/Enrollment`.
-
 use gents::agent::p2p_reconcile::enrollment::{
     canonical_enrollment_digest, canonical_enrollment_payload, frame_enrollment_field,
     AuthorizationRevision, AuthorizationRevisionKind, DurableEnrollmentDocuments, EnrollmentAction,
@@ -74,9 +72,6 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
             refused_over_hop_kinds.insert(kind.as_str());
         }
     }
-    // Every admission branch, including cross-node `Peer` messaging, is
-    // exercised by an admitted row, and both the LocalSelf and Peer branches
-    // have a refused row whose hop exceeds the target's bound.
     for kind in [
         AgentRequestAdmissionKind::Enrollment,
         AgentRequestAdmissionKind::LocalSelf,
@@ -101,9 +96,6 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
     }
 }
 
-/// The materializer is the single writer of the signed hop
-/// (`AgentRequest.request_hop`) and admission bounds it by the target's
-/// `max_request_hop`; both must evaluate exactly as `CausalHop` does.
 #[test]
 fn generated_causal_hop_cases_match_native_materializer() {
     use gents::{next_request_hop, request_hop_within_bound, RequestHopCause};

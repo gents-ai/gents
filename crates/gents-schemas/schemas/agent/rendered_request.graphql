@@ -1,96 +1,47 @@
-# The durable fact record for one provider call: the exact rendered request,
-# persisted before it is sent. `Proofs/RenderedCapture.lean` fences the order —
+# Durable fact record for one provider call: the exact rendered request,
+# persisted before it is sent. Proofs/RenderedCapture.lean fences the order —
 # a send is legal only after the matching (capture_key, canonical request) is
-# durable, and one capture key names at most one canonical request.
-#
-# `@branchable` is deliberate and irreversible. DefraDB rejects every patch that
-# flips `is_branchable`, and a populated collection cannot be dropped and
-# recreated, so the property is chosen here or never. It is NOT what produces
-# the content address for `request_json`: per-field and composite commit blocks
-# are written unconditionally, and `is_branchable` gates only the extra
-# collection-level block. It is taken because it is the sole precondition for
-# two capabilities this fact record will want and could not acquire later —
-# DefraDB's branchable collection sync, which is a newly paired peer's only bulk
-# backfill path and rejects non-branchable collections outright, and
-# collection-scoped ACP read decisions, which are the enforcement surface #840's
-# participant boundary needs once defradb.rs#1318 lands.
-#
-# There is deliberately no `request_hash` column. A stored digest is
-# self-attested: the same writer chooses both the bytes and the digest over
-# them, so it proves nothing an auditor could not have been lied to about.
-# Integrity comes from the DefraDB field commit CID for `request_json`, which is
-# computed over the v2 capture container actually stored and replicates with it.
-# Every logical-record delta pins its base document and exact request_json
-# field-commit CID.
-#
-# v3 rows are manifests of RenderedRequestBlock references: the canonical body
-# and provenance bytes live in that collection, and `request_json` stores the
-# ordered references with their pinned field commits. The two collections are
-# one sync unit — a manifest without its blocks is undecodable and a block
-# without a referencing manifest is inert, so neither is delivered, backed up
-# or pruned without the other.
-#
-# No `@policy` and no encryption directives. ACP is blocked on defradb.rs#1318
-# (`EmbeddedNode` exposes no policy or relationship API), and a policy id that
-# is never installed deploys cleanly while leaving rows anonymously readable.
-# `encrypt: true` protects replicated CRDT block deltas only; the local
-# datastore is already encrypted at rest with the store key, which protects the
-# disk, not a reader of this node. #840's participant-boundary criterion is
-# therefore NOT met by this collection as shipped.
+# durable. `@branchable` is deliberate and irreversible; it is the bulk-backfill
+# and collection-scoped-ACP precondition, not the content address: integrity
+# comes from the DefraDB field commit CID for `request_json`. v3 rows are
+# manifests of RenderedRequestBlock references; the two collections are one
+# sync unit. No `@policy` and no encryption: rows on this node remain
+# anonymously readable, so #840's participant boundary is NOT met as shipped.
 type RenderedRequest @branchable @index(fields: ["node_did", "requester_did", "session_id", "source", "capture_scope", "created_at"]) {
     # sha256 over the canonical (node_did, session_id, request_scope,
-    # turn_index, attempt) tuple, where `request_scope` is the injective JSON
-    # pair `[request_doc_id, capture_scope]`. Unique: exactly one capture per
-    # provider attempt, ever. Reusing this key with a different canonical
-    # request is an integrity error, never an update.
+    # turn_index, attempt) tuple. Unique: exactly one capture per provider
+    # attempt, ever; reuse with a different canonical request is an integrity
+    # error, never an update.
     capture_key: String @index(unique: true) @immutable
-    # Exact DefraDB `_docID` of the durable AgentRequest. This is the durable
-    # provenance edge; request_id below remains the logical/user-facing id.
-    # Empty only for one-shot runs, which do not author an AgentRequest.
+    # Exact DefraDB `_docID` of the durable AgentRequest; empty for one-shot runs.
     request_doc_id: String @index @immutable
     # Composite DefraDB commit CID current when this capture was durably
-    # persisted. Together with request_doc_id this is an exact, time-travelable
-    # source reference; it is empty only for one-shot runs.
+    # persisted; empty only for one-shot runs.
     request_commit_cid: String @index @immutable
     request_id: String @index @immutable
     session_id: String @index @immutable
     node_did: String @index @immutable
     requester_did: String @immutable
     agent_id: String @immutable
-    # Which completion loop inside the request issued this provider call.
-    # `inference.N` is the request's own loop; `compaction.N` and
-    # `compaction_fallback.N` are the summarizer whose checkpoint is fenced by
-    # ProviderContextReduction; `title.N` and `oneshot.N` are the rest. Each loop
-    # starts its own turn/attempt counters at zero, so without this component
-    # the summarizer's first call and the request's first turn would be one
-    # fact.
+    # Which completion loop inside the request issued this provider call
+    # (inference.N, compaction.N, compaction_fallback.N, title.N, oneshot.N).
     capture_scope: String @immutable
-    # The owned completion loop's turn and retry counters. Neither is
-    # `InferenceCall.attempt`; they count different things.
+    # The owned completion loop's turn and retry counters.
     turn_index: Int @immutable
     attempt: Int @immutable
-    # Capture format version. Gates how `provenance_json` is interpreted; an
-    # unsupported version is reported, never silently reinterpreted.
+    # Capture format version; gates how `provenance_json` is interpreted.
     capture_version: Int @immutable
     model_name: String @immutable
-    # Provider wire shape the request was sent on, e.g. openai_responses or
-    # openai_chat_completions. Derived from the request path the transport
-    # actually posted to, not from agent configuration.
+    # Provider wire shape the request was sent on, derived from the request
+    # path the transport actually posted to.
     source: String @immutable
-    # Version 1 stores canonical provider JSON directly. Version 2 stores a
-    # versioned container with independently decodable, lossless full/delta
-    # records for the provider body and heavy native provenance. The bounded,
-    # witnessed request-body decode is the complete provider body captured at the
-    # transport seam: the last point at which the body exists before the HTTP
-    # send, after the ChatGPT-Codex instructions/store/strict rewrite, after
-    # Grok's `store:false` injection, and after Responses assistant-item
-    # normalization. The decoded value is the conformance oracle; the current
-    # field commit witnesses the container and either logical record's delta
-    # pins that same physical field commit on its immutable base document.
+    # Versioned container (v1: canonical provider JSON) for the provider body
+    # and heavy native provenance. The decoded value is the conformance oracle;
+    # every logical-record delta pins the same physical field commit on its
+    # immutable base document.
     request_json: String @immutable
-    # Versioned provenance manifest. Never an overloaded empty map: absent
-    # required provenance reads as CapturedOnly, not as evidence of
-    # reconstructibility.
+    # Versioned provenance manifest; absent required provenance reads as
+    # CapturedOnly, never as evidence of reconstructibility.
     provenance_json: String @immutable
     created_at: DateTime @index @immutable
 }

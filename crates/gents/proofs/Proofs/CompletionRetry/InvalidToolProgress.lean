@@ -1,12 +1,13 @@
 import Proofs.CompletionRetry.State
 
-/-! Request-execution-local accounting in the existing owned completion loop.
-`recordDurable` is called only after the outcome has been persisted/threaded.
-It does not terminalize a request: exhaustion asks the existing stream error path
-and execution lease owner to do so. The abstraction assumes serialized dispatch;
-a stream containing several calls must check eligibility before each dispatch.
--/
 namespace CompletionRetry.InvalidToolProgress
+
+/-- Request-execution-local accounting in the existing owned completion loop.
+`recordDurable` is called only after the outcome has been persisted/threaded.
+It does not terminalize a request: exhaustion asks the existing stream error
+path and execution lease owner to do so. Assumes serialized dispatch; a stream
+containing several calls must check eligibility before each dispatch. -/
+
 
 def limit : Nat := 8
 
@@ -61,9 +62,6 @@ theorem invalid_spends_one (s : State) (o : Outcome)
     (recordDurable s o).invalidUsed = s.invalidUsed + 1 := by
   simp [recordDurable, h, hi]
 
-/-- A strict natural-valued rank decreases on every accepted invalid outcome.
-Valid outcomes cannot replenish it. This bounds invalid churn even when valid
-calls are interspersed; it does not claim termination of infinite valid work. -/
 theorem invalid_rank_decreases (s : State) (o : Outcome)
     (h : canDispatch s = true) (hi : invalid o = true) :
     limit - (recordDurable s o).invalidUsed < limit - s.invalidUsed := by

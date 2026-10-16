@@ -121,11 +121,6 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
         {
             Ok(applied) => applied,
             Err(error) => {
-                // The executor has exhausted its restart budget and is about
-                // to park. If that veto cannot become durable, close routing
-                // before returning so the last Ready observation can never
-                // admit another request into its dead queue. Runtime teardown
-                // will then publish a terminal state or fail boundedly.
                 self.admission_gate.close().await;
                 let rendered = format!("{error:#}");
                 if self.fatal_error.send(error).is_err() {
@@ -170,11 +165,8 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
     }
 }
 
-/// Sole owner of the process-state/admission ordering boundary.
-///
-/// Ready is persisted before the gate opens. Beginning shutdown marks the
-/// lifecycle terminal under the same mutex, closes the gate (waiting for any
-/// in-progress routing admission), and only then publishes ShuttingDown.
+/// Sole owner of the process-state/admission ordering boundary: Ready is
+/// persisted before the gate opens; shutdown closes the gate first.
 struct RuntimeLifecycleCoordinator {
     closing: Mutex<bool>,
     admission_gate: super::router::RuntimeAdmissionGate,
@@ -394,14 +386,8 @@ async fn run_agent_owned(
     #[cfg(test)] slot_runner: Option<TestSlotRunner>,
 ) -> Result<()> {
     let cancel = CancellationToken::new();
-    // Ask cooperative children to stop if the coordinator future itself is
-    // dropped. Abort-on-drop handles below provide the hard ownership boundary
-    // for tasks which could otherwise remain between cancellation checkpoints.
     let _cancel_on_drop = cancel.clone().drop_guard();
     let (fatal_error_tx, mut fatal_error_rx) = mpsc::unbounded_channel();
-    // Every owned runtime task listens to this internal signal. If any one
-    // background task exits unexpectedly, the coordinator closes admission,
-    // broadcasts shutdown to the remaining tasks and awaits their joins.
     let (runtime_shutdown_tx, shutdown) = watch::channel(false);
     runtime_status
         .set_reconcile_phase(ReconcilePhase::Resolving)
@@ -433,9 +419,8 @@ async fn run_agent_owned(
         runtime_status.publish_error(&format!("{error:#}")).await;
         return Err(error);
     }
-    // DefraDB's event bus is live-only. Subscribe before the MCP health
-    // checker's first cycle can persist a transition that makes a required
-    // service (and therefore its dependent agent) runnable.
+    // Subscribe before the MCP health checker can persist a transition that
+    // makes a required service runnable.
     let control_subscription = agent
         .document_runtime_context()
         .is_some()
@@ -533,10 +518,8 @@ async fn run_agent_owned(
         .publish_startup_snapshot(initial_active_snapshot.as_ref())
         .await
     {
-        // Bootstrap owns live generation-one slots before the initial source is
-        // durable. Transfer them through the same ordered shutdown boundary as
-        // the steady-state supervisor; dropping JoinHandles here would detach
-        // executors that can outlive the readiness owner.
+        // Bootstrap owns live generation-one slots; drop them through the
+        // ordered shutdown boundary.
         runtime_shutdown_tx.send_replace(true);
         cancel.cancel();
         let shutdown_result = generation_supervisor.shutdown_slots().await;
@@ -610,11 +593,6 @@ async fn run_agent_owned(
     let trigger_engine_materializer_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_cancel = cancel.child_token();
     let trigger_engine_startup_barrier = startup_barrier.clone();
-    // Construct the `ManualSource` up-front so the `ManualTriggerHandle` can
-    // be published to in-process callers (via the `OnceCell` on
-    // `Gents`) before `run()` awaits shutdown. Deferring construction
-    // into the spawned task would race the callers that cloned `Gents`
-    // and are polling for the handle.
     let (manual_source, manual_trigger_handle) =
         crate::trigger_engine::manual_source::ManualSource::new(trigger_engine_cancel.clone());
     let _ = agent.manual_trigger_handle.set(manual_trigger_handle);
@@ -1066,8 +1044,7 @@ async fn log_recovery(
     default_agent_id: &str,
     executions: &crate::hook::BackgroundExecutionRegistry,
 ) {
-    // Sweep order lives in `startup_recovery`, not here: the inference-call
-    // sweep is parent-gated and must run after request repair (#1001).
+    // The inference-call sweep is parent-gated and must run after request repair.
     let outcome =
         crate::startup_recovery::run_startup_recovery_with_executions(node, node_did, executions)
             .await;
@@ -1217,11 +1194,7 @@ async fn validate_startup_snapshot(
             .filter(|(_, reason)| !is_degraded_startup_unavailable_reason(reason.public_reason))
             .collect::<Vec<_>>();
         if !blocking.is_empty() {
-            // The bail and the persisted runtime status carry only the
-            // presentation-safe reason; the diagnostic is operator-local and
-            // must not leak into either, so it is only logged here (and, in
-            // service mode, mirrored to the stderr sink the service manager
-            // captures).
+            // Only the presentation-safe reason leaves this boundary.
             for (agent_id, reason) in &blocking {
                 tracing::error!(
                     agent_id = %agent_id,

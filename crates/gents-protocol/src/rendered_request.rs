@@ -1,61 +1,24 @@
-//! Shared vocabulary for `RenderedRequest` capture rows (#840, #1066).
-//!
-//! The producer lives in `gents::rendered_request` — it builds the capture DTO
-//! at the transport seam and persists the 18-column row. Every *consumer* (the
-//! run timeline, adapter projections, the CLI, a future reconstructor) reads
-//! through the types here, so the sharp parts of the format — the
-//! `"{kind}.{seq}"` capture scope, the `(scope, turn, attempt)` ordering, and
-//! the versioned provenance manifest — are implemented exactly once, next to
-//! the vocabulary that defines them. `gents` re-exports everything in this
-//! module at its original paths, so the producer and the readers cannot drift.
-//!
-//! Serialized shapes here are load-bearing: `provenance_json` columns already
-//! persisted by #1059 deserialize through these exact serde attributes.
-
 use serde::{Deserialize, Serialize};
 
 use crate::message::{Message, ToolResultContent, UserContent};
 
-/// Capture format version stamped onto every row. Bump when the columns or the
-/// storage encoding a reader must understand changes.
-///
-/// v1 stores the canonical provider JSON directly. v2 stores a container whose
-/// payloads are independently decodable full/delta records. v3 (#2333) stores a
-/// container whose payloads are manifests of content-defined byte blocks, so a
-/// later capture re-references the blocks it shares with an earlier one instead
-/// of re-signing the whole conversation; rows written as v1 or v2 keep decoding
-/// through their own arms forever.
+/// Capture format version. A reader that does not know it must report the row
+/// as unsupported rather than guessing.
 pub const CAPTURE_VERSION: u32 = 3;
 
-/// Provenance manifest version. Bump when `ProvenanceManifest`'s serialized
-/// shape changes. A reader that does not know this number must report
-/// `UnsupportedManifest` rather than guessing.
-///
-/// v2 (#1059): status, seam, scope, endpoint, assembly trace.
-/// v3 (#1066): optional `admission` join to the persisted `InferenceCall`.
-/// v4 (#1544): compact searchable trace metadata; the lossless heavy trace
-/// payload moves into its independently decodable v2 `request_json` record.
+/// Provenance manifest version. A reader that does not know this number must
+/// report `UnsupportedManifest` rather than guessing.
 pub const PROVENANCE_MANIFEST_VERSION: u32 = 4;
 
-/// Assembly-trace version. Bump when `AssemblyTrace`'s serialized shape
-/// changes. Versioned independently of the manifest so a manifest that later
-/// gains pinned config CIDs does not have to re-version the trace.
+/// Assembly-trace version, versioned independently of the manifest.
 pub const ASSEMBLY_TRACE_VERSION: u32 = 4;
 
-/// Version of the request-bound context accounting payload. The estimator is
-/// intentionally named as well as versioned: these are the exact values the
-/// runtime used for its dispatch decision, not a claim about a provider's
-/// proprietary tokenizer.
-///
-/// v2: provider-wire projection selected by backend/API, with normalized
-/// documents attributed separately and one authoritative whole-body total.
+/// Version of the request-bound context accounting payload; the exact values
+/// the runtime used for its dispatch decision, not a provider tokenizer claim.
 pub const CONTEXT_ACCOUNTING_VERSION: u32 = 2;
 
-/// Request paths whose body is a completion request, and the wire shape each
-/// one implies. The capturing transport only claims a pending capture for one
-/// of these, so a `/models` listing or a token-refresh call issued while a
-/// capture is armed passes through untouched instead of consuming — and
-/// mis-describing — the turn's fact.
+/// Request paths whose body is a completion request. The capturing transport
+/// only claims a pending capture for one of these.
 const COMPLETION_REQUEST_PATHS: &[(&str, RenderedRequestSource)] = &[
     ("/responses", RenderedRequestSource::OpenAiResponses),
     (
@@ -65,15 +28,8 @@ const COMPLETION_REQUEST_PATHS: &[(&str, RenderedRequestSource)] = &[
     ("/messages", RenderedRequestSource::ClaudeCliSubscription),
 ];
 
-/// The provider wire shape a captured body was actually sent on.
-///
-/// Derived from the request path the transport posted to, never from agent
-/// configuration: configuration says what the runtime *intended*, and this
-/// column has to say what the provider *received*. The two can disagree — a
-/// backend document can be edited between reconcile and send.
-///
-/// `ClaudeCliSubscription` is stamped by the capturing HTTP transport for
-/// Anthropic Messages posts to `/v1/messages` — the only Claude wire.
+/// The provider wire shape a captured body was actually sent on, derived from
+/// the request path the transport posted to, never from agent configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RenderedRequestSource {
     #[serde(rename = "openai_responses")]
@@ -85,8 +41,8 @@ pub enum RenderedRequestSource {
 }
 
 impl RenderedRequestSource {
-    /// Classify by the completion request path. `None` means "not a completion
-    /// request", which is the transport's signal to forward without capturing.
+    /// `None` means "not a completion request": the transport forwards without
+    /// capturing.
     pub fn for_request_path(path: &str) -> Option<Self> {
         COMPLETION_REQUEST_PATHS
             .iter()
@@ -104,24 +60,18 @@ impl RenderedRequestSource {
 }
 
 /// Which completion loop inside a request is issuing provider calls.
-///
-/// Declaration order is the ordering `CaptureOrderKey` sorts kinds by; it is a
-/// stable identity order, not a temporal one (temporal interleaving across
-/// loops comes from `created_at` and the admission join).
+/// Declaration order is the ordering `CaptureOrderKey` sorts kinds by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CaptureScopeKind {
-    /// The request's own owned completion loop (`agent/loop_stream.rs`).
+    /// The request's own owned completion loop.
     Inference,
-    /// The guided per-turn compaction summarizer. Its output becomes a durable
-    /// request-local `ProviderContextReduction` before it may replace provider
-    /// history; it is not a session-prefix `CompactionEntry`.
+    /// The guided per-turn compaction summarizer.
     Compaction,
-    /// The strict-JSON compaction fallback, taken when guided structured output
-    /// exhausts its recovery.
+    /// The strict-JSON compaction fallback.
     CompactionFallback,
     /// Conversation title generation.
     Title,
-    /// The one-shot runner (`oneshot::run_openai_oneshot_with_tools`).
+    /// The one-shot runner.
     OneShot,
 }
 
@@ -136,7 +86,7 @@ impl CaptureScopeKind {
         }
     }
 
-    /// The inverse of `as_str`. `None` for anything the producer never writes.
+    /// The inverse of `as_str`.
     pub fn from_label(label: &str) -> Option<Self> {
         match label {
             "inference" => Some(Self::Inference),
@@ -156,12 +106,7 @@ impl std::fmt::Display for CaptureScopeKind {
 }
 
 /// A parsed `capture_scope` column: which loop, and which allocation of that
-/// loop within the request. The producer writes `"{kind}.{seq}"` with `seq`
-/// starting at 1 per kind (`gents::rendered_request::scope`).
-///
-/// Serializes as that same `"{kind}.{seq}"` label, so the provider-turn
-/// coordinate in `output::OutputSource` is the capture's coordinate, not a
-/// second encoding of it.
+/// loop within the request. Serializes as `"{kind}.{seq}"`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct CaptureScope {
@@ -183,13 +128,11 @@ impl TryFrom<String> for CaptureScope {
     }
 }
 
-/// Why a `capture_scope` string failed to parse. Malformed scope is an error a
-/// consumer must surface, never a default: defaulting would silently merge the
-/// row into some other loop's ordering.
+/// Malformed scope is an error a consumer must surface, never a default:
+/// defaulting would silently merge the row into another loop's ordering.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CaptureScopeParseError {
     Empty,
-    /// No `.` separator, or an empty kind/seq component.
     MissingSeparator(String),
     UnknownKind(String),
     InvalidSeq(String),
@@ -217,8 +160,8 @@ impl std::str::FromStr for CaptureScope {
         if label.is_empty() {
             return Err(CaptureScopeParseError::Empty);
         }
-        // Split on the LAST '.': kind labels contain '_' but never '.', and a
-        // future kind must not silently re-shape existing labels.
+        // Split on the LAST '.': a future kind label must not silently
+        // re-shape existing labels.
         let (kind, seq) = label
             .rsplit_once('.')
             .filter(|(kind, seq)| !kind.is_empty() && !seq.is_empty())
@@ -242,14 +185,7 @@ impl std::fmt::Display for CaptureScope {
 }
 
 /// The stable identity ordering of capture rows within one request:
-/// `(kind, seq, turn_index, attempt)`, with `seq` compared numerically — a
-/// lexical sort of the raw `capture_scope` column would put `inference.10`
-/// before `inference.2`.
-///
-/// This orders rows *within* and *across* loops deterministically; it is not a
-/// temporal order across loops (the summarizer's calls interleave with the
-/// inference loop's in wall-clock time). Temporal placement comes from
-/// `created_at` and the provenance admission join.
+/// `(kind, seq, turn_index, attempt)`, with `seq` compared numerically.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CaptureOrderKey {
     pub scope: CaptureScope,
@@ -258,13 +194,9 @@ pub struct CaptureOrderKey {
 }
 
 impl CaptureOrderKey {
-    /// A zero-padded rendering whose lexical order equals `Ord`. For sort-key
-    /// slots that only carry strings (timeline tiebreaks).
-    ///
-    /// The leading numeric rank is load-bearing: the kind *labels* sort
-    /// lexically as `compaction < inference`, which contradicts declaration
-    /// order — the conformance case `kind_rank_dominates_seq` is the fence
-    /// that caught exactly that.
+    /// A zero-padded rendering whose lexical order equals `Ord`. The leading
+    /// numeric rank is load-bearing: kind labels sort lexically as
+    /// `compaction < inference`, contradicting declaration order.
     pub fn padded(&self) -> String {
         format!(
             "{:02}.{}.{:010}.{:06}.{:06}",
@@ -273,9 +205,8 @@ impl CaptureOrderKey {
     }
 }
 
-/// Why a row could not produce a [`CaptureOrderKey`]. `turn_index` and
-/// `attempt` are core facts; a row missing them cannot be ordered, and
-/// defaulting them to zero would silently collide with a real first-turn row.
+/// Why a row could not produce a [`CaptureOrderKey`]; missing core facts cannot
+/// be defaulted to zero without colliding with real rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CaptureOrderKeyError {
     MissingScope,
@@ -307,24 +238,20 @@ impl From<CaptureScopeParseError> for CaptureOrderKeyError {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ParsedProvenance {
     Manifest(Box<ProvenanceManifest>),
-    /// The row was written by a runtime this reader does not understand. The
-    /// row is still real and still listed; only its provenance is opaque.
+    /// Written by a runtime this reader does not understand; the row is still
+    /// listed, only its provenance is opaque.
     Unsupported {
         manifest_version: u32,
     },
 }
 
-/// Why a `provenance_json` column failed to read. Distinct from
-/// [`ParsedProvenance::Unsupported`]: these are malformed columns, not
-/// unknown-but-well-formed versions.
+/// A malformed `provenance_json` column, distinct from an
+/// unknown-but-well-formed version.
 #[derive(Debug)]
 pub enum ProvenanceParseError {
     Empty,
     InvalidJson(serde_json::Error),
-    /// JSON object with no numeric `manifest_version` — pre-versioned or
-    /// corrupt; either way unreadable by contract.
     MissingVersion,
-    /// Version in range but the body did not match that version's shape.
     InvalidManifest(serde_json::Error),
 }
 
@@ -350,12 +277,9 @@ impl std::error::Error for ProvenanceParseError {}
 
 impl ProvenanceManifest {
     /// Read a `provenance_json` column, gating on `manifest_version` before
-    /// committing to a shape.
-    /// Parse the compact metadata view used by current readers.
-    ///
-    /// A v3 manifest is projected to a v4 metadata value; this does not claim
-    /// to reproduce the original durable v3 JSON. Callers that export evidence
-    /// must retain the raw column alongside this normalized view.
+    /// committing to a shape. A v3 manifest is projected to a v4 metadata
+    /// value; callers that export evidence must retain the raw column
+    /// alongside this normalized view.
     pub fn parse(provenance_json: &str) -> Result<ParsedProvenance, ProvenanceParseError> {
         if provenance_json.trim().is_empty() {
             return Err(ProvenanceParseError::Empty);
@@ -382,33 +306,20 @@ impl ProvenanceManifest {
 }
 
 /// Which of the owned loop's two request builders produced the captured
-/// `CompletionRequest`.
-///
-/// This is one of the four unrecoverable inputs. The completion-retry `Repair`
-/// directive rebuilds directly after payload repair, while `Budgeted` performs
-/// ordinary assembly and optional per-turn compaction. Every resulting request
-/// is provider-projected, recounted, and output-clamped at the final dispatch
-/// boundary; this discriminator records the assembly route, not budget policy.
+/// `CompletionRequest`: one of the four unrecoverable inputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssemblyBuildPath {
-    /// `build_budgeted_request`: ordinary assembly and per-turn compaction when
-    /// the request exceeded the input budget.
+    /// Ordinary assembly and per-turn compaction when the request exceeded the
+    /// input budget.
     Budgeted,
-    /// `build_request` invoked directly by a completion-retry repair.
+    /// Invoked directly by a completion-retry repair.
     Repair,
 }
 
 /// A provider-assigned assistant message id, positioned in the effective
-/// message list.
-///
-/// One of the four unrecoverable inputs. `close_streaming_turn` stamps the
-/// provider's `MessageId` event onto the threaded assistant message
-/// (`agent/loop_stream.rs:802-806`) because OpenAI Responses and ChatGPT Codex
-/// follow-up requests reference prior `msg_` ids. The persistence path builds
-/// its assistant message with `id: None`
-/// (`agent/stream_processor.rs:305`), so the id exists in the provider request
-/// and nowhere in the durable transcript.
+/// message list. One of the four unrecoverable inputs: the id exists in the
+/// provider request and nowhere in the durable transcript.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssistantMessageId {
     /// Index into `AssemblyTrace::effective_messages`.
@@ -417,22 +328,11 @@ pub struct AssistantMessageId {
 }
 
 /// The exact tool-result content threaded back into provider history for one
-/// tool call.
-///
-/// One of the four unrecoverable inputs. The loop threads
-/// `bounded_tool_result(name, outcome.model_facing_text())`
-/// (`gents-loop/src/loop_stream/turn_threading.rs`): text bounded by
-/// `TruncationLimits::default()`, image parts whole. Persistence
-/// re-derives its text from the stored `AgentToolCall.result` with
-/// `TruncationMode::Head`, the hook's own `truncation_limits`, and
-/// `model_observation_for_tool_result`
-/// (`hook/persistence/message_spawn.rs:296-324`). Those are different functions
-/// over different inputs, so replaying from the transcript does not reproduce
-/// the bytes the model actually saw.
-///
-/// `content` is the full threaded `Vec<ToolResultContent>`, not a flattened
-/// string: `ToolResultContent::from_tool_output` can split a JSON payload into
-/// several parts, and that split is part of what the provider received.
+/// tool call. One of the four unrecoverable inputs: the loop and the
+/// persistence path derive different text from different sources, so replaying
+/// from the transcript does not reproduce the bytes the model saw. `content`
+/// is the full threaded `Vec<ToolResultContent>`: the part split is part of
+/// what the provider received.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ThreadedToolResult {
     /// Index into `AssemblyTrace::effective_messages`.
@@ -445,23 +345,18 @@ pub struct ThreadedToolResult {
 }
 
 /// Why the successful provider dispatch did or did not use per-turn
-/// compaction. Session-prefix compaction remains represented by
-/// `CompactionEntry`; this describes the complete request assembled at the
-/// owned-loop dispatch boundary.
+/// compaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextCompactionReason {
-    /// The complete assembled input fit below the configured threshold.
+    /// The assembled input fit below the configured threshold.
     BelowThreshold,
-    /// The input exceeded the threshold and a durable
-    /// `ProviderContextReduction` was activated before this dispatch.
+    /// A durable `ProviderContextReduction` was activated before dispatch.
     Compacted,
-    /// A request-local, non-durable repair (currently completed tool-result
-    /// stripping) made the provider view fit without creating a reduction
-    /// checkpoint.
+    /// A request-local, non-durable repair made the provider view fit without
+    /// a reduction checkpoint.
     ProviderViewRepaired,
-    /// This completion loop had no per-turn compactor. Used by internal and
-    /// one-shot loops where compaction is deliberately unavailable.
+    /// This completion loop had no per-turn compactor.
     CompactorUnavailable,
 }
 
@@ -486,13 +381,10 @@ impl ContextInputComponents {
     }
 }
 
-/// Request-bound context accounting persisted with the exact rendered request
-/// and projected onto its joined, replicated `InferenceCall` row. Every
-/// provider dispatch attempt owns a distinct call row.
+/// Request-bound context accounting persisted with the exact rendered request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextAccounting {
     pub accounting_version: u32,
-    /// Provider-dispatch coordinate within the owning completion loop.
     #[serde(default)]
     pub turn_index: usize,
     #[serde(default)]
@@ -512,70 +404,35 @@ pub struct ContextAccounting {
     pub pre_compaction_input_tokens: Option<usize>,
 }
 
-/// The request-local inputs that reconstruction must account for explicitly.
+/// The request-local inputs that reconstruction must account for explicitly;
+/// everything else that shapes a request is durable or a pure function of
+/// durable data. `assistant_message_ids` and `threaded_tool_results` are
+/// overlays keyed by position and call id; `effective_messages` is the oracle
+/// a reconstructor checks itself against, present only when request-context
+/// rendering, per-turn compaction, or a repair introduced request-local
+/// content. Per-turn compaction is a sticky mutation whose exact source split
+/// and checkpoint are written as a `ProviderContextReduction`; re-running the
+/// summarizer is not reconstruction.
 ///
-/// Everything else that shapes a request is either durable (transcript rows,
-/// agent/profile/backend/skill documents) or a pure function of durable data.
-/// These four need an overlay, an oracle, or an explicit durable lineage:
-///
-/// 1. `assistant_message_ids` — provider-assigned, persisted as `None`.
-/// 2. `threaded_tool_results` — the loop and the persistence path derive
-///    different text from different sources.
-/// 3. `effective_messages` — when a rendered request-context message,
-///    repair, or per-turn compaction adds request-local content. Compaction is a *sticky*
-///    mutation
-///    (`*history = compacted; *new_messages = vec![compacted_prompt]`,
-///    `agent/loop_stream.rs:1350-1351`), so one turn's model-generated summary
-///    governs every later turn of the same request. Its exact source split and
-///    checkpoint are written as a `ProviderContextReduction`; re-running the
-///    summarizer is not reconstruction because it need not produce the same words.
-/// 4. `build_path` — see `AssemblyBuildPath`.
-///
-/// `assistant_message_ids` and `threaded_tool_results` are projections of the
-/// effective message list, derived by the same constructor so they cannot drift
-/// from it.
-/// They are carried explicitly because a reconstructor rebuilds its message
-/// list from `AgentMessage` rows and needs these as an *overlay* keyed by
-/// position and call id; `effective_messages` is the oracle it checks itself
-/// against. `effective_messages` is present only when that list contains a
-/// rendered request-context message, a durably recorded per-turn compaction
-/// summary, or the result of a repair rewrite. Otherwise the durable transcript
-/// plus these overlays reconstructs it exactly.
-///
-/// ## Size
-///
-/// Ordinary turns do not retain the full native message list next to the
-/// provider-wire copy in `request_json`; that list is reconstructible from
-/// durable rows plus the overlays. Once request-context rendering, per-turn
-/// compaction, or a repair changes the native list, the full list is retained
-/// as the reconstruction oracle. Per-turn reductions additionally cite their
-/// durable fact keys, so the oracle can be checked against independently
-/// addressable checkpoints. Compacted lists are bounded by the context window.
-///
-/// `threaded_tool_results` is carried on **every** turn, compact path included,
-/// because rig joins multi-part tool-result content with `"\n"` on the Chat
-/// Completions wire — the native `Vec<ToolResultContent>` split is genuinely
-/// unrecoverable from `request_json`. So a tool-heavy turn does duplicate its
-/// tool-result payloads; only the surrounding message list is elided.
+/// `threaded_tool_results` is carried on **every** turn, compact path
+/// included, because rig joins multi-part tool-result content with `"\n"` on
+/// the Chat Completions wire — the native split is unrecoverable from
+/// `request_json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AssemblyTrace {
     pub trace_version: u32,
     pub build_path: AssemblyBuildPath,
-    /// Number of native messages passed to assembly. This validates positional
-    /// overlays even when the reconstructible common-path list is omitted.
+    /// Number of native messages passed to assembly.
     pub effective_message_count: usize,
     /// The full effective provider message list at capture time, retained only
     /// after request-context rendering or per-turn compaction introduces
-    /// request-local content. Native `Message`s, not provider wire shapes: this is
-    /// the *input* to assembly, whereas `request_json` is its output.
+    /// request-local content.
     pub effective_messages: Option<Vec<Message>>,
     pub assistant_message_ids: Vec<AssistantMessageId>,
     pub threaded_tool_results: Vec<ThreadedToolResult>,
     /// Ordered immutable per-turn reduction facts that causally determine the
-    /// sticky provider projection used for this request. Empty on ordinary
-    /// assembly.
+    /// sticky provider projection used for this request.
     pub reduction_keys: Vec<String>,
-    /// Exact accounting used at the dispatch gate.
     pub context_accounting: Option<ContextAccounting>,
 }
 
@@ -602,8 +459,7 @@ impl From<&AssemblyTrace> for AssemblyTraceMetadata {
 
 impl AssemblyTrace {
     /// The only constructor that keeps the overlays consistent with
-    /// `effective_messages`. Build traces with this, never with a struct
-    /// literal.
+    /// `effective_messages`.
     pub fn from_effective_messages(
         build_path: AssemblyBuildPath,
         effective_messages: Vec<Message>,
@@ -611,8 +467,8 @@ impl AssemblyTrace {
         Self::from_messages(build_path, effective_messages, true)
     }
 
-    /// Build the compact common-path trace when the native list can be rebuilt
-    /// from durable transcript/configuration documents plus the overlays.
+    /// Build the compact common-path trace when the native list is
+    /// reconstructible from durable rows plus the overlays.
     pub fn from_reconstructible_messages(
         build_path: AssemblyBuildPath,
         effective_messages: Vec<Message>,
@@ -677,83 +533,63 @@ impl AssemblyTrace {
     }
 }
 
-/// How much this capture claims about reconstructibility.
-///
-/// Explicit, never inferred from an absent field. A manifest that simply omits
-/// pinned CIDs must not read as "nothing needed pinning".
+/// How much this capture claims about reconstructibility; explicit, never
+/// inferred from an absent field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProvenanceStatus {
     /// The rendered request is durable and exact, but no durable source
-    /// versions are pinned alongside it, so a reconstruction cannot be
-    /// verified against it. This is the only status version 1 emits.
+    /// versions are pinned alongside it.
     CapturedOnly,
 }
 
-/// Where in the send path the captured bytes were read.
-///
-/// Recorded positively so a reader never has to infer it. A row that says
-/// `TransportBody` is claiming the stronger thing: these are the bytes the HTTP
-/// client forwarded, after every provider-specific rewrite.
+/// Where in the send path the captured bytes were read, recorded positively so
+/// a reader never has to infer it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureSeam {
-    /// The last `HttpClientExt` before the network client. The only seam
-    /// version 1 emits.
+    /// The last `HttpClientExt` before the network client; the bytes the HTTP
+    /// client forwarded, after every provider-specific rewrite.
     TransportBody,
 }
 
-/// The admission identity of the provider call this capture preceded: the
-/// `call_id`/`call_seq` the admission registry minted for exactly that call.
-///
-/// This makes the capture↔`InferenceCall` correspondence a stored key instead
-/// of an ordinal guess — an admission rejection consumes no `call_seq`, so
-/// counting rows on either side desynchronises; this join does not. Absent for
-/// one-shot runs (no admission scope exists) and on v2 rows.
+/// The admission identity of the provider call this capture preceded. A
+/// stored key, not an ordinal guess: an admission rejection consumes no
+/// `call_seq`, so counting rows on either side desynchronises. Absent for
+/// one-shot runs and on v2 rows.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdmissionJoin {
     pub call_id: String,
     pub call_seq: i64,
 }
 
-/// Versioned provenance travelling in the `provenance_json` column.
-///
-/// Version 1 carries the assembly trace, the seam the bytes came from, the
-/// capture scope, and an honest `CapturedOnly` status. Pinned
-/// config/transcript CIDs are a later version; when they arrive, a version-1
-/// row must still be readable and must still report `CapturedOnly`.
+/// Versioned provenance travelling in the `provenance_json` column. A v1 row
+/// must remain readable and must still report `CapturedOnly`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProvenanceManifest {
     pub manifest_version: u32,
     pub status: ProvenanceStatus,
-    /// Why this row is not `Verified`, in words, so a projection can say so
-    /// without the reader reverse-engineering it from missing fields.
+    /// Why this row is not `Verified`, in words.
     pub status_reason: String,
     pub capture_seam: CaptureSeam,
-    /// Mirrors the `capture_scope` column. Duplicated here so a manifest read
-    /// in isolation still identifies which completion loop it describes.
+    /// Mirrors the `capture_scope` column.
     pub capture_scope: String,
     /// Scheme and host authority the body was actually posted to, observed at
-    /// the seam; URL userinfo is excluded. `None` only when the URI carried no
-    /// authority.
-    ///
-    /// This is transport evidence otherwise lost in time. A configured
-    /// endpoint or backend ID is not proof of the route used for this send;
-    /// the observed authority and route-path digest carry that distinction.
+    /// the seam; URL userinfo is excluded. Transport evidence otherwise lost
+    /// in time: a configured endpoint is not proof of the route used.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_endpoint: Option<String>,
     /// Canonical family of the already-built completion client, not a later
-    /// configuration lookup. Missing on historical captures.
+    /// configuration lookup.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_family: Option<String>,
-    /// SHA-256 of the transport-observed URI path. Absent when the URI has a
+    /// SHA-256 of the transport-observed URI path; absent when the URI has a
     /// query, since query-based routing cannot be established without keeping
-    /// potentially secret values. Missing on historical captures.
+    /// potentially secret values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_route_path_sha256: Option<String>,
-    /// The admitted call this capture preceded. Present exactly when an
-    /// admission scope was live at the seam; a one-shot capture legitimately
-    /// carries none, and its absence there is a documented fact, not an error.
+    /// The admitted call this capture preceded. Absence on a one-shot capture
+    /// is a documented fact, not an error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admission: Option<AdmissionJoin>,
     pub assembly_trace: AssemblyTraceMetadata,
@@ -823,442 +659,5 @@ impl ProvenanceManifest {
         self.provider_family = family;
         self.provider_route_path_sha256 = path_sha256;
         self
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-    use crate::message::{AssistantContent, Text, ToolCall, ToolFunction};
-
-    fn tool_result_message(id: &str, call_id: Option<&str>, text: &str) -> Message {
-        Message::User {
-            content: vec![match call_id {
-                Some(call_id) => UserContent::tool_result_with_call_id(
-                    id,
-                    call_id.to_string(),
-                    vec![ToolResultContent::text(text)],
-                ),
-                None => UserContent::tool_result(id, vec![ToolResultContent::text(text)]),
-            }],
-        }
-    }
-
-    fn assistant_with_tool_call(id: Option<&str>, tool_call_id: &str) -> Message {
-        Message::Assistant {
-            id: id.map(str::to_string),
-            content: vec![AssistantContent::ToolCall(ToolCall::new(
-                tool_call_id.to_string(),
-                ToolFunction {
-                    name: "read_file".to_string(),
-                    arguments: json!({"path": "a.txt"}),
-                },
-            ))],
-        }
-    }
-
-    /// The wire shape is read off the path the transport posted to, so the
-    /// column reports what was sent rather than what was configured.
-    #[test]
-    fn rendered_source_follows_the_request_path() {
-        assert_eq!(
-            RenderedRequestSource::for_request_path("/v1/responses"),
-            Some(RenderedRequestSource::OpenAiResponses)
-        );
-        assert_eq!(
-            RenderedRequestSource::for_request_path("/backend-api/codex/responses"),
-            Some(RenderedRequestSource::OpenAiResponses)
-        );
-        assert_eq!(
-            RenderedRequestSource::for_request_path("/v1/chat/completions"),
-            Some(RenderedRequestSource::OpenAiChatCompletions)
-        );
-        assert_eq!(RenderedRequestSource::for_request_path("/v1/models"), None);
-        assert_eq!(RenderedRequestSource::for_request_path("/key"), None);
-    }
-
-    #[test]
-    fn claude_cli_subscription_classifies_messages_http_urls_only() {
-        assert_eq!(
-            RenderedRequestSource::ClaudeCliSubscription.messages_field(),
-            "messages"
-        );
-        assert_eq!(
-            serde_json::to_value(RenderedRequestSource::ClaudeCliSubscription).unwrap(),
-            json!("claude_cli_subscription")
-        );
-        assert_eq!(
-            RenderedRequestSource::for_request_path("/v1/messages"),
-            Some(RenderedRequestSource::ClaudeCliSubscription)
-        );
-        assert_eq!(RenderedRequestSource::for_request_path("/claude"), None);
-        assert_eq!(
-            RenderedRequestSource::for_request_path("claude-cli://subscription"),
-            None
-        );
-    }
-
-    /// Every suffix the capture path claims must classify to the wire shape the
-    /// table names, and the table must stay the only definition of "completion
-    /// request".
-    #[test]
-    fn completion_path_suffixes_all_classify() {
-        for (suffix, source) in COMPLETION_REQUEST_PATHS {
-            assert_eq!(
-                RenderedRequestSource::for_request_path(suffix),
-                Some(*source),
-                "{suffix} must classify as a completion path"
-            );
-        }
-    }
-
-    #[test]
-    fn assembly_trace_records_assistant_message_ids_by_position() {
-        let trace = AssemblyTrace::from_effective_messages(
-            AssemblyBuildPath::Budgeted,
-            vec![
-                Message::user("hi"),
-                assistant_with_tool_call(Some("msg_abc"), "call-1"),
-                tool_result_message("call-1", Some("fc_1"), "ok"),
-                // An assistant turn the provider gave no id for.
-                Message::assistant("done"),
-            ],
-        );
-
-        assert_eq!(
-            trace.assistant_message_ids,
-            vec![AssistantMessageId {
-                message_index: 1,
-                message_id: "msg_abc".to_string(),
-            }]
-        );
-    }
-
-    #[test]
-    fn assembly_trace_records_threaded_tool_results_by_call_identity() {
-        let trace = AssemblyTrace::from_effective_messages(
-            AssemblyBuildPath::Budgeted,
-            vec![
-                assistant_with_tool_call(Some("msg_abc"), "call-1"),
-                tool_result_message("call-1", Some("fc_1"), "threaded bytes"),
-                tool_result_message("call-2", None, "no provider call id"),
-            ],
-        );
-
-        assert_eq!(
-            trace.threaded_tool_results,
-            vec![
-                ThreadedToolResult {
-                    message_index: 1,
-                    tool_call_id: "call-1".to_string(),
-                    call_id: Some("fc_1".to_string()),
-                    content: vec![ToolResultContent::Text(Text {
-                        text: "threaded bytes".to_string()
-                    })],
-                },
-                ThreadedToolResult {
-                    message_index: 2,
-                    tool_call_id: "call-2".to_string(),
-                    call_id: None,
-                    content: vec![ToolResultContent::Text(Text {
-                        text: "no provider call id".to_string()
-                    })],
-                },
-            ]
-        );
-    }
-
-    /// The overlays index into `effective_messages`; a projection that reads
-    /// them has to land back on the message it came from.
-    #[test]
-    fn assembly_trace_overlay_indexes_address_the_effective_messages() {
-        let messages = vec![
-            Message::user("hi"),
-            assistant_with_tool_call(Some("msg_abc"), "call-1"),
-            tool_result_message("call-1", Some("fc_1"), "threaded bytes"),
-        ];
-        let trace =
-            AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, messages.clone());
-
-        let effective_messages = trace
-            .effective_messages
-            .as_ref()
-            .expect("explicit oracle trace");
-        assert_eq!(effective_messages, &messages);
-        for overlay in &trace.assistant_message_ids {
-            assert!(matches!(
-                &effective_messages[overlay.message_index],
-                Message::Assistant { id: Some(id), .. } if *id == overlay.message_id
-            ));
-        }
-        for overlay in &trace.threaded_tool_results {
-            assert!(matches!(
-                &effective_messages[overlay.message_index],
-                Message::User { .. }
-            ));
-        }
-    }
-
-    /// Per-turn compaction rewrites `history` and `new_messages` in place, so
-    /// the trace has to describe the *post*-compaction list. Nothing else
-    /// records it: the summary is model-generated and never becomes an
-    /// `AgentCompactionEntry`.
-    #[test]
-    fn assembly_trace_carries_the_post_compaction_message_list() {
-        let compacted = vec![
-            Message::system("<system-reminder>continuation checkpoint</system-reminder>"),
-            Message::user("continue"),
-        ];
-        let trace =
-            AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, compacted.clone());
-
-        assert_eq!(trace.effective_messages, Some(compacted));
-        assert_eq!(trace.trace_version, ASSEMBLY_TRACE_VERSION);
-    }
-
-    #[test]
-    fn capture_scope_round_trips_and_rejects_garbage() {
-        for label in [
-            "inference.1",
-            "compaction.2",
-            "compaction_fallback.1",
-            "title.1",
-            "oneshot.1",
-        ] {
-            let scope: CaptureScope = label.parse().expect(label);
-            assert_eq!(scope.to_string(), label);
-        }
-        for bad in [
-            "",
-            "inference",
-            "inference.",
-            ".1",
-            "inference.0x2",
-            "inference.+2",
-            "inference. 2",
-            "mystery.1",
-            "inference.1.2",
-        ] {
-            assert!(
-                bad.parse::<CaptureScope>().is_err(),
-                "{bad:?} must not parse"
-            );
-        }
-    }
-
-    #[test]
-    fn order_key_sorts_seq_numerically_not_lexically() {
-        let key = |label: &str, turn_index, attempt| CaptureOrderKey {
-            scope: label.parse().unwrap(),
-            turn_index,
-            attempt,
-        };
-        let mut keys = [
-            key("inference.10", 0, 0),
-            key("inference.2", 3, 1),
-            key("inference.2", 3, 0),
-        ];
-        keys.sort();
-        assert_eq!(keys[0], key("inference.2", 3, 0));
-        assert_eq!(keys[1], key("inference.2", 3, 1));
-        assert_eq!(keys[2], key("inference.10", 0, 0));
-
-        // padded() must agree with Ord under lexical sort.
-        let padded: Vec<String> = keys.iter().map(CaptureOrderKey::padded).collect();
-        let mut lexical = padded.clone();
-        lexical.sort();
-        assert_eq!(padded, lexical);
-    }
-
-    /// Cross-kind ordering is by declaration order — a stable identity order,
-    /// pinned so a reordered enum shows up as a test failure and a conscious
-    /// decision, not a silent re-sort of every consumer.
-    #[test]
-    fn order_key_orders_kinds_by_declaration() {
-        let scopes: Vec<CaptureScope> = [
-            "oneshot.1",
-            "title.1",
-            "compaction_fallback.1",
-            "compaction.1",
-            "inference.1",
-        ]
-        .iter()
-        .map(|label| label.parse().unwrap())
-        .collect();
-        let mut sorted = scopes.clone();
-        sorted.sort();
-        assert_eq!(
-            sorted.iter().map(|s| s.kind.as_str()).collect::<Vec<_>>(),
-            vec![
-                "inference",
-                "compaction",
-                "compaction_fallback",
-                "title",
-                "oneshot"
-            ]
-        );
-    }
-
-    #[test]
-    fn manifest_reader_accepts_current_and_projects_v3_metadata() {
-        let current = json!({
-            "manifest_version": PROVENANCE_MANIFEST_VERSION,
-            "status": "captured_only",
-            "status_reason": "r",
-            "capture_seam": "transport_body",
-            "capture_scope": "inference.1",
-            "assembly_trace": {
-                "trace_version": 4,
-                "build_path": "budgeted",
-                "effective_message_count": 0,
-                "reduction_keys": [],
-                "context_accounting": null
-            }
-        });
-        let parsed = ProvenanceManifest::parse(&current.to_string()).expect("current parses");
-        match parsed {
-            ParsedProvenance::Manifest(manifest) => {
-                assert_eq!(manifest.manifest_version, PROVENANCE_MANIFEST_VERSION);
-                assert_eq!(manifest.capture_scope, "inference.1");
-                assert_eq!(manifest.status, ProvenanceStatus::CapturedOnly);
-            }
-            other => panic!("expected manifest, got {other:?}"),
-        }
-
-        let mut legacy = current.clone();
-        legacy["manifest_version"] = json!(3);
-        legacy["assembly_trace"]["effective_messages"] =
-            serde_json::to_value(vec![crate::message::Message::user("large")]).unwrap();
-        legacy["assembly_trace"]["assistant_message_ids"] = json!([]);
-        legacy["assembly_trace"]["threaded_tool_results"] = json!([]);
-        legacy["assembly_trace"]["reduction_keys"] = json!(["reduction-1"]);
-        let ParsedProvenance::Manifest(projected) =
-            ProvenanceManifest::parse(&legacy.to_string()).expect("v3 parses")
-        else {
-            panic!("v3 must project to metadata")
-        };
-        assert_eq!(projected.manifest_version, PROVENANCE_MANIFEST_VERSION);
-        assert_eq!(projected.assembly_trace.effective_message_count, 0);
-        assert_eq!(projected.assembly_trace.reduction_keys, ["reduction-1"]);
-
-        for version in [2, 99] {
-            let unsupported = json!({ "manifest_version": version, "anything": true });
-            assert_eq!(
-                ProvenanceManifest::parse(&unsupported.to_string())
-                    .expect("well-formed unknown version"),
-                ParsedProvenance::Unsupported {
-                    manifest_version: version
-                }
-            );
-        }
-
-        assert!(matches!(
-            ProvenanceManifest::parse(""),
-            Err(ProvenanceParseError::Empty)
-        ));
-        assert!(matches!(
-            ProvenanceManifest::parse("not json"),
-            Err(ProvenanceParseError::InvalidJson(_))
-        ));
-        assert!(matches!(
-            ProvenanceManifest::parse(r#"{"status":"captured_only"}"#),
-            Err(ProvenanceParseError::MissingVersion)
-        ));
-        // Current version whose body does not match the declared shape.
-        assert!(matches!(
-            ProvenanceManifest::parse(&format!(
-                r#"{{"manifest_version":{PROVENANCE_MANIFEST_VERSION}}}"#
-            )),
-            Err(ProvenanceParseError::InvalidManifest(_))
-        ));
-    }
-
-    /// What the producer writes, the reader reads — through the version gate,
-    /// not around it.
-    #[test]
-    fn manifest_reader_round_trips_the_producer_shape() {
-        let manifest = ProvenanceManifest::captured_only(
-            "compaction.2".to_string(),
-            Some("https://api.example.test".to_string()),
-            Some(AdmissionJoin {
-                call_id: "call-7".to_string(),
-                call_seq: 7,
-            }),
-            AssemblyTrace::from_effective_messages(
-                AssemblyBuildPath::Repair,
-                vec![Message::user("hi")],
-            ),
-        );
-        let serialized = serde_json::to_string(&manifest).expect("serialize manifest");
-        assert_eq!(
-            ProvenanceManifest::parse(&serialized).expect("reader accepts producer output"),
-            ParsedProvenance::Manifest(Box::new(manifest))
-        );
-    }
-
-    #[test]
-    fn reconstructible_trace_does_not_duplicate_message_bodies() {
-        let marker = "ordinary-message-body-".repeat(1_000);
-        let messages = vec![Message::user(marker.clone()), Message::assistant("done")];
-        let compact = AssemblyTrace::from_reconstructible_messages(
-            AssemblyBuildPath::Budgeted,
-            messages.clone(),
-        );
-        let oracle = AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, messages);
-
-        let compact_json = serde_json::to_string(&compact).expect("compact trace");
-        let oracle_json = serde_json::to_string(&oracle).expect("oracle trace");
-        assert_eq!(compact.effective_message_count, 2);
-        assert!(compact.effective_messages.is_none());
-        assert!(!compact_json.contains(&marker));
-        assert!(oracle_json.len() > compact_json.len() + marker.len());
-    }
-
-    #[test]
-    fn context_accounting_round_trips_decision_and_components() {
-        let accounting = ContextAccounting {
-            accounting_version: CONTEXT_ACCOUNTING_VERSION,
-            turn_index: 2,
-            attempt: 1,
-            estimator: "serialized_json_bytes_div_4_v1".to_string(),
-            components: ContextInputComponents {
-                messages: 120,
-                documents: 3,
-                tool_schemas: 40,
-                additional_parameters: 2,
-                output_schema: 5,
-            },
-            estimated_input_tokens: 170,
-            context_window: 480_000,
-            compaction_threshold_basis_points: 5_460,
-            compaction_threshold_tokens: 262_080,
-            configured_max_output_tokens: Some(64_000),
-            effective_max_output_tokens: Some(64_000),
-            compaction_reason: ContextCompactionReason::Compacted,
-            pre_compaction_input_tokens: Some(300_000),
-        };
-        let trace = AssemblyTrace::from_reconstructible_messages(
-            AssemblyBuildPath::Budgeted,
-            vec![Message::user("hello")],
-        )
-        .with_context_accounting(accounting.clone());
-        let encoded = serde_json::to_string(&trace).expect("serialize accounting trace");
-        let decoded: AssemblyTrace =
-            serde_json::from_str(&encoded).expect("deserialize accounting trace");
-
-        assert_eq!(decoded.trace_version, ASSEMBLY_TRACE_VERSION);
-        assert_eq!(decoded.context_accounting, Some(accounting));
-        assert!(encoded.contains(r#""compaction_reason":"compacted""#));
-        assert_eq!(
-            decoded
-                .context_accounting
-                .as_ref()
-                .expect("accounting")
-                .components
-                .estimated_input_tokens(),
-            170
-        );
     }
 }

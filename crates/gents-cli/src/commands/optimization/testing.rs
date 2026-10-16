@@ -1,5 +1,3 @@
-//! Helpers for the `gents optimization` tests, over the eval fixture.
-
 use anyhow::Context as _;
 use clap::Parser;
 use gents::config_client::read_desired_state_record_in_txn;
@@ -14,7 +12,6 @@ use crate::commands::eval::testing::{
 };
 use crate::commands::eval::Deps;
 
-/// `gents optimization <argv…>` as clap parses it.
 pub(crate) fn optimization_command(argv: &[&str]) -> OptimizationCommand {
     let cli = Cli::try_parse_from(
         ["gents", "optimization"]
@@ -38,7 +35,6 @@ pub(crate) async fn optimization_with(
     Ok(String::from_utf8(out)?)
 }
 
-/// With a scripted executor where every trial passes.
 pub(crate) async fn optimization(fixture: &Fixture, argv: &[&str]) -> anyhow::Result<String> {
     let executor = executor(&[]);
     let registry = CheckRegistry::builtin();
@@ -50,7 +46,6 @@ pub(crate) async fn optimization(fixture: &Fixture, argv: &[&str]) -> anyhow::Re
     .await
 }
 
-/// `scripted:<file>` proposing [`CANDIDATE_PROMPT`] in each of three rounds.
 pub(crate) fn proposer_file(fixture: &Fixture) -> String {
     std::fs::create_dir_all(&fixture.ctx.home_dir).unwrap();
     let path = fixture.ctx.home_dir.join("proposals.json");
@@ -66,8 +61,6 @@ pub(crate) fn proposer_file(fixture: &Fixture) -> String {
     format!("scripted:{}", path.display())
 }
 
-/// Run a job whose baseline fails every validation case and whose candidate
-/// passes them: it reaches `ready_to_promote`. Returns what the run wrote.
 pub(crate) async fn accepted_job(fixture: &Fixture, job_id: &str) -> String {
     let scripted = executor(&VALIDATION_CASES);
     let registry = CheckRegistry::builtin();
@@ -93,7 +86,6 @@ pub(crate) async fn accepted_job(fixture: &Fixture, job_id: &str) -> String {
     .unwrap()
 }
 
-/// Delete the fixture's eval definition, as an operator removing it would.
 pub(crate) async fn delete_definition(fixture: &Fixture) {
     let owner = fixture.ctx.owner.as_str();
     fixture

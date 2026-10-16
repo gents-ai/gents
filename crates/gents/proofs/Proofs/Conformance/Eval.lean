@@ -1,8 +1,6 @@
 import Proofs.Eval
 import Proofs.Conformance.ContractTypes
 
-/-! Generated witnesses for the eval outcome projection. Rust must classify every
-(kind, provider reason) combination exactly as the model does. -/
 namespace Conformance.Eval
 
 open Conformance.Contracts
@@ -23,5 +21,25 @@ private def row (k : OutcomeKind) (r : Option ProviderReason) : String :=
 def evalOutcomeCasesJson : String :=
   jsonArray (allKinds.flatMap fun k =>
     ([none] ++ allReasons.map some).map fun r => row k r)
+
+private def captureRow (collection : String) (fields filterFields : List String)
+    (nested : Bool) : String :=
+  let filter := "{" ++ String.intercalate "," (filterFields.map fun field =>
+    jsonString field ++ ":{\"_eq\":\"$trial\"}") ++ "}"
+  let filter := if nested then "{\"_or\":[" ++ filter ++ "]}" else filter
+  "{\"collection\":" ++ jsonString collection ++
+    ",\"fields\":" ++ jsonStringArray fields ++
+    ",\"filter_fields\":" ++ jsonStringArray filterFields ++
+    ",\"filter\":" ++ filter ++
+    ",\"allowed\":" ++ boolJson (documentCaptureAllowed collection fields filterFields) ++ "}"
+
+def evalDocumentCaptureCasesJson : String := jsonArray <|
+  (["Task", "Agent"] ++ ScopeTemplates.credentialCollections).flatMap fun collection =>
+    [[], ["backend_id"], ["backend_id", "endpoint", "enabled", "max_concurrent"],
+      ["auth"], ["backend_id", "auth"], ["credential_id"], ["access_token"],
+      ["refresh_token"], ["id_token"]].flatMap fun fields =>
+        [[], ["node_did"], ["auth"], ["node_did", "auth"], ["access_token"],
+          ["refresh_token"], ["id_token"]].flatMap fun filterFields =>
+            [false, true].map fun nested => captureRow collection fields filterFields nested
 
 end Conformance.Eval

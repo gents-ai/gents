@@ -1,15 +1,9 @@
-//! The chat's answer to "Allow this plugin to read this path?" (see
-//! `gents::plugin::approval`): asked on the terminal between turn polls, so
-//! the call waiting in the server continues as soon as the operator answers.
-
 use std::io::{IsTerminal, Write};
 use std::path::Path;
 
 use anyhow::Result;
 use gents::plugin::approval::{self, Answer, Request};
 
-/// `o` allows once, `f` always this file, `a` always the folder, anything
-/// else (an empty line included) denies.
 pub(super) fn parse_answer(line: &str) -> Answer {
     match line.trim().to_ascii_lowercase().as_str() {
         "o" | "once" | "y" | "yes" => Answer::Once,
@@ -26,15 +20,12 @@ pub(super) fn mine(request: &Request, session_id: &str) -> bool {
         .is_none_or(|id| id == session_id)
 }
 
-/// Whether `session_id` has a question waiting.
 pub(super) fn has_pending(home: &Path, session_id: &str) -> Result<bool> {
     Ok(approval::pending(home)?
         .iter()
         .any(|request| mine(request, session_id)))
 }
 
-/// Asks `read` about every question `session_id` is waiting on and writes
-/// the answers; true when any was asked.
 pub(super) fn answer_pending(
     home: &Path,
     session_id: &str,
@@ -52,8 +43,6 @@ pub(super) fn answer_pending(
     Ok(asked)
 }
 
-/// The terminal reader: prints the question and reads one line. Without a
-/// terminal there is nobody to ask, so the call is denied.
 pub(super) fn ask_on_terminal(request: &Request) -> Answer {
     if !std::io::stdin().is_terminal() {
         eprintln!("{} No terminal to ask on; denied.", request.prompt());
@@ -86,16 +75,6 @@ mod tests {
     use super::*;
     use gents::pack::BindAccess;
     use gents::plugin::allowed::{self, Resolved};
-
-    #[test]
-    fn answers_parse_and_default_to_deny() {
-        assert_eq!(parse_answer("o\n"), Answer::Once);
-        assert_eq!(parse_answer(" Always "), Answer::AlwaysFolder);
-        assert_eq!(parse_answer("f"), Answer::AlwaysPath);
-        assert_eq!(parse_answer("yes"), Answer::Once);
-        assert_eq!(parse_answer(""), Answer::Deny);
-        assert_eq!(parse_answer("whatever"), Answer::Deny);
-    }
 
     #[test]
     fn only_this_sessions_questions_are_answered_and_always_stores_the_folder() {

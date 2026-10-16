@@ -116,8 +116,6 @@ async fn create_owned_request_with_times_and_requester(
     } else {
         String::new()
     };
-    // These fixtures model previously owned rows observed after an execution
-    // crashed. Recovery requires the exact expired generation tuple.
     let execution_fields = if matches!(lifecycle_state, "claimed" | "processing") {
         format!(
             r#", execution_generation: "{}", execution_lease_expires_at: "{CONVERGENCE_CREATED_AT}", execution_progress_seq: 0"#,

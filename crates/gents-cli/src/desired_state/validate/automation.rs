@@ -1,7 +1,5 @@
 use super::super::DesiredStateManifest;
 
-/// Intrinsic checks use canonical owners. Trigger/task/source relationships are
-/// validated over the retained + authored candidate by ConfigReferences.
 pub(super) fn validate_automation(manifest: &DesiredStateManifest, errors: &mut Vec<String>) {
     for result in manifest
         .tasks

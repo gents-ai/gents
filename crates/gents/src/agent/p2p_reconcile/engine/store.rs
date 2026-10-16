@@ -35,9 +35,8 @@ pub struct GraphqlPairingStateStore {
 }
 
 impl GraphqlPairingStateStore {
-    /// Construct a store for explicit `PeerPairingDesired` ownership only.
-    ///
-    /// Runtime data-plane materialization must instead use
+    /// Construct a store for explicit `PeerPairingDesired` ownership only;
+    /// runtime data-plane materialization must use
     /// [`Self::with_enrollment_authority`] so it cannot bypass the durable
     /// enrollment projection.
     pub fn for_explicit_desired(node: Arc<EmbeddedNode>, identity: Arc<dyn NodeIdentity>) -> Self {
@@ -62,8 +61,8 @@ impl GraphqlPairingStateStore {
         }
     }
 
-    /// Construct a materialization store fenced by one already-verified exact
-    /// enrollment generation. The desired document is evidence only.
+    /// Fenced by one already-verified exact enrollment generation; the desired
+    /// document is evidence only.
     pub fn for_enrollment_materialization(
         node: Arc<EmbeddedNode>,
         identity: Arc<dyn NodeIdentity>,

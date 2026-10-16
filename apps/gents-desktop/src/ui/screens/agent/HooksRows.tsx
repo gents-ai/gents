@@ -1,5 +1,3 @@
-/* A task's hooks as rows: when it runs, the command, how long it may take.
-   Replaces the canonical JSON area; the document shape is unchanged. */
 import { Plus, Trash2 } from "lucide-react";
 import type { TaskView } from "@source-inc/gents-desktop-client";
 
@@ -23,19 +21,11 @@ export const PHASES: { value: TaskHookPhase; label: string }[] = [
   { value: "finally", label: "Always, afterwards" },
 ];
 
-/* The draft shows the command as one line. The stored argv is kept beside
-   it and written back untouched unless that row's command text is edited,
-   so a save never reshapes a hook nobody changed. An edited line is parsed
-   with a lossless scheme: an argument that is empty or holds whitespace, a
-   quote or a backslash is written in double quotes with \\ and \" escaped;
-   outside quotes every character is literal, so a typed Windows path keeps
-   its backslashes. parse(format(argv)) is argv for every argv. */
 export type HookDraft = {
   hook_id: string;
   phase: TaskHookPhase;
   command: string;
   timeout: string;
-  /* the argv as stored, and the line it was shown as */
   stored?: { argv: string[]; line: string } | null;
 };
 
@@ -70,7 +60,7 @@ export function splitCommand(line: string): string[] {
           i += 1;
         }
       }
-      i += 1; /* the closing quote, or the end of an unterminated one */
+      i += 1;
     } else {
       inToken = true;
       current += c;
@@ -92,11 +82,9 @@ export const toHookDraft = (h: TaskHook): HookDraft => {
   };
 };
 
-/* the argv to write: the stored one while its line is untouched */
 export const argvOf = (r: HookDraft): string[] =>
   r.stored && r.command === r.stored.line ? r.stored.argv : splitCommand(r.command);
 
-/* the document hooks, or a message saying what is wrong */
 export function hooksFromDraft(rows: HookDraft[]): TaskHook[] | string {
   const ids = new Set<string>();
   const out: TaskHook[] = [];
@@ -127,7 +115,6 @@ export function HooksRows({
   id: string;
   value: HookDraft[];
   onChange: (v: HookDraft[]) => void;
-  /** what hooksFromDraft says is wrong with them */
   error?: string;
 }) {
   const set = (i: number, patch: Partial<HookDraft>) =>

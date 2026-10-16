@@ -73,8 +73,6 @@ try {
   if (!headed) {
     bombadilArgs.push("--headless");
   }
-  // --exit-on-violation is mutually exclusive with --reproduce (a replay
-  // always runs the whole trace and reports the violations it finds).
   if (!keepRunning && !replayRequested) {
     bombadilArgs.push("--exit-on-violation");
   }

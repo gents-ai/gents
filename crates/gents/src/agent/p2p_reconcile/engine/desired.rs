@@ -151,9 +151,9 @@ pub(super) fn data_plane_desired_from_pairing_row(
             .context("client data-plane pairing row is missing its durable route key")?;
         match policy::client_route_direction(route_id) {
             Ok(direction) => direction,
+            // Enrollment base routes are keyed by the member peer, not a
+            // directional suffix.
             Err(_) if row.source.as_deref() == Some("enrollment") => {
-                // Runtime-owned enrollment base routes are keyed by the
-                // member peer, not a directional suffix.
                 policy::PairingDirection::RuntimeToClient
             }
             Err(error) => return Err(error),
@@ -314,7 +314,7 @@ pub fn merge_layered_desired(
         (Some(desired), None) | (None, Some(desired)) => Some(desired),
         (Some(mut left), Some(right)) => {
             left.collections.extend(right.collections);
-            // The data-plane layer comes from the verified current PeerEndpoint.
+            // The data-plane layer comes from the verified PeerEndpoint.
             if !right.replicator_addresses.is_empty() {
                 left.replicator_addresses = right.replicator_addresses;
             }

@@ -1,9 +1,3 @@
-//! Generated-case structs for the Lean `SelfConfig` model
-//! (`proofs/Proofs/SelfConfig/`): per-target field tables and patch-merge
-//! witness cases consumed by `tests/conformance/self_config.rs`. The tables
-//! describe the canonical configuration collections (`ConfigDocuments`), with
-//! the nested `Tools.self_config` group carried as one field value.
-
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -25,13 +19,10 @@ pub(crate) struct LeanSelfConfigFieldValue {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanSelfConfigPatchEntry {
     pub(crate) field: String,
-    /// `"set"` or `"clear"`.
     pub(crate) action: String,
     pub(crate) value: Option<String>,
 }
 
-/// A backend a profile row can select; `backend_id` and `auth` are canonical
-/// JSON text.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanSelfConfigBackend {
     pub(crate) backend_id: String,
@@ -39,7 +30,6 @@ pub(crate) struct LeanSelfConfigBackend {
     pub(crate) auth: String,
 }
 
-/// Operator grants the invoking agent holds (`SelfConfig.Grants`).
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanSelfConfigGrants {
     pub(crate) pack_install: bool,
@@ -53,8 +43,6 @@ pub(crate) struct LeanSelfConfigCase {
     pub(crate) guarded: bool,
     pub(crate) validates: bool,
     pub(crate) held_grants: LeanSelfConfigGrants,
-    /// The Tools document the row's Context or Agent selects before and
-    /// after the patch (Lean `rowResolve`), or null when it selects none.
     #[serde(deserialize_with = "super::required_nullable")]
     pub(crate) selected_before: Option<Vec<LeanSelfConfigFieldValue>>,
     #[serde(deserialize_with = "super::required_nullable")]
@@ -86,8 +74,6 @@ pub(crate) struct LeanAgentCreateInput {
     pub(crate) clone_from: String,
 }
 
-/// Decision inputs shared by `agent_decision_cases` and
-/// `agent_materialization_cases`.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanAgentDecisionInputs {
     pub(crate) name: String,
@@ -119,7 +105,6 @@ pub(crate) struct LeanAgentResolvedSession {
     pub(crate) effort: Option<String>,
 }
 
-/// Candidate registry rows under the Lean `Configuration` field names.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCandidateAgent {
@@ -154,7 +139,6 @@ pub(crate) struct LeanCandidateBackend {
     pub(crate) enabled: bool,
 }
 
-/// The serialized `CandidateFixture`: one node scope and its registry documents.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanAgentCandidate {

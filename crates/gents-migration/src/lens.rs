@@ -1,13 +1,9 @@
-//! Lens module helpers — always inline bytes, never temp files.
-
 use defra_node::{LensConfig, LensModule};
 
 use crate::registry::LensSpec;
 
-/// Build a [`LensConfig`] from a [`LensSpec`] and pinned version pair.
-///
-/// Uses [`LensModule::from_bytes`] exclusively so transform IDs are stable
-/// across hosts (path-based modules hash differently).
+/// [`LensModule::from_bytes`] keeps transform IDs stable across hosts
+/// (path-based modules hash differently).
 pub fn lens_config(spec: &LensSpec<'_>, source: &str, destination: &str) -> LensConfig {
     let mut module = LensModule::from_bytes(spec.wasm.to_vec());
     if let Some(args) = spec.args_json {
@@ -18,10 +14,6 @@ pub fn lens_config(spec: &LensSpec<'_>, source: &str, destination: &str) -> Lens
     LensConfig::new(source, destination, module)
 }
 
-/// Predict the transform id DefraDB will assign for a bytes lens module.
-///
-/// Matches `WasmTransformStore::add` / `MemoryTransformStore::add`: sha256 of
-/// the serialized `Lenses` array, formatted as `baf` + 16 hex bytes.
 pub fn predict_transform_id(spec: &LensSpec<'_>) -> String {
     use sha2::{Digest, Sha256};
     let module = {

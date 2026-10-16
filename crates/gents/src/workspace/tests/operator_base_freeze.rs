@@ -1,4 +1,3 @@
-//! Real Git / existing memory document-adapter consumer; not a native DB isolation proof.
 use super::*;
 
 #[test]
@@ -39,7 +38,6 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
             )
             .expect("prepare actual operator seal, never fabricate a writer request");
             if case["before_state"] == "cleaned" {
-                // Cleanup must produce both the cleaned row and missing checkout.
                 execute_cleanup_workspace_plan(
                     &emit_cleanup_workspace_plan(CleanupWorkspaceAction {
                         workspace_id: "workspace-1".into(),
@@ -49,8 +47,6 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
                 )
                 .expect("prepare the cleaned row through the real cleanup owner");
             } else if case["before_state"] == "cleaning" {
-                // Fail removal after cleanup persists Cleaning, then restore the
-                // placement so the freeze observes the declared Lean input.
                 let real_host_path = docs.placements["workspace-1"].host_path.clone();
                 docs.placements.get_mut("workspace-1").unwrap().host_path = dest
                     .with_file_name("gents-ws-workspace-1-drifted")
@@ -80,7 +76,6 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
                 );
                 docs.placements.get_mut("workspace-1").unwrap().host_path = real_host_path;
             } else if case["before_state"] == "sealed" {
-                // The freeze above already produced this state.
             } else {
                 panic!("unmapped emitted operator-freeze before_state {case:?}");
             }
@@ -95,8 +90,6 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
                 let workspace = docs.workspaces.get_mut("workspace-1").unwrap();
                 workspace.path_capability =
                     serde_json::from_value(case["capability"].clone()).unwrap();
-                // Keep the host marker canonical and consistent: the rejected
-                // capability itself must be the failing guard, not marker drift.
                 super::super::adapter::write_identity(&dest, &workspace.identity()).unwrap();
             }
             "active_writer_denied" => {
@@ -126,7 +119,6 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
                 fs::write(git_dir.join("gents-workspace-identity.json"), b"not-json").unwrap();
             }
             "wrong_identity_binding_denied" => {
-                // A real different commit, not an unresolvable invented SHA.
                 git(&fx.repo, &["commit", "--allow-empty", "-m", "other base"]);
                 action.base_sha = git(&fx.repo, &["rev-parse", "HEAD"]);
             }
@@ -142,8 +134,8 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
             case["expected_binding"]["workspace_id"],
             action.workspace_id
         );
-        assert_eq!(case["expected_binding"]["owner"], "host-1"); // abstract owner -> fixture principal
-        assert_eq!(case["expected_binding"]["tree"], "base-tree"); // abstract base-tree -> actual Git tree
+        assert_eq!(case["expected_binding"]["owner"], "host-1");
+        assert_eq!(case["expected_binding"]["tree"], "base-tree");
         assert_eq!(case["expected_binding"]["capability"], case["capability"]);
         assert_eq!(
             case["expected_binding"]["base"] == "base-commit",
@@ -256,7 +248,6 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
     }
 }
 
-// The emitted wrong-owner case does not exercise either placement guard.
 #[test]
 fn freeze_rejects_drifted_placement_binding() {
     let fx = Fixture::new();
@@ -275,7 +266,6 @@ fn freeze_rejects_drifted_placement_binding() {
         base_sha: fx.base_sha.clone(),
     });
 
-    // Isolate the repository-binding guard.
     docs.placements
         .get_mut("freeze-placement")
         .unwrap()
@@ -304,7 +294,6 @@ fn freeze_rejects_drifted_placement_binding() {
         Some(ActionJournalState::Validated)
     );
 
-    // Restore the repository binding, then isolate the host-path guard.
     docs.placements
         .get_mut("freeze-placement")
         .unwrap()
@@ -334,8 +323,6 @@ fn freeze_rejects_drifted_placement_binding() {
     assert_eq!(docs.workspaces["freeze-placement"], before_workspace);
     assert!(docs.receipts.is_empty());
 }
-
-// Partial result-document persistence must converge through the existing executor.
 
 struct FailFreezePlacementOnce {
     inner: MemoryWorkspaceDocuments,
@@ -410,8 +397,7 @@ fn operator_base_freeze_recovers_partial_documents_with_fresh_journal() {
         &mut fx.ctx(&mut memory, git_worktree_caps()),
     )
     .unwrap();
-    // Placement observation is derived, not the authoritative seal. Start with
-    // an unrecorded observation so failed persistence leaves a visible mismatch.
+
     memory
         .placements
         .get_mut("freeze-recovery")
@@ -460,7 +446,6 @@ fn operator_base_freeze_recovers_partial_documents_with_fresh_journal() {
         Some(ActionJournalState::EffectObserved)
     );
 
-    // The ordinary runtime can restart with a new in-memory action journal.
     let mut restarted = Vec::new();
     let recovered = execute_freeze_workspace_base_plan(
         &plan,

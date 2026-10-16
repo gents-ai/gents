@@ -1,12 +1,3 @@
-//! Eval execution support shared by the runtime and the test harness.
-//!
-//! This module is the loop: it plans the trials a run still owes, executes
-//! them, and records what each one produced. Everything it decides comes from
-//! the frozen run, so a resumed run makes the same decisions a crashed one
-//! would have made. The loop owns three judgements and nothing else: whether a
-//! trial produced evidence at all, whether a slot has spent its infrastructure
-//! retries, and whether so many trials in a row produced nothing that running
-//! more of them would only burn the provider.
 pub mod embedded;
 pub mod executor;
 mod files;
@@ -65,40 +56,16 @@ use crate::eval::{
     VerdictDraft,
 };
 
-/// What one pass over a run produced. Counts, not judgements: how a run scored
-/// is derived from its verdicts, not from here.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunOutcome {
     pub run_id: String,
-    /// Attempts whose completion was written, whatever they came to.
     pub completed: u32,
-    /// Trials that were launched and left unfinished by cancellation.
     pub abandoned: u32,
-    /// Slots whose every permitted attempt finished without evidence. A count
-    /// of slots, not of attempts, so it does not overlap [`Self::completed`].
-    ///
-    /// Computed once the run owes nothing: only then has every slot spent the
-    /// attempts the run allows. A run that ended another way — the breaker
-    /// tripped, or it was cancelled — reports `0` here, because it never
-    /// reached the point where the count means anything. Read the trials, not
-    /// this field, to count what an interrupted run learned.
     pub not_evidence: u32,
     pub breaker_tripped: bool,
-    /// The caller's token or a cancel marker stopped this pass while the run
-    /// still owed slots. A cancel that lands after the last slot is settled
-    /// leaves this `false`: the run finished. A caller that decides on the run
-    /// (the optimizer) must not read a cancelled pass as a finished one.
     pub cancelled: bool,
 }
 
-/// Too many trials in a row produced no evidence, so the run stopped rather
-/// than spend a provider that is plainly not answering.
-///
-/// [`Self::outcome`] is what the run had recorded when it stopped, including
-/// the trials that were already in flight at the trip and finished afterwards.
-/// [`Self::consecutive_not_evidence`] is the run of empty trials that tripped
-/// the breaker, read at that moment: a trial that finished later and reset the
-/// running count cannot rewrite why the run stopped.
 #[derive(Debug)]
 pub struct ProviderDown {
     pub outcome: RunOutcome,
@@ -121,21 +88,14 @@ pub fn provider_down(error: &anyhow::Error) -> Option<&ProviderDown> {
     error.downcast_ref::<ProviderDown>()
 }
 
-/// The file whose presence asks a run to stop: `<run dir>/cancel` (spec 4a
-/// §3). Another process on this machine writes it with [`request_cancel`];
-/// the loop checks for it wherever it checks its own cancellation token, and
-/// [`run`] and [`resume`] remove it before planning. It carries no state and
-/// is not a document, so a remote host never sees it; remote cancel is spec
-/// 2b's.
+/// Local filesystem cancellation marker; remote cancellation uses its own path.
 pub const CANCEL_MARKER: &str = "cancel";
 
-/// `<runs_dir>/<run_id>`, for a run id that is one ordinary path component.
 pub fn run_dir(runs_dir: &Path, run_id: &str) -> Result<PathBuf> {
     freeze::directory_name("run_id", run_id)?;
     Ok(runs_dir.join(run_id))
 }
 
-/// Ask the process hosting `run_id` to stop launching at its next check.
 pub fn request_cancel(runs_dir: &Path, run_id: &str) -> Result<PathBuf> {
     let dir = run_dir(runs_dir, run_id)?;
     if !dir.is_dir() {
@@ -150,9 +110,6 @@ pub fn request_cancel(runs_dir: &Path, run_id: &str) -> Result<PathBuf> {
     Ok(marker)
 }
 
-/// Whether the loop should stop: its token is cancelled, or the marker is
-/// present, in which case the token is cancelled so every in-flight trial and
-/// every later check reads the same answer.
 fn cancel_requested(run_dir: &Path, cancel: &CancellationToken) -> bool {
     if cancel.is_cancelled() {
         return true;
@@ -168,9 +125,6 @@ fn cancel_requested(run_dir: &Path, cancel: &CancellationToken) -> bool {
     false
 }
 
-/// Remove the marker a cancelled run left, if any. A run a live process
-/// still holds is refused instead: its marker and `progress.json` are that
-/// process's.
 fn clear_cancel(run_dir: &Path) -> Result<()> {
     refuse_if_held(run_dir)?;
     let marker = run_dir.join(CANCEL_MARKER);
@@ -197,9 +151,6 @@ fn refuse_if_held(run_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// How often the loop checks the cancel marker while a batch is in flight or
-/// while it waits out a backoff, and refreshes `progress.json` while slots are
-/// in flight: the backoff base, capped at one second and never zero.
 fn marker_poll(options: &RunOptions) -> Duration {
     options
         .poll_backoff_base
@@ -207,21 +158,10 @@ fn marker_poll(options: &RunOptions) -> Duration {
         .max(Duration::from_millis(1))
 }
 
-/// The longest [`marker_poll`] any runner uses, whatever its options.
 const MARKER_POLL_CAP_SECS: u64 = 1;
 
-/// How long a `progress.json` entry stays fresh without being rewritten:
-/// three of the longest marker periods a runner uses. A running loop rewrites
-/// its entries at least once per period, so an entry older than this belongs
-/// to a process that stopped. A reader cannot know the options the writer ran
-/// with, so the window is the one that covers every runner. This is the one
-/// staleness window: [`running_elsewhere`] uses it, and so does anything else
-/// that asks whether a slot is still being run, such as `gents eval watch`.
 pub const STALE_WINDOW: Duration = Duration::from_secs(3 * MARKER_POLL_CAP_SECS);
 
-/// How many slots the run still owes, by the planner's own rule: a slot that
-/// spent its infrastructure retries or its abandonment bound owes nothing,
-/// although the report still shows it as not evidence or abandoned.
 pub fn slots_owed(record: &RunRecord, trials: &[TrialRecord]) -> usize {
     plan(
         &record.origin,
@@ -232,9 +172,6 @@ pub fn slots_owed(record: &RunRecord, trials: &[TrialRecord]) -> usize {
     .len()
 }
 
-/// A live process refreshed the run's `progress.json` holder, or one of its
-/// slot entries, within [`STALE_WINDOW`]. An absent or unreadable file holds
-/// nothing.
 pub fn running_elsewhere(run_dir: &Path) -> bool {
     read_progress(run_dir).is_some_and(|progress| {
         progress
@@ -248,14 +185,10 @@ pub fn running_elsewhere(run_dir: &Path) -> bool {
     })
 }
 
-/// Finished, for `gents eval rm` without `--force` and for `gents eval gc`:
-/// the run owes nothing and no live process is running a slot of it.
 pub fn run_finished(record: &RunRecord, trials: &[TrialRecord], run_dir: &Path) -> bool {
     slots_owed(record, trials) == 0 && !running_elsewhere(run_dir)
 }
 
-/// A shared ceiling on complete trial attempts across independent runs.
-/// Clones share admission; a permit covers provisioning through durable completion.
 #[derive(Clone, Debug)]
 pub struct TrialBudget(Arc<tokio::sync::Semaphore>);
 
@@ -277,7 +210,6 @@ impl PartialEq for TrialBudget {
 }
 impl Eq for TrialBudget {}
 
-/// Execution admission and retry waits; neither changes a run's frozen trial policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunOptions {
     pub trial_budget: Option<TrialBudget>,
@@ -295,8 +227,6 @@ impl Default for RunOptions {
     }
 }
 
-/// Check for an active run, then validate and freeze without dispatching trials.
-/// This uses the same best-effort concurrent-start check as [`run`].
 pub async fn prepare_run(
     access: &ConfigAccess,
     request: &RunRequest,
@@ -306,7 +236,6 @@ pub async fn prepare_run(
     freeze(access, request, isolation).await
 }
 
-/// Freeze `request` and run everything it owes.
 pub async fn run(
     access: &ConfigAccess,
     request: &RunRequest,
@@ -315,20 +244,12 @@ pub async fn run(
     cancel: CancellationToken,
     options: &RunOptions,
 ) -> Result<RunOutcome> {
-    // Before freezing, which rewrites an existing run's files in place. Two
-    // starters racing past this check is the accepted ceiling.
     let frozen = prepare_run(access, request, executor.isolation()).await?;
     clear_cancel(&frozen.run_dir)?;
     let recorder = DocumentRecorder::new(access);
     execute_frozen(&frozen, &recorder, executor, registry, cancel, options).await
 }
 
-/// Run what an existing run still owes.
-///
-/// A resumed run is the same run: it rebuilds the frozen origin rather than
-/// re-deciding it, and plans from the trials already written, so a slot that
-/// answered before the crash is never run twice. What freezing refused, a
-/// resume refuses again — the executor may not be the one the run froze under.
 #[allow(clippy::too_many_arguments)]
 pub async fn resume(
     access: &ConfigAccess,
@@ -346,25 +267,12 @@ pub async fn resume(
     execute_frozen(&frozen, &recorder, executor, registry, cancel, options).await
 }
 
-/// What one trial's turn through the loop came to.
 enum Slot {
-    /// Never launched: the loop had already stopped launching.
     Skipped,
-    /// Launched, then cancelled: its row stays open for a later resume.
     Abandoned,
-    /// Ran to the end and was recorded. `not_evidence` says whether it taught
-    /// the run anything: when it did not, the next pass plans the slot again.
     Completed { attempt: u32, not_evidence: bool },
 }
 
-/// Plan, execute and record until the run owes nothing.
-///
-/// Each pass re-reads the trials the run has written, so the plan is a
-/// function of what is durable rather than of what this process remembers.
-/// Every attempt that ran is completed, including one that learned nothing: a
-/// provider outage is a fact about the attempt, and a null completion is
-/// reserved for the trials the runner never finished. Which slots that leaves
-/// owing an answer is [`plan`]'s judgement, not this loop's.
 pub(crate) async fn execute_frozen(
     frozen: &FrozenRun,
     recorder: &dyn Recorder,
@@ -373,8 +281,6 @@ pub(crate) async fn execute_frozen(
     cancel: CancellationToken,
     options: &RunOptions,
 ) -> Result<RunOutcome> {
-    // A child of the caller's token: a cancel marker stops this run and never
-    // the work that hosts it (an optimization job runs several runs).
     let cancel = cancel.child_token();
     let owner = frozen.record.owner.as_str();
     let run_id = frozen.record.run_id.as_str();
@@ -386,16 +292,8 @@ pub(crate) async fn execute_frozen(
         ..RunOutcome::default()
     };
     let mut consecutive = 0u32;
-    // One writer per `execute_frozen` call: a resumed run starts from an
-    // empty file, which also clears whatever a crashed process left in
-    // flight.
     let progress = ProgressWriter::new(&frozen.run_dir);
-    // This process holds the run from here, between passes and through a
-    // backoff too; the guard clears it on every way out, after the last
-    // trial documents are written.
     let _held = progress.hold();
-    // The file is rewritten at most this often, however fast the marker
-    // timer runs.
     let heartbeat_gap = marker_poll(options).max(Duration::from_millis(250));
     let views = ViewWriter::default();
     views.refresh(frozen, recorder).await;
@@ -412,8 +310,6 @@ pub(crate) async fn execute_frozen(
             break;
         }
 
-        // Set when the loop stops launching, so the slots still queued behind
-        // the in-flight ones return without doing anything.
         let stop = AtomicBool::new(false);
         let admission_stopped = CancellationToken::new();
         let mut retried: Vec<u32> = Vec::new();
@@ -442,9 +338,6 @@ pub(crate) async fn execute_frozen(
             watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 let next = if observed_cancel {
-                    // Draining: the in-flight trials wind down and are still
-                    // this process's, so their entries and the holder stay
-                    // fresh. The marker no longer matters.
                     tokio::select! {
                         _ = watch.tick() => {
                             progress.heartbeat(heartbeat_gap);
@@ -462,9 +355,6 @@ pub(crate) async fn execute_frozen(
                             continue;
                         }
                         _ = watch.tick() => {
-                            // The in-flight entries are alive; a marker
-                            // written mid-batch cancels the child token, which
-                            // interrupts the executors' current requests.
                             progress.heartbeat(heartbeat_gap);
                             cancel_requested(&frozen.run_dir, &cancel);
                             continue;
@@ -475,8 +365,6 @@ pub(crate) async fn execute_frozen(
                 let slot = match next {
                     None => break,
                     Some(Ok(slot)) => slot,
-                    // The trials still in flight are cancelled and drained
-                    // rather than dropped, which would detach their runtimes.
                     Some(Err(error)) => {
                         tracing::error!(
                             run_id,
@@ -506,9 +394,6 @@ pub(crate) async fn execute_frozen(
                         consecutive += 1;
                         if consecutive >= frozen.breaker_threshold {
                             outcome.breaker_tripped = true;
-                            // Read now: a trial still in flight may finish and
-                            // reset the running count, but not the reason the
-                            // run stopped.
                             tripped.get_or_insert(consecutive);
                             stop.store(true, Ordering::Relaxed);
                             admission_stopped.cancel();
@@ -535,7 +420,6 @@ pub(crate) async fn execute_frozen(
         if cancel_requested(&frozen.run_dir, &cancel) {
             break;
         }
-        // One wait for the whole pass, long enough for its most-retried slot.
         if let Some(backoff) = retried
             .iter()
             .map(|attempt| backoff_for(options, *attempt))
@@ -546,8 +430,6 @@ pub(crate) async fn execute_frozen(
                 backoff = ?backoff,
                 "eval run waits before planning the slots that produced no evidence again"
             );
-            // The marker is looked for during the wait too, so a cancel does
-            // not sit behind a long backoff.
             let wait = tokio::time::sleep(backoff);
             tokio::pin!(wait);
             let mut watch = tokio::time::interval(marker_poll(options));
@@ -570,8 +452,6 @@ pub(crate) async fn execute_frozen(
     }
 
     if cancel.is_cancelled() {
-        // A cancel that lands once the run owes nothing stopped nothing: the
-        // pass finished, and says so.
         let existing = recorder.load_trials(owner, run_id).await?;
         if slots_owed(&frozen.record, &existing) == 0 {
             outcome.not_evidence = settled(run_id, &existing);
@@ -591,12 +471,6 @@ pub(crate) async fn execute_frozen(
     Ok(outcome)
 }
 
-/// The not-evidence count of a run that owes nothing, logging the slots the
-/// abandonment bound stopped.
-///
-/// Nothing is left to plan, so every slot still without evidence has spent
-/// what the run allows: `max_infra_retries + 1` attempts that finished without
-/// evidence, or [`MAX_ABANDONED_ATTEMPTS`] that never finished.
 fn settled(run_id: &str, existing: &[TrialRecord]) -> u32 {
     let bounded = abandonment_bounded_slots(existing);
     if bounded > 0 {
@@ -610,8 +484,6 @@ fn settled(run_id: &str, existing: &[TrialRecord]) -> u32 {
     not_evidence_slots(existing)
 }
 
-/// One trial: provision it, record that it exists, run it, grade it, and
-/// record what it came to.
 #[allow(clippy::too_many_arguments)]
 async fn execute_trial(
     frozen: &FrozenRun,
@@ -640,7 +512,6 @@ async fn execute_trial(
     } else {
         None
     };
-    // A queued slot may have been stopped while another trial held capacity.
     if stop.load(Ordering::Relaxed) || cancel_requested(&frozen.run_dir, cancel) {
         return Ok(Slot::Skipped);
     }
@@ -661,8 +532,6 @@ async fn execute_trial(
     let goal = case_goal(case, &frozen.captures);
 
     let locator = executor.provision(&spec).await;
-    // Names the trial's cell beside its DID, the only identity a trial's own
-    // log lines carry.
     tracing::info!(
         target: "gents::eval",
         run_id,
@@ -686,9 +555,6 @@ async fn execute_trial(
         seed: planned.seed,
         home_hint: locator.home_hint.clone(),
     };
-    // The trial was provisioned and will now never run, so whatever the
-    // executor is holding for it is released before the error leaves: an
-    // embedded home nobody takes would otherwise run until the process ends.
     if let Err(error) = recorder.create_trial(owner, &identity).await {
         executor.discard(&spec.trial_id).await;
         return Err(error);
@@ -702,15 +568,12 @@ async fn execute_trial(
             attempt: planned.attempt,
             stage_id: None,
             started_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            // Stamped by `slot_started`.
             pid: 0,
             written_at: String::new(),
             live: None,
             goal: goal.clone(),
         },
     );
-    // Removes the entry however this trial leaves: completed, abandoned, or
-    // an error writing its rows.
     let _in_flight = InFlightGuard {
         progress,
         trial_id: &planned.trial_id,
@@ -767,7 +630,6 @@ async fn execute_trial(
     })
 }
 
-/// Ends a slot's `progress.json` entry when the trial's turn ends.
 struct InFlightGuard<'a> {
     progress: &'a ProgressWriter,
     trial_id: &'a str,
@@ -779,11 +641,6 @@ impl Drop for InFlightGuard<'_> {
     }
 }
 
-/// Record the trial's [`EvidenceRecord`] beside its retained home.
-///
-/// It is a record, not an input: nothing the loop decides reads it back, so
-/// a write that fails is reported and the trial still counts. A spec with no
-/// home directory has nowhere to put it.
 fn write_evidence_sidecar(trial_dir: &Path, record: EvidenceRecord) {
     if trial_dir.as_os_str().is_empty() {
         return;
@@ -796,19 +653,13 @@ fn write_evidence_sidecar(trial_dir: &Path, record: EvidenceRecord) {
     }
 }
 
-/// Rewrites `<run dir>/report.json` for watchers, one refresh at a time, so
-/// a trial that finishes later never has its view replaced by an older one.
 #[derive(Default)]
 struct ViewWriter(tokio::sync::Mutex<()>);
 
 impl ViewWriter {
-    /// Derive the run's report through the recorder and write the
-    /// [`RunView`]. Advisory: a report that cannot be built, or a write that
-    /// fails, is logged and the run goes on.
     async fn refresh(&self, frozen: &FrozenRun, recorder: &dyn Recorder) {
         let _one = self.0.lock().await;
         let run_id = frozen.record.run_id.as_str();
-        // `run_dir` is `<runs dir>/<run id>`.
         let runs_dir = frozen.run_dir.parent().unwrap_or(&frozen.run_dir);
         let report = match recorder
             .report(&frozen.record.owner, runs_dir, run_id)
@@ -837,9 +688,6 @@ impl ViewWriter {
     }
 }
 
-/// Everything the trial is allowed to know, assembled from the frozen cell and
-/// the case. The case id reaches the executor only through
-/// [`TrialSpec::script_key`], and only for an executor that asks for it.
 fn trial_spec(
     frozen: &FrozenRun,
     planned: &PlannedTrial,
@@ -874,9 +722,6 @@ fn trial_spec(
     })
 }
 
-/// The stages a trial submits, each with the captures read when it ends: the
-/// stage's own `capture` list, or the run's request-level list when the stage
-/// declares none.
 fn stage_specs(case: &EvalCase, fallback: &[Capture]) -> Vec<StageSpec> {
     case.stages
         .iter()
@@ -900,8 +745,6 @@ fn stage_specs(case: &EvalCase, fallback: &[Capture]) -> Vec<StageSpec> {
         .collect()
 }
 
-/// The definition's fixtures, then the case's: a case adds to what every case
-/// shares rather than replacing it.
 fn fixtures(
     pack_dir: &Path,
     definition: Option<&EvalFixtures>,
@@ -919,8 +762,6 @@ fn fixtures(
         for asset in &declared.assets {
             fixtures.files.extend(asset_files(pack_dir, asset)?);
         }
-        // Inline files are authored with the case, so they never need the
-        // subject pack to carry test data.
         fixtures
             .files
             .extend(declared.files.iter().map(|file| FixtureFile {
@@ -931,14 +772,7 @@ fn fixtures(
     Ok(fixtures)
 }
 
-/// A fixture asset is a pack-relative path, so it names a file inside the run's
-/// own copy of the pack and never a path out of it. An asset the pack does not
-/// hold is the runner's failure, not the trial's: no trial ran, so there is no
-/// outcome to record.
-///
-/// A path naming a directory of the pack materializes every file under it, so
-/// cells whose packs hold different files under one directory share a case.
-/// The run's copy of a pack holds only its declared assets and no symlinks.
+/// Asset paths are confined to the run's pack copy.
 fn asset_files(pack_dir: &Path, asset: &str) -> Result<Vec<FixtureFile>> {
     anyhow::ensure!(
         Path::new(asset)
@@ -983,9 +817,6 @@ fn asset_files(pack_dir: &Path, asset: &str) -> Result<Vec<FixtureFile>> {
     Ok(files)
 }
 
-/// A verdict row as a document. `index` is the row's position among the
-/// trial's rows, so a case naming one check twice on a stage still writes two
-/// distinct documents.
 fn verdict_draft(
     run_id: &str,
     trial_id: &str,
@@ -1006,9 +837,6 @@ fn verdict_draft(
         score_bp: row.score_bp,
         weight: row.weight,
         raw: row.raw.clone(),
-        // Only the train split may carry a check's advice back to an author:
-        // everywhere else it would be a channel from the evaluation into the
-        // thing being evaluated.
         feedback: (split == EvalSplit::Train)
             .then(|| row.feedback.clone())
             .flatten(),
@@ -1016,8 +844,6 @@ fn verdict_draft(
     }
 }
 
-/// Derived from the row it describes, so re-running a trial cannot mint a
-/// second document for the same verdict.
 fn verdict_id(trial_id: &str, stage_id: &str, check: &str, index: usize) -> String {
     let material = format!(
         "{trial_id}
@@ -1028,8 +854,6 @@ fn verdict_id(trial_id: &str, stage_id: &str, check: &str, index: usize) -> Stri
     format!("{:x}", Sha256::digest(material.as_bytes()))
 }
 
-/// How the trial ended, stage by stage. Every stage of the case appears: the
-/// ones the evidence holds, and then the ones it never reached.
 fn completion(case: &EvalCase, evidence: &TrialEvidence) -> TrialCompletion {
     let mut stages: Vec<StageCompletion> = evidence
         .stages
@@ -1066,9 +890,6 @@ fn completion(case: &EvalCase, evidence: &TrialEvidence) -> TrialCompletion {
     }
 }
 
-/// Exponential in the attempt, bounded: a provider that has failed four times
-/// is not helped by asking again immediately, and is not helped by waiting
-/// forever either.
 fn backoff_for(options: &RunOptions, attempt: u32) -> Duration {
     let factor = 1u32
         .checked_shl(attempt.saturating_sub(1))
@@ -1097,8 +918,6 @@ mod tests {
     };
     use crate::Collection;
 
-    /// Two validation cases and one train case, each one stage with one
-    /// acceptance check.
     fn definition(check: &str) -> Value {
         json!({
             "definition_id": "loop-def",
@@ -1130,7 +949,6 @@ mod tests {
         })
     }
 
-    /// A launching home holding the loop's definition and a fixture pack.
     async fn launching(check: &str) -> (Launching, PathBuf) {
         let launching = Launching::new().await;
         launching
@@ -1140,7 +958,6 @@ mod tests {
         (launching, pack)
     }
 
-    /// Two cells, both validation cases, two trials each: eight slots.
     fn request(launching: &Launching, pack: &Path, run_id: &str) -> RunRequest {
         RunRequest {
             run_id: run_id.into(),
@@ -1164,7 +981,6 @@ mod tests {
         }
     }
 
-    /// One slot: one cell, one case, one trial.
     fn one_slot(request: &mut RunRequest) {
         request.cells.truncate(1);
         request.case_ids = Some(vec!["case-a".into()]);
@@ -1189,7 +1005,6 @@ mod tests {
         }
     }
 
-    /// The stage the fixture case declares, with the row its check requires.
     fn passed() -> TrialEvidence {
         ScriptedExecutor::passed_evidence("did:key:trial", "check", "findings", vec![json!({})])
     }
@@ -1439,7 +1254,6 @@ mod tests {
         assert_eq!(budget.0.available_permits(), 1);
     }
 
-    /// A check that always passes and always has something to say.
     struct FeedbackCheck;
 
     impl Check for FeedbackCheck {
@@ -1472,8 +1286,6 @@ mod tests {
         }
     }
 
-    /// An executor that cancels the run the first time it is asked to execute
-    /// anything, then waits for its own cancellation like a real trial would.
     struct CancelOnFirstExecute {
         run: CancellationToken,
     }
@@ -1507,10 +1319,6 @@ mod tests {
         }
     }
 
-    /// Trials of index 0 learn nothing and finish at once; trials of index 1
-    /// pass, but only once `gate` opens. The recorder opens it after the
-    /// breaker's worth of completions is durable, so the passing trials are
-    /// in flight across the trip and complete strictly after it.
     struct BreakerExecutor {
         gate: CancellationToken,
     }
@@ -1551,7 +1359,6 @@ mod tests {
         }
     }
 
-    /// A recorder that opens a gate once `open_after` trials are complete.
     struct GatingRecorder<'a> {
         inner: DocumentRecorder<'a>,
         completions: Mutex<u32>,
@@ -1596,8 +1403,6 @@ mod tests {
         }
     }
 
-    /// An executor whose trials run until they are cancelled, and count how
-    /// many of them saw that cancellation and wound down.
     #[derive(Default)]
     struct SettlesOnCancel {
         settled: std::sync::atomic::AtomicU32,
@@ -1632,8 +1437,6 @@ mod tests {
         }
     }
 
-    /// A [`ScriptedExecutor`] that records which trials the loop handed back,
-    /// so a test can see a provisioned trial released rather than stranded.
     struct DiscardingExecutor {
         inner: ScriptedExecutor,
         discarded: Mutex<Vec<String>>,
@@ -1673,8 +1476,6 @@ mod tests {
         }
     }
 
-    /// A [`DocumentRecorder`] that logs every call and can be made to fail one
-    /// of them, so a test can crash the loop exactly where it wants to.
     struct FaultingRecorder<'a> {
         inner: DocumentRecorder<'a>,
         fail_on: Option<(&'static str, u32)>,
@@ -1695,7 +1496,6 @@ mod tests {
             self
         }
 
-        /// Log the call, and fail it when it is the injected one.
         fn enter(&self, method: &'static str, subject: &str) -> Result<()> {
             let mut calls = self.calls.lock().expect("the recorder call log");
             calls.push((method, subject.to_owned()));
@@ -1744,7 +1544,6 @@ mod tests {
         }
     }
 
-    /// The completion of the slot's `attempt`-th try.
     fn completion_of(trials: &[TrialRecord], attempt: u32) -> TrialCompletion {
         trials
             .iter()
@@ -1753,7 +1552,6 @@ mod tests {
             .unwrap_or_else(|| panic!("a completion for attempt {attempt}"))
     }
 
-    /// `(cell_id, case_id, trial_index, attempt, completed)`, sorted.
     fn trial_keys(trials: &[TrialRecord]) -> Vec<(String, String, u32, u32, bool)> {
         let mut keys: Vec<_> = trials
             .iter()
@@ -1771,7 +1569,6 @@ mod tests {
         keys
     }
 
-    /// `(trial_id, stage_id, check, kind, score_bp)`, sorted.
     fn verdict_keys(
         verdicts: &[VerdictRecord],
     ) -> Vec<(String, String, String, &'static str, Option<u32>)> {
@@ -1791,8 +1588,6 @@ mod tests {
         keys
     }
 
-    /// The trial's fixtures are the definition's plus the case's, and an
-    /// asset names a file inside the run's own copy of the pack.
     #[test]
     fn fixtures_merge_the_case_after_the_definition_and_read_assets_from_the_pack() {
         let pack = tempfile::tempdir().unwrap();
@@ -1853,8 +1648,6 @@ mod tests {
         );
     }
 
-    /// A directory asset materializes every file under it, so two cells whose
-    /// packs hold different files there run one case.
     #[test]
     fn a_directory_asset_materializes_every_file_under_it() {
         let pack = tempfile::tempdir().unwrap();
@@ -1939,8 +1732,6 @@ mod tests {
             .iter()
             .all(|verdict| verdict.kind == OutcomeKind::Passed && verdict.feedback.is_none()));
 
-        // `TrialCompletion` has no field for the evidence digest, so the loop
-        // records it beside each trial's retained home.
         for trial in &trials {
             let path = frozen
                 .run_dir
@@ -2038,10 +1829,6 @@ mod tests {
         );
     }
 
-    /// The loop provisioned a trial and then could not write its row. The
-    /// executor may be holding a whole booted home for it, so the loop hands
-    /// the trial back before the error leaves; otherwise that home would run
-    /// until the process ended.
     #[tokio::test]
     async fn a_trial_whose_row_cannot_be_written_is_handed_back_to_the_executor() {
         let (launching, pack) = launching("captured_rows_count").await;
@@ -2181,10 +1968,6 @@ mod tests {
         assert_eq!(not_evidence_slots(&trials), 1);
     }
 
-    /// A harness fault inside a stage — the stage's request could not be
-    /// written, or its evidence could not be read back — is a fact about the
-    /// runner, not about the subject. The slot must be asked again rather than
-    /// closed with a zero.
     #[tokio::test]
     async fn a_stage_that_failed_on_the_harness_re_plans_the_slot() {
         let (launching, pack) = launching("captured_rows_count").await;
@@ -2228,8 +2011,6 @@ mod tests {
         );
         assert!(completion_is_not_evidence(&completion_of(&trials, 1)));
 
-        // And it is recorded as infrastructure rather than scored against the
-        // subject.
         let verdicts = load_verdicts(&launching.access, OWNER, "run-1")
             .await
             .unwrap();
@@ -2319,9 +2100,6 @@ mod tests {
         );
     }
 
-    /// The guarantee freezing gave — an embedded trial never runs a pack that
-    /// grants it host bash — is the executor's, not the run's, so a resume
-    /// under a different executor has to be asked again.
     #[tokio::test]
     async fn resume_refuses_an_embedded_executor_for_a_pack_that_grants_host_bash() {
         let (launching, _) = launching("captured_rows_count").await;
@@ -2352,9 +2130,6 @@ mod tests {
         );
     }
 
-    /// The breaker reports the run of empty trials that stopped the run. A
-    /// trial that was already in flight finishes afterwards and resets the
-    /// running count, which must not rewrite why the run stopped.
     #[tokio::test]
     async fn the_breaker_reports_the_count_it_tripped_on_not_the_one_it_ended_with() {
         let (launching, pack) = launching("captured_rows_count").await;
@@ -2437,9 +2212,6 @@ mod tests {
             .is_empty());
     }
 
-    /// Writes its run's cancel marker the first time it executes a trial,
-    /// then answers like the scripted executor: another process running
-    /// `gents eval cancel` while this one works.
     struct MarkOnFirstExecute {
         inner: ScriptedExecutor,
         runs_dir: PathBuf,
@@ -2546,8 +2318,6 @@ mod tests {
         );
     }
 
-    /// `run` and `resume` clear the marker before the loop, so the loop is
-    /// driven directly to see a marker that is already there.
     #[tokio::test]
     async fn a_marker_written_before_the_loop_starts_launches_nothing() {
         let (launching, pack) = launching("captured_rows_count").await;
@@ -2581,8 +2351,6 @@ mod tests {
             .is_empty());
     }
 
-    /// Writes its run's cancel marker right after the trial's completion is
-    /// recorded: a `gents eval cancel` that lands once the run owes nothing.
     struct MarkAfterComplete<'a> {
         inner: DocumentRecorder<'a>,
         runs_dir: PathBuf,
@@ -2620,8 +2388,6 @@ mod tests {
         }
     }
 
-    /// A marker that lands after the last completion stops nothing the run
-    /// still owed, so the pass reports a finished run, not a cancelled one.
     #[tokio::test]
     async fn a_marker_written_after_the_last_completion_is_not_a_cancelled_run() {
         let (launching, pack) = launching("captured_rows_count").await;
@@ -2656,8 +2422,6 @@ mod tests {
         assert!(!outcome.cancelled, "the run owes nothing: {outcome:?}");
     }
 
-    /// `run` on a run id that already exists reuses the run, and
-    /// clears a leftover marker exactly as `resume` does.
     #[tokio::test]
     async fn run_on_an_existing_run_id_clears_the_marker_like_resume() {
         let (launching, pack) = launching("captured_rows_count").await;
@@ -2682,9 +2446,6 @@ mod tests {
         assert!(!marker.exists());
     }
 
-    /// One trial's error stops the pass, but the trials already in flight are
-    /// cancelled and drained before it leaves, so none is dropped mid-run
-    /// with its runtime detached.
     #[tokio::test]
     async fn an_error_in_one_trial_drains_the_trials_in_flight() {
         let (launching, pack) = launching("captured_rows_count").await;
@@ -2713,8 +2474,6 @@ mod tests {
         );
     }
 
-    /// A second `run` or `resume` of a run a live process holds refuses
-    /// before it clears that process's cancel marker or resets its progress.
     #[tokio::test]
     async fn run_and_resume_refuse_a_run_held_by_a_live_process() {
         let (launching, pack) = launching("captured_rows_count").await;
@@ -2735,8 +2494,6 @@ mod tests {
             .set_modified(long_ago)
             .unwrap();
 
-        // STALE_WINDOW is 3 s: refresh the holder before each look, or a slow
-        // machine sees it go stale mid-test.
         holder.heartbeat(Duration::ZERO);
         let ran = run(
             &launching.access,
@@ -2917,9 +2674,6 @@ mod tests {
         assert_eq!(serial_verdicts, parallel_verdicts);
     }
 
-    /// A stage reads what it declares; a stage that declares nothing reads what
-    /// the run requested, which is how a definition whose stages declare no
-    /// captures keeps the ones the run requested.
     #[test]
     fn a_stage_captures_what_it_declares_and_otherwise_what_the_run_requested() {
         let case: EvalCase = serde_json::from_value(json!({
@@ -2989,8 +2743,6 @@ mod tests {
         );
     }
 
-    /// A slot cancelled mid-trial under `max_infra_retries: 0` is planned
-    /// again, so its pair is not lost.
     #[tokio::test]
     async fn a_cancelled_slot_is_planned_again_under_no_infrastructure_retries() {
         let (launching, pack) = launching("captured_rows_count").await;
@@ -3035,8 +2787,6 @@ mod tests {
         assert_eq!(attempts, vec![(1, false), (2, true)]);
     }
 
-    /// Reports its one stage the way the embedded executor does and records
-    /// what `progress.json` said while the trial was inside it.
     struct StageReporting {
         run_dir: PathBuf,
         seen: Mutex<Vec<Option<Progress>>>,
@@ -3121,8 +2871,6 @@ mod tests {
         assert!(!running_elsewhere(&run_dir));
     }
 
-    /// Writes its run's marker, then waits inside the trial for its own
-    /// cancellation, the way a real stage waits on a request.
     struct MarksThenWaits {
         runs_dir: PathBuf,
         run_id: String,
@@ -3161,8 +2909,6 @@ mod tests {
         }
     }
 
-    /// Cancels its run, then keeps running past the interrupt for a second,
-    /// reading the holder as the loop drains: a trial that winds down slowly.
     struct DrainsSlowly {
         runs_dir: PathBuf,
         run_id: String,
@@ -3273,8 +3019,6 @@ mod tests {
         assert!(trials[0].completion.is_none(), "left open for a resume");
     }
 
-    /// Reads its own `progress.json` entry twice, 600 ms apart: longer than
-    /// the 250 ms floor on the heartbeat.
     struct WatchesHeartbeat {
         run_dir: PathBuf,
         seen: Mutex<Vec<String>>,
@@ -3317,8 +3061,6 @@ mod tests {
         }
     }
 
-    /// Reports one snapshot, reads it back out of `progress.json` while the
-    /// trial is still in flight, then reports the snapshot it ends on.
     struct ReportsLive {
         run_dir: PathBuf,
         seen: Mutex<Option<InFlight>>,
@@ -3434,8 +3176,6 @@ mod tests {
         assert_eq!(record.goal, goal);
         assert!(record.ended_at.is_some());
 
-        // The run's view for watchers: the report the documents derive, with
-        // each slot's evidence record and each verdict's detail.
         let view = read_run_view(&run_dir).expect("report.json");
         assert_eq!(view.pid, std::process::id());
         assert_eq!(view.trials.get(trial_id), Some(&record));
@@ -3459,8 +3199,6 @@ mod tests {
         );
     }
 
-    /// Signals when the loop begins a backoff between passes: the event the
-    /// loop logs as it starts the wait carries a `backoff` field.
     struct BackoffBegan(Arc<tokio::sync::Notify>);
 
     impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for BackoffBegan {
@@ -3477,11 +3215,6 @@ mod tests {
         }
     }
 
-    /// A marker written while the loop waits out a 30 s backoff ends the wait
-    /// at a later `marker_poll` tick. The marker is written only once the loop
-    /// has said it is backing off, and a little after, so neither the check
-    /// after the pass nor the wait's first immediate tick can see it: only
-    /// the timer inside the wait can. A loop that never backs off fails here.
     #[tokio::test]
     async fn a_marker_written_during_the_backoff_ends_the_wait() {
         use tracing_subscriber::layer::SubscriberExt;
@@ -3511,8 +3244,6 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(20), began.notified())
                 .await
                 .expect("the loop began its backoff after the not-evidence attempt");
-            // No slot is in flight during the backoff; the holder says the
-            // loop is alive, and its one-second heartbeat keeps it fresh.
             let first = held().expect("the loop holds the run during its backoff");
             assert!(running_elsewhere(&run_dir));
             tokio::time::sleep(Duration::from_millis(2_500)).await;
@@ -3618,7 +3349,6 @@ mod tests {
         assert_eq!(slots_owed(&record, &trials), 0);
         assert!(run_finished(&record, &trials, &frozen.run_dir));
 
-        // This process holds a slot of the run: not finished.
         let writer = ProgressWriter::new(&frozen.run_dir);
         writer.slot_started(
             "held",
@@ -3647,12 +3377,9 @@ mod tests {
             )
             .unwrap();
         };
-        // A live process that stopped refreshing the entry longer ago than
-        // the staleness window does not hold it.
         rewrite(&|slot| slot.written_at = "2026-01-01T00:00:00.000Z".into());
         assert!(!running_elsewhere(&frozen.run_dir));
 
-        // A fresh entry from a process that no longer exists does not hold it.
         rewrite(&|slot| {
             slot.written_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
@@ -3661,8 +3388,6 @@ mod tests {
         assert!(!running_elsewhere(&frozen.run_dir));
         assert!(run_finished(&record, &trials, &frozen.run_dir));
 
-        // A loop between passes holds the run without a slot in flight; a
-        // holder that stopped refreshing does not.
         let idle = ProgressWriter::new(&frozen.run_dir);
         let held = idle.hold();
         assert!(running_elsewhere(&frozen.run_dir));

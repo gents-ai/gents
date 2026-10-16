@@ -177,10 +177,6 @@ fn compaction_generation<T: CompactionProjection>(rows: &[T]) -> Result<String> 
     crate::rendered_request::sha256_canonical_json(&serde_json::json!(projection))
 }
 
-/// Load only the compaction projection consumed while assembling a prompt.
-///
-/// Every persisted entry must carry a canonical cursor. Rows without one are
-/// rejected rather than projected into provider history.
 pub(crate) async fn load_prompt_compaction_state(
     node: &EmbeddedNode,
     session_id: &str,
@@ -530,10 +526,6 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                 let sequence =
                     u32::try_from(rows.len() + 1).context("compaction sequence overflow")?;
                 let compaction_key = compaction_key(node_did, session_id, requester_did, sequence);
-                // DefraDB canonicalizes fractional seconds with Go's RFC3339Nano
-                // formatter, which trims trailing zeros.  Emit whole seconds so the
-                // value returned from this create is byte-identical to the value
-                // loaded during an exact redelivery.
                 let created_at =
                     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
                 let cursor_field = compacted_through_sequence

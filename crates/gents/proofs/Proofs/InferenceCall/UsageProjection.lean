@@ -3,19 +3,6 @@ import Proofs.CanonicalOutput.Execution.State
 import Proofs.PromptAssembly.AggregateBudget
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 
-/-!
-# Request-scoped inference usage projections
-
-`InferenceCall.Persistence.Row.usage` remains the one durable provider usage
-observation, including observations arriving after its terminal write. The
-finite call-ID set represents physical `InferenceCall` identity: repeating an
-identical row in a query cannot add that ID a second time. A coherent catalog
-cannot contain different rows for one call ID. The translated row carries the
-call's physical `request_doc_id` alongside the persisted call, whose
-`requestId` represents only the logical ID. Historical signed title provenance
-remains observable after the active claim is cleared.
--/
-
 open scoped BigOperators
 
 namespace InferenceCall.UsageProjection
@@ -23,14 +10,10 @@ namespace InferenceCall.UsageProjection
 abbrev Usage := PromptAssembly.AggregateBudget.PersistedUsage
 abbrev TitleBinding := CanonicalOutput.Execution.Handover.TitleBinding
 
-/-- The native call row's `request_doc_id` is the physical request document,
-not the logical `InferenceCall.requestId`. Translation must retain both. -/
 structure UsageRow where
   physicalRequest : CanonicalOutput.DocId
   persisted : Persistence.Row Usage
 
-/-- An exact normal parent query, including its durable request state. State is
-an observation, never an authority to suppress later child usage. -/
 structure ParentScope where
   physical : CanonicalOutput.DocId
   logical : RequestId
@@ -38,19 +21,12 @@ structure ParentScope where
   session : SessionId
   state : RequestState
 
-/-- Call IDs, not repeated query rows, define the accounting domain. `purpose`
-comes from the required signed request field; `titleBinding` is authenticated
-title provenance, not an assertion of historical execution or a caller-supplied
-parent label. The execution claim fence remains an independent write authority. -/
 structure Observation where
   callIds : Finset Nat
   row : Nat → UsageRow
   purpose : CanonicalOutput.DocId → Option RequestPurpose
   titleBinding : CanonicalOutput.DocId → Option TitleBinding
 
-/-- A native query may repeat an identical call row, but cannot choose a first
-winner for conflicting rows under one physical call ID. The decoder must
-reject a query for which this predicate cannot be established. -/
 structure CatalogCoherent (records : List (Nat × UsageRow))
     (observation : Observation) : Prop where
   ids : observation.callIds = (records.map Prod.fst).toFinset
@@ -77,24 +53,17 @@ def sumWhere (observation : Observation) (eligible : UsageRow → Bool) : Nat ×
       if eligible (observation.row callId) then
         (rowUsage (observation.row callId)).completionTokens else 0)
 
-/-- The ordinary public projection selects only exact, signed-normal request
-IDs. Title calls never become public merely by carrying parent provenance. -/
 def normalPublic (observation : Observation) (parent : ParentScope) : Nat × Nat :=
   sumWhere observation fun row =>
     decide (observation.purpose parent.physical = some .normal ∧
       row.persisted.call.requestId = parent.logical ∧
       row.physicalRequest = parent.physical)
 
-/-- Validate authenticated title provenance against the call's own immutable
-physical and logical request identities. An unrelated parent is not a malformed
-self-binding; execution history is not inferred from this provenance. -/
 def titleSelfBindingValid (row : UsageRow) (binding : TitleBinding) : Bool :=
   decide (binding.authenticated = true ∧
     row.persisted.call.requestId = binding.logicalRequest ∧
     row.physicalRequest = binding.physicalRequest)
 
-/-- Join one valid title call through authenticated title parent provenance.
-Matching the selected parent is projection membership, not authentication. -/
 def titleBelongsTo (observation : Observation) (parent : ParentScope)
     (row : UsageRow) : Bool :=
   match observation.titleBinding row.physicalRequest with
@@ -111,8 +80,6 @@ def titleChildren (observation : Observation) (parent : ParentScope) : Nat × Na
     decide (observation.purpose row.physicalRequest = some .titleAudit) &&
       titleBelongsTo observation parent row
 
-/-- Explicit audit projection, never the ordinary public request total. The
-same unique physical call contributes its persisted components once. -/
 def parentInclusiveAudit (observation : Observation) (parent : ParentScope) : Nat × Nat :=
   let normal := normalPublic observation parent
   let titles := titleChildren observation parent
@@ -126,8 +93,6 @@ inductive CatalogError where
   | invalidTitleBinding
   deriving DecidableEq, Repr
 
-/-- Exact persisted-row comparison for one physical call ID. No field is chosen
-from the first row when two native query observations disagree. -/
 def sameUsageRow (left right : UsageRow) : Bool :=
   decide (left.physicalRequest = right.physicalRequest ∧
     left.persisted.call.callId = right.persisted.call.callId ∧
@@ -162,8 +127,6 @@ theorem sameUsageRow_sound (left right : UsageRow)
               cases husage
               rfl
 
-/-- Executable finite check of the catalog premise. The projection gate calls
-this on the original raw records, not merely on the normalized representatives. -/
 def coherentCheck (records : List (Nat × UsageRow))
     (observation : Observation) : Bool :=
   decide (observation.callIds = (records.map Prod.fst).toFinset) &&
@@ -210,11 +173,6 @@ structure Totals where
   parentInclusiveAudit : Nat × Nat
   deriving DecidableEq, Repr
 
-/-- Native ingestion of bounded candidate calls rejects conflicting rows and
-unresolved signed purpose/title-provenance facts before returning numeric totals. An
-empty catalog has zero totals; nonempty projections reuse the same finite-ID
-owner as the verified single-row observation. Candidate scope and authenticated
-physical facts remain native premises. -/
 def validateAndProject (records : List (Nat × UsageRow))
     (purpose : CanonicalOutput.DocId → Option RequestPurpose)
     (titleBinding : CanonicalOutput.DocId → Option TitleBinding)
@@ -254,16 +212,12 @@ theorem duplicate_call_id_does_not_double_count (observation : Observation)
       parentInclusiveAudit observation parent := by
   simp [Finset.insert_eq_of_mem present]
 
-/-- A parent may have terminalized before the title provider reports usage;
-neither projection filters on the parent's lifecycle state. -/
 theorem parent_terminal_does_not_drop_late_usage (observation : Observation)
     (parent : ParentScope) (terminal : RequestState) :
     parentInclusiveAudit observation { parent with state := terminal } =
       parentInclusiveAudit observation parent := by
   rfl
 
-/-- Late usage changes the persisted usage projection without altering the
-terminal call or terminal timestamp already selected by the call writer. -/
 theorem observe_usage_after_terminal (row : UsageRow) (usage : Usage) :
     rowUsage { row with persisted := Persistence.observeUsage row.persisted usage } = usage ∧
     (Persistence.observeUsage row.persisted usage).call = row.persisted.call ∧

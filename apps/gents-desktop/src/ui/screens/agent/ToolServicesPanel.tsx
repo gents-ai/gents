@@ -49,7 +49,6 @@ function Editor({
   };
   const port = (next: typeof saved) =>
     requiredInteger("MCP port", next.mcpPort, { min: 1, max: 65_535 });
-  /* what the save and the test both need of the address */
   const endpointProblems = (next: typeof saved): Problems<typeof saved> => ({
     hostname: [next.hostname, next.tailscaleIp, next.lanIp].some((v) => v.trim())
       ? undefined
@@ -60,7 +59,6 @@ function Editor({
         ? "MCP path must be empty or start with /"
         : undefined,
   });
-  /* the address as the bridge takes it, once it has no problems */
   const endpointOf = (next: typeof saved) => ({
     hostname: next.hostname.trim() || null,
     tailscaleIp: next.tailscaleIp.trim() || null,
@@ -272,12 +270,7 @@ export function ToolServicesPanel({
           (s) => s.service_id === id,
         )!;
         return (
-          <Editor
-            key={service.service_id}
-
-            deployment={deployment}
-            service={service}
-          />
+          <Editor key={service.service_id} deployment={deployment} service={service} />
         );
       }}
     />

@@ -23,7 +23,6 @@ struct Imported {
     close: Option<String>,
 }
 
-/// Import a native observation without claiming live publication authority.
 async fn import_message(
     node: &defra_node::EmbeddedNode,
     session: &str,

@@ -123,8 +123,6 @@ async fn upgrades_every_namespace_and_sidecar_and_survives_reopen() -> Result<()
     assert_eq!(pending_record(&data)?, Some(record.clone()));
     assert!(retired_path(&data).join("MANIFEST").exists());
     assert_contents(&data, &key, &entries).await?;
-    // A crash after enclosing metadata publication but before finish resumes
-    // the installed store; it must never encrypt ciphertext a second time.
     progress.clear();
     encrypt_existing_with_progress(&data, &record, &key, &mut |stage| progress.push(stage)).await?;
     assert!(
@@ -275,7 +273,6 @@ async fn a_sidecar_that_cannot_be_copied_keeps_the_original_and_can_retry() -> R
     let (record, key) = prepare(&data, &temp.path().join("key"))?;
     let fifo = data.join("external-command-pipe");
     let name = std::ffi::CString::new(fifo.as_os_str().as_bytes())?;
-    // The CString remains live for the call and mkfifo does not retain it.
     assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
     assert!(encrypt_existing(&data, &record, &key).await.is_err());
     assert!(data.join("MANIFEST").exists());

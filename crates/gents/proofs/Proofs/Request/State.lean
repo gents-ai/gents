@@ -3,8 +3,7 @@ import Proofs.Persistence
 import Proofs.Scheduling
 import Proofs.ToolExecution.State
 
-/-- Immutable signed request purpose. Absence is invalid at the wire boundary;
-an audit request does not become ordinary session work by omission. -/
+/-- Wire-boundary required signed purpose; an audit request never becomes ordinary session work by omission. -/
 inductive RequestPurpose where
   | normal
   | titleAudit

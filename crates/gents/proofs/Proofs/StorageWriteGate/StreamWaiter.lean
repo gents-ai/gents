@@ -2,13 +2,10 @@ import Proofs.StorageWriteGate
 
 namespace StorageWriteGate.StreamWaiter
 
-/-- The native owner uses a FIFO async mutex. A polled lock future may queue;
-    after the current guard releases, its place can be reserved before that
-    future is polled again. Dropping a borrowed `next()` future leaves its
-    generator alive, while dropping the generator cancels its pending acquire.
-    This finite model captures that scheduling distinction only: it assumes
-    queued acquisition is FIFO and cancellation returns its queue reservation;
-    it proves no executor fairness or storage completion. -/
+/-- A polled lock future may queue and its place reserved before it is polled
+    again; dropping a borrowed `next()` leaves the generator alive while dropping
+    the generator cancels its pending acquire. This finite model assumes queued
+    acquisition is FIFO and cancellation returns its queue reservation only. -/
 inductive Waiter where
   | idle | queued | reserved | acquired | cancelled
   deriving DecidableEq, Repr
@@ -149,9 +146,8 @@ theorem initial_guard_release_cannot_release_stream_owner :
   decide
 
 /-- Co-polling services one reserved stream acquire, then the completed stream
-    write hands the mutex reservation to the waiting flush. The model bounds
-    the helper to one buffered item; further progress is disabled until the
-    consumer resumes. -/
+    write hands the mutex reservation to the waiting flush; the model bounds
+    the helper to one buffered item. -/
 def copolled : State :=
   run reservedAfterWriter
     [.progressPoll, .streamWriteReturned, .progressFlush]

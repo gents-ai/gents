@@ -1,19 +1,3 @@
-//! Compile a pack's plugins and pack the result into one `.pack` file: the
-//! shared-library owner behind `gents pack build`.
-//!
-//! Compiling is this module's job through the [`PluginCompiler`] seam;
-//! packing is [`crate::pack_archive::write_pack`]'s. A plugin with no
-//! `source` must already carry its compiled artifact. A plugin with a
-//! `source` must be its own Afterburner package (a directory with its own
-//! `afb.toml`), compiled through the seam — the CLI's
-//! `commands::afterburner_build::{load_and_validate, compile}` is the
-//! implementation to supply, since the compiler itself
-//! (`afterburner::cli::compile`) lives behind a feature this crate does not
-//! carry. Everything else in the manifest travels unchanged.
-//!
-//! The CLI delegates build mechanics here and supplies the existing
-//! Afterburner compiler through this seam.
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -22,17 +6,8 @@ use serde_json::json;
 
 use crate::pack::{PackManifest, PackPlugin};
 
-/// Compiles one already-staged Afterburner package directory to `out_path`.
-///
-/// The implementor owns the language gate: the CLI's
-/// `load_and_validate` refuses a language
-/// [`crate::pack::SUPPORTED_PLUGIN_LANGUAGES`] does not admit before
-/// compiling, and this module relies on it, exactly as the CLI's own
-/// `build_plugin` does. Errors are reported with the owner label this
-/// module supplies.
+/// The CLI implements this seam because its compiler lives behind the `afterburner` `bin` feature.
 pub trait PluginCompiler {
-    /// Stable identity for the compiler implementation, used to invalidate
-    /// artifacts when a different compiler produces different output.
     fn builder_id(&self) -> &str {
         BUILDER_ID
     }
@@ -44,11 +19,8 @@ pub trait PluginCompiler {
 #[derive(Debug, Serialize)]
 pub struct BuildReport {
     pub pack: String,
-    /// The coordinate's other half, so what `publish` will place it under
-    /// is visible at build time rather than discovered at publish time.
     pub namespace: String,
     pub version: String,
-    /// The pack digest: what installs, the store and the registry name it by.
     pub digest: String,
     pub size_bytes: u64,
     pub out: PathBuf,
@@ -61,9 +33,6 @@ pub struct PluginReport {
     pub artifact: String,
 }
 
-/// Builds every pack directory under `root` (any directory that carries a
-/// `manifest.json`) into a `.pack` beside it, so this repository's own
-/// packs can be published to the registry in one step.
 pub fn build_all(
     root: &Path,
     compiler: &dyn PluginCompiler,
@@ -89,10 +58,6 @@ pub fn build_all(
         .collect()
 }
 
-/// Compiles `dir`'s declared plugins onto disk, then packs the whole
-/// directory into a `.pack` at `out`, or beside `dir` under the pack's file
-/// name. The file is written to a staging name and renamed into place, so an
-/// interrupted build never leaves a partial `.pack` behind.
 pub fn build_pack(
     dir: &Path,
     compiler: &dyn PluginCompiler,
@@ -114,7 +79,6 @@ pub fn build_pack(
     let out_dir = match out.and_then(Path::parent) {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
         Some(_) => PathBuf::from("."),
-        // Beside the pack directory, even when it was named as `.`.
         None => std::path::absolute(dir)
             .with_context(|| format!("resolving {}", dir.display()))?
             .parent()
@@ -165,9 +129,6 @@ pub fn build_pack(
     })
 }
 
-/// Compiles every graph the pack declares and writes each plan to
-/// `graphs/<graph_id>.plan.json`, declaring it in `manifest.json` when it is
-/// not yet, so the pack digest covers the plan install will verify.
 pub fn build_graph_plans(dir: &Path, manifest: &PackManifest) -> Result<()> {
     let plans = crate::graph_package::compile_pack_graphs(
         manifest,
@@ -192,14 +153,11 @@ pub fn build_graph_plans(dir: &Path, manifest: &PackManifest) -> Result<()> {
     }
     let manifest_path = dir.join("manifest.json");
     let text = std::fs::read_to_string(&manifest_path).context("reading manifest.json")?;
-    // Appended: the author's order stays, and the digest sorts anyway.
     let mut assets = manifest.metadata.assets.clone();
     assets.extend(missing);
     std::fs::write(&manifest_path, replace_assets(&text, &assets)?).context("writing manifest.json")
 }
 
-/// `text` with its top-level `"assets"` list replaced by `assets`, one per
-/// line at the list's own indentation; nothing else in the file moves.
 fn replace_assets(text: &str, assets: &[String]) -> Result<String> {
     let key = text
         .find("\"assets\"")
@@ -226,15 +184,6 @@ fn replace_assets(text: &str, assets: &[String]) -> Result<String> {
     ))
 }
 
-/// Makes sure one plugin's artifact exists on disk before the pack is
-/// packed: compiles it from `source` when the manifest names one, otherwise
-/// requires it to already be there.
-///
-/// A plugin's source is plain source in its language (see [`plugin_entry`]).
-/// The build copies it to `<pack>/target/plugins/<name>/`, writes the package
-/// description the compiler reads there from the manifest entry, and compiles
-/// the copy, so the author's directory holds only their code and a rebuild
-/// reuses the language toolchain's own cache in the staged copy.
 pub fn build_plugin(
     dir: &Path,
     manifest: &PackManifest,
@@ -291,9 +240,6 @@ pub fn build_plugin(
         &serde_json::to_vec(&manifold)?,
     )?;
 
-    // Unchanged source, compiler and the artifact this build last produced
-    // from them: skip. The compiler is linked into this binary, so its
-    // version is part of the key; an upgrade may change `.afb` output.
     let stamp = staged.join("target").join("gents-build.stamp");
     let source_digest = format!("{} {}", compiler.builder_id(), tree_digest(&staged)?);
     if let (Ok(recorded), Ok(artifact)) = (
@@ -313,13 +259,8 @@ pub fn build_plugin(
         .with_context(|| format!("writing {}", stamp.display()))
 }
 
-/// The builder identity recorded in a plugin's build stamp: a caller whose
-/// compiler can produce different `.afb` output than another's must supply
-/// its own identity, the way the CLI's build names its own version.
 pub const BUILDER_ID: &str = concat!("gents/", env!("CARGO_PKG_VERSION"));
 
-/// Digest of every file under `dir` except the toolchain's `target/`, by
-/// relative path and content, in path order.
 fn tree_digest(dir: &Path) -> Result<String> {
     fn walk(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
         for entry in std::fs::read_dir(dir)? {
@@ -358,8 +299,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", sha2::Sha256::digest(bytes))
 }
 
-/// The entry file a plugin's source holds, by language: the one convention
-/// the scaffolder writes and the build compiles.
 pub fn plugin_entry(language: &str) -> Option<&'static str> {
     Some(match language.trim().to_ascii_lowercase().as_str() {
         "rust" => "source/main.rs",
@@ -378,10 +317,6 @@ fn toml_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_owned())
 }
 
-/// Makes `to` a copy of `from`, rewriting only files whose bytes changed so a
-/// toolchain's incremental cache in `to` stays valid, and removing what
-/// `from` no longer has. The staged `target/` and the generated package
-/// description are the build's own and are kept.
 fn mirror(from: &Path, to: &Path) -> Result<()> {
     mirror_level(from, to, true)
 }
@@ -433,10 +368,6 @@ fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// A compiler seam that records it was asked and refuses: enough to
-    /// prove the staging, stamping and refusal behavior around the seam
-    /// without invoking any real toolchain (this workspace's bounded
-    /// session forbids compiler runs).
     #[derive(Clone)]
     struct RefusingCompiler {
         called: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -464,9 +395,6 @@ mod tests {
         }
     }
 
-    /// Writes a minimal plugin-less pack (mirrors any of the 11 first-party
-    /// packs' shape) so tests exercise the real manifest/asset contract
-    /// instead of a hand-rolled fixture that could drift from it.
     fn write_plain_pack(root: &Path, name: &str) {
         std::fs::create_dir_all(root).unwrap();
         std::fs::write(root.join("README.md"), b"# a plain pack").unwrap();
@@ -572,7 +500,6 @@ mod tests {
                 "input_schema": {"type": "object", "properties": {}},
             }),
         );
-        // The artifact is declared but never written to disk.
         let (compiler, called) = RefusingCompiler::new();
 
         let error = build_pack(&root, &compiler, None).unwrap_err();
@@ -626,17 +553,11 @@ mod tests {
         );
     }
 
-    /// Unchanged staged source with a recorded stamp skips the compiler
-    /// seam; the stamp records this builder's identity, so a foreign
-    /// builder's artifact is rebuilt.
     #[test]
     fn a_stamp_recorded_by_this_builder_skips_the_seam_and_a_foreign_stamp_does_not() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("shipping_plugins");
         let (compiler, called) = RefusingCompiler::new();
-        // A plugin shipping a prebuilt artifact and no source builds
-        // without the seam; to exercise the stamp path itself, stage the
-        // source by hand and write a stamp this builder would accept.
         write_plugin_pack(
             &root,
             "shipping_plugins",
@@ -659,8 +580,6 @@ mod tests {
         std::fs::create_dir_all(root.join("plugins")).unwrap();
         std::fs::write(root.join("plugins/format_check.afb"), b"stub artifact").unwrap();
 
-        // Pre-stage what build_plugin would, and record a stamp matching
-        // this builder's key, so the skip path runs without a compiler.
         let manifest: PackManifest =
             serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
         let staged = root.join("target/plugins/format_check");
@@ -703,8 +622,6 @@ mod tests {
             "unchanged source with this builder's stamp skips the compiler"
         );
 
-        // A stamp from another builder is rebuilt: the seam is asked (and
-        // this test's compiler refuses, naming the owner).
         let recorded = std::fs::read_to_string(staged.join("target/gents-build.stamp")).unwrap();
         std::fs::write(
             staged.join("target/gents-build.stamp"),
@@ -763,9 +680,6 @@ mod tests {
                 "input_schema": {"type": "object", "properties": {}},
             }),
         );
-        // No source: the artifact only needs to exist on disk for
-        // `build_plugin` to pass, so the refusal below is purely about the
-        // language.
         std::fs::create_dir_all(root.join("plugins")).unwrap();
         std::fs::write(root.join("plugins/format_check.afb"), b"stub").unwrap();
         let (compiler, _) = RefusingCompiler::new();
@@ -788,8 +702,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_plain_pack(&dir.path().join("alpha"), "alpha");
         write_plain_pack(&dir.path().join("beta"), "beta");
-        // A non-pack file beside the pack directories must not be treated
-        // as one (mirrors packs/catalog.json sitting next to real packs).
         std::fs::write(dir.path().join("catalog.json"), b"[]").unwrap();
         let (compiler, _) = RefusingCompiler::new();
 
@@ -802,9 +714,6 @@ mod tests {
         }
     }
 
-    /// The entry convention matches `SUPPORTED_PLUGIN_LANGUAGES`' spellings:
-    /// every language a pack may declare names one entry file, the one the
-    /// scaffolder writes.
     #[test]
     fn every_supported_language_names_an_entry() {
         for language in crate::pack::SUPPORTED_PLUGIN_LANGUAGES {

@@ -3,8 +3,4 @@
 /**
  * Principal-local checkout used by existing workspace provisioning callbacks.
  */
-export type RepositoryPlacement = { repository_id: string, node_did: string, host_path: string, enabled?: boolean | null,
-/**
- * Optional UI/discovery labels. References, never tags, determine execution.
- */
-tags?: Array<string> | null, };
+export type RepositoryPlacement = { repository_id: string, node_did: string, host_path: string, enabled?: boolean | null, tags?: Array<string> | null, };

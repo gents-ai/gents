@@ -1,12 +1,10 @@
 //! A callback whose handler is an installed plugin.
 //!
-//! The plugin receives the projected source document on stdin. Its single JSON
-//! result becomes the handler's output documents, with the correlation copied
-//! from the source by the host, never authored by the plugin. The output
-//! documents, the invocation's success and its `CallbackResult` commit in one
-//! transaction, so a result is visible only once every output is written. An
-//! invocation found already executing on recovery fails with its reason and is
-//! never run twice.
+//! The plugin's single JSON result becomes output documents whose correlation
+//! is copied from the source by the host, never authored by the plugin. The
+//! outputs, the invocation's success and its `CallbackResult` commit in one
+//! transaction, so a result is visible only once every output is written; an
+//! invocation found already executing on recovery fails and is never run twice.
 //!
 //! A stage binds the path its source names with no working folder and nobody
 //! to ask, so the path is reachable only inside a folder the operator allowed
@@ -30,8 +28,7 @@ use crate::workspace::journal::advance;
 use crate::workspace::{ActionJournalEntry, ActionJournalState};
 
 /// A plugin writes only a pack's own collections: never the runtime's
-/// documents (requests, triggers, callbacks and the rest) and never a
-/// protected collection.
+/// documents and never a protected collection.
 fn writable_output_collection(collection: &str) -> Result<()> {
     crate::graphql::validate_collection_identifier(collection)?;
     anyhow::ensure!(
@@ -41,7 +38,6 @@ fn writable_output_collection(collection: &str) -> Result<()> {
     crate::document_config::reject_protected_collection_name(collection)
 }
 
-/// Refuses a plugin handler that could never run or write its outputs.
 pub fn validate_handler(
     plugin: &str,
     digest: &str,
@@ -75,12 +71,9 @@ pub fn validate_handler(
     Ok(())
 }
 
-/// The documents `output` writes, as `(collection, document)` pairs.
-///
-/// One output takes the plugin's value itself (an object, or an array of
-/// objects for `many`); several outputs take an object keyed by output name.
-/// Each document gets `correlation` in its output's correlation field, which
-/// the plugin may not set itself.
+/// The documents `output` writes, as `(collection, document)` pairs; several
+/// outputs take an object keyed by output name, and each document gets
+/// `correlation` in its correlation field, which the plugin may not set.
 pub(crate) fn output_documents(
     output: &Value,
     outputs: &[PortSpec],
@@ -158,7 +151,6 @@ pub(super) struct PluginHandler<'a> {
     pub outputs: &'a [PortSpec],
 }
 
-/// Runs a claimed, running invocation whose callback is a plugin.
 pub(super) async fn execute(
     node: &std::sync::Arc<EmbeddedNode>,
     invocation: &mut CallbackInvocationDoc,
@@ -199,7 +191,7 @@ pub(super) async fn execute(
     persist_journal(node, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
 
     // The invocation carries the correlation it was caused by; a grouped
-    // delivery's input is an array, so the source itself cannot say.
+    // delivery's input is an array, so the source itself cannot say it.
     let correlation = invocation.caused_by_correlation.clone().or_else(|| {
         handler
             .correlation_field
@@ -249,7 +241,7 @@ pub(super) async fn execute(
 }
 
 /// Writes the outputs, marks the invocation succeeded and records its result,
-/// all or nothing.
+/// atomically.
 async fn commit_success(
     node: &std::sync::Arc<EmbeddedNode>,
     invocation: &mut CallbackInvocationDoc,
@@ -407,15 +399,10 @@ mod tests {
         assert!(validate_handler("team/lint", &digest, Some("run_id"), &twice).is_err());
     }
 
-    /// A node with a `Job` source, an `Echoed` output, and a binding that runs
-    /// the echo plugin on every created Job; returns the created Job's id.
     async fn run_echo_binding(digest: &str) -> (std::sync::Arc<EmbeddedNode>, tempfile::TempDir) {
         run_binding(digest, None, false, "").await
     }
 
-    /// [`run_echo_binding`] where the plugin declares `bind_dir` on `path`
-    /// when `bind` is set, the operator allows `allowed` read-only when
-    /// given, and the Job names `job_path`.
     async fn run_binding(
         digest: &str,
         allowed: Option<&std::path::Path>,
@@ -439,9 +426,6 @@ mod tests {
         .await
     }
 
-    /// [`run_binding`] for any installed plugin, declaring `binding` (over a
-    /// schema of the Job's fields, validated as a pack would be) and allowing
-    /// `allowed` at its access when given.
     async fn run_plugin_binding(
         (home, mut record): (tempfile::TempDir, crate::plugin::store::InstalledPlugin),
         digest: &str,
@@ -450,8 +434,6 @@ mod tests {
         job_path: &str,
     ) -> (std::sync::Arc<EmbeddedNode>, tempfile::TempDir) {
         if binding.is_some() {
-            // The Job fields the binding passes, so the declaration is one a
-            // real pack would carry.
             record.declaration.input_schema = serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -632,8 +614,8 @@ mod tests {
     }
 
     /// A graph stage has no working folder, so a writing call reaches only a
-    /// folder the operator allowed `read_write` (#2303), and the same plugin's
-    /// call is denied under a read-only folder with the command that allows it.
+    /// folder the operator allowed `read_write` (#2303); a read-only folder
+    /// denies it with the command that allows it.
     #[tokio::test]
     async fn a_graph_stage_writes_only_where_the_operator_allowed_writing() {
         let writer = || {

@@ -66,7 +66,6 @@ function status(overrides: Partial<ManagedServerStatus> = {}): ManagedServerStat
   };
 }
 
-/* `read`: nodes whose configuration the bridge has read from the node */
 function fleet(listed: DeploymentView[], read: string[] = []) {
   const api = {
     managedServerStatus: vi.fn(async () => status()),
@@ -185,7 +184,6 @@ describe("Add node enrollment", () => {
 });
 
 describe("the local node's Setup needed", () => {
-  /* the fixture's backend is init's placeholder: not configured */
   it("shows once the node's configuration is read and it has no inference", async () => {
     const { app } = fleet([forge], [forge.nodeDid]);
     renderIn(app, <AgentsScreen />);

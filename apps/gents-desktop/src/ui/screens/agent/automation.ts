@@ -1,6 +1,3 @@
-/* Automations in words. A trigger is a sentence, "Every weekday at 09:00 ·
-   run Nightly audit with Implementer", and a readiness line that says why
-   it will not fire. From the loaded documents and the bridge's readiness. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { agentReadiness } from "@/lib/agent-readiness";
 import type {
@@ -23,7 +20,6 @@ const DAYS = [
 const hhmm = (h: string, m: string) => `${h.padStart(2, "0")}:${m.padStart(2, "0")}`;
 const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
 
-/* the common cron shapes; anything else is shown as its expression */
 export function cadenceInWords(s: Schedule): string {
   if (s.cadence.kind === "interval") {
     const secs = s.cadence.interval_secs;
@@ -78,10 +74,6 @@ export function sourceInWords(deployment: NodeView, t: TriggerView): string | nu
 export type Readiness =
   { ok: true; note: string | null } | { ok: false; reason: string };
 
-/* why a trigger will not fire, in the order a user can fix it: its own
-   switch and references from the loaded documents, then the agent's
-   readiness as the bridge reports it. `ok` means nothing here blocks it;
-   it is never shown as a promise that the run will succeed. */
 export function triggerReadiness(deployment: NodeView, t: TriggerView): Readiness {
   const cfg = t.config;
   if (cfg.enabled === false) return { ok: false, reason: "Off" };
@@ -98,8 +90,6 @@ export function triggerReadiness(deployment: NodeView, t: TriggerView): Readines
   if (task.enabled === false) return { ok: false, reason: "Task is disabled" };
   const b = agentOf(deployment, task.agentId);
   if (!b) return { ok: false, reason: "Agent is missing" };
-  /* whether the agent can run is the bridge's readiness decision, not a
-     guess from the documents here */
   const readiness = agentReadiness(deployment, b.agentId);
   if (!readiness.ready)
     return { ok: false, reason: `${b.displayName}: ${readiness.reason}` };
@@ -113,7 +103,6 @@ export function triggerReadiness(deployment: NodeView, t: TriggerView): Readines
   return { ok: true, note: null };
 }
 
-/* the sentence's second half: what runs, and with whom */
 export function actionInWords(deployment: NodeView, t: TriggerView): string {
   const task = deployment.tasks.find((x) => x.taskId === t.config.task_id);
   if (!task) return "run a missing task";
@@ -121,7 +110,6 @@ export function actionInWords(deployment: NodeView, t: TriggerView): string {
   return `run ${task.name ?? task.taskId}${b ? ` with ${b.displayName}` : ""}`;
 }
 
-/* a profile by name, with its model beside it so the field reads as a model picker */
 export function profileLabel(deployment: NodeView, profileId: string) {
   const p = deployment.inferenceProfiles.find((x) => x.profile_id === profileId);
   if (!p) return profileId;
@@ -129,7 +117,6 @@ export function profileLabel(deployment: NodeView, profileId: string) {
   return name.includes(p.model_name) ? name : `${name} · ${p.model_name}`;
 }
 
-/* what a Tools document lets an agent do, in one line: "files rw · bash on · no network" */
 export function toolsInWords(tools: Tools | null | undefined): string {
   if (!tools) return "no tools";
   const files = tools.host?.files?.mode;

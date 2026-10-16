@@ -23,12 +23,6 @@ use crate::support::{
 const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);
 
-/// Seed an already-committed canonical terminal observation for GoalSource.
-///
-/// This fixture deliberately bypasses provider publication and therefore
-/// proves neither acceptance nor transaction/lease behavior; those guarantees
-/// belong to owned-loop tests. It supplies a physical generation explicitly so
-/// canonical output never relies on an invented fallback during observation.
 async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, content: &str) {
     use gents::defra_node::{ExecuteRetryPolicy, QueryRequest};
     use gents::session::canonical_rows::{
@@ -231,8 +225,6 @@ fn snapshot(local_did: &str) -> Arc<ActiveRuntimeSnapshot> {
     })
 }
 
-/// Publish the runtime-authored readiness row GoalSource consumes, with the
-/// router aligned on `generation`.
 async fn publish_node_readiness(
     db: &TestDb,
     process_state: gents_protocol::row::NodeReadinessProcessState,
@@ -1427,7 +1419,6 @@ async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStat
         claimed.last_continued_from_request_id
     );
     assert_eq!(current.last_failure, claimed.last_failure);
-    // A current observation must still authorize the legitimate transition.
     assert!(
         update_goal_fields_if_status(&db.node, &current, GoalStatus::Active, &fields,)
             .await
@@ -1899,8 +1890,6 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         )
         .await;
         set_request_lifecycle_state(db.node.as_ref(), &parent_doc, terminal).await;
-        // The accepted spawn has real provider usage before the failed call
-        // below. Retain that usage instead of assuming an empty call history.
         let prior_usage = session_token_usage(&db.node, db.node_identity.did(), SESSION)
             .await
             .unwrap();
@@ -1938,9 +1927,8 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         .await
         .unwrap();
 
-        // Order the two writers: the Goal owner publishes its wrapup into the
-        // idle session first, and only then does the background process end
-        // and publish its completion wake.
+        // Ordering constraint: the Goal publishes its wrapup before the
+        // background process publishes its completion wake.
         for _ in 0..200 {
             if goal_children(&db).await.len() == 1
                 && runtime.backend.observed_requests(objective) > 0
@@ -1960,8 +1948,6 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             "the wrapup reached its held provider response"
         );
         std::fs::write(&release_path, b"release").unwrap();
-        // Delivery is marked before the worker finishes its side effects. Wait
-        // for that exact worker to release ownership before redriving them.
         let completion = tokio::time::timeout(
             Duration::from_secs(5),
             background_executions.wait_for_completion(&process_tool_call_id),
@@ -1993,8 +1979,6 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         ).await;
         assert!(!observed.has_errors(), "{:?}", observed.errors);
         let data = observed.data.unwrap();
-        // A Goal never suppresses a background completion: the wrapup and the
-        // completion's coalesced wake are both published.
         assert_eq!(
             data["AgentRequest"].as_array().unwrap().len(),
             3,
@@ -2021,15 +2005,11 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             1,
             "besides the parent and the Goal wrapup, only the completion wake exists: {requests:?}"
         );
-        // The Goal owner continues the session's latest request, which at
-        // wrapup time is the failed parent: the completion wake was written
-        // only after the wrapup.
         let wrapup = goal_requests[0];
         assert_eq!(
             wrapup["caused_by_parent_request_id"], parent,
             "the wrapup must continue the session's latest request: {requests:?}"
         );
-        // Goal continuations are themselves scheduled work, like the wake.
         assert_eq!(goal_requests[0]["execution_origin"], "scheduled");
         let messages = data["AgentMessage"].as_array().unwrap();
         let mut completions = Vec::new();
@@ -2048,7 +2028,6 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             }
         }
         assert_eq!(completions.len(), 1);
-        // The completion is published as the input of its wake.
         assert_eq!(completions[0].0["request_doc_id"], wakes[0]["_docID"]);
         let background_rows = data["AgentToolCall"]
             .as_array()
@@ -2108,8 +2087,6 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             "the Goal child must be able to load the parent's durable background input"
         );
 
-        // A restart while this wrapup is pending must not publish another child
-        // or charge an ordinary infrastructure retry for the failed parent.
         let (mut restarted, _restart_tx) = self::source(&db).await;
         let restarted_fire =
             tokio::time::timeout(Duration::from_millis(200), restarted.next_fire()).await;
@@ -2226,8 +2203,6 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
         .expect("load goal")
         .expect("goal exists");
     assert_eq!(goal.parsed_status(), Some(GoalStatus::BudgetLimited));
-    // Charged total: prompt_tokens (100, cached input included by design) +
-    // completion_tokens (5) == 105, matching the request ledger's formula.
     assert_eq!(goal.tokens_used, Some(105));
     assert_eq!(goal.wrapup_requested, Some(true));
     assert_eq!(goal.wrapup_completed, Some(true));
@@ -2327,9 +2302,6 @@ async fn session_token_usage_charges_cached_input_as_part_of_the_total() {
     let tokens = session_token_usage(&db.node, db.node_identity.did(), SESSION)
         .await
         .expect("session token usage");
-    // Charged total is prompt_tokens (1000, cached input included) +
-    // completion_tokens (50) == 1050, not the old "fresh input" formula
-    // ((1000 - 800) + 50 == 250).
     assert_eq!(tokens, 1050);
 }
 
@@ -2522,7 +2494,6 @@ async fn a_later_limited_call_wins_over_an_earlier_retry() {
     );
 }
 
-/// An active Goal whose request failed on a limit whose reset has passed.
 async fn seed_a_passed_reset(db: &TestDb, opted_in: bool) {
     let did = db.node_identity.did();
     crate::support::fixtures::bind_agent_backend(
@@ -2603,7 +2574,6 @@ async fn seed_a_passed_reset(db: &TestDb, opted_in: bool) {
     }
 }
 
-/// The Goal's status and its continuation count.
 async fn goal_and_children(db: &TestDb) -> (Option<GoalStatus>, usize) {
     let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
         .await
@@ -2623,7 +2593,6 @@ async fn goal_and_children(db: &TestDb) -> (Option<GoalStatus>, usize) {
     (goal.parsed_status(), children)
 }
 
-/// One rescan pass over a Goal stopped by a limit whose reset has passed.
 async fn goal_after_a_passed_reset(name: &str, opted_in: bool) -> (Option<GoalStatus>, usize) {
     let db = test_db(name).await;
     seed_a_passed_reset(&db, opted_in).await;
@@ -2655,7 +2624,6 @@ async fn a_database_update_leaves_a_passed_reset_to_the_rescan_tick() {
         CancellationToken::new(),
     )
     .with_rescan_interval(Duration::from_secs(3600));
-    // The first tick stops the Goal on its limit; the next is an hour away.
     let pass = Duration::from_millis(300);
     assert!(tokio::time::timeout(pass, source.next_fire())
         .await
@@ -2988,8 +2956,6 @@ async fn stale_usage_refresh_preserves_completed_goal_time_accounting() {
     )
     .await
     .unwrap();
-    // Pin a distinguishable completed accounting value without elapsed-clock
-    // assertions. The stale snapshot still carries seven active seconds.
     seed_goal_fields(
         db.node.as_ref(),
         &stale,
@@ -3460,8 +3426,6 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
     let goal_before = set_goal(&db.node, did, SESSION, None, Some(GoalStatus::Paused), None)
         .await
         .unwrap();
-    // Immutable content cannot be updated in place. Model hostile persisted
-    // input by replacing the fixture row while retaining its original signature.
     let original = db.node.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
             request_id node_did requester_did admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind agent_id session_id retry_parent_request retry_parent_request_doc_id retry_root_request retry_key content max_total_tokens input execution_origin caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id created_at retry_count max_retries valid_until request_hop caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash lifecycle_state
@@ -3532,9 +3496,6 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
     ] {
         let db = test_db(&format!("operator-resume-unfinished-{label}")).await;
         let did = db.node_identity.did();
-        // Both signed fixtures share created_at; the canonical secondary
-        // ordering makes a-older precede z-parent. The latest-parent guard
-        // therefore cannot hide a missing whole-session terminal check.
         let sibling = seed_operator_resume_parent(&db, "a-older").await;
         seed_operator_resume_parent(&db, "z-parent").await;
         let state = state
@@ -3638,8 +3599,6 @@ async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
     );
 }
 
-/// Fixture-only mutation for constructing boundary states. Production writes
-/// go through the guarded Goal owner; tests do not require an unfenced API.
 async fn seed_goal_fields(
     node: &defra_node::EmbeddedNode,
     goal: &gents::goal::GoalDocument,
@@ -3665,8 +3624,6 @@ async fn seed_same_second_canonical_goal_child(
 ) -> (String, String) {
     use sha2::{Digest, Sha256};
     let did = db.node_identity.did();
-    // The generic completed-row fixture does not sign admission. This test
-    // exercises authenticated ancestry, so create a real signed root first.
     let mut parent = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         parent_id,
@@ -3871,7 +3828,6 @@ async fn canonical_goal_json(db: &TestDb) -> serde_json::Value {
     .unwrap()
 }
 
-/// Routing's pre-claim rejection: terminal without an execution generation.
 async fn reject_before_claim(db: &TestDb, doc_id: &str, reason: &str) {
     let doc_id = gents::graphql::escape_graphql_string(doc_id);
     let reason = gents::graphql::escape_graphql_string(reason);
@@ -4024,7 +3980,6 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
     .expect("set goal");
     let (mut source, _tx) = source(&db).await;
 
-    // More consecutive races than the infrastructure retry budget allows.
     for round in 1..=(gents::goal::MAX_INFRASTRUCTURE_RETRIES as usize + 1) {
         tokio::time::timeout(Duration::from_secs(2), source.next_fire())
             .await
@@ -4078,8 +4033,6 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
         publish_reconcile_phase(&db, "idle").await;
     }
 
-    // Readiness that still says Ready from before a rejection (lagging or
-    // failing publication) must not re-issue: only a later write can.
     tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("goal source timed out after the final race")

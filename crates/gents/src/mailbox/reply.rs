@@ -9,7 +9,6 @@ pub(crate) async fn claim_reply_in_txn(
     request: &AgentRequest,
     now: &str,
 ) -> Result<()> {
-    // An event observing a mailbox row is not the user's reply to that row.
     if request.execution_origin.as_deref() != Some("interactive") {
         return Ok(());
     }
@@ -24,7 +23,6 @@ pub(crate) async fn claim_reply_in_txn(
     let response = txn.execute_local_response(&query).await?;
     let items = rows::<MailboxItem>(&response, super::MAILBOX_COLLECTION)?;
     let Some(item) = items.first() else {
-        // Event and control requests also carry source documents.
         return Ok(());
     };
     if item.parsed_action() != Some(MailboxAction::StartRequest) {

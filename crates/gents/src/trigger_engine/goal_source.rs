@@ -1,10 +1,3 @@
-//! Durable-goal trigger source.
-//!
-//! The source wakes on DefraDB updates and periodically rescans. It only
-//! continues the canonical goal for a session after the whole session is idle,
-//! and it claims a durable parent-request latch before creating a deterministic
-//! same-session child request.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -50,9 +43,6 @@ const GOAL_OBSERVED_COLLECTIONS: &[&str] = &[
     "NodeRuntime",
 ];
 
-/// Build a complete ID-to-name map so the source only suppresses changes whose
-/// collection is known to be unrelated to Goal reconciliation. An incomplete
-/// schema inventory disables filtering; unknown IDs always wake a durable scan.
 fn goal_collection_names_by_id(node: &EmbeddedNode) -> Option<HashMap<String, String>> {
     let mut names_by_id = HashMap::new();
     for name in node.list_collections().ok()? {
@@ -82,8 +72,6 @@ fn goal_document_batch_requires_rescan(
     })
 }
 
-/// Request/claim evidence selected before a usage refresh belongs to this
-/// observed Goal epoch. Reloading must not relabel it with a resumed epoch.
 fn continuation_evidence_is_current(observed: &GoalDocument, current: &GoalDocument) -> bool {
     observed.doc_id == current.doc_id
         && observed.status == current.status
@@ -150,7 +138,6 @@ impl GoalSource {
         }
     }
 
-    /// A reset is a clock event, so only the rescan `tick` resumes at one.
     async fn rescan(&mut self, tick: bool) -> Option<FireIntent> {
         let node_did = self.snapshot_rx.borrow().local_did.clone();
         if tick {
@@ -177,8 +164,6 @@ impl GoalSource {
         None
     }
 
-    /// Opted-in usage-limited Goals resume through the operator resume
-    /// transaction once their reported reset has passed.
     async fn resume_at_reported_resets(&self, node_did: &str) {
         let goals = match self
             .load_goals(
@@ -352,10 +337,6 @@ impl GoalSource {
                     return Ok(None);
                 }
             }
-            // A crash may leave the durable claim without its child. Decision
-            // side effects (notably retry charging) were committed before the
-            // claim and must not be replayed. Reconstruct the already-claimed
-            // prompt solely from the persisted result and materialize it.
             let retries = goal.infrastructure_retry_count.unwrap_or_default().max(0);
             let retry_prefix = (retries > 0
                 && goal.last_failure.as_deref() == Some(terminal_name.as_str()))
@@ -452,10 +433,6 @@ impl GoalSource {
                 wrapup_requested: goal.wrapup_requested.unwrap_or(false),
                 wrapup_completed: goal.wrapup_completed.unwrap_or(false),
             };
-        // The usage refresh below writes the Goal, and every write wakes this
-        // source through its Update subscription, so waiting must return before
-        // it. Persisted usage never exceeds refreshed usage, and a reached
-        // budget only turns a publishing decision into another publishing one.
         let persisted_budget_reached = goal
             .token_budget
             .is_some_and(|budget| goal.tokens_used.unwrap_or_default() >= budget);
@@ -474,9 +451,6 @@ impl GoalSource {
             .await?
             .context("refreshed Goal row disappeared")?;
         if !continuation_evidence_is_current(&goal, &refreshed_goal) {
-            // In particular, an operator may have resumed the Goal and
-            // published a child while usage was refreshing. Re-select the
-            // idle request and continuation phase on the next reconciliation.
             return Ok(None);
         }
         goal = refreshed_goal;
@@ -631,8 +605,6 @@ impl GoalSource {
             GoalContinuationAction::Materialize,
         );
 
-        // Carry the exact tuple installed by our successful claim. Reloading
-        // here could silently authorize a newer owner's claim after an await.
         goal.continuation_sequence = Some(
             goal.continuation_sequence()
                 .checked_add(1)
@@ -872,9 +844,6 @@ impl GoalSource {
         }))
     }
 
-    /// Settled unavailability ends automatic continuation through the
-    /// existing Goal transitions: an active Goal pauses and a pending budget
-    /// wrap-up is abandoned. Operator resume restarts it after the fix.
     async fn stop_for_unavailable_agent(
         &self,
         goal: &GoalDocument,
@@ -920,8 +889,6 @@ impl GoalSource {
         .await
     }
 
-    /// Records why an unclaimed continuation waits. Every Goal write wakes
-    /// this source, so an unchanged reason must not be rewritten.
     async fn record_readiness_wait(
         &self,
         goal: &GoalDocument,
@@ -1141,8 +1108,6 @@ mod tests {
         observed.continuation_sequence = Some(4);
         observed.last_continued_from_request_id = Some("earlier-parent".to_owned());
 
-        // The same active status after pause/resume is an ABA: the old
-        // interrupted request must not be evaluated using the new sequence.
         let mut resumed = observed.clone();
         resumed.continuation_sequence = Some(5);
         resumed.last_continued_from_request_id = Some("interrupted-parent".to_owned());
@@ -1163,7 +1128,6 @@ mod tests {
         completed.status = "complete".to_owned();
         assert!(!continuation_evidence_is_current(&observed, &completed));
 
-        // Ordinary accounting refresh is not a new continuation decision.
         let mut accounting_only = observed.clone();
         accounting_only.tokens_used = Some(300);
         accounting_only.active_time_seconds = Some(10);
@@ -1199,10 +1163,6 @@ mod tests {
         assert!(prompt.contains("Do not expect another automatic continuation"));
     }
 
-    /// Canonical wrapup detection: the wrapup fact is the typed
-    /// `input.goal_continuation` of the goal-kind request, matched against
-    /// its declared goal lineage. Signature admission is a separate owner. Ordinary schedule/event/manual requests
-    /// and goal-kind requests outside the exact goal lineage are never wrapups.
     #[test]
     fn request_is_goal_wrapup_reads_typed_input_facts_only() {
         fn row(
@@ -1229,17 +1189,14 @@ mod tests {
             }
         }
 
-        // Canonical continuation with wrapup fact under the exact goal lineage.
         assert!(request_is_goal_wrapup(
             &row(Some("goal"), Some("goal-1"), Some(wrapup_input(true))),
             "goal-1"
         ));
-        // Explicit false is preserved: not a wrapup.
         assert!(!request_is_goal_wrapup(
             &row(Some("goal"), Some("goal-1"), Some(wrapup_input(false))),
             "goal-1"
         ));
-        // No goal_continuation facts: not a wrapup.
         assert!(!request_is_goal_wrapup(
             &row(Some("goal"), Some("goal-1"), Some(RequestInput::default())),
             "goal-1"
@@ -1248,12 +1205,10 @@ mod tests {
             &row(Some("goal"), Some("goal-1"), None),
             "goal-1"
         ));
-        // Different goal id: presence grants nothing outside the exact lineage.
         assert!(!request_is_goal_wrapup(
             &row(Some("goal"), Some("goal-1"), Some(wrapup_input(true))),
             "goal-2"
         ));
-        // Other trigger kinds are never goal wrapups.
         assert!(!request_is_goal_wrapup(
             &row(Some("schedule"), Some("goal-1"), Some(wrapup_input(true))),
             "goal-1"

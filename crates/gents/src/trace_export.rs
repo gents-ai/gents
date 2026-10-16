@@ -148,8 +148,6 @@ pub fn analyze_tool_call_with_persisted_outcome(
     });
     let completed = lifecycle_state == ToolCallState::Completed;
 
-    // Result parsing contributes trace shape only. The durable lifecycle owns
-    // the outcome and model-facing text can never override it.
     analysis.tool_failure_class = failure_class;
     analysis.tool_result_ok = completed && analysis.tool_failure_class.is_none();
     analysis.tool_error = failure_class.map(|failure_class| TraceToolError {
@@ -187,14 +185,9 @@ pub fn raw_message_json(message: &Message) -> Result<Value> {
     serde_json::to_value(message).context("serializing canonical trace message")
 }
 
-/// Canonical transcript projection for the export path.
-///
-/// Loads native messages through the public session history owner — exact
-/// authorized references and strict reconstruction are handled there — and
-/// renders each through `present_message`, preserving the exported sequence
-/// order and the canonical session scope (node DID, requester DID). Callers
-/// passing a physical request identity exclude its in-flight input row, which
-/// is owned by the request itself, not the durable transcript.
+/// Loads native messages through the public session history owner and renders
+/// each through `present_message`. Callers passing a physical request identity
+/// exclude its in-flight input row, which is owned by the request itself.
 #[allow(clippy::too_many_arguments)]
 pub async fn load_trace_transcript(
     node: &EmbeddedNode,
@@ -218,7 +211,6 @@ pub async fn load_trace_transcript(
     Ok(rows.into_iter().map(present_trace_message).collect())
 }
 
-/// One exported transcript row: native message plus its rendered projection.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PresentedTraceMessage {
     pub sequence: u32,
@@ -244,8 +236,6 @@ pub fn extract_raw_tool_call_json(
         return None;
     };
 
-    // The caller already selected the exact accepted header. A tool name is
-    // not identity: a turn can contain multiple calls to the same tool.
     let mut matches = content.iter().filter_map(|item| match item {
         AssistantContent::ToolCall(call)
             if call.id == persisted_tool_call_id && call.function.name == persisted_tool_name =>

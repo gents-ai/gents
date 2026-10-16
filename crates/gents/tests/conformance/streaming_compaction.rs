@@ -115,10 +115,6 @@ fn drive_compaction_reducer_case(case: &lean_vocab_test::LeanCompactionReducerCa
     );
 
     if case.reducer == "summarize" {
-        // The public APIs expose the structural stable-prefix gate and
-        // bounded splitter, not the complete summary/checkpoint operation
-        // represented by Lean. Test those
-        // owners without manufacturing a reduced tail and calling it execution.
         check_summarize_gate_and_split(case, input);
         return;
     }
@@ -142,10 +138,6 @@ fn drive_compaction_reducer_case(case: &lean_vocab_test::LeanCompactionReducerCa
         "{}: preserves_pairs",
         case.name
     );
-    // Lean's `StrictlyIncreasingMessages` survives a reducer that *drops* rows,
-    // so the runtime analogue is "the retained shapes are a subsequence of the
-    // input shapes" — not "the shapes are unchanged", which only held while the
-    // modelled reducer was `id`.
     assert_eq!(
         is_subsequence(
             &abstract_prompt_view(&reduced),
@@ -156,8 +148,6 @@ fn drive_compaction_reducer_case(case: &lean_vocab_test::LeanCompactionReducerCa
         case.name
     );
 
-    // Lean's fixture uses a nonzero result payload: stripping must be visible
-    // in identity checks, even when the row and tool-call shapes are unchanged.
     assert_eq!(
         reduced == input,
         case.reducer_is_identity,
@@ -200,17 +190,10 @@ fn apply_compaction_reducer(
     }
 }
 
-/// Checks the production gate and splitter. This does not execute a summary
-/// provider call or validate full reducer identity/idempotence/checkpoint state.
 fn check_summarize_gate_and_split(
     case: &lean_vocab_test::LeanCompactionReducerCase,
     input: Vec<Message>,
 ) {
-    // Bind the modelled `safeToReduce` to its production structural owners.
-    // The publication/loading conjunct (`rowPublished`) has no in-process
-    // predicate on `Message` values: it lives in the durable header-loading
-    // path. This summary fixture does not exercise that loader or establish
-    // publication readiness; it pins the structural components only.
     let production_gate_open = gents::compaction::safe_to_reduce(&input);
     assert_eq!(
         production_gate_open,
@@ -219,9 +202,6 @@ fn check_summarize_gate_and_split(
          turn-boundary and sanitizer-fixpoint gate components",
         case.name
     );
-    // The modelled rows carry no content order. The same rows persisted in a
-    // grouped wire's native emission order (reasoning before text) are the
-    // same modelled prefix, and the gate must decide them identically.
     let native_order = with_leading_reasoning(&input);
     assert_eq!(
         gents::compaction::history::normalize_assistant_content_order(
@@ -255,15 +235,6 @@ fn check_summarize_gate_and_split(
         "{}: production pair_safe_boundary must match Compaction.pairSafeBoundary",
         case.name
     );
-    // `gateOpen` is the reducer's own `decGate`: a nonempty pair-safe prefix.
-    // `safeToReduce` is a separate prerequisite, checked above. In particular,
-    // an unloaded publication can have a nonempty prefix without being safe.
-
-    // Checking `pair_safe_boundary` alone would not notice production dropping
-    // the call to it from `split_messages_for_summary`. Sweep every budget
-    // through the live splitter and require the retained tail to stay
-    // pair-closed — the property `summarize_preserves_pairs` states, fenced
-    // against the real code path rather than a helper.
     if pair_closed(&input) {
         for budget in 0usize.. {
             let (old, recent) = gents::compaction::split_for_summary(
@@ -285,15 +256,6 @@ fn check_summarize_gate_and_split(
         }
     }
 
-    // The model supplies a split index, not a token-retention budget. In
-    // particular, `summarize_oversized_complete_turn` supplies index 4; it does
-    // not imply that a native budget of zero selects that index. Native budget
-    // selection is exercised by compaction::tests::
-    // split_summarizes_an_oversized_complete_tool_turn. Do not manufacture a
-    // budget from the witness name and label it a generated input.
-
-    // Keep the reducer-specific gate distinct from publication readiness;
-    // combining them here would misread IsValidReducer's two prerequisites.
     assert_eq!(
         case.gate_open
             .expect("summarize cases carry a modelled gate"),
@@ -340,8 +302,6 @@ pub(super) fn compaction_messages_for_count(count: usize) -> Vec<Message> {
     }
 }
 
-/// Every assistant row with text gains a leading reasoning block, as a grouped
-/// wire persists a turn that thought before answering.
 fn with_leading_reasoning(messages: &[Message]) -> Vec<Message> {
     messages
         .iter()

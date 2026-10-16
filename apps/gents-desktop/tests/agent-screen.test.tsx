@@ -33,7 +33,6 @@ describe("switching nodes on the configuration screen", () => {
 });
 
 describe("moving within the configuration screen", () => {
-  /* where each scroll to the top landed */
   function scrolls() {
     const at: Element[] = [];
     const original = HTMLElement.prototype.scrollTo;
@@ -47,7 +46,6 @@ describe("moving within the configuration screen", () => {
       <AgentScreen nodeDid={nodeDid} section={section} />
     </TooltipProvider>
   );
-  /* the scroll area holding the section, not the sidebar beside it */
   const content = () =>
     screen
       .getByRole("combobox", { name: "Section" })

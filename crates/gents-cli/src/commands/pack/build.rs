@@ -1,5 +1,3 @@
-//! CLI adapters for the shared pack build owner.
-
 use std::path::Path;
 
 use anyhow::Result;
@@ -67,9 +65,6 @@ mod tests {
     use super::*;
     use gents::pack_archive::PackArchive;
 
-    /// Writes a minimal plugin-less pack (mirrors any of the 11 first-party
-    /// packs' shape) so tests exercise the real manifest/asset contract
-    /// instead of a hand-rolled fixture that could drift from it.
     fn write_plain_pack(root: &Path, name: &str) {
         std::fs::create_dir_all(root).unwrap();
         std::fs::write(root.join("README.md"), b"# a plain pack").unwrap();
@@ -172,7 +167,6 @@ mod tests {
                 "input_schema": {"type": "object", "properties": {}},
             }),
         );
-        // The artifact is declared but never written to disk.
 
         let error = build_pack(&root, None).unwrap_err();
         let message = format!("{error:#}");
@@ -205,8 +199,6 @@ mod tests {
         assert!(message.contains("is not a directory"), "{message}");
     }
 
-    /// A second build of unchanged source reuses the artifact; a source edit
-    /// rebuilds it.
     #[test]
     fn an_unchanged_plugin_is_not_recompiled() {
         let root = tempfile::tempdir().unwrap();
@@ -281,12 +273,6 @@ mod tests {
         assert!(message.contains("has no source/main.rs"), "{message}");
     }
 
-    /// The pack manifest's own `PackPlugin::validate` (exercised end to
-    /// end here through `build_pack`, which packs the manifest once every
-    /// declared plugin's artifact is on disk) is what actually rejects an
-    /// unsupported language; `crate::pack`'s own unit tests check that
-    /// rule directly. This proves `gents pack build` surfaces the same
-    /// refusal, naming the plugin and the language it declared.
     #[test]
     fn a_plugin_with_an_unknown_language_is_refused_naming_it() {
         let dir = tempfile::tempdir().unwrap();
@@ -302,9 +288,6 @@ mod tests {
                 "input_schema": {"type": "object", "properties": {}},
             }),
         );
-        // No source: the artifact only needs to exist on disk for
-        // `build_plugin` to pass, so the refusal below is purely about the
-        // language.
         std::fs::create_dir_all(root.join("plugins")).unwrap();
         std::fs::write(root.join("plugins/format_check.afb"), b"stub").unwrap();
 
@@ -325,8 +308,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_plain_pack(&dir.path().join("alpha"), "alpha");
         write_plain_pack(&dir.path().join("beta"), "beta");
-        // A non-pack file beside the pack directories must not be treated
-        // as one (mirrors packs/catalog.json sitting next to real packs).
         std::fs::write(dir.path().join("catalog.json"), b"[]").unwrap();
 
         let reports = build_all(dir.path()).unwrap();
@@ -338,14 +319,6 @@ mod tests {
         }
     }
 
-    /// Compiles a real Rust Afterburner package to `wasm32-wasip1` through
-    /// [`crate::commands::afterburner_build`] and packs it, exercising the
-    /// actual `pkg::LocalPackage::load` + native-toolchain compile path end
-    /// to end rather than a stub. Every language `gents pack build` can
-    /// compile a plugin from is exercised directly, once, in
-    /// `afterburner_build`'s own tests; this proves the pack-manifest
-    /// integration around that shared compiler, not the compiler itself
-    /// again per language.
     #[test]
     fn a_plugin_with_a_rust_source_is_compiled_through_afterburner_and_packed() {
         let dir = tempfile::tempdir().unwrap();

@@ -1,11 +1,9 @@
-//! Shared by build-time embedding and runtime pack resolution.
 use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
 
-/// Opens one pack file only when its resolved target remains under the pack
-/// directory. Pack paths are manifest input; lexical admission alone does
-/// not keep a symlinked file inside that directory.
+/// Resolve and open only targets under the pack root; lexical path checks do not constrain
+/// symlink targets.
 pub(crate) fn open_pack_asset(root: &Path, path: &str) -> Result<std::fs::File> {
     ensure!(
         is_distributable_asset(path) && has_canonical_asset_spelling(path),
@@ -43,9 +41,6 @@ pub(crate) fn is_distributable_asset(path: &str) -> bool {
         })
 }
 
-/// Canonical spelling for a pack directory or a per-document directory handle.
-/// Keep this next to asset admission so build-time embedding and runtime
-/// resolution cannot disagree about what may be distributed.
 pub(crate) fn is_snake_case_name(name: &str) -> bool {
     let mut bytes = name.bytes();
     bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())

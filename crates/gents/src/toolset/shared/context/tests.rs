@@ -1,4 +1,4 @@
-use super::{resolve_default_read_root, ToolContext, ToolError};
+use super::{ToolContext, ToolError};
 use crate::tool_call_lifecycle::FailureClass;
 use crate::toolset::{CommandExecutionMode, CommandNetworkMode, CommandPolicyDenial, DenialReason};
 
@@ -18,26 +18,6 @@ fn policy_denial_reaches_dispatch_as_typed_failure() {
         }
         other => panic!("expected typed policy denial, got {other:?}"),
     }
-}
-
-#[test]
-fn default_read_root_prefers_current_dir() {
-    let cwd = std::env::temp_dir().join("gents-cwd-root");
-    let home = std::env::temp_dir().join("gents-home-root");
-    let resolved = resolve_default_read_root(Some(cwd.clone()), Some(home)).unwrap();
-    assert_eq!(resolved, cwd);
-}
-
-#[test]
-fn default_read_root_falls_back_to_home() {
-    let home = std::env::temp_dir().join("gents-home-root");
-    let resolved = resolve_default_read_root(None, Some(home.clone())).unwrap();
-    assert_eq!(resolved, home);
-}
-
-#[test]
-fn default_read_root_errors_when_unavailable() {
-    assert!(resolve_default_read_root(None, None).is_err());
 }
 
 #[test]

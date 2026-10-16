@@ -89,7 +89,6 @@ pub use submission::prepare_user_message_input;
 
 #[derive(Debug)]
 pub(crate) struct EnqueuedBackgroundCompletionInput {
-    /// None is a durable notification without a background wake request.
     pub(crate) request: Option<EnqueuedAgentRequest>,
     pub(crate) message_sequence: u32,
     pub(crate) created_request: bool,

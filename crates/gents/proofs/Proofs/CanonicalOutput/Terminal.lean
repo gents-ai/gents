@@ -23,8 +23,8 @@ def terminalPublicationEligible : MessagePublication → Bool
 /-- The caller has observed terminal request lifecycle. Header dependency
 reconstruction follows this selection; success here is not complete hydration.
 Agent/requester authorization is supplied by the existing ACP owner, not inferred
-    from these Nat labels. Physical request and session membership are checked
-    here, along with assistant role and request publication eligibility. -/
+from these Nat labels. Physical request and session membership, assistant role
+and request publication eligibility are checked here. -/
 def resolveTerminal (headers : List Header) (denied : List DocId)
     (request : DocId) (session : SessionId) :
     Option TerminalSelection → Except TerminalError (Option Header)

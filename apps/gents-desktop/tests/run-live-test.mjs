@@ -24,8 +24,7 @@ function takeFlag(argv, name) {
 const DEFAULT_LIVE_INFERENCE_URL = "http://100.73.235.38:8000/v1";
 const DEFAULT_LIVE_MODEL_NAME = "GLM-5.2";
 
-// Live backends require an explicit provider kind; it is never inferred from
-// the inference URL or model name. Exported for argument-validation tests.
+// The live provider kind is never inferred from the inference URL or model name.
 export function resolveLiveProvider(providerFlag, env) {
   const resolved = providerFlag ?? env?.GENTS_TAURI_LIVE_PROVIDER;
   if (!resolved) {
@@ -54,8 +53,7 @@ if (isDirectRun) {
   const agentTargetApiKeyEnvVar = takeFlag(argv, "--agent-target-api-key-env-var");
   const suite = takeFlag(argv, "--suite");
 
-  // Fail fast before launching vitest; never guess a provider from the URL
-  // or model name.
+  // Fail fast before launching vitest.
   resolveLiveProvider(provider, process.env);
 
   const env = {

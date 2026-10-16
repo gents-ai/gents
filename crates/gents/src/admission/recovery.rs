@@ -187,9 +187,6 @@ async fn recover_inference_call_row(
         }}"#,
     );
 
-    // Recovery must consume the observed live state. InferenceCall's terminal
-    // states have no outgoing transitions; a delayed sweep cannot overwrite
-    // a completion or a later queued-to-running transition.
     let response = crate::config_client::ConfigAccess::write_local_response(
         node,
         "recover_inference_call",

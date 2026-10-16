@@ -1,5 +1,3 @@
-//! Real signed-row selector consumer; synthetic physical IDs deliberately do
-//! not claim database storage uniqueness, transaction, or replication coverage.
 use super::*;
 use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lifecycle::queue::prepare_goal_continuation;
@@ -154,8 +152,6 @@ impl Fixture<'_> {
                     );
                     signed_row(&base, model.parent_doc.unwrap())
                 };
-                // Model fields name the claimed physical pair, independently of
-                // whether it matches any actual parent in the input snapshot.
                 parent.doc_id = model.parent_doc.map(|doc| format!("physical-{doc}"));
                 parent.node_did = Some(self.identity(model.owner).did().into());
                 parent.session_id = Some(format!("session-{}", model.session));
@@ -192,8 +188,6 @@ impl Fixture<'_> {
                 base
             };
             if self.case.name == "legacy_source_omission_keeps_physical_edge" {
-                // Old automatic continuations were validly signed without this
-                // inherited field; change it before signing the fixture DTO.
                 create.caused_by_source_doc_id = if model.goal.is_none() {
                     Some("original-event-source".into())
                 } else {

@@ -92,7 +92,6 @@ namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
-/-- The pairing route rules the native scope-template owner must resolve. -/
 def scopeRulesJson (rules : List ScopeTemplates.CollectionRule) : String :=
   jsonArray (rules.map fun rule =>
     "{\"collection\":" ++ jsonString rule.collection
@@ -282,6 +281,8 @@ def snapshotJson : String :=
       ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
     ++ "\"eval_outcome_cases\":"
       ++ Conformance.Eval.evalOutcomeCasesJson ++ ","
+    ++ "\"eval_document_capture_cases\":"
+      ++ Conformance.Eval.evalDocumentCaptureCasesJson ++ ","
     ++ "\"optimization_cases\":"
       ++ Conformance.Optimization.optimizationCasesJson ++ ","
     ++ "\"publish_if_cases\":"

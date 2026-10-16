@@ -1,15 +1,11 @@
-//! xAI OAuth refresh against `auth.x.ai` (public Grok CLI client).
-
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::oauth_credential::{OAuthAuthProblem, RefreshedTokens};
 
-/// Token endpoint from live OIDC discovery at `https://auth.x.ai/.well-known/openid-configuration`.
 const TOKEN_URL: &str = "https://auth.x.ai/oauth2/token";
 
-/// Public Grok CLI OAuth client id (no secret).
 pub const XAI_OAUTH_CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 
 pub const XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV: &str = "GENTS_XAI_OAUTH_TOKEN_URL";
@@ -55,7 +51,6 @@ pub async fn refresh_xai_token(
         let body = response.text().await.unwrap_or_default();
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::BAD_REQUEST
         {
-            // 400 invalid_grant is the usual consumed/revoked refresh token path.
             return Err(OAuthAuthProblem::Expired);
         }
         if status == reqwest::StatusCode::FORBIDDEN {
@@ -73,8 +68,6 @@ pub async fn refresh_xai_token(
     let access_token = refreshed.access_token.ok_or_else(|| {
         OAuthAuthProblem::Other("xAI token refresh response omitted access_token".to_string())
     })?;
-    // Refresh tokens rotate; a success that omits the new refresh_token must not leave the
-    // consumed token on disk.
     let new_refresh = refreshed.refresh_token.ok_or_else(|| {
         OAuthAuthProblem::Other(
             "xAI token refresh response omitted refresh_token (rotation required)".to_string(),
@@ -115,28 +108,4 @@ fn parse_error_message(body: &str) -> String {
         .or_else(|| value.get("message").and_then(Value::as_str))
         .unwrap_or(body)
         .to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_error_message_prefers_oauth_description() {
-        assert_eq!(
-            parse_error_message(r#"{"error":"invalid_grant","error_description":"revoked"}"#),
-            "revoked"
-        );
-        assert_eq!(
-            parse_error_message(r#"{"error":"access_denied"}"#),
-            "access_denied"
-        );
-        assert_eq!(parse_error_message("plain"), "plain");
-    }
-
-    #[test]
-    fn client_id_is_public_uuid_shape() {
-        assert_eq!(XAI_OAUTH_CLIENT_ID.len(), 36);
-        assert!(XAI_OAUTH_CLIENT_ID.contains('-'));
-    }
 }

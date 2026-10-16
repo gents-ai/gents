@@ -94,8 +94,6 @@ pub trait PeerAdmissionAuthority: Send + Sync {
 }
 
 impl EnrollmentAuthorityHandle {
-    /// Read the last complete projection. Pending and failed reads are
-    /// intentionally errors so pairing and hydration remain fail closed.
     pub fn current(&self) -> Result<Arc<EnrollmentProjection>> {
         match self.receiver.borrow().clone() {
             EnrollmentAuthorityState::Ready(projection) => Ok(projection),
@@ -108,8 +106,8 @@ impl EnrollmentAuthorityHandle {
         }
     }
 
-    /// Ask the single durable authority owner to reload the document set and
-    /// return the exact current authorization generation for one member.
+    /// Reload the document set and return the exact current authorization
+    /// generation for one member.
     pub async fn fresh_authorization(
         &self,
         member_did: &str,
@@ -129,10 +127,9 @@ impl EnrollmentAuthorityHandle {
             .context("enrollment authority owner dropped fresh authorization response")?
     }
 
-    /// Reload authority through the sole owner and resolve one transport peer
-    /// to its exact current generation. Transport reconciliation has the peer
-    /// identity before it has a trusted member DID, so this lookup must derive
-    /// the DID from the signed authority projection rather than a desired row.
+    /// Resolve one transport peer to its exact current generation; transport
+    /// reconciliation has the peer identity before a trusted member DID, so
+    /// the DID derives from the signed authority projection, not a desired row.
     pub async fn fresh_peer_authorization(
         &self,
         member_peer: &str,
@@ -150,8 +147,8 @@ impl EnrollmentAuthorityHandle {
             .context("enrollment authority owner dropped fresh peer authorization response")?
     }
 
-    /// Reload through the sole owner and resolve an exact current generation
-    /// for a signed request principal. Duplicate active identities fail closed.
+    /// Resolve an exact current generation for a signed request principal;
+    /// duplicate active identities fail closed.
     pub async fn fresh_member_authorization(
         &self,
         member_did: &str,
@@ -296,12 +293,8 @@ impl EnrollmentAuthorityOwner {
     }
 }
 
-/// Run the sole durable enrollment projection/effect loop.
-///
-/// Readers use [`EnrollmentAuthorityHandle`]; atomic mutations reuse the same
-/// authenticated projector inside their transaction. This loop publishes its
-/// immutable projection and owns
-/// `source="enrollment"` data-plane rows, and retries exact terminal delivery.
+/// Run the sole durable enrollment projection/effect loop. This loop publishes
+/// its immutable projection and owns `source="enrollment"` data-plane rows.
 pub async fn run_enrollment_reconciler(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
@@ -755,16 +748,14 @@ async fn reconcile_data_plane(
             );
             continue;
         }
-        // A durable revoke or superseding generation can commit after the
-        // sweep projection was loaded. Reload through the authority store at
-        // the write boundary and compare the complete signed generation; a
-        // time-only check cannot fence those transitions.
+        // A durable revoke or superseding generation can commit after the sweep
+        // projection was loaded; reload through the authority store at the
+        // write boundary and compare the complete signed generation.
         let fresh_projection = match store.load_projection().await {
             Ok(projection) => projection,
             Err(error) => {
-                // Authority read failure is fail closed. Remove every row this
-                // owner can identify so a stale materialization cannot keep
-                // granting route admission while the projection is unknown.
+                // Fail closed: remove every row this owner can identify so a
+                // stale materialization cannot keep granting route admission.
                 for stale_peer_id in enrollment_rows.keys() {
                     delete_enrollment_route(node, stale_peer_id).await?;
                 }

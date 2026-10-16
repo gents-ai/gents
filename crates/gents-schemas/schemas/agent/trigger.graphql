@@ -1,5 +1,3 @@
-# One task selection with exactly one typed schedule/event source. Runtime
-# observations are excluded by the canonical desired-configuration projection.
 type Trigger @branchable @index(fields: ["node_did", "trigger_id"], unique: true) {
     trigger_id: String
     node_did: String @index

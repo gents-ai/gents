@@ -1,5 +1,3 @@
-/* The session's context meter: how much of the window the next request
-   fills, and what compaction has done. */
 import { useRef } from "react";
 import { X } from "lucide-react";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
@@ -14,9 +12,6 @@ function formatTokens(value: number) {
   return `${amount >= 10 ? Math.round(amount) : amount.toFixed(1).replace(/\.0$/, "")}k`;
 }
 
-/* how full the context is, as a stroked ring: the track is the window, the
-   arc is what the conversation has used; past the compaction threshold the
-   arc takes the brand color, so the number beside it need not */
 function ContextRing({
   used,
   window,
@@ -26,7 +21,6 @@ function ContextRing({
   window: number;
   threshold: number;
 }) {
-  /* a 20px ring with a 7px radius: enough arc to read at a glance */
   const r = 7;
   const c = 2 * Math.PI * r;
   const share = Math.min(1, used / window);
@@ -68,14 +62,10 @@ export function SessionContext({
   compact = false,
 }: {
   context: DesktopSessionSnapshot["context"];
-  /* in the compact header: the ring alone, the numbers in its tooltip and popover */
   compact?: boolean;
 }) {
   const popover = useExclusivePopover();
   const used = Math.max(0, context.estimatedConversationTokens);
-  /* the configured window as the runtime resolves it, so an edit to the
-     profile shows at once; the last request's window is history. A window
-     the runtime rejects is reported, never shown as the one in use. */
   const windowError = context.contextWindowError ?? null;
   const window = Math.max(1, context.contextWindow);
   const threshold = Math.max(0, context.compactionThresholdTokens);
@@ -97,8 +87,6 @@ export function SessionContext({
       onOpenChange={popover.onOpenChange}
       onOpenChangeComplete={popover.onOpenChangeComplete}
     >
-      {/* the details open on hover as well as click where there is a pointer;
-          on touch a tap opens them. Leaving trigger and popup both closes. */}
       <PopoverTrigger
         render={
           compact ? (

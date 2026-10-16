@@ -25,8 +25,7 @@ fn explicit_client_route_keeps_requester_and_owner_across_remote_admin() {
             template: Some("client".to_string()),
             ..Default::default()
         },
-        // Desktop authenticates the remote-admin request as the phone. The
-        // owner must still come from durable intent, not this actor DID.
+        // Owner comes from durable intent, not the remote-admin actor DID.
         "did:key:phone",
     )
     .expect("explicit route parses")
@@ -167,11 +166,6 @@ fn data_plane_agent_target_caller_uses_signed_peer_for_addressed_requests() {
     .expect("data-plane coordinator desired")
     .expect("some data-plane layer");
 
-    // The full template → (collections, filters) shape is owned by
-    // `agent_target_caller_template_filters_only_addressed_requests` in
-    // `engine/tests/desired_state.rs`; here only the unique data-plane
-    // claim is re-proven: the coordinator survives the signed-endpoint
-    // merge with its addressed-request filter intact.
     assert_eq!(desired.replicator_collections, set(&["AgentRequest"]));
     assert_eq!(
         desired
@@ -207,11 +201,6 @@ fn data_plane_agent_target_host_scopes_return_projection_to_signed_requester() {
     .expect("data-plane host desired")
     .expect("some data-plane layer");
 
-    // The full template → (collections, filters) shape is owned by
-    // `agent_target_host_template_filters_return_projection_to_requester` in
-    // `engine/tests/desired_state.rs`; here only the unique data-plane
-    // claim is re-proven: the host projection survives the signed-endpoint
-    // merge with its requester-scoped filters intact.
     assert!(
         !desired.replicator_filter.is_empty(),
         "the host projection must keep requester-scoped filters through the signed-endpoint merge"
@@ -251,10 +240,9 @@ fn data_plane_desired_rejects_foreign_node_did_scope() {
     assert!(error.to_string().contains("foreign DID"));
 }
 
-/// #714 C1 regression: the `machine` template's session data-plane set must
-/// scope to the same requester DID `conversation` uses on the data plane,
-/// while `NodeDirectoryEntry` is restricted to this issuer's source-owned
-/// projection.
+/// #714 C1 regression: the `machine` template scopes session data-plane
+/// collections to the same requester DID as `conversation`, while
+/// `NodeDirectoryEntry` is restricted to the issuer's source-owned projection.
 #[test]
 fn data_plane_desired_machine_scopes_session_set_and_owned_directory() {
     let signed_endpoint = EnrollmentEndpointEntry {

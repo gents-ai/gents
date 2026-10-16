@@ -5,9 +5,7 @@ namespace TitleAdmission
 
 open CanonicalOutput.Execution
 
-/-- Native document/DID strings are opaque Nat labels in the execution model.
-The adapter must preserve distinct identities; a hash without collision checks
-does not establish this interface premise. -/
+/-- Adapter must preserve distinct identities; a bare hash without collision checks does not. -/
 structure Identities where
   encode : String → Nat
   injective : Function.Injective encode
@@ -15,9 +13,7 @@ structure Identities where
 theorem Identities.exact_equality (ids : Identities) (left right : String) :
     ids.encode left = ids.encode right ↔ left = right := ids.injective.eq_iff
 
-/-- Authoritative observation of the title's own physical row, not a requested
-document label. Native decoding establishes `physicalBindingCurrent` from that
-row's identity and immutable signed contents before constructing this evidence. -/
+/-- Authoritative observation of the title's own physical row, not a requested document label. -/
 structure RequestRowEvidence where
   physicalRequest : String
   logicalRequest : String
@@ -25,8 +21,6 @@ structure RequestRowEvidence where
   physicalBindingCurrent : Bool
   branchFieldsExact : Bool
   pendingDeadlineAbsent : Bool
-  /-- The target node's configured `max_request_hop`, read by the same
-  admission observation. -/
   maxRequestHop : Nat
 
 def rowBound (row : RequestRowEvidence) (request : Enrollment.AgentRequestSemantics)
@@ -107,9 +101,7 @@ theorem unbound_row_cannot_activate
       row generation duration deadline = none := by
   simp [activation?, h]
 
-/-- Admission authenticates the immutable parent binding before the existing
-gate claims the title's own lease. An unavailable/denied observation cannot
-manufacture authenticated execution evidence or consume a session queue entry. -/
+/-- Authenticated parent binding must precede claiming the title's own lease. -/
 def activate? (world : World) (actor : Gate.Actor) (now : Time)
     (ids : Identities) (available : Bool) (enrollment : Enrollment.State)
     (request : Enrollment.AgentRequestSemantics)

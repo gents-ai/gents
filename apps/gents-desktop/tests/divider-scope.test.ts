@@ -90,7 +90,6 @@ describe("the dock divider when the window resizes", () => {
       return next;
     });
     vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
-    /* runs the spring to rest, a frame at a time */
     const settle = () => {
       for (let t = 16; frames.size > 0 && t < 10_000; t += 16)
         act(() => {
@@ -106,7 +105,6 @@ describe("the dock divider when the window resizes", () => {
     );
     rerender({ open: true, container: 1600 });
     expect(result.current.settling).toBe(true);
-    /* the window narrows while the dock is still opening toward 520 */
     rerender({ open: true, container: 800 });
     settle();
 

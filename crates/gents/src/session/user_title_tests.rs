@@ -193,8 +193,6 @@ fn model_time(value: &serde_json::Value) -> serde_json::Value {
         .unwrap_or(serde_json::Value::Null)
 }
 
-/// Translate Lean's interned identities and logical seconds, without deriving
-/// any expected title/update outcome outside the Lean transition owner.
 fn model_session(value: &serde_json::Value) -> gents_protocol::session::AgentSession {
     let mut provenance = value["provenance"].clone();
     if let Some(object) = provenance.as_object_mut() {

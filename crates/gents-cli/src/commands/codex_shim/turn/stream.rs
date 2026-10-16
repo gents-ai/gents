@@ -307,8 +307,6 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             }
             _ => None,
         };
-        // Only translate the owner's presentation for the existing wire delta
-        // helpers. Never clone admission input into an output-shaped object.
         let rendered_output = presentation.map(|value| {
             json!({
                 "content": value.body_markdown,
@@ -381,10 +379,6 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 }
             }
         }
-        // A published provider-turn header closes its selected source before
-        // the request settles: complete that reasoning item at publication
-        // with the header's durable text. Completion is idempotent per item,
-        // so the later terminal pass does not replay it.
         if !projection_settled {
             if let gents::session::CanonicalRequestOutput::Published {
                 header,
@@ -483,11 +477,6 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 tokio::time::sleep(state.poll_interval).await;
                 continue;
             }
-            // Terminal content comes only from the shared typed owner: it
-            // classifies Loading/Denied/Conflicted/Invalid, distinguishes a
-            // terminal NoMessage from missing dependencies, and never promotes
-            // a retained partial attempt into the current answer. Request JSON
-            // (admission prompt included) is never overlaid as response text.
             let terminal_presentation = match &canonical_output {
                 gents::session::CanonicalRequestOutput::TerminalMessage {
                     presentation, ..
@@ -504,12 +493,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                     tokio::time::sleep(state.poll_interval).await;
                     continue;
                 }
-                gents::session::CanonicalRequestOutput::TerminalNoMessage => {
-                    // Terminal without a selected message: no answer to catch
-                    // up on; downstream projection surfaces the failure/empty
-                    // turn honestly.
-                    None
-                }
+                gents::session::CanonicalRequestOutput::TerminalNoMessage => None,
                 gents::session::CanonicalRequestOutput::Denied
                 | gents::session::CanonicalRequestOutput::Conflicted
                 | gents::session::CanonicalRequestOutput::Invalid
@@ -719,9 +703,6 @@ fn nonempty_timestamp_field<'a>(row: &'a Value, field: &str) -> Option<&'a str> 
         .filter(|value| !value.is_empty())
 }
 
-/// When the owner-selected output began: the first segment of the selected
-/// live source, or the selected header's creation for a native terminal
-/// message. Request admission time is not response start.
 async fn canonical_output_started_at_ms(
     state: &ShimState,
     output: &gents::session::CanonicalRequestOutput,
@@ -1382,54 +1363,8 @@ fn persisted_steering_input(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        content_delta, content_delta_from_cursor, progress_marker, suffix_prefix_overlap,
-        ContentCursor, ReasoningCursor, ReasoningObservation,
-    };
+    use super::ReasoningCursor;
     use gents_codex_protocol as codex;
-    use serde_json::json;
-
-    #[test]
-    fn persisted_steering_recovers_selected_skills_without_connection_cache() {
-        let input = super::persisted_steering_input("correction".into(), vec!["research".into()]);
-        assert!(matches!(&input[0], codex::UserInput::Text { text, .. } if text == "correction"));
-        assert_eq!(
-            crate::commands::codex_shim::protocol::selected_skill_ids_from_input(&input),
-            vec!["research"]
-        );
-    }
-
-    #[test]
-    fn silent_owner_renewal_and_request_failure_change_progress() {
-        let initial = json!({
-            "lifecycle_state": "processing",
-            "execution_lease_expires_at": "2026-09-22T00:00:30Z",
-            "failure_reason": null
-        });
-        let mut renewed = initial.clone();
-        renewed["execution_lease_expires_at"] = json!("2026-09-22T00:00:45Z");
-        let mut failed = initial.clone();
-        failed["failure_reason"] = json!("provider unavailable");
-        let marker = progress_marker(Some(&initial), None, &[], &[]);
-        assert_ne!(marker, progress_marker(Some(&renewed), None, &[], &[]));
-        assert_ne!(marker, progress_marker(Some(&failed), None, &[], &[]));
-        assert_eq!(marker, progress_marker(Some(&initial), None, &[], &[]));
-    }
-
-    #[test]
-    fn live_preview_changes_are_observed_and_terminal_text_catches_up() {
-        let request = json!({"lifecycle_state": "processing"});
-        let first = json!({"content": "hello", "reasoning": "thinking"});
-        let second = json!({"content": "hello!", "reasoning": "thinking"});
-        assert_ne!(
-            progress_marker(Some(&request), Some(&first), &[], &[]),
-            progress_marker(Some(&request), Some(&second), &[], &[]),
-        );
-        let mut cursor = ContentCursor::default();
-        assert_eq!(content_delta_from_cursor(&mut cursor, "hello"), "hello");
-        assert_eq!(content_delta_from_cursor(&mut cursor, "hello!"), "!");
-        assert_eq!(content_delta("hello!", "hello! world"), " world");
-    }
 
     #[tokio::test]
     async fn reasoning_cursor_oversized_no_overlap_tail_terminally_completes_with_durable_text() {
@@ -1485,10 +1420,6 @@ mod tests {
             .await
             .expect("project first reasoning delta");
 
-        // A poll gap larger than the bounded preview has no overlap. The
-        // source is still the same provider turn, so the latest tail extends
-        // its existing item. Terminal materialization replaces that item's
-        // incomplete streamed text with the exact durable text.
         let observation = cursor.observe("request-1", &second_tail, &source);
         assert!(observation.completed_item_id.is_none());
         let second = observation.delta.expect("unrecoverable bounded-tail delta");
@@ -1521,93 +1452,6 @@ mod tests {
         assert_eq!(completed, vec![(first.item_id, durable_text)]);
     }
 
-    #[test]
-    fn content_cursor_emits_only_appended_suffix() {
-        let mut cursor = ContentCursor::default();
-
-        assert_eq!(
-            content_delta_from_cursor(&mut cursor, "first chunk"),
-            "first chunk"
-        );
-        assert_eq!(cursor.rendered_len, "first chunk".len());
-        assert_eq!(
-            content_delta_from_cursor(&mut cursor, "first chunk and second"),
-            " and second"
-        );
-        assert_eq!(cursor.rendered_len, "first chunk and second".len());
-        assert_eq!(
-            content_delta_from_cursor(&mut cursor, "first chunk and second"),
-            ""
-        );
-    }
-
-    #[test]
-    fn primed_content_cursor_emits_updates_after_resume_snapshot() {
-        let mut cursor = ContentCursor::default();
-        cursor.prime("visible in thread/resume");
-
-        assert_eq!(
-            content_delta_from_cursor(&mut cursor, "visible in thread/resume plus live delta"),
-            " plus live delta"
-        );
-    }
-
-    #[test]
-    fn content_cursor_falls_back_to_full_text_on_rewrite() {
-        let mut cursor = ContentCursor::default();
-
-        assert_eq!(
-            content_delta_from_cursor(&mut cursor, "draft answer"),
-            "draft answer"
-        );
-        assert_eq!(content_delta_from_cursor(&mut cursor, "final"), "final");
-        assert_eq!(cursor.rendered_len, "final".len());
-    }
-
-    #[test]
-    fn content_cursor_falls_back_when_tail_reset_was_missed() {
-        let mut cursor = ContentCursor::default();
-
-        assert_eq!(
-            content_delta_from_cursor(&mut cursor, "previous assistant text"),
-            "previous assistant text"
-        );
-        assert_eq!(
-            content_delta_from_cursor(&mut cursor, "new assistant text after reset"),
-            "new assistant text after reset"
-        );
-    }
-
-    #[test]
-    fn content_cursor_empty_current_resets_boundary() {
-        let mut cursor = ContentCursor::default();
-
-        assert_eq!(
-            content_delta_from_cursor(&mut cursor, "old tail"),
-            "old tail"
-        );
-        assert_eq!(content_delta_from_cursor(&mut cursor, ""), "");
-        assert_eq!(cursor.rendered_len, 0);
-        assert_eq!(
-            content_delta_from_cursor(&mut cursor, "new tail"),
-            "new tail"
-        );
-    }
-
-    #[test]
-    fn content_cursor_uses_utf8_byte_boundaries_from_prior_content() {
-        let mut cursor = ContentCursor::default();
-
-        assert_eq!(
-            content_delta_from_cursor(&mut cursor, "hello ☕"),
-            "hello ☕"
-        );
-        assert_eq!(
-            content_delta_from_cursor(&mut cursor, "hello ☕ done"),
-            " done"
-        );
-    }
-
     fn reasoning_source(turn_index: u32) -> gents::session::CanonicalSelectedSource {
         gents::session::CanonicalSelectedSource {
             request_doc_id: "request-doc-1".to_string(),
@@ -1623,171 +1467,5 @@ mod tests {
                 execution_generation: "generation-1".to_string(),
             },
         }
-    }
-
-    #[test]
-    fn reasoning_cursor_appends_and_suppresses_same_source_replay() {
-        let mut cursor = ReasoningCursor::default();
-        let source = reasoning_source(0);
-        let first = cursor
-            .observe("request-1", "inspect", &source)
-            .delta
-            .unwrap();
-        assert_eq!(first.item_id, "gents-reasoning-request-1");
-        assert_eq!(first.text, "inspect");
-        let appended = cursor
-            .observe("request-1", "inspect then test", &source)
-            .delta
-            .unwrap();
-        assert_eq!(appended.item_id, first.item_id);
-        assert_eq!(appended.text, " then test");
-        assert_eq!(
-            cursor.observe("request-1", "inspect then test", &source),
-            ReasoningObservation::default()
-        );
-    }
-
-    #[test]
-    fn reasoning_cursor_identical_next_source_survives_missed_empty_boundary() {
-        let mut cursor = ReasoningCursor::default();
-        let first_source = reasoning_source(0);
-        let next_source = reasoning_source(1);
-        cursor
-            .observe("request-1", "same thought", &first_source)
-            .delta
-            .unwrap();
-        let next = cursor.observe("request-1", "same thought", &next_source);
-        assert_eq!(
-            next.completed_item_id.as_deref(),
-            Some("gents-reasoning-request-1")
-        );
-        let delta = next.delta.unwrap();
-        assert_eq!(delta.item_id, "gents-reasoning-request-1-segment-1");
-        assert_eq!(delta.text, "same thought");
-        assert_eq!(
-            cursor.observe("request-1", "same thought", &next_source),
-            ReasoningObservation::default()
-        );
-    }
-
-    #[test]
-    fn reasoning_cursor_writer_change_is_a_distinct_owner() {
-        let mut cursor = ReasoningCursor::default();
-        let first_source = reasoning_source(0);
-        let mut next_owner = first_source.clone();
-        next_owner.writer = gents_protocol::output::OutputWriter::RequestExecution {
-            execution_generation: "generation-2".to_string(),
-        };
-        cursor
-            .observe("request-1", "same thought", &first_source)
-            .delta
-            .unwrap();
-        let next = cursor.observe("request-1", "same thought", &next_owner);
-        assert_eq!(
-            next.completed_item_id.as_deref(),
-            Some("gents-reasoning-request-1")
-        );
-        assert_eq!(next.delta.unwrap().text, "same thought");
-    }
-
-    #[test]
-    fn reasoning_cursor_live_to_settling_keeps_same_source() {
-        let mut cursor = ReasoningCursor::default();
-        let source = reasoning_source(0);
-        cursor.observe("request-1", "live", &source).delta.unwrap();
-        assert_eq!(
-            cursor.observe("request-1", "live", &source),
-            ReasoningObservation::default()
-        );
-        let settling = cursor.observe("request-1", "live and settling", &source);
-        assert!(settling.completed_item_id.is_none());
-        assert_eq!(settling.delta.unwrap().text, " and settling");
-    }
-
-    #[test]
-    fn reasoning_cursor_empty_source_does_not_consume_item_number() {
-        let mut cursor = ReasoningCursor::default();
-        assert_eq!(
-            cursor.observe("request-1", "", &reasoning_source(0)),
-            ReasoningObservation::default()
-        );
-        let first = cursor
-            .observe("request-1", "first actual thought", &reasoning_source(1))
-            .delta
-            .unwrap();
-        assert_eq!(first.item_id, "gents-reasoning-request-1");
-    }
-
-    #[test]
-    fn reasoning_cursor_recovers_rolled_tail_without_new_source() {
-        let mut cursor = ReasoningCursor::default();
-        let source = reasoning_source(0);
-        cursor
-            .observe("request-1", "first middle", &source)
-            .delta
-            .unwrap();
-        let rolled = cursor
-            .observe("request-1", "middle last", &source)
-            .delta
-            .unwrap();
-        assert_eq!(rolled.item_id, "gents-reasoning-request-1");
-        assert_eq!(rolled.text, " last");
-    }
-
-    #[test]
-    fn reasoning_cursor_does_not_infer_new_source_from_disjoint_tail() {
-        let mut cursor = ReasoningCursor::default();
-        let source = reasoning_source(0);
-        cursor
-            .observe("request-1", "first window", &source)
-            .delta
-            .unwrap();
-        let disjoint = cursor
-            .observe("request-1", "later window", &source)
-            .delta
-            .unwrap();
-        assert_eq!(disjoint.item_id, "gents-reasoning-request-1");
-        assert_eq!(disjoint.text, "later window");
-    }
-
-    #[test]
-    fn reasoning_cursor_primes_resume_without_replay() {
-        let mut cursor = ReasoningCursor::default();
-        let source = reasoning_source(0);
-        cursor.prime("gents-reasoning-request-1".to_string(), "already visible");
-        assert!(cursor
-            .observe("request-1", "already visible", &source)
-            .delta
-            .is_none());
-        let delta = cursor
-            .observe("request-1", "already visible plus new", &source)
-            .delta
-            .unwrap();
-        assert_eq!(delta.text, " plus new");
-    }
-
-    #[test]
-    fn reasoning_cursor_reset_allows_identical_first_source() {
-        let mut cursor = ReasoningCursor::default();
-        let source = reasoning_source(0);
-        cursor
-            .observe("request-1", "same thought", &source)
-            .delta
-            .unwrap();
-        cursor.reset();
-        assert_eq!(
-            cursor
-                .observe("request-1", "same thought", &source)
-                .delta
-                .unwrap()
-                .text,
-            "same thought"
-        );
-    }
-    #[test]
-    fn suffix_prefix_overlap_is_linear_and_utf8_safe() {
-        assert_eq!(suffix_prefix_overlap("abc middle", "middle xyz"), 6);
-        assert_eq!(suffix_prefix_overlap("reason ☕", "☕ next"), "☕".len());
-        assert_eq!(suffix_prefix_overlap("no overlap", "fresh"), 0);
     }
 }

@@ -11,7 +11,6 @@ use crate::support::test_db;
 async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_default() {
     let db = test_db("document-config-scoped-roundtrip").await;
     let access = ConfigAccess::local(db.node.clone());
-    // Equal logical IDs under different principals must resolve independently.
     for (owner, model) in [
         ("did:test:roundtrip", "model-a"),
         ("did:test:other", "model-b"),
@@ -116,8 +115,6 @@ async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_de
                             read_desired_state_record_in_txn(txn, collection, owner, id)
                                 .await?
                                 .unwrap();
-                        // Compare canonical values, including every configured sampling,
-                        // execution and context property, through the public read owner.
                         let expected = DesiredStateApplyPlan::new(vec![
                             gents::config_client::DesiredStateApplyDocument {
                                 collection,

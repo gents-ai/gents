@@ -1,9 +1,3 @@
-//! Header-only authorized session forks.
-//!
-//! Forking creates fresh child headers and child compaction metadata.  Payload
-//! segments and tool lifecycle documents stay at their origin: a header's
-//! immutable references are the dependency graph and never executable child
-//! state.
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
@@ -30,7 +24,6 @@ pub struct ForkParams<'a> {
     pub source_session_id: &'a str,
     pub fork_at_user_turn: u32,
     pub caller_node_did: &'a str,
-    /// Exact requester scope. None means absent, never every requester.
     pub caller_requester_did: Option<&'a str>,
     pub target_agent_id: Option<&'a str>,
 }
@@ -128,7 +121,6 @@ fn ordinal(row: &Value, field: &str) -> Result<u32> {
     .with_context(|| format!("fork {field} exceeds supported sequence range"))
 }
 
-/// User headers that only deliver a tool result do not consume a fork turn.
 pub fn is_user_turn(row: &Value) -> Result<bool> {
     let message = decode_transcript_message_row(row)?.message;
     Ok(message.role == MessageRole::User

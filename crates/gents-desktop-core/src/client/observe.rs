@@ -145,8 +145,8 @@ pub fn spawn_observer_with_selection(
                     metrics_for_task
                         .drop_recoveries
                         .fetch_add(1, Ordering::Relaxed);
-                    // Overflow may have omitted an AgentRequest event from
-                    // this batch, so fence in-flight request reads conservatively.
+                    // Fence in-flight request reads: overflow may omit an
+                    // AgentRequest event from this batch.
                     store.observe_request_event(None);
                     store.enqueue_resync_request(None);
                     resync_pending = true;
@@ -224,8 +224,8 @@ pub fn spawn_observer_with_selection(
                 }
                 continue;
             }
-            // While waiting for a failed authoritative reload's deadline,
-            // ingest and fence new events but do not start patch or reload I/O.
+            // While waiting for a failed authoritative reload's deadline, do
+            // not start patch or reload I/O.
             if resync_pending {
                 continue;
             }
@@ -281,7 +281,7 @@ pub fn spawn_observer_with_selection(
                     Ok(patch) => {
                         let row_count = patch.observed_documents;
                         // A scoped deletion reload cannot recover surviving rows
-                        // for other nodes in this same update batch.
+                        // for other nodes in this batch.
                         if patch.store.row_count() > 0 {
                             if store
                                 .merge_observer_patch_at_read(&captured_snapshot, patch.store)
@@ -327,9 +327,6 @@ pub fn spawn_observer_with_selection(
                             None => Vec::new(),
                         };
                         for scope in reload_scopes {
-                            // One observer owner handles authoritative reads and
-                            // applies the same bounded retry deadline to every
-                            // source of a replacement request.
                             store.request_resync(scope.as_deref());
                             resync_pending = true;
                         }
@@ -382,7 +379,7 @@ pub fn spawn_observer_with_selection(
 }
 
 /// Branchable collections emit a collection-head update with an empty document
-/// ID alongside the document update. Only the latter identifies a row to read.
+/// ID; only the document update identifies a row to read.
 async fn accumulate_dirty(
     dirty: &mut HashMap<&'static str, HashSet<String>>,
     resolver: &CollectionResolver,
@@ -400,8 +397,8 @@ async fn accumulate_dirty(
         Ok(Some(name))
             if supports_doc_patch_collection(name) || name == SESSION_HYDRATION_REQUEST =>
         {
-            // Fence prior request reads as soon as collection identity is known,
-            // before this event can be delayed behind the observer's retry timer.
+            // Fence prior request reads before this event can be delayed
+            // behind the observer's retry timer.
             if name == AGENT_REQUEST_NAME {
                 store.observe_request_event(Some(doc_id));
             }

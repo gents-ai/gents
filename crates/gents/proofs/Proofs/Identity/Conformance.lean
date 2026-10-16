@@ -211,8 +211,6 @@ def identityPermissionCases : List IdentityPermissionCase :=
 theorem structural_scope_cases_pinned : structuralCases.map (·.wellFormed) =
     [true, true, false, false, true] := by native_decide
 
-/-- Same label never borrows the other node's ACP grant, regardless of
-query ordering. Ambiguous same-owner documents fail resolution. -/
 def sharedLabelAgents : List AgentCase :=
   [{ id := "coding", node := amyDid, enabled := true },
    { id := "coding", node := ruminationDid, enabled := true }]

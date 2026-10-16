@@ -1,12 +1,3 @@
-//! Tests for the plugin store guard: which home it belongs to, and when the
-//! underlying lock is actually held or released.
-//!
-//! Every assertion here is single-threaded and nonblocking: held-versus-free
-//! is probed with [`crate::file_lock::FileLock::try_exclusive`] on a second,
-//! independently opened descriptor of the same lock file, mirroring how
-//! `file_lock.rs`'s own tests distinguish separate open file descriptions
-//! without ever waiting on another holder.
-
 use super::*;
 
 fn open_lock_file(home: &Path) -> std::fs::File {
@@ -31,10 +22,6 @@ fn lock_is_free(home: &Path) -> bool {
     }
 }
 
-/// `for_home` accepts only the exact home the guard was taken for: the same
-/// tempdir passes, and a different home is refused naming both. The exactness
-/// is the point: a guard is proof about one home, and anything else must ask
-/// for its own.
 #[test]
 fn for_home_accepts_only_the_home_the_guard_was_taken_for() {
     let home = tempfile::tempdir().unwrap();
@@ -56,10 +43,6 @@ fn for_home_accepts_only_the_home_the_guard_was_taken_for() {
     );
 }
 
-/// A shared guard really holds the lock: a second descriptor cannot take it
-/// exclusively, and dropping the guard releases it for the next holder
-/// without any explicit unlock. Exclusive mode behaves the same. This is the
-/// RAII guarantee mutations rely on: leaving a scope leaves nothing locked.
 #[test]
 fn a_guard_holds_the_lock_until_dropped_then_releases_it() {
     let home = tempfile::tempdir().unwrap();
@@ -81,8 +64,6 @@ fn a_guard_holds_the_lock_until_dropped_then_releases_it() {
     lock_store(home.path(), true).unwrap();
 }
 
-/// `lock_store` prepares the store's own lock file under the plugins root
-/// before locking, so the first install in a fresh home needs nothing else.
 #[test]
 fn lock_store_creates_the_lock_file_under_the_plugins_root() {
     let home = tempfile::tempdir().unwrap();
@@ -92,8 +73,6 @@ fn lock_store_creates_the_lock_file_under_the_plugins_root() {
     assert!(path.is_file(), "{} must exist", path.display());
 }
 
-/// Async mutation owners fail immediately rather than blocking their executor
-/// while another operation holds the store lock.
 #[test]
 fn try_lock_store_reports_contention_without_waiting() {
     let home = tempfile::tempdir().unwrap();

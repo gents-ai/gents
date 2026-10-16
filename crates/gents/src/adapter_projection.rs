@@ -91,19 +91,14 @@ pub struct AdapterProjectionEnvelope {
     pub source_agent_id: Option<String>,
     pub redaction_mode: ProjectionRedactionMode,
     pub provenance: ProjectionProvenance,
-    /// Rendered-request capture metadata for the projected request — the
-    /// timeline's capture events verbatim: keys, hashes, ordering facts, and
-    /// the admission join. **Never bodies.** The timeline never selects
-    /// `request_json`, so a captured body cannot reach this envelope in any
-    /// redaction mode; the one body read in the system is the CLI's explicit
-    /// `--include-body`. Uniform across all four projections, including the
-    /// two whose native shapes are closed to extension.
+    /// Never bodies: the timeline never selects `request_json`, so a captured
+    /// body cannot reach this envelope in any redaction mode; the one body read
+    /// in the system is the CLI's explicit `--include-body`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rendered_captures: Vec<TimelineRenderedRequestEvent>,
     pub output: AdapterProjection,
 }
 
-/// The capture events of a timeline, in timeline order.
 fn rendered_capture_events(timeline: &RunTimeline) -> Vec<TimelineRenderedRequestEvent> {
     timeline
         .events
@@ -115,8 +110,6 @@ fn rendered_capture_events(timeline: &RunTimeline) -> Vec<TimelineRenderedReques
         .collect()
 }
 
-/// The same capture events as a JSON array, for open extension surfaces
-/// (ATIF `extra`, LangGraph `values`). `None` when the timeline has none.
 pub(crate) fn rendered_captures_json(timeline: &RunTimeline) -> Option<Value> {
     let captures = rendered_capture_events(timeline);
     if captures.is_empty() {
@@ -535,8 +528,6 @@ pub fn build_external_adapter_projection(
         projection_id: imported.projection.id().to_string(),
         projection_version: ADAPTER_PROJECTION_VERSION.to_string(),
         source_request_id: view.request.request_id.clone(),
-        // The mapping request/session labels are external capture metadata,
-        // not canonical physical document identities.
         source_request_doc_id: None,
         source_session_id: view.request.session_id.clone(),
         source_node_did: redact_option(view.request.node_did.as_deref(), context),
@@ -1243,8 +1234,7 @@ pub fn adapter_projection_json_schema(kind: AdapterProjectionKind) -> Value {
     })
 }
 
-/// Schema for the envelope's `rendered_captures` section: capture metadata
-/// only — the shape has no field a captured body could travel in.
+/// Capture metadata only: the shape has no field a captured body could travel in.
 fn rendered_captures_schema() -> Value {
     json!({
         "type": "array",
@@ -1964,8 +1954,6 @@ fn build_openai_codex_run_trace(
                     timestamp: event.timestamp.clone(),
                 });
             }
-            // Captures ride the envelope's `rendered_captures`; the Codex
-            // native item shapes are additionalProperties:false throughout.
             RunTimelineEvent::RenderedRequest(_) => {}
             RunTimelineEvent::InferenceCall(_) => {}
             RunTimelineEvent::Compaction(_) => {}
@@ -2050,8 +2038,6 @@ fn build_langgraph_state_history(
             content,
             reasoning,
         ) = match event {
-            // Captures surface in `values.rendered_captures`, not as graph
-            // nodes — a capture is a fact about an inference call, not a step.
             RunTimelineEvent::RenderedRequest(_) => continue,
             RunTimelineEvent::ProviderContextReduction(event) => (
                 format!("provider_context_reduction:{}", event.reduction_key),
@@ -2266,8 +2252,6 @@ fn build_multi_agent_task(
                     }
                 }
             }
-            // Captures ride the envelope's `rendered_captures`; the
-            // multi-agent native shape is additionalProperties:false.
             RunTimelineEvent::RenderedRequest(_) => {}
             RunTimelineEvent::InferenceCall(_) => {}
             RunTimelineEvent::Compaction(_) => {}

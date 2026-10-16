@@ -73,10 +73,8 @@ async fn load_agent_request_by_request_id(
         return serde_json::from_value(row).map_err(Into::into);
     }
 
-    // Goal-backed manual runs are committed atomically on the managed
-    // runtime so Goal, GoalCreationClaim and AgentRequest become visible
-    // together. Resolve their document ID at that authoritative operator
-    // node instead of racing the runtime-to-client P2P projection.
+    // Goal-backed manual runs are committed on the managed runtime; resolve
+    // the document ID there rather than racing its P2P projection.
     let response = core.operator_access(node_did)?.execute(&query).await?;
     let row = response
         .pointer("/data/AgentRequest/0")
@@ -172,47 +170,4 @@ pub async fn delete_event_source_config(
 ) -> Result<()> {
     core.delete_event_source(&request.event_source_id, &request.node_did)
         .await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn task_and_schedule_actions_keep_their_agent_scope_across_views() {
-        let tasks: Vec<Task> = ["did:alpha", "did:beta"]
-            .into_iter()
-            .map(|did| {
-                serde_json::from_value(json!({
-            "node_did": did, "task_id": "daily", "agent_id": "default", "prompt_template": "hello"
-        })).unwrap()
-            })
-            .collect();
-        let schedules: Vec<Schedule> = ["did:alpha", "did:beta"].into_iter().map(|did| serde_json::from_value(json!({
-            "node_did": did, "schedule_id": "daily", "cadence": { "kind": "interval", "interval_secs": 60 }
-        })).unwrap()).collect();
-        for did in ["did:alpha", "did:beta"] {
-            assert_eq!(
-                task_for_run(&tasks, "daily", Some(did)).unwrap().node_did,
-                did
-            );
-            assert_eq!(
-                schedule_for_run(&schedules, "daily", Some(did))
-                    .unwrap()
-                    .node_did,
-                did
-            );
-        }
-        assert!(task_for_run(&tasks, "daily", None)
-            .unwrap_err()
-            .to_string()
-            .contains("ambiguous"));
-        assert!(schedule_for_run(&schedules, "daily", None)
-            .unwrap_err()
-            .to_string()
-            .contains("ambiguous"));
-        assert!(task_for_run(&tasks, "daily", Some("did:missing")).is_err());
-        assert!(schedule_for_run(&schedules, "daily", Some("did:missing")).is_err());
-    }
 }

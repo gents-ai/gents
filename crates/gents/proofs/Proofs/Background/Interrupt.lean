@@ -1,18 +1,4 @@
 import Proofs.ToolExecution.Transition
-
-/-!
-# Foreground Interrupt Scope
-
-An interrupt stops one thread's foreground turn. Every tool call owned by the
-interrupted request receives exactly one disposition, and none of them reaches
-background work or another session:
-
-* a pending intent was never dispatched and is cancelled;
-* a running foreground call is cancelled with cause `interrupted`;
-* running background work (native processes and `agent_new` /
-  `agent_message` rows) and terminal rows are untouched.
--/
-
 namespace Background
 namespace Interrupt
 
@@ -31,13 +17,9 @@ def toContract : Disposition → String
 
 end Disposition
 
-/-- The per-row interrupt disposition. There is no cascade: interrupting a
-session stops only that thread's foreground work. A session it started with
-`agent_new` is an ordinary agent's session, addressed directly, and keeps
-running; only `cancel_process` or the UI kill on that one background row
-interrupts that one request. Jack's 0.20 decision: the runtime encodes no
-hierarchy between agents, so no parent fate is a cancel signal for another
-session, and any stronger policy belongs to the application. -/
+/-- No cascade: interrupting a session stops only that thread's foreground work;
+`agent_new` sessions keep running, addressed directly. Any stronger policy
+belongs to the application. -/
 def disposition (c : ToolCallContext) : Disposition :=
   if c.state = .pending then
     .cancel
@@ -77,8 +59,6 @@ theorem interruptTool_preserves_identity (c : ToolCallContext) :
   unfold interruptTool
   split <;> simp
 
-/-- Running background work, including every started session's row, is
-untouched by an interrupt. -/
 theorem interrupt_retains_running_background
     (c : ToolCallContext)
     (h_running : c.state = .running)
@@ -86,7 +66,6 @@ theorem interrupt_retains_running_background
     interruptTool c = c := by
   simp [interruptTool, disposition, h_running, h_background]
 
-/-- The interrupt stops the thread's own foreground calls. -/
 theorem interrupt_cancels_running_foreground
     (c : ToolCallContext)
     (h_running : c.state = .running)
@@ -94,8 +73,6 @@ theorem interrupt_cancels_running_foreground
     (interruptTool c).state = .cancelled := by
   simp [interruptTool, disposition, h_running, h_foreground]
 
-/-- An interrupt never produces a running background row it did not already
-have: no work is moved out of the interrupted thread. -/
 theorem interrupt_never_backgrounds (c : ToolCallContext) :
     (interruptTool c).awaitMode = c.awaitMode :=
   (interruptTool_preserves_identity c).2.2

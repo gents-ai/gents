@@ -66,7 +66,7 @@ WARNING: --yolo bootstraps UNRESTRICTED tools. The agent can run any command\n\
 and write any file your user account can reach — no sandbox, no containment.\n\
 Use --write for sandboxed writes scoped to the tool root.";
 
-/// Takes the store lock for the rest of init. An overwrite wipes the home
+/// Takes the store lock for the rest of init; an overwrite wipes the home
 /// under that same lock, keeping the lock file itself, so no runtime can open
 /// the store while it is removed or hold a second lock afterwards.
 pub(crate) fn lock_init_store(
@@ -74,7 +74,6 @@ pub(crate) fn lock_init_store(
     data_dir: &Path,
     overwrite: bool,
 ) -> Result<gents::home::StoreLock> {
-    // $HOME first, then the password database.
     let user_home = std::env::home_dir();
     lock_init_store_for_user(home_dir, data_dir, overwrite, user_home.as_deref())
 }
@@ -343,8 +342,6 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
     Ok(())
 }
 
-/// What `init` says when its sign-in added an account beside others instead
-/// of taking the provider's original slot, which the setup backend runs on.
 fn added_account_note(sign_in: &gents::oauth_credential::SignIn) -> Option<String> {
     (sign_in.result == gents::oauth_credential::SignInResult::Added
         && sign_in.credential.account_ref.is_some())
@@ -407,7 +404,6 @@ async fn maybe_inline_grok_login(
         return InlineGrokLoginState::Unauthenticated;
     }
     let provider = gents::xai_grok_oauth::normalize_provider("xai-oauth");
-    // `init` writes a backend with no account reference, which runs on the original account.
     match gents::oauth_credential::resolve_oauth_credential(
         access,
         node_did,
@@ -481,7 +477,6 @@ async fn maybe_inline_claude_login(
     }
     let provider =
         gents::claude_oauth::normalize_provider(gents::claude_oauth::CLAUDE_OAUTH_PROVIDER);
-    // `init` writes a backend with no account reference, which runs on the original account.
     match gents::oauth_credential::resolve_oauth_credential(
         access,
         node_did,
@@ -538,7 +533,6 @@ async fn maybe_inline_codex_login(
         return InlineCodexLoginState::Unauthenticated;
     }
     let provider = gents::chatgpt_codex::normalize_provider("chatgpt-codex");
-    // `init` writes a backend with no account reference, which runs on the original account.
     match gents::oauth_credential::resolve_oauth_credential(
         access,
         node_did,
@@ -878,21 +872,12 @@ async fn initialize_runtime_home(
     let tools_id = default_tools_id_for_agent(&default_agent_id);
     let tool_ceiling = tool_ceiling_for_package(tool_package);
     let tool_root = resolve_tool_root_for_package(tool_package, args.tool_root.as_deref())?;
-    // A blank Tools.host.root inherits the operator root recorded in
-    // init.json only while no explicit WorkspaceRoot policy exists: the
-    // execution guard refuses rootless host tools under configured policy, so
-    // init pins the resolved operator root exactly when the operator has
-    // authored one, and init.json stays the single record otherwise.
     let explicit_workspace_policy = gents::tool_surface::load_workspace_root_policy(node, None)
         .await?
         .configured;
     let pinned_tool_root = explicit_workspace_policy
         .then(|| tool_root.clone())
         .flatten();
-    // Canonical auth is a typed selection, never a raw key copy: an
-    // environment-key endpoint reads the key from the runtime host at call
-    // time, and agent-scoped OAuth providers keep using the node's
-    // existing OAuthCredential owner.
     let backend_auth = backend_auth_for_init(&backend)?;
     let backend_doc = InferenceBackend {
         node_did: node_did.to_string(),
@@ -906,9 +891,8 @@ async fn initialize_runtime_home(
         discovery_timeout_secs: None,
         max_concurrent: Some(args.max_concurrent),
         max_queue_depth: Some(args.max_queue_depth),
-        // First-run must not activate the placeholder model merely because an
-        // unrelated service happens to answer on the default localhost port.
-        // Selecting inference enables this backend through the normal config owner.
+        // First-run must not activate the placeholder model because an
+        // unrelated service answers on the default localhost port.
         enabled: initial_backend_enabled(args),
         tags: Vec::new(),
     };
@@ -927,9 +911,6 @@ async fn initialize_runtime_home(
         enable_defra_query,
         args.defra_query_collections.clone(),
     );
-    // Every first run carries the Engineer's configuration tools, as the
-    // desktop first run does; the stored tool ceiling still bounds any host
-    // tool change they make.
     tools.self_config = Some(engineer_self_config());
     tools
         .built_ins
@@ -967,9 +948,6 @@ async fn initialize_runtime_home(
         &model_name.to_string(),
     );
     inference_profile.execution_id = Some(inference_execution_id);
-    // Canonical chain: agent -> context (system prompt, tools, compaction)
-    // and agent -> inference profile. No backend/model copies on the
-    // agent.
     let agent = Agent {
         agent_id: default_agent_id.clone(),
         node_did: node_did.to_string(),
@@ -993,13 +971,6 @@ async fn initialize_runtime_home(
         },
         created_at: Some(chrono::Utc::now().to_rfc3339()),
     };
-    // One canonical publication: every init-owned document is staged into a
-    // shared DesiredStateApplyPlan so the whole home bootstraps atomically and
-    // references are validated against the complete staged candidate, not
-    // publication order. Per-type writers and duplicate upsert seams go away.
-    // The retired per-type writers each validated their document before
-    // publication; the shared plan owner normalizes but does not re-validate,
-    // so init preserves that guarantee explicitly before staging.
     if let Some(error) = tools
         .validation_violations()
         .into_iter()
@@ -1033,11 +1004,6 @@ async fn initialize_runtime_home(
         documents,
     )
     .await?;
-    // Health and discovery are runtime-owned observations, so the desired
-    // config plan deliberately omits them. Preserve init's established
-    // bootstrap contract by publishing the selected endpoint as initially
-    // healthy after its canonical backend document exists; the health owner
-    // will replace this observation with measured state once the server runs.
     gents::backend_registry::set_backend_probe_status_with_last_probe(
         node,
         node_did,
@@ -1072,9 +1038,6 @@ async fn initialize_runtime_home(
     })
 }
 
-/// Publish init's documents and the node_document that names their default
-/// agent as one validated plan: a failed init leaves no default pointing at
-/// a missing or disabled agent.
 async fn publish_home_config(
     access: &ConfigAccess,
     node_did: &str,
@@ -1113,8 +1076,6 @@ async fn publish_home_config(
         .await
 }
 
-/// Serialize a canonical config document into a complete-replacement plan
-/// entry (same add/update value; the plan normalizes owner/logical identity).
 fn replacement<T: serde::Serialize>(
     collection: Collection,
     document: &T,
@@ -1135,17 +1096,6 @@ fn default_context_id_for_agent(agent_id: &str) -> String {
     format!("{agent_id}-context")
 }
 
-/// Canonical `Tools` document for an init tool package. Typed nested groups
-/// replace the flat selection rows: absent groups and unset flags expose no
-/// capability, a blank `Tools.host.root` inherits the operator root recorded in
-/// init.json while no WorkspaceRoot policy is configured (so a narrowed
-/// operator root moves every default behavior without re-authoring documents),
-/// and an explicit policy pins the resolved operator root because the
-/// execution guard refuses rootless host tools under it. The execution policy
-/// stays an explicit typed selection (macOS `--write` keeps the sandboxed
-/// workspace_write policy; `--yolo` is always unrestricted). Backgrounding is
-/// per-capability: only write-capable bash may run in the background, which
-/// the derived allowlist materializes as `bash_unrestricted`.
 fn tools_for_package(
     node_did: &str,
     tools_id: &str,
@@ -1233,10 +1183,6 @@ fn tools_for_package(
     }
 }
 
-/// The seeded permissive preset, migrated to the canonical nested `Tools`
-/// shape: explicitly enabled meta-adjacent and DefraDB query capabilities,
-/// every privilege-bearing host capability absent. Absence grants nothing —
-/// the permissive surface is explicit, never implied by a policy version.
 fn wide_open_tools_document(node_did: &str) -> Tools {
     Tools {
         tools_id: wide_open_tools_id_for_node(node_did),
@@ -1254,11 +1200,6 @@ fn wide_open_tools_document(node_did: &str) -> Tools {
     }
 }
 
-/// The Engineer builds, starts, observes and steers its crew (#1796): the
-/// agents tools, the sessions tool, read-only query and an escalation surface
-/// holding the canonical `file_mailbox_item` declaration (default event/flag/ack
-/// policy). `agent_new` appears once these Tools select a AgentTarget, which
-/// the Engineer creates through self-config.
 fn engineer_tools(
     tools: &mut Tools,
     node_did: &str,
@@ -1297,11 +1238,6 @@ fn wide_open_tools_id_for_node(node_did: &str) -> String {
     format!("{node_did}:wide-open")
 }
 
-/// Canonical typed auth for an init-resolved backend. Agent-scoped OAuth
-/// providers resolve the node's existing `OAuthCredential` at call time;
-/// a raw key is stored under DefraDB ACP in the backend document; an
-/// environment key is read from the runtime host per call; a deliberately
-/// unauthenticated endpoint (local model server) stays explicit.
 fn backend_auth_for_init(backend: &ResolvedBackendConfig) -> Result<BackendAuth> {
     if backend.provider_kind.is_node_scoped_oauth() {
         return Ok(BackendAuth::NodeOAuth { account_ref: None });
@@ -1316,8 +1252,6 @@ fn backend_auth_for_init(backend: &ResolvedBackendConfig) -> Result<BackendAuth>
         (None, Some(variable)) => Ok(BackendAuth::Environment {
             variable: variable.to_string(),
         }),
-        // Local model servers (llama-server, ollama) listen unauthenticated;
-        // an explicit absent auth is the honest record, never a silent grant.
         (None, None) => Ok(BackendAuth::Unauthenticated),
     }
 }
@@ -1386,8 +1320,6 @@ fn init_enable_defra_query(
     (package_enables_defra_query(tool_package) || enable_defra_query) && !disable_defra_query
 }
 
-/// Whether the package's canonical `Tools` document enables the datastore
-/// query capability by default. `Introspection` is the only opt-in package.
 fn package_enables_defra_query(tool_package: ToolPackageArg) -> bool {
     matches!(tool_package, ToolPackageArg::Introspection)
 }
@@ -1415,9 +1347,6 @@ fn resolve_tool_root_for_package(
     }
 }
 
-/// Sampling stays unbound. `initialize_runtime_home` binds the execution
-/// document this leaves unset, because the self-config tool can only edit an
-/// execution its profile already names.
 fn standard_inference_profile(
     node_did: &str,
     profile_id: &str,
@@ -1444,8 +1373,6 @@ fn default_inference_execution_id_for_profile(profile_id: &str) -> String {
     format!("{profile_id}-execution")
 }
 
-/// Every limit stays unset so the canonical defaults keep owning each bound;
-/// the document exists only so the configurator has an execution to reach.
 fn standard_inference_execution(node_did: &str, execution_id: &str) -> InferenceExecution {
     InferenceExecution {
         node_did: node_did.to_string(),
@@ -1562,53 +1489,6 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
-    fn sign_in_fixture(
-        result: gents::oauth_credential::SignInResult,
-        account_ref: Option<&str>,
-    ) -> gents::oauth_credential::SignIn {
-        let mut credential = gents::claude_oauth::credential_from_login_tokens(
-            "did:key:z6MkTest",
-            gents::claude_oauth::CLAUDE_OAUTH_PROVIDER,
-            &gents::claude_oauth::ClaudeLoginTokens {
-                access_token: "access-SECRET".into(),
-                refresh_token: "refresh-SECRET".into(),
-                expires_in: Some(60),
-                scope: None,
-                account_id: None,
-                organization_uuid: None,
-                account_uuid: None,
-            },
-            chrono::Utc::now(),
-        );
-        credential.account_ref = account_ref.map(str::to_owned);
-        credential.label = account_ref.map(|_| "Claude 2".to_owned());
-        gents::oauth_credential::SignIn {
-            doc_id: "bae-1".into(),
-            credential,
-            result,
-            identity_matched: false,
-            profiles: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn init_notes_a_sign_in_that_added_another_account() {
-        use gents::oauth_credential::SignInResult;
-        let note = added_account_note(&sign_in_fixture(SignInResult::Added, Some("acct-2")))
-            .expect("an added account is noted");
-        assert!(note.contains("Claude 2"), "{note}");
-        assert!(note.contains("gents accounts"), "{note}");
-        assert_eq!(
-            added_account_note(&sign_in_fixture(SignInResult::Added, None)),
-            None
-        );
-        assert_eq!(
-            added_account_note(&sign_in_fixture(SignInResult::Refreshed, Some("acct-2"))),
-            None
-        );
-    }
-
-    /// A fake user home, so no test ever resolves a real broad path.
     fn overwrite(home: &Path, user_home: &Path) -> Result<gents::home::StoreLock> {
         lock_init_store_for_user(home, &home.join("data"), true, Some(user_home))
     }
@@ -1761,26 +1641,6 @@ mod tests {
             "the lock init holds is the one a runtime would take"
         );
     }
-    use gents::BackendProviderKind;
-
-    /// Compile-only guard that the retired flat Tools vocabulary is
-    /// gone from the init test surface: preset classification now goes through
-    /// the shared `tool_surface::presets::classify_tools` owner against the
-    /// canonical nested `Tools` document.
-    #[test]
-    fn tests_reference_canonical_tools_not_flat_selection() {
-        let tools = tools_for_package(
-            "did:key:z-drift",
-            "drift-tools",
-            ToolPackageArg::Readonly,
-            None,
-            false,
-            false,
-            Vec::new(),
-        );
-        assert_eq!(tools.tools_id, "drift-tools");
-        assert!(tools.validate().is_ok());
-    }
 
     #[tokio::test]
     async fn a_freshly_initialized_profile_resolves_to_the_default_turn_limit() {
@@ -1860,9 +1720,6 @@ mod tests {
         );
     }
 
-    /// The grant exercised here is the configurator's own profile category;
-    /// its no-lockout and preview guardrails are separate policy, not this
-    /// fence.
     #[tokio::test]
     async fn the_engineer_sets_max_turns_on_a_freshly_initialized_home() {
         use gents::llm::tool::ToolDyn;
@@ -1961,7 +1818,6 @@ mod tests {
         };
         let node_document = || async { load_node(&node, owner).await.unwrap() };
 
-        // The named agent is missing, then disabled: neither publishes a node_document.
         let missing = vec![
             entry(Collection::InferenceBackend, backend.clone()),
             entry(Collection::InferenceProfile, profile.clone()),
@@ -2000,141 +1856,6 @@ mod tests {
         );
     }
 
-    fn init_summary(provider_kind: BackendProviderKind, endpoint: &str) -> InitSummary {
-        InitSummary {
-            backend_id: "did:key:z-init:backend".to_string(),
-            backend_name: "test-agent backend".to_string(),
-            provider_kind,
-            endpoint: endpoint.to_string(),
-            api_key: None,
-            api_key_env_var: None,
-            model_name: "test-model".to_string(),
-            max_concurrent: 2,
-            max_queue_depth: 16,
-            default_agent_id: "default".to_string(),
-            tools_id: "default-tools".to_string(),
-            wide_open_preset_id: "wide-open".to_string(),
-            inference_profile_id: "default-profile".to_string(),
-            tool_package: ToolPackageArg::Readonly,
-            tool_ceiling: ToolCeilingArg::Readonly,
-            tool_root: None,
-            enable_memory: false,
-            enable_defra_query: false,
-            defra_query_collections: Vec::new(),
-            created_node: true,
-            created_default_agent: true,
-        }
-    }
-
-    #[test]
-    fn claude_next_steps_lead_with_login() {
-        let steps = init_next_steps(
-            &init_summary(
-                BackendProviderKind::ClaudeCliSubscription,
-                "claude-cli://subscription",
-            ),
-            false,
-            false,
-            false,
-        );
-        assert_eq!(
-            steps.first().map(String::as_str),
-            Some("gents claude-login")
-        );
-    }
-
-    #[test]
-    fn claude_next_steps_drop_login_after_inline_login() {
-        let steps = init_next_steps(
-            &init_summary(
-                BackendProviderKind::ClaudeCliSubscription,
-                "claude-cli://subscription",
-            ),
-            false,
-            false,
-            true,
-        );
-        assert!(!steps.iter().any(|step| step == "gents claude-login"));
-        let state = InlineClaudeLoginState::ExistingCredential;
-        assert!(state.is_authenticated());
-        assert!(state.outcome().is_none());
-    }
-
-    #[test]
-    fn chatgpt_codex_next_steps_lead_with_login() {
-        let steps = init_next_steps(
-            &init_summary(
-                BackendProviderKind::ChatGptCodex,
-                "https://chatgpt.com/backend-api/codex",
-            ),
-            false,
-            false,
-            false,
-        );
-        assert_eq!(steps.first().map(String::as_str), Some("gents codex-login"));
-    }
-
-    #[test]
-    fn chatgpt_codex_next_steps_drop_login_after_inline_login() {
-        let steps = init_next_steps(
-            &init_summary(
-                BackendProviderKind::ChatGptCodex,
-                "https://chatgpt.com/backend-api/codex",
-            ),
-            true,
-            false,
-            false,
-        );
-        assert!(!steps.iter().any(|step| step == "gents codex-login"));
-    }
-
-    #[test]
-    fn existing_codex_credential_drops_login_step_without_new_outcome() {
-        let state = InlineCodexLoginState::ExistingCredential;
-        assert!(state.is_authenticated());
-        assert!(state.outcome().is_none());
-
-        let steps = init_next_steps(
-            &init_summary(
-                BackendProviderKind::ChatGptCodex,
-                "https://chatgpt.com/backend-api/codex",
-            ),
-            state.is_authenticated(),
-            false,
-            false,
-        );
-        assert!(!steps.iter().any(|step| step == "gents codex-login"));
-    }
-
-    #[test]
-    fn non_codex_next_steps_omit_login() {
-        let steps = init_next_steps(
-            &init_summary(
-                BackendProviderKind::OpenAiCompatible,
-                "http://127.0.0.1:8080/v1",
-            ),
-            false,
-            false,
-            false,
-        );
-        assert!(!steps.iter().any(|step| step == "gents codex-login"));
-        assert!(!steps.iter().any(|step| step == "gents grok-login"));
-    }
-
-    #[test]
-    fn grok_oauth_next_steps_lead_with_login() {
-        let steps = init_next_steps(
-            &init_summary(
-                BackendProviderKind::XaiGrokOAuth,
-                "https://cli-chat-proxy.grok.com/v1",
-            ),
-            false,
-            false,
-            false,
-        );
-        assert_eq!(steps.first().map(String::as_str), Some("gents grok-login"));
-    }
-
     fn init_args() -> InitArgs {
         InitArgs {
             home: None,
@@ -2169,528 +1890,5 @@ mod tests {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
         }
-    }
-
-    #[test]
-    fn engineer_placeholder_is_disabled_until_inference_is_selected() {
-        let mut args = init_args();
-        args.engineer = true;
-        args.model_name = None;
-        assert!(!initial_backend_enabled(&args));
-        args.model_name = Some("selected-model".into());
-        assert!(initial_backend_enabled(&args));
-        args.model_name = None;
-        args.engineer = false;
-        assert!(initial_backend_enabled(&args));
-    }
-
-    #[test]
-    fn init_affordances_seed_tools_document() {
-        let tools = tools_for_package(
-            "did:key:z-init",
-            "default-tools",
-            ToolPackageArg::Readonly,
-            None,
-            true,
-            true,
-            vec!["AgentRequest".to_string(), "AgentMessage".to_string()],
-        );
-
-        assert!(
-            tools.self_config.is_none(),
-            "package profiles leave self-config to init's first-run preset"
-        );
-        let built_ins = tools.built_ins.as_ref().unwrap();
-        assert_eq!(built_ins.enable_memory, Some(true));
-        let datastore = tools.datastore.as_ref().unwrap();
-        assert_eq!(datastore.enable_defra_query, Some(true));
-        assert_eq!(
-            datastore.defra_query_collections,
-            Some(vec!["AgentRequest".to_string(), "AgentMessage".to_string()])
-        );
-        let host = tools.host.as_ref().unwrap();
-        assert_eq!(host.files.as_ref().unwrap().mode, FileToolMode::ReadOnly);
-        assert_eq!(host.bash.as_ref().unwrap().mode, BashMode::ReadOnly);
-    }
-
-    #[test]
-    fn engineer_uses_the_selected_process_permissions() {
-        let selected = ToolPackageArg::Yolo;
-        assert_eq!(
-            tool_ceiling_for_package(ToolPackageArg::Yolo),
-            ToolCeilingArg::Readwrite
-        );
-
-        let tools = tools_for_package(
-            "did:key:z-init",
-            "setup-tools",
-            selected,
-            None,
-            false,
-            false,
-            Vec::new(),
-        );
-        let host = tools.host.expect("setup host tools");
-        assert_eq!(
-            host.root, None,
-            "without WorkspaceRoot policy the default Tools document must not pin the operator root; init.json owns it"
-        );
-        let pinned = tools_for_package(
-            "did:key:z-init",
-            "setup-tools",
-            selected,
-            Some(PathBuf::from("/")),
-            false,
-            false,
-            Vec::new(),
-        );
-        assert_eq!(
-            pinned.host.and_then(|host| host.root),
-            Some("/".to_string()),
-            "under an explicit WorkspaceRoot policy the default Tools document pins the resolved operator root so the execution guard admits requests"
-        );
-        assert_eq!(host.files.unwrap().mode, FileToolMode::ReadWrite);
-        assert_eq!(host.bash.unwrap().mode, BashMode::Unrestricted);
-        assert_eq!(
-            engineer_self_config().self_config_categories,
-            Some(vec![
-                "node".to_string(),
-                "agent".to_string(),
-                "tools".to_string(),
-                "profile".to_string(),
-                "backend".to_string(),
-                "mcp_service".to_string(),
-                "automation".to_string(),
-            ])
-        );
-        assert_eq!(engineer_self_config().enable_pack_install, Some(true));
-    }
-
-    #[test]
-    fn engineer_ships_agents_sessions_query_and_mailbox_tools() {
-        let mut tools = tools_for_package(
-            "did:key:z-init",
-            "setup-tools",
-            ToolPackageArg::Write,
-            None,
-            false,
-            false,
-            Vec::new(),
-        );
-        let surface = engineer_tools(&mut tools, "did:key:z-init", true);
-        assert_eq!(
-            tools.built_ins.as_ref().unwrap().enable_schema_tool,
-            Some(true)
-        );
-        assert!(tools.validation_violations().is_empty());
-        assert_eq!(tools.agents.as_ref().unwrap().enabled, Some(true));
-        assert_eq!(
-            tools
-                .built_ins
-                .as_ref()
-                .unwrap()
-                .enable_session_history_tool,
-            Some(true)
-        );
-        let datastore = tools.datastore.as_ref().unwrap();
-        assert_eq!(datastore.enable_defra_query, Some(true));
-        assert_eq!(
-            datastore.datastore_tool_surface_ids,
-            Some(vec![surface.surface_id.clone()])
-        );
-        assert_eq!(surface.node_did, "did:key:z-init");
-        assert_eq!(
-            surface.entries,
-            Some(vec![SurfaceToolDecl::Create(
-                gents::mailbox::canonical_mailbox_write_decl()
-            )])
-        );
-    }
-
-    #[test]
-    fn engineer_defaults_to_write_without_overriding_explicit_restrictions() {
-        let mut args = init_args();
-        args.engineer = true;
-        assert_eq!(
-            resolve_initial_tool_package(&args).unwrap(),
-            ToolPackageArg::Write
-        );
-        for package in [
-            ToolPackageArg::Minimal,
-            ToolPackageArg::Introspection,
-            ToolPackageArg::Readonly,
-            ToolPackageArg::Write,
-            ToolPackageArg::Yolo,
-        ] {
-            args.tool_package = Some(package);
-            assert_eq!(resolve_initial_tool_package(&args).unwrap(), package);
-        }
-    }
-
-    /// Drift fence between init's tool packages and the directory agent
-    /// catalog's preset templates (`gents::tool_surface::presets`): the
-    /// templates are copied verbatim from init's package profiles, and
-    /// nothing else ties the two together. Classify the exact canonical
-    /// `Tools` document init mints — projected into `PresetFields`
-    /// through the shared `classify_tools` owner with the same
-    /// None-means-default reads the directory projection applies to stored
-    /// rows — so a change to either side fails here instead of silently
-    /// mislabeling directory rows.
-    #[test]
-    fn init_minted_selections_classify_as_their_agent_preset() {
-        use gents::tool_surface::presets::{classify_tools, PRESET_READONLY, PRESET_WRITE};
-
-        fn classify(package: ToolPackageArg) -> Option<&'static str> {
-            let tools = tools_for_package(
-                "did:key:z-init",
-                "default-tools",
-                package,
-                None,
-                false,
-                false,
-                Vec::new(),
-            );
-            classify_tools(&tools, &gents::MergedSurfaceTools::default()).unwrap()
-        }
-
-        assert_eq!(classify(ToolPackageArg::Readonly), Some(PRESET_READONLY));
-        assert_eq!(classify(ToolPackageArg::Write), Some(PRESET_WRITE));
-        // Yolo differs from Write only in fields the classifier deliberately
-        // excludes (display name, exec policy), so it badges as "write".
-        assert_eq!(classify(ToolPackageArg::Yolo), Some(PRESET_WRITE));
-        assert_eq!(classify(ToolPackageArg::Minimal), None);
-        assert_eq!(classify(ToolPackageArg::Introspection), None);
-    }
-
-    #[test]
-    fn init_tool_packages_seed_expected_tools_documents() {
-        struct Case {
-            package: ToolPackageArg,
-            ceiling: ToolCeilingArg,
-            display_name: &'static str,
-            file_tools_mode: Option<FileToolMode>,
-            bash_mode: Option<BashMode>,
-            enable_goal_tools: Option<bool>,
-            enable_defra_query: bool,
-            background_enabled: Option<bool>,
-        }
-
-        let cases = [
-            Case {
-                package: ToolPackageArg::Minimal,
-                ceiling: ToolCeilingArg::MetaOnly,
-                display_name: "Minimal Tools",
-                file_tools_mode: None,
-                bash_mode: None,
-                enable_goal_tools: None,
-                enable_defra_query: false,
-                background_enabled: None,
-            },
-            Case {
-                package: ToolPackageArg::Introspection,
-                ceiling: ToolCeilingArg::MetaOnly,
-                display_name: "Introspection Tools",
-                file_tools_mode: None,
-                bash_mode: None,
-                enable_goal_tools: Some(true),
-                enable_defra_query: true,
-                background_enabled: None,
-            },
-            Case {
-                package: ToolPackageArg::Readonly,
-                ceiling: ToolCeilingArg::Readonly,
-                display_name: "Standard Read-Only Tools",
-                file_tools_mode: Some(FileToolMode::ReadOnly),
-                bash_mode: Some(BashMode::ReadOnly),
-                enable_goal_tools: Some(true),
-                enable_defra_query: false,
-                background_enabled: Some(false),
-            },
-            Case {
-                package: ToolPackageArg::Write,
-                ceiling: ToolCeilingArg::Readwrite,
-                display_name: "Standard Write Tools",
-                file_tools_mode: Some(FileToolMode::ReadWrite),
-                bash_mode: Some(BashMode::Unrestricted),
-                enable_goal_tools: Some(true),
-                enable_defra_query: false,
-                background_enabled: Some(true),
-            },
-        ];
-
-        for case in cases {
-            let tools = tools_for_package(
-                "did:key:z-init",
-                "default-tools",
-                case.package,
-                None,
-                false,
-                init_enable_defra_query(case.package, false, false),
-                Vec::new(),
-            );
-
-            assert_eq!(tool_ceiling_for_package(case.package), case.ceiling);
-            assert_eq!(tools.display_name.as_deref(), Some(case.display_name));
-            let host = tools.host.as_ref();
-            assert_eq!(
-                host.and_then(|host| host.files.as_ref().map(|files| files.mode)),
-                case.file_tools_mode
-            );
-            let bash = host.and_then(|host| host.bash.as_ref());
-            assert_eq!(bash.map(|bash| bash.mode), case.bash_mode);
-            let built_ins = tools.built_ins.as_ref().unwrap();
-            assert_eq!(built_ins.enable_goal_tools, case.enable_goal_tools);
-            assert_eq!(built_ins.enable_memory, Some(false));
-            assert_eq!(built_ins.enable_context_budget, Some(true));
-            assert_eq!(
-                tools.datastore.as_ref().unwrap().enable_defra_query,
-                Some(case.enable_defra_query)
-            );
-            // Canonical agent capability is absent unless authored: no
-            // targets, no spawn/steering/background, no cross-node_document grant.
-            assert!(tools.agents.is_none());
-            assert!(tools.remote.is_none());
-            assert!(tools.self_config.is_none());
-            assert_eq!(
-                // Write-capable bash may run in the background; the runtime
-                // adapter materializes that as the `bash_unrestricted` entry.
-                bash.map(|bash| bash.background_enabled),
-                case.background_enabled
-            );
-        }
-    }
-
-    #[test]
-    fn init_can_seed_defra_query_disabled_document() {
-        let tools = tools_for_package(
-            "did:key:z-init",
-            "default-tools",
-            ToolPackageArg::Write,
-            None,
-            false,
-            init_enable_defra_query(ToolPackageArg::Write, false, true),
-            Vec::new(),
-        );
-
-        let built_ins = tools.built_ins.as_ref().unwrap();
-        assert_eq!(built_ins.enable_memory, Some(false));
-        let datastore = tools.datastore.as_ref().unwrap();
-        assert_eq!(datastore.enable_defra_query, Some(false));
-        assert_eq!(datastore.defra_query_collections, None);
-        let bash = tools.host.as_ref().unwrap().bash.as_ref().unwrap();
-        assert!(bash.background_enabled);
-    }
-
-    #[test]
-    fn init_tool_package_aliases_and_defra_query_scope_validation_match_seeded_docs() {
-        assert_eq!(
-            resolve_init_tool_package(false, false, None).unwrap(),
-            ToolPackageArg::Readonly
-        );
-        assert_eq!(
-            resolve_init_tool_package(true, false, None).unwrap(),
-            ToolPackageArg::Write
-        );
-        assert_eq!(
-            resolve_init_tool_package(true, false, Some(ToolPackageArg::Write)).unwrap(),
-            ToolPackageArg::Write
-        );
-        assert!(
-            resolve_init_tool_package(true, false, Some(ToolPackageArg::Readonly))
-                .unwrap_err()
-                .to_string()
-                .contains("--write")
-        );
-        assert_eq!(
-            resolve_init_tool_package(false, true, None).unwrap(),
-            ToolPackageArg::Yolo
-        );
-        assert_eq!(
-            resolve_init_tool_package(false, true, Some(ToolPackageArg::Yolo)).unwrap(),
-            ToolPackageArg::Yolo
-        );
-        assert!(
-            resolve_init_tool_package(false, true, Some(ToolPackageArg::Readonly))
-                .unwrap_err()
-                .to_string()
-                .contains("--yolo")
-        );
-
-        let mut scoped_introspection = init_args();
-        scoped_introspection.tool_package = Some(ToolPackageArg::Introspection);
-        scoped_introspection.defra_query_collections = vec!["AgentRequest".to_string()];
-        validate_init_tool_flags(&scoped_introspection, ToolPackageArg::Introspection).unwrap();
-
-        let tools = tools_for_package(
-            "did:key:z-init",
-            "default-tools",
-            ToolPackageArg::Introspection,
-            None,
-            true,
-            init_enable_defra_query(ToolPackageArg::Introspection, false, false),
-            scoped_introspection.defra_query_collections.clone(),
-        );
-        let built_ins = tools.built_ins.as_ref().unwrap();
-        assert_eq!(built_ins.enable_memory, Some(true));
-        let datastore = tools.datastore.as_ref().unwrap();
-        assert_eq!(datastore.enable_defra_query, Some(true));
-        assert_eq!(
-            datastore.defra_query_collections,
-            Some(vec!["AgentRequest".to_string()])
-        );
-    }
-
-    #[test]
-    fn yolo_package_seeds_unrestricted_write_documents() {
-        let tools = tools_for_package(
-            "did:key:z-init",
-            "default-tools",
-            ToolPackageArg::Yolo,
-            None,
-            false,
-            init_enable_defra_query(ToolPackageArg::Yolo, false, false),
-            Vec::new(),
-        );
-        let bash = tools.host.as_ref().unwrap().bash.as_ref().unwrap();
-        assert_eq!(bash.mode, BashMode::Unrestricted);
-        assert_eq!(
-            bash.execution_mode,
-            Some(CommandExecutionMode::Unrestricted)
-        );
-        assert!(bash.background_enabled);
-
-        let write_bash = tools_for_package(
-            "did:key:z-init",
-            "default-tools",
-            ToolPackageArg::Write,
-            None,
-            false,
-            false,
-            Vec::new(),
-        )
-        .host
-        .unwrap()
-        .bash
-        .unwrap();
-        assert_eq!(
-            write_bash.execution_mode,
-            if cfg!(target_os = "macos") {
-                Some(CommandExecutionMode::WorkspaceWrite)
-            } else {
-                Some(CommandExecutionMode::Unrestricted)
-            }
-        );
-        assert_eq!(
-            standard_system_prompt(ToolPackageArg::Yolo),
-            STANDARD_READWRITE_SYSTEM_PROMPT
-        );
-        assert_eq!(
-            tool_ceiling_for_package(ToolPackageArg::Yolo),
-            ToolCeilingArg::Readwrite
-        );
-    }
-
-    #[test]
-    fn wide_open_preset_is_canonical_permissive_tools() {
-        let preset = wide_open_tools_document("did:key:z-init");
-        assert_eq!(preset.tools_id, "did:key:z-init:wide-open");
-        assert_eq!(preset.node_did, "did:key:z-init");
-        assert_eq!(
-            preset.built_ins.as_ref().unwrap().enable_context_budget,
-            Some(true)
-        );
-        assert_eq!(
-            preset.datastore.as_ref().unwrap().enable_defra_query,
-            Some(true)
-        );
-        // No host tools, remote services, agents, integrations, or
-        // self-config: the permissive surface is explicit, never implied by a
-        // policy version.
-        assert!(preset.host.is_none());
-        assert!(preset.remote.is_none());
-        assert!(preset.agents.is_none());
-        assert!(preset.integrations.is_none());
-        assert!(preset.self_config.is_none());
-        assert!(preset.validate().is_ok());
-    }
-
-    #[test]
-    fn init_backend_auth_selection_is_typed_and_oauth_owns_its_credential() {
-        let mut backend = ResolvedBackendConfig {
-            provider_kind: gents::BackendProviderKind::OpenAiCompatible,
-            openai_wire_api: None,
-            endpoint: "http://127.0.0.1:8080/v1".to_string(),
-            api_key: None,
-            api_key_env_var: None,
-        };
-        assert_eq!(
-            backend_auth_for_init(&backend).unwrap(),
-            BackendAuth::Unauthenticated
-        );
-        backend.api_key = Some("raw-key".to_string());
-        assert_eq!(
-            backend_auth_for_init(&backend).unwrap(),
-            BackendAuth::ApiKey {
-                key: "raw-key".to_string()
-            }
-        );
-        backend.api_key = None;
-        backend.api_key_env_var = Some("PROVIDER_KEY".to_string());
-        assert_eq!(
-            backend_auth_for_init(&backend).unwrap(),
-            BackendAuth::Environment {
-                variable: "PROVIDER_KEY".to_string()
-            }
-        );
-        // Agent-scoped OAuth providers resolve the node's existing
-        // OAuthCredential; the backend never copies tokens or keys.
-        backend.provider_kind = gents::BackendProviderKind::ChatGptCodex;
-        backend.api_key = Some("ignored".to_string());
-        assert_eq!(
-            backend_auth_for_init(&backend).unwrap(),
-            BackendAuth::NodeOAuth { account_ref: None }
-        );
-    }
-
-    #[test]
-    fn init_rejects_affordances_that_would_not_write_documents() {
-        let mut identity_only = init_args();
-        identity_only.identity_only = true;
-        identity_only.enable_memory = true;
-        assert!(
-            validate_init_tool_flags(&identity_only, ToolPackageArg::Readonly)
-                .unwrap_err()
-                .to_string()
-                .contains("--identity-only because no Tools document")
-        );
-
-        let mut identity_only_query = init_args();
-        identity_only_query.identity_only = true;
-        identity_only_query.enable_defra_query = true;
-        assert!(
-            validate_init_tool_flags(&identity_only_query, ToolPackageArg::Readonly)
-                .unwrap_err()
-                .to_string()
-                .contains("--identity-only because no Tools document")
-        );
-
-        let mut scoped_without_tool = init_args();
-        scoped_without_tool.defra_query_collections = vec!["AgentRequest".to_string()];
-        assert!(
-            validate_init_tool_flags(&scoped_without_tool, ToolPackageArg::Minimal)
-                .unwrap_err()
-                .to_string()
-                .contains("--defra-query-collection")
-        );
-
-        let mut scoped_disabled = init_args();
-        scoped_disabled.disable_defra_query = true;
-        scoped_disabled.defra_query_collections = vec!["AgentRequest".to_string()];
-        assert!(
-            validate_init_tool_flags(&scoped_disabled, ToolPackageArg::Readonly)
-                .unwrap_err()
-                .to_string()
-                .contains("--defra-query-collection")
-        );
     }
 }

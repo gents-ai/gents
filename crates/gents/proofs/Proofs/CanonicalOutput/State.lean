@@ -116,8 +116,6 @@ structure PayloadRef where
   stream : Nat
   deriving DecidableEq, Repr
 
-/-- Delivery deduplicates exact facts. A distinct document at the same source
-coordinate remains visible, so reconstruction can expose the conflict. -/
 def deliver (records : List Segment) (record : Segment) : List Segment :=
   if record ∈ records then records else records ++ [record]
 

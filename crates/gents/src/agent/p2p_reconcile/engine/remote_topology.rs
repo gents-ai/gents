@@ -1,5 +1,3 @@
-//! Observation and mutation of the live remote P2P topology.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
@@ -10,9 +8,9 @@ use super::super::{
     TransportEndpoint,
 };
 
-/// Authoritatively remove every live replicator at an endpoint owned by a
-/// route being deleted. Ownership has already been established by the caller,
-/// so mutable collection/filter drift must not protect the stale route.
+/// Remove every live replicator at an endpoint owned by a route being deleted.
+/// Caller has already established ownership, so stale-route drift must not
+/// protect these replicators.
 pub async fn teardown_owned_replicators_at_endpoint(
     admin: &dyn RemoteP2pAdmin,
     address: &str,

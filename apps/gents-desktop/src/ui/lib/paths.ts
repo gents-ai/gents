@@ -1,22 +1,14 @@
-/* How a filesystem path reads on screen. Only for display: an exact path
-   (an input's value, a copy, a delete confirmation) stays whole, and
-   whatever shortens a path puts the full one in the title. */
-
 type Parsed = {
   sep: "/" | "\\";
-  /** "~", "/", a drive such as "C:", a UNC share, or "" for a relative path */
   root: string;
   segments: string[];
 };
 
-/* a machine that separates with a backslash has the same long prefix to
-   lose, and a drive letter is as absolute as a leading slash */
 const separator = (path: string): "/" | "\\" =>
   path.includes("\\") && !path.includes("/") ? "\\" : "/";
 
 const segmentsOf = (path: string) => path.split(/[\\/]/).filter(Boolean);
 
-/* Windows and macOS compare paths without regard to case by default */
 const sameRoot = (sep: "/" | "\\", a: string, b: string) =>
   sep === "\\" ? a.toLowerCase() === b.toLowerCase() : a === b;
 
@@ -52,17 +44,9 @@ const join = ({ sep, root, segments }: Parsed) => {
   return segments.length ? `${root}${sep}${segments.join(sep)}` : root;
 };
 
-/** The last segment of a path: the folder or file it names. */
 export const pathName = (path: string): string => segmentsOf(path).pop() ?? path;
 
-/**
- * A path as it reads on screen. With `home`, a path under it starts at `~`;
- * pass it only for paths on this computer, since a remote host's home is
- * not this one. A long absolute path loses folders from the left, the end
- * that every path in a list shares, and keeps at least its own name:
- * folders go while more than `keep` remain or it is longer than `max`
- * characters. A relative path is already short and stays whole.
- */
+/** Display-only shortening; `home` must belong to this computer. */
 export function shortPath(
   path: string,
   {
@@ -85,10 +69,6 @@ export function shortPath(
   return `${lead}${sep}${segments.slice(-kept).join(sep)}`;
 }
 
-/**
- * Each path's name, and for names two paths share, a short form of the
- * folder it sits in, so the rows can be told apart.
- */
 export function distinctNames(
   paths: readonly string[],
   home?: string | null,

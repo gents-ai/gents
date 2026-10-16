@@ -149,8 +149,6 @@ async fn fetch_doc_patch_returns_only_matching_rows() {
     let response = node.execute(mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    // DefraDB's create_* mutations return an array, so each value is
-    // [{_docID: "..."}] rather than {_docID: "..."}.
     let doc_ids: Vec<String> = response
         .data
         .as_ref()

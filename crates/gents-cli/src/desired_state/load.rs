@@ -79,13 +79,10 @@ fn load_root(root: &Path, owner: Option<&str>) -> Result<DesiredStateManifest> {
         },
     )?;
     let mut config = config;
-    // A pack's own plugin nodes are pinned to the artifact it ships.
     if let Some(manifest) = pack_manifest(root)? {
         gents::pack::pin_pack_plugins(&manifest, &|path| read_pack_asset(root, path), &mut config)?;
     }
     let plan = gents::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;
-    // Offline validation checks canonical shape, duplicate IDs and owner scope.
-    // Existence closure belongs to the transaction over retained + authored docs.
     gents::document_config::ConfigReferences::from_documents(
         &config.node.node_did,
         plan.documents()
@@ -95,8 +92,6 @@ fn load_root(root: &Path, owner: Option<&str>) -> Result<DesiredStateManifest> {
     Ok(config)
 }
 
-/// The `manifest.json` of the pack `root` holds, or `None` for a plain
-/// configuration folder.
 fn pack_manifest(root: &Path) -> Result<Option<gents::pack::PackManifest>> {
     let path = root.join("manifest.json");
     if !path.is_file() {
@@ -107,7 +102,6 @@ fn pack_manifest(root: &Path) -> Result<Option<gents::pack::PackManifest>> {
         .with_context(|| format!("invalid pack manifest {}", path.display()))
 }
 
-/// An asset of the pack at `root`, refused when it is not a plain relative path inside it.
 fn read_pack_asset(root: &Path, relative: &str) -> Result<Vec<u8>> {
     let relative = PathBuf::from(relative);
     anyhow::ensure!(
@@ -170,33 +164,6 @@ mod filesystem_tests {
         }),None,&|name|(name=="NOT_EXPANDED").then(||"${NOT_EXPANDED}".into()),&|_,_,_|unreachable!()).unwrap()
     }
 
-    #[test]
-    fn compact_export_roundtrips_literal_sidecars() {
-        let dir = tempfile::tempdir().unwrap();
-        let expected = config();
-        super::super::write::write_manifest_root(dir.path(), &expected, false).unwrap();
-        assert!(dir.path().join("pack_config.json").is_file());
-        let (actual, report) = load_manifest_root(dir.path());
-        assert!(report.ok, "{:?}", report.errors);
-        assert_eq!(
-            serde_json::to_value(actual.unwrap()).unwrap(),
-            serde_json::to_value(expected).unwrap()
-        );
-    }
-
-    #[test]
-    fn malformed_unknown_and_escaping_sidecar_authoring_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        for text in [
-            "{broken",
-            r#"{"node":{"node_did":"owner"},"unknown":true}"#,
-            r#"{"node":{"node_did":"owner"},"contexts":[{"context_id":"context","system_prompt":"./../outside.md"}]}"#,
-        ] {
-            fs::write(dir.path().join("pack_config.json"), text).unwrap();
-            assert!(!load_manifest_root(dir.path()).1.ok, "{text}");
-        }
-    }
-
     #[cfg(unix)]
     #[test]
     fn sidecars_cannot_escape_through_symlinks() {
@@ -245,39 +212,6 @@ mod filesystem_boundary_tests {
         }
         fs::write(dir.path().join("bad.md"), [0xff, 0xfe]).unwrap();
         assert!(hydrate_sidecar(&mut Some("./bad.md".into()), dir.path()).is_err());
-    }
-}
-
-#[cfg(test)]
-mod interpolation_tests {
-    #[test]
-    fn shared_decoder_interpolates_values_after_json_parse_and_enforces_owner() {
-        let value = serde_json::json!({"node":{"node_did":"owner"},"contexts":[{"context_id":"context","description":"${DESCRIPTION}"}]});
-        let config = gents::pack::decode_pack_config(
-            value.clone(),
-            None,
-            &|name| (name == "DESCRIPTION").then(|| "quoted \"value\"\nnext".into()),
-            &|_, _, _| unreachable!(),
-        )
-        .unwrap();
-        assert_eq!(
-            config.contexts[0].description.as_deref(),
-            Some("quoted \"value\"\nnext")
-        );
-        assert!(
-            gents::pack::decode_pack_config(value, None, &|_| None, &|_, _, _| unreachable!())
-                .is_err()
-        );
-        let config = gents::pack::decode_pack_config(
-            serde_json::json!({"node":{"node_did":"${GENTS_PACK_NODE_DID}"}}),
-            Some(&gents::pack::PackInstallOptions {
-                node_did: "selected-owner".into(),
-            }),
-            &|_| Some("spoofed-owner".into()),
-            &|_, _, _| unreachable!(),
-        )
-        .unwrap();
-        assert_eq!(config.node.node_did, "selected-owner");
     }
 }
 

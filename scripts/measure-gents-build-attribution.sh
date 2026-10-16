@@ -1,18 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Produce cold-build, Cargo timing, resolved-feature, and linked-size evidence
-# for the release CLI. Raw reports belong in workflow artifacts, not git.
-#
-# Environment:
-#   ATTRIBUTION_OUTPUT_DIR=path   report directory (default: build-attribution)
-#   CARGO_TARGET_DIR=path         fresh Cargo target directory (required in CI)
-#   ATTRIBUTION_CACHE_STATE=text  human-readable cache state for the report
-#   TARGET_TRIPLE=triple          target to measure (default: rustc host)
-#
-# The target directory must be empty. This prevents an accidentally warm build
-# from being labelled cold. Set ATTRIBUTION_ALLOW_EXISTING_TARGET=1 only for
-# parser/tool development; never set it in the measurement workflow.
+# ATTRIBUTION_ALLOW_EXISTING_TARGET=1 permits a warm target dir for
+# parser/tool development only; never set it in the measurement workflow.
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
@@ -190,10 +180,8 @@ if [[ ! -f "$timing_html" ]]; then
   exit 1
 fi
 
-# cargo-bloat intentionally rebuilds with profile stripping disabled so it can
-# inspect symbols. Snapshot and measure the ordinary stripped release output
-# first; otherwise the inspection build would overwrite the binary whose size
-# this report claims to record.
+# Cargo-bloat rebuilds with stripping disabled to inspect symbols; snapshot the
+# stripped release binary first or the inspection build overwrites it.
 cp "$binary_path" "$measured_binary"
 BUILD_ELAPSED_SECONDS=$build_elapsed_seconds \
   BINARY_PATH=$measured_binary \

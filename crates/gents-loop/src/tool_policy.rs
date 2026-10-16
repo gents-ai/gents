@@ -1,13 +1,3 @@
-//! Pure command-policy vocabulary shared between the loop's tool-dispatch
-//! outcome (`ToolOutcome::Failed { denial, .. }`) and `gents`'s native
-//! command-execution enforcement (`toolset::shared::command`).
-//!
-//! Everything here is data and pure classification: no process spawn, no
-//! filesystem, no DefraDB. The enforcement itself (building a
-//! `CommandExecutionPolicy`, running `sandbox-exec`, spawning `managed_exec`)
-//! stays in `gents`, which re-exports these types so its own call sites are
-//! unchanged.
-
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -51,7 +41,6 @@ impl CommandExecutionMode {
         }
     }
 
-    /// Intersect effects: source writes and private artifact writes are incomparable.
     pub fn meet(self, other: Self) -> Self {
         if self == other {
             return self;
@@ -103,7 +92,6 @@ impl WorkspaceAuthority {
         matches!(self, Self::ReadWrite)
     }
 
-    /// Greatest lower bound. Child spawn cannot outrank a bound parent.
     pub fn infimum(self, other: Self) -> Self {
         if self.rank() <= other.rank() {
             self
@@ -175,7 +163,6 @@ impl CommandNetworkMode {
         !matches!(self, Self::Disabled)
     }
 
-    /// More restrictive mode wins: Disabled < Inherit < Enabled.
     pub fn meet(self, other: Self) -> Self {
         if self.rank() <= other.rank() {
             self

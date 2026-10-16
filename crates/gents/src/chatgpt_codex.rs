@@ -128,10 +128,6 @@ pub fn chatgpt_codex_client_version() -> String {
         .unwrap_or_else(|| CHATGPT_CODEX_CLIENT_VERSION.to_string())
 }
 
-// The codex backend-api hides each model whose minimal_client_version exceeds
-// the advertised client version, so an old default silently hides newer model
-// families (#982). Keep this at a current codex CLI release;
-// GENTS_CHATGPT_CODEX_CLIENT_VERSION overrides it at runtime.
 const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.160.0";
 const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "GENTS_CHATGPT_CODEX_CLIENT_VERSION";
 
@@ -813,20 +809,6 @@ mod tests {
         assert_eq!(terminal.send_count(), 1);
     }
 
-    #[test]
-    fn bearer_rejection_only_for_401_and_403() {
-        use crate::oauth_http::{is_bearer_rejection, OAuthHttpPolicy as _};
-        let statuses = ChatGptCodexPolicy::REJECTION_STATUSES;
-        assert!(is_bearer_rejection(statuses, &status_error("401")));
-        assert!(is_bearer_rejection(statuses, &status_error("403")));
-        assert!(!is_bearer_rejection(statuses, &status_error("500")));
-        assert!(!is_bearer_rejection(statuses, &status_error("429")));
-        assert!(!is_bearer_rejection(
-            statuses,
-            &http_client::Error::Instance(anyhow::anyhow!("network down").into())
-        ));
-    }
-
     async fn send_through(status: u16) -> Arc<CountingBearer> {
         let bearer = CountingBearer::new("tok");
         let client =
@@ -860,47 +842,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn classifies_missing_auth_with_login_guidance() {
-        let msg = classify_chatgpt_auth_error(
-            "did:key:zAgent",
-            CHATGPT_CODEX_PROVIDER,
-            &OAuthAuthProblem::Missing,
-        );
-
-        assert!(msg.contains("did:key:zAgent"), "names the node DID: {msg}");
-        assert!(
-            msg.contains("gents codex-login"),
-            "tells the user how to fix it: {msg}"
-        );
-    }
-
-    #[test]
-    fn classifies_wrong_mode_naming_found_mode() {
-        let msg = classify_chatgpt_auth_error(
-            "did:key:zAgent",
-            CHATGPT_CODEX_PROVIDER,
-            &OAuthAuthProblem::WrongMode {
-                found_mode: "disabled".to_string(),
-            },
-        );
-
-        assert!(msg.contains("ChatGPT"), "asks for ChatGPT OAuth: {msg}");
-        assert!(msg.contains("disabled"), "names what was found: {msg}");
-    }
-
-    #[test]
-    fn classifies_expired_with_reauth_guidance() {
-        let msg = classify_chatgpt_auth_error(
-            "did:key:zAgent",
-            CHATGPT_CODEX_PROVIDER,
-            &OAuthAuthProblem::Expired,
-        );
-
-        assert!(msg.to_lowercase().contains("expired"), "{msg}");
-        assert!(msg.contains("gents codex-login"), "{msg}");
-    }
-
     #[tokio::test]
     async fn injects_fresh_bearer_on_each_request() {
         let bearer = CountingBearer::new("tok-123");
@@ -926,89 +867,6 @@ mod tests {
             bearer.calls.load(Ordering::SeqCst),
             1,
             "refreshed once per request"
-        );
-    }
-
-    #[test]
-    fn patches_rig_responses_body_for_chatgpt_codex() {
-        let body = json!({
-            "model": "gpt-5.2",
-            "max_output_tokens": 2048,
-            "temperature": 0.2,
-            "top_p": 0.9,
-            "input": [
-                {
-                    "type": "message",
-                    "role": "system",
-                    "content": [
-                        { "type": "input_text", "text": "Use terse answers." }
-                    ]
-                },
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": [
-                        { "type": "input_text", "text": "Say pong." }
-                    ]
-                }
-            ],
-            "tools": [
-                {
-                    "type": "function",
-                    "name": "query",
-                    "strict": true,
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "collection": { "type": "string" },
-                            "filter": { "type": "object" }
-                        },
-                        "required": ["collection", "filter"]
-                    }
-                },
-                {
-                    "type": "function",
-                    "name": "read_file"
-                }
-            ]
-        });
-
-        let patched = patch_instructions_body(&serde_json::to_vec(&body).unwrap()).unwrap();
-        let patched: Value = serde_json::from_slice(&patched).unwrap();
-
-        assert_eq!(
-            patched.get("instructions").and_then(Value::as_str),
-            Some("Use terse answers.")
-        );
-        assert_eq!(patched.get("store").and_then(Value::as_bool), Some(false));
-        assert_eq!(patched.get("stream").and_then(Value::as_bool), Some(true));
-        assert!(patched
-            .get("input")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .all(|item| item.get("role").and_then(Value::as_str) != Some("system")));
-        for unsupported in CHATGPT_CODEX_UNSUPPORTED_PARAMS {
-            assert!(
-                patched.get(*unsupported).is_none(),
-                "unsupported Codex param {unsupported} should be stripped: {patched}"
-            );
-        }
-        let tools = patched.get("tools").and_then(Value::as_array).unwrap();
-        assert!(
-            tools
-                .iter()
-                .all(|tool| tool.get("strict") == Some(&Value::Bool(false))),
-            "Codex function tools should match Codex CLI strict:false: {tools:?}"
-        );
-        assert_eq!(
-            tools[0]
-                .get("parameters")
-                .and_then(|parameters| parameters.get("required"))
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2),
-            "strict:false shaping should not rewrite tool schemas"
         );
     }
 

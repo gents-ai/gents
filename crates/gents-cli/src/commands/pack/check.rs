@@ -1,5 +1,3 @@
-//! CLI validation around the shared pack check and topology owners.
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -44,7 +42,6 @@ pub(crate) async fn check(args: PackCheckArgs) -> Result<()> {
     Ok(())
 }
 
-/// Runs the shared authoring checks and adds checks whose owners live in the CLI.
 pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
     let shared = gents::pack::authoring::check_dir(dir).await;
     let mut report = CheckReport {
@@ -101,7 +98,6 @@ fn load_config(archive: &PackArchive) -> Result<gents::document_config::PackConf
     gents::pack::authoring::load_config(archive)
 }
 
-/// Runs event-source filters as queries against runtime and pack schemas.
 async fn check_filters(
     dir: &Path,
     config: &gents::document_config::PackConfig,
@@ -164,9 +160,6 @@ pub(crate) fn write_topology(dir: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// Every fixture pack passes the check: the machinery gate for gents
-    /// itself. The CI gate for real (packs-repo) packs moved to packs CI
-    /// (`gents pack test`), which builds against this checkout's gents.
     #[tokio::test]
     async fn every_fixture_pack_passes_the_check() {
         let dirs = super::super::test_support::every_fixture_dir();
@@ -274,8 +267,6 @@ mod tests {
         assert!(report.problems.is_empty(), "{:#?}", report.problems);
     }
 
-    /// `gents pack check` validates `experiment.json` at its declared
-    /// defaults, so a scenario that fails to load fails the check too.
     #[tokio::test]
     async fn a_scenario_that_fails_validation_fails_the_check() {
         let dir = copy_pack(&super::super::test_support::fixture_dir(
@@ -283,8 +274,6 @@ mod tests {
         ));
         let experiment_path = dir.path().join("experiment.json");
         let text = std::fs::read_to_string(&experiment_path).unwrap();
-        // A tool package the loader does not recognize; `validate_tool_package`
-        // refuses it before any run ever starts.
         std::fs::write(
             &experiment_path,
             text.replacen(
@@ -298,9 +287,6 @@ mod tests {
         assert!(!report.problems.is_empty(), "{:#?}", report.problems);
     }
 
-    /// An allowed folder must stay inside `init.tool_root`, so `gents pack
-    /// check` refuses a scenario that allows one without declaring it, before
-    /// any run initializes a home.
     #[tokio::test]
     async fn allowed_folders_without_a_tool_root_fail_the_check() {
         let dir = copy_pack(&super::super::test_support::fixture_dir(

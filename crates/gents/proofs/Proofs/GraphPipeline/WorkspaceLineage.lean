@@ -1,13 +1,6 @@
 import Proofs.GraphPipeline.LogicalInvocation
 import Proofs.Workspace.Types
 
-/-!
-Derived workspace lineage for one pinned graph entry, not a new document owner.
-Authentication/route/physical-source facts are checked adapter observations.
-No cryptography, scan phantom protection or filesystem sealHash computation is proved.
-Ready quickstart creation is NOT sealing; a sealHash can only be supplied by the
-existing workspace owner. An absent sealHash remains absent under inheritance.
--/
 namespace GraphPipeline.WorkspaceLineage
 
 structure Identity where
@@ -43,9 +36,6 @@ structure Context where
 
 inductive Source where
   | downstream (roots : List Root)
-  /-- Controller's immutable input constraints and workspace-owner-stamped tuple.
-  physicalSeedVerified includes selected entry route, source collection/docID and
-  unique observed correlation; this does NOT assert a native predicate lock. -/
   | bootstrap (controllerInput : Explicit) (stamped : Option Identity)
       (physicalSeedVerified : Bool) (workspaceOwnerVerified : Bool)
   deriving DecidableEq, Repr
@@ -67,9 +57,6 @@ def explicitMatches (context : Context) (explicit : Explicit) (identity : Option
   identityMatches explicit identity &&
     explicit.authority.all (fun authority => context.destinationAuthority == some authority)
 
-/-- Bootstrap may add an owner-verified sealHash when omitted by the CLI, but
-cannot introduce a workspace ID absent from the controller's stored input.
-The node owner comes from the verified workspace, never caller input. -/
 def controllerMatches (context : Context) (input : Explicit) (stamped : Option Identity) : Bool :=
   input.workspaceId == stamped.map Identity.workspaceId &&
   explicitMatches context input stamped
@@ -78,8 +65,6 @@ def rootMatches (context : Context) (root : Root) : Bool :=
   root.authenticatedTarget && root.correlation == context.correlation &&
   root.revision == context.revision && root.entryRoute == context.entryRoute
 
-/-- Unauthenticated and unrelated hints grant nothing. Exactly one qualifying
-physical entry receipt must remain; authenticated ambiguity is never sorted away. -/
 def sourceIdentity (context : Context) : Source → Option (Option Identity)
   | .downstream roots =>
       match roots.filter (rootMatches context) with
@@ -89,8 +74,6 @@ def sourceIdentity (context : Context) : Source → Option (Option Identity)
       if seedVerified && ownerVerified && controllerMatches context input stamped
       then some stamped else none
 
-/-- A destination with no workspace ceiling (including code-review triage)
-receives no binding. Validate provenance/conflicting hints before attenuation. -/
 def destinationWorkspace (context : Context) (identity : Option Identity) : Option Identity :=
   if context.destinationAuthority.isSome then identity else none
 
@@ -202,8 +185,6 @@ theorem unauthenticated_singleton_denied (context : Context) (root : Root)
   apply missing_root_denied
   simp [rootMatches, h]
 
-/-- Same existing GraphRun publication state and generation fence. No second
-transaction/status: this stages only when lineage and the current fence agree. -/
 def publish (state : LogicalInvocation.PublicationState) (expected : Nat)
     (context : Context) (source : Source) (explicit : Explicit) : LogicalInvocation.PublicationState :=
   if (resolve context source explicit).isSome &&
@@ -248,9 +229,6 @@ structure Eligibility where
   routeKind : RouteKind
   deriving DecidableEq, Repr
 
-/-- A selected entry has one immutable run seed. A grouped route has one
-EventGroupState per pinned consumer/configuration/correlation. These native
-publication premises, not the concurrency setting, establish singleton identity. -/
 def eligible (e : Eligibility) : Bool :=
   e.sourceIsTask && e.targetExists && e.targetIsTask && e.routeCount == 1 &&
     e.routeKind != .perDocument

@@ -1,7 +1,3 @@
-/* A node pick kept in browser storage outlives the node it names: storage belongs
-   to the app's origin, so a reset home or a removed peer leaves a DID no
-   node has. The list must not narrow to nothing, and an empty list must
-   not claim there are no sessions when a filter hides them. */
 import { cleanup, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
@@ -36,7 +32,6 @@ const session = (overrides: Partial<SessionSummary>): SessionSummary => ({
 });
 const nodeWith = (nodeDid: string, sessions: SessionSummary[]) =>
   node({ nodeDid, label: nodeDid, source: "enrollment", sessions });
-/* the home is the working node, where the list starts */
 const app = (deployments: ReturnType<typeof nodeWith>[]) =>
   testApp({
     snapshot: {

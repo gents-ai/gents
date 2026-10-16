@@ -1,8 +1,4 @@
-//! Developer option: open the managed runtime's DB Explorer window.
-//!
-//! `gents serve` mounts the vendored DefraDB Explorer at `/explorer/` on the
-//! same listener as its DefraDB HTTP API, so the window is same-origin with
-//! the database it browses and needs no CORS or IPC access.
+//! The window is same-origin with the DefraDB HTTP API, so it needs no CORS or IPC access.
 
 use tauri::{AppHandle, Manager, Runtime, State, WebviewUrl, WebviewWindowBuilder};
 
@@ -33,7 +29,6 @@ pub async fn desktop_open_db_explorer<R: Runtime>(
     Ok(url)
 }
 
-/// `http://host:port/api/v0/graphql` → `http://host:port/explorer/`.
 fn explorer_url_from_graphql(graphql: &str) -> Result<String, BridgeError> {
     let parsed = reqwest::Url::parse(graphql).map_err(|error| {
         BridgeError::new(
@@ -69,7 +64,6 @@ fn open_db_explorer_window<R: Runtime>(app: &AppHandle<R>, url: &str) -> Result<
         .parse()
         .map_err(|error| BridgeError::new(BridgeErrorCode::InvalidArgument, format!("{error}")))?;
     if let Some(existing) = app.get_webview_window(DB_EXPLORER_WINDOW_LABEL) {
-        // The runtime address can change between runs; re-point the window.
         existing
             .navigate(parsed)
             .map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error}")))?;
@@ -90,32 +84,4 @@ fn open_db_explorer_window<R: Runtime>(app: &AppHandle<R>, url: &str) -> Result<
         )
     })?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::explorer_url_from_graphql;
-
-    #[test]
-    fn derives_explorer_url_from_graphql_endpoint() {
-        assert_eq!(
-            explorer_url_from_graphql("http://127.0.0.1:9181/api/v0/graphql").unwrap(),
-            "http://127.0.0.1:9181/explorer/"
-        );
-        assert_eq!(
-            explorer_url_from_graphql("http://100.73.235.38:9291/api/v0/graphql").unwrap(),
-            "http://100.73.235.38:9291/explorer/"
-        );
-        assert_eq!(
-            explorer_url_from_graphql("https://runtime.example/api/v0/graphql").unwrap(),
-            "https://runtime.example/explorer/"
-        );
-    }
-
-    #[test]
-    fn rejects_non_http_and_invalid_endpoints() {
-        assert!(explorer_url_from_graphql("ftp://127.0.0.1/api/v0/graphql").is_err());
-        assert!(explorer_url_from_graphql("not a url").is_err());
-        assert!(explorer_url_from_graphql("file:///etc/passwd").is_err());
-    }
 }

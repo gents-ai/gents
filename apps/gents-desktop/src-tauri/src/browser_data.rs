@@ -20,8 +20,6 @@ pub(crate) fn isolated_store_identifier() -> anyhow::Result<Option<[u8; 16]>> {
     Ok(None)
 }
 
-/// The lock on the WebKit store this process uses, shared by every desktop
-/// home (see `gents_desktop_core::home_reset::lock_browser_store`).
 pub fn lock_store() -> anyhow::Result<gents_desktop_core::home_reset::BrowserStoreLock> {
     let isolated = isolated_store_identifier()?.map(|identifier| {
         identifier
@@ -32,8 +30,6 @@ pub fn lock_store() -> anyhow::Result<gents_desktop_core::home_reset::BrowserSto
     gents_desktop_core::home_reset::lock_browser_store(isolated.as_deref())
 }
 
-/// Confirms no running desktop, whatever its home, holds the store, so a
-/// reset can stop before it retires anything.
 pub fn check_to_receipt(receipt: &Path) -> anyhow::Result<()> {
     let result = lock_store().map(drop);
     let value = match &result {
@@ -44,12 +40,9 @@ pub fn check_to_receipt(receipt: &Path) -> anyhow::Result<()> {
     result
 }
 
-/// WebKit owns clearing its website data and signals completion asynchronously.
-/// Parent-process death does not acknowledge its network process's final writes.
-/// This helper creates no webviews and writes its receipt only after the public
-/// removeData completion callback; it promises logical clearing, not archival or
-/// the absence of WebKit-managed cache directories. The default store requires
-/// the installed app's bundle identity; E2E can only select its explicit UUID.
+/// The default store requires the installed app's bundle identity; E2E can
+/// only select its explicit UUID. This helper promises logical clearing only,
+/// not archival or the absence of WebKit-managed cache directories.
 pub fn clear_to_receipt(receipt: &Path) -> anyhow::Result<()> {
     #[cfg(target_os = "macos")]
     let result = macos::clear_to_receipt(receipt);

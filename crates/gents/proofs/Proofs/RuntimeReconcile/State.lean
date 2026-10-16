@@ -42,8 +42,8 @@ structure ResolvedSnapshot where
   runnable : Finset AgentId
   unavailable : Finset AgentId
   /-- Agents whose declared runtime dependencies were present while the
-  snapshot was resolved. An agent may be dependency-ready but unavailable
-  for another reason; the converse is forbidden. -/
+  snapshot was resolved; dependency-ready but unavailable for another reason
+  is allowed, the converse is not. -/
   dependenciesSatisfied : Finset AgentId
   deriving DecidableEq
 
@@ -130,8 +130,8 @@ structure RuntimeState where
   active : ActiveRuntimeSnapshot
   routerObservedGeneration : Generation
   /-- Agents removed from effective dispatch after exhausting the startup
-  build budget. They remain in the immutable active snapshot for diagnostics,
-  but both runtime admission and client readiness must treat them as unavailable. -/
+  build budget; both runtime admission and client readiness must treat them
+  as unavailable. -/
   startupDemoted : Finset AgentId
   readyGenerations : Finset Generation
   liveGenerations : Finset Generation
@@ -224,9 +224,9 @@ instance
   infer_instance
 
 /-- Client-facing readiness is derived from the same runtime state and
-effective dispatcher set used by request admission. Configuration rows never
-participate. Missing observations, a non-ready process, and generation skew
-all fail closed. -/
+effective dispatcher set used by request admission; configuration rows never
+participate, and missing observations, a non-ready process, and generation
+skew all fail closed. -/
 inductive AgentUnavailableReason where
   | agentDisabled
   | runtimeConfigurationInvalid
@@ -424,8 +424,7 @@ def coherent (s : RuntimeState) : Prop :=
       s.sessionAgent (s.requestSession rid) = some (s.requestAgent rid))
 
 /-- `readyGenerations` is an internal transition guard, not an independent
-client-wire admission fact. In every coherent runtime state, an aligned router
-necessarily observes the active ready generation. -/
+client-wire admission fact. -/
 theorem coherent_aligned_router_is_ready
     {s : RuntimeState}
     (hCoherent : s.coherent)

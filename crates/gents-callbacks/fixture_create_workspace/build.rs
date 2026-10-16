@@ -1,11 +1,3 @@
-//! Builds this crate's own WASI command so host dependents embed it as
-//! [`WASI_COMMAND`]. Only test builds depend on this crate, so release builds
-//! never need the `wasm32-wasip1` target.
-//!
-//! The nested build uses a target dir under OUT_DIR so it does not wait on the
-//! parent cargo's lock. `GENTS_SKIP_CALLBACK_WASM_BUILD=1` skips it, and the
-//! embedded command is then `None`.
-
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;

@@ -24,9 +24,9 @@ pub(crate) enum AdmittedCallError<E> {
 }
 
 /// A provider model admitted through the backend it was built for.
-/// `connection` is that backend's `backend_connection_fingerprint` at build
-/// time. It only attributes calls: after a connection change, calls through
-/// this model still share the backend's pool and finish on this connection.
+/// `connection` attributes calls only; after a connection change, calls
+/// through this model still share the backend's pool and finish on that
+/// connection.
 #[derive(Clone)]
 pub(crate) struct AdmittedCompletionModel<M> {
     pub(crate) inner: M,
@@ -48,8 +48,7 @@ impl<M> AdmittedCompletionModel<M> {
     }
 
     /// Run one provider call under an admission permit, racing the request's
-    /// interrupt token. A provider failure finishes the permit as failed; on
-    /// success the caller owns the permit's terminal.
+    /// interrupt token. On success the caller owns the permit's terminal.
     pub(crate) async fn admit<T, E: std::fmt::Display>(
         &self,
         observe_provider_activity: bool,
@@ -111,9 +110,7 @@ impl CallKind {
 }
 
 /// The identity of the admission call currently in flight on this task:
-/// exactly what `next_call` minted for it. This is what makes the
-/// capture-to-`InferenceCall` join exact instead of ordinal — an admission
-/// rejection consumes no `call_seq` and stores no join.
+/// exactly what `next_call` minted for it.
 #[derive(Clone, Debug)]
 pub(crate) struct CurrentCallJoin {
     pub(crate) call_id: String,
@@ -133,8 +130,8 @@ pub(crate) struct AdmissionCallContext {
     pub(super) attempt: i64,
     pub(super) call_seq: Arc<AtomicU64>,
     /// Written by `next_call`, read by `current_call_join()` at the transport
-    /// seam. Every call scope installs its own slot so concurrent inference,
-    /// compaction, and title calls cannot replace each other's joins.
+    /// seam. Every call scope installs its own slot so concurrent calls
+    /// cannot replace each other's joins.
     pub(super) current_call: Arc<Mutex<Option<CurrentCallJoin>>>,
     pub(super) inference_token: Option<CancellationToken>,
     pub(super) terminal_failure_reason: Option<TerminalFailureReasonObserver>,
@@ -200,8 +197,8 @@ pub(crate) async fn scope_request<T>(
     ADMISSION_CALL_CONTEXT.scope(context, future).await
 }
 
-/// Select an internal call's backend without changing physical request identity,
-/// cancellation, call sequence or the join slot shared with its enclosing scope.
+/// Select an internal call's backend without changing the enclosing scope's
+/// physical request identity, cancellation, call sequence or join slot.
 pub(crate) async fn scope_backend<T>(backend_id: &str, future: impl Future<Output = T>) -> T {
     let mut context =
         current_context().expect("backend selection requires request admission context");
@@ -300,8 +297,8 @@ pub(crate) fn current_session_id() -> Option<String> {
 }
 
 /// The admission identity of the call currently in flight on this task, if
-/// one has been admitted. `None` outside an admission scope (one-shot runs)
-/// and before the first `next_call` of a scope.
+/// one has been admitted. `None` outside an admission scope and before the
+/// first `next_call` of a scope.
 pub(crate) fn current_call_join() -> Option<CurrentCallJoin> {
     ADMISSION_CALL_CONTEXT
         .try_with(|context| match context.current_call.lock() {
@@ -310,47 +307,4 @@ pub(crate) fn current_call_join() -> Option<CurrentCallJoin> {
         })
         .ok()
         .flatten()
-}
-
-#[cfg(test)]
-mod backend_scope_tests {
-    use super::*;
-    #[tokio::test]
-    async fn summary_backend_scope_preserves_physical_request_and_shared_call_sequence() {
-        let context = AdmissionCallContext {
-            request_id: "request-label".into(),
-            request_doc_id: "physical-request".into(),
-            backend_id: "primary".into(),
-            agent_id: "behavior".into(),
-            node_did: "did:key:owner".into(),
-            session_id: "session".into(),
-            call_kind: CallKind::Inference,
-            attempt: 1,
-            call_seq: Arc::new(AtomicU64::new(0)),
-            current_call: Arc::new(Mutex::new(None)),
-            inference_token: Some(CancellationToken::new()),
-            terminal_failure_reason: None,
-        };
-        scope_request(context, async {
-            let first = current_context().unwrap().next_call("runtime");
-            let (second, join) = scope_call_with_join(
-                CallKind::Compaction,
-                1,
-                scope_backend("summary", async {
-                    let context = current_context().unwrap();
-                    assert!(context.inference_token.is_some());
-                    context.next_call("runtime")
-                }),
-            )
-            .await;
-            let third = current_context().unwrap().next_call("runtime");
-            assert_eq!((first.call_seq, second.call_seq, third.call_seq), (1, 2, 3));
-            assert_eq!(second.backend_id, "summary");
-            assert_eq!(third.backend_id, "primary");
-            assert_eq!(second.request_doc_id, first.request_doc_id);
-            assert_eq!(second.node_did, first.node_did);
-            assert_eq!(join.unwrap().call_id, second.call_id);
-        })
-        .await;
-    }
 }

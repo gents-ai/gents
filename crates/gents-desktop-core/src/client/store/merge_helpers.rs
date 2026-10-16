@@ -55,9 +55,8 @@ pub(super) fn retain_rows_and_sources<T>(
     *sources = kept_sources;
 }
 
-/// Merge durable goals without allowing a later-created replicated twin to
-/// replace the canonical row selected by the runtime. A row with the same
-/// creation time and goal ID is treated as an update and replaces in place.
+// A later-created replicated twin must not replace the canonical runtime
+// selection; same creation time and goal ID is an update and replaces in place.
 pub(super) fn upsert_goal_rows(target: &mut Vec<GoalRow>, incoming: Vec<GoalRow>) {
     let mut indexes = target
         .iter()
@@ -166,9 +165,9 @@ pub(super) fn retire_request_placeholders(
     });
 }
 
-/// Immutable canonical facts are set-unioned. A duplicated physical identity
-/// with different bytes is retained for reconstruction to classify as an
-/// integrity conflict; it must never be turned into a last-writer-wins row.
+// Immutable canonical facts are set-unioned; a duplicated physical identity
+// with different bytes is retained so reconstruction can classify the
+// integrity conflict, never last-writer-wins.
 pub(super) fn union_immutable_rows<T: std::fmt::Debug>(
     target: &mut Vec<T>,
     incoming: Vec<T>,

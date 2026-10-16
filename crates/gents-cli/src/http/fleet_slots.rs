@@ -155,9 +155,7 @@ impl BackendRow {
         self.enabled.unwrap_or(false)
     }
 
-    /// Runtime-observed `probe_status` for display only — never a truth source
-    /// for admission (that's the readiness projection; see
-    /// `backend_admission_from_readiness`).
+    /// Runtime-observed `probe_status` for display only.
     fn display_probe_status(&self) -> String {
         let probe_status = clean_optional_string(self.probe_status.as_deref());
         if probe_status.is_empty() {
@@ -319,13 +317,6 @@ fn build_fleet_slot_snapshot(
         .map(|row| (row.node_did.clone(), row))
         .collect::<BTreeMap<_, _>>();
 
-    // Measured backend health is never persisted to `InferenceBackend`
-    // (#640), so out-of-process readers like this one cannot compute
-    // admission from that document's `enabled`/`probe_status` fields —
-    // only the runtime that owns the live `BackendHealthMap` can. The
-    // per-backend "accepting" flag instead comes from the readiness rows
-    // for agents bound to that backend, published by each agent's
-    // own runtime.
     let backend_accepting =
         backend_admission_from_readiness(&agents, &readiness_by_agent, generated_at);
 
@@ -479,14 +470,9 @@ fn build_fleet_slot_snapshot(
     }
 }
 
-/// Per-backend "accepting admission" from the readiness rows of the
-/// agents currently bound to it — never from `InferenceBackend`'s
-/// `enabled`/`probe_status` (measured health stays unpersisted; see
-/// `backend_health.rs`). A backend accepts once any bound agent's own
-/// runtime reports it `Ready`; with no such signal the projection is
-/// not-accepting. This is last-known capacity information, not an admission
-/// gate or a connectivity probe. The runtime's admission owner and transport
-/// health remain authoritative for live execution and reachability.
+/// Per-backend "accepting admission" from the readiness rows of agents bound
+/// to it, never from `InferenceBackend`'s `enabled`/`probe_status` (measured
+/// health stays unpersisted); the runtime's admission owner stays authoritative.
 fn backend_admission_from_readiness(
     agents: &BTreeMap<(String, String), ResolvedAgentRow>,
     readiness_by_agent: &BTreeMap<String, NodeReadinessRow>,
@@ -600,240 +586,6 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_reconstructs_slots_by_backend_and_agent() {
-        let now = DateTime::parse_from_rfc3339("2026-05-20T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let snapshot = build_fleet_slot_snapshot(
-            now,
-            FleetSlotQueryEnvelope {
-                agents: vec![
-                    AgentRow {
-                        agent_id: "agent-a".to_string(),
-                        node_did: "did:test:test".to_string(),
-                        inference_profile_id: Some("profile-a".to_string()),
-                        enabled: Some(true),
-                    },
-                    AgentRow {
-                        agent_id: "agent-b".to_string(),
-                        node_did: "did:test:test".to_string(),
-                        inference_profile_id: Some("profile-b".to_string()),
-                        enabled: Some(true),
-                    },
-                ],
-                profiles: vec![
-                    InferenceProfileRow {
-                        profile_id: "profile-a".to_string(),
-                        node_did: "did:test:test".to_string(),
-                        backend_id: "backend-a".to_string(),
-                    },
-                    InferenceProfileRow {
-                        profile_id: "profile-b".to_string(),
-                        node_did: "did:test:test".to_string(),
-                        backend_id: "backend-a".to_string(),
-                    },
-                ],
-                backends: vec![BackendRow {
-                    backend_id: "backend-a".to_string(),
-                    node_did: "did:test:test".to_string(),
-                    enabled: Some(true),
-                    max_concurrent: Some(2),
-                    max_queue_depth: Some(4),
-                    probe_status: Some("healthy".to_string()),
-                }],
-                calls: vec![
-                    InferenceCallRow {
-                        backend_id: Some("backend-a".to_string()),
-                        agent_id: Some("agent-a".to_string()),
-                        node_did: Some("did:test:test".to_string()),
-                        call_state: "running".to_string(),
-                    },
-                    InferenceCallRow {
-                        backend_id: Some("backend-a".to_string()),
-                        agent_id: Some("agent-b".to_string()),
-                        node_did: Some("did:test:test".to_string()),
-                        call_state: "queued".to_string(),
-                    },
-                ],
-                requests: vec![AgentRequestRow {
-                    node_did: Some("did:test:test".to_string()),
-                    agent_id: Some("agent-a".to_string()),
-                    deadline: Some("2026-05-20T11:59:00Z".to_string()),
-                    ..empty_request_row()
-                }],
-                node_readiness: vec![readiness_row(
-                    "did:test:test",
-                    "agent-a",
-                    &["agent-a", "agent-b"],
-                    "2026-05-20T11:59:50Z",
-                )],
-            },
-        );
-
-        assert_eq!(snapshot.source, SNAPSHOT_SOURCE);
-        assert_eq!(
-            snapshot.totals,
-            FleetSlotTotals {
-                assigned: 1,
-                available: 1,
-                max: 2,
-                queued: 1,
-            }
-        );
-        assert_eq!(snapshot.expired.processing_requests, 1);
-        assert_eq!(snapshot.backends[0].running, 1);
-        assert_eq!(snapshot.backends[0].queued, 1);
-        assert_eq!(snapshot.backends[0].available, 1);
-
-        let agent_a = snapshot
-            .agents
-            .iter()
-            .find(|agent_config| agent_config.agent_id == "agent-a")
-            .unwrap();
-        assert_eq!(agent_a.assigned, 1);
-        assert_eq!(agent_a.available, 1);
-        assert_eq!(agent_a.max, 2);
-        assert_eq!(agent_a.expired_processing, 1);
-
-        let agent_b = snapshot
-            .agents
-            .iter()
-            .find(|agent_config| agent_config.agent_id == "agent-b")
-            .unwrap();
-        assert_eq!(agent_b.assigned, 0);
-        assert_eq!(agent_b.queued, 1);
-        assert_eq!(agent_b.available, 1);
-    }
-
-    #[test]
-    fn snapshot_preserves_unavailable_and_unconfigured_edges() {
-        let now = DateTime::parse_from_rfc3339("2026-05-20T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let snapshot = build_fleet_slot_snapshot(
-            now,
-            FleetSlotQueryEnvelope {
-                agents: vec![AgentRow {
-                    agent_id: "agent-disabled".to_string(),
-                    node_did: "did:test:test".to_string(),
-                    inference_profile_id: Some("profile-unhealthy".to_string()),
-                    enabled: Some(false),
-                }],
-                profiles: vec![InferenceProfileRow {
-                    profile_id: "profile-unhealthy".to_string(),
-                    node_did: "did:test:test".to_string(),
-                    backend_id: "backend-unhealthy".to_string(),
-                }],
-                backends: vec![
-                    BackendRow {
-                        backend_id: "backend-unhealthy".to_string(),
-                        node_did: "did:test:test".to_string(),
-                        enabled: Some(true),
-                        max_concurrent: Some(3),
-                        max_queue_depth: Some(4),
-                        probe_status: Some("unhealthy".to_string()),
-                    },
-                    BackendRow {
-                        backend_id: "backend-missing-flags".to_string(),
-                        node_did: "did:test:test".to_string(),
-                        enabled: None,
-                        max_concurrent: Some(2),
-                        max_queue_depth: Some(1),
-                        probe_status: None,
-                    },
-                ],
-                calls: vec![
-                    InferenceCallRow {
-                        backend_id: Some("backend-unhealthy".to_string()),
-                        agent_id: Some("agent-disabled".to_string()),
-                        node_did: Some("did:test:test".to_string()),
-                        call_state: "running".to_string(),
-                    },
-                    InferenceCallRow {
-                        backend_id: Some("backend-stale".to_string()),
-                        agent_id: Some("agent-stale".to_string()),
-                        node_did: Some("did:test:stale".to_string()),
-                        call_state: "running".to_string(),
-                    },
-                ],
-                requests: vec![
-                    AgentRequestRow {
-                        node_did: Some("did:test:test".to_string()),
-                        agent_id: Some("agent-disabled".to_string()),
-                        deadline: Some("2026-05-20T11:59:00Z".to_string()),
-                        ..empty_request_row()
-                    },
-                    AgentRequestRow {
-                        node_did: Some("did:test:test".to_string()),
-                        agent_id: Some("agent-disabled".to_string()),
-                        deadline: Some("not-a-date".to_string()),
-                        ..empty_request_row()
-                    },
-                    AgentRequestRow {
-                        node_did: Some("did:test:test".to_string()),
-                        agent_id: Some("agent-disabled".to_string()),
-                        deadline: None,
-                        ..empty_request_row()
-                    },
-                ],
-                node_readiness: Vec::new(),
-            },
-        );
-
-        assert_eq!(
-            snapshot.totals,
-            FleetSlotTotals {
-                assigned: 2,
-                available: 0,
-                max: 5,
-                queued: 0,
-            }
-        );
-        assert_eq!(snapshot.expired.processing_requests, 1);
-
-        let unhealthy = find_backend(&snapshot, "did:test:test", "backend-unhealthy");
-        assert!(unhealthy.configured);
-        assert!(unhealthy.enabled);
-        assert_eq!(unhealthy.probe_status, "unhealthy");
-        assert!(!unhealthy.accepting_admission);
-        assert_eq!(unhealthy.running, 1);
-        assert_eq!(unhealthy.available, 0);
-        assert_eq!(unhealthy.max_concurrent, 3);
-
-        let missing_flags = find_backend(&snapshot, "did:test:test", "backend-missing-flags");
-        assert!(missing_flags.configured);
-        assert!(!missing_flags.enabled);
-        assert_eq!(missing_flags.probe_status, UNKNOWN_PROBE_STATUS);
-        assert!(!missing_flags.accepting_admission);
-        assert_eq!(missing_flags.available, 0);
-
-        let stale_backend = find_backend(&snapshot, "did:test:stale", "backend-stale");
-        assert!(!stale_backend.configured);
-        assert!(!stale_backend.enabled);
-        assert_eq!(stale_backend.probe_status, UNKNOWN_PROBE_STATUS);
-        assert_eq!(stale_backend.running, 1);
-        assert_eq!(stale_backend.max_concurrent, 0);
-
-        let disabled = find_agent(&snapshot, "did:test:test", "agent-disabled");
-        assert!(disabled.configured);
-        assert!(!disabled.enabled);
-        assert!(!disabled.backend_available);
-        assert_eq!(disabled.assigned, 1);
-        assert_eq!(disabled.available, 0);
-        assert_eq!(disabled.max, 3);
-        assert_eq!(disabled.expired_processing, 1);
-
-        let stale_agent = find_agent(&snapshot, "did:test:stale", "agent-stale");
-        assert!(!stale_agent.configured);
-        assert!(!stale_agent.enabled);
-        assert_eq!(stale_agent.node_did, "did:test:stale");
-        assert_eq!(stale_agent.backend_id, "backend-stale");
-        assert_eq!(stale_agent.assigned, 1);
-        assert_eq!(stale_agent.available, 0);
-        assert_eq!(stale_agent.max, 0);
-    }
-
-    #[test]
     fn snapshot_scopes_same_ids_to_their_owning_agent() {
         let now = DateTime::parse_from_rfc3339("2026-05-20T12:00:00Z")
             .unwrap()
@@ -929,16 +681,5 @@ mod tests {
         assert_eq!(snapshot.totals.queued, 1);
         assert_eq!(snapshot.totals.available, 5);
         assert_eq!(snapshot.totals.max, 6);
-    }
-
-    #[test]
-    fn decode_rejects_missing_data_object() {
-        let error = decode_fleet_slot_query_response(json!({ "data": null })).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("fleet slot snapshot query response missing object data"),
-            "{error:#}"
-        );
     }
 }

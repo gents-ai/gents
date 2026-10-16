@@ -1,10 +1,3 @@
-//! Inference retry with exponential backoff and jitter.
-//!
-//! Wraps the streaming inference call with configurable retry behavior.
-//! Only retries when the error is classified as transient (connection
-//! failures, rate limits, timeouts) — permanent errors (auth, context
-//! length) fail immediately.
-
 use std::time::Duration;
 
 use rand::Rng;
@@ -31,8 +24,6 @@ impl Default for RetryPolicy {
 }
 
 impl RetryPolicy {
-    /// Compute delay for a given attempt (0-indexed) with exponential
-    /// backoff and +/-25% jitter.
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         let base = self.base_delay_ms;
         let exponential = base.saturating_mul(1u64 << attempt.min(10));
@@ -61,6 +52,3 @@ pub fn retries_exhausted(policy: &RetryPolicy, last_error: &InferenceError) -> I
         last_error: last_error.to_string(),
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -14,9 +14,6 @@ use crate::workspace::{
     MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceDocuments, WorkspacePlacementDoc,
 };
 
-/// Crash-window bound for succeeded-without-result repair. Happy-path
-/// succeeded rows are excluded by a batched CallbackResult lookup, not by
-/// probing every historical invocation.
 pub(crate) const SUCCEEDED_REPAIR_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) const SUCCEEDED_REPAIR_LIMIT: u32 = 256;
 
@@ -55,7 +52,6 @@ const PLACEMENT_FIELDS: &str = r#"
     observed_tree_hash
 "#;
 
-// Canonical event callback configuration is shared with packs.
 pub use crate::document_config::{
     CallbackBinding as CallbackBindingDoc, CallbackModule as CallbackModuleDoc,
 };
@@ -69,20 +65,15 @@ impl CallbackBindingDoc {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CallbackInvocationDoc {
-    /// Immutable projected planner input captured before dispatch. Events use an
-    /// object and groups an ordered array of projected objects.
-    /// Reuse the existing planner input and action journal; retries never reread
-    /// changed source rows or recompute a persisted action plan.
+    /// Immutable projected planner input captured before dispatch; retries
+    /// never reread changed source rows or recompute a persisted action plan.
     #[serde(deserialize_with = "deserialize_callback_input")]
     pub input: serde_json::Value,
     pub invocation_id: String,
-    /// Node whose runtime owns execution and recovery.
     pub owner_node_did: String,
     pub callback_id: String,
     pub origin: crate::document_config::CallbackInvocationOrigin,
     pub idempotency_key: String,
-    /// The source document's correlation, when its event source names one:
-    /// how a graph run finds the invocations it caused.
     #[serde(default)]
     pub caused_by_correlation: Option<String>,
     pub lifecycle_state: String,
@@ -144,11 +135,8 @@ where
 pub struct CallbackResultDoc {
     pub result_id: String,
     pub invocation_id: String,
-    /// The binding that produced this result, so event sources can select
-    /// one binding's results with a plain filter.
     #[serde(default)]
     pub binding_id: Option<String>,
-    /// Node whose runtime owns execution and recovery.
     pub owner_node_did: String,
     #[serde(default)]
     pub workspace_id: Option<String>,
@@ -165,9 +153,9 @@ pub(super) struct CallbackResultInvocationRow {
     pub invocation_id: String,
 }
 
-/// One per-document event invocation per binding and arrival. The source
-/// version is not part of it: an edit after admission is not another arrival.
-/// Collections and document IDs carry no `:`, so the key is unambiguous.
+/// One per-document event invocation per binding and arrival; an edit after
+/// admission is not another arrival. Keys use `:` separators, unambiguous
+/// because collection and document IDs carry none.
 pub fn idempotency_key(binding_id: &str, source_collection: &str, source_doc_id: &str) -> String {
     format!("{binding_id}:{source_collection}:{source_doc_id}")
 }
@@ -194,7 +182,6 @@ pub fn parse_string_list(raw: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-/// Bindings that list secret-bearing source fields fail closed at apply/load.
 pub fn validate_callback_binding(binding: &CallbackBindingDoc) -> Result<()> {
     for (name, value) in [
         ("binding_id", &binding.binding_id),
@@ -496,8 +483,6 @@ async fn list_recent_succeeded_missing_result(
     Ok(succeeded_missing_result(succeeded, &results))
 }
 
-/// Recently failed invocations, which a retry may pick up again. Bounded by
-/// the same window and page as the succeeded-without-result repair.
 pub async fn list_recent_failed(
     node: &EmbeddedNode,
     owner_node_did: &str,
@@ -687,7 +672,6 @@ pub async fn create_pending_invocation(
     }
 }
 
-/// The compare-and-set update of `invocation`, matched on `expected_state` when given.
 pub(super) fn update_invocation_mutation(
     invocation: &CallbackInvocationDoc,
     expected_state: Option<&str>,
@@ -730,8 +714,6 @@ pub(super) fn update_invocation_mutation(
     )
 }
 
-/// `name: "value",` when `value` is present, `name: null,` when it is
-/// absent. An absent optional field is a genuine null, never `""`.
 fn optional_graphql_string_field(name: &str, value: Option<&str>) -> String {
     value
         .map(|value| format!(r#"{name}: "{}","#, escape_graphql_string(value)))
@@ -753,7 +735,6 @@ pub async fn update_invocation(
     Ok(crate::graphql::single_mutation_document(&response, "update_CallbackInvocation")?.is_some())
 }
 
-/// The create mutation for `result`.
 pub(super) fn create_callback_result_mutation(result: &CallbackResultDoc) -> String {
     let now = result
         .created_at

@@ -3,9 +3,6 @@ import Proofs.Session.State
 import Proofs.Enrollment.State
 import Proofs.Workspace.Types
 
-/-! Invocation input is not configuration or admission authority. The existing
-path/workspace owner supplies cwd evidence; the authenticated origin supplies
-queue-source evidence. Neither is inferred from caller-authored input. -/
 namespace Enrollment
 
 structure QueuePosition where
@@ -24,8 +21,6 @@ structure RequestQueue where
   position : Option QueuePosition := none
   deriving DecidableEq, Repr
 
-/-- Original signed facts, not the mutable current Goal state. Goal and parent
-identities remain on existing request lineage. Positive sequence is validated. -/
 structure GoalContinuationInput where
   sequence : Int
   wrapup : Bool
@@ -39,9 +34,7 @@ structure RequestInput where
   goalContinuation : Option GoalContinuationInput := none
   deriving DecidableEq, Repr
 
-/-- Structural fields, passed to the existing length-prefixed canonical encoder.
-Explicit option tags and collection lengths preserve absent/empty distinctions.
-The implementation must use its one canonical input encoder for signing and
+/-- The implementation must use its one canonical input encoder for signing and
 verification, rather than concatenating unescaped JSON or arbitrary metadata. -/
 private def optionFields {α : Type} (encode : α → List String) : Option α → List String
   | none => ["none"]
@@ -50,9 +43,7 @@ private def optionFields {α : Type} (encode : α → List String) : Option α �
 private def titleFields (title : AgentSession.Title) : List String :=
   [title.text, title.source.toWireName]
 
-/-- The extension marker cannot be confused with the following goal option's
-`none`/`some` tag. Default queue input retains its existing signed bytes; new
-fields use the same length-framed canonical encoder as every other field. -/
+/-- Default queue input retains its existing signed bytes. -/
 def queueExtensionFields (queue : RequestQueue) : List String :=
   if queue.delivery == .queue && queue.position.isNone then []
   else ["queue-v2", queue.delivery.toDefraDB] ++
@@ -93,12 +84,9 @@ def inputWithinContext (input : RequestInput) (skillIds : List String)
     (input.cwd.map cwdAllowed).getD true &&
     (input.queue.map (fun q => queueSourceAllowed q.source)).getD true
 
-/-- Agent selection has one owner and is required even for new sessions. -/
 def agentMatchesSession (selected observed : String) : Bool :=
   !selected.trim.isEmpty && selected == observed
 
-/-- Request titles are consumed only by creation. Reuse, including a currently
-untitled session, must never replay the original title intent. -/
 def materializedTitle (sessionExists : Bool) (current : Option AgentSession.Title)
     (input : RequestInput) : Option AgentSession.Title :=
   if sessionExists then current else input.initialTitle
@@ -127,12 +115,8 @@ theorem rejected_cwd_cannot_override_host_policy (input : RequestInput)
     inputWithinContext input skills cwdAllowed queueAllowed = false := by
   simp [inputWithinContext, hcwd, hdeny]
 
-/-- The retained signed tuple names a workspace and authority, never a host.
-Workspace ownership/grants/seal validity are resolved by the existing workspace
-admission owner, not established by these caller-authored fields. -/
 structure RequestWorkspace where
   workspaceId : Option String := none
-  /-- Exact owner scope retained from the authenticated source, never a host. -/
   ownerNodeDid : Option String := none
   authority : Option BindingAuthority := none
   sealHash : Option String := none
@@ -145,9 +129,8 @@ def requestWorkspaceFields (workspace : RequestWorkspace) : CanonicalFields :=
     optionFields (fun a => [a.toDefraDB]) workspace.authority ++
     optionFields (fun s => [s]) workspace.sealHash
 
-/-- A scoped workspace reference is complete or absent. This structural check
-never grants access; ACP, writer/integrator, state and seal checks remain owned
-by the existing admission and workspace adapters. -/
+/-- Workspace ownership/grants/seal validity are resolved by the existing
+admission and workspace adapters, never granted by this structural check. -/
 def requestWorkspaceWellFormed (workspace : RequestWorkspace) : Bool :=
   match workspace.workspaceId, workspace.ownerNodeDid, workspace.authority with
   | none, none, none => workspace.sealHash.isNone
@@ -192,8 +175,7 @@ theorem workspace_source_preserves_identity (request source : RequestWorkspace)
   simp only [requestWorkspaceWithinSource, Bool.and_eq_true, beq_iff_eq] at h
   exact h.1.1.1.2
 
-/-- Repeated delegation cannot rewrite the owner, even when each executor has
-another DID. The source adapter authenticates every edge independently. -/
+/-- The source adapter authenticates every edge independently. -/
 theorem nested_workspace_owner_preserved (root child grandchild : RequestWorkspace)
     (hc : requestWorkspaceWithinSource child root true = true)
     (hg : requestWorkspaceWithinSource grandchild child true = true) :

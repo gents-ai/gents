@@ -1,15 +1,14 @@
 /-!
 # Native storage completion ownership
 
-This model states obligations for Gents' owner tasks around DefraDB operations.
 `nativeReturned` is an observation supplied by the adapter; a caller timeout or
-cancellation does not imply it. The model does not establish that native work
-eventually returns. If it never returns, retaining the mutation gate is the
-safe modeled outcome. Explicit rollback completion is allowed only after all
-abandoned native statements return. Native owner abandonment instead removes the
-registry entry synchronously, without implying that already-acquired contexts
-have returned. Both paths retain the gate until every native operation drains.
-This model observes registry ownership and gate ownership, not storage internals.
+cancellation does not imply it, and the model does not establish that native
+work eventually returns (retaining the mutation gate is the safe modeled
+outcome). Explicit rollback completion is allowed only after all abandoned
+native statements return; native owner abandonment removes the registry entry
+synchronously without implying already-acquired contexts have returned. Both
+paths retain the gate until every native operation drains. Observes registry
+and gate ownership, not storage internals.
 -/
 namespace NativeCompletion
 
@@ -139,12 +138,9 @@ theorem concurrent_operations_are_all_drained_before_rollback :
     s.nativeOutstanding = 1 ∧ s.rollbackReturned = false ∧ s.gateHeld = true := by
   decide
 
-/--
-Execution-lease renewal intentionally bypasses the ordinary mutation gate so
-lease maintenance can progress during other writes. Its single `RenewalTask`
-owner must nevertheless wait for an abandoned native statement before it
-returns to the polling loop and admits another renewal attempt.
--/
+/-- Execution-lease renewal bypasses the ordinary mutation gate, but its single
+`RenewalTask` owner must wait for an abandoned native statement before
+returning to the polling loop. -/
 theorem periodic_renewal_waits_for_abandoned_native_work :
     let renewal := { transaction with periodicRenewal := true, gateHeld := false }
     let s := run renewal

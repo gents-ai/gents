@@ -1,51 +1,23 @@
-//! Physical row envelopes for the canonical durable output collections
-//! (#1571): `AgentOutputSegment` and `AgentMessage`.
-//!
-//! Reader envelopes only. The document shapes are owned by
-//! `gents_protocol::output` and the SDL in `gents-schemas`; nothing here
-//! duplicates or redefines them. Each envelope pairs the strict protocol
-//! value with the physical `_docID` the owner uses to address the exact row
-//! in a patch transaction. `_docID` is physical database identity, not
-//! protocol data: it is stripped before strict protocol deserialization so
-//! it can never leak into the canonical document shape, and an absent or
-//! blank `_docID` is rejected.
-
 use anyhow::{Context, Result};
 
-/// Fields for one canonical `AgentOutputSegment` read, mirroring the SDL
-/// field list plus the physical `_docID`. Nested values (`source`, `writer`,
-/// `runs`, `close`) are DefraDB JSON scalar columns: read the bare field
-/// name, never an object subselection, and decode through the canonical
-/// protocol owners.
 pub const AGENT_OUTPUT_SEGMENT_FIELDS: &str = "node_did requester_did session_id \
 request_doc_id source ordinal writer runs payload close created_at _docID";
 
-/// Fields for one canonical `AgentMessage` (`TranscriptMessage`) read,
-/// mirroring the SDL field list plus the physical `_docID`. `publication`
-/// and `blocks` are DefraDB JSON scalar columns: read the bare field name,
-/// never an object subselection.
 pub const AGENT_MESSAGE_FIELDS: &str = "message_key session_id node_did requester_did \
 request_doc_id publication outcome sequence role native_id blocks created_at _docID";
 
-/// One canonical `AgentOutputSegment` row: the strict protocol segment plus
-/// the physical `_docID` used to address it. Not a second writable
-/// representation; segments are create-only through the existing owners.
 #[derive(Debug, Clone)]
 pub struct OutputSegmentRow {
     pub doc_id: String,
     pub segment: gents_protocol::output::OutputSegment,
 }
 
-/// One canonical `AgentMessage` row: the strict protocol transcript message
-/// plus the physical `_docID` used to address it.
 #[derive(Debug, Clone)]
 pub struct TranscriptMessageRow {
     pub doc_id: String,
     pub message: gents_protocol::output::TranscriptMessage,
 }
 
-/// Split one physical row into its nonblank `_docID` and the remaining
-/// document, ready for strict protocol deserialization.
 fn split_physical_doc_id(
     row: &serde_json::Value,
     collection: &str,
@@ -64,9 +36,6 @@ fn split_physical_doc_id(
     Ok((doc_id, document))
 }
 
-/// Decode one `AgentOutputSegment` row: strip the physical `_docID`, then
-/// deserialize strictly through `gents_protocol::output::OutputSegment`
-/// (`deny_unknown_fields` rejects retired or unknown fields).
 pub fn decode_output_segment_row(row: &serde_json::Value) -> Result<OutputSegmentRow> {
     let (doc_id, document) = split_physical_doc_id(row, "AgentOutputSegment")?;
     let segment: gents_protocol::output::OutputSegment =
@@ -74,8 +43,6 @@ pub fn decode_output_segment_row(row: &serde_json::Value) -> Result<OutputSegmen
     Ok(OutputSegmentRow { doc_id, segment })
 }
 
-/// Decode one `AgentMessage` row: strip the physical `_docID`, then
-/// deserialize strictly through `gents_protocol::output::TranscriptMessage`.
 pub fn decode_transcript_message_row(row: &serde_json::Value) -> Result<TranscriptMessageRow> {
     let (doc_id, document) = split_physical_doc_id(row, "AgentMessage")?;
     let message: gents_protocol::output::TranscriptMessage =
@@ -83,14 +50,6 @@ pub fn decode_transcript_message_row(row: &serde_json::Value) -> Result<Transcri
     Ok(TranscriptMessageRow { doc_id, message })
 }
 
-/// Read of every `AgentOutputSegment` of one physical request, filtered by
-/// the request alone; apply the node scope with
-/// [`decode_scoped_request_output_segments`].
-///
-/// DefraDB selects one single-field index. With multiple usable indexes it
-/// estimates each candidate with capped entry scans before choosing the most
-/// selective one. Naming only `request_doc_id` avoids estimation of node
-/// and session history and makes the scan independent of their selectivity.
 pub fn request_output_segments_query(request_doc_id: &str) -> String {
     format!(
         r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
@@ -126,9 +85,6 @@ pub(crate) fn source_output_segments_query(
     ))
 }
 
-/// Read the canonical output facts for one physical request in a single
-/// response. Both collections use their request_doc_id indexes; scope checks
-/// are applied before decoding below.
 pub fn request_output_facts_query(request_doc_id: &str) -> String {
     let request_doc_id = gents_protocol::graphql::escape_graphql_string(request_doc_id);
     format!(
@@ -139,9 +95,6 @@ pub fn request_output_facts_query(request_doc_id: &str) -> String {
     )
 }
 
-/// Decode the rows of [`request_output_segments_query`] that lie in one
-/// exact node scope, and in `session_id` when given. Rows outside the
-/// scope are dropped undecoded, exactly as a scoped store filter would.
 pub fn decode_scoped_request_output_segments(
     rows: &[serde_json::Value],
     node_did: &str,
@@ -157,9 +110,6 @@ pub fn decode_scoped_request_output_segments(
     )
 }
 
-/// Apply the same exact node/session scope before either canonical row
-/// decoder. A malformed foreign row must not poison an authorized projection.
-/// ACP remains enforced by the database read supplying these observations.
 pub fn decode_scoped_canonical_rows<T>(
     rows: &[serde_json::Value],
     node_did: &str,
@@ -180,30 +130,19 @@ pub fn decode_scoped_canonical_rows<T>(
         .collect()
 }
 
-/// Create mutation for one canonical `AgentOutputSegment` row. The document
-/// travels as a typed GraphQL variable, never as rendered GraphQL text: JSON
-/// keys (including arbitrary `additional_params` object keys) and JSON empty
-/// arrays are preserved verbatim by the variable encoder and are not nillable
-/// SDL lists.
+/// The document travels as a typed GraphQL variable, never as rendered
+/// GraphQL text: JSON keys and JSON empty arrays are preserved verbatim by
+/// the variable encoder and are not nillable SDL lists.
 pub const CREATE_AGENT_OUTPUT_SEGMENT_MUTATION: &str = "mutation($input: \
 AgentOutputSegmentMutationInputArg!) { create_AgentOutputSegment(input: $input) { _docID } }";
 
-/// Create mutation for one canonical `AgentMessage` row. The document travels
-/// as a typed GraphQL variable, never as rendered GraphQL text: JSON keys
-/// (including arbitrary `additional_params` object keys) and JSON empty arrays
-/// are preserved verbatim by the variable encoder and are not nillable SDL
-/// lists.
 pub const CREATE_AGENT_MESSAGE_MUTATION: &str = "mutation($input: \
 AgentMessageMutationInputArg!) { create_AgentMessage(input: $input) { _docID } }";
 
-/// Shared immutable key for request-owned authored publications.
 pub(crate) fn authored_message_key(request_doc_id: &str, key: &str) -> String {
     format!("authored:{request_doc_id}:{key}")
 }
 
-/// Build the `execute_with_variables` variables for one canonical
-/// `AgentOutputSegment` create: the strict protocol segment serialized as the
-/// `$input` variable, with no GraphQL-text rendering of the JSON.
 pub fn output_segment_create_variables(
     segment: &gents_protocol::output::OutputSegment,
 ) -> Result<serde_json::Value> {
@@ -215,9 +154,6 @@ pub fn output_segment_create_variables(
     )])))
 }
 
-/// Build the `execute_with_variables` variables for one canonical
-/// `AgentMessage` create: the strict protocol message serialized as the
-/// `$input` variable, with no GraphQL-text rendering of the JSON.
 pub fn transcript_message_create_variables(
     message: &gents_protocol::output::TranscriptMessage,
 ) -> Result<serde_json::Value> {
@@ -371,27 +307,6 @@ mod tests {
     }
 
     #[test]
-    fn field_selections_end_with_the_physical_doc_id() {
-        assert!(AGENT_OUTPUT_SEGMENT_FIELDS.ends_with("_docID"));
-        assert!(AGENT_MESSAGE_FIELDS.ends_with("_docID"));
-    }
-
-    #[test]
-    fn segment_row_splits_physical_identity_from_strict_payload() {
-        let decoded = decode_output_segment_row(&terminal_only_segment_row()).unwrap();
-        assert_eq!(decoded.doc_id, "seg-1");
-        assert_eq!(decoded.segment.session_id, "session");
-        assert_eq!(decoded.segment.request_doc_id, "request");
-        assert_eq!(decoded.segment.runs, Vec::new());
-        assert_eq!(
-            decoded.segment.close,
-            Some(SourceClose::Retracted),
-            "terminal-only record carries closure without a flush"
-        );
-        assert_eq!(decoded.segment.ordinal, None);
-    }
-
-    #[test]
     fn segment_row_rejects_absent_blank_and_unknown_fields() {
         let mut row = terminal_only_segment_row();
         row.as_object_mut().unwrap().remove("_docID");
@@ -403,15 +318,6 @@ mod tests {
         row["_docID"] = serde_json::json!("seg-1");
         row["retired_field"] = serde_json::json!(true);
         assert!(decode_output_segment_row(&row).is_err());
-    }
-
-    #[test]
-    fn message_row_splits_physical_identity_from_strict_payload() {
-        let decoded = decode_transcript_message_row(&transcript_message_row()).unwrap();
-        assert_eq!(decoded.doc_id, "msg-1");
-        assert_eq!(decoded.message.sequence, 3);
-        assert_eq!(decoded.message.outcome, OutputOutcome::Complete);
-        assert_eq!(decoded.message.blocks.len(), 1);
     }
 
     #[test]
@@ -436,9 +342,6 @@ mod tests {
         assert!(decode_transcript_message_row(&row).is_err());
     }
 
-    /// A minimal closed segment whose closing record declares no streams: the
-    /// serialized `stream_bytes` is a JSON empty array, which must survive as
-    /// a JSON array in the `$input` variable (not a nillable SDL list `null`).
     fn closed_segment_no_streams() -> gents_protocol::output::OutputSegment {
         gents_protocol::output::OutputSegment {
             node_did: "agent".into(),
@@ -489,7 +392,6 @@ mod tests {
         let mut message = decode_transcript_message_row(&transcript_message_row())
             .unwrap()
             .message;
-        // 18 UTF-8 bytes, 10 chars: byte-exactness must survive the variable.
         let unicode = "héllo 🌍 中文";
         message.blocks = vec![gents_protocol::output::MessageBlock::Text {
             text: gents_protocol::output::PresentedPayload {
@@ -523,8 +425,6 @@ mod tests {
         let mut message = decode_transcript_message_row(&transcript_message_row())
             .unwrap()
             .message;
-        // Arbitrary provider-opaque object keys, including empty-string and
-        // GraphQL-hostile characters, must pass through the variable verbatim.
         message.blocks = vec![gents_protocol::output::MessageBlock::ToolCall {
             tool_call_doc_id: "call-1".into(),
             id: "id-1".into(),

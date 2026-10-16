@@ -3,13 +3,10 @@ import Proofs.Request.State
 /-!
 # Request execution lease state
 
-The generation parameter is deliberately abstract. The owner may compare
-generations for equality and remember used values, but cannot derive a successor.
-Claims, recovery, and revocation therefore require a fresh opaque value.
-
-Output never changes lease expiry or recovery authority. The owner's explicit,
-cadence-bounded deadline CAS requires a live lease at admission. Native durable
-commit can occur later; the observed-transaction model exposes that distinction.
+The generation parameter is deliberately abstract: claims, recovery, and revocation
+require a fresh opaque value; output never changes lease expiry or recovery authority.
+The owner's explicit cadence-bounded deadline CAS requires a live lease at admission;
+native durable commit can occur later (see `ObservedTransaction`).
 -/
 
 namespace RequestExecutionLease
@@ -22,9 +19,7 @@ inductive Outcome where
   | superseded
   deriving DecidableEq, Repr
 
-/-- Ordinary writes use the local mutation gate. Exact-request renewal can use
-a native transaction whose point-read observation is validated at commit. An
-observing replica cannot admit writes or recover work. -/
+/-- Native transaction commit; an observing replica cannot admit writes or recover work. -/
 inductive Boundary where
   | mutationWriteGate
   | validatedTransaction
@@ -34,13 +29,11 @@ inductive Boundary where
 inductive Lease (Generation : Type) where
   | vacant
   | active (generation : Generation) (duration explicitDeadline : Time)
-  /-- Explicitly dropped work only. Expiry recovery swaps generation atomically
-  from `active`; it never commits this intermediate state. -/
+  /-- Explicitly dropped work only; expiry recovery swaps generation atomically from `active`, never committing this state. -/
   | recoverable (generation : Generation) (duration explicitDeadline : Time)
   | terminal (generation : Generation) (outcome : Outcome)
   deriving DecidableEq, Repr
 
-/-- These counters expose duplicate terminal side effects as values above one. -/
 structure World (Generation : Type) where
   request : RequestState
   lease : Lease Generation
@@ -108,9 +101,7 @@ instance {Generation : Type} [DecidableEq Generation]
   unfold admitted
   cases boundary <;> cases hlease : world.lease <;> simp <;> infer_instance
 
-/-- Lifecycle states in which the owned completion loop may keep its explicit
-lease alive. A mailbox handoff completes the producer; it does not hold a lease
-while waiting for the later, separately claimed reply request. -/
+/-- States where the owned completion loop may keep its lease alive; a mailbox handoff completes the producer without holding a lease for the later reply request. -/
 def renewableLifecycle : RequestState → Prop
   | .claimed | .processing => True
   | _ => False

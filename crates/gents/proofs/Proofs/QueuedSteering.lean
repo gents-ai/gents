@@ -7,9 +7,6 @@ import Proofs.CanonicalOutput.Execution.SessionComposition
 import Proofs.CanonicalOutput.Execution.Examples
 import Proofs.RenderedCapture
 
-/-! Composition of existing queue, request, canonical execution, client, and
-provider-capture owners. Raw admission input is retained independently of the
-fallible prepared message; this module does not render or template it. -/
 namespace QueuedSteering
 
 open CanonicalOutput
@@ -68,10 +65,6 @@ def interruptBeforeClaim? (w : World) : Option World := do
   let request ← RequestContext.step? w.request .interruptBeforeClaim
   pure { w with request }
 
-/-- Native selection establishes the exact physical request and node/requester
-scope before this composition. Queue scope represents the admitted request's
-scope here; ACP and lookup cardinality remain native premises. Terminal state
-does not disqualify the selected row. -/
 structure InterruptTarget where
   requestDocId : Nat
   agent : Nat
@@ -124,8 +117,6 @@ theorem latch_interrupt_preserves_existing_stamp
         · simp [hexecution, hqueue] at hlatch
   · simp [latchInterrupt?, htarget] at hlatch
 
-/-- Joining a native latch into an in-flight execution changes only the shared
-queue projection and durable intent; it does not manufacture a lease transition. -/
 theorem latch_interrupt_preserves_execution_join
     {before after : World} {target : InterruptTarget}
     (hlatch : latchInterrupt? before target = some after) :
@@ -154,8 +145,6 @@ theorem latch_interrupt_preserves_execution_join
               simp
             · simp [hexecution, hqueue] at hlatch
 
-/-! A terminal decision before the owned execution starts retains the signed
-admission input. It does not fabricate a transcript header. -/
 def terminateBeforeStart? (w : World) (action : RequestContext.Action) : Option World := do
   if w.execution.isSome then none
   let request ← RequestContext.step? w.request action
@@ -164,9 +153,6 @@ def terminateBeforeStart? (w : World) (action : RequestContext.Action) : Option 
       SessionQueue.step? w.queue .finishActive else some w.queue
   pure { w with request, queue }
 
-/-! Once the owned execution has begun, a preparation failure or interruption
-is a real terminal commit followed by the existing queue handoff. No authored
-header is invented for the input accepted at admission. -/
 private structure OwnedTerminalHandoff where
   request : RequestContext
   execution : CanonicalOutput.Execution.World
@@ -200,8 +186,6 @@ private def ownedTerminalHandoff? (w : World) (actor now generation : Nat)
 def terminateOwnedBeforePublication? (w : World) (actor now generation : Nat)
     (action : RequestContext.Action) : Option World := do
   let handoff ← ownedTerminalHandoff? w actor now generation action
-  -- Queue clearance is proved by Handover. The two lease/request equalities are
-  -- explicit coherence checks at this composition boundary, not new transitions.
   if handoff.request.state != handoff.outcome.requestState ||
       handoff.execution.lease.request != handoff.request.state ||
       handoff.execution.lease.lease != .terminal generation handoff.outcome then none
@@ -259,9 +243,6 @@ theorem claim_without_begin_activates_and_preserves_input
                 simp [hactive, hx]
           · simp [hx, hqueue, hactive] at hc
 
-/-! The canonical execution owner is supplied by the claim/begin handoff. It
-must be the same physical request, logical queue head, and processing lease;
-this check does not implement a second lease transition. -/
 def claimAndBegin? (w : World) (generation : Nat)
     (execution : CanonicalOutput.Execution.World) : Option World := do
   if w.execution.isSome then none
@@ -288,8 +269,6 @@ private theorem terminal_request_claim_step_none (w : World)
     simp at hterminal
   simp [RequestContext.step?, hnotPending]
 
-/-- A terminal request may retain a pending queue entry, but neither claim
-route can select it because the request owner rejects pending-to-claimed. -/
 theorem terminal_request_cannot_claim_without_begin (w : World)
     (hterminal : isTerminal w.request.state) : claimWithoutBegin? w = none := by
   simp [claimWithoutBegin?, terminal_request_claim_step_none w hterminal]
@@ -300,8 +279,6 @@ theorem terminal_request_cannot_claim_and_begin (w : World) (generation : Nat)
     claimAndBegin? w generation execution = none := by
   simp [claimAndBegin?, terminal_request_claim_step_none w hterminal]
 
-/-! Preparation is a fallible existing runtime boundary. Its selected message
-may be templated or wrapped; raw admission text is not equated with it. -/
 def publishAtExecutionStart? (w : World) (actor now generation : Nat)
     (candidate : Option PreparedInput) : Option World := do
   let prepared ← candidate
@@ -316,10 +293,9 @@ def publishAtExecutionStart? (w : World) (actor now generation : Nat)
     (.authored generation prepared.closing prepared.message)
   pure { w with execution := some execution, prepared := some prepared }
 
-/-! This is the authored-input and capture fence, not a general provider-lease
-authorization or proof that opaque serialized bytes encode `prepared`. A resumed
-attempt may reuse its exact canonical publication without creating a new row.
-`RenderedCapture` separately fences the opaque serialized request bytes. -/
+/-- Authored-input and capture fence only: not a general provider-lease
+authorization, and not a proof that opaque serialized bytes encode `prepared`
+(`RenderedCapture` fences those separately). -/
 def providerSendPermitted (w : World) (prepared : PreparedInput)
     (capture : RenderedCapture.Scenario) : Bool :=
   (w.request.state == .processing) &&
@@ -461,8 +437,6 @@ theorem terminal_before_start_clears_owned_active
             rfl
           · simp [terminateBeforeStart?, hx, hs, hterminal] at ht
 
-/-- A claimed-but-not-begun terminal request releases its active queue head
-through SessionQueue.finishActive and retains the signed admission input. -/
 theorem claimed_prestart_terminal_retains_input_and_clears_queue
     {before claimed after : World} {action : RequestContext.Action}
     (hp : before.prepared = none)
@@ -567,8 +541,6 @@ private def canonicalBefore (queue : SessionQueue.SessionQueueState) :
     lease := { RequestExecutionLease.initial Nat with now := 10 },
     queue }
 
-/-! The case's owner result is produced by the existing claim and begin steps,
-not by constructing a processing lease in the steering model. -/
 private def begunOwner? (queued : World) : Option CanonicalOutput.Execution.World := do
   let gate ← Gate.acquire (Gate.initial (canonicalBefore queued.queue)) 1 true
   let claimed ← SessionComposition.activate gate 1 10 activation 0 budget (some 20)
@@ -600,8 +572,6 @@ private def runAction (script : Script) (w : World) : Action → Option World
   | .claimAndBegin => do
       let owner ← begunOwner? w
       claimAndBegin? w 91 owner
-  -- An external durable interrupt intent becomes observable at this point.
-  -- RequestContext owns the subsequent legal terminal transition.
   | .latchInterrupt =>
       latchInterrupt? w (currentInterruptTarget w)
   | .terminate transition =>

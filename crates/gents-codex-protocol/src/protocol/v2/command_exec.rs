@@ -4,7 +4,6 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// PTY size in character cells for `command/exec` PTY sessions.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandExecTerminalSize {
@@ -14,12 +13,6 @@ pub struct CommandExecTerminalSize {
     pub cols: u16,
 }
 
-/// Run a standalone command (argv vector) in the server sandbox without
-/// creating a thread or turn.
-///
-/// The final `command/exec` response is deferred until the process exits and is
-/// sent only after all `command/exec/outputDelta` notifications for that
-/// connection have been emitted.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandExecParams {
@@ -92,7 +85,6 @@ pub struct CommandExecParams {
     pub permission_profile: Option<String>,
 }
 
-/// Final buffered result for `command/exec`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandExecResponse {
@@ -108,8 +100,6 @@ pub struct CommandExecResponse {
     pub stderr: String,
 }
 
-/// Write stdin bytes to a running `command/exec` session, close stdin, or
-/// both.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandExecWriteParams {
@@ -123,12 +113,10 @@ pub struct CommandExecWriteParams {
     pub close_stdin: bool,
 }
 
-/// Empty success response for `command/exec/write`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandExecWriteResponse {}
 
-/// Terminate a running `command/exec` session.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandExecTerminateParams {
@@ -137,12 +125,10 @@ pub struct CommandExecTerminateParams {
     pub process_id: String,
 }
 
-/// Empty success response for `command/exec/terminate`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandExecTerminateResponse {}
 
-/// Resize a running PTY-backed `command/exec` session.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandExecResizeParams {
@@ -153,12 +139,10 @@ pub struct CommandExecResizeParams {
     pub size: CommandExecTerminalSize,
 }
 
-/// Empty success response for `command/exec/resize`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandExecResizeResponse {}
 
-/// Stream label for `command/exec/outputDelta` notifications.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CommandExecOutputStream {
@@ -167,10 +151,6 @@ pub enum CommandExecOutputStream {
     /// stderr stream.
     Stderr,
 }
-/// Base64-encoded output chunk emitted for a streaming `command/exec` request.
-///
-/// These notifications are connection-scoped. If the originating connection
-/// closes, the server terminates the process.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandExecOutputDeltaNotification {

@@ -1,5 +1,3 @@
-//! Shared fail-closed validation for signed semantic fields.
-
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, SecondsFormat};
 

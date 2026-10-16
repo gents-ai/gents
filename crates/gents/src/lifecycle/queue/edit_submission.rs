@@ -11,10 +11,6 @@ const COMMAND_LIFETIME: chrono::Duration = chrono::Duration::minutes(5);
 const RECEIPT_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 const RECEIPT_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// Signs `edit` as the signer's command to `node_did`'s runtime, writes it
-/// through `access` and waits until `access` shows the runtime's verified
-/// receipt and, when applied, its effect. `requester_peer_id` names the
-/// signer's P2P peer; it is recorded only when the signer is not the node.
 #[allow(clippy::too_many_arguments)]
 pub async fn submit_pending_user_edit(
     access: &ConfigAccess,

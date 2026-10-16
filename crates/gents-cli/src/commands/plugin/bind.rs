@@ -1,7 +1,3 @@
-//! `gents plugin bind` and `unbind`: choose, and later change, the inference
-//! profile an installed plugin calls a model through. A plugin with its model
-//! slot unbound runs without model calls.
-
 use anyhow::{Context, Result};
 use gents::plugin::install::set_model_binding;
 use gents::plugin::model_calls::{AccessModels, ModelBinding, ModelResolver};

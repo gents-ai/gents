@@ -2,53 +2,37 @@ import Proofs.InferenceCall.ControllerBookkeeping
 
 /-! One backend's admission capacity pool (#897, #1366).
 
-A backend document rewrite replaces the admitting controller incarnation
-immediately; it never waits for earlier incarnations to drain. All
-incarnations of a backend share one pool: permits held by calls admitted
+All incarnations of a backend share one pool: permits held by calls admitted
 under a replaced incarnation, or before an outage, keep counting against the
-backend's capacity until they release. A health veto flaps on probe
-timeouts, which are most likely while the server is already saturated, so
-forgetting those permits at an outage would grant another full capacity on
-every flap. Hung calls are bounded separately by the stream idle timeout.
-
-`connection` is the identity an agent slot's provider client was built
-from: endpoint, credentials and provider/wire protocol, but not capacity or
-queue depth. Snapshot semantics (product decision on #1725): a connection
-change, such as key rotation or an endpoint move, is a new incarnation for
-new slots, while requests already in progress finish on the connection their
-slot started with, sharing the backend's pool. Admission never rejects a
-caller for its connection; a revoked credential fails at the provider. Each
-admitted call is attributed to the connection of the slot that made it.
+backend's capacity until they release; forgetting them at an outage would
+grant another full capacity on every health-veto flap. `connection` is the
+identity an agent slot's provider client was built from: endpoint, credentials
+and provider/wire protocol, but not capacity or queue depth. Snapshot
+semantics (#1725): a connection change is a new incarnation for new slots,
+while requests already in progress finish on the connection their slot started
+with. Admission never rejects a caller for its connection; a revoked
+credential fails at the provider.
 
 Unavailability and removal close admission: queued callers fail with
 `BackendGone` and new callers are rejected, while admitted calls keep their
-permits. A waiter whose permit was assigned before the close but that
-registers only after a reopen acquires again on the new semaphore in Rust;
-the model conservatively counts it as failed with the close. `held` counts real permits, not persisted InferenceCall rows. -/
+permits. `held` counts real permits, not persisted InferenceCall rows. -/
 namespace InferenceCall.Registry
 
 structure Config where
   connection : Nat
-  /-- Observed runtime epoch; rollback may reuse it. Attribution only: it is
-  never a replacement trigger. -/
+  /-- Attribution only: never a replacement trigger. -/
   generation : Nat
   capacity : Nat
   queueDepth : Nat
   available : Bool
   deriving DecidableEq, Repr
 
-/-- Cumulative call outcomes, in the vocabulary Rust reports. -/
 structure Tally where
   admitted : Nat
   queueFull : Nat
   gone : Nat
   deriving DecidableEq, Repr
 
-/-- `admitting` is the incarnation that admits new calls; `none` means
-admission is closed. `held` counts permits held by every call admitted since
-the pool first opened. `queue` lists the connections of parked callers in
-FIFO order; `attributed` lists the slot connection of every admitted call
-in admission order. -/
 structure State where
   desired : Option Config
   admitting : Option Config
@@ -61,9 +45,6 @@ structure State where
 def availableDesired (desired : Option Config) : Option Config :=
   desired.filter (·.available)
 
-/-- Connection, capacity and queue depth characterize admission resources;
-generation is not a replacement trigger. A metadata-only runtime generation
-keeps its owner. -/
 def sameResources (a b : Config) : Bool :=
   a.connection == b.connection && a.capacity == b.capacity && a.queueDepth == b.queueDepth
 
@@ -85,8 +66,6 @@ def admit (s : State) (slot : Nat) : State :=
 @[simp] theorem admit_gone (s : State) (slot : Nat) :
     (admit s slot).tally.gone = s.tally.gone := rfl
 
-/-- FIFO hand-off of free permits to parked callers, whatever connection
-their slot was built for. -/
 def serve (c : Config) (s : State) : List Nat → State
   | [] => { s with queue := [] }
   | w :: rest =>
@@ -110,7 +89,6 @@ def reconcile (s : State) (desired : Option Config) : State :=
           else settle { s with desired := desired, admitting := some next }
       | none => settle { s with desired := desired, admitting := some next }
 
-/-- A caller whose slot was built for connection `slot` asks for admission. -/
 def acquire (s : State) (slot : Nat) : State :=
   match s.admitting with
   | none => { s with tally := { s.tally with gone := s.tally.gone + 1 } }
@@ -119,8 +97,6 @@ def acquire (s : State) (slot : Nat) : State :=
       else if s.queue.length < c.queueDepth then { s with queue := s.queue ++ [slot] }
       else { s with tally := { s.tally with queueFull := s.tally.queueFull + 1 } }
 
-/-- An admitted call returns its permit, whichever incarnation admitted it and
-whether or not admission has closed since. -/
 def release (s : State) : State :=
   settle { s with held := s.held - 1 }
 
@@ -148,9 +124,6 @@ theorem metadata_only_reconcile_preserves_admitting
     reconcile s desired = { s with desired := desired } := by
   simp [reconcile, h_admitting, h_available, h_same]
 
-/-- #1366 and #897: an available desired configuration admits through its
-own incarnation as soon as it is reconciled, whatever the prior state, unless
-it only restates the current resources. -/
 theorem available_desired_admits_without_gap (s : State) (desired : Option Config)
     (next : Config) (h_available : availableDesired desired = some next) :
     ∃ c, (reconcile s desired).admitting = some c ∧ sameResources c next = true := by
@@ -177,8 +150,6 @@ theorem serve_within_capacity (c : Config) (s : State) (q : List Nat) :
         omega
       · simp
 
-/-- Parked callers are admitted in FIFO order and each admission is
-attributed to its own slot's connection. -/
 theorem serve_attributes_fifo (c : Config) (s : State) (q : List Nat) :
     ∃ k, (serve c s q).attributed = s.attributed ++ q.take k ∧
       (serve c s q).queue = q.drop k := by
@@ -191,8 +162,6 @@ theorem serve_attributes_fifo (c : Config) (s : State) (q : List Nat) :
         exact ⟨k + 1, by simp [hk, List.append_assoc], by simp [hq]⟩
       · exact ⟨0, by simp, by simp⟩
 
-/-- Snapshot semantics: a rewrite to an available configuration, including a
-connection change, rejects no queued caller. -/
 theorem available_rewrite_rejects_nothing (s : State) (desired : Option Config)
     (next : Config) (h_available : availableDesired desired = some next) :
     (reconcile s desired).tally.gone = s.tally.gone := by
@@ -213,14 +182,11 @@ theorem available_rewrite_rejects_nothing (s : State) (desired : Option Config)
     · simp only [settle]; exact hs _ _ _
   · simp only [settle]; exact hs _ _ _
 
-/-- An admitted caller is attributed to its own slot's connection, whichever
-connection is admitting. -/
 theorem acquire_attributes_slot (s : State) (slot : Nat) (c : Config)
     (h_admitting : s.admitting = some c) (h_free : s.held < c.capacity) :
     (acquire s slot).attributed = s.attributed ++ [slot] := by
   simp [acquire, h_admitting, h_free, admit]
 
-/-- New admissions never raise held permits above the current capacity. -/
 theorem acquire_admits_within_capacity (s : State) (slot : Nat)
     (h : s.held < (acquire s slot).held) :
     (acquire s slot).held ≤ capacity (acquire s slot) := by
@@ -254,15 +220,11 @@ theorem release_within_capacity (s : State) :
       simp [capacity, hc] at this ⊢
       omega
 
-/-- B1: an outage does not forget held permits; a reopened pool admits only
-the capacity they leave free. -/
 theorem outage_carries_held (s : State) (down up : Option Config) (next : Config)
     (h_down : availableDesired down = none) (h_up : availableDesired up = some next) :
     (reconcile (reconcile s down) up).held = s.held := by
   simp [reconcile, h_down, h_up, settle, serve]
 
-/-- Deleting or disabling a backend fails every parked caller and rejects new
-ones without admitting anything. -/
 theorem unavailable_closes_admission (s : State) (desired : Option Config) (slot : Nat)
     (h : availableDesired desired = none) :
     (reconcile s desired).queue = [] ∧
@@ -302,13 +264,11 @@ theorem reconcile_retains_latest_desired (s : State) (desired : Option Config) :
 
 /-! ## Semaphore ledger refinement
 
-Rust realizes `held ≤ capacity` with one Tokio semaphore per open period.
 Tokio permits cannot go negative, so a decrease below the permits in use is
-recorded as `owed` and paid by forgetting permits. `transit` counts permits a
-Tokio waiter took but the ledger has not registered. Tokio returns such a
-permit straight to the semaphore when the waiting future is dropped
-(`abandon`), bypassing the ledger, so `available` can become positive while
-`owed` is. Registration therefore pays debt before it admits. -/
+recorded as `owed` and paid by forgetting permits. Tokio returns a permit
+taken by a dropped waiter straight to the semaphore (`abandon`), bypassing
+the ledger, so `available` can become positive while `owed` is. Registration
+therefore pays debt before it admits. -/
 namespace Ledger
 
 structure State where
@@ -319,17 +279,12 @@ structure State where
   held : Nat
   deriving DecidableEq, Repr
 
-/-- Tokens are conserved: every permit is available, in transit, held, or
-owed back. -/
 def conserved (l : State) : Prop :=
   l.available + l.transit + l.held = l.capacity + l.owed
 
 def take (l : State) : State :=
   if 0 < l.available then { l with available := l.available - 1, transit := l.transit + 1 } else l
 
-/-- A permit taken from the semaphore is either forgotten to pay debt or
-admitted, and only while admission is open. A permit assigned before close
-and registered after it returns to the closed semaphore. -/
 def register (l : State) (isOpen : Bool) : State :=
   if 0 < l.transit then
     if !isOpen then { l with transit := l.transit - 1, available := l.available + 1 }
@@ -340,8 +295,6 @@ def register (l : State) (isOpen : Bool) : State :=
 def abandon (l : State) : State :=
   if 0 < l.transit then { l with transit := l.transit - 1, available := l.available + 1 } else l
 
-/-- Returning a permit, including one from a retired semaphore after an
-outage: debt first, otherwise back to the current semaphore. -/
 def release (l : State) : State :=
   if 0 < l.held then
     if 0 < l.owed then { l with held := l.held - 1, owed := l.owed - 1 }
@@ -358,11 +311,6 @@ def resize (l : State) (capacity : Nat) : State :=
     { l with capacity := capacity, available := l.available - forgotten,
              owed := l.owed + (l.capacity - capacity - forgotten) }
 
-/-- Reopening after an outage starts a fresh semaphore charged with the
-permits still held. A permit a waiter took from the retired semaphore is
-forgotten and never registers: the waiter acquires again from this one, so
-`register` is the only admission step and always runs against the current
-ledger. -/
 def reopen (held capacity : Nat) : State :=
   ⟨capacity, held - min held capacity, capacity - min held capacity, 0, held⟩
 
@@ -376,8 +324,6 @@ theorem register_conserved (l : State) (isOpen : Bool) (h : conserved l) :
   all_goals (try simp only)
   all_goals omega
 
-/-- A closed backend admits nothing, even with a permit assigned before the
-close (`unavailable_closes_admission` at the semaphore level). -/
 theorem register_closed_admits_nothing (l : State) :
     (register l false).held = l.held := by
   unfold register
@@ -398,8 +344,6 @@ theorem resize_conserved (l : State) (capacity : Nat) (h : conserved l) :
 theorem reopen_conserved (held capacity : Nat) : conserved (reopen held capacity) := by
   unfold reopen conserved; simp; omega
 
-/-- Registration admits only without debt, so an admission leaves held
-permits within capacity. -/
 theorem register_admits_within_capacity (l : State) (isOpen : Bool) (h : conserved l)
     (h_admit : l.held < (register l isOpen).held) :
     (register l isOpen).held ≤ l.capacity := by
@@ -408,7 +352,6 @@ theorem register_admits_within_capacity (l : State) (isOpen : Bool) (h : conserv
   all_goals (try simp only at h_admit ⊢)
   all_goals omega
 
-/-- Debt forces zero availability through every ledger-owned step. -/
 def debtBlocks (l : State) : Prop := 0 < l.owed → l.available = 0
 
 theorem resize_debt_blocks (l : State) (capacity : Nat) (h : debtBlocks l) :
@@ -423,9 +366,6 @@ theorem release_debt_blocks (l : State) (h : debtBlocks l) : debtBlocks (release
 theorem reopen_debt_blocks (held capacity : Nat) : debtBlocks (reopen held capacity) := by
   unfold reopen debtBlocks; simp; omega
 
-/-- The Tokio bypass: dropping a waiter that already holds a permit can make
-a permit available while debt is outstanding, which is why registration, not
-the semaphore, is the admission point. -/
 theorem abandon_can_expose_permit_under_debt :
     ¬ debtBlocks (abandon ⟨1, 1, 0, 1, 1⟩) := by
   simp [debtBlocks, abandon]

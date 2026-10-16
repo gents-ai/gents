@@ -19,7 +19,6 @@ import {
 import { createSessionStore } from "../src/hooks/sessionStore";
 import type { ShellProjection, ShellStores } from "../src/hooks/shellProjection";
 
-/** A fleet store holding `deployments`, as a shell's fleet. */
 export function fleetFor(deployments: unknown[] = []) {
   const fleet = createFleetStore();
   applyFleetSnapshot(fleet, {
@@ -29,8 +28,6 @@ export function fleetFor(deployments: unknown[] = []) {
   return fleet;
 }
 
-/** Every shell store, holding `deployments` as both the client's read and
-    its fleet, with the selection given. */
 export function shellStores({
   deployments,
   selection = {},
@@ -55,9 +52,6 @@ export function shellStores({
   };
 }
 
-/** A projection admitting a send and a retry under `agentId`, or one
-    whose send status is `blocked`, for actions tested apart from the
-    stores' own projection. */
 export function admittingProjection(
   agentId = "coding",
   blocked?: string,
@@ -72,7 +66,6 @@ export function admittingProjection(
   } as unknown as ShellProjection;
 }
 
-/** Each value `key` takes in the chat store, in order. */
 export function historyOf<K extends keyof ChatState>(stores: ShellStores, key: K) {
   const values: ChatState[K][] = [];
   stores.chat.subscribe((state, prev) => {
@@ -81,8 +74,6 @@ export function historyOf<K extends keyof ChatState>(stores: ShellStores, key: K
   return values;
 }
 
-/** A started lifecycle over fresh stores, as the app makes it, with the
-    client's state read through getters and every banner error kept. */
 export function lifecycleFor(
   api: object,
   {

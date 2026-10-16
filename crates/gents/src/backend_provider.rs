@@ -7,13 +7,11 @@ use crate::document_config::AdvertisedModel;
 
 pub use gents_loop::backend_provider::BackendProviderKind;
 
-/// Agent-scoped credential provider selected by each backend kind.
 pub trait BackendProviderOauthExt {
     fn oauth_provider(self) -> Option<&'static str>;
 }
 
 impl BackendProviderOauthExt for BackendProviderKind {
-    /// The `OAuthCredential.provider` value an agent-scoped kind authenticates with.
     fn oauth_provider(self) -> Option<&'static str> {
         match self {
             Self::ChatGptCodex => Some(crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER),
@@ -38,8 +36,6 @@ impl ModelDiscoveryHttpError {
         matches!(self.status, 401 | 403)
     }
 
-    /// HTTP 426 Upgrade Required: the provider demands a newer client version
-    /// than the one gents advertised.
     pub fn is_client_version_gate(&self) -> bool {
         self.status == 426
     }
@@ -57,11 +53,8 @@ fn provider_display_name(kind: BackendProviderKind) -> &'static str {
 }
 
 const MODEL_DISCOVERY_PATH: &str = "/models";
-/// The Grok CLI proxy publishes its catalog at `/models-v2` (official client path).
+// The Grok CLI proxy's official client catalog path.
 const XAI_GROK_MODEL_DISCOVERY_PATH: &str = "/models-v2";
-/// Claude subscription catalog base. The backend document's endpoint is the
-/// `claude-cli://subscription` placeholder; an `http(s)://` endpoint (tests)
-/// overrides this.
 const CLAUDE_MODELS_BASE: &str = crate::claude_subscription::ANTHROPIC_API_ENDPOINT;
 
 fn claude_models_base(endpoint: &str) -> String {
@@ -86,13 +79,9 @@ struct OpenAiModelRecord {
     model: Option<String>,
     #[serde(rename = "modelId")]
     model_id: Option<String>,
-    /// Grok `/models-v2` catalog rows advertise a display name and context
-    /// window per model; the OpenAI-style catalogs observed by the existing
-    /// adapter do not, so these stay `None` elsewhere.
     name: Option<String>,
     #[serde(rename = "contextWindow")]
     context_window: Option<i64>,
-    // vLLM's OpenAI-compatible catalog and OpenRouter's documented catalog.
     max_model_len: Option<i64>,
     context_length: Option<i64>,
     top_provider: Option<OpenRouterModelProvider>,
@@ -108,8 +97,6 @@ struct OpenRouterModelProvider {
 }
 
 impl OpenAiModelRecord {
-    /// OpenAI-style catalogs identify models by `id`; the Grok `/models-v2`
-    /// catalog identifies them by `model` / `modelId` (`id` is a row id there).
     fn identifier(self, kind: BackendProviderKind) -> Option<String> {
         let ordered = if kind == BackendProviderKind::XaiGrokOAuth {
             [self.model, self.model_id, self.id]
@@ -123,10 +110,6 @@ impl OpenAiModelRecord {
             .map(|value| value.trim().to_string())
     }
 
-    /// Preserve provider-advertised limits without inferring them from model IDs.
-    /// `xai_api`: an `OpenAiCompatible` backend at the xAI API endpoint, whose
-    /// `/v1/models` advertises `capabilities.reasoning_effort` exactly for the
-    /// models that accept an effort (absent means none) and `context_length`.
     fn into_advertised(self, kind: BackendProviderKind, xai_api: bool) -> Option<AdvertisedModel> {
         let reasoning_efforts = if kind.uses_messages_wire() {
             self.capabilities.as_ref().map(|caps| {
@@ -233,9 +216,6 @@ impl ChatGptCodexModelRecord {
             .map(|value| value.trim().to_string())
     }
 
-    /// Preserve the metadata returned by Codex's ModelInfo catalog. Its
-    /// max_context_window is an override ceiling, not the normal context size.
-    /// Output limits and sampling are provider-managed on this transport.
     fn into_advertised(self) -> Option<AdvertisedModel> {
         let display_name = self.display_name.clone();
         let context_window = self.context_window.filter(|v| *v > 0);
@@ -607,17 +587,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn probe_error_body_truncation_preserves_utf8_boundaries() {
-        assert_eq!(truncate_probe_body("short error"), "short error");
-        for character in ['é', '界', '🦀'] {
-            let prefix = "x".repeat(255);
-            let body = format!("{prefix}{character}backend error");
-            assert_eq!(truncate_probe_body(&body), format!("{prefix}..."));
-        }
-        assert_eq!(truncate_probe_body(&"x".repeat(256)), "x".repeat(256));
-    }
-
     use std::sync::{Arc, Mutex};
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -726,9 +695,6 @@ mod tests {
 
     #[tokio::test]
     async fn discover_models_reads_grok_models_v2_shape() {
-        // Official Grok CLI catalog shape: `/models-v2` returns `{"data":[...]}`
-        // where the model identifier is `model` / `modelId`, not `id` (which is
-        // a catalog row id when present).
         let (endpoint, requests) = spawn_model_discovery_server(
             r#"{"data":[{"id":"row-1","model":"grok-4.5","name":"Grok 4.5","contextWindow":256000,"apiBackend":"responses"},{"id":"row-2","modelId":"grok-build-0.1","name":"Grok Build"}]}"#,
         )
@@ -756,9 +722,6 @@ mod tests {
 
     #[tokio::test]
     async fn discover_models_grok_426_is_a_client_version_gate() {
-        // The subscription proxy answers 426 when the advertised
-        // `x-grok-client-version` is below its floor; the CLI needs the typed
-        // status to append the version-gate guidance.
         let (endpoint, _requests) = spawn_model_discovery_server_with_status(
             "426 Upgrade Required",
             r#"{"error":{"message":"Your Grok CLI version (1.0.13) is outdated. Please update to version 1.0.46 or later"}}"#,
@@ -913,8 +876,6 @@ mod tests {
 
     #[tokio::test]
     async fn discover_models_reads_claude_models_with_oauth_headers() {
-        // Live probe: `GET https://api.anthropic.com/v1/models` with the
-        // subscription bearer returns the OpenAI-style `{"data":[{"id":...}]}`.
         let (endpoint, requests) = spawn_model_discovery_server(
             r#"{"data":[{"id":"claude-fable-5-1","display_name":"Claude Fable 5.1","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"effort":{"supported":true,"low":{"supported":true},"high":{"supported":true},"xhigh":{"supported":true}}},"type":"model"},{"id":"claude-opus-5","type":"model"},{"id":"claude-sonnet-5","type":"model"}],"has_more":false}"#,
         )

@@ -32,7 +32,6 @@ struct ManagedPairingTarget {
     graphql: String,
 }
 
-/// What an initialized home says about itself in `init.json`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct HomeIdentity {
     reviewed: ReviewedHome,
@@ -176,8 +175,6 @@ async fn observe_managed_server_status<R: Runtime>(
     } else {
         None
     };
-    // Native process state is not runtime readiness. Probe the status endpoint
-    // on every read so the frontend gets the live DID and route.
     let port = match state.policy.node_home.as_deref() {
         Some(node_home) => observe_port_readiness(node_home).await?,
         None => PortReadiness::NotListening,
@@ -211,8 +208,6 @@ async fn observe_managed_server_status<R: Runtime>(
 
     match port {
         PortReadiness::Ready(external) => status = project_external_status(external, &native),
-        // Our own job is restarted at launch and reports starting meanwhile.
-        // An external one never becomes ready: say so now.
         PortReadiness::Outdated { version } if !native.job_loaded && !starting => {
             status.state = ManagedServerState::Failed;
             status.error = Some(outdated_runtime_message(version.as_deref()));
@@ -240,8 +235,6 @@ async fn observe_managed_server_status<R: Runtime>(
     Ok(status)
 }
 
-/// Canonical managed-service and runtime-readiness observation shared by the
-/// status command and native desktop consumers such as DB Explorer.
 pub(crate) async fn managed_server_status_for<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
@@ -255,8 +248,6 @@ fn project_external_status(
     native: &gents_server::native_service::NativeServiceStatus,
 ) -> ManagedServerStatus {
     external.auto_start = native.enabled;
-    // Approval revoked while the runtime still serves stays visible: the
-    // next launch of the job will be blocked.
     external.approval_required = native.requires_approval;
     if native.job_loaded {
         external.state = ManagedServerState::Running;
@@ -264,9 +255,6 @@ fn project_external_status(
     external
 }
 
-/// Another runtime serves the managed port. Its message replaces generic
-/// errors, and a loaded job that cannot bind the port is failed rather than
-/// waited on. A start in progress reports the conflict itself.
 fn project_foreign_port(status: &mut ManagedServerStatus, message: &str, starting: bool) {
     if starting {
         return;
@@ -309,8 +297,6 @@ const START_CANCELLED: &str =
     "Starting the local Node was cancelled because the Node was stopped, restarted, or reconfigured.";
 const START_SUPERSEDED: &str = "This start of the local Node was replaced by a newer start.";
 
-/// A start or restart waiting outside the lifecycle lock, and why it was
-/// cancelled.
 #[derive(Clone, Default)]
 pub struct StartWait {
     token: tokio_util::sync::CancellationToken,
@@ -348,8 +334,6 @@ async fn begin_start_wait(state: &DesktopAppState) -> StartWait {
     token
 }
 
-/// Ends a start that is waiting for approval or readiness so Stop and Restart
-/// can take the lifecycle lock.
 pub(super) async fn cancel_start_wait(state: &DesktopAppState) {
     let mut managed = state.managed_server.lock().await;
     if let Some(token) = managed.start_wait.take() {
@@ -358,9 +342,6 @@ pub(super) async fn cancel_start_wait(state: &DesktopAppState) {
     }
 }
 
-/// Takes the lifecycle lock for an operation that supersedes any start. A
-/// wait registered while this caller queued for the lock belongs to a start
-/// or restart that has since released it to wait, so it is cancelled too.
 pub(super) async fn lock_lifecycle_superseding_start(
     state: &DesktopAppState,
 ) -> LifecycleGuard<'_> {
@@ -417,7 +398,6 @@ fn ensure_not_cancelled(token: &StartWait) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Native steps of a managed start. The waits run without the lifecycle lock.
 trait ManagedLaunch {
     async fn requires_approval(&self) -> Result<bool, BridgeError>;
     async fn await_approval(&self) -> anyhow::Result<()>;
@@ -428,8 +408,6 @@ trait ManagedLaunch {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Launched {
     Started,
-    /// macOS refused the start until the user approves the background item.
-    /// Carries launchctl's refusal.
     ApprovalPending(String),
 }
 
@@ -496,8 +474,6 @@ async fn launch_managed_server<'a, L: ManagedLaunch>(
             wait_unlocked(token, launch.await_approval()).await?;
             lifecycle = Some(relock_start(state, token).await?);
         }
-        // A start can launch the process and then fail restoring login state.
-        // Roll back the owned attempt even when that final native step fails.
         ensure_not_cancelled(token)?;
         attempted_start = true;
         start_when_approved(state, token, &mut lifecycle, launch).await?;
@@ -534,9 +510,6 @@ async fn launch_managed_server<'a, L: ManagedLaunch>(
     }
 }
 
-/// Starts the job, waiting for approval whenever macOS refuses it. Each wait
-/// polls approval and is bounded by the approval timeout, so a start that
-/// macOS keeps refusing fails with the approval message.
 async fn start_when_approved<'a, L: ManagedLaunch>(
     state: &'a DesktopAppState,
     token: &StartWait,
@@ -548,8 +521,6 @@ async fn start_when_approved<'a, L: ManagedLaunch>(
         let refusal = match launch.start().await {
             Ok(Launched::Started) => return Ok(()),
             Ok(Launched::ApprovalPending(detail)) => {
-                // A refusal that approval polling cannot observe would
-                // return from the wait at once; report it instead.
                 if !launch.requires_approval().await.unwrap_or(false) {
                     anyhow::bail!("launchctl could not start Gents: {detail}");
                 }
@@ -613,7 +584,6 @@ async fn start_managed_server<'a, R: Runtime>(
     let (ready, initial_enabled, _lifecycle) = match matching_external_server(&node_home).await? {
         Some(external) => (Some(external), false, lifecycle),
         None => {
-            // Before anything below unloads a job this launch could not replace.
             ensure_launchable_here(app, state)?;
             let outdated = match observe_port_readiness(&node_home).await? {
                 PortReadiness::Outdated { version } => Some(version),
@@ -687,14 +657,8 @@ async fn start_managed_server<'a, R: Runtime>(
 
     let provisioned: anyhow::Result<()> = async {
         if replace_loaded_job {
-            // The loaded job runs a runtime older than this app, will not run
-            // again by itself (a clean exit or a runtime that moved) or is
-            // crash looping. Unload it so the current definition can be
-            // installed and the launch below starts it fresh.
             run_native(native_service(app, state)?, |service| service.stop(false)).await?;
         }
-        // A fresh home has no identity to compare yet. Provisioning is safe
-        // either way, and the check below names any other runtime on the port.
         if gents_server::server_host::initialized_home(&node_home) {
             ensure_default_port_identity(&node_home).await?;
         }
@@ -721,9 +685,6 @@ async fn start_managed_server<'a, R: Runtime>(
         )
         .await?;
         ensure_default_port_identity(&node_home).await?;
-        // Install even when a unit file already exists. `install` leaves a
-        // matching definition alone and refuses while the service is active.
-        // A stopped unit can still name a previous mount or runtime.
         run_native(launchable_native_service(app, state)?, |service| {
             service.install()
         })
@@ -805,9 +766,6 @@ async fn start_managed_server<'a, R: Runtime>(
     Ok(status)
 }
 
-/// Ends a failed start or restart: rolls back a native start it attempted,
-/// clears its wait, and records the failure. Errs with the cancellation when
-/// a stop or restart superseded it first.
 async fn settle_launch_failure<C, CF>(
     state: &DesktopAppState,
     token: &StartWait,
@@ -848,7 +806,6 @@ where
         }
     }
     finish_start_wait(state, token).await;
-    // A runtime still booting is observed as starting, not as a failure.
     if !still_booting {
         state.managed_server.lock().await.last_error = Some(message.clone());
     }
@@ -924,21 +881,6 @@ async fn fail_managed_start<R: Runtime>(
     }
 }
 
-/// Previews or retires local state through the shared home reset plan.
-/// Explicit full resets stop the runtime and client, then hand retirement to
-/// a helper that waits for this process and its webviews to exit.
-///
-/// For refused stores, scope is the managed runtime home's own entries (a fixed inventory,
-/// [`gents::home::RUNTIME_HOME_ENTRIES`]) when the runtime refused its store,
-/// and the desktop client's state when the client refused its store or when
-/// the runtime home is retired (the client's pairing is bound to that
-/// runtime). Full reset also includes the service definition and desktop logs,
-/// and clears browser data through WebKit in either disposition. Other homes
-/// and files outside the inventory stay in place.
-///
-/// A preview changes nothing and cancels nothing. The confirmation it returns
-/// pins the exact planned set: an action whose plan differs, before or after
-/// the service is stopped, is refused.
 #[tauri::command]
 pub async fn desktop_managed_server_reset<R: Runtime>(
     request: ManagedServerResetRequest,
@@ -1009,9 +951,6 @@ async fn plan_state_reset(
     )
 }
 
-/// A path is not identity: only the reviewed home itself being gone, or now
-/// carrying another DID, orphans the client. A configured home that moved or
-/// changed while the reviewed identity still exists keeps the client state.
 fn classify_binding(
     reviewed: Option<&ReviewedHome>,
     configured: Option<&HomeIdentity>,
@@ -1030,8 +969,6 @@ fn classify_binding(
     match reviewed_home {
         Some(home) if home.reviewed.node_did == reviewed.node_did => ClientBinding::Unbound,
         Some(_) => ClientBinding::Orphaned,
-        // An init marker that exists but cannot be read is not evidence the
-        // node is gone.
         None if reviewed_init_present => ClientBinding::Unbound,
         None => ClientBinding::Orphaned,
     }
@@ -1069,17 +1006,12 @@ async fn client_binding(state: &DesktopAppState) -> ClientBinding {
     )
 }
 
-/// Before a client start opens its store: client state paired with a home
-/// that is gone or now carries another identity is archived through the
-/// reset plan, so first-run setup starts clean. The home is never touched.
 pub(super) async fn retire_orphaned_client_state(
     state: &DesktopAppState,
 ) -> Result<Option<ManagedServerResetResult>, BridgeError> {
     if state.policy.managed_server != ManagedServerPolicy::Allowed {
         return Ok(None);
     }
-    // Provisioning writes the home's init marker under this lock; reading
-    // the binding outside it could see a home mid-write.
     let _lifecycle = state.managed_server_lifecycle.lock().await;
     if client_binding(state).await != ClientBinding::Orphaned {
         return Ok(None);
@@ -1118,7 +1050,6 @@ async fn retire_incompatible_home<R: Runtime>(
     let plan = plan_state_reset(state, full_reset).await?;
     plan.check_confirmation(confirmation, disposition)?;
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ").to_string();
-    // Refuse a rename across filesystems before anything is stopped.
     let backup = match disposition {
         HomeResetDisposition::Archive => {
             let backup = plan.backup_path(&stamp)?;
@@ -1128,11 +1059,6 @@ async fn retire_incompatible_home<R: Runtime>(
         HomeResetDisposition::Delete => None,
     };
 
-    // The store lock this version's runtime and `init` take before opening
-    // or creating this home's store. It is taken whether or not the store
-    // exists and held (never moved) until the entries are retired, so neither
-    // can open or create the store meanwhile. Older runtimes do not take it;
-    // the service stop and endpoint check above cover them.
     if full_reset {
         run_native(native_service(app, state)?, |service| service.stop(true)).await?;
         let native = run_native(native_service(app, state)?, |service| service.status()).await?;
@@ -1140,9 +1066,6 @@ async fn retire_incompatible_home<R: Runtime>(
     }
     let _store_lock = match plan.runtime.as_ref() {
         Some((home, _)) => {
-            // The service definition names this home; a fresh setup installs
-            // it again. Removing it keeps login from launching a runtime on an
-            // emptied home.
             if !full_reset {
                 run_native(native_service(app, state)?, |service| service.uninstall()).await?;
             }
@@ -1154,16 +1077,12 @@ async fn retire_incompatible_home<R: Runtime>(
         }
         None => None,
     };
-    // Held until the entries are retired: no client start can open the
-    // store, peer directory or keys meanwhile.
     let _client = if plan.retires_client_state() {
         drain_managed_runtime_pairing(state).await;
         Some(super::lifecycle::exclude_client(state).await?)
     } else {
         None
     };
-    // The stopped service and client may have changed the homes: act only on
-    // the set the user confirmed.
     let settled = plan_state_reset(state, full_reset).await?;
     settled.check_confirmation(confirmation, disposition)?;
 
@@ -1217,8 +1136,6 @@ async fn retire_incompatible_home<R: Runtime>(
     Ok(result)
 }
 
-/// The helper reserves reset before acknowledging readiness, then waits for
-/// this process (including its webviews) to exit before touching browser data.
 fn launch_reset_helper(
     executable: &Path,
     home: &Path,
@@ -1283,10 +1200,6 @@ fn launch_reset_helper_with_timeout(
     launch().map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error:#}")))
 }
 
-/// Fails closed unless nothing serves the managed home: no runtime answers
-/// as its identity and the standard endpoint refuses connections. An unknown
-/// responder is equally unsafe, since its data ownership cannot be
-/// established.
 async fn ensure_home_not_served(home: &Path) -> Result<(), BridgeError> {
     let config = gents_server::server_host::ServerConfig::standard(home.to_path_buf());
     let managed_address = std::net::SocketAddr::new(config.http_addr, config.http_port);
@@ -1342,11 +1255,6 @@ fn runtime_tool_ceiling(
 const MANAGED_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(300);
 const BACKGROUND_APPROVAL_TIMEOUT: Duration = Duration::from_secs(600);
 const MANAGED_SERVER_POLL_INTERVAL: Duration = Duration::from_millis(500);
-/// Supervisor restarts after a failed exit that make a crash loop rather
-/// than a single exit waiting out the respawn throttle. Counted from the
-/// restart counter at the first failed exit observed: launchd `runs` includes
-/// earlier kickstarts and crashes of the same loaded job, so an absolute
-/// count would reject a start after old failures.
 const CRASH_LOOP_RESTARTS: u64 = 2;
 
 #[derive(Debug)]
@@ -1360,7 +1268,6 @@ enum NativeProgress {
     Stopped,
     AwaitingApproval,
     Exited(gents_server::native_service::ServiceExit),
-    /// The supervisor gave up on the job and will not restart it.
     Failed(gents_server::native_service::ServiceExit),
 }
 
@@ -1417,8 +1324,6 @@ where
     NF: Future<Output = Result<NativeProgress, BridgeError>>,
 {
     let started = tokio::time::Instant::now();
-    // Binding is the only progress a runtime reports before it is ready, so
-    // the bound restarts then. Migrations after an upgrade can take longer.
     let mut progress_at = started;
     let mut booting = false;
     let mut first_exit_restarts = None;
@@ -1429,8 +1334,6 @@ where
                 anyhow::bail!("{}", outdated_runtime_message(version.as_deref()))
             }
             PortReadiness::Foreign(foreign) => anyhow::bail!(foreign.message()),
-            // A listener without /status may be this runtime before it
-            // answers; it only explains a later failure.
             PortReadiness::Occupied(port) => (false, Some(port)),
             PortReadiness::Booting => (true, None),
             PortReadiness::NotListening => (false, None),
@@ -1501,8 +1404,6 @@ where
     }
 }
 
-/// A running job whose runtime is bound but not ready when the wait ends. It
-/// is left running rather than rolled back: it may be migrating its data.
 #[derive(Debug)]
 struct RuntimeStillBooting {
     waited: Duration,
@@ -1570,8 +1471,6 @@ async fn wait_for_booting_managed_server<'a, R: Runtime>(
     result
 }
 
-/// Ends the wait on a job that was already running. A job still booting at
-/// the bound is reported as such, not as a failure, like a launched one.
 async fn settle_adoption<'a>(
     state: &'a DesktopAppState,
     token: &StartWait,
@@ -1686,18 +1585,12 @@ pub async fn desktop_managed_server_open_login_items<R: Runtime>(
 enum PortReadiness {
     Ready(ManagedServerStatus),
     Foreign(ForeignRuntime),
-    /// This home's runtime is bound but has not reported it finished starting.
     Booting,
-    /// This home's runtime predates the lifecycle field and never reports ready.
-    Outdated {
-        version: Option<String>,
-    },
-    /// A program that is not a Gents runtime accepts connections on the port.
+    Outdated { version: Option<String> },
     Occupied(u16),
     NotListening,
 }
 
-/// A runtime other than this home's that answers on the managed port.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ForeignRuntime {
     port: u16,
@@ -1745,8 +1638,6 @@ fn occupied_port_message(port: u16) -> String {
     )
 }
 
-/// Who answers on the managed port. Any answer on a fresh home, or one that
-/// does not carry the initialized identity, belongs to another runtime.
 async fn observe_port_readiness(node_home: &std::path::Path) -> Result<PortReadiness, BridgeError> {
     let config = gents_server::server_host::ServerConfig::standard(node_home.to_path_buf());
     let Some(payload) = default_port_payload(Some(node_home)).await? else {
@@ -1834,7 +1725,6 @@ fn validate_ready_runtime(
     Ok(())
 }
 
-/// Refuses a launch from a location the service could not keep running from.
 fn ensure_launchable_here<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
@@ -1850,9 +1740,6 @@ fn native_service<R: Runtime>(
     build_native_service(app, state, false)
 }
 
-/// The service manager to use before a definition is installed or started. A
-/// packaged build copies its runtime out of the temporary mount first, so the
-/// service keeps an executable once the desktop app and its mount are gone.
 fn launchable_native_service<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
@@ -1860,14 +1747,6 @@ fn launchable_native_service<R: Runtime>(
     build_native_service(app, state, true)
 }
 
-/// Brings a packaged install up to date at startup. It refreshes the runtime
-/// copied out of the package, then reconciles an already-installed definition
-/// with the one this version writes, so an upgraded application does not leave
-/// a service pointing at the previous release's runtime or environment.
-///
-/// It never installs a service the user has not chosen, and never starts or
-/// stops an agent. A running agent keeps the definition it launched with.
-/// Start and restart install the current definition before they launch it.
 pub(crate) fn refresh_packaged_install<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
@@ -1875,8 +1754,6 @@ pub(crate) fn refresh_packaged_install<R: Runtime>(
     if state.policy.node_home.is_none() {
         return Ok(());
     }
-    // The setup thread is outside the async runtime. Waiting here keeps a
-    // start or restart from launching the definition this refresh replaces.
     let _lifecycle = state.managed_server_lifecycle.blocking_lock();
     let executable = resolve_service_executable(app, state.policy.desktop_paths.root())?;
     if executable.install()? {
@@ -1900,8 +1777,6 @@ pub(crate) fn refresh_packaged_install<R: Runtime>(
         return Ok(());
     }
     if status.is_active_or_transitioning() {
-        // A loaded job that is not running and names a runtime that moved
-        // cannot launch again. Unload it so its definition can be replaced.
         if !status.running
             && service
                 .installed_executable_differs()
@@ -1915,8 +1790,6 @@ pub(crate) fn refresh_packaged_install<R: Runtime>(
             service.stop(false).map_err(native_error)?;
             return service.install().map_err(native_error);
         }
-        // `install` refuses a live Linux job, and on macOS it bootouts a
-        // loaded job whose definition differs. Leave that job alone.
         tracing::info!(
             target: "gents_desktop::managed_server",
             "agent restart pending before the updated service definition applies"
@@ -1926,9 +1799,6 @@ pub(crate) fn refresh_packaged_install<R: Runtime>(
     service.install().map_err(native_error)
 }
 
-/// Our own running job still runs a runtime older than this app, which never
-/// reports ready. Restart it on the refreshed definition and executable at
-/// launch; status reads report it starting meanwhile rather than stopped.
 pub(crate) async fn restart_outdated_managed_job<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
@@ -2002,8 +1872,6 @@ fn build_native_service<R: Runtime>(
     config.stderr_path = Some(crate::logging::runtime_error_log(
         state.policy.desktop_paths.root(),
     ));
-    // Login Items shows the code-signing identity name unless the
-    // agent names the desktop bundle that installed it.
     let bundle_id = app.config().identifier.clone();
     if !bundle_id.trim().is_empty() {
         config.associated_bundle_id = Some(bundle_id);
@@ -2075,8 +1943,6 @@ async fn start_managed_runtime_pairing(
     node_home: std::path::PathBuf,
     target: ManagedPairingTarget,
 ) {
-    // A durably paired runtime skips pairing below, so its replicated schema
-    // is observed on every start; a failed fetch leaves the last state.
     {
         let mut managed = state.managed_server.lock().await;
         if !managed
@@ -2149,26 +2015,19 @@ async fn start_managed_runtime_pairing(
     }));
 }
 
-/// Background pairing retries a failed attempt this many times in total.
 const MANAGED_PAIRING_ATTEMPTS: u32 = 4;
-/// The wait before retry `n` is `n` times this.
 const MANAGED_PAIRING_RETRY_DELAY: Duration = Duration::from_secs(2);
-/// How long one attempt waits for its approved enrollment to become chat-ready.
 const MANAGED_PAIRING_APPROVAL_WINDOW: Duration = Duration::from_secs(30);
 const MANAGED_PAIRING_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const MANAGED_PAIRING_CANCELLED: &str = "managed runtime pairing was cancelled";
 
-/// Why a pairing attempt ended without a chat-ready route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PairingFailure {
     Cancelled,
-    /// Retrying cannot help: the runtime is incompatible, outdated, or is
-    /// not the identity this home pairs with.
     Permanent(String),
     Transient(String),
 }
 
-/// Failures no retry of the same runtime can resolve.
 const PERMANENT_PAIRING_ERRORS: &[&str] = &["incompatible", "does not match", "predates this app"];
 
 impl PairingFailure {
@@ -2193,8 +2052,6 @@ impl std::fmt::Display for PairingFailure {
     }
 }
 
-/// Runs pairing attempts until one succeeds, fails permanently, the attempts
-/// run out, or the pairing is cancelled.
 async fn retry_managed_pairing<A, AF>(
     cancel: &tokio_util::sync::CancellationToken,
     attempts: u32,
@@ -2238,8 +2095,6 @@ enum PairingApproval {
     NotVisibleYet,
 }
 
-/// Approves an authored enrollment and waits for it to become chat-ready.
-/// Cancellation is observed between steps; each step is left to finish.
 async fn await_managed_pairing_approval<P, PF, A, AF, R, RF>(
     cancel: &tokio_util::sync::CancellationToken,
     window: Duration,
@@ -2284,12 +2139,8 @@ where
     }
 }
 
-/// How long a just-started runtime may take to report it finished starting.
-/// Its replicated schema and enrollment offer are published by then.
 const MANAGED_SCHEMA_PUBLISH_WINDOW: Duration = Duration::from_secs(30);
 
-/// Fetch the managed runtime's `/status`, retrying within
-/// [`MANAGED_SCHEMA_PUBLISH_WINDOW`] while it is unreachable or still starting.
 async fn fetch_managed_runtime_status(
     graphql: &str,
     cancel: &tokio_util::sync::CancellationToken,
@@ -2375,9 +2226,6 @@ async fn ensure_managed_runtime_pairing(
         return Err(PairingFailure::Cancelled);
     }
     let live_peer = live_server_peer(&status);
-    // Each /status mints a fresh offer, so authoring again would leave the
-    // earlier request pending where it could still be approved. A request
-    // stays in use until it expires or is denied.
     let request_id = resolve_managed_request(
         cancel,
         || async {
@@ -2396,8 +2244,6 @@ async fn ensure_managed_runtime_pairing(
                     .map_err(|error| format!("{error:#}"))
             }
         },
-        // Authoring installs and unwinds bootstrap replication state, so it
-        // is not interrupted; cancellation is observed once it returns.
         || async {
             core.request_status_enrollment_with_label(&status, Some(&target.node_name))
                 .await
@@ -2461,9 +2307,6 @@ async fn ensure_managed_runtime_pairing(
     Ok(())
 }
 
-/// The peer serving the live runtime's enrollment offer, falling back to the
-/// peer its status reports. Used only to select among this desktop's own
-/// requests; each was authenticated against its server when authored.
 fn live_server_peer(status: &serde_json::Value) -> Option<String> {
     status
         .pointer("/enrollment/token")
@@ -2479,8 +2322,6 @@ fn live_server_peer(status: &serde_json::Value) -> Option<String> {
         .filter(|peer| !peer.trim().is_empty())
 }
 
-/// This desktop's newest unexpired, undenied request to pair with the runtime
-/// serving from `live_peer`.
 fn select_managed_request(
     requests: Vec<EnrollmentRequestResult>,
     node_did: &str,
@@ -2497,9 +2338,6 @@ fn select_managed_request(
         })
 }
 
-/// Reuses a live request, pushing a pending one to the server again since its
-/// earlier push may have failed. Authors a new one only after a lookup that
-/// succeeded and found none.
 async fn resolve_managed_request<L, LF, R, RF, A, AF>(
     cancel: &tokio_util::sync::CancellationToken,
     lookup: L,
@@ -2515,8 +2353,6 @@ where
     AF: Future<Output = Result<String, PairingFailure>>,
 {
     let found = lookup().await;
-    // A stop during the lookup must not author or push. Once begun, those
-    // steps run to completion so authoring can unwind its replication state.
     if cancel.is_cancelled() {
         return Err(PairingFailure::Cancelled);
     }
@@ -2554,10 +2390,6 @@ fn pairing_target(status: &ManagedServerStatus) -> Option<ManagedPairingTarget> 
 }
 
 pub(super) async fn drain_managed_runtime_pairing(state: &DesktopAppState) {
-    // The schema observation's only write is synchronous after its last
-    // await, so aborting it cannot leave partial state. Pairing is awaited
-    // because authoring must unwind replication state; only its wait for the
-    // runtime's status is cancelled.
     let task = {
         let mut managed = state.managed_server.lock().await;
         if let Some(observation) = managed.schema_observation_task.take() {
@@ -2579,13 +2411,9 @@ pub(super) async fn drain_managed_runtime_pairing(state: &DesktopAppState) {
     }
 }
 
-/// The runtime on the default port when it is this home's. A fresh first-run
-/// home never adopts a neighbor's `gents server`.
 async fn matching_external_server(
     node_home: &std::path::Path,
 ) -> Result<Option<ManagedServerStatus>, BridgeError> {
-    // A booting runtime is observed through its native service until it
-    // reports ready; discovery and pairing need its runtime.json.
     Ok(match observe_port_readiness(node_home).await? {
         PortReadiness::Ready(status) => Some(status),
         PortReadiness::Foreign(_)
@@ -2627,7 +2455,6 @@ fn managed_status_from_payload(payload: serde_json::Value, live_did: &str) -> Ma
     }
 }
 
-/// The refusal kind a failed readiness wait carries from the exit status.
 #[derive(Debug, Clone, Copy)]
 struct RefusedStoreKind(gents::storage_backend::IncompatibleStoreKind);
 
@@ -2646,8 +2473,6 @@ fn refused_kind(error: &anyhow::Error) -> Option<gents::storage_backend::Incompa
         .map(|refused| refused.0)
 }
 
-/// The managed runtime's refused store: the legacy marker when present,
-/// otherwise the refusal the runtime reported by its exit status.
 fn refused_runtime_store(
     node_home: &Path,
     reported: Option<gents::storage_backend::IncompatibleStoreKind>,
@@ -2659,8 +2484,6 @@ fn refused_runtime_store(
         .or(reported)
         .unwrap_or(gents::storage_backend::IncompatibleStoreKind::UnknownLineage);
     let data_path = match kind {
-        // The exit status names the refusal, not the key; its directory
-        // under the home is where the runtime keeps keys.
         gents::storage_backend::IncompatibleStoreKind::InsecureKey => node_home.join("keys"),
         _ => data_path,
     };
@@ -2699,9 +2522,6 @@ async fn ensure_default_port_identity(node_home: &Path) -> Result<(), BridgeErro
     }
 }
 
-/// Stop and Restart control only this home's job. This home's runtime
-/// serving outside that job blocks them; another home's runtime on the port
-/// never does.
 fn ensure_native_owns_running_endpoint(
     port: &PortReadiness,
     native_job_loaded: bool,
@@ -2768,7 +2588,6 @@ async fn stop_managed_server_locked<R: Runtime>(
         managed.last_error = None;
         managed.approval_refused = false;
     }
-    // The returned status names another home's runtime on the port.
     let port = match state.policy.node_home.as_deref() {
         Some(node_home) => observe_port_readiness(node_home).await?,
         None => PortReadiness::NotListening,
@@ -2789,8 +2608,6 @@ async fn stop_managed_server_locked<R: Runtime>(
     observe_managed_server_status(app, state).await
 }
 
-/// Native login enablement is the operator's background-running choice.
-/// External servers remain outside the desktop's service ownership.
 pub(crate) async fn prepare_app_exit<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
@@ -2798,8 +2615,6 @@ pub(crate) async fn prepare_app_exit<R: Runtime>(
     let _lifecycle = state.managed_server_lifecycle.lock().await;
     let service = match native_service(app, state) {
         Ok(service) => service,
-        // Hosts without a native service manager cannot have a service owned
-        // by this path; quitting remains available on those platforms.
         Err(error) if error.code == BridgeErrorCode::Unsupported => return Ok(()),
         Err(error) => return Err(error),
     };
@@ -2830,8 +2645,6 @@ fn ensure_app_not_quitting(state: &DesktopAppState) -> Result<(), BridgeError> {
     Ok(())
 }
 
-/// Starts the reviewed local service once when its owning desktop opens.
-/// Native enablement continues to control login startup independently.
 pub(crate) async fn start_configured_managed_server<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
@@ -2886,8 +2699,6 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
             "managed server requires a local node home",
         )
     })?;
-    // Refused before taking the lifecycle lock, which supersedes an
-    // in-flight start: a refused restart must not cancel it.
     refuse_renaming_home(&node_home, &request.node_name).await?;
     let lifecycle = lock_lifecycle_superseding_start(&state).await;
     ensure_app_not_quitting(&state)?;
@@ -2966,8 +2777,6 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
         node_home: &node_home,
         enable_at_login: was_enabled,
     };
-    // Another runtime on the port does not keep this job from stopping, but
-    // a job launched into it could only crash loop.
     let install = async {
         ensure_default_port_identity(&node_home)
             .await
@@ -3044,9 +2853,6 @@ fn ensure_allowed(state: &DesktopAppState) -> Result<(), BridgeError> {
     Ok(())
 }
 
-/// The crash-loop sample for one status read. Only a runtime that reports
-/// its lifecycle `ready` counts as ready: one still migrating is bound but can
-/// still die, so it samples as running and keeps the evidence.
 fn job_sample<'a>(
     port: &PortReadiness,
     job_loaded: bool,
@@ -3060,8 +2866,6 @@ fn job_sample<'a>(
     }
 }
 
-/// Restarts since `baseline`. A counter below the baseline means the job was
-/// reloaded or its counter reset, so the baseline restarts from it.
 fn restarts_since(baseline: &mut Option<u64>, counter: u64) -> u64 {
     let first = baseline
         .filter(|first| *first <= counter)
@@ -3070,11 +2874,6 @@ fn restarts_since(baseline: &mut Option<u64>, counter: u64) -> u64 {
     counter - first
 }
 
-/// Tracks a crash loop across status reads: the supervisor's restart count
-/// when a failed exit was first seen, and the loop once restarts since then
-/// reach the threshold. A job that dies seconds into boot is sampled running
-/// between respawns, so running samples keep the evidence. Only an unload,
-/// runtime readiness, a clean exit or a dropped restart counter clear it.
 #[derive(Debug, Default)]
 pub struct CrashLoopWatch {
     baseline: Option<u64>,
@@ -3117,7 +2916,6 @@ fn status_from(
         native.is_some_and(|status| status.approval_pending(managed.approval_refused));
     let exited_cleanly = last_exit.is_some_and(|exit| exit.clean);
     let settled = !managed.starting && !approval_required;
-    // A refused store is final on its first exit; restarts cannot change it.
     let refused_exit = last_exit.is_some_and(|exit| settled && exit.incompatible_store());
     let refused_store = refused_exit.then(|| {
         managed
@@ -3244,9 +3042,6 @@ async fn read_initialized_name(node_home: &std::path::Path) -> Option<String> {
         })
 }
 
-/// Provisioning rewrites an initialized home's host authority but never its
-/// name, so a start or restart naming another agent is refused before
-/// anything (stop, provisioning, preferences) touches the home.
 async fn refuse_renaming_home(
     node_home: &std::path::Path,
     requested: &str,
@@ -3277,9 +3072,6 @@ fn name_confirmed_by_home(requested: &str, initialized: Option<&str>) -> bool {
     initialized.is_some_and(|name| name.trim() == requested.trim())
 }
 
-/// Provisioning never renames an initialized home, so a requested name is
-/// remembered only once the home's init config carries it. Otherwise the
-/// stored preference is left as it was.
 async fn save_confirmed_preference(
     state: &DesktopAppState,
     node_home: &std::path::Path,
@@ -3325,9 +3117,6 @@ async fn read_home_identity(node_home: &std::path::Path) -> Option<HomeIdentity>
     })
 }
 
-/// The remembered grant is withheld unless it was reviewed for this exact
-/// home and identity, and the home still carries that same authority. A
-/// replaced, repointed, missing or re-granted home needs a fresh review.
 fn bind_preference(
     mut stored: StoredManagedServer,
     home: Option<&HomeIdentity>,
@@ -3345,9 +3134,6 @@ fn bind_preference(
     stored
 }
 
-/// A start uses the authority reviewed with it, or else a remembered grant
-/// that [`bind_preference`] kept for this home. Failing here happens before
-/// provisioning, so a stale grant is never written into a home.
 fn start_authority(
     tool_ceiling: Option<ManagedServerToolCeiling>,
     tool_root: Option<&str>,
@@ -3486,8 +3272,6 @@ mod tests {
         write(&node_home.join("init.json"), &init.to_string());
     }
 
-    /// Reviewed for the Forge home as it stands, then saved through the
-    /// same confirm-and-bind path start and restart use.
     async fn remember_forge_grant(state: &DesktopAppState, node_home: &Path, root: &str) {
         save_confirmed_preference(
             state,
@@ -3509,8 +3293,6 @@ mod tests {
             .is_some());
     }
 
-    /// Start and restart, driven through their IPC commands, with a
-    /// different name and a different authority than the initialized home.
     fn invoke_on_forge_home(cmd: &str) -> (tempfile::TempDir, Vec<u8>, String) {
         use tauri::ipc::InvokeBody;
         use tauri::webview::InvokeRequest;
@@ -3602,7 +3384,6 @@ mod tests {
         write_home(&node_home, "did:key:forge", "Readwrite", Some(&root));
         remember_forge_grant(&state, &node_home, &root).await;
 
-        // Another identity now lives at the same path.
         write_home(&node_home, "did:key:other", "MetaOnly", None);
         let before = std::fs::read(node_home.join("init.json")).unwrap();
         let bound = load_bound_preference(&state).await.unwrap();
@@ -3640,14 +3421,7 @@ mod tests {
     async fn reprovisioning_with_another_name_leaves_the_home_and_preference_alone() {
         let (_temp, state) = orchestration_state();
         let node_home = state.policy.node_home.clone().expect("node home");
-        let init = serde_json::json!({
-            "home": node_home.display().to_string(),
-            "node_name": "Forge",
-            "node_did": "did:key:forge",
-            "key_path": null,
-            "tool_ceiling": "Readwrite",
-            "tool_root": null,
-        });
+        let init = serde_json :: json ! ({ "home" : node_home . display () . to_string () , "node_name" : "Forge" , "node_did" : "did:key:forge" , "key_path" : null , "tool_ceiling" : "Readwrite" , "tool_root" : null , });
         write(&node_home.join("init.json"), &init.to_string());
         let forge = StoredManagedServer {
             node_name: "Forge".to_string(),
@@ -3656,8 +3430,6 @@ mod tests {
             reviewed_for: None,
         };
         save_preference(&state, &forge).await.unwrap();
-
-        // What restart does with a stale requested name.
         gents_server::server_host::ensure_standard_home(
             gents_server::server_host::ProvisionOptions {
                 home: node_home.clone(),
@@ -3679,14 +3451,12 @@ mod tests {
         )
         .await
         .unwrap();
-
         assert_eq!(
             read_initialized_name(&node_home).await.as_deref(),
             Some("Forge")
         );
         let stored = load_preference(&state).await.unwrap().expect("preference");
         assert_eq!(stored.node_name, "Forge");
-
         save_confirmed_preference(&state, &node_home, &forge)
             .await
             .unwrap();
@@ -3694,23 +3464,6 @@ mod tests {
             load_preference(&state).await.unwrap().unwrap().node_name,
             "Forge"
         );
-    }
-
-    #[tokio::test]
-    async fn requested_name_is_remembered_only_when_the_home_confirms_it() {
-        let home = tempfile::tempdir().unwrap();
-        assert!(!name_confirmed_by_home(
-            "Scout",
-            read_initialized_name(home.path()).await.as_deref()
-        ));
-        write(
-            &home.path().join("init.json"),
-            r#"{"node_did":"did:key:forge","node_name":"Forge"}"#,
-        );
-        let initialized = read_initialized_name(home.path()).await;
-        assert_eq!(initialized.as_deref(), Some("Forge"));
-        assert!(!name_confirmed_by_home("Scout", initialized.as_deref()));
-        assert!(name_confirmed_by_home("Forge", initialized.as_deref()));
     }
 
     #[cfg(unix)]
@@ -3756,9 +3509,6 @@ mod tests {
         }
     }
 
-    /// A 0.18-style default home: the managed agent's own files at the root
-    /// of `~/.gents`, another agent's home nested beside them, and desktop
-    /// client state (with the packaged runtime copy) elsewhere.
     fn dirty_home(temp: &Path) -> (PathBuf, gents_desktop_core::client::DesktopPaths) {
         let home = temp.join(".gents");
         write(&home.join("data/MANIFEST"), "REGOMAN old lineage");
@@ -4003,8 +3753,6 @@ mod tests {
         plan.retire(HomeResetDisposition::Archive, Some(&backup))
             .unwrap();
 
-        // What a relaunched runtime would find: no store, no init marker, and
-        // no desktop pairing; another agent's home is left alone.
         let entries = gents::home::home_entries(&home, &[]).unwrap();
         assert!(entries.owned.is_empty(), "{:?}", entries.owned);
         assert!(!gents_server::server_host::initialized_home(&home));
@@ -4329,7 +4077,6 @@ mod tests {
         .unwrap()
         .preview();
 
-        // A runtime-owned entry appears after the review.
         write(&home.join("plugins/new/manifest.json"), "{}");
         let changed = plan_home_reset(
             Some(&home),
@@ -4804,10 +4551,6 @@ mod tests {
             .any(|path| path.ends_with("data.lock")));
     }
 
-    /// A home refused only for an insecure key may have no store. The reset
-    /// still holds the home's store lock, so an opener that creates the
-    /// store (init or serve taking `lock_store`) cannot run while `init.json`
-    /// and `keys/` are retired, and a store it creates afterwards is not.
     #[tokio::test]
     async fn an_opener_cannot_create_the_store_while_a_storeless_home_is_retired() {
         use std::sync::Arc;
@@ -4836,8 +4579,6 @@ mod tests {
             .iter()
             .any(|path| path.ends_with("/data")));
 
-        // An opener races the retirement: it creates the store and takes the
-        // store lock, as `gents init` and `gents server` do.
         let barrier = Arc::new(tokio::sync::Barrier::new(2));
         let opener = {
             let barrier = Arc::clone(&barrier);
@@ -4879,7 +4620,6 @@ mod tests {
         let (home, desktop) = dirty_home(&temp);
         let refused = Some(lineage_refusal(home.join("data")));
 
-        // The managed home is the user's home, or an ancestor of it.
         for user_home in [home.clone(), home.join("person")] {
             assert_eq!(
                 plan_home_reset(
@@ -4895,7 +4635,6 @@ mod tests {
                 BridgeErrorCode::InvalidArgument
             );
         }
-        // The desktop state root is the user's home or one of its ancestors.
         let user_home = desktop.root().join("person");
         assert_eq!(
             plan_home_reset(
@@ -4910,7 +4649,6 @@ mod tests {
             .code,
             BridgeErrorCode::InvalidArgument
         );
-        // A path alias of the user's home is the same root.
         #[cfg(unix)]
         {
             let alias = temp.join("alias");
@@ -5319,38 +5057,6 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_failure_preserves_the_original_failure() {
-        let combined = combine_cleanup_error(
-            "readiness failed".to_string(),
-            "newly started native service",
-            "stop failed".to_string(),
-        );
-        assert!(combined.contains("readiness failed"));
-        assert!(combined.contains("stop failed"));
-    }
-
-    #[test]
-    fn parse_tool_ceiling_accepts_init_json_and_status_spellings() {
-        assert_eq!(
-            parse_tool_ceiling("readwrite"),
-            Some(ManagedServerToolCeiling::Readwrite)
-        );
-        assert_eq!(
-            parse_tool_ceiling("Readwrite"),
-            Some(ManagedServerToolCeiling::Readwrite)
-        );
-        assert_eq!(
-            parse_tool_ceiling("readonly"),
-            Some(ManagedServerToolCeiling::Readonly)
-        );
-        assert_eq!(
-            parse_tool_ceiling("meta-only"),
-            Some(ManagedServerToolCeiling::MetaOnly)
-        );
-        assert_eq!(parse_tool_ceiling("unknown"), None);
-    }
-
-    #[test]
     fn ready_runtime_requires_live_status_to_carry_reviewed_authority() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -5681,7 +5387,6 @@ mod tests {
         .expect_err("the wait is bounded");
         assert!(error.is::<RuntimeStillBooting>(), "{error}");
 
-        // The bound restarts at bind: time spent before it does not count.
         let started = std::time::Instant::now();
         await_runtime_readiness(
             Duration::from_millis(200),
@@ -5835,7 +5540,6 @@ mod tests {
                 },
                 || async {
                     authored.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    // Written locally, then the push to the server fails.
                     *store.lock().unwrap() = Some(managed_request(
                         "enroll-1",
                         "peer-a",
@@ -5853,7 +5557,6 @@ mod tests {
         assert_eq!(authored.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(*resent.lock().unwrap(), vec!["enroll-1".to_string()]);
 
-        // An approved request needs no push.
         *store.lock().unwrap() = Some(managed_request(
             "enroll-1",
             "peer-a",
@@ -6083,8 +5786,6 @@ mod tests {
         assert_eq!(typed.code, BridgeErrorCode::IncompatibleLocalStore);
     }
 
-    /// A runtime that binds, reports booting, then refuses its store fails
-    /// typed on that exit rather than being waited on as a slow migration.
     #[tokio::test]
     async fn a_refused_store_fails_typed_even_while_status_reports_booting() {
         for code in [
@@ -6539,7 +6240,6 @@ mod tests {
                 true,
                 Some(&service_exit(restarts)),
             ));
-            // Bound with its identity but not `ready`: migrations can still fail.
             assert!(
                 matches!(
                     job_sample(&PortReadiness::Booting, true, None),
@@ -7066,8 +6766,6 @@ mod tests {
 
     #[test]
     fn a_job_that_dies_seconds_into_boot_is_a_crash_loop_across_running_samples() {
-        // With a 1s status poll and launchd's respawn throttle, most samples
-        // see the respawned process running for its few seconds of boot.
         let mut watch = CrashLoopWatch::default();
         let samples = [
             (JobSample::Running, None),
@@ -7488,8 +7186,6 @@ mod tests {
         assert_eq!(observations.load(Ordering::SeqCst), 4);
     }
 
-    /// Serves one fixed `/status` body. While `hold` is set, each response
-    /// waits for `release` after announcing the request on `received`.
     struct StatusServer {
         port: u16,
         hold: Arc<std::sync::atomic::AtomicBool>,

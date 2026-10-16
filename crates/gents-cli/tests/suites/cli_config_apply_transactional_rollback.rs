@@ -95,9 +95,6 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
         .to_str()
         .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
 
-    // Hold the first successfully staged transactional mutation at the HTTP
-    // boundary. This makes the SIGKILL point deterministic without a timing
-    // sleep or a production-only test hook in config apply.
     let (proxy_graphql, mutation_staged, proxy) =
         start_stalling_transaction_proxy(&graphql).await?;
     let mut cli = std::process::Command::new(crate::support::cli_bin())

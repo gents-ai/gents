@@ -4,34 +4,6 @@ import type { LinkedSessionView } from "./LinkedSessionView.js";
 import type { TurnSenderView } from "./TurnSenderView.js";
 
 /**
- * One session's agent-message lineage, mapped from the
- * `gents::session_origin::lineage` owner. It is provenance only: no
- * hierarchy, cascade or authority follows.
+ * Provenance only: no hierarchy, cascade or authority follows.
  */
-export type SessionProvenanceView = { sessionId: string,
-/**
- * The session whose request started this one.
- */
-startedBy: LinkedSessionView | null,
-/**
- * Sessions this session's requests started.
- */
-started: Array<LinkedSessionView>,
-/**
- * Other sessions this session messaged without starting them.
- */
-sent: Array<LinkedSessionView>,
-/**
- * Other sessions, besides its starter, that messaged this one.
- */
-received: Array<LinkedSessionView>,
-/**
- * The sender of each of this session's requests another session caused,
- * where that sender is one of the linked sessions.
- */
-senders: Array<TurnSenderView>,
-/**
- * This session's `agent_new`/`agent_message` calls and the request each
- * caused.
- */
-calls: Array<CausedCallView>, };
+export type SessionProvenanceView = { sessionId: string, startedBy: LinkedSessionView | null, started: Array<LinkedSessionView>, sent: Array<LinkedSessionView>, received: Array<LinkedSessionView>, senders: Array<TurnSenderView>, calls: Array<CausedCallView>, };

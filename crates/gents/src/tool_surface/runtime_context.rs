@@ -79,7 +79,6 @@ impl ToolRuntimeContext {
         }
     }
 
-    /// Where this runtime's plugin tools find installed plugins.
     pub fn with_plugins(mut self, plugins: Arc<crate::plugin::executor::PluginExecutor>) -> Self {
         self.plugins = plugins;
         self

@@ -1,7 +1,5 @@
-/* Native host adapter: screens keep calling href/navigate/useRoute.
-   MemoryNavProvider owns the stack; this module never writes location.
-   href() is a path token (not a URL). Clicks on those tokens, and leftover
-   prototype `#/…` hrefs, are intercepted and pushed onto the memory stack. */
+// Native host adapter: screens keep calling href/navigate/useRoute;
+// MemoryNavProvider owns the stack and this module never writes location.
 import { parseRoute, pathFor, useNav, type Nav, type Route } from "@gents/shell";
 
 export type { Route };
@@ -17,8 +15,6 @@ export function href(route: Route) {
   return pathFor(route);
 }
 
-/* the memory nav pushes every call, and an entry equal to the one shown
-   would make Back look like it did nothing */
 export function navigate(route: Route) {
   if (!current || pathFor(route) === pathFor(current.route)) return;
   current.navigate(route);
@@ -28,7 +24,6 @@ export function useRoute(): Route {
   return useNav().route;
 }
 
-/* back and forward, with whether each can go: the memory nav's own cursor */
 export type History = Pick<Nav, "canBack" | "canForward" | "back" | "forward">;
 
 export function useHistory(): History {

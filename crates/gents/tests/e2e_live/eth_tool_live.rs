@@ -1,19 +1,3 @@
-//! Live EthTool qualification: a live model uses `{tool_id}_query` against
-//! Base Sepolia (live chain data, live inference).
-//!
-//! Write coverage lives in `eth_tool_write_live.rs` (local Hardhat/Anvil,
-//! provisioned key, native transfer + declared contract write).
-//!
-//! ```bash
-//! GENTS_ETH_LIVE=1 GENTS_EVAL_TARGET=workstation-1 cargo test -p gents --features live-e2e --test e2e_live \
-//!   eth_tool_live_model_queries_base_sepolia \
-//!   -- --ignored --test-threads=1 --nocapture
-//! ```
-//!
-//! Inference comes from the target named by `GENTS_EVAL_TARGET`. The RPC
-//! defaults to `https://sepolia.base.org` (chain id 84532); override with
-//! `GENTS_ETH_LIVE_RPC`, `GENTS_ETH_LIVE_CHAIN_ID`.
-
 use std::sync::Arc;
 use std::time::Duration;
 

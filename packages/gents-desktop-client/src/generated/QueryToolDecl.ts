@@ -7,11 +7,10 @@ import type { WriteToolField } from "./WriteToolField.js";
  */
 export type QueryToolDecl = { tool_name: string, collection: string, description?: string,
 /**
- * Projection allowlist. Omit `fields` at call time to return all of these.
+ * Projection allowlist; omit `fields` at call time to return all of these.
  */
 fields?: Array<string>,
 /**
- * Filter slots. Runtime-filled entries are hidden from the model and
- * applied as `_eq` clauses; the rest are optional/required string args.
+ * Runtime-filled entries are hidden from the model, applied as `_eq`.
  */
 filter_fields?: Array<WriteToolField>, };

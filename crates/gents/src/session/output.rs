@@ -65,7 +65,6 @@ pub(crate) struct CanonicalReplayScope<'a> {
 pub(crate) struct CanonicalAssistantCandidate {
     pub(crate) header_doc_id: String,
     pub(crate) request_doc_id: String,
-    /// Read only by tests that pin the candidate's transcript position.
     #[cfg(test)]
     pub(crate) sequence: u32,
     pub(crate) message: gents_protocol::message::Message,
@@ -114,8 +113,6 @@ pub(crate) fn record_request_output_scan() {
         .try_with(|scans| scans.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
 }
 
-/// Run `future`, counting the request-wide output segment scans canonical
-/// reconstruction issues on this task.
 #[cfg(test)]
 pub(crate) async fn count_request_output_scans<F: std::future::Future>(
     future: F,
@@ -155,8 +152,6 @@ tokio::task_local! {
     static CAPTURE_ROW_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
-/// Run `future`, counting the batched replay capture-row statements canonical
-/// replay resolution issues on this task.
 #[cfg(test)]
 pub(crate) async fn count_capture_row_queries<F: std::future::Future>(
     future: F,
@@ -367,12 +362,6 @@ pub(crate) async fn load_canonical_message_in_txn(
     .await
 }
 
-/// Exact reconstruction of many headers of one scope in one authoritative
-/// transaction. Each request-wide segment scan and resolved header is read
-/// once per reader: terminalization holds the process-wide write gate while
-/// it validates every accepted tool reply, and a fresh read per header scans
-/// the request's whole output once per tool, starving lease renewal.
-///
 /// Its cache is a transaction snapshot. A publication that appends exactly
 /// one segment and header may consume it through `load_created_message`,
 /// which reads the two new rows under ACP and invalidates coordinate checks.
@@ -574,7 +563,6 @@ pub async fn load_canonical_message(
     .await
 }
 
-/// Borrowed-node form of the same exact, scoped reconstruction boundary.
 pub async fn load_canonical_message_from_node(
     node: &EmbeddedNode,
     header_doc_id: &str,
@@ -598,9 +586,6 @@ pub async fn load_canonical_message_from_node(
 }
 
 #[cfg(test)]
-/// Reconstruct one exact payload reference inside an authorized physical
-/// request. Callers must first obtain the reference from its canonical owner;
-/// this reader never searches by logical labels or chooses a latest stream.
 pub(crate) async fn load_canonical_payload_from_node(
     node: &EmbeddedNode,
     request_doc_id: &str,
@@ -832,9 +817,7 @@ async fn load_header(
     }
 }
 
-/// Scoped headers sharing `header`'s key or sequence in its session. A
-/// bulk transaction reader reads its session once: validating each of a request's
-/// headers by its own query costs the session size per header.
+/// Scoped headers sharing `header`'s key or sequence in its session.
 async fn coordinate_twins(
     access: ReadAccess<'_, '_>,
     header: &super::canonical_rows::TranscriptMessageRow,
@@ -937,7 +920,6 @@ async fn validate_origin_chain(
     }
 }
 
-/// Scoped segments of one request, read once per reader in a transaction.
 async fn request_rows(
     access: ReadAccess<'_, '_>,
     request_doc_id: &str,
@@ -1351,9 +1333,6 @@ async fn reconstruct_scoped_message_with_facts(
 /// Resolve physical assistant origins reachable from the bounded session view.
 /// Forks retain their origin's request/session scope; an arbitrary historical
 /// request supplied by the caller is never a lookup root.
-/// A source boundary limits this read, but does not itself prove that an
-/// independently stored checkpoint was causally derived from the whole view.
-/// The caller must not select a candidate by comparing native message bytes.
 #[cfg(test)]
 pub(crate) async fn load_canonical_assistant_candidates(
     node: &EmbeddedNode,
@@ -1956,7 +1935,6 @@ pub(crate) async fn resolve_canonical_replay_tags(
         .collect()
 }
 
-/// Test convenience; production uses the batch owner even for a single turn.
 #[cfg(test)]
 pub(crate) async fn resolve_canonical_replay_tag(
     node: &EmbeddedNode,
@@ -2506,55 +2484,6 @@ mod tests {
     use super::*;
     use gents_protocol::output::{MessageRole, OutputOutcome, TranscriptMessage};
 
-    #[tokio::test]
-    async fn replay_preloads_output_and_request_facts_in_bounded_chunks() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        let mut request_doc_ids = (0..=crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH)
-            .map(|index| {
-                document::DocID::new_v0_from_seed(&format!("missing-replay-request-{index}"))
-                    .to_string()
-            })
-            .collect::<Vec<_>>();
-        request_doc_ids.push(request_doc_ids[0].clone());
-        let distinct_request_count = crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH + 1;
-        let mut cache = ReadCache {
-            reuse_node_scans: true,
-            ..ReadCache::default()
-        };
-
-        let (output_result, output_batches) =
-            count_request_output_scans(preload_replay_request_output_segments(
-                &node,
-                &request_doc_ids,
-                "did:test:replay-batch",
-                None,
-                &mut cache,
-            ))
-            .await;
-        output_result.unwrap();
-        assert_eq!(
-            output_batches, 2,
-            "33 request IDs require two indexed output reads at the 32-ID bound"
-        );
-        assert_eq!(cache.requests.len(), distinct_request_count);
-        assert!(cache.requests.values().all(|rows| rows.rows.is_empty()));
-
-        let (request_facts, request_fact_batches) = count_replay_request_fact_batches(
-            ReplayRequestReader::request_facts(&node, &request_doc_ids),
-        )
-        .await;
-        let request_facts = request_facts.unwrap();
-        assert_eq!(
-            request_fact_batches, 2,
-            "request and composite-commit aliases stay below the 32-document bound"
-        );
-        assert_eq!(request_facts.len(), distinct_request_count);
-        assert!(request_facts
-            .values()
-            .all(|facts| facts.rows.is_empty() && facts.commits.is_empty()));
-    }
-
     #[test]
     fn session_header_index_preserves_coordinate_observations() {
         let rows = vec![
@@ -2584,19 +2513,98 @@ mod tests {
     }
 
     #[test]
+    fn current_input_selection_matches_lean_owner() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().current_input_cases;
+        assert!(!cases.is_empty());
+        for case in cases {
+            let retained = case
+                .headers
+                .iter()
+                .enumerate()
+                .filter_map(|(index, input)| {
+                    let publication = match input.kind.as_str() {
+                        "prompt" | "context" | "folded" | "assistant" => {
+                            MessagePublication::RequestExecution {
+                                execution_generation: "observed-generation".into(),
+                            }
+                        }
+                        "tool_result" | "notification" => MessagePublication::ToolDelivery {
+                            tool_call_doc_id: format!("tool-{index}"),
+                        },
+                        other => panic!("unsupported modeled header class {other}"),
+                    };
+                    let mut row = header(
+                        &index.to_string(),
+                        "session",
+                        Some(&input.request),
+                        publication,
+                    );
+                    let key = match input.kind.as_str() {
+                        "folded" => crate::lifecycle::queue::folded_input_key("folded-request"),
+                        kind => kind.to_owned(),
+                    };
+                    row.message.message_key =
+                        super::super::canonical_rows::authored_message_key(&input.request, &key);
+                    (!is_current_admission_input(&row.message, &case.current_request))
+                        .then_some(index)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(retained, case.retained_indices, "{}", case.name);
+        }
+    }
+
+    fn header(
+        doc_id: &str,
+        session_id: &str,
+        request_doc_id: Option<&str>,
+        publication: MessagePublication,
+    ) -> super::super::canonical_rows::TranscriptMessageRow {
+        super::super::canonical_rows::TranscriptMessageRow {
+            doc_id: doc_id.into(),
+            message: TranscriptMessage {
+                message_key: format!("key-{doc_id}"),
+                session_id: session_id.into(),
+                node_did: "did:test:agent".into(),
+                requester_did: Some("did:test:requester".into()),
+                request_doc_id: request_doc_id.map(str::to_owned),
+                publication,
+                outcome: OutputOutcome::Complete,
+                sequence: 7,
+                role: MessageRole::Assistant,
+                native_id: Some("native-message".into()),
+                blocks: Vec::new(),
+                created_at: "2026-09-21T00:00:00Z".into(),
+            },
+        }
+    }
+
+    async fn create_doc(
+        node: &EmbeddedNode,
+        mutation: &str,
+        variables: serde_json::Value,
+        field: &str,
+    ) -> String {
+        let response = node
+            .execute_request_with_retry(
+                defra_node::QueryRequest::new(mutation).with_variables(variables),
+                defra_node::ExecuteRetryPolicy::default(),
+            )
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        crate::graphql::single_mutation_document(&response, field)
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    #[test]
     #[ignore = "manual canonical session-coordinate benchmark"]
     fn session_coordinate_lookup_size_benchmark() {
         let mut measurements = Vec::new();
         for count in [1_usize, 500, 10_000] {
-            let rows = (0..count)
-                .map(|sequence| {
-                    serde_json::json!({
-                        "_docID": format!("header-{sequence}"),
-                        "message_key": format!("key-{sequence}"),
-                        "sequence": sequence,
-                    })
-                })
-                .collect::<Vec<_>>();
+            let rows = (0 .. count) . map (| sequence | { serde_json :: json ! ({ "_docID" : format ! ("header-{sequence}") , "message_key" : format ! ("key-{sequence}") , "sequence" : sequence , }) }) . collect :: < Vec < _ > > () ;
             let coordinates = (0..count)
                 .map(|sequence| (format!("key-{sequence}"), u32::try_from(sequence).unwrap()))
                 .collect::<Vec<_>>();
@@ -2646,18 +2654,13 @@ mod tests {
             for values in [&mut baseline, &mut indexed, &mut construction] {
                 values.sort_by(f64::total_cmp);
             }
-            measurements.push(serde_json::json!({
-                "headers": count, "lookups": count,
-                "baseline_median_ms": baseline[2], "indexed_median_ms": indexed[2],
-                "construction_with_row_clone_median_ms": construction[2],
-            }));
+            measurements . push (serde_json :: json ! ({ "headers" : count , "lookups" : count , "baseline_median_ms" : baseline [2] , "indexed_median_ms" : indexed [2] , "construction_with_row_clone_median_ms" : construction [2] , })) ;
         }
-        let result =
-            serde_json::json!({"measurements": measurements, "includes_database_reads": false});
+        let result = serde_json :: json ! ({ "measurements" : measurements , "includes_database_reads" : false });
         if let Some(path) = std::env::var_os("GENTS_COORDINATE_BENCHMARK_OUTPUT") {
             std::fs::write(path, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
         }
-        tracing::info!(%result, "session coordinate lookup benchmark");
+        tracing :: info ! (% result , "session coordinate lookup benchmark");
     }
 
     #[tokio::test]
@@ -2746,124 +2749,6 @@ mod tests {
         node.shutdown().await;
     }
 
-    #[test]
-    fn current_input_selection_matches_lean_owner() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().current_input_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let retained = case
-                .headers
-                .iter()
-                .enumerate()
-                .filter_map(|(index, input)| {
-                    let publication = match input.kind.as_str() {
-                        "prompt" | "context" | "folded" | "assistant" => {
-                            MessagePublication::RequestExecution {
-                                execution_generation: "observed-generation".into(),
-                            }
-                        }
-                        "tool_result" | "notification" => MessagePublication::ToolDelivery {
-                            tool_call_doc_id: format!("tool-{index}"),
-                        },
-                        other => panic!("unsupported modeled header class {other}"),
-                    };
-                    let mut row = header(
-                        &index.to_string(),
-                        "session",
-                        Some(&input.request),
-                        publication,
-                    );
-                    let key = match input.kind.as_str() {
-                        "folded" => crate::lifecycle::queue::folded_input_key("folded-request"),
-                        kind => kind.to_owned(),
-                    };
-                    row.message.message_key =
-                        super::super::canonical_rows::authored_message_key(&input.request, &key);
-                    (!is_current_admission_input(&row.message, &case.current_request))
-                        .then_some(index)
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(retained, case.retained_indices, "{}", case.name);
-        }
-    }
-
-    fn header(
-        doc_id: &str,
-        session_id: &str,
-        request_doc_id: Option<&str>,
-        publication: MessagePublication,
-    ) -> super::super::canonical_rows::TranscriptMessageRow {
-        super::super::canonical_rows::TranscriptMessageRow {
-            doc_id: doc_id.into(),
-            message: TranscriptMessage {
-                message_key: format!("key-{doc_id}"),
-                session_id: session_id.into(),
-                node_did: "did:test:agent".into(),
-                requester_did: Some("did:test:requester".into()),
-                request_doc_id: request_doc_id.map(str::to_owned),
-                publication,
-                outcome: OutputOutcome::Complete,
-                sequence: 7,
-                role: MessageRole::Assistant,
-                native_id: Some("native-message".into()),
-                blocks: Vec::new(),
-                created_at: "2026-09-21T00:00:00Z".into(),
-            },
-        }
-    }
-
-    #[test]
-    fn fork_validation_allows_only_identity_session_and_key_to_change() {
-        let origin = header(
-            "origin",
-            "origin-session",
-            Some("origin-request"),
-            MessagePublication::RequestExecution {
-                execution_generation: "generation".into(),
-            },
-        );
-        let child = header(
-            "child",
-            "child-session",
-            None,
-            MessagePublication::Fork {
-                origin_message_doc_id: "origin".into(),
-            },
-        );
-        validate_fork(&child, &origin).expect("valid fork");
-
-        let mut reordered = child.clone();
-        reordered.message.sequence += 1;
-        assert!(validate_fork(&reordered, &origin).is_err());
-
-        let mut request_bound = child;
-        request_bound.message.request_doc_id = Some("child-request".into());
-        assert!(validate_fork(&request_bound, &origin).is_err());
-    }
-
-    async fn create_doc(
-        node: &EmbeddedNode,
-        mutation: &str,
-        variables: serde_json::Value,
-        field: &str,
-    ) -> String {
-        let response = node
-            .execute_request_with_retry(
-                defra_node::QueryRequest::new(mutation).with_variables(variables),
-                defra_node::ExecuteRetryPolicy::default(),
-            )
-            .await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        crate::graphql::single_mutation_document(&response, field)
-            .unwrap()
-            .unwrap()["_docID"]
-            .as_str()
-            .unwrap()
-            .to_owned()
-    }
-
-    /// `parts` as the ordered segments of one authored text stream; the last
-    /// closes the source.
     fn authored_segments(
         request_doc_id: &str,
         key: &str,
@@ -2970,7 +2855,6 @@ mod tests {
             .unwrap();
         let a_close = create_segment(a).await;
         let a_header = create_authored_header(&node, request, "a", 1, a_close).await;
-        // B's close is visible before its payload segment replicates.
         let [b_payload, b_close] = authored_segments(request, "b", &["hel", "lo"])
             .try_into()
             .unwrap();

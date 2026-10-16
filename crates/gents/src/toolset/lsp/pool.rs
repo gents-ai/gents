@@ -336,9 +336,9 @@ impl LspPool {
                 let ready = entry.ready.clone();
                 let notified = ready.notified();
                 tokio::pin!(notified);
-                // `notify_waiters` does not retain a permit. Register this
+                // `notify_waiters` does not retain a permit; register the
                 // waiter before releasing the state lock so the starter
-                // cannot publish Ready in the registration gap.
+                // cannot publish Ready in the gap.
                 notified.as_mut().enable();
                 drop(entry);
                 notified.await;

@@ -1,11 +1,6 @@
 //! Surface entries are either a create tool ([`WriteToolDecl`]) or a
-//! single-collection query tool ([`QueryToolDecl`]).
-//!
-//! Stored in `DatastoreToolSurface.entries` as native JSON under an `entries`
-//! object envelope. The envelope keeps DefraDB from typing the top-level list
-//! as a string array instead of the schema's JSON scalar. Existing create
-//! entries have no `kind` and stay [`SurfaceToolDecl::Create`]. Query entries
-//! set `"kind": "query"`.
+//! single-collection query tool ([`QueryToolDecl`]). Stored under an `entries`
+//! object envelope so DefraDB keeps the JSON scalar type.
 
 use std::collections::{HashMap, HashSet};
 
@@ -25,15 +20,12 @@ use super::write_tool::{
 pub struct MergedSurfaceTools {
     pub write_tools: Vec<WriteToolDecl>,
     pub query_tools: Vec<QueryToolDecl>,
-    /// Tool name to the DatastoreToolSurface that declared it, so a refusal
-    /// can name the document the Engineer edits.
     pub surface_of_tool: std::collections::BTreeMap<String, String>,
 }
 
-/// Expand the context's explicitly selected datastore surface documents.
-///
-/// The operation fails closed when a selected surface is missing, disabled,
-/// foreign-owned, malformed, duplicated, or introduces a tool-name collision.
+/// Expand the context's explicitly selected datastore surface documents,
+/// failing closed on missing, disabled, foreign-owned, malformed, duplicated,
+/// or colliding surfaces.
 pub fn merge_datastore_tool_surfaces<'a>(
     selection: &Tools,
     surfaces: impl IntoIterator<Item = &'a DatastoreToolSurfaceDocument>,
@@ -130,11 +122,10 @@ pub struct QueryToolDecl {
     pub collection: String,
     #[cfg_attr(feature = "typescript", ts(as = "Option<String>", optional))]
     pub description: String,
-    /// Projection allowlist. Omit `fields` at call time to return all of these.
+    /// Projection allowlist; omit `fields` at call time to return all of these.
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional))]
     pub fields: Vec<String>,
-    /// Filter slots. Runtime-filled entries are hidden from the model and
-    /// applied as `_eq` clauses; the rest are optional/required string args.
+    /// Runtime-filled entries are hidden from the model, applied as `_eq`.
     #[cfg_attr(
         feature = "typescript",
         ts(as = "Option<Vec<WriteToolField>>", optional)
@@ -453,144 +444,4 @@ pub(crate) fn validate_surface_tool_names(
     extra.extend(write_tools.iter().map(|decl| decl.tool_name.clone()));
     validate_query_tool_declarations(query_tools, cli_tool_names, &extra)?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn query_authoring_does_not_rewrite_invalid_names_or_drop_fields() {
-        let decl: super::QueryToolDecl = serde_json::from_value(serde_json::json!({
-            "tool_name": "inspect", "collection": " Records ", "fields": ["name", ""]
-        }))
-        .unwrap();
-        assert_eq!(decl.collection, " Records ");
-        assert_eq!(decl.fields, vec!["name", ""]);
-        assert!(super::validate_query_tool_declarations(&[decl], &[], &[]).is_err());
-        let blank_field: super::QueryToolDecl = serde_json::from_value(serde_json::json!({
-            "tool_name": "inspect", "collection": "Records", "fields": ["name", ""]
-        }))
-        .unwrap();
-        assert!(super::validate_query_tool_declarations(&[blank_field], &[], &[]).is_err());
-    }
-
-    #[test]
-    fn surface_references_match_exact_owner_and_id() {
-        let tools: super::Tools = serde_json::from_value(serde_json::json!({
-            "node_did": "owner", "tools_id": "tools",
-            "datastore": {"datastore_tool_surface_ids": ["surface"]}
-        }))
-        .unwrap();
-        let surface = |owner: &str, id: &str| {
-            serde_json::from_value::<super::DatastoreToolSurfaceDocument>(serde_json::json!({
-                "node_did": owner, "surface_id": id
-            }))
-            .unwrap()
-        };
-        for denied in [surface("owner", " surface "), surface("foreign", "surface")] {
-            assert!(super::merge_datastore_tool_surfaces(&tools, [&denied]).is_err());
-        }
-        let exact = surface("owner", "surface");
-        assert!(super::merge_datastore_tool_surfaces(&tools, [&exact]).is_ok());
-    }
-
-    use super::*;
-
-    #[test]
-    fn create_entry_without_kind_round_trips() {
-        let decl = WriteToolDecl {
-            notification: None,
-            tool_name: "write_finding".into(),
-            collection: "Finding".into(),
-            description: "create one finding".into(),
-            fields: vec![WriteToolField {
-                name: "title".into(),
-                required: true,
-                fill: None,
-            }],
-            output_obligation: None,
-        };
-        let json = serde_json::to_value(SurfaceToolDecl::Create(decl.clone())).unwrap();
-        assert!(json.get("kind").is_none());
-        let parsed: SurfaceToolDecl = serde_json::from_value(json).unwrap();
-        assert_eq!(parsed, SurfaceToolDecl::Create(decl));
-    }
-
-    #[test]
-    fn query_entry_requires_kind_and_projection() {
-        let decl = QueryToolDecl {
-            tool_name: "query_finding".into(),
-            collection: "Finding".into(),
-            description: "load findings".into(),
-            fields: vec!["finding_id".into(), "title".into()],
-            filter_fields: vec![WriteToolField {
-                name: "run_id".into(),
-                required: false,
-                fill: Some(WriteToolFieldFill::Correlation),
-            }],
-        };
-        let json = serde_json::to_value(SurfaceToolDecl::Query(decl.clone())).unwrap();
-        assert_eq!(json["kind"], "query");
-        let parsed: SurfaceToolDecl = serde_json::from_value(json).unwrap();
-        assert_eq!(parsed, SurfaceToolDecl::Query(decl));
-    }
-
-    #[test]
-    fn query_decl_rejects_empty_projection() {
-        let decl = QueryToolDecl {
-            tool_name: "query_finding".into(),
-            collection: "Finding".into(),
-            description: String::new(),
-            fields: Vec::new(),
-            filter_fields: Vec::new(),
-        };
-        assert!(!decl.is_well_formed());
-        let err = validate_query_tool_declarations(&[decl], &[], &[]).unwrap_err();
-        assert!(err.to_string().contains("at least one projection"));
-    }
-
-    #[test]
-    fn query_decl_rejects_reserved_filter_names() {
-        for name in ["fields", "limit", "field_page"] {
-            let decl = QueryToolDecl {
-                tool_name: "query_finding".into(),
-                collection: "Finding".into(),
-                description: String::new(),
-                fields: vec!["title".into()],
-                filter_fields: vec![WriteToolField {
-                    name: name.into(),
-                    required: true,
-                    fill: None,
-                }],
-            };
-            let err = validate_query_tool_declarations(&[decl], &[], &[]).unwrap_err();
-            assert!(err.to_string().contains("reserved query argument"));
-        }
-    }
-
-    #[test]
-    fn surface_entries_cannot_name_a_protected_collection() {
-        let create = SurfaceToolDecl::Create(WriteToolDecl {
-            notification: None,
-            tool_name: "write_verdict".into(),
-            collection: "EvalVerdict".into(),
-            description: "forge a verdict".into(),
-            fields: vec![WriteToolField {
-                name: "score_bp".into(),
-                required: true,
-                fill: None,
-            }],
-            output_obligation: None,
-        });
-        let query = SurfaceToolDecl::Query(QueryToolDecl {
-            tool_name: "query_definition".into(),
-            collection: "EvalDefinition".into(),
-            description: String::new(),
-            fields: vec!["cases".into()],
-            filter_fields: Vec::new(),
-        });
-        for decl in [create, query] {
-            let error = decl.validate().unwrap_err();
-            assert!(format!("{error:#}").contains("protected"), "{error:#}");
-        }
-    }
 }

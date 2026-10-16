@@ -1,12 +1,6 @@
-//! Two-finger history swipes come from AppKit's own recogniser so they match
-//! Safari's thresholds and tracking; the webview draws the feedback and owns
-//! the history, so WebKit's page-sliding animation and back-forward list stay
-//! out of it.
-//!
 //! AppKit's tracker takes over the scroll stream once it starts, so it only
 //! starts where the webview has said the content under the pointer cannot
-//! scroll further in the gesture's direction. Content scrolls first and the
-//! swipe arms at its edge, as in Safari and Chrome.
+//! scroll further in the gesture's direction.
 use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::sync::Mutex;
@@ -58,7 +52,6 @@ pub fn setup(app: AppHandle) {
             }
             event as *const NSEvent as *mut NSEvent
         });
-    // The monitor lives for the process; AppKit retains the block.
     let _handle: Option<Retained<AnyObject>> = unsafe {
         NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::ScrollWheel, &monitor)
     };
@@ -80,7 +73,6 @@ fn track(app: &AppHandle, event: &NSEvent) {
     else {
         return;
     };
-    // A positive delta moves content right, toward its left edge.
     let (left, right) = scroll_room(window.label());
     let delta = event.scrollingDeltaX();
     if (delta > 0.0 && left) || (delta < 0.0 && right) {
@@ -88,8 +80,6 @@ fn track(app: &AppHandle, event: &NSEvent) {
     }
     let handler: RcBlock<dyn Fn(CGFloat, NSEventPhase, Bool, NonNull<Bool>)> = RcBlock::new(
         move |amount: CGFloat, phase: NSEventPhase, _complete: Bool, _stop: NonNull<Bool>| {
-            // After Ended AppKit keeps animating the amount on its own; the
-            // webview settles its handle from where the fingers left it.
             let phase = match phase {
                 NSEventPhase::Began | NSEventPhase::Changed => "moving",
                 NSEventPhase::Ended => "ended",

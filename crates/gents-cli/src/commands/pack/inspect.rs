@@ -1,15 +1,8 @@
-//! `gents pack show` and `gents pack verify`: looking at a pack without
-//! installing it.
-
 use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::cli::{PackDiffArgs, PackShowArgs, PackVerifyArgs};
 
-/// `gents pack show`: the manifest, the pack digest and every file with its
-/// size and sha256, for any pack `install` accepts; with `--config`, instead
-/// prints `{config, scenario}` as an install would load them, at their
-/// declared `${VAR:-default}` defaults (the environment is never read).
 pub(super) async fn show(args: PackShowArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let pack = super::resolve_pack_source(&args.package, args.registry.as_deref(), &home).await?;
@@ -51,12 +44,6 @@ pub(super) async fn show(args: PackShowArgs) -> Result<()> {
     }))
 }
 
-/// `gents pack show --config`'s `{config, scenario}`: the pack's canonical
-/// configuration, loaded exactly like an install would (for a placeholder
-/// owner, since nothing is written), and its `experiment.json`, interpolated
-/// at defaults, or `null` when the pack declares no scenario. The
-/// environment is never read: a missing default is refused so the preview
-/// never differs from the pack's own declared defaults.
 fn show_config(pack: &super::PackSource) -> Result<()> {
     let preview = gents::pack::authoring::preview_config(pack.manifest(), &|path| {
         pack.asset(path).map(Vec::from)
@@ -64,8 +51,6 @@ fn show_config(pack: &super::PackSource) -> Result<()> {
     crate::print_json(&preview)
 }
 
-/// `gents pack verify`: checks a `.pack` file, or a pack in the home's
-/// store, streaming, without installing or storing anything.
 pub(super) fn verify(args: PackVerifyArgs) -> Result<()> {
     let header = if args.target.starts_with("sha256:") {
         let home = crate::home_state::resolve_home_dir(args.home.as_deref());
@@ -77,11 +62,8 @@ pub(super) fn verify(args: PackVerifyArgs) -> Result<()> {
     crate::print_json(&json!({ "verified": true, "pack": header }))
 }
 
-/// The owner a compared pack's documents are bound to. Never written.
 const COMPARED_OWNER: &str = "did:key:zPackDiffPlaceholderOwner";
 
-/// `gents pack diff`: the files and configuration documents that differ
-/// between two packs, each named as `install` accepts.
 pub(super) async fn diff(args: PackDiffArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let a = super::resolve_pack_source(&args.a, args.registry.as_deref(), &home).await?;

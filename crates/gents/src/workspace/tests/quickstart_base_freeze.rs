@@ -1,4 +1,3 @@
-//! Actual quickstart + native DB persistence; Git setup comes from workspace tests.
 use super::*;
 
 #[tokio::test]
@@ -52,7 +51,6 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         base_tree
     );
 
-    // Inspect persisted state independently of the returned in-memory result.
     let persisted = node.execute(r#"{
         IsolatedWorkspace { workspace_id owner_node_did base_sha lifecycle_state seal_hash path_capability }
         WorkspacePlacement { workspace_id owner_node_did host_path observed_tree_hash }

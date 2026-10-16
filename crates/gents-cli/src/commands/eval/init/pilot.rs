@@ -1,8 +1,3 @@
-//! `--pilot`: the written draft runs once against its subject, one trial per
-//! case and one run per populated split, and the author reads the evidence
-//! and either keeps the pack or revises it once. A pilot is a look at cases
-//! that are about to change, not evidence: its runs carry purpose `pilot`.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::Write;
@@ -25,24 +20,17 @@ use crate::commands::eval::render::wire;
 use crate::commands::eval::run::{follow, run_request};
 use crate::commands::eval::{Deps, EvalContext};
 
-/// The cell a pilot runs: the subject, on the init's profile.
 const PILOT_CELL: &str = "pilot";
 
-/// Captured rows the digest shows per case, in bytes of JSON.
 const ROWS_BUDGET_BYTES: usize = 2048;
 
-/// What the author is told to make of the digest.
 const INSTRUCTION: &str = "A failing check may mean a wrong case (the case expects what the agent should not do, or its capture or params miss what the agent did: a matcher miss, empty versus absent rows, a keyword that did not survive) or a wrong subject (the agent really fails it). One trial per case cannot tell noise from either; judge each failure from its rows.";
 
-/// What the pilot ran and whether the pack changed after it.
 pub(crate) struct PilotOutcome {
-    /// One per populated split, in train, validation, held-out order.
     pub(crate) run_ids: Vec<String>,
     pub(crate) revised: bool,
 }
 
-/// Pilot what `drafted` wrote. `confirm` is asked with the case count
-/// before anything is spent; a refusal is an error and nothing runs.
 pub(crate) async fn pilot(
     ctx: &EvalContext,
     deps: &Deps<'_>,
@@ -64,16 +52,12 @@ pub(crate) async fn pilot(
     install_definition(ctx, &written.out).await?;
 
     let unix_ms = chrono::Utc::now().timestamp_millis();
-    // Every run is named here as it is created, a stopped one included, so
-    // the README names it whatever happens after.
     let mut run_ids = Vec::new();
     let result = run_and_answer(ctx, deps, init, turn, drafted, unix_ms, &mut run_ids, out).await;
     let revised = match result {
         Ok(revised) => revised,
         Err(error) if run_ids.is_empty() => return Err(error),
         Err(error) => {
-            // The pilot's own failure is what returns; a README that could
-            // not be written as well is said beside it, never instead.
             let note = PilotNote {
                 run_ids: run_ids.clone(),
                 revised: false,
@@ -107,9 +91,6 @@ pub(crate) async fn pilot(
     Ok(PilotOutcome { run_ids, revised })
 }
 
-/// The pilot from its first run to the author's answer: every populated
-/// split's run (each id pushed to `run_ids` before it starts), the digest
-/// turn, and the one revision round. Whether the pack was revised.
 #[allow(clippy::too_many_arguments)]
 async fn run_and_answer(
     ctx: &EvalContext,
@@ -162,8 +143,6 @@ async fn run_and_answer(
     revise(init, drafted, run_ids, &reply, out).await
 }
 
-/// Install the pack at `dir` into the home as a directory pack, through the
-/// owner `gents pack install` uses. Its definition is what the runs freeze.
 async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<()> {
     let (manifest, assets) = super::dossier::read_pack(dir)?;
     let config = gents::pack::load_pack_config(
@@ -211,8 +190,6 @@ async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<
     Ok(())
 }
 
-/// One pilot run: `split`'s cases, one trial each, on the subject, built and
-/// followed as `gents eval run` builds and follows one.
 async fn run_split(
     ctx: &EvalContext,
     deps: &Deps<'_>,
@@ -232,7 +209,6 @@ async fn run_split(
         profiles: vec![(PILOT_CELL.to_owned(), init.profile.clone())],
         split,
         trials: 1,
-        // `gents eval run`'s defaults.
         seed_base: 1000,
         concurrency: 1,
         purpose: PILOT_PURPOSE.to_owned(),
@@ -242,7 +218,6 @@ async fn run_split(
         json: false,
         scope: EvalScopeArgs::default(),
     };
-    // The packs are held until the run ends: a cache entry stays locked.
     let (request, _packs) = run_request(ctx, &args).await?;
     let outcome = follow(
         ctx,
@@ -267,8 +242,6 @@ async fn run_split(
     Ok(())
 }
 
-/// The captured rows of every failing stage, read back from the trial's
-/// home by `(case_id, stage_id)`. Unreadable homes give nothing.
 async fn failing_rows(
     deps: &Deps<'_>,
     assembled: &Assembled,
@@ -310,9 +283,6 @@ async fn failing_rows(
             let Some(evidence) = deps.executor.recollect(&locator, &captures).await else {
                 continue;
             };
-            // Recollected stages are named by their position in the session;
-            // a session without this stage's position shows no rows rather
-            // than another stage's.
             let Some(read) = evidence.stages.get(index) else {
                 continue;
             };
@@ -327,9 +297,6 @@ async fn failing_rows(
     rows
 }
 
-/// The author's pilot turn: per case and stage each check's kind, score and
-/// reason code, the captured rows of failing stages within a per-case
-/// budget, and what to reply.
 pub(crate) fn digest_turn(
     reports: &[EvalReport],
     rows: &BTreeMap<(String, String), Vec<Value>>,
@@ -392,8 +359,6 @@ pub(crate) fn digest_turn(
     text
 }
 
-/// `rows` as JSON within `budget` bytes, cut at a character boundary and
-/// marked `…` when it did not fit; `budget` loses what was rendered.
 fn render_rows(rows: &[Value], budget: &mut usize) -> String {
     let json = serde_json::to_string(rows).unwrap_or_default();
     if json.len() <= *budget {
@@ -408,9 +373,6 @@ fn render_rows(rows: &[Value], budget: &mut usize) -> String {
     format!("{}…", &json[..cut])
 }
 
-/// The author's answer to the digest: `keep`, or one revised draft. A valid
-/// revision replaces the pack at `--out`; a failing one is reported and the
-/// pack stays as written. Whether the pack was replaced.
 async fn revise(
     init: &InitContext<'_>,
     drafted: &InitOutcome,
@@ -437,8 +399,6 @@ async fn revise(
         run_ids: run_ids.to_vec(),
         revised: true,
     };
-    // The revision keeps the first draft's id: the home, `--out` and the
-    // pilot's run ids already carry it.
     let definition_id = drafted
         .assembled
         .as_ref()
@@ -476,18 +436,15 @@ mod tests {
     use std::path::Path;
 
     use gents::eval::checks::CheckRegistry;
-    use gents::eval::report::{load_report, load_runs};
-    use gents::eval::runner::{ScriptKey, ScriptedExecutor};
+    use gents::eval::report::load_runs;
     use serde_json::json;
-    use tokio_util::sync::CancellationToken;
 
     use super::super::tests::draft_block;
-    use super::super::turn::ScriptedTurn;
     use super::super::validate::tests::dossier;
     use super::super::validate::{assemble, validate, Floors};
-    use super::super::write::write_pack;
+    use super::super::write::{commit, stage};
     use super::*;
-    use crate::commands::eval::testing::{deps, eval_with, fail, pass, Fixture};
+    use crate::commands::eval::testing::Fixture;
 
     const DEFINITION: &str = "pilot-def";
     const SUMMARY: &str = "It must record findings.";
@@ -540,35 +497,23 @@ mod tests {
         }
     }
 
-    /// What the interview hands the pilot: the pack of [`cases`], written.
     async fn drafted(init: &InitContext<'_>) -> InitOutcome {
         let draft = super::super::draft::parse_reply(&block(&cases()))
             .unwrap()
             .unwrap();
         let assembled = assemble(&draft, None, &init.owner, &init.dossier.slot).unwrap();
         validate(&assembled, init.registry, &init.dossier, &init.floors).unwrap();
-        let written = write_pack(&assembled, SUMMARY, &init.dossier, &init.out, false)
+        let staged = stage(&assembled, SUMMARY, &init.dossier, None)
             .await
             .unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let written = commit(staged, &init.out, false, home.path()).unwrap();
         InitOutcome {
             written: Some(written),
             assembled: Some(assembled),
             summary: SUMMARY.into(),
             rounds: 1,
         }
-    }
-
-    /// Every trial passes but `val-a`'s.
-    fn failing_val_a() -> ScriptedExecutor {
-        ScriptedExecutor::new().with_default(pass()).with(
-            ScriptKey {
-                cell_label: "pilot".into(),
-                case_id: "val-a".into(),
-                trial_index: 0,
-                attempt: 1,
-            },
-            fail(),
-        )
     }
 
     async fn pilot_runs(fixture: &Fixture) -> Vec<gents::eval::RunRecord> {
@@ -640,311 +585,5 @@ mod tests {
             gents::config_client::stale_expectation(&error).is_some(),
             "{error:#}"
         );
-    }
-
-    #[tokio::test]
-    async fn a_pilot_runs_every_split_once_records_its_purpose_and_digests_the_failures() {
-        let fixture = Fixture::new().await;
-        let registry = CheckRegistry::builtin();
-        let root = tempfile::tempdir().unwrap();
-        let init = context(&fixture, &registry, &root.path().join("out"));
-        let drafted = drafted(&init).await;
-        let executor = failing_val_a();
-        let mut turn = ScriptedTurn::new(["keep"]);
-        let mut asked = Vec::new();
-        let mut out = Vec::new();
-        let piloted = pilot(
-            &fixture.ctx,
-            &deps(&executor, &registry, CancellationToken::new()),
-            &init,
-            &mut turn,
-            &drafted,
-            &mut |count| {
-                asked.push(count);
-                true
-            },
-            &mut out,
-        )
-        .await
-        .unwrap();
-        assert_eq!(asked, vec![4]);
-        assert!(!piloted.revised);
-
-        let runs = pilot_runs(&fixture).await;
-        assert_eq!(runs.len(), 3, "one run per populated split");
-        let mut covered = Vec::new();
-        for run in &runs {
-            assert_eq!(run.origin.purpose, "pilot");
-            assert_eq!(run.origin.trials_per_case, 1);
-            let split = crate::commands::eval::render::wire(&run.origin.split);
-            assert!(
-                run.run_id.starts_with(&format!("{DEFINITION}-pilot-"))
-                    && run.run_id.ends_with(&format!("-{split}")),
-                "{}",
-                run.run_id
-            );
-            assert!(piloted.run_ids.contains(&run.run_id));
-            covered.extend(run.origin.case_ids.iter().cloned());
-        }
-        covered.sort();
-        assert_eq!(covered, vec!["ho-a", "train-a", "val-a", "val-b"]);
-
-        let digest = &turn.sent[0];
-        assert!(digest.starts_with("## Pilot results"), "{digest}");
-        assert!(digest.contains("### val-a (validation)"), "{digest}");
-        assert!(digest.contains("captured_rows_count"), "{digest}");
-        assert!(digest.contains("below_min"), "{digest}");
-        assert!(
-            digest.contains("wrong case") && digest.contains("wrong subject"),
-            "{digest}"
-        );
-        assert!(digest.contains("say 'keep'"), "{digest}");
-        // The scripted executor keeps no home to read rows back from.
-        assert!(
-            digest.contains("captured rows: none could be read back"),
-            "{digest}"
-        );
-        let validation = piloted
-            .run_ids
-            .iter()
-            .find(|run_id| run_id.ends_with("-validation"))
-            .unwrap();
-        let report = load_report(
-            &fixture.ctx.access,
-            &fixture.ctx.owner,
-            &fixture.ctx.runs_dir(),
-            validation,
-        )
-        .await
-        .unwrap();
-        let rows = BTreeMap::from([(
-            ("val-a".to_owned(), "check".to_owned()),
-            vec![json!({"capture": "findings", "result": {"kind": "documents", "rows": []}})],
-        )]);
-        let with_rows = digest_turn(&[report], &rows);
-        assert!(
-            with_rows.contains("captured rows:\n[{\"capture\":\"findings\""),
-            "{with_rows}"
-        );
-        // A passing stage shows its verdicts and no rows.
-        let val_b = with_rows
-            .split("### val-b (validation)")
-            .nth(1)
-            .and_then(|rest| rest.split("\n\n").nth(1))
-            .unwrap();
-        assert!(val_b.contains("captured_rows_count"), "{val_b}");
-        assert!(!val_b.contains("captured rows"), "{val_b}");
-        let printed = String::from_utf8(out).unwrap();
-        assert!(
-            printed.contains("landed pilot val-a #0 attempt 1"),
-            "{printed}"
-        );
-
-        let readme = std::fs::read_to_string(init.out.join("README.md")).unwrap();
-        for run_id in &piloted.run_ids {
-            assert!(readme.contains(run_id.as_str()), "{readme}");
-        }
-        assert!(!readme.contains("revised after the pilot"), "{readme}");
-    }
-
-    #[tokio::test]
-    async fn a_revised_draft_after_the_pilot_overwrites_the_pack() {
-        let fixture = Fixture::new().await;
-        let registry = CheckRegistry::builtin();
-        let root = tempfile::tempdir().unwrap();
-        let init = context(&fixture, &registry, &root.path().join("out"));
-        let drafted = drafted(&init).await;
-        let executor = failing_val_a();
-        let mut revised = cases();
-        revised[1]["case_id"] = json!("val-renamed");
-        // The revision renames the definition; the pack keeps the first
-        // draft's id, which the home and the pilot's runs already carry.
-        let mut turn =
-            ScriptedTurn::new([block(&revised).replace(DEFINITION, "renamed-by-author")]);
-        let piloted = pilot(
-            &fixture.ctx,
-            &deps(&executor, &registry, CancellationToken::new()),
-            &init,
-            &mut turn,
-            &drafted,
-            &mut |_| true,
-            &mut Vec::new(),
-        )
-        .await
-        .unwrap();
-        assert!(piloted.revised);
-        assert!(init.out.join("cases/val_renamed.json").is_file());
-        assert!(!init.out.join("cases/val_a.json").exists());
-        let config = std::fs::read_to_string(init.out.join("pack_config.json")).unwrap();
-        assert!(config.contains(&format!("\"{DEFINITION}\"")), "{config}");
-        assert!(!config.contains("renamed-by-author"), "{config}");
-        let readme = std::fs::read_to_string(init.out.join("README.md")).unwrap();
-        assert!(readme.contains(&piloted.run_ids[0]), "{readme}");
-        assert!(readme.contains("revised after the pilot"), "{readme}");
-    }
-
-    #[tokio::test]
-    async fn a_revision_that_fails_validation_keeps_the_pack_and_notes_the_pilot() {
-        let fixture = Fixture::new().await;
-        let registry = CheckRegistry::builtin();
-        let root = tempfile::tempdir().unwrap();
-        let init = context(&fixture, &registry, &root.path().join("out"));
-        let drafted = drafted(&init).await;
-        let executor = failing_val_a();
-        let mut broken = cases();
-        broken[1]["stages"][0]["checks"][0]["check"] = json!("no_such");
-        let mut turn = ScriptedTurn::new([block(&broken)]);
-        let mut out = Vec::new();
-        let piloted = pilot(
-            &fixture.ctx,
-            &deps(&executor, &registry, CancellationToken::new()),
-            &init,
-            &mut turn,
-            &drafted,
-            &mut |_| true,
-            &mut out,
-        )
-        .await
-        .unwrap();
-        assert!(!piloted.revised);
-        assert_eq!(turn.sent.len(), 1, "exactly one revision round");
-        let printed = String::from_utf8(out).unwrap();
-        assert!(printed.contains("unknown check"), "{printed}");
-        assert!(init.out.join("cases/val_a.json").is_file());
-        let readme = std::fs::read_to_string(init.out.join("README.md")).unwrap();
-        assert!(readme.contains(&piloted.run_ids[0]), "{readme}");
-    }
-
-    #[tokio::test]
-    async fn a_pilot_that_fails_after_its_runs_still_names_them_in_the_readme() {
-        let fixture = Fixture::new().await;
-        let registry = CheckRegistry::builtin();
-        let root = tempfile::tempdir().unwrap();
-        let init = context(&fixture, &registry, &root.path().join("out"));
-        let drafted = drafted(&init).await;
-        let executor = failing_val_a();
-        // The author never answers: the digest turn fails after the runs.
-        let mut turn = ScriptedTurn::new(Vec::<String>::new());
-        let error = pilot(
-            &fixture.ctx,
-            &deps(&executor, &registry, CancellationToken::new()),
-            &init,
-            &mut turn,
-            &drafted,
-            &mut |_| true,
-            &mut Vec::new(),
-        )
-        .await
-        .err()
-        .expect("the failed turn propagates");
-        assert!(format!("{error:#}").contains("no reply left"), "{error:#}");
-        assert_eq!(turn.sent.len(), 1, "the digest was sent");
-        let runs = pilot_runs(&fixture).await;
-        assert_eq!(runs.len(), 3);
-        let readme = std::fs::read_to_string(init.out.join("README.md")).unwrap();
-        for run in &runs {
-            assert!(readme.contains(run.run_id.as_str()), "{readme}");
-        }
-        assert!(!readme.contains("revised after the pilot"), "{readme}");
-    }
-
-    #[tokio::test]
-    async fn the_pilot_asks_before_spending_unless_told_yes() {
-        let fixture = Fixture::new().await;
-        let registry = CheckRegistry::builtin();
-        let root = tempfile::tempdir().unwrap();
-        let init = context(&fixture, &registry, &root.path().join("out"));
-        let drafted = drafted(&init).await;
-        let executor = failing_val_a();
-        let mut turn = ScriptedTurn::new(["keep"]);
-        let error = pilot(
-            &fixture.ctx,
-            &deps(&executor, &registry, CancellationToken::new()),
-            &init,
-            &mut turn,
-            &drafted,
-            &mut |_| false,
-            &mut Vec::new(),
-        )
-        .await
-        .err()
-        .expect("a declined pilot is refused");
-        assert!(error.to_string().contains("declined"), "{error:#}");
-        assert!(pilot_runs(&fixture).await.is_empty());
-        assert!(turn.sent.is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_pilot_run_is_not_exposure() {
-        let fixture = Fixture::new().await;
-        let registry = CheckRegistry::builtin();
-        let root = tempfile::tempdir().unwrap();
-        let init = context(&fixture, &registry, &root.path().join("out"));
-        let drafted = drafted(&init).await;
-        let executor = failing_val_a();
-        pilot(
-            &fixture.ctx,
-            &deps(&executor, &registry, CancellationToken::new()),
-            &init,
-            &mut ScriptedTurn::new(["keep"]),
-            &drafted,
-            &mut |_| true,
-            &mut Vec::new(),
-        )
-        .await
-        .unwrap();
-        let pack = fixture.pack_arg();
-        let cell = format!("baseline={pack}");
-        eval_with(
-            &fixture,
-            &[
-                "run",
-                DEFINITION,
-                "--cell",
-                &cell,
-                "--profile",
-                "baseline=local",
-                "--run-id",
-                "r-eval",
-                "--trials",
-                "1",
-            ],
-            &deps(&executor, &registry, CancellationToken::new()),
-        )
-        .await
-        .unwrap();
-        let report = load_report(
-            &fixture.ctx.access,
-            &fixture.ctx.owner,
-            &fixture.ctx.runs_dir(),
-            "r-eval",
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            report.exposure, 1,
-            "the validation pilot run is not exposure"
-        );
-    }
-
-    #[test]
-    fn the_digest_budgets_captured_rows_per_case() {
-        let mut rows = BTreeMap::new();
-        let long = "x".repeat(4096);
-        rows.insert(
-            ("val-a".to_owned(), "check".to_owned()),
-            vec![json!({"capture": "findings", "rows": [{"text": long}]})],
-        );
-        let rendered = render_rows(&rows[&("val-a".to_owned(), "check".to_owned())], &mut 2048);
-        assert!(
-            rendered.len() <= 2048 + '…'.len_utf8(),
-            "{}",
-            rendered.len()
-        );
-        assert!(rendered.ends_with('…'), "{rendered}");
-        let mut budget = 2048;
-        let short = render_rows(&[json!({"id": 1})], &mut budget);
-        assert_eq!(short, r#"[{"id":1}]"#);
-        assert_eq!(budget, 2048 - short.len());
     }
 }

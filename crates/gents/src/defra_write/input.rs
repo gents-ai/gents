@@ -30,18 +30,6 @@ pub(crate) fn parameters(schema: &str) -> Result<Value> {
     Ok(shape)
 }
 
-/// Count-carrier admission shared by completed-write obligations and event
-/// groups, as modeled by `CompletionRetry.CountCarrier`. It asks whether some
-/// successful native write can supply a canonical positive count, not whether
-/// every value of the field type is a count. The two readers use durable call
-/// arguments and stored documents respectively.
-///
-/// `schema` is a native or introspected GraphQL spelling, optionally suffixed
-/// with `!`. For supported native field types, nullability does not change
-/// whether a count witness exists.
-/// DateTime arguments are strings, but a canonical decimal string is not
-/// RFC3339 and cannot complete a DateTime write. Whole-valued floating fields
-/// have an integer witness; this does not promise arbitrary integer precision.
 pub fn can_hold_canonical_count(schema: &str) -> bool {
     if schema.trim_end_matches('!') == "DateTime" {
         return false;

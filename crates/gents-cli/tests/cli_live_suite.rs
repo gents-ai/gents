@@ -1,7 +1,3 @@
-//! Live-inference CLI suites; every test is #[ignore]d behind env gates.
-//! The binary itself is feature-gated (`live-e2e`) so default builds skip
-//! its link entirely — see the [[test]] block in Cargo.toml.
-
 mod support;
 
 #[path = "suites/cli_live.rs"]

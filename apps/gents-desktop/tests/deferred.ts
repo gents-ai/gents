@@ -1,4 +1,3 @@
-/** A promise and the functions that settle it, for a test to decide when. */
 export function deferred<T = void>() {
   let resolve!: (value: T) => void;
   let reject!: (reason: unknown) => void;

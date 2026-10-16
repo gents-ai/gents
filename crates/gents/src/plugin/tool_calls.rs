@@ -1,5 +1,3 @@
-//! Host-mediated calls to the installed plugin's selected tool surface.
-
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -9,23 +7,17 @@ use serde_json::{json, Map, Value};
 
 use crate::tool_call_lifecycle::ToolOutcome;
 
-/// Child calls one invocation may attempt (Lean `PluginCalls.maxEffects`).
 pub(crate) const MAX_EFFECTS: u32 = 64;
-/// Bytes of one child's arguments or result (Lean `PluginCalls.maxPayloadBytes`).
 pub(crate) const MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
 
 pub(super) fn available(granted: bool, live_dispatcher: bool) -> bool {
     granted && live_dispatcher
 }
 
-/// Only ordinary dispatch is child-callable; see [`HookOwnedTool`].
-///
-/// [`HookOwnedTool`]: crate::hook::persistence::HookOwnedTool
 pub(crate) fn supported(name: &str) -> bool {
     crate::hook::persistence::HookOwnedTool::of(name).is_none()
 }
 
-/// The model-facing composition rule; a refused child's error names the tool.
 pub(super) fn composition_note() -> String {
     format!(
         "\nThis plugin may call up to {MAX_EFFECTS} of this request's other tools in sequence, except the session's own goal, agent and process tools; call those directly."
@@ -40,8 +32,6 @@ fn result_fits(bytes: usize) -> bool {
     bytes <= MAX_PAYLOAD_BYTES
 }
 
-/// Lean `PluginCalls.settle`: `Err` is the parent-fatal reason; every other
-/// child outcome, including its own timeout or cancellation, is guest data.
 fn settle(outcome: Result<ToolOutcome, ToolEffectError>) -> Result<Value, String> {
     let error = match outcome {
         Err(ToolEffectError::Fatal(reason)) => return Err(reason),
@@ -125,8 +115,6 @@ impl Session {
         })
     }
 
-    /// Children run under the parent tool call's deadline and cancellation,
-    /// which preempt this whole invocation; they are not guest compute.
     pub(super) async fn serve(&mut self, requests: Vec<Request>) -> Map<String, Value> {
         let mut results = Map::new();
         for request in requests {
@@ -559,8 +547,6 @@ mod tests {
         let target = outside.path().join("in.json");
         std::fs::write(&target, "{}").unwrap();
         let answer_home = home.path().to_owned();
-        // The operator answers only after more than the plugin's whole wall
-        // clock, so completing at all proves the wait is serving time.
         tokio::spawn(async move {
             let started = tokio::time::Instant::now();
             loop {

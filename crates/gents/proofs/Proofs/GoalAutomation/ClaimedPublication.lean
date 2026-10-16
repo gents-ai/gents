@@ -223,8 +223,6 @@ theorem publication_preserves_claim_and_budget (s : Snapshot) (r : ClaimedReques
   repeat' split at *
   all_goals simp_all
 
-/-- Only fail-closed wait evidence may change the Goal, and only through
-`stopForInvalidEvidence`. -/
 theorem publication_preserves_goal_unless_invalid (s : Snapshot) (r : ClaimedRequest)
     (o : PublicationObservation) (commit : Bool)
     (h : (publishClaimed s r o commit).2 ≠ .invalidEvidence) :
@@ -241,8 +239,6 @@ theorem invalid_evidence_result (s : Snapshot) (r : ClaimedRequest)
   repeat' split at *
   all_goals simp_all
 
-/-- Invalid evidence on an active Goal pauses it when the transaction commits,
-so the rejection is durable and visible instead of a silent rescan loop. -/
 theorem invalid_evidence_pauses_active_goal (s : Snapshot) (r : ClaimedRequest)
     (o : PublicationObservation)
     (hactive : s.goal.status = .active)
@@ -251,8 +247,6 @@ theorem invalid_evidence_pauses_active_goal (s : Snapshot) (r : ClaimedRequest)
   rw [invalid_evidence_result s r o true h]
   simp [stopGoal, stopForInvalidEvidence, Goals.step?, hactive]
 
-/-- A finished or abandoned wrap-up is the end of automatic continuation: its
-claim can never publish or stop again, whatever the wait evidence says. -/
 theorem completed_wrapup_admits_no_publication (s : Snapshot) (r : ClaimedRequest)
     (o : PublicationObservation) (commit : Bool) (h : s.goal.wrapupCompleted = true) :
     (publishClaimed s r o commit).1 = s ∧ (publishClaimed s r o commit).2 ≠ .created := by
@@ -260,9 +254,6 @@ theorem completed_wrapup_admits_no_publication (s : Snapshot) (r : ClaimedReques
   repeat' split
   all_goals simp_all
 
-/-- Anti-suppression: a deferral exists only because a matching accepted
-wait_process timed out on a matching, correctly-originated target that still
-owes its result. -/
 theorem pending_requires_matching_running_wait (r : ClaimedRequest)
     (o : PublicationObservation) (h : assessWait r o = .pending) :
     ∃ w ∈ o.waits, matchingWait r w = true ∧ w.reply = .timedOutRunning ∧
@@ -293,8 +284,6 @@ theorem pending_requires_matching_running_wait (r : ClaimedRequest)
         exact ⟨w, hw, hm, hreply, backgrounds, rfl, b, hb', hmb, hrun⟩
       · cases h
 
-/-- A storage failure during the evidence reads never transitions the Goal
-and never publishes; the claim stays for a later reconciliation. -/
 theorem storage_failure_is_retryable_noop (s : Snapshot) (r : ClaimedRequest)
     (o : PublicationObservation) (commit : Bool) (h : o.storageFailed = true) :
     (publishClaimed s r o commit).1 = s ∧
@@ -305,7 +294,6 @@ theorem storage_failure_is_retryable_noop (s : Snapshot) (r : ClaimedRequest)
   repeat' split
   all_goals simp_all
 
-/-- A background launch without an accepted matching wait never defers. -/
 theorem launch_without_wait_never_defers (r : ClaimedRequest)
     (o : PublicationObservation) (h : ∀ w ∈ o.waits, matchingWait r w = false) :
     assessWait r o ≠ .pending := by

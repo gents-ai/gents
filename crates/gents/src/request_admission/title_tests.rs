@@ -283,8 +283,6 @@ async fn generated_title_admission_cases_bind_representable_fresh_verifier_subse
     let mut unbound = 0;
     for case in lean_title_request_admission_cases() {
         match case.name.as_str() {
-            // These observations need a separate authority or representation
-            // seam; a fresh verifier result alone cannot witness them.
             "ordinary-signed-control-preserved"
             | "pending-title-observation-unavailable"
             | "foreign-admission-branch-fields"

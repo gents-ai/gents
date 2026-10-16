@@ -1,5 +1,3 @@
-//! Runtime-owned variables available to task templates.
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Site {
     Task,

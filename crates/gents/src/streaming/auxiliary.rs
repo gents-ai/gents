@@ -38,9 +38,9 @@ struct State {
     audit_seen: bool,
 }
 
-/// Auxiliary output uses its owning request's live generation but never publishes a
-/// transcript header. A separate writer tail prevents nested compaction from
-/// replacing the main inference attempt's uncommitted prefix.
+/// Auxiliary output never publishes a transcript header. A separate writer
+/// tail prevents nested compaction from replacing the main inference attempt's
+/// uncommitted prefix.
 pub(crate) fn sink(
     node: Arc<EmbeddedNode>,
     request: crate::watcher::AgentRequest,

@@ -1,8 +1,6 @@
 use super::*;
 use anyhow::Context;
 
-/// Injective key for a sequence within one canonical session scope.
-/// Explicit caller-owned keys keep their own vocabulary (steering, receipts).
 pub fn sequence_message_key(
     node_did: &str,
     session_id: &str,

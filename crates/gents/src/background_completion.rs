@@ -1,10 +1,3 @@
-//! Background completion delivery.
-//!
-//! Every background row ends with one user-role completion notification in
-//! its session plus a coalesced wake. A native process row terminalizes in its
-//! executor; an `agent_new`/`agent_message` row terminalizes here, when the
-//! observer sees the request it caused reach a durable terminal.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;

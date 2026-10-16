@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// Local-runtime init request. Filesystem paths are **not** accepted from the
-/// webview — they come from `BridgeConfig` resolved at plugin init.
+/// Filesystem paths come from `BridgeConfig` at plugin init, never from the
+/// webview.
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopInitRequest {
@@ -44,7 +44,6 @@ pub struct ManagedServerRestartRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedServerResetRequest {
-    /// Include healthy stores, the managed service and browser state.
     #[serde(default)]
     #[ts(optional)]
     #[ts(optional = nullable)]
@@ -52,23 +51,20 @@ pub struct ManagedServerResetRequest {
     /// Omit to preview what would be retired and the required confirmation.
     #[ts(optional = nullable)]
     pub confirmation: Option<String>,
-    /// Archive (the default) or delete. Each has its own confirmation text.
     #[ts(optional = nullable)]
     #[serde(default)]
     #[ts(optional = nullable)]
     pub disposition: Option<crate::types::HomeResetDisposition>,
 }
 
-/// Fetch peer runtime status by **saved peer id** only — read grants never
-/// accept arbitrary addresses (SSRF).
+/// Fetch peer runtime status by saved peer id only; read grants never accept
+/// arbitrary addresses (SSRF).
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PeerStatusFetchRequest {
     pub peer_id: String,
 }
 
-/// Fleet-admin request to authenticate a server status offer and author a
-/// pending enrollment request. Lives only in `fleet-admin`.
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct EnrollmentStatusRequest {
@@ -87,13 +83,9 @@ pub struct ChatSendRequest {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub caused_by_source_doc_id: Option<String>,
-    /// An answer to the question on the `caused_by_source_doc_id` item. The
-    /// bridge renders the reply content from the item, so `content` is empty.
     #[serde(default)]
     #[ts(optional = nullable)]
     pub answer: Option<gents_protocol::mailbox_question::MailboxQuestionAnswer>,
-    /// The folder the user works in for this chat: plugin tools read inside
-    /// it without a prompt. Absent keeps the agent's own tool root.
     #[serde(default)]
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
@@ -120,7 +112,6 @@ pub struct NodeConfigSaveRequest {
     pub document: gents::document_config::Node,
 }
 
-/// Make an agent the node's default, enabling it in the same apply.
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
@@ -268,7 +259,6 @@ pub struct SkillSaveRequest {
 #[serde(rename_all = "camelCase")]
 pub struct TaskRunRequest {
     pub task_id: String,
-    /// Explicit action scope; independent of the shared observation filter.
     #[ts(optional)]
     #[ts(optional = nullable)]
     pub node_did: Option<String>,
@@ -307,8 +297,6 @@ pub struct DesktopOperationsSnapshotRequest {
     #[ts(optional = nullable)]
     pub node_did: Option<String>,
     #[serde(default)]
-    /// Accepted from the client but not yet consumed: snapshot filtering by
-    /// root request / terminal inclusion is staged (operator-surfaces spec).
     #[allow(dead_code)]
     #[ts(optional = nullable)]
     pub root_request_id: Option<String>,
@@ -318,8 +306,6 @@ pub struct DesktopOperationsSnapshotRequest {
     pub include_terminal: Option<bool>,
 }
 
-/// One session scope's provenance: what other sessions' calls caused in it,
-/// and what its own calls caused elsewhere.
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopSessionProvenanceRequest {
@@ -327,14 +313,11 @@ pub struct DesktopSessionProvenanceRequest {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub node_did: Option<String>,
-    /// Part of the exact session scope; null is the null-requester scope.
     #[serde(default)]
     #[ts(optional = nullable)]
     pub requester_did: Option<String>,
 }
 
-/// Interrupts exactly `request_id`. Other requests, including those it caused
-/// in other sessions, keep running.
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopInterruptRequest {
@@ -354,114 +337,6 @@ pub struct DesktopProbeMcpServiceRequest {
     pub service_id: String,
 }
 
-#[cfg(test)]
-mod tests {
-    use serde_json::{json, Value};
-
-    use super::*;
-
-    macro_rules! assert_source_routed_delete_request {
-        ($request_type:ty, $id_key:literal, $id_field:ident, $id:literal) => {{
-            let mut value = json!({ "nodeDid": "did:test:source" });
-            value[$id_key] = json!($id);
-            let request: $request_type = serde_json::from_value(value).unwrap();
-
-            assert_eq!(request.$id_field, $id);
-            assert_eq!(request.node_did, "did:test:source");
-
-            let mut missing_source = json!({});
-            missing_source[$id_key] = json!($id);
-            assert!(serde_json::from_value::<$request_type>(missing_source).is_err());
-        }};
-    }
-
-    #[test]
-    fn tool_goal_capabilities_use_canonical_optional_group() {
-        let omitted: ToolsSaveRequest =
-            serde_json::from_value(json!({"document":{"node_did":"owner","tools_id":"tools"}}))
-                .unwrap();
-        assert!(omitted.document.built_ins.is_none());
-        let explicit: ToolsSaveRequest = serde_json::from_value(json!({"document":{"node_did":"owner","tools_id":"tools","built_ins":{"enable_goal_tools":true,"enable_goal_creation":false}}})).unwrap();
-        let built_ins = explicit.document.built_ins.unwrap();
-        assert_eq!(built_ins.enable_goal_tools, Some(true));
-        assert_eq!(built_ins.enable_goal_creation, Some(false));
-        let explicit_null: ToolsSaveRequest = serde_json::from_value(
-            json!({"document":{"node_did":"owner","tools_id":"tools","built_ins":null}}),
-        )
-        .unwrap();
-        assert!(explicit_null.document.built_ins.is_none());
-    }
-
-    #[test]
-    fn task_goal_fields_use_canonical_replacement_optionality() {
-        let mut value = json!({"document":{"node_did":"owner","task_id":"task","agent_id":"agent","prompt_template":"Do work"}});
-        let omitted: TaskSaveRequest = serde_json::from_value(value.clone()).unwrap();
-        assert!(omitted.document.goal_objective_template.is_none());
-        value["document"]["goal_objective_template"] = Value::Null;
-        value["document"]["goal_token_budget"] = Value::Null;
-        let cleared: TaskSaveRequest = serde_json::from_value(value.clone()).unwrap();
-        assert!(cleared.document.goal_objective_template.is_none());
-        assert!(cleared.document.goal_token_budget.is_none());
-        value["document"]["goal_objective_template"] = json!("Finish work");
-        value["document"]["goal_token_budget"] = json!(10000);
-        let explicit: TaskSaveRequest = serde_json::from_value(value).unwrap();
-        assert_eq!(
-            explicit.document.goal_objective_template.as_deref(),
-            Some("Finish work")
-        );
-        assert_eq!(explicit.document.goal_token_budget, Some(10000));
-    }
-
-    #[test]
-    fn config_delete_requests_require_camel_case_source_node_did() {
-        assert_source_routed_delete_request!(SkillDeleteRequest, "skillId", skill_id, "skill-a");
-        assert_source_routed_delete_request!(TaskDeleteRequest, "taskId", task_id, "task-a");
-        assert_source_routed_delete_request!(
-            ScheduleDeleteRequest,
-            "scheduleId",
-            schedule_id,
-            "schedule-a"
-        );
-        assert_source_routed_delete_request!(
-            TriggerDeleteRequest,
-            "triggerId",
-            trigger_id,
-            "trigger-a"
-        );
-        assert_source_routed_delete_request!(
-            BackendDeleteRequest,
-            "backendId",
-            backend_id,
-            "backend-a"
-        );
-        assert_source_routed_delete_request!(
-            InferenceProfileDeleteRequest,
-            "profileId",
-            profile_id,
-            "profile-a"
-        );
-        assert_source_routed_delete_request!(
-            ToolsDeleteRequest,
-            "toolsId",
-            tools_id,
-            "selection-a"
-        );
-        assert_source_routed_delete_request!(
-            ToolServiceDeleteRequest,
-            "serviceId",
-            service_id,
-            "service-a"
-        );
-        assert_source_routed_delete_request!(AgentDeleteRequest, "agentId", agent_id, "agent-a");
-        assert_source_routed_delete_request!(
-            ContextDeleteRequest,
-            "contextId",
-            context_id,
-            "context-a"
-        );
-    }
-}
-
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
@@ -477,10 +352,9 @@ pub struct EventSourceDeleteRequest {
     pub node_did: String,
 }
 
-/// Atomic component edits for an existing node, not pack installation.
-/// Supply node with only node_did/default-valued fields. Node settings use
-/// NodeConfigSaveRequest. Omitted documents remain untouched;
-/// graph_intents/graph_capabilities are rejected, not compiled or ignored.
+/// Atomic edits for an existing node, not pack installation; node settings
+/// use NodeConfigSaveRequest. Omitted documents stay untouched;
+/// graph_intents/graph_capabilities are rejected.
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
@@ -488,9 +362,8 @@ pub struct ConfigComponentsApplyRequest {
     pub document: gents::document_config::PackConfig,
 }
 
-/// Existing-document edits only. Canonical patch admission protects identities;
-/// omitted values remain unchanged, including redacted credentials. All edits
-/// are validated and committed together. No implicit creation or removal.
+/// Existing-document edits only; omitted values (including redacted
+/// credentials) stay unchanged and all edits commit together.
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]

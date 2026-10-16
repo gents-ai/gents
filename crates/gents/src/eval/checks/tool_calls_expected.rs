@@ -1,5 +1,3 @@
-//! `tool_calls_expected`: which tools a stage called, graded per requirement.
-
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
@@ -10,18 +8,12 @@ use crate::eval::checks::{
 };
 use crate::eval::runner::executor::StageEvidence;
 
-/// Params: `{ "required": [<tool>], "forbidden": [<tool>], "max_calls": <u64>? }`.
-/// Each required tool called, each forbidden tool not called, and the call
-/// count within `max_calls` is one requirement; the score is the satisfied
-/// fraction. `allowed_argv` maps a tool to permitted argument-vector prefixes;
-/// every call to that tool must match a prefix. It constrains observed calls,
-/// not runtime authorization. `config_read_only` instead checks native dispatch
-/// receipts, allowing help, previews, and calls rejected before dispatch.
+/// Scores tool requirements from observed calls. `allowed_argv` constrains
+/// observed calls, not runtime authorization; `config_read_only` requires
+/// native dispatch receipts and fails closed without read-only evidence.
 pub struct ToolCallsExpected;
 
-/// Calls listed in feedback before the rest are only counted.
 const LISTED_CALLS: usize = 12;
-/// Chars of a call's arguments quoted in feedback.
 const ARGS_CHARS: usize = 60;
 
 #[derive(Deserialize)]
@@ -249,7 +241,6 @@ mod tests {
         }
     }
 
-    /// One completed stage that made `calls`.
     fn stage(calls: Vec<ToolCallEvidence>) -> StageEvidence {
         let mut evidence = ScriptedExecutor::passed_evidence("did:x", "s1", "items", vec![]);
         let mut stage = evidence.stages.remove(0);
@@ -419,8 +410,8 @@ mod tests {
         let verdict = ToolCallsExpected.evaluate(&json!({"required": ["write"]}), &stage(vec![]));
         assert_eq!(verdict.score_bp, Some(0));
         let text = feedback(&verdict);
-        assert!(text.contains("tool calls made: none"), "{text}");
-        assert!(text.contains("write: not called"), "{text}");
+        assert!(text.contains("tool calls made: none"));
+        assert!(text.contains("write: not called"));
     }
 
     #[test]
@@ -431,11 +422,8 @@ mod tests {
         );
         assert_eq!(verdict.score_bp, Some(0));
         let text = feedback(&verdict);
-        assert!(
-            text.contains(r#"1. search {"q":"disk"} -> failed"#),
-            "{text}"
-        );
-        assert!(text.contains("write_finding: wrong tool"), "{text}");
+        assert!(text.contains(r#"1. search {"q":"disk"} -> failed"#));
+        assert!(text.contains("write_finding: wrong tool"));
     }
 
     #[test]
@@ -449,11 +437,8 @@ mod tests {
         );
         assert_eq!(verdict.score_bp, Some(0));
         let text = feedback(&verdict);
-        assert!(text.contains("rm: forbidden but called 2 times"), "{text}");
-        assert!(
-            text.contains("2 tool calls, more than the 1 allowed"),
-            "{text}"
-        );
+        assert!(text.contains("rm: forbidden but called 2 times"));
+        assert!(text.contains("2 tool calls, more than the 1 allowed"));
     }
 
     #[test]
@@ -464,9 +449,9 @@ mod tests {
             .collect();
         let verdict = ToolCallsExpected.evaluate(&json!({"required": ["write"]}), &stage(calls));
         let text = feedback(&verdict);
-        assert!(text.len() <= 2_048, "{}", text.len());
-        assert!(text.contains("500"), "the count survives: {text}");
-        assert!(text.contains("write: wrong tool"), "{text}");
+        assert!(text.len() <= 2_048);
+        assert!(text.contains("500"));
+        assert!(text.contains("write: wrong tool"));
     }
 
     #[test]
@@ -493,13 +478,12 @@ mod tests {
         assert!(validator.is_valid(&json!({"required": ["a"], "forbidden": [], "max_calls": 3})));
         assert!(!validator.is_valid(&json!({"required": ["a"], "extra": 1})));
         assert!(!validator.is_valid(&json!({"max_calls": -1})));
-        // What the parser rejects as requiring nothing, the schema rejects too.
         for nothing in [
             json!({}),
             json!({"required": []}),
             json!({"max_calls": null}),
         ] {
-            assert!(!validator.is_valid(&nothing), "{nothing}");
+            assert!(!validator.is_valid(&nothing));
         }
         assert!(validator.is_valid(&json!({"max_calls": 0})));
         assert!(validator.is_valid(&json!({"required": [], "forbidden": ["rm"]})));

@@ -1,5 +1,4 @@
 //! Same-owner configuration closure over the complete transaction snapshot.
-//! Ordinary references never fall back to foreign documents or old snapshots.
 
 use std::collections::BTreeMap;
 
@@ -14,8 +13,6 @@ use crate::Collection;
 use super::*;
 
 /// An ordinary reference to a document absent from the candidate snapshot.
-/// Typed so callers that can stage the target elsewhere (connected preview)
-/// can name that next step instead of only the failure.
 #[derive(Debug, thiserror::Error)]
 #[error(
     "{} {id} field {field} references missing {} {target_id:?} within node_did {node_did}",
@@ -31,8 +28,7 @@ pub struct MissingReference {
     pub node_did: String,
 }
 
-/// Canonical configuration visible for one node. Retained documents and
-/// staged replacements share this snapshot; observations are never selected.
+/// Canonical configuration visible for one node; observations are never selected.
 #[derive(Debug, Clone, Default)]
 pub struct ConfigReferences {
     node_did: String,
@@ -84,8 +80,6 @@ impl ConfigReferences {
         Ok(snapshot)
     }
 
-    /// Read every retained config row after the transaction's staged writes and
-    /// removals. The transaction owns commit/discard and the complete read set.
     pub async fn load_in_txn(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Result<Self> {
         ensure!(
             !node_did.trim().is_empty(),
@@ -144,8 +138,7 @@ impl ConfigReferences {
             .collect()
     }
 
-    /// The profiles an agent's turns use: its own, then its context's
-    /// compaction profile.
+    /// The profile an agent's turns use and its context's compaction profile.
     pub(crate) fn agent_profiles(&self, agent_id: &str) -> Vec<String> {
         let get = |collection: Collection, id: Option<&str>| {
             self.documents.get(&(collection, id?.to_owned()))
@@ -179,10 +172,8 @@ impl ConfigReferences {
             .collect()
     }
 
-    /// Event Triggers of this snapshot whose Task opts into `emit_outcome`,
-    /// as `(trigger_id, task_id, event_source_id, source_collection, per_document)`.
-    /// Unresolvable links are the reference validator's diagnostic and are
-    /// omitted here.
+    /// Triggers of this snapshot whose Task opts into `emit_outcome`.
+    /// Unresolvable links are omitted here.
     pub(crate) fn outcome_event_deliveries(&self) -> Vec<(String, String, String, String, bool)> {
         self.documents
             .iter()
@@ -217,7 +208,6 @@ impl ConfigReferences {
     }
 
     /// Validate the full retained candidate, including unchanged inbound links.
-    /// Membership checks permit cycles and impose no collection ordering.
     pub fn validate(&self) -> Result<()> {
         for ((collection, _), document) in &self.documents {
             self.validate_document(*collection, document)?;
@@ -225,9 +215,8 @@ impl ConfigReferences {
         Ok(())
     }
 
-    /// Check a single conservative prune against every current referrer,
-    /// including the removed document itself. This preserves the apply model's
-    /// delete-safe rule while sharing the canonical reference definitions.
+    /// Prune check against every current referrer, sharing the canonical
+    /// reference definitions.
     pub fn validate_removal(&self, collection: Collection, id: &str) -> Result<()> {
         let mut candidate = self.clone();
         ensure!(
@@ -278,9 +267,8 @@ impl ConfigReferences {
             }
             Ok(())
         };
-        // Use canonical fields directly; this is the only ordinary-reference
-        // rule table. Defra ACP and explicit foreign delegation retain their
-        // existing owners and are not converted into ordinary references.
+        // Canonical-field reference table; Defra ACP and explicit foreign
+        // delegation keep their existing owners.
         match collection {
             Collection::Node => {
                 let doc: Node = decode(value)?;
@@ -425,9 +413,8 @@ impl ConfigReferences {
                     !doc.target_node_did.trim().is_empty() && !doc.agent_id.trim().is_empty(),
                     "AgentTarget {id} requires target_node_did and agent_id"
                 );
-                // Same-owner targets close legal agent/context/tools cycles.
-                // Explicit foreign targets are checked by delegation admission
-                // under ACP, never satisfied by a global config lookup.
+                // Same-owner targets close legal agent/context/tools cycles;
+                // foreign targets are checked by delegation admission under ACP.
                 if doc.target_node_did == self.node_did {
                     require(Collection::Agent, &doc.agent_id, "agent_id")?;
                 }
@@ -601,11 +588,7 @@ impl ConfigReferences {
             Collection::EventSource => decode::<EventSource>(value)?.validate()?,
             Collection::ToolServiceRegistry => decode::<ToolServiceRegistry>(value)?.validate()?,
             Collection::RepositoryPlacement => decode::<RepositoryPlacement>(value)?.validate()?,
-            // Check names resolve against the builtin registry at run time, not
-            // against configuration documents; there are no outgoing references.
             Collection::EvalDefinition => decode::<EvalDefinition>(value)?.validate()?,
-            // Skill tool_refs name tools, not config documents. Schema names,
-            // ACP policy IDs, hook commands and tags keep their existing owners.
             Collection::Skill | Collection::CallbackModule | Collection::GraphDefinition => {}
         }
         Ok(())

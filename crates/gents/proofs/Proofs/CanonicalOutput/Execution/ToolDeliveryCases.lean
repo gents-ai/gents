@@ -51,14 +51,9 @@ def backgroundReceiptMessage : MessageEnvelope :=
     blocks := [.toolResult 600 "native-call" none
       [.text ⟨⟨702, 0⟩, .composed [.literal [91], .range 0 1, .literal [93]]⟩]] }
 
-/-- An `agent_new`/`agent_message` row. Its closing authority is the
-native action projected from the caused request's terminal output. -/
 def sessionMessageAdmission : ToolAdmission :=
   ⟨600, { foregroundToolContext with operation := .sessionMessage }⟩
 
-/-- A started session publishes its immediate receipt while the physical call
-is running, the calling request can then finish, and the caused request's
-terminal closes the tool source before the ordinary late notification. -/
 def sessionReceiptThenNotification : Option Bool := do
   let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
     [sessionMessageAdmission]).toOption
@@ -88,10 +83,6 @@ def sessionReceiptThenNotification : Option Bool := do
 theorem session_message_receipt_and_notification_trace :
     sessionReceiptThenNotification = some true := by native_decide
 
-/-- An immediate background receipt remains the one native result if the
-owner later waits in the foreground.  Completion is blocked while the call
-is physically running; the native close changes lifecycle only and does
-not allocate or publish another result. -/
 def receiptThenForegroundClose : Option Bool := do
   let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
     [foregroundAdmission]).toOption
@@ -234,8 +225,6 @@ def backgroundNotificationRequiresExactWake : Bool :=
             | _ => false
           rawRejected && parentAsWakeRejected
 
-/-- A background notification is published only against its exact physical
-wake document, whether or not the session has a Goal. -/
 theorem background_notification_requires_exact_wake :
     backgroundNotificationRequiresExactWake = true := by native_decide
 

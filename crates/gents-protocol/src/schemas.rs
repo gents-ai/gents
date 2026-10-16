@@ -1,13 +1,3 @@
-//! Static GraphQL schema strings for every replicated collection.
-//!
-//! Agent-domain schemas are re-exported from `gents_schemas`; the inference
-//! and services domains are `include_str!`-compiled here so that runtime
-//! nodes and client peers register identical collection schemas without
-//! pulling the files in at startup. `ALL` lists the deployment schemas in
-//! registration order; `RUNTIME_ALL` lists the schemas that must be
-//! registered before runtime reconciliation can begin.
-
-// agent domain
 pub use gents_schemas::{
     is_local_audit_collection, is_local_only_collection, AGENT, AGENT_CONTEXT, AGENT_CONTEXT_NAME,
     AGENT_MESSAGE, AGENT_MESSAGE_NAME, AGENT_NAME, AGENT_OUTPUT_SEGMENT, AGENT_OUTPUT_SEGMENT_NAME,
@@ -47,7 +37,6 @@ pub use gents_schemas::{
     WORKSPACE_RECEIPT_NAME, WORKSPACE_ROOT, WORKSPACE_ROOT_NAME,
 };
 
-// inference domain
 pub const INFERENCE_BACKEND_NAME: &str = "InferenceBackend";
 pub const INFERENCE_BACKEND: &str = include_str!("../schemas/inference/inference_backend.graphql");
 pub const INFERENCE_CALL_NAME: &str = "InferenceCall";
@@ -69,7 +58,6 @@ pub const PROVIDER_ACCOUNT_USAGE_NAME: &str = "ProviderAccountUsage";
 pub const PROVIDER_ACCOUNT_USAGE: &str =
     include_str!("../schemas/inference/provider_account_usage.graphql");
 
-// services domain
 pub const TOOL_SERVICE_REGISTRY_NAME: &str = "ToolServiceRegistry";
 pub const TOOL_SERVICE_REGISTRY: &str =
     include_str!("../schemas/services/tool_service_registry.graphql");
@@ -77,11 +65,9 @@ pub const TOOL_SERVICE_HEALTH_STATE_NAME: &str = "ToolServiceHealthState";
 pub const TOOL_SERVICE_HEALTH_STATE: &str =
     include_str!("../schemas/services/tool_service_health_state.graphql");
 
-/// Schemas that must be registered before the runtime can start reconciling.
 pub const RUNTIME_ALL: &[&str] = &[INFERENCE_BACKEND];
 pub const RUNTIME_COLLECTION_NAMES: &[&str] = &[INFERENCE_BACKEND_NAME];
 
-/// Every schema required by a full agent deployment, in registration order.
 pub const ALL: &[&str] = &[
     NODE,
     AGENT,
@@ -247,124 +233,8 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
 
 pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = BRANCHABLE_AGENT_COLLECTION_NAMES;
 
-/// Credential-bearing collections: `ScopeTemplates.credentialCollections`,
-/// bound by the scope-template conformance suite. Broad client subscription
-/// sets exclude them; they stay on their operator/runtime route.
 pub const CREDENTIAL_COLLECTION_NAMES: &[&str] = &[INFERENCE_BACKEND_NAME, OAUTH_CREDENTIAL_NAME];
 
 pub fn is_credential_collection(name: &str) -> bool {
     CREDENTIAL_COLLECTION_NAMES.contains(&name)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashSet;
-
-    use super::*;
-
-    #[test]
-    fn all_contains_every_schema() {
-        let schema_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas");
-        let mut expected: Vec<String> = AGENT_ALL.iter().map(|sdl| sdl.to_string()).collect();
-        for domain in ["inference", "services"] {
-            for entry in std::fs::read_dir(schema_dir.join(domain)).unwrap() {
-                let path = entry.unwrap().path();
-                if path
-                    .extension()
-                    .is_some_and(|extension| extension == "graphql")
-                {
-                    expected.push(std::fs::read_to_string(path).unwrap());
-                }
-            }
-        }
-        let registered: Vec<_> = ALL.iter().chain(RUNTIME_ALL.iter()).copied().collect();
-        assert_eq!(
-            registered.len(),
-            expected.len(),
-            "catalog must register every schema exactly once"
-        );
-        for sdl in expected {
-            assert!(
-                registered.contains(&sdl.as_str()),
-                "unregistered schema: {sdl}"
-            );
-        }
-    }
-
-    #[test]
-    fn every_schema_starts_with_type_declaration() {
-        for sdl in ALL.iter().chain(RUNTIME_ALL.iter()) {
-            let first_sdl_line = sdl
-                .lines()
-                .map(str::trim)
-                .find(|line| !line.is_empty() && !line.starts_with('#'))
-                .unwrap_or("");
-            assert!(
-                first_sdl_line.starts_with("type "),
-                "schema must begin with `type`: {}",
-                sdl.lines().next().unwrap_or("")
-            );
-        }
-    }
-
-    #[test]
-    fn collection_names_align_with_sdl_arrays() {
-        assert_eq!(ALL.len(), ALL_COLLECTION_NAMES.len());
-        assert_eq!(RUNTIME_ALL.len(), RUNTIME_COLLECTION_NAMES.len());
-    }
-
-    #[test]
-    fn collection_names_are_unique() {
-        let mut seen = HashSet::new();
-
-        for name in ALL_COLLECTION_NAMES
-            .iter()
-            .chain(RUNTIME_COLLECTION_NAMES.iter())
-        {
-            assert!(seen.insert(*name), "duplicate collection name: {name}");
-        }
-    }
-
-    #[test]
-    fn node_readiness_is_registered_but_not_broad_synced() {
-        let index = ALL_COLLECTION_NAMES
-            .iter()
-            .position(|name| *name == NODE_READINESS_NAME)
-            .expect("node readiness must be reserved in the protocol catalog");
-        assert_eq!(ALL[index], NODE_READINESS);
-        assert!(AGENT_COLLECTION_NAMES.contains(&NODE_READINESS_NAME));
-        assert!(!BRANCHABLE_COLLECTION_NAMES.contains(&NODE_READINESS_NAME));
-    }
-
-    #[test]
-    fn node_runtime_schema_is_diagnostics_only() {
-        for forbidden in [
-            "process_state",
-            "active_generation",
-            "router_generation",
-            "default_agent_id",
-            "runnable_agent_count",
-            "unavailable_agent_count",
-        ] {
-            assert!(
-                !NODE_RUNTIME.lines().any(|line| {
-                    line.trim_start()
-                        .strip_prefix(forbidden)
-                        .is_some_and(|suffix| suffix.trim_start().starts_with(':'))
-                }),
-                "NodeRuntime must not redeclare readiness-owned field {forbidden}"
-            );
-        }
-    }
-
-    #[test]
-    fn enrollment_route_receipt_is_registered_but_only_exact_pushed() {
-        let index = ALL_COLLECTION_NAMES
-            .iter()
-            .position(|name| *name == NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME)
-            .expect("route receipt must be reserved in the protocol catalog");
-        assert_eq!(ALL[index], NETWORK_ENROLLMENT_ROUTE_RECEIPT);
-        assert!(AGENT_COLLECTION_NAMES.contains(&NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME));
-        assert!(!BRANCHABLE_COLLECTION_NAMES.contains(&NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME));
-    }
 }

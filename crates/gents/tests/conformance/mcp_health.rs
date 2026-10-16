@@ -1,19 +1,3 @@
-//! MCP health conformance: pins the generated transition-case rows to the real
-//! service-health owner in `crates/gents-protocol/src/tool_service_health.rs`.
-//!
-//! The transition machine itself is fenced with stronger owners and is
-//! deliberately NOT re-implemented here: the Lean theorems (`h2` … `h8`,
-//! `degraded_count_lt_K`) prove the semantics, and the in-crate
-//! `health_checker::tests::generated_mcp_health_cases_match_health_checker_transitions`
-//! replays every emitted row through the real `step_service` owner and its
-//! `HealthStatus` projection. This conformance pin keeps the row-shape
-//! guarantees (threshold coverage including the production default, the H7
-//! collapse witness, removal dropping state and count together, eviction being
-//! probe-failure driven) and closes the coupling gap: every surviving
-//! `next_state` must parse as the persisted `ToolServiceHealthState`
-//! vocabulary and project, through the owner's `project()`, to the emitted
-//! operator-facing `rust_projection`.
-
 use super::*;
 
 pub(super) fn generated_mcp_health_cases_pin_threshold_projection_shape() {
@@ -23,8 +7,6 @@ pub(super) fn generated_mcp_health_cases_pin_threshold_projection_shape() {
         "Lean must emit MCP health transition cases"
     );
 
-    // The production health checker default must stay covered by the emitted
-    // rows alongside the degenerate thresholds.
     assert_eq!(
         gents::HealthCheckerOptions::default().failure_threshold_k,
         3,
@@ -56,7 +38,6 @@ pub(super) fn generated_mcp_health_cases_pin_threshold_projection_shape() {
         "H7: at K=1 the first probeFail must collapse healthy -> evicted directly"
     );
 
-    // Every persisted Rust state must have a transition witness.
     let starts = cases
         .iter()
         .map(|case| case.start_state.as_str())
@@ -94,9 +75,6 @@ pub(super) fn generated_mcp_health_cases_pin_threshold_projection_shape() {
             case.name
         );
 
-        // Coupling through the real owner: a surviving state must be in the
-        // persisted ToolServiceHealthState vocabulary and must project to the
-        // emitted operator-facing status (Lean `healthProjection`).
         if let Some(next_state) = case.next_state.as_deref() {
             let parsed =
                 gents_protocol::tool_service_health::ToolServiceHealthState::parse(next_state)

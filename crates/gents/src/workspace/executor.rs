@@ -122,8 +122,6 @@ pub struct CreateWorkspaceOutcome {
     pub placement: WorkspacePlacementDoc,
 }
 
-/// Host-chosen dest lives under the checkout so `--tool-root` can be the
-/// operator repo without the placement escaping that ceiling.
 pub fn workspace_host_path(
     repository_checkout: &Path,
     workspace_id: &str,
@@ -268,7 +266,6 @@ fn create_workspace_action(
         journal::advance(journal, 0, ActionJournalState::Executing);
     }
 
-    // Recovery from Executing always observes; never blindly re-runs create.
     let observed = observe_effect(
         &source,
         &dest,
@@ -443,7 +440,6 @@ fn persist_docs(
                 identity.workspace_id
             );
         }
-        // provisioning → ready | provisionFailed only. ProvisionFailed is terminal.
         if existing_state == Some(LIFECYCLE_PROVISION_FAILED)
             && lifecycle_state != LIFECYCLE_PROVISION_FAILED
         {
@@ -516,8 +512,6 @@ pub struct SealWorkspaceOutcome {
     pub receipt: WorkspaceReceiptDoc,
 }
 
-/// Freeze an operator-provisioned, unchanged base through the ordinary workspace
-/// action journal. This emits no writer receipt or producer request identity.
 pub fn execute_freeze_workspace_base_plan(
     plan: &ActionPlan,
     journal: &mut Vec<ActionJournalEntry>,
@@ -610,18 +604,12 @@ fn freeze_workspace_base_action(
                 "base freeze replay differs from persisted seal",
             ));
         }
-        // Workspace is the durable seal owner. Placement's tree observation is
-        // derived from it and may lag after partial result-document persistence.
-        // Recover through the same journal and document writer, including after
-        // restart with a fresh journal; no producer receipt is synthesized.
         if placement.observed_tree_hash != base_tree {
             placement.observed_tree_hash = base_tree.clone();
             journal::advance(journal, 0, ActionJournalState::EffectObserved);
             persist_sealed_workspace_documents(&workspace, &placement, ctx.documents)
                 .map_err(failed)?;
         }
-        // Recovery of an already persisted seal is not a new checkout capture.
-        // Read/artifact admission still independently verifies the live tree.
         journal::advance(journal, 0, ActionJournalState::ResultDocsWritten);
         return Ok(CreateWorkspaceOutcome {
             workspace,
@@ -681,7 +669,6 @@ fn freeze_workspace_base_action(
     })
 }
 
-/// Shared host seal effect; caller establishes its writer/base-freeze evidence.
 fn apply_seal_snapshot(
     workspace: &mut IsolatedWorkspaceDoc,
     placement: &mut WorkspacePlacementDoc,
@@ -1031,7 +1018,6 @@ pub struct IntegrateWorkspaceOutcome {
     pub workspace: IsolatedWorkspaceDoc,
     pub placement: WorkspacePlacementDoc,
     pub receipt: WorkspaceReceiptDoc,
-    /// Trunk `HEAD` is not moved until the receipt is durable.
     pub pending_head_sha: Option<String>,
 }
 
@@ -1229,8 +1215,6 @@ fn integrate_workspace_action(
             Some(head.to_owned())
         };
         journal::advance(journal, 0, ActionJournalState::ResultDocsWritten);
-        // An already-applied receipt is a pure acknowledgment. Do not recreate
-        // a pending journal or touch the old checkout on this path.
         if pending.is_some() {
             persist_integrate_journal(
                 journal,
@@ -1249,9 +1233,6 @@ fn integrate_workspace_action(
         });
     }
 
-    // New integration needs the writer's existing immutable seal witness.
-    // Writer and integrator are different requests; the producer IDs are checked
-    // for canonical receipt identity, not equated to this integrator action.
     let writer_matches = receipts.iter().any(|receipt| {
         !receipt.produced_by_request_id.trim().is_empty()
             && !receipt.produced_by_request_doc_id.trim().is_empty()
@@ -1422,7 +1403,6 @@ fn persist_integrate_docs(
     receipt: WorkspaceReceiptDoc,
     documents: &mut dyn WorkspaceDocuments,
 ) -> Result<IntegrateWorkspaceOutcome> {
-    // Receipt first; binding stays Active until the DefraDB flush succeeds.
     documents.write_receipt(receipt.clone())?;
     Ok(IntegrateWorkspaceOutcome {
         workspace,

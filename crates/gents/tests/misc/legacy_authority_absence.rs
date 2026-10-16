@@ -1,6 +1,3 @@
-//! Clean-break fence: authenticated enrollment is the only remote route and
-//! persona authority. These names may appear here only as deletion targets.
-
 use std::path::PathBuf;
 
 const REMOVED_COLLECTIONS: &[&str] = &[
@@ -165,17 +162,11 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
         assert!(
             source.contains("AgentRequestCreate")
                 || source.contains("write_pending_agent_request")
-                // #1336: queue/mutation.rs and queue/goal_continuation.rs no
-                // longer spell "AgentRequestCreate" at all — they build a
-                // RequestSpec and construct through
-                // build_request/build_signed_request/sign_request instead.
                 || source.contains("RequestSpec"),
             "a production Pending writer lost its canonical signed authoring seam"
         );
     }
 
-    // Background redrive composes a transaction with another mutation, so it
-    // embeds the canonical input fields rather than the standalone mutation.
     let background = include_str!("../../src/lifecycle/background_wake_recovery.rs");
     assert!(background.contains("create.graphql_input_fields()"));
     assert_eq!(background.matches("create_AgentRequest(input:").count(), 1);
@@ -190,16 +181,12 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
     assert!(!signed_direct_materializer.contains("add_AgentRequest(input:"));
     assert!(!signed_direct_materializer.contains("status: \"processing\""));
     assert!(signed_direct_materializer.contains("Arc<dyn crate::identity::NodeIdentity>"));
-    // #1336: this site now builds and signs its AgentRequestCreate through
-    // the shared constructor rather than hand-rolling
-    // AgentRequestCreate::base(...) itself.
     assert!(signed_direct_materializer.contains("build_signed_request"));
     assert!(signed_direct_materializer.contains("verify_fresh_local_self_request"));
     assert!(signed_direct_materializer.contains("claim_with_identity"));
     assert!(!oneshot.contains("add_AgentRequest(input:"));
     assert!(oneshot.contains("agent.node_identity().clone()"));
 
-    // The runtime constructor owns stamped request fields for every client.
     for (name, source) in [
         (
             "CLI requests",
@@ -214,8 +201,6 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
             include_str!("../../../gents-desktop-core/src/client/mutations/chat/request.rs"),
         ),
     ] {
-        // Inline test modules may construct protocol fixtures; a top-level
-        // cfg(test) module declaration must not truncate production code.
         let production = source.split("#[cfg(test)]\nmod tests {").next().unwrap();
         for forbidden in [
             "AgentRequestCreate::base(",

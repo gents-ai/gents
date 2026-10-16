@@ -42,9 +42,6 @@ fn unclaimed(row: &AgentRequestRow) -> bool {
     )
 }
 
-/// The request whose turn a session is on, reached from `newest` within the
-/// session's `requests` (Lean `ClientShell.SessionTurn.turnOf`). Every step
-/// stays in `newest`'s requester scope.
 pub fn session_turn_request<'a>(
     requests: &[&'a AgentRequestRow],
     newest: &'a AgentRequestRow,
@@ -63,10 +60,6 @@ fn in_scope<'a>(
         .find(|row| row.requester_did == of.requester_did && matches(row))
 }
 
-/// Lean `SessionTurn.resolve`: a folded row resolves to the physical request
-/// it was folded into, a terminal row to its retry successor, and an
-/// unclaimed queued row to the turn of the request it was queued after while
-/// that turn is not terminal.
 fn resolve<'a>(
     requests: &[&'a AgentRequestRow],
     fuel: usize,
@@ -76,8 +69,6 @@ fn resolve<'a>(
     if fuel == 0 {
         return row;
     }
-    // A repeated physical row ends this walk at the first repeat. Row
-    // references also distinguish optimistic rows without a persisted physical ID.
     let identity = row
         .doc_id
         .as_deref()
@@ -128,8 +119,6 @@ fn resolve<'a>(
     }
 }
 
-/// Unclaimed requests waiting behind `turn`, in arrival order (Lean
-/// `SessionTurn.queuedBehind`).
 pub fn queued_behind_turn<'a>(
     requests: &[&'a AgentRequestRow],
     turn: &AgentRequestRow,
@@ -151,7 +140,6 @@ pub fn queued_behind_turn<'a>(
     queued
 }
 
-/// Requests a claim folded, in `requester`'s scope (Lean `SessionTurn.foldedIn`).
 pub fn folded_requests<'a>(
     requests: &[&'a AgentRequestRow],
     requester: Option<&str>,

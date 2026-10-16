@@ -1,8 +1,3 @@
-/* Who ran a session and where: the node's avatar behind, the agent's in
-   front. Each carries its own hover card. The node is looked up from the
-   session's node id, and an agent is named by the node it belongs to. The
-   local node is where work is assumed to be, so only a remote node is shown;
-   a session whose node the client cannot see shows the agent alone too. */
 import { useShallow } from "zustand/react/shallow";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import type { NodeView } from "../../hooks/fleetStore";
@@ -28,25 +23,17 @@ export function NodeAgentStack({
   agentId: string | null | undefined;
   description?: string;
   size?: "sm" | "md";
-  /** sessions this one handed out: their agents, and any remote node
-      they run on, join the stack so the row says the whole piece of work */
   workers?: readonly SessionSummary[];
-  /** the agent avatar is a labelled button, so its card opens from the keyboard */
   keyboard?: boolean;
 }) {
   const homeDid = useHomeDid();
   const found = useFleet((state) => nodeOf(state, nodeDid));
-  /* each worker's node, in the workers' order */
   const workersOn = useFleet(
     useShallow((state) => workers.map((w) => nodeOf(state, w.nodeDid))),
   );
   const node = found && !isWorkingNode(found, homeDid) ? found : null;
   const dim = size === "sm" ? "size-5 text-[9px]" : "size-7 text-[11px]";
   const overlap = size === "sm" ? "-ml-1.5" : "-ml-2";
-  /* two marks overlap to read as one; hovering the pair spreads them on a
-     pill so each can be read and hovered on its own */
-  /* one mark per distinct agent the workers use, beyond this one; one
-     per distinct remote node beyond this one; three of each at most */
   const workerAgents = [
     ...new Map(
       workers.flatMap((w, i) =>
@@ -69,16 +56,11 @@ export function NodeAgentStack({
     ),
   ];
   const spread = node !== null || workerAgents.length > 0 || workerNodes.length > 0;
-  /* the order says whose is whose: this session's node and agent lead,
-     then each distinct agent its workers use, then any remote node a
-     worker runs on. The stack says who worked on it, not how many workers
-     did: three of each at most, and the count is only what that left out */
   const shownNodes = workerNodes.slice(0, 3);
   const shownAgents = workerAgents.slice(0, 3);
   const agentsLeft = workerAgents.length - shownAgents.length;
   const nodesLeft = workerNodes.length - shownNodes.length;
   const leftOut = agentsLeft + nodesLeft;
-  /* every mark moves with the same curve, so the spread reads as one motion */
   const motion = "transition-[margin,box-shadow] duration-200 ease-out";
   const shifted = cn(
     "cursor-default ring-2 ring-background",
@@ -90,8 +72,6 @@ export function NodeAgentStack({
   return (
     <span
       className={cn(
-        /* the vertical padding is there at rest too, so the pill never
-           changes the row's height when it appears */
         "group/stack inline-flex shrink-0 items-center rounded-full py-0.5 transition-[padding,background-color] duration-200 ease-out",
         spread &&
           "hover:bg-raised hover:px-1 hover:shadow-xs hover:ring-1 hover:ring-border",
@@ -109,8 +89,6 @@ export function NodeAgentStack({
         side={spread ? "bottom" : "right"}
       >
         {keyboard ? (
-          /* a button, so the card opens from the keyboard too: the one
-             place a screen offers this, so the name is found once */
           <button
             type="button"
             aria-label={`About ${agentName(agentId ?? null, found)} agent`}

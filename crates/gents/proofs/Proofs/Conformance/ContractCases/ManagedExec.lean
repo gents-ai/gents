@@ -51,8 +51,6 @@ def managedExecLivenessCases : List ManagedExecLivenessCase :=
     }
   ]
 
-/-- Every (before, after) observation pair, with its verdict computed by the
-    ownership model rather than written by hand. -/
 def processStopCases : List ProcessStopCase :=
   ManagedExec.ProcessObservation.all.flatMap fun before =>
     ManagedExec.ProcessObservation.all.map fun after =>

@@ -15,7 +15,6 @@ import {
 
 const TRAY_WAIT_TOAST = "managed-server-tray-wait";
 
-/** The native tray targets the one view that owns shared-backend recovery. */
 export function useManagedServerTrayControls({ actions, stores }: DesktopApp) {
   useEffect(() => {
     if (!ownsAutomaticRecovery() || !inNativeShell()) return;
@@ -62,15 +61,10 @@ export function useManagedServerTrayControls({ actions, stores }: DesktopApp) {
         void (async () => {
           try {
             await showAndFocusWindow();
-          } catch {
-            // The command error remains actionable even if the OS cannot reveal
-            // the owner window; never replace it with a secondary focus error.
-          }
+          } catch {}
           try {
             toast.error(`Node menu command failed: ${message}`);
-          } catch {
-            // A notification renderer failure must not become an unhandled task.
-          }
+          } catch {}
         })();
       },
       showAndFocusWindow,
@@ -81,15 +75,12 @@ export function useManagedServerTrayControls({ actions, stores }: DesktopApp) {
             toast.loading(describeManagedServerWait(wait, Date.now()).label, {
               id: TRAY_WAIT_TOAST,
             });
-        } catch {
-          // Progress is informational; the command's own result reports failures.
-        }
+        } catch {}
       },
     );
   }, [actions, stores]);
 }
 
-/** The local server as the menu bar commands use it, through its owner. */
 export function trayServerFor({
   actions,
   stores,

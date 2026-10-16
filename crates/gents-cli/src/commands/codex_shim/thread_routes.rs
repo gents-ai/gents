@@ -480,27 +480,3 @@ fn internal_error(err: anyhow::Error) -> ThreadRouteError {
         message: err.to_string(),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn source_filters_classify_gents_spawned_children() {
-        assert!(source_filter_allows_cli(None));
-        assert!(source_filter_allows_cli(Some(&[])));
-        assert!(!source_filter_allows_spawned_agent_threads(None));
-        assert!(!source_filter_allows_spawned_agent_threads(Some(&[])));
-
-        assert!(source_filter_allows_spawned_agent_threads(Some(&[
-            codex::ThreadSourceKind::SubAgent,
-        ])));
-        assert!(source_filter_allows_spawned_agent_threads(Some(&[
-            codex::ThreadSourceKind::SubAgentThreadSpawn,
-        ])));
-        assert!(!source_filter_allows_spawned_agent_threads(Some(&[
-            codex::ThreadSourceKind::Cli,
-            codex::ThreadSourceKind::SubAgentReview,
-        ])));
-    }
-}

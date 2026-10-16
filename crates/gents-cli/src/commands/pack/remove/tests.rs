@@ -39,7 +39,6 @@ async fn remove_pkg(home: &Path, package: &str) -> anyhow::Result<Value> {
     .await
 }
 
-/// The fixture assets pack, as a spec string `install` accepts.
 fn assets_fixture_spec() -> String {
     fixture_dir("assets_fixture").to_str().unwrap().to_owned()
 }
@@ -340,7 +339,6 @@ async fn forged_asset_paths_do_not_release_files_or_install_receipts() {
     }
 }
 
-/// A minimal `plugins`-kind pack directory: one plugin, `name`'s bytes.
 fn plugin_pack_dir(
     namespace: &str,
     pack_name: &str,

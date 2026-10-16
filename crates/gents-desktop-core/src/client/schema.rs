@@ -19,8 +19,6 @@ pub async fn subscribe_all_collections(node: &EmbeddedNode) -> Result<()> {
 pub(crate) async fn subscribe_runtime_collections(
     p2p: &dyn defra_p2p_adapter::P2POperations,
 ) -> Result<()> {
-    // The DB handles existing subscriptions idempotently and persists the
-    // resulting list once per API call.
     p2p.add_collections(
         subscribed_collection_names()
             .into_iter()
@@ -31,24 +29,6 @@ pub(crate) async fn subscribe_runtime_collections(
     Ok(())
 }
 
-/// Prompt-bearing local audit collections are deliberately excluded.
-///
-/// These rows carry either a full provider request or an exact reduction
-/// checkpoint — conversation and tool material in plaintext, because
-/// `RenderedRequest` carries no `@policy` and no field encryption (both blocked
-/// on defradb.rs#1318). Capture is on by default and writes one row per turn per
-/// attempt, so subscribing it would push a full conversation body per provider
-/// call onto the gossip channel, to a device class that includes iOS, for a
-/// collection nothing on the desktop reads.
-///
-/// Credential collections are excluded too: the client route never carries
-/// them, and the desktop reads a hosted runtime's backends through that
-/// runtime's operator endpoint, so a subscription would only admit gossiped
-/// API keys and OAuth tokens into the client store.
-///
-/// This list is built from `ALL_COLLECTION_NAMES` verbatim, so a new collection
-/// otherwise joins the subscription set with no decision being taken about it.
-/// The desktop live-fixture runner replicates this same set.
 pub fn subscribed_collection_names() -> Vec<&'static str> {
     ALL_COLLECTION_NAMES
         .iter()
@@ -64,10 +44,6 @@ mod tests {
     use super::subscribed_collection_names;
     use gents::agent::p2p_reconcile::templates::CLIENT_INDEX_COLLECTIONS;
 
-    /// The subscription set is derived from a list that grows whenever a
-    /// collection is added, so the exclusions have to be asserted rather than
-    /// assumed. The Lean scope model keeps credentials off every client route;
-    /// the broad subscription must not reintroduce them.
     #[test]
     fn the_desktop_does_not_replicate_plaintext_provider_bodies_or_credentials() {
         let names = subscribed_collection_names();

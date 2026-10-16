@@ -1,11 +1,8 @@
 //! The executor seam: what one trial contains, what running it yields, and the
 //! trait the embedded and scripted executors implement.
 //!
-//! A serialized [`TrialSpec`] never carries checks, tiers, splits or other cases.
-//! Its host-only review handle can deliver feedback from completed evidence
-//! to a subsequent stage that explicitly opts into assisted review. The one
-//! field that names a case is [`TrialSpec::script_key`], and the loop fills it
-//! only for an executor that asks for it.
+//! A serialized [`TrialSpec`] never carries checks, tiers, splits or other
+//! cases; the one field that names a case is [`TrialSpec::script_key`].
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -24,48 +21,36 @@ use crate::eval::runner::progress::StageProgress;
 use crate::eval::runner::scripted::ScriptKey;
 use crate::eval::{Anchor, OutcomeKind, ProviderReason, TrialUsage};
 
-/// Where a trial's runtime lives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Isolation {
     Embedded,
     Process,
 }
 
-/// Subject-visible inputs plus non-serialized harness handles. Serialized
-/// inputs contain no checks, tiers, splits, case IDs or other cases.
+/// Subject-visible inputs plus non-serialized harness handles.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrialSpec {
     pub trial_id: String,
-    /// Materialized pack for this cell.
     pub pack_dir: PathBuf,
     pub pack_digest: String,
     pub agent_id: String,
-    /// Profile and backend documents copied verbatim, plus the trial's seed.
+    /// Copied verbatim so a later edit cannot change what a finished trial meant.
     pub inference: InferenceBinding,
     pub fixtures: TrialFixtures,
-    /// The definition's [`crate::document_config::EvalSubject::host_bash`].
     #[serde(default)]
     pub host_bash: bool,
     pub stages: Vec<StageSpec>,
-    /// `<run dir>/trials/<trial_id>`.
     pub trial_dir: PathBuf,
-    /// Populated only when [`TrialExecutor::wants_script_key`]; the one field
-    /// that carries a `case_id`.
+    /// The one field that carries a `case_id`; populated only when
+    /// [`TrialExecutor::wants_script_key`].
     pub script_key: Option<ScriptKey>,
-    /// Stage boundaries for `<run dir>/progress.json` (spec 4b §6). Not
-    /// part of what a trial may know: skipped by serde, ignored by equality,
-    /// and a no-op unless the loop attached a writer.
     #[serde(skip)]
     pub progress: StageProgress,
-    /// Host-only checks. Only their feedback may cross into an explicitly
-    /// authored review turn; check definitions never serialize with the trial.
     #[serde(skip)]
     pub review: super::review::StageReview,
 }
 
 impl TrialSpec {
-    /// A spec with nothing in it but an id, for tests that exercise the seam
-    /// rather than the trial.
     #[cfg(test)]
     pub(crate) fn empty_for_tests(trial_id: &str) -> Self {
         Self {
@@ -92,17 +77,13 @@ impl TrialSpec {
     }
 }
 
-/// The inference documents a trial runs against, copied verbatim so a later
-/// edit cannot change what a finished trial meant. The seed lives on the
-/// sampling document; it is repeated here because the trial is seeded by index.
+/// Copied verbatim so a later edit cannot change what a finished trial meant.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InferenceBinding {
     pub profile: Value,
     pub backend: Value,
     pub sampling: Option<Value>,
-    /// The InferenceExecution the profile's `execution_id` names, if any.
     pub execution: Option<Value>,
-    /// The InferenceRetryPolicy that execution's `retry_policy_id` names, if any.
     pub retry_policy: Option<Value>,
     pub seed: i64,
 }
@@ -130,25 +111,18 @@ pub struct FixtureFile {
 pub struct StageSpec {
     pub stage_id: String,
     pub prompt: String,
-    /// Written instead of submitting `prompt`; the stage observes the request
-    /// the pack's trigger fires for it.
+    /// Written instead of submitting `prompt`.
     pub seed: Option<FixtureDocument>,
     pub deadline_secs: u64,
-    /// Observe the home until it is quiet before capturing; see
-    /// [`crate::document_config::EvalStage::settle`].
     #[serde(default)]
     pub settle: bool,
-    /// See [`crate::document_config::EvalStage::continuation`].
     #[serde(default)]
     pub continuation: Option<crate::document_config::EvalContinuation>,
     #[serde(default)]
     pub review_previous: bool,
-    /// What to read out of the home when this stage ends: the stage's own
-    /// captures, or the run's request-level list when the stage declares none.
     pub captures: Vec<Capture>,
 }
 
-/// What to read out of a finished trial home.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Capture {
@@ -168,9 +142,6 @@ pub enum Capture {
     },
 }
 
-/// A definition's capture as the runner reads it. The two types are one shape
-/// on two sides of the freeze: the definition's is authored and validated,
-/// the runner's is what a trial executes.
 impl From<&EvalCapture> for Capture {
     fn from(capture: &EvalCapture) -> Self {
         match capture {
@@ -197,7 +168,6 @@ impl From<&EvalCapture> for Capture {
     }
 }
 
-/// Where a trial's durable evidence lives once it has been provisioned.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrialLocator {
     pub trial_node_did: String,
@@ -206,7 +176,6 @@ pub struct TrialLocator {
     pub home_hint: Option<String>,
 }
 
-/// How one stage ran, with everything grading may read.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StageEvidence {
     pub stage_id: String,
@@ -219,8 +188,6 @@ pub struct StageEvidence {
     pub tool_calls: Vec<ToolCallEvidence>,
     pub inference_calls: Vec<InferenceCallEvidence>,
     pub captures: BTreeMap<String, CaptureResult>,
-    /// Continuation prods the stage sent before its `until` capture held
-    /// (see [`crate::document_config::EvalContinuation`]).
     #[serde(default)]
     pub prods: u32,
 }
@@ -236,11 +203,9 @@ pub enum CaptureResult {
     },
     Files {
         files: Vec<FileRef>,
-        /// Matches the capture refused because they resolve outside the
-        /// trial's workspace — a symlink out of it, say. Recorded rather than
-        /// dropped, so a check can tell an empty capture from a capture whose
-        /// files were not the trial's to hand over. Defaulted, so evidence
-        /// written before this existed still reads.
+        /// Recorded rather than dropped, so a check can tell an empty capture
+        /// from files refused outside the trial's workspace; defaulted, so
+        /// older evidence still reads.
         #[serde(default)]
         outside_workspace: Vec<String>,
     },
@@ -253,14 +218,9 @@ pub struct FileRef {
     pub bytes: u64,
 }
 
-/// What one execution produced. The digest covers the evidence itself, so it is
-/// a per-trial integrity anchor: it says that this evidence is the evidence that
-/// was written, and nothing more. Comparability across runs rests on the anchor,
-/// not on two executions digesting alike.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrialEvidence {
     pub locator: TrialLocator,
-    /// Only the stages that were submitted.
     pub stages: Vec<StageEvidence>,
     pub usage: TrialUsage,
     pub anchor: Anchor,
@@ -269,7 +229,7 @@ pub struct TrialEvidence {
 
 impl TrialEvidence {
     /// SHA-256 over canonical JSON of `(stages, usage, anchor)`; the locator is
-    /// excluded, because where a trial ran is not what it did.
+    /// excluded.
     pub fn digest(stages: &[StageEvidence], usage: &TrialUsage, anchor: &Anchor) -> String {
         #[derive(Serialize)]
         struct DigestInput<'a> {
@@ -278,10 +238,8 @@ impl TrialEvidence {
             anchor: &'a Anchor,
         }
 
-        // Neither fallback should be reachable: every field of the input
-        // serializes. If one ever stops doing so the digest becomes the hash of
-        // nothing and two unlike trials compare equal, so it is reported rather
-        // than absorbed.
+        // The fallbacks should be unreachable; a digest over nothing would make
+        // unlike trials compare equal, so it is reported rather than absorbed.
         let value = serde_json::to_value(DigestInput {
             stages,
             usage,
@@ -304,8 +262,6 @@ impl TrialEvidence {
         format!("{:x}", Sha256::digest(bytes))
     }
 
-    /// The one constructor: the digest follows from what it is given, so a
-    /// `TrialEvidence` cannot be built carrying a digest of something else.
     pub fn new(
         locator: TrialLocator,
         stages: Vec<StageEvidence>,
@@ -322,8 +278,7 @@ impl TrialEvidence {
         }
     }
 
-    /// Evidence for a trial that never ran: nothing observed, and an anchor
-    /// that says so.
+    /// Evidence for a trial that never ran.
     pub fn infrastructure(locator: TrialLocator) -> Self {
         Self::new(
             locator,
@@ -338,14 +293,10 @@ impl TrialEvidence {
     }
 }
 
-/// Rebuild every object with its keys sorted, so the digest depends on the
-/// content and not on the order a home happened to write a captured row in.
-///
-/// `serde_json` without `preserve_order` already keeps `Value::Object` in a
-/// `BTreeMap`, which is how this workspace builds it today: the feature is
-/// enabled only through `tree-sitter`'s build dependency, and resolver 2 does
-/// not unify that into the lib build. This sort makes the digest independent
-/// of that resolution, which a transitive dependency could change.
+/// Sorts object keys so the digest does not depend on the order a home wrote a
+/// row. `serde_json` keeps insertion order on any build that enables
+/// `preserve_order`, so this sort must not be removed while that build may be
+/// in use.
 fn canonical(value: Value) -> Value {
     match value {
         Value::Object(map) => {
@@ -363,14 +314,10 @@ fn canonical(value: Value) -> Value {
     }
 }
 
-/// Runs one trial. Implementations are the embedded runtime and, for tests,
-/// [`crate::eval::runner::scripted::ScriptedExecutor`].
 #[async_trait::async_trait]
 pub trait TrialExecutor: Send + Sync {
     fn isolation(&self) -> Isolation;
 
-    /// Only the scripted executor returns true; the loop then fills
-    /// [`TrialSpec::script_key`].
     fn wants_script_key(&self) -> bool {
         false
     }
@@ -379,18 +326,12 @@ pub trait TrialExecutor: Send + Sync {
     /// `EvalTrial` row can be written before execution. Never returns `Err`: a
     /// failed provisioning returns a locator whose `trial_node_did` is
     /// `"did:unprovisioned"`, and [`Self::execute`] then returns
-    /// [`TrialEvidence::infrastructure`] — evidence holding no stage, which
-    /// [`crate::eval::runner::grade`] grades as
-    /// [`OutcomeKind::Infrastructure`] for every check the case declared.
+    /// [`TrialEvidence::infrastructure`].
     async fn provision(&self, spec: &TrialSpec) -> TrialLocator;
 
-    /// Release a trial that was provisioned and will never run.
-    ///
-    /// An executor that holds something between [`Self::provision`] and
-    /// [`Self::execute`] — the embedded one holds a booted home — has to be
-    /// told when the loop abandons the trial, or that home runs until the
-    /// process ends. The default does nothing, which is right for an executor
-    /// that holds nothing.
+    /// Release a trial that was provisioned and will never run (the embedded
+    /// executor holds a booted home between [`Self::provision`] and
+    /// [`Self::execute`]); the default does nothing.
     async fn discard(&self, _trial_id: &str) {}
 
     /// Never returns `Err`. Observes `cancel`: on cancellation, interrupts the
@@ -398,20 +339,11 @@ pub trait TrialExecutor: Send + Sync {
     async fn execute(&self, spec: &TrialSpec, cancel: CancellationToken) -> TrialEvidence;
 
     /// Reads captures back out of a home that already ran, when it still
-    /// exists.
-    ///
-    /// Captures are per stage, so a caller supplies the captures of the stage
-    /// it is reading, taken from the case as the run loop's `stage_specs` does.
-    ///
-    /// Recollected evidence is capture evidence, not gradeable evidence. A
-    /// finished home records which requests a session held, not which stage
-    /// submitted them, so the stages this returns are named by their position
-    /// in the session (`"0"`, `"1"`, …) and match no case's `stage_id`:
-    /// passing them to [`crate::eval::runner::grade`] would grade every check
-    /// as a skipped prerequisite. A caller that wants a regrade has to map the
-    /// positions onto the case's stage ids first, which is M4's work.
-    /// `interrupted_on_deadline` is likewise unknowable afterwards, so a stage
-    /// that was interrupted on its deadline is not reported as one here.
+    /// exists. Recollected evidence is capture evidence, not gradeable
+    /// evidence: a finished home records which requests a session held, not
+    /// which stage submitted them, so the stages this returns are named by
+    /// their position in the session (`"0"`, `"1"`, …) and match no case's
+    /// `stage_id`, and `interrupted_on_deadline` is unknowable afterwards.
     async fn recollect(&self, at: &TrialLocator, captures: &[Capture]) -> Option<TrialEvidence>;
 }
 
@@ -440,10 +372,6 @@ mod tests {
         assert_ne!(a.evidence_digest, c.evidence_digest);
     }
 
-    /// Captured rows are arbitrary JSON read back out of a trial home, and
-    /// `serde_json` keeps object keys in insertion order here, so two homes
-    /// that produced the same row with its fields written in a different order
-    /// must still digest the same.
     #[test]
     fn the_evidence_digest_ignores_the_key_order_of_captured_rows() {
         let one = ScriptedExecutor::passed_evidence(

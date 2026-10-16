@@ -6,10 +6,6 @@ use gents::session::canonical_rows::{
 use gents_protocol::output::MessagePublication;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-/// A page can contain at most 80 headers.  Dependency reads are additionally
-/// capped so a malformed header cannot turn an interactive page render into an
-/// unbounded request scan.  Hitting a cap is an honest query failure, never a
-/// partial transcript or a fallback to a parent-session scan.
 const MAX_FORK_ORIGIN_DEPTH: usize = 32;
 const MAX_CANONICAL_DEPENDENCY_ROWS: usize = 2_048;
 
@@ -92,11 +88,6 @@ fn insert_exact_segment(
     Ok(())
 }
 
-/// Resolve only immutable facts named by the current page.  A fork origin is
-/// addressed by its physical document id and can therefore live in another
-/// session; we never substitute a latest/parent-session header.  Output
-/// records are similarly read only for a referenced closure's request/source
-/// scope, not for every segment in the selected session.
 async fn load_page_canonical_dependencies(
     access: TranscriptAccess<'_>,
     page_headers: &[TranscriptMessageRow],
@@ -148,11 +139,7 @@ async fn load_page_canonical_dependencies(
         let rows = parse_canonical_rows(&data, AGENT_MESSAGE_NAME, decode_transcript_message_row)?;
         queried_rows = queried_rows.saturating_add(rows.len());
         match rows.len() {
-            0 => {
-                // ACP-filtered absence is deliberately only absence.  The
-                // caller has not received evidence that this identity was
-                // denied, so reconstruction must remain Loading.
-            }
+            0 => {}
             1 => {
                 let origin = rows.into_iter().next().expect("one row checked");
                 if origin.doc_id != origin_id
@@ -239,10 +226,6 @@ async fn load_page_canonical_dependencies(
         }
     }
 
-    // The schema intentionally indexes request identity, rather than the JSON
-    // source value.  Read that bounded request slice, then retain exactly the
-    // source named by the closure.  The hard limit makes a malformed/high-volume
-    // request fail visibly instead of silently dropping a segment.
     let mut sources_by_request = BTreeMap::new();
     for closure in &closures {
         sources_by_request
@@ -382,17 +365,6 @@ async fn resolve_transcript_cursor_sequence(
         .ok_or_else(|| anyhow!("session transcript cursor is no longer present: {cursor}"))
 }
 
-/// The exact requester scope under which one session's transcript is read.
-///
-/// Transcript rows carry their session's requester scope, and a desktop
-/// reading an enrolled node defaults to its own requester scope. A local
-/// child session the node spawns for itself is admitted as a `LocalChild`,
-/// whose requester is the node's own DID, so under the desktop's scope its
-/// session reads as empty. Only the node's operator (its operator GraphQL
-/// endpoint, which already carries full read authority over that runtime)
-/// reads such a session under the session's own scope. Every other session
-/// keeps the desktop's scope, so sessions requested by other requesters are
-/// never widened into view.
 pub fn session_transcript_requester_scope(
     session: Option<&AgentSession>,
     node_did: Option<&str>,
@@ -411,13 +383,6 @@ pub fn session_transcript_requester_scope(
     requester_scope.map(str::to_owned)
 }
 
-/// Why this client cannot read a session, or `None` when it can.
-///
-/// Transcript rows carry their session's requester, so a session is readable
-/// exactly when the scope [`session_transcript_requester_scope`] reads under
-/// is the session's own requester. Anything else reads as empty here and a
-/// hydration request for it is refused by the server's ownership check
-/// (`SessionHydration.canStart`), so it is presented instead of requested.
 pub fn session_unreadable_reason(
     session: &AgentSession,
     requester_scope: Option<&str>,
@@ -441,11 +406,6 @@ pub fn session_unreadable_reason(
     })
 }
 
-/// Query a bounded transcript window directly from DefraDB. The cursor is a
-/// bridge item key, but is resolved to the durable sequence space before the
-/// page query so inserts at the tip cannot shift an older page. Messages and
-/// tool groups are independently overscanned because one sequence may produce
-/// both timeline items; the bridge performs the final visible-item limit.
 pub async fn load_session_transcript_page(
     node: &EmbeddedNode,
     session_id: &str,
@@ -538,9 +498,9 @@ async fn load_session_transcript_page_with_access(
 }}"#
     );
     let started = std::time::Instant::now();
-    // Messages and tool calls must come from one DefraDB query evaluation. A
-    // pair of sequential reads can observe a new tool group without the
-    // message window that owns it when the live tip advances between reads.
+    // Messages and tool calls must come from one DefraDB query evaluation: a
+    // pair of sequential reads can observe a tool group without the message
+    // window that owns it.
     let transcript_data = access
         .execute(&transcript_query, "session transcript page")
         .await?;
@@ -573,9 +533,6 @@ async fn load_session_transcript_page_with_access(
             "session transcript contains legacy tool calls without a message sequence; bounded pagination cannot represent that schema state losslessly"
         );
     }
-    // The message lookahead boundary is known only after parsing the atomic
-    // response. DESC ordering proves the relevant tool window is complete if
-    // the query either exhausted all tools or crossed that lower boundary.
     let crossed_message_boundary = deferred_message_sequence.is_some_and(|boundary| {
         queried_tool_calls
             .last()
@@ -600,9 +557,6 @@ async fn load_session_transcript_page_with_access(
             .and_then(|row| row.message_sequence)
             .expect("null tool sequences rejected above");
         tool_calls.retain(|row| row.message_sequence != Some(deferred_sequence));
-        // The overscan row proves every lower sequence is outside the complete
-        // tool window too. Defer their messages with the boundary group so the
-        // bridge never renders a message whose tools were truncated.
         messages.retain(|row| i64::from(row.message.sequence) > deferred_sequence);
         if tool_calls.is_empty() {
             bail!(
@@ -649,12 +603,6 @@ async fn load_session_transcript_page_with_access(
     })
 }
 
-/// Load the durable rows needed to calculate the session context meter.
-///
-/// Unlike an observer snapshot, this store is intentionally short-lived. It
-/// is read directly from DefraDB for the selected session, consumed while the
-/// bridge builds one tip projection, and then dropped. Transcript content must
-/// never be merged into the process-wide observed store.
 pub async fn load_session_context_store(
     node: &EmbeddedNode,
     session_id: &str,
@@ -742,10 +690,6 @@ async fn load_session_context_store_with_access(
     }))
 }
 
-/// Load an exact transcript only for explicit diagnostic evidence.
-///
-/// This is intentionally separate from the interactive projection: it is
-/// unbounded, may be expensive, and must never feed React or the observer.
 pub async fn load_session_diagnostics_store(
     node: &EmbeddedNode,
     session_id: &str,

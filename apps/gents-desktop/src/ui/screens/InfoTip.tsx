@@ -1,5 +1,3 @@
-/* More about a field, behind an icon beside its label: the page shows the
-   field, and what it means is a hover or a keyboard focus away. */
 import type { ReactNode } from "react";
 import { Info } from "lucide-react";
 import {
@@ -25,7 +23,6 @@ export function InfoTip({ about, children }: { about: string; children: ReactNod
           <Info className="size-3.5" />
         </TooltipTrigger>
         <TooltipContent className="max-w-xs text-xs leading-relaxed">
-          {/* one block: the tooltip lays its children out in a row */}
           <span className="block">{children}</span>
         </TooltipContent>
       </Tooltip>

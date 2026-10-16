@@ -12,7 +12,6 @@ use tokio::time::Instant;
 
 use crate::contract::PLUGIN_APPROVALS_CHANGED_EVENT;
 
-/// The approval owner's listener freshness window is 15 seconds.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 pub(crate) struct PromptSubscriptions {
@@ -138,7 +137,7 @@ impl QueueWatch {
                 let _ = changes.try_send(());
             }
         })?;
-        // A watch on the parent survives removal or atomic replacement of the queue.
+        // Keep watching the parent across queue removal or atomic replacement.
         watcher.watch(&parent, RecursiveMode::NonRecursive)?;
         watcher.watch(&queue, RecursiveMode::Recursive)?;
         Ok(Self { watcher, queue })
@@ -152,8 +151,6 @@ impl QueueWatch {
     }
 }
 
-/// Subscription removal waits only for an in-flight freshness write, never a
-/// queue scan or native watch attachment.
 fn renew_listener(home: &Path, subscriptions: &watch::Receiver<bool>) -> Result<bool> {
     let active = subscriptions.borrow();
     if !*active {

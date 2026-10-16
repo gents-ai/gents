@@ -28,16 +28,6 @@ async fn persist_request(node: &EmbeddedNode, create: &AgentRequestCreate) -> Ag
     serde_json::from_value(data["AgentRequest"][0].clone()).unwrap()
 }
 
-/// Claim a signed request through the production claim path and begin its
-/// owned execution so a canonical provider attempt can publish under it.
-/// Claim deduplication orders same-session requests by (created_at,
-/// request_id); every earlier same-session request must already be terminal,
-/// so the caller passes the still-claimed previous lifecycle plus the
-/// assistant header doc ID its publication produced for terminalization
-/// before the next claim. A zero-write predecessor published nothing, so it
-/// terminalizes Failed with `TerminalOutput::NoMessage` — the only selection
-/// valid without an owned assistant header, and one the finalize policy
-/// admits directly from the claimed state.
 async fn claimed(
     node: &Arc<EmbeddedNode>,
     request: &AgentRequestRow,
@@ -79,9 +69,6 @@ async fn begin_writer(
     writer
 }
 
-/// Publish one canonical provider turn carrying the actual accepted tool call
-/// arguments. ONE close for all streams of the source (the native encoder
-/// emits exactly one stream, and the single close is terminal-only).
 async fn publish_accepted_turn(
     writer: &DefraStreamWriter,
     lifecycle: &mut RequestLifecycle,
@@ -127,8 +114,6 @@ async fn publish_accepted_turn(
     (accepted, published.message_doc_id)
 }
 
-/// Drive the modeled completion flag through the production terminal owner.
-/// Failed writes retain their output but must not satisfy the obligation.
 async fn terminalize_accepted_tool(
     node: &Arc<EmbeddedNode>,
     lifecycle: &mut RequestLifecycle,
@@ -163,10 +148,6 @@ async fn terminalize_accepted_tool(
     tool
 }
 
-/// A running observational wait is deadline-owned only when a Failed request
-/// is terminalized at or after its valid-until boundary. Interruption and an
-/// ordinary pre-deadline failure retain the running invocation as uncertain;
-/// neither may manufacture a deadline timeout for the accepted call.
 #[tokio::test]
 async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
     for interrupted in [true, false] {
@@ -351,22 +332,11 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             .unwrap();
         let outsider_row = persist_request(&node, &outsider).await;
         let mut stored = std::collections::HashSet::new();
-        // Claim deduplication orders same-session requests by (created_at,
-        // request_id): root, child, outsider. The fixture must therefore
-        // process EVERY admitted same-session request in that actual queue
-        // order — including zero-write requests, which publish nothing yet
-        // still gate every later claim — not only the requests that carry
-        // writes. Each request runs under ONE claimed lifecycle, and its
-        // predecessor is terminalized before the next claim so no claim is
-        // ever queued behind an active same-session request. A zero-write
-        // request terminalizes with `TerminalOutput::NoMessage`; the last
-        // lifecycle stays active until the gate runs.
         let mut previous: Option<(RequestLifecycle, Option<String>)> = None;
         let mut writes_by_request: std::collections::BTreeMap<u64, Vec<&Value>> =
             Default::default();
         for write in case["writes"].as_array().unwrap() {
             let call = write["call_doc"].as_u64().unwrap();
-            // Reobserving one physical call cannot create another DB document.
             if !stored.insert(call) {
                 continue;
             }
@@ -385,8 +355,6 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             let writes = writes_by_request.remove(&request_doc).unwrap_or_default();
             let mut lifecycle = claimed(&node, row, previous.take()).await;
             if writes.is_empty() {
-                // Zero-write request: claimed and immediately terminalized;
-                // it produced no assistant header to select.
                 previous = Some((lifecycle, None));
                 continue;
             }
@@ -432,7 +400,6 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                 .expect("each fixture request publishes at least one owned assistant header");
             previous = Some((lifecycle, Some(doc_id)));
         }
-        // Every admitted same-session request was processed in queue order.
         assert!(writes_by_request.is_empty());
         let configured = vec![(
             "write_result".into(),
@@ -484,7 +451,6 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
     }
 }
 
-// Malformed durable counts must fail the actual output gate.
 #[tokio::test]
 async fn dynamic_count_failures_are_observed_not_defaulted() {
     for (arguments, reason) in [
@@ -492,9 +458,6 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
             json!({"other_field": 1}),
             "the write is missing the expected_count_field",
         ),
-        // `canonical_positive_count` rejects leading zeroes, zero, and values
-        // above the closed-set maximum: textual variants cannot smuggle a
-        // second representation of the same count past the consistency check.
         (
             json!({"expected_total": "03"}),
             "a leading-zero count is not canonical",
@@ -568,9 +531,6 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
     }
 }
 
-// Two same-tool completed writes declaring different expected counts inside
-// ONE canonical header must surface as a per-tool count disagreement, never
-// as name ambiguity.
 #[tokio::test]
 async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());

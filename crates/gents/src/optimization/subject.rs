@@ -306,12 +306,9 @@ pub(crate) mod tests {
     const OWNER: &str = "did:key:subject-owner";
     pub(crate) use crate::eval::runner::freeze::tests::FIXTURE_PROMPT;
 
-    /// The eval runner's own fixture pack: a manifest, a README, the canonical
-    /// config bundle and one agent sidecar holding [`FIXTURE_PROMPT`].
     pub(crate) fn write_fixture_pack(root: &Path) {
         crate::eval::runner::freeze::tests::write_fixture_pack(root, "Off");
     }
-
     pub(crate) fn context_pack(dir: &Path) -> Result<MaterializedPack> {
         materialize_pack(dir, OWNER, "monitor", &JobTarget::Context)
     }
@@ -407,9 +404,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// The fixture pack with one task of the monitor agent, its prompt
-    /// template in a sidecar or inline in `pack_config.json`, fired by an
-    /// event trigger whose source has no group.
     pub(crate) fn write_task_fixture_pack(root: &Path, inline: bool) {
         write_fixture_pack(root);
         let manifest_path = root.join("manifest.json");
@@ -482,7 +476,6 @@ pub(crate) mod tests {
         assert_eq!(baseline_text(&candidate).unwrap(), text);
         assert_eq!(candidate.target_id, "plan");
 
-        // The same pack as a context subject leaves the task alone.
         let context = context_pack(&baseline_dir).unwrap();
         assert_eq!(context.target_id, "monitor-context");
         assert_eq!(baseline_text(&context).unwrap(), FIXTURE_PROMPT);
@@ -510,9 +503,6 @@ pub(crate) mod tests {
         );
     }
 
-    /// A sidecar two fields read would change both documents in a trial,
-    /// while promotion writes only the target; a shared sidecar the target
-    /// does not read never changes.
     #[test]
     fn only_a_target_sidecar_referenced_from_two_fields_is_an_error() {
         let dirs = tempfile::tempdir().unwrap();
@@ -573,8 +563,7 @@ pub(crate) mod tests {
 
         assert_eq!(
             baseline.files.keys().collect::<Vec<_>>(),
-            candidate.files.keys().collect::<Vec<_>>(),
-            "a candidate declares exactly the baseline's assets"
+            candidate.files.keys().collect::<Vec<_>>()
         );
         let differing: Vec<&String> = baseline
             .files
@@ -587,10 +576,7 @@ pub(crate) mod tests {
             baseline_text(&candidate).unwrap(),
             "Watch the mailbox, and say why.\n"
         );
-        assert_ne!(
-            candidate.digest, baseline.digest,
-            "one changed byte is a new pack"
-        );
+        assert_ne!(candidate.digest, baseline.digest);
         assert!(candidate_dir.join("manifest.json").exists());
     }
 
@@ -605,18 +591,12 @@ pub(crate) mod tests {
             .unwrap();
         let two = materialize_candidate(&baseline, OWNER, "New text.\n", &dirs.path().join("two"))
             .unwrap();
-        assert_eq!(
-            one.digest, two.digest,
-            "the digest is over content, not location"
-        );
+        assert_eq!(one.digest, two.digest);
 
         let same =
             materialize_candidate(&baseline, OWNER, FIXTURE_PROMPT, &dirs.path().join("same"))
                 .unwrap();
-        assert_eq!(
-            same.digest, baseline.digest,
-            "rewriting the prompt with its own text is the baseline pack"
-        );
+        assert_eq!(same.digest, baseline.digest);
     }
 
     #[test]
@@ -629,8 +609,6 @@ pub(crate) mod tests {
         assert!(format!("{error:#}").contains("no-such-agent"), "{error:#}");
     }
 
-    /// The same pack with the prompt inline in `pack_config.json` and no
-    /// sidecar asset, for the structural gate's inline branch.
     pub(crate) fn write_inline_fixture_pack(root: &Path) {
         write_fixture_pack(root);
         std::fs::remove_file(root.join("agents/monitor/system_prompt.md")).unwrap();
@@ -663,8 +641,6 @@ pub(crate) mod tests {
         assert_ne!(candidate.digest, baseline.digest);
     }
 
-    /// An inline prompt is written into `pack_config.json`, which the loader
-    /// interpolates; the candidate must still evaluate exactly the text.
     #[test]
     fn an_inline_prompt_with_dollar_signs_loads_back_as_itself() {
         let text = "Home is ${HOME}, pay $$5, and ${GENTS_T21_SURELY_UNSET}.\n";

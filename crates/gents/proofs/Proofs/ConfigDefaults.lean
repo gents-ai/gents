@@ -4,7 +4,6 @@ import Proofs.Basic
 Defaults and minimum values remain with the capability that owns each setting. -/
 namespace ConfigDefaults
 
-/-- A minimum of one is a positive timer/capacity; zero permits an empty queue. -/
 def resolveNat (fallback minimum : Nat) : Option Int → Option Nat
   | none => some fallback
   | some value => if (minimum : Int) ≤ value then some value.toNat else none
@@ -20,7 +19,6 @@ theorem resolveNat_lower_bound (fallback minimum : Nat) (authored : Option Int)
     · simp only [Option.some.injEq] at h; omega
     · simp at h
 
-/-- Positive controls use exactly the same decoder as zero-permitting limits. -/
 theorem resolveNat_positive (fallback : Nat) (authored : Option Int) :
     resolveNat fallback 1 authored =
       match authored with
@@ -57,8 +55,6 @@ theorem absent_maximum_follows (fallback : Nat) (authored : Option Int) (pair : 
   cases h
   rfl
 
-/-- Only an explicit, coherent advertised ceiling constrains an authored override.
-The model's default is not itself a maximum. -/
 def advertisedCeiling (modelDefault maximum : Option Int) : Option Int :=
   maximum.filter fun cap => 0 < cap && modelDefault.all (fun value => 0 < value && value ≤ cap)
 

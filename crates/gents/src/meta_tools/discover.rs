@@ -209,8 +209,6 @@ mod tests {
         assert!(!output.contains("observability-mcp"));
     }
 
-    // --- #622: discover must stay bounded and honor the health gate ---------
-
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 

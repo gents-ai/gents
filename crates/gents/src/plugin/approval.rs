@@ -1,17 +1,3 @@
-//! The operator's per-call answer to "Allow this plugin to read this path?".
-//!
-//! A model's plugin call that names a path outside the working folder and the
-//! allowed folders waits here when its request came from an interactive chat,
-//! including a child another plugin composes: the gate belongs to the
-//! operator, not the composition.
-//! The question is one request file in the gents home, the answer one decision
-//! file; the desktop app and `gents chat` list the pending questions and write
-//! the decision. This is operator consent within the existing host trust
-//! boundary, not isolation from shell commands running as the same OS user.
-//! Sandboxed plugins cannot access this queue. "Always allow" is applied by [`decide`]
-//! on the answering side, adding the folder to the operator's list; the
-//! waiting call only learns allow or deny.
-
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -21,13 +7,11 @@ use serde::{Deserialize, Serialize};
 use super::allowed;
 use crate::pack::BindAccess;
 
-/// How long a call waits for an answer before it gives up and fails.
+// Consent gates plugin calls inside the existing OS-user trust boundary; it does not isolate same-user shell commands.
 pub const WAIT: Duration = Duration::from_secs(10 * 60);
 
-/// How long a listener's last mark still counts as someone listening.
 const LISTENER_FRESH: Duration = Duration::from_secs(15);
 
-/// How long a call waits for a first listener before it fails for want of one.
 const LISTENER_GRACE: Duration = if cfg!(test) {
     Duration::from_millis(150)
 } else {
@@ -39,8 +23,6 @@ tokio::task_local! {
     static COMPOSED: ();
 }
 
-/// Runs `future` as an interactive chat's call when `interactive`, so a
-/// plugin call inside it may ask the operator.
 pub async fn scope_interactive<F: std::future::Future>(interactive: bool, future: F) -> F::Output {
     if interactive {
         INTERACTIVE.scope((), future).await
@@ -49,9 +31,6 @@ pub async fn scope_interactive<F: std::future::Future>(interactive: bool, future
     }
 }
 
-/// Wraps `future` for a task about to be spawned: the spawned task starts with
-/// no task-locals, so the caller's interactivity is read now and re-applied
-/// there. Every spawn on a tool call's path goes through this.
 pub fn carry_interactive<F: std::future::Future>(
     future: F,
 ) -> impl std::future::Future<Output = F::Output> {
@@ -66,14 +45,10 @@ pub fn carry_interactive<F: std::future::Future>(
     }
 }
 
-/// Whether the running call came from an interactive chat.
 pub fn interactive() -> bool {
     INTERACTIVE.try_with(|_| ()).is_ok()
 }
 
-/// Runs `future` as a child call composed by another plugin. The marker is
-/// the composed axis of `consentRoute`: the generated cases run a real
-/// composed scope and prove composition does not change the operator's gate.
 pub(crate) async fn scope_composed<F: std::future::Future>(future: F) -> F::Output {
     COMPOSED.scope((), future).await
 }
@@ -88,9 +63,6 @@ pub(crate) enum Consent {
     Deny,
 }
 
-/// Lean `ToolPolicy.PluginCalls.consentRoute`. The composed axis is the
-/// owner's input; a child another plugin composes waits on the operator like
-/// a directly issued call.
 pub(crate) fn consent_route(interactive: bool, _composed: bool) -> Consent {
     if interactive {
         Consent::Ask
@@ -99,21 +71,16 @@ pub(crate) fn consent_route(interactive: bool, _composed: bool) -> Consent {
     }
 }
 
-/// How an uncovered path in the running call reaches the operator.
 pub(crate) fn consent(interactive: bool) -> Consent {
     consent_route(interactive, composed())
 }
 
-/// One pending question.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
     pub id: String,
     pub plugin: String,
-    /// The exact file or folder the call names.
     pub path: String,
-    /// The folder "always allow" remembers.
     pub folder: PathBuf,
-    /// Whether the path is a folder, so "always allow this file" is the folder.
     #[serde(default)]
     pub is_dir: bool,
     pub access: BindAccess,
@@ -141,7 +108,6 @@ impl Request {
         }
     }
 
-    /// The question as the operator reads it.
     pub fn prompt(&self) -> String {
         let verb = match self.access {
             BindAccess::Read => "read",
@@ -151,14 +117,10 @@ impl Request {
     }
 }
 
-/// The operator's answer to one question.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Answer {
-    /// This call only.
     Once,
-    /// This call, and the exact file from now on (the folder when the path is one).
     AlwaysPath,
-    /// This call, and the whole folder holding the path from now on.
     AlwaysFolder,
     Deny,
 }
@@ -172,8 +134,6 @@ fn listener_file(home: &Path) -> PathBuf {
     dir(home).join(".listening")
 }
 
-/// Preparing the queue does not advertise a listener. Native watchers mark
-/// listening only after their filesystem subscription succeeds.
 pub fn prepare_listener(home: &Path) -> Result<PathBuf> {
     let queue = dir(home);
     std::fs::create_dir_all(&queue).context("creating the approval queue")?;
@@ -190,7 +150,6 @@ pub fn prepare_listener(home: &Path) -> Result<PathBuf> {
     Ok(queue)
 }
 
-/// Marks `home` as having someone who answers questions, by touching a file.
 pub fn mark_listening(home: &Path) -> Result<()> {
     let path = listener_file(home);
     prepare_listener(home)?;
@@ -241,7 +200,6 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Removes a question's files whenever the waiting call ends, however it ends.
 struct Cleanup<'a> {
     home: &'a Path,
     id: &'a str,
@@ -254,8 +212,6 @@ impl Drop for Cleanup<'_> {
     }
 }
 
-/// Files `request` and waits up to `wait` for the operator; true when they
-/// allowed it.
 pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool> {
     write_atomic(
         &request_file(home, &request.id),
@@ -292,16 +248,11 @@ pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool>
     }
 }
 
-/// The unanswered questions, oldest first. A question older than [`WAIT`]
-/// belongs to a call that already gave up and is skipped. Listing marks the
-/// caller as listening for [`ask`].
 pub fn pending(home: &Path) -> Result<Vec<Request>> {
     mark_listening(home)?;
     pending_requests(home)
 }
 
-/// Native event consumers advertise listener freshness only while their watch
-/// and answer surface are both available; reading the queue does not renew it.
 pub fn pending_requests(home: &Path) -> Result<Vec<Request>> {
     let entries = match std::fs::read_dir(dir(home)) {
         Ok(entries) => entries,
@@ -315,7 +266,6 @@ pub fn pending_requests(home: &Path) -> Result<Vec<Request>> {
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
-        // A file removed or half-written between listing and reading is not pending.
         let Ok(bytes) = std::fs::read(&path) else {
             continue;
         };
@@ -330,9 +280,6 @@ pub fn pending_requests(home: &Path) -> Result<Vec<Request>> {
     Ok(requests)
 }
 
-/// Answers question `id`. An allow with [`Answer::AlwaysPath`] or
-/// [`Answer::AlwaysFolder`] also adds that file or folder to the operator's
-/// list, keeping any wider access it already has.
 pub fn decide(home: &Path, id: &str, answer: Answer) -> Result<()> {
     anyhow::ensure!(
         id.chars().all(|c| c.is_ascii_alphanumeric()),

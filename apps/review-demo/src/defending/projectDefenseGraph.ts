@@ -217,7 +217,9 @@ export function projectDefenseGraph(
       left.assignment_id.localeCompare(right.assignment_id),
     );
   const patches = snapshot.patches.filter((row) => row.run_id === runId);
-  const validations = snapshot.validations.filter((row) => row.run_id === runId);
+  const validations = snapshot.validations.filter(
+    (row) => row.run_id === runId,
+  );
   const reviews = snapshot.reviews.filter((row) => row.run_id === runId);
   const securityReviews = snapshot.securityReviews.filter(
     (row) => row.run_id === runId,
@@ -228,7 +230,10 @@ export function projectDefenseGraph(
   const planRequest = requestFor(requests, "defend-plan", threat?._docID);
   const triageRequest = requestFor(requests, "defend-triage");
   const clusterRequest = requestFor(requests, "defend-cluster", triage?._docID);
-  const remediationPlanRequest = requestFor(requests, "defend-remediation-plan");
+  const remediationPlanRequest = requestFor(
+    requests,
+    "defend-remediation-plan",
+  );
   const verificationPlanRequest = requestFor(
     requests,
     "defend-verification-plan",
@@ -259,9 +264,7 @@ export function projectDefenseGraph(
       requestId: threatRequest?.request_id,
       sessionId: threatRequest?.session_id ?? undefined,
       sourceDocId: threat?._docID,
-      badges: threat
-        ? [threat.provenance_status ?? "written"]
-        : [],
+      badges: threat ? [threat.provenance_status ?? "written"] : [],
     }),
     node({
       id: `plan:${runId}`,
@@ -324,7 +327,8 @@ export function projectDefenseGraph(
             ...(findingCount > 0
               ? [`${findingCount} candidate${findingCount === 1 ? "" : "s"}`]
               : []),
-            ...(scan?.finding_count && scan.finding_count !== String(findingCount)
+            ...(scan?.finding_count &&
+            scan.finding_count !== String(findingCount)
               ? [`declared ${scan.finding_count}`]
               : []),
           ],
@@ -380,8 +384,10 @@ export function projectDefenseGraph(
     !scansClosed;
   const graphNativeVerification = Boolean(
     verificationPlanRequest ||
-      verificationAssignments.length > 0 ||
-      requests.some((request) => request.caused_by_trigger_id === "defend-verifier"),
+    verificationAssignments.length > 0 ||
+    requests.some(
+      (request) => request.caused_by_trigger_id === "defend-verifier",
+    ),
   );
   const sortedCandidates = candidates
     .slice()
@@ -422,24 +428,32 @@ export function projectDefenseGraph(
         emptyAssignment._docID,
       )
     : undefined;
-  const isolatedVerifierCount = candidateWork.filter(
-    ({ verifierRequest }) => verifierRequest,
-  ).length + (emptyVerifierRequest ? 1 : 0);
-  const runningVerifierCount = candidateWork.filter(
-    ({ completion, verifierRequest, verdict }) =>
-      verifierActivity(verifierRequest, Boolean(verdict), completion?.status) ===
-      "running",
-  ).length +
+  const isolatedVerifierCount =
+    candidateWork.filter(({ verifierRequest }) => verifierRequest).length +
+    (emptyVerifierRequest ? 1 : 0);
+  const runningVerifierCount =
+    candidateWork.filter(
+      ({ completion, verifierRequest, verdict }) =>
+        verifierActivity(
+          verifierRequest,
+          Boolean(verdict),
+          completion?.status,
+        ) === "running",
+    ).length +
     (emptyVerifierRequest &&
     verifierActivity(emptyVerifierRequest, false, emptyCompletion?.status) ===
       "running"
       ? 1
       : 0);
-  const queuedVerifierCount = candidateWork.filter(
-    ({ completion, verifierRequest, verdict }) =>
-      verifierActivity(verifierRequest, Boolean(verdict), completion?.status) ===
-      "queued",
-  ).length +
+  const queuedVerifierCount =
+    candidateWork.filter(
+      ({ completion, verifierRequest, verdict }) =>
+        verifierActivity(
+          verifierRequest,
+          Boolean(verdict),
+          completion?.status,
+        ) === "queued",
+    ).length +
     (emptyAssignment &&
     verifierActivity(emptyVerifierRequest, false, emptyCompletion?.status) ===
       "queued"
@@ -447,16 +461,16 @@ export function projectDefenseGraph(
       : 0);
   const isolatedVerifierTopology = Boolean(
     graphNativeVerification ||
-      triageRequest?.content?.includes("candidate-verifier") ||
-      triageRequest?.content?.includes("agent_new"),
+    triageRequest?.content?.includes("candidate-verifier") ||
+    triageRequest?.content?.includes("agent_new"),
   );
   const legacySerialTriage = Boolean(
     scansClosed &&
-      candidates.length > 0 &&
-      triageRequest &&
-      !isolatedVerifierTopology &&
-      isolatedVerifierCount === 0 &&
-      !triage,
+    candidates.length > 0 &&
+    triageRequest &&
+    !isolatedVerifierTopology &&
+    isolatedVerifierCount === 0 &&
+    !triage,
   );
   if (graphNativeVerification) {
     nodes.push(
@@ -603,8 +617,7 @@ export function projectDefenseGraph(
     for (const [
       index,
       { assignment, candidate, completion, verdict, verifierRequest },
-    ] of
-      candidateWork.entries()) {
+    ] of candidateWork.entries()) {
       const activity = legacySerialTriage
         ? "activity untracked"
         : verifierActivity(
@@ -622,9 +635,7 @@ export function projectDefenseGraph(
           runId,
           sourceDocId: candidate._docID,
           badges: [
-            ...(candidate.claimed_severity
-              ? [candidate.claimed_severity]
-              : []),
+            ...(candidate.claimed_severity ? [candidate.claimed_severity] : []),
             ...(candidate.area_id ? [candidate.area_id] : []),
             activity,
           ],
@@ -754,7 +765,9 @@ export function projectDefenseGraph(
         sourceDocId: completion._docID,
         badges: [
           "orphan/duplicate ledger row",
-          ...(completion.status ? [completion.status.replaceAll("_", " ")] : []),
+          ...(completion.status
+            ? [completion.status.replaceAll("_", " ")]
+            : []),
         ],
       }),
     );
@@ -783,17 +796,17 @@ export function projectDefenseGraph(
 
   const contractAwarePipeline = Boolean(
     snapshot.contractPipelineAvailable ||
-      clusters.length > 0 ||
-      contractReviews.length > 0 ||
-      clusterRequest ||
-      requests.some((request) =>
-        [
-          "defend-contract-review",
-          "defend-remediation-plan",
-          "defend-patch-validation",
-          "defend-patch-security-review",
-        ].includes(request.caused_by_trigger_id ?? ""),
-      ),
+    clusters.length > 0 ||
+    contractReviews.length > 0 ||
+    clusterRequest ||
+    requests.some((request) =>
+      [
+        "defend-contract-review",
+        "defend-remediation-plan",
+        "defend-patch-validation",
+        "defend-patch-security-review",
+      ].includes(request.caused_by_trigger_id ?? ""),
+    ),
   );
   if (contractAwarePipeline) {
     nodes.push(
@@ -1004,11 +1017,7 @@ export function projectDefenseGraph(
         ? requestFor(requests, "defend-patch-validation", patch._docID)
         : undefined;
       const securityReviewRequest = review?._docID
-        ? requestFor(
-            requests,
-            "defend-patch-security-review",
-            review._docID,
-          )
+        ? requestFor(requests, "defend-patch-security-review", review._docID)
         : undefined;
       nodes.push(
         node({
@@ -1145,7 +1154,9 @@ export function projectDefenseGraph(
     (row) => row.patch_id,
     assignments.map((row) => row.assignment_id),
   )) {
-    const sourcePatch = patches.find((row) => row.patch_id === validation.patch_id);
+    const sourcePatch = patches.find(
+      (row) => row.patch_id === validation.patch_id,
+    );
     const validationRequest = requestFor(
       requests,
       "defend-patch-validation",
@@ -1245,7 +1256,9 @@ export function projectDefenseGraph(
     (row) => row.patch_id,
     assignments.map((row) => row.assignment_id),
   )) {
-    const sourceReview = reviews.find((row) => row.patch_id === review.patch_id);
+    const sourceReview = reviews.find(
+      (row) => row.patch_id === review.patch_id,
+    );
     const securityRequest = requestFor(
       requests,
       "defend-patch-security-review",
@@ -1320,9 +1333,7 @@ function memberCount(value: string): number {
     if (Array.isArray(parsed)) {
       return parsed.length;
     }
-  } catch {
-    // Newline/comma-delimited ids are also accepted by the pack schema.
-  }
+  } catch {}
   return trimmed.split(/[\n,]+/).filter((item) => item.trim()).length;
 }
 

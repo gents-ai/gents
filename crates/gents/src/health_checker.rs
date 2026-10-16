@@ -1,5 +1,3 @@
-//! Background health checker for registered data services.
-
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -118,12 +116,6 @@ impl ServiceHealthEntry {
     }
 }
 
-/// `Reconnecting` is reachable only via `ProbeEvent::BackoffExpiry` in the
-/// Lean model; the production cycle does not emit that event today (the
-/// loop skips while backoff is active, then probes directly), so rows with
-/// `status: "reconnecting"` will only appear once the cycle is extended to
-/// bridge the gap. The persisted vocabulary covers it so future production
-/// emission needs no schema change.
 type HealthStateInternal = gents_protocol::tool_service_health::ToolServiceHealthState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,13 +157,6 @@ enum ProbeEvent {
     RegistryAbsent,
 }
 
-/// Full MCP service health snapshot exposed to operators (CLI table, desktop
-/// panel, and the persisted `ToolServiceHealthState` DefraDB row).
-///
-/// Carries the K-model fields (`failure_count`, `k_max`, `backoff_until`)
-/// that the public `HealthStatus` projection collapses. `status` is the
-/// internal `HealthStateInternal` projected to its DefraDB string
-/// vocabulary (`healthy` / `stale` / `evicted` / `reconnecting`).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct MCPServiceHealthSnapshot {
     pub service_id: String,
@@ -220,10 +205,6 @@ impl ServiceHealthMap {
             .collect()
     }
 
-    /// Full per-service snapshot including the K-model fields. The
-    /// `snapshot()` projection drops `failure_count` / `backoff_until` /
-    /// the internal `HealthState`; this one preserves them for operator
-    /// surfaces (the desktop panel, the persisted DefraDB row).
     pub async fn snapshot_full(&self, k_max: u32) -> Vec<MCPServiceHealthSnapshot> {
         let k_max = k_max.max(1);
         self.inner
@@ -389,8 +370,6 @@ async fn run_health_check(
             mcp_port: service.mcp_port.and_then(|port| u16::try_from(port).ok()),
             mcp_path: service.mcp_path.unwrap_or_default(),
             send_node_did: service.send_node_did,
-            // Configuration revisions are not service heartbeats. This probe
-            // supplies a fresh observation through the existing health owner.
             updated_at: None,
         })
         .collect();
@@ -438,15 +417,6 @@ pub async fn run_health_check_cycle(
         let previous_endpoint = previous.as_ref().and_then(|entry| entry.endpoint.clone());
         let previous_tool_count = previous.as_ref().and_then(|entry| entry.tool_count);
 
-        // The Lean model (`Proofs/MCPHealth/Transition.lean`) reaches the
-        // `Reconnecting` state via `ProbeEvent::BackoffExpiry` between an
-        // `Evicted` cycle and the next probe. The production loop does not
-        // emit that event today — it skips while backoff is active, then
-        // probes directly into `Healthy` / `Degraded` / back into `Evicted`.
-        // So persisted rows never carry `status: "reconnecting"` until the
-        // cycle is extended to bridge that gap (a future task; tracked
-        // alongside the K≥2 design pass in #303). The persisted vocabulary
-        // and the desktop panel already cover the state for that point.
         if backoff_is_active(&previous_model, now, options) {
             continue;
         }
@@ -1055,8 +1025,6 @@ mod tests {
             );
         }
 
-        // A failed publish must discard the confirmed snapshot, even when its
-        // native outcome could be ambiguous. The next attempt repairs all fields.
         let unavailable = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         let failed_context = HealthPersistenceContext {
             node: &unavailable,
@@ -1410,7 +1378,6 @@ mod tests {
                 .clone()
         }
         let mut original_ids = Vec::new();
-        // A third cycle with fresh in-memory health must update the existing row.
         for (index, did) in [did_a, did_b, did_a].into_iter().enumerate() {
             run_health_check(
                 &node,
@@ -1468,7 +1435,6 @@ mod tests {
         }
         assert_eq!(probes.lock().unwrap().len(), 3);
 
-        // An actual registry change makes only this node's row stale.
         let response = node
             .execute(
                 r#"mutation {

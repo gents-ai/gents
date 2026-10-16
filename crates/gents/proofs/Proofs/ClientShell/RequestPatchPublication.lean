@@ -1,7 +1,3 @@
-/-! A selected-request patch is reusable only after its publication was
-accepted, and only while both its read fence and its physical request rows
-remain current. A nonreusable cache entry does not veto an authoritative fresh
-read: that candidate is admitted by its captured publication fence. -/
 namespace ClientShell.RequestPatchPublication
 
 inductive CacheState where
@@ -15,9 +11,6 @@ def publish (state : CacheState) (accepted : Bool) : CacheState :=
 def reusable (state : CacheState) (sameSignature fenceAccepted rowsCurrent : Bool) : Bool :=
   state == .memoized && sameSignature && fenceAccepted && rowsCurrent
 
-/-- Once the authoritative read is complete, cache contents no longer decide
-whether its candidate can publish. Only the final store fence and presence of
-the requested patch matter. -/
 inductive FreshReadAction where
   | mergeFresh
   | rejectCandidate

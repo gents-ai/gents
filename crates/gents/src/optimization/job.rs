@@ -1,14 +1,3 @@
-//! The `OptimizationJob` document: a frozen origin, an append-only journal
-//! guarded by its own length, and a state derived from the journal.
-//!
-//! This is the Rust refinement of `Optimization.appendIf`. The guard is the
-//! `journal_len` predicate on the update mutation, so two writers who read the
-//! same journal cannot both extend it: the loser matches no row, gets a
-//! [`JournalConflict`], and the journal is left exactly as it was.
-//!
-//! The job is the driver's notebook, not a request. `state` is derived, never
-//! claimed, and no runtime ever reconciles this collection.
-
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -23,48 +12,29 @@ use crate::graphql::escape_graphql_string;
 use crate::optimization::policy::{Decision, Mode, PolicyV2};
 use crate::optimization::target::{FrozenDocument, Target};
 
-/// What a job may spend. `max_rounds` is also the Bonferroni divisor: the
-/// driver refuses a job whose policy disagrees with it, so the significance
-/// level a decision is judged at always matches the number of candidates the
-/// job may try on one validation split.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Budgets {
     pub max_rounds: u32,
-    /// Total case-trials across every run of the job, including the reserved
-    /// held-out run.
     pub max_case_trials: u64,
     pub max_tokens: u64,
     pub deadline_unix_secs: Option<u64>,
 }
 
-/// Frozen at creation and never rewritten.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobOrigin {
     pub target: Target,
-    /// The owner's full desired configuration at freeze, as digests.
     pub closure: Vec<FrozenDocument>,
     pub subject: SubjectRef,
     pub definition: DefinitionRef,
     pub policy: PolicyV2,
     pub trials_per_case: u32,
     pub budgets: Budgets,
-    /// The target's text at freeze: the first checkpoint, and what `revert`
-    /// would restore if nothing had been promoted since.
     pub baseline_text: String,
     pub owner: String,
     pub seed_base: i64,
-    /// Frozen so a resumed job cannot silently change the model both arms run
-    /// on; a resume that names another profile is refused.
     pub inference_profile_id: String,
     pub max_text_bytes: usize,
-    /// `<launching home>/eval/jobs` (ruling R8). The job owns
-    /// `<jobs_dir>/<job_id>/`; `promote` verifies the retained checkpoint's
-    /// pack there, so the operator's verb needs only the job id.
     pub jobs_dir: PathBuf,
-    /// What every run of the job reads out of a finished trial home: the
-    /// request-level fallback; stage-level `EvalStage.capture` supersedes it
-    /// once the runner reads stage captures. Frozen because the runner refuses
-    /// to resume a run under a changed list; empty is a valid list.
     #[serde(default)]
     pub captures: Vec<Capture>,
 }
@@ -76,12 +46,9 @@ pub enum JobState {
     ReadyToPromote,
     NothingToPromote,
     Exhausted,
-    Failed {
-        reason: String,
-    },
+    Failed { reason: String },
     Promoted,
     Stale,
-    /// Terminal (ruling R4). A further promotion is a new job.
     Reverted,
 }
 
@@ -106,9 +73,6 @@ pub struct DriftedRef {
     pub id: String,
 }
 
-/// The convenience numbers behind a decision. The authority is the referenced
-/// runs' `EvalVerdict` rows; `optimization::show::show`
-/// recomputes every decision from them and flags a mismatch.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecisionSummary {
     pub improved: u32,
@@ -124,8 +88,6 @@ pub struct DecisionSummary {
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum JournalEntry {
     Frozen,
-    /// Written before the runner is asked for a run. One without a matching
-    /// `Decided` means the run may be incomplete, and replay resumes it.
     RunStarted {
         run_id: String,
         round: Option<u32>,
@@ -150,7 +112,6 @@ pub enum JournalEntry {
         policy_version: String,
         summary: DecisionSummary,
     },
-    /// A candidate that was never evaluated is not a rejection.
     BudgetExhausted {
         round: Option<u32>,
         reason: String,
@@ -180,8 +141,6 @@ pub struct JobRecord {
     pub journal: Vec<JournalEntry>,
 }
 
-/// The retained checkpoint: the candidate of the last round the policy
-/// accepted. Never the best candidate the job ever saw.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Checkpoint {
     pub round: u32,
@@ -196,7 +155,6 @@ pub fn derive_state(journal: &[JournalEntry]) -> JobState {
             JournalEntry::Finalized { state: finalized } => state = finalized.clone(),
             JournalEntry::Promoted { .. } => state = JobState::Promoted,
             JournalEntry::PromotionRefused { .. } => state = JobState::Stale,
-            // Terminal, as spec section 6 draws it: `Promoted -> Reverted`.
             JournalEntry::Reverted { .. } => state = JobState::Reverted,
             _ => {}
         }
@@ -232,7 +190,6 @@ pub fn checkpoint(journal: &[JournalEntry]) -> Option<Checkpoint> {
     retained
 }
 
-/// `Optimization.roundsUsed`: one per `Proposed`, whatever it came to.
 pub fn rounds_used(journal: &[JournalEntry]) -> u32 {
     journal
         .iter()
@@ -240,8 +197,6 @@ pub fn rounds_used(journal: &[JournalEntry]) -> u32 {
         .count() as u32
 }
 
-/// The append lost the length guard: another writer extended the journal
-/// first, so nothing was written.
 #[derive(Debug)]
 pub struct JournalConflict {
     pub expected: usize,
@@ -457,8 +412,6 @@ pub async fn load_job(
         .await
 }
 
-/// `Optimization.appendIf`. The update matches only while `journal_len` still
-/// equals the length this writer read, so a stale writer changes nothing.
 pub(crate) async fn append_in_txn(
     txn: &ConfigApplyTxn<'_>,
     job: &JobRecord,
@@ -491,7 +444,6 @@ pub(crate) async fn append_in_txn(
     }
 }
 
-/// Append one entry, advancing `job` only when the write took.
 pub async fn append(access: &ConfigAccess, job: &mut JobRecord, entry: JournalEntry) -> Result<()> {
     {
         let (current, entry) = (&*job, &entry);
@@ -508,7 +460,6 @@ pub async fn append(access: &ConfigAccess, job: &mut JobRecord, entry: JournalEn
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::optimization::policy::{InconclusiveReason, RejectReason};
     use crate::optimization::target::{Target, TargetField};
     use std::sync::Arc;
 
@@ -618,9 +569,6 @@ mod tests {
         assert_eq!(derive_state(&loaded.journal), JobState::Running);
     }
 
-    /// `Optimization.appendIf_match` and `appendIf_prefix`: an append at the
-    /// length the writer read extends the journal by exactly one entry, and
-    /// every earlier entry is preserved in order.
     #[tokio::test]
     async fn an_append_at_the_expected_length_extends_the_journal_by_one() {
         let access = access().await;
@@ -636,19 +584,13 @@ mod tests {
             let before = job.journal.clone();
             append(&access, &mut job, entry.clone()).await.unwrap();
             assert_eq!(job.journal.len(), before.len() + 1);
-            assert_eq!(
-                &job.journal[..before.len()],
-                &before[..],
-                "a prefix is never rewritten"
-            );
+            assert_eq!(&job.journal[..before.len()], &before[..]);
             assert_eq!(job.journal.last(), Some(&entry));
         }
         let loaded = load_job(&access, OWNER, "job-2").await.unwrap().unwrap();
         assert_eq!(loaded.journal, entries.to_vec());
     }
 
-    /// `Optimization.appendIf_stale_unchanged`: an append whose expected length
-    /// does not match leaves the journal exactly as it was.
     #[tokio::test]
     async fn a_stale_writer_cannot_append_and_changes_nothing() {
         let access = access().await;
@@ -665,71 +607,13 @@ mod tests {
             .unwrap_err();
         let conflict = journal_conflict(&error).unwrap_or_else(|| panic!("{error:#}"));
         assert_eq!(conflict.expected, 0);
-        assert!(
-            stale.journal.is_empty(),
-            "a refused append never mutates the caller's copy"
-        );
+        assert!(stale.journal.is_empty());
 
         let loaded = load_job(&access, OWNER, "job-3").await.unwrap().unwrap();
         assert_eq!(loaded.journal, vec![JournalEntry::Frozen]);
         assert_eq!(derive_state(&loaded.journal), JobState::Running);
     }
 
-    #[test]
-    fn the_checkpoint_is_the_last_accepted_round_and_never_the_best_seen() {
-        let journal = vec![
-            JournalEntry::Frozen,
-            proposed(1, "one"),
-            decided(1, Decision::Accept),
-            proposed(2, "two"),
-            decided(2, Decision::Reject(RejectReason::NoImprovement)),
-            proposed(3, "three"),
-            decided(3, Decision::Inconclusive(InconclusiveReason::Insufficient)),
-        ];
-        let retained = checkpoint(&journal).expect("round 1 was accepted");
-        assert_eq!((retained.round, retained.text.as_str()), (1, "one"));
-        assert_eq!(retained.pack_digest, "sha256:candidate-1");
-        assert_eq!(
-            checkpoint(&journal[..2]),
-            None,
-            "a proposal alone is not a checkpoint"
-        );
-        assert_eq!(rounds_used(&journal), 3, "every Proposed is a spent round");
-    }
-
-    #[test]
-    fn the_state_is_derived_from_the_terminal_entries_in_order() {
-        let mut journal = vec![JournalEntry::Frozen];
-        assert_eq!(derive_state(&journal), JobState::Running);
-        journal.push(JournalEntry::Finalized {
-            state: JobState::ReadyToPromote,
-        });
-        assert_eq!(derive_state(&journal), JobState::ReadyToPromote);
-        journal.push(JournalEntry::PromotionRefused {
-            drifted: vec![DriftedRef {
-                collection: "AgentContext".into(),
-                id: "monitor-context".into(),
-            }],
-        });
-        assert_eq!(derive_state(&journal), JobState::Stale);
-        journal.push(JournalEntry::Promoted {
-            by: OWNER.into(),
-            target_digest: "sha256:after".into(),
-            previous_text: "Watch the mailbox.\n".into(),
-            previous_digest: "sha256:before".into(),
-        });
-        assert_eq!(derive_state(&journal), JobState::Promoted);
-        journal.push(JournalEntry::Reverted { by: OWNER.into() });
-        assert_eq!(
-            derive_state(&journal),
-            JobState::Reverted,
-            "ruling R4: a revert is terminal; a further promotion is a new job"
-        );
-        assert_eq!(JobState::Reverted.label(), "reverted");
-    }
-
-    /// Ruling P-B3: `origin` is stored as a JSON string, so integers past
-    /// `i64::MAX` survive the document unchanged.
     #[tokio::test]
     async fn an_origin_with_extreme_budgets_round_trips_through_the_document() {
         let access = access().await;

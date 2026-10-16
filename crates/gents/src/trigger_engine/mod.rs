@@ -1,5 +1,3 @@
-//! Trigger engine scaffold.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -21,8 +19,6 @@ pub mod subscription_source;
 #[cfg(test)]
 mod tests;
 
-// Per-document fires share the canonical owner/trigger gate; grouped fires
-// additionally select the complete typed group generation through its durable key.
 type TriggerLockKey = (String, String, Option<String>);
 type TriggerLock = Arc<Mutex<()>>;
 type TriggerLockMap = HashMap<TriggerLockKey, TriggerLock>;
@@ -65,8 +61,6 @@ pub struct FireIntent {
     pub group_vars: Option<serde_json::Value>,
     pub trigger_context: Option<String>,
     pub args_vars: Option<serde_json::Value>,
-    /// Stable identity of this logical source delivery. Goal-backed Tasks use
-    /// it with `task_id` to recover the same session/request after retries.
     pub durable_fire_key: String,
     pub pre_materialized_request_id: Option<String>,
     pub on_result: Box<dyn FnOnce(FireResult) + Send>,
@@ -131,10 +125,6 @@ pub(crate) fn fire_result_from_materialize(result: anyhow::Result<String>) -> Fi
 
 pub(crate) const SERIAL_BUSY: &str = "serial: prior fire still in-flight";
 
-/// Recorded when a fire's result never reaches the acknowledgment channel, so
-/// the park's own `on_result` writer cannot run. The eval runner reads this
-/// status and classes the slot as a harness fault instead of waiting out the
-/// stage deadline on no evidence.
 pub(crate) const UNACKNOWLEDGED_STATUS: &str = "unacknowledged";
 
 #[derive(Debug, Clone)]
@@ -153,12 +143,6 @@ pub enum FireResult {
     Errored {
         error: String,
     },
-    /// The intent cannot be admitted under the configuration snapshot it was
-    /// dispatched against: rendering or preparing it failed on the Task,
-    /// Trigger or source document alone, so repeating it under the same
-    /// snapshot repeats the refusal. Nothing was admitted; an event arrival
-    /// stays pending (`EventDelivery.Durable.unadmitted_prefix_match_cannot_advance`)
-    /// and its source retries it only after the configuration changes.
     Rejected {
         error: String,
     },
@@ -207,13 +191,6 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         Box::pin(async { Ok(None) })
     }
 
-    /// Check whether any active runtime `AgentRequest` of `node_did` is
-    /// currently bound to this trigger. Used by the concurrency gate to
-    /// decide whether a new fire should skip or supersede.
-    ///
-    /// The DID scope is load-bearing: on a replicated fleet the store also
-    /// holds OTHER agents' requests for the same human-chosen trigger id, and
-    /// those must never gate this agent's fires (#605).
     fn has_active_runtime_request_for_trigger(
         &self,
         node_did: &str,
@@ -244,13 +221,6 @@ pub(crate) trait MaterializerHandle: Send + Sync {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>;
 }
 
-/// Scaffolding for the trigger engine.
-///
-/// The engine owns a read handle onto the active runtime snapshot (to look up
-/// agents / concurrency / enabled gates at fire time) and a materializer
-/// handle (to create requests). Per-trigger mutexes serialize dispatches that
-/// share a trigger id so the concurrency gate and request materialization
-/// land atomically with respect to each other.
 pub(crate) struct TriggerEngine {
     #[allow(dead_code)]
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
@@ -295,10 +265,6 @@ impl TriggerEngine {
                 }
             });
         }
-        // Wait for all source drivers to terminate (either via cancel or
-        // their source returning `None`). Any panic in a driver task is
-        // logged — individual source failures must not bring down the
-        // entire engine.
         while let Some(joined) = join_set.join_next().await {
             if let Err(error) = joined {
                 if !error.is_cancelled() {
@@ -325,8 +291,6 @@ impl TriggerEngine {
         }
 
         let delivery_identity = if intent.trigger_kind == TriggerKind::Schedule {
-            // Probe every scheduled occurrence, even if its destination was
-            // removed after admission but before the cursor was persisted.
             let snapshot = self.snapshot_rx.borrow().clone();
             intent.trigger_id.as_ref().map(|trigger| {
                 gents_protocol::trigger_delivery::FireIdentity {
@@ -395,11 +359,6 @@ impl TriggerEngine {
             }
         }
 
-        // Recovery is keyed by the durable Task/fire identity, not by the
-        // Task's current declaration. The goal, request, and claim may have
-        // committed before the source checkpoint did; if an operator removes
-        // the declaration before restart, that exact fire must still recover
-        // instead of falling through to a second ordinary request.
         match self
             .materializer
             .recover_goal_task_fire(&intent.task, &intent.durable_fire_key)
@@ -876,9 +835,6 @@ impl TriggerEngine {
         }
 
         use crate::runtime_snapshot::ConcurrencyMode;
-        // Every request, including active work, is a group marker. Under the
-        // full group lock, an absent marker leaves no grouped request to gate
-        // or supersede. Per-document concurrency remains trigger-wide.
         match (intent.group_vars.is_some(), intent.concurrency) {
             (true, _) | (false, ConcurrencyMode::Parallel | ConcurrencyMode::QueuedSerial) => {}
             (false, ConcurrencyMode::Serial) => match self

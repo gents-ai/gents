@@ -3,13 +3,9 @@ import Mathlib.Data.Finset.Card
 
 /-!
 Local request-worker capacity, distinct from backend inference admission.
-
-A worker is held only by running work. No request parks a worker while it
-waits on another session: `agent_new`/`agent_message` never block their
-caller (`ToolCallContext.Transition.foreground` excludes them), and the started session's
-result arrives as a completion notification that wakes the caller later. The
-request/lease/tool owners remain authoritative; capacity operations cannot
-mutate their worlds.
+A worker is held only by running work: `agent_new`/`agent_message` never block
+their caller, and capacity operations cannot mutate the request/lease/tool
+owners' worlds.
 -/
 namespace CanonicalOutput.Execution.WorkerCapacity
 
@@ -34,8 +30,6 @@ def acquire (s : State) (ticket : Ticket) : Option State :=
     some { s with active := insert ticket s.active }
   else none
 
-/-- Cleanup does not need a live lease: an expired request must still be able
-to release its local resources, without authorizing a durable write. -/
 def release (s : State) (ticket : Ticket) : State :=
   { s with active := s.active.erase ticket }
 
@@ -59,8 +53,6 @@ theorem full_capacity_refuses (s : State) (ticket : Ticket)
   simp [acquire]
   omega
 
-/-- The application may change while workers are held. Its trace cannot spend
-or manufacture a local worker ticket. -/
 inductive SchedulerTrace : (World × State) → (World × State) → Prop where
   | application {before after : World} (capacity : State)
       (trace : SessionComposition.Trace before after) :
@@ -90,7 +82,6 @@ theorem SchedulerTrace.applicationTrace {before after : World × State}
   | release _ _ _ => exact .refl _
   | trans _ _ ih₁ ih₂ => exact .trans ih₁ ih₂
 
-/-- Capacity one: a second request waits for the first to release its worker. -/
 def capacityOneRun : Option (Bool × Bool) := do
   let first ← acquire (initial 1) (10, 7)
   let blocked := (acquire first (11, 8)).isNone

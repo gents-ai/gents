@@ -31,8 +31,7 @@ pub struct Trigger {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub enabled: bool,
-    /// Reuse parallel / serial / latest_only semantics. Absent/null is Parallel
-    /// for both schedule and event sources, matching the graph-edge default.
+    /// Absent defaults to Parallel, matching the graph-edge default.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub concurrency: Option<ConcurrencyMode>,
@@ -54,8 +53,7 @@ pub struct Trigger {
 
 /// Exactly one configured source per trigger. Source documents can be reused;
 /// each trigger retains its own delivery identity and runtime observations.
-/// Manual task invocation remains supported by the existing manual source and
-/// does not require a persisted Trigger document.
+/// Manual task invocation does not require a persisted Trigger document.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

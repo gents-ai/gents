@@ -12,8 +12,6 @@ impl DefraSessionHook {
             .remove(internal_call_id)
     }
 
-    /// A background row this session principal manages: a native process or
-    /// an `agent_new`/`agent_message` row.
     pub(super) async fn load_authorized_background_tool(
         &self,
         caller: &ProcessControlScope,
@@ -42,8 +40,13 @@ impl DefraSessionHook {
         caller_deadline_at: chrono::DateTime<chrono::Utc>,
         wait_deadline_at: chrono::DateTime<chrono::Utc>,
     ) -> anyhow::Result<String> {
+        let mut wakeup = crate::watcher::DocumentChangeWakeup::new(
+            &self.node,
+            Some(&["AgentToolCall", "AgentRequest", "AgentOutputSegment"]),
+            Duration::from_secs(1),
+        )
+        .with_minimum_interval(Duration::from_millis(100));
         loop {
-            let now = chrono::Utc::now();
             let lifecycle = self
                 .load_authorized_background_tool(caller, tool_call_id)
                 .await?;
@@ -57,8 +60,8 @@ impl DefraSessionHook {
                 return self.background_tool_envelope(lifecycle, "terminal").await;
             }
 
-            // Waiting is observational. Ending or interrupting this caller's
-            // turn must not revoke the separately budgeted background job.
+            // Waiting is observational; ending this caller's turn must not
+            // revoke the separately budgeted background job.
             if crate::interrupt::fetch_interrupt_requested_at_scoped(
                 &self.node,
                 &caller.request_id,
@@ -73,6 +76,7 @@ impl DefraSessionHook {
                     .await;
             }
 
+            let now = chrono::Utc::now();
             if now >= caller_deadline_at {
                 return self
                     .background_tool_envelope(lifecycle, "caller_deadline_exceeded")
@@ -80,22 +84,23 @@ impl DefraSessionHook {
             }
 
             // A bounded wait reports the process as still running; it never
-            // cancels it. Completion arrives as the background notification.
+            // cancels it.
             if now >= wait_deadline_at {
                 return self
                     .background_tool_envelope(lifecycle, "wait_timeout")
                     .await;
             }
 
-            let remaining = (caller_deadline_at.min(wait_deadline_at) - now)
+            let remaining = (caller_deadline_at.min(wait_deadline_at) - chrono::Utc::now())
                 .to_std()
                 .unwrap_or(Duration::from_millis(0));
-            tokio::time::sleep(remaining.min(Duration::from_millis(100))).await;
+            tokio::select! {
+                _ = wakeup.wait() => {},
+                _ = tokio::time::sleep(remaining) => {},
+            }
         }
     }
 
-    /// Returns the lifecycle, whether this call won the terminal compare, and
-    /// the host stop verdict when it did.
     pub(super) async fn cancel_background_tool_lifecycle(
         &self,
         mut lifecycle: ToolCallLifecycle,
@@ -113,9 +118,6 @@ impl DefraSessionHook {
         } else {
             false
         };
-        // Persist the explicit cancellation before waking the worker. If the
-        // token fires first, the worker can win the same running-state compare
-        // and replace the user's specific cause with generic `interrupted`.
         let process = if won_terminal_compare {
             let doc_id = lifecycle
                 .doc_id()
@@ -141,9 +143,6 @@ impl DefraSessionHook {
             .doc_id()
             .context("background result requires physical tool identity")?;
         let result = if lifecycle.is_spawned_background() {
-            // A spawned process owns an exact canonical ToolOutput source but,
-            // deliberately, no fabricated provider ToolCall block or direct
-            // invocation reply. Read its source through the output owner.
             crate::background_tools::canonical_tool_output(
                 self.node.as_ref(),
                 tool_doc_id,

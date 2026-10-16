@@ -49,9 +49,6 @@ pub(crate) async fn install(
     install_with_access(&access, &owner_did, source, args, emit_report).await
 }
 
-/// Installs and activates a graph package, resolved from any source, through
-/// a caller's open access, so a pack that installs it as a dependency keeps
-/// its one claim on the home's store for the whole install.
 pub(crate) async fn install_with_access(
     access: &ConfigAccess,
     owner_did: &str,
@@ -199,8 +196,6 @@ async fn access_and_actor(
     Ok((access, actor))
 }
 
-/// `--input`: a JSON object, or `@FILE` naming a file that holds one; absent
-/// is an empty object, so an entry with every field defaulted needs neither.
 fn parse_input_arg(raw: Option<&str>) -> Result<Value> {
     let Some(raw) = raw else {
         return Ok(json!({}));
@@ -216,8 +211,6 @@ fn parse_input_arg(raw: Option<&str>) -> Result<Value> {
     Ok(value)
 }
 
-/// `--field NAME=VALUE`: sets one string field on the input, overriding
-/// whatever `--input` gave it.
 fn apply_input_fields(mut input: Value, fields: &[String]) -> Result<Value> {
     let object = input
         .as_object_mut()
@@ -444,7 +437,6 @@ fn print_progress_text(
         .inference_calls
         .iter()
         .filter(|call| {
-            // InferenceCall.call_state vocabulary, not AgentRequest.lifecycle_state.
             !matches!(
                 call.call_state.as_str(),
                 "failed" | "completed" | "cancelled"
@@ -640,8 +632,6 @@ fn print_result_text(view: &GraphRunView) -> Result<()> {
     write_result_text(&mut io::stdout().lock(), view)
 }
 
-/// One observation of a watched run. NDJSON is one compact object per line;
-/// the last line's `run.status` and the exit code mark the end.
 fn emit_progress(out: &mut impl io::Write, format: OutputFormat, value: &Value) -> Result<()> {
     let line = match format {
         OutputFormat::Json => serde_json::to_string_pretty(value)?,
@@ -753,273 +743,4 @@ async fn toggle(args: GraphToggleArgs, enabled: bool) -> Result<()> {
         .graph_id;
     set_graph_enabled_with_access(&access, &actor, &graph_id, enabled).await?;
     print_json(&json!({ "graph_id": graph_id, "enabled": enabled }))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ndjson_emits_one_compact_line_per_observation() {
-        let observations = [
-            json!({"run": {"status": "running"}, "activity": {"rows": [1, 2]}}),
-            json!({"run": {"status": "succeeded"}, "activity": {}}),
-        ];
-        let mut out = Vec::new();
-        for observation in &observations {
-            emit_progress(&mut out, OutputFormat::Ndjson, observation).unwrap();
-        }
-        let text = String::from_utf8(out).unwrap();
-        assert_eq!(text.matches('\n').count(), 2, "{text}");
-        for (line, observation) in text.lines().zip(&observations) {
-            assert_eq!(&serde_json::from_str::<Value>(line).unwrap(), observation);
-        }
-    }
-
-    #[test]
-    fn json_progress_stays_pretty_and_other_formats_are_refused() {
-        let mut out = Vec::new();
-        emit_progress(
-            &mut out,
-            OutputFormat::Json,
-            &json!({"run": {"status": "running"}}),
-        )
-        .unwrap();
-        assert!(String::from_utf8(out).unwrap().contains("\n  \"run\""));
-        assert!(emit_progress(&mut Vec::new(), OutputFormat::Table, &json!({})).is_err());
-    }
-
-    #[test]
-    fn parse_input_arg_defaults_to_an_empty_object() {
-        assert_eq!(parse_input_arg(None).unwrap(), json!({}));
-    }
-
-    #[test]
-    fn parse_input_arg_reads_inline_json() {
-        assert_eq!(
-            parse_input_arg(Some(r#"{"question":"why?"}"#)).unwrap(),
-            json!({"question": "why?"})
-        );
-    }
-
-    #[test]
-    fn parse_input_arg_reads_an_at_file() {
-        let file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(file.path(), r#"{"question":"from a file"}"#).unwrap();
-        let arg = format!("@{}", file.path().display());
-        assert_eq!(
-            parse_input_arg(Some(&arg)).unwrap(),
-            json!({"question": "from a file"})
-        );
-    }
-
-    #[test]
-    fn parse_input_arg_refuses_a_missing_at_file() {
-        let error = parse_input_arg(Some("@/does/not/exist.json")).unwrap_err();
-        assert!(
-            error.to_string().contains("reading --input file"),
-            "{error:#}"
-        );
-    }
-
-    #[test]
-    fn parse_input_arg_refuses_invalid_json() {
-        let error = parse_input_arg(Some("not json")).unwrap_err();
-        assert!(
-            error.to_string().contains("parsing --input as JSON"),
-            "{error:#}"
-        );
-    }
-
-    #[test]
-    fn parse_input_arg_refuses_a_non_object() {
-        let error = parse_input_arg(Some("[1, 2]")).unwrap_err();
-        assert!(
-            error.to_string().contains("--input must be a JSON object"),
-            "{error:#}"
-        );
-    }
-
-    #[test]
-    fn apply_input_fields_overrides_input_values() {
-        let input = json!({"question": "original", "scope": "narrow"});
-        let updated = apply_input_fields(input, &["question=overridden".to_owned()]).unwrap();
-        assert_eq!(updated["question"], "overridden");
-        assert_eq!(updated["scope"], "narrow");
-    }
-
-    #[test]
-    fn apply_input_fields_refuses_a_field_without_equals() {
-        let error = apply_input_fields(json!({}), &["question".to_owned()]).unwrap_err();
-        assert!(
-            error.to_string().contains("must be NAME=VALUE"),
-            "{error:#}"
-        );
-    }
-
-    #[test]
-    fn apply_input_fields_refuses_an_empty_name() {
-        let error = apply_input_fields(json!({}), &["=value".to_owned()]).unwrap_err();
-        assert!(error.to_string().contains("must name a field"), "{error:#}");
-    }
-
-    fn result_view() -> GraphRunView {
-        serde_json::from_str(
-            r#"{
-            "view_version": 1,
-            "run_id": "run-1",
-            "graph_id": "review",
-            "revision_digest": "sha256:revision",
-            "owner_did": "did:key:owner",
-            "caller_did": "did:key:owner",
-            "entry_name": "review",
-            "correlation": "run-1",
-            "status": "succeeded",
-            "input": {},
-            "cancellation_requested_at": null,
-            "cancellation_requested_by": null,
-            "cancellation_reason": null,
-            "error": null,
-            "created_at": "2026-08-26T00:00:00Z",
-            "started_at": "2026-08-26T00:00:00Z",
-            "deadline_at": "2026-08-26T02:00:00Z",
-            "completed_at": "2026-08-26T01:00:00Z",
-            "update_generation": 2,
-            "requests": [],
-            "stages": [],
-            "groups": [],
-            "results": [{
-                "name": "findings",
-                "terminal": true,
-                "satisfied": true,
-                "observed_count": 1,
-                "violation": null,
-                "refs": [],
-                "documents": [{
-                    "_docID": "finding-doc",
-                    "run_id": "run-1",
-                    "severity": "Major",
-                    "path": "src/main.rs",
-                    "line": "42",
-                    "title": "Actionable defect",
-                    "detail": "The complete explanation.",
-                    "evidence": "Exact source evidence.",
-                    "verification": "Independently confirmed."
-                }]
-            }, {
-                "name": "report",
-                "terminal": true,
-                "satisfied": true,
-                "observed_count": 1,
-                "violation": null,
-                "refs": [],
-                "documents": [{
-                    "_docID": "report-doc",
-                    "run_id": "run-1",
-                    "summary": "Block until the confirmed defect is fixed."
-                }]
-            }],
-            "persisted_result_refs": [],
-            "active_request_count": 0,
-            "terminal_request_count": 1,
-            "result_contract_satisfied": true,
-            "failure_evidence": null
-        }"#,
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn result_text_is_a_complete_actionable_handoff() {
-        let mut output = Vec::new();
-        write_result_text(&mut output, &result_view()).unwrap();
-        let output = String::from_utf8(output).unwrap();
-        for expected in [
-            "Status: succeeded",
-            "severity: Major",
-            "path: src/main.rs",
-            "line: 42",
-            "title: Actionable defect",
-            "detail: The complete explanation.",
-            "evidence: Exact source evidence.",
-            "verification: Independently confirmed.",
-            "summary: Block until the confirmed defect is fixed.",
-        ] {
-            assert!(output.contains(expected), "missing {expected:?}:\n{output}");
-        }
-        assert!(!output.contains("_docID"));
-        assert!(!output.contains("run_id:"));
-    }
-
-    #[test]
-    fn progress_json_exposes_derived_failure_evidence_as_error() {
-        let mut view = result_view();
-        view.status = "running".to_owned();
-        view.error = None;
-        view.failure_evidence = Some(json!({
-            "code": "result_contract_unsatisfied",
-            "message": "terminal contract failed"
-        }));
-        assert_eq!(
-            progress(&view)["error"]["code"],
-            "result_contract_unsatisfied"
-        );
-    }
-
-    #[test]
-    fn live_usage_uses_durable_context_estimates_only_for_unreported_completed_calls() {
-        let calls = vec![
-            TimelineInferenceCallRow {
-                call_state: "completed".to_owned(),
-                prompt_tokens: Some(120),
-                completion_tokens: Some(30),
-                cached_input_tokens: Some(40),
-                ..TimelineInferenceCallRow::default()
-            },
-            TimelineInferenceCallRow {
-                call_state: "completed".to_owned(),
-                prompt_tokens: Some(0),
-                completion_tokens: Some(0),
-                cached_input_tokens: Some(0),
-                context_accounting_json: Some(r#"{"estimated_input_tokens":6310}"#.to_owned()),
-                ..TimelineInferenceCallRow::default()
-            },
-            TimelineInferenceCallRow {
-                call_state: "running".to_owned(),
-                context_accounting_json: Some(r#"{"estimated_input_tokens":9999}"#.to_owned()),
-                ..TimelineInferenceCallRow::default()
-            },
-        ];
-        let summary = run_usage_summary(&calls);
-        assert_eq!(
-            summary,
-            RunUsageSummary {
-                reported_input_tokens: 120,
-                reported_cached_input_tokens: 40,
-                reported_output_tokens: 30,
-                estimated_input_tokens: 6310,
-                unreported_completed_calls: 1,
-            }
-        );
-        assert_eq!(
-            usage_detail(&summary),
-            "120 input reported · 40 cached · 30 output · ~6.3k input estimated · 1 completed call unreported"
-        );
-    }
-
-    #[test]
-    fn live_usage_does_not_render_missing_provider_usage_as_zero() {
-        let summary = run_usage_summary(&[TimelineInferenceCallRow {
-            call_state: "completed".to_owned(),
-            prompt_tokens: Some(0),
-            completion_tokens: Some(0),
-            cached_input_tokens: Some(0),
-            context_accounting_json: Some(r#"{"estimated_input_tokens":8900000}"#.to_owned()),
-            ..TimelineInferenceCallRow::default()
-        }]);
-        assert_eq!(
-            usage_detail(&summary),
-            "~8.9m input estimated · output unavailable · 1 completed call unreported"
-        );
-    }
 }

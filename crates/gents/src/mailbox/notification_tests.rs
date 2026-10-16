@@ -315,7 +315,6 @@ async fn content_tool_stamps_current_request_and_reuses_configured_condition() {
         assert_eq!(receipt["outcome"], outcome);
         assert_eq!(receipt["item"]["title"], title);
         assert_eq!(receipt["item"]["requester_did"], context.requester_did);
-        // Creation provenance stays immutable when current content changes.
         assert_eq!(receipt["item"]["request_id"], "one");
         assert_eq!(receipt["item"]["cause_doc_id"], "input-one");
         let current = receipt["item"]["_docID"].clone();
@@ -385,7 +384,6 @@ async fn provenance_keeps_execution_owner_resolved_selection() {
     let context = tests::context("did:test:owner");
     let response = node.execute("mutation { create_AgentRequest(input: {request_id: \"default-selection\", purpose: \"normal\", node_did: \"did:test:agent\", requester_did: \"did:test:owner\"}) {_docID} }").await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    // The execution owner may resolve the default behavior and create a session.
     notification::request_provenance(&node, "default-selection", &context)
         .await
         .unwrap();
@@ -414,7 +412,6 @@ async fn question_files_an_ask_whatever_the_surface_policy_and_refuses_invalid_p
         "mutation { create_AgentRequest(input: {request_id: \"ask\", purpose: \"normal\", node_did: \"did:test:agent\", requester_did: \"did:test:owner\", agent_id: \"operator\"}) {_docID} }"
     ).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
-    // The surface's default is an informational flag.
     let tool = MailboxCreateTool::new(node.clone(), MailboxNotificationPolicy::default());
     let question = |prompt: &str, options: &[&str]| MailboxQuestion {
         version: MAILBOX_QUESTION_VERSION,
@@ -479,8 +476,6 @@ async fn question_files_an_ask_whatever_the_surface_policy_and_refuses_invalid_p
     assert_eq!(receipt["item"]["action"], "start_request");
     let stored = MailboxQuestion::from_payload(receipt["item"]["payload"].as_str().unwrap());
     assert_eq!(stored.unwrap(), first);
-    // A second question in the same request is its own item; an ordinary
-    // filing keeps the surface policy.
     let second: Value = serde_json::from_str(
         &call(content(
             "Backend",
@@ -493,8 +488,6 @@ async fn question_files_an_ask_whatever_the_surface_policy_and_refuses_invalid_p
     .unwrap();
     assert_eq!(second["outcome"], "created");
     assert_ne!(second["item"]["_docID"], receipt["item"]["_docID"]);
-    // The same prompt under another title is another question, and re-filing
-    // an identical question reuses it unchanged.
     let retitled: Value = serde_json::from_str(
         &call(content("Release B", None, Some(first.clone())))
             .await

@@ -53,9 +53,6 @@ pub struct AgentToolSurfaceConfig {
 
 impl AgentToolSurfaceConfig {
     pub fn meta_only() -> Self {
-        // defra_query is opt-in (#592): the meta-only baseline agent policy
-        // disables it, while the ceiling stays permissive so an explicit
-        // selection can still enable it.
         let mut agent_policy = ToolPolicySurface::ceiling_with_host_modes(
             super::FileToolMode::Off,
             super::BashMode::Off,
@@ -300,11 +297,6 @@ impl AgentToolSurfaceConfig {
                 .filter_background_tools(backgroundable_tool_names)
                 .into_iter()
                 .filter_map(|name| match (name.as_str(), bash) {
-                    // The document selection names the requested host tool,
-                    // while the runtime registers the ceiling-downgraded
-                    // variant. Keep background execution aligned with that
-                    // effective surface instead of quarantining an otherwise
-                    // valid agent after restart.
                     ("bash_unrestricted", BashMode::ReadOnly) => Some("bash".to_owned()),
                     ("bash_unrestricted" | "bash", BashMode::Off) => None,
                     _ => Some(name),
@@ -385,11 +377,6 @@ impl AgentToolSurfaceConfig {
                         .permits(&plugin.tool_name().to_string())
                 })
                 .collect(),
-            // `agent_name` is the agent_id on the document path
-            // (agent.rs `agent_config_from_documents`): the identity anchor
-            // for "my config". Programmatic builder surfaces that enable
-            // self-config with a non-document name simply fail doc resolution
-            // at call time.
             self_config: super::SelfConfigToolConfig {
                 enabled: static_policy.include_self_config(),
                 agent_id: agent_name.to_string(),
@@ -600,8 +587,6 @@ impl AgentToolSurfaceConfig {
                 })
                 .cloned()
                 .collect(),
-            // Sync construction cannot read the plugin store; the async
-            // production paths fill the resolutions beside this default.
             plugin_resolutions: Vec::new(),
             enable_skills: effective_policy.skills,
             self_config: super::SelfConfigToolConfig {
@@ -661,10 +646,6 @@ impl AgentToolSurfaceConfig {
         }
     }
 
-    /// Resolve the tool surface, dropping local-DID session targets whose
-    /// agent is not in the active local set. A target on another node
-    /// stays listed: it is admitted there as a Peer request under that
-    /// node's ACP.
     pub(crate) async fn resolve_with_available_agent_targets(
         &self,
         node: &std::sync::Arc<EmbeddedNode>,
@@ -713,11 +694,6 @@ impl Default for AgentToolSurfaceConfig {
     }
 }
 
-/// Resolves each surviving plugin reference against the host plugin store for
-/// change detection only (the `plugin_resolutions` field on `ToolSurface`).
-/// A plugin that does not resolve, for any reason, records `None`: tool
-/// building stays the fail-closed gate, and only the Agent naming it is
-/// affected.
 fn resolve_plugin_identities(
     plugins: &crate::plugin::executor::PluginExecutor,
     plugin_tools: &[crate::document_config::PluginToolRef],

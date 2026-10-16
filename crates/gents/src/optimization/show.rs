@@ -1,7 +1,3 @@
-//! Historical decisions are comparable only under the frozen evaluation
-//! instrument. Missing or changed definitions leave the journal visible but
-//! unchecked; run invalidation remains a separate observation.
-
 use anyhow::Result;
 use serde::Serialize;
 
@@ -20,14 +16,8 @@ pub struct DecisionView {
     pub mode: Mode,
     pub run_ids: Vec<String>,
     pub journaled: Decision,
-    /// `None` when the installed definition differs from the frozen instrument.
-    /// The journaled decision remains visible without recomputation.
     pub recomputed: Option<Decision>,
-    /// The rows no longer support what the journal says. False when nothing
-    /// was recomputed.
     pub mismatch: bool,
-    /// A run this decision read has since been invalidated. False when
-    /// nothing was recomputed.
     pub invalidated: bool,
 }
 
@@ -37,25 +27,15 @@ pub struct JobView {
     pub state: JobState,
     pub checkpoint: Option<Checkpoint>,
     pub rounds_used: u32,
-    /// The installed definition was edited, deleted, or no longer validates.
-    /// Decisions cannot be compared across different instruments.
     pub definition_changed: bool,
     pub decisions: Vec<DecisionView>,
 }
 
-/// Project `job_id`'s journal. Only `Decided` entries are recomputed: a
-/// structural rejection, including a text refused before any pack was
-/// materialized (ruling P-N5), and a `BudgetExhausted` spent no run, so they
-/// appear in `job.journal` as written. A decision the rounds ended on (ruling
-/// P-N3) is recomputed like any other.
 pub async fn show(access: &ConfigAccess, owner: &str, job_id: &str) -> Result<JobView> {
     let job = load_job(access, owner, job_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("no optimization job {job_id:?} for {owner}"))?;
     let origin = &job.origin;
-    // Ruling T34-4: a definition that was deleted or no longer validates has
-    // changed. The view still renders, with no decision recomputed; any other
-    // error is not a fact about the definition and propagates.
     let definition = match load_definition(access, owner, &origin.definition.definition_id).await {
         Ok(definition) => Some(definition),
         Err(error) if freeze_refused(&error).is_some() => {
@@ -209,10 +189,6 @@ mod tests {
         );
     }
 
-    /// I1 and ruling T34-4: a job whose definition was deleted still renders.
-    /// Its decisions are listed as journaled, with nothing recomputed, and a
-    /// job the driver then finalized as `Failed(definition_changed)` shows
-    /// that state.
     #[tokio::test]
     async fn a_job_whose_definition_was_deleted_renders_with_nothing_recomputed() {
         let (harness, request) = accepting_harness("show-deleted").await;
@@ -249,7 +225,6 @@ mod tests {
         assert!(view.decisions.is_empty(), "{:#?}", view.decisions);
     }
 
-    /// Ruling C2: a reason renders as its serde name, never as `Debug`.
     #[tokio::test]
     async fn a_rejection_renders_its_reason_in_snake_case() {
         let (harness, request) = rejecting_harness("show-rejected").await;
@@ -277,8 +252,6 @@ mod tests {
         assert!(!rendered.to_string().contains("NoImprovement"));
     }
 
-    /// Ruling P-N3: the decision the rounds ended on is followed by
-    /// `BudgetExhausted { round: None }` and recomputes like any other.
     #[tokio::test]
     async fn the_decision_an_unaffordable_rerun_ended_on_recomputes() {
         let harness = Harness::new().await;
@@ -314,8 +287,6 @@ mod tests {
             .any(|entry| matches!(entry, JournalEntry::BudgetExhausted { round: None, .. })));
     }
 
-    /// Ruling P-N5: a text refused before materialization has a text-only
-    /// digest and no pack; it is a round used and no decision.
     #[tokio::test]
     async fn a_text_refused_before_materialization_is_a_round_and_no_decision() {
         let harness = Harness::new().await;

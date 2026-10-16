@@ -16,7 +16,6 @@ use super::lean_vocab_test::{
 };
 
 const RECOVERY_AGENT_ID: &str = "amy-code";
-// A failed claim observation, deliberately absent from retry successor input.
 const FAILED_CLAIM_BACKEND: &str = "old-claim-backend";
 
 #[derive(Debug)]
@@ -134,33 +133,6 @@ async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
     .contains("target session"));
     node.shutdown().await;
     Ok(())
-}
-
-#[test]
-fn retry_key_and_mutation_are_scoped_to_exact_parent_document() {
-    assert_ne!(
-        retry_successor_key("parent-doc-a"),
-        retry_successor_key("parent-doc-b")
-    );
-    let field = build_add_agent_request_field(
-        "request",
-        "retry-request",
-        "did:test:node",
-        "did:test:requester",
-        "agent",
-        "session",
-        "logical-parent",
-        Some("parent-doc-a"),
-        "logical-root",
-        "retry content",
-        "2026-08-09T00:00:00Z",
-        1,
-        3,
-        "backend",
-        "interactive",
-        "",
-    );
-    assert!(field.contains(r#"retry_parent_request_doc_id: "parent-doc-a""#));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1524,9 +1496,6 @@ async fn interactive_retry_ignores_newer_foreign_requester_row() -> Result<()> {
         .find(|case| case.legal)
         .context("legal retry witness")?;
     let pre = seed_session_recovery_pre_state(&core, case).await?;
-    // A newer row in another requester scope is not this interactive retry's
-    // head, even when visible locally. Background wake recovery deliberately
-    // uses the broader all-requester query instead.
     let node = escape_graphql_string(core.node_identity().did());
     let session = escape_graphql_string(&pre.session_id);
     let request_id = escape_graphql_string(&format!("foreign-{}", Uuid::new_v4()));

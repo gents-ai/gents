@@ -1,5 +1,3 @@
-//! MCP client connection pool — lazy-connect, cached connections to remote MCP servers.
-
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::Ipv4Addr;
@@ -205,12 +203,6 @@ pub struct McpPool {
     park: Arc<std::sync::Mutex<HashMap<ParkKey, ParkState>>>,
 }
 
-/// Parking is scoped by service, endpoint, and bound node DID. A service can
-/// move between LAN/Tailscale/registry endpoints; a bad endpoint must not park
-/// a later healthy endpoint for the same logical service. Node DID is included
-/// because MCP services may authorize per node DID. Trace headers are
-/// intentionally excluded: they are per-call correlation context, not a useful
-/// failure partition.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ParkKey {
     owner_node_did: Option<String>,
@@ -287,7 +279,6 @@ impl McpPool {
         }
     }
 
-    /// Bind the cache/parking namespace independently of outbound header policy.
     pub fn for_agent(&self, node_did: &str) -> Self {
         let mut pool = self.clone();
         pool.owner_node_did = Some(node_did.to_string());
@@ -480,15 +471,7 @@ impl McpPool {
         .await
     }
 
-    /// Call a tool on the MCP server at `endpoint`.
-    ///
-    /// Connects lazily, same as [`list_tools`](Self::list_tools). Unlike
-    /// `list_tools`, this does not retry after a dispatch failure: repeating an
-    /// MCP tool call can repeat side effects until services advertise
-    /// idempotency metadata that `Proofs.ToolExecution` can model.
-    /// A dead cached connection can therefore keep failing `call_tool` until
-    /// `list_tools` or explicit removal evicts it; this keeps recovery from
-    /// retransmitting a possibly mutating call.
+    /// Dispatch failures are not retried because calls can repeat side effects without idempotency evidence.
     pub async fn call_tool(
         &self,
         service_id: &str,
@@ -588,8 +571,6 @@ impl McpPool {
         connection: &McpConnection,
         params: CallToolRequestParams,
     ) -> Result<CallToolResult> {
-        // The caller owns the call deadline. The exact scoped connection stays
-        // pinned through dispatch even if another request updates the cache.
         (connection.call_tool_fn)(params).await
     }
 
@@ -619,9 +600,6 @@ impl McpPool {
             }
         }
 
-        // Slow path — re-check under the lock, but connect OUTSIDE it: a hung
-        // or slow connect (blackholed endpoint, #622) must not wedge every
-        // other service in the pool.
         let mut poison_detected_for_key = None;
         {
             let mut guard = self.inner.write().await;

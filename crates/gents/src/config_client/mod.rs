@@ -1,17 +1,10 @@
-//! Typed per-collection control-plane write client (#654).
+//! Typed per-collection control-plane write client.
 //!
-//! One proven write path for config collections, shared by two consumers:
-//! the CLI `config apply`/imperative commands (which historically owned these
-//! writers under `gents-cli/src/config_writes`) and the runtime
-//! self-configuration tools (`crate::self_config`).
-//!
-//! The client is DID-parameterized: [`ConfigAccess::transact_local_write`] accepts an
-//! optional `identity::Did`, and every statement executed inside that
-//! transaction carries it as the DefraDB ACP actor. Authorization remains at
-//! the node. Embedded CLI paths default to the node DID and signer. HTTP paths
-//! authenticate as the [`GraphqlEndpoint`]'s DID with a DefraDB bearer; a
-//! served home's node access control admits writes only from its own DID, so
-//! anonymous HTTP access is read-only.
+//! The client is DID-parameterized: every statement carries the optional
+//! `identity::Did` as the DefraDB ACP actor; authorization remains at the node.
+//! Embedded paths default to the node DID and signer; HTTP paths authenticate
+//! as the [`GraphqlEndpoint`]'s DID with a DefraDB bearer; anonymous HTTP
+//! access is read-only because a served home admits writes only from its own DID.
 //!
 //! Write conventions (load-bearing — see `AGENTS.md`):
 //! - every interpolated value goes through
@@ -38,9 +31,6 @@ mod schema_management;
 mod txn;
 pub(crate) mod write_telemetry;
 
-/// A transaction step this owner classified as unavailable (a conflict that
-/// outlived its retries, a storage failure, or a step timeout), as opposed to
-/// data the step returned.
 pub(crate) fn is_transaction_step_unavailable(error: &anyhow::Error) -> bool {
     retry::classified_transaction_conflict(error).is_some()
         || retry::is_transaction_storage_failure(error)
@@ -106,13 +96,6 @@ use futures::future::BoxFuture;
 use gents_protocol::graphql::GraphqlRequestOptions;
 use serde_json::Value;
 
-/// A served node's HTTP GraphQL endpoint and the DID its requests act as.
-///
-/// A node with node access control enabled refuses anonymous writes, schema
-/// changes and P2P administration. Requests from an endpoint with a DID carry
-/// a short-lived DefraDB bearer signed by that DID's key, which
-/// must be loaded in this process; minting fails instead of degrading to an
-/// anonymous request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GraphqlEndpoint {
     url: String,
@@ -137,9 +120,7 @@ impl GraphqlEndpoint {
         }
     }
 
-    /// Forward a caller's DefraDB bearer without minting a runtime node
-    /// credential. DefraDB checks its signature, DID, audience and ACP; this
-    /// endpoint never authenticates or widens the delegated authority.
+    /// Forward a caller's DefraDB bearer without minting a runtime node credential.
     pub fn with_delegated_authorization(
         url: impl Into<String>,
         authorization: &str,
@@ -158,14 +139,11 @@ impl GraphqlEndpoint {
         })
     }
 
-    /// **Must end with `/graphql`** — transaction begin/commit/discard derive
-    /// the REST API base by stripping that suffix.
+    /// **Must end with `/graphql`**: begin/commit/discard derive the REST base by stripping this suffix.
     pub fn url(&self) -> &str {
         &self.url
     }
 
-    /// `Authorization` header value for requests sent now, or `None` for an
-    /// anonymous endpoint.
     pub fn authorization(&self) -> Result<Option<String>> {
         if let Some(value) = &self.delegated_authorization {
             return Ok(Some(value.to_str()?.to_owned()));
@@ -178,8 +156,7 @@ impl GraphqlEndpoint {
         let host = url
             .host_str()
             .ok_or_else(|| anyhow::anyhow!("GraphQL endpoint {} has no host", self.url))?;
-        // DefraDB checks the token audience against the `Host` header, which
-        // carries the port only when it is not the scheme default.
+        // The DefraDB token audience is the `Host` header, which carries the port only when it is not the scheme default.
         let audience = match url.port() {
             Some(port) => format!("{host}:{port}"),
             None => host.to_string(),
@@ -197,7 +174,6 @@ impl GraphqlEndpoint {
         Ok(Some(value))
     }
 
-    /// Attach a bearer minted now to one request.
     pub fn authorize(&self, request: reqwest::RequestBuilder) -> Result<reqwest::RequestBuilder> {
         Ok(match self.authorization_header()? {
             Some(value) => request.header(reqwest::header::AUTHORIZATION, value),
@@ -225,9 +201,7 @@ pub enum ConfigAccess {
     Local(LocalConfigAccess),
 }
 
-/// Executes reads through the existing access or transaction owner. A
-/// transaction retains its native DID and snapshot; adapters add no retry or
-/// authorization decision.
+/// Reads use the existing owner; adapters add no retry or authorization decision.
 #[async_trait::async_trait]
 pub trait ConfigRead: Send + Sync {
     async fn execute_read(&self, document: &str) -> Result<Value>;
@@ -249,24 +223,18 @@ impl ConfigRead for ConfigApplyTxn<'_> {
 }
 
 impl ConfigAccess {
-    /// Anonymous HTTP access: reads only on a node with access control.
     pub fn graphql(url: impl Into<String>) -> Self {
         Self::Graphql(GraphqlEndpoint::anonymous(url))
     }
 
-    /// HTTP access acting as `principal_did`, whose key must be loaded here.
     pub fn graphql_as(url: impl Into<String>, principal_did: impl Into<String>) -> Self {
         Self::Graphql(GraphqlEndpoint::as_principal(url, principal_did))
     }
 
-    /// Shared so callers that already hold the node can construct access
-    /// without moving it; `EmbeddedNode` is not `Clone`.
     pub fn local(node: Arc<EmbeddedNode>) -> Self {
         Self::Local(LocalConfigAccess::new(node))
     }
 
-    /// Construct local access that retains the process claim for the store
-    /// until every access and Gents-owned native operation has returned.
     pub fn claimed_local(node: Arc<EmbeddedNode>, claim: crate::home::StoreLock) -> Result<Self> {
         Ok(Self::Local(LocalConfigAccess::claimed(node, claim)?))
     }
@@ -311,9 +279,7 @@ impl ConfigAccess {
         })
     }
 
-    /// Apply schema SDL through the same local-or-HTTP control-plane seam as
-    /// configuration writes. Callers must still perform their own structural
-    /// compatibility check before invoking this operation.
+    /// Apply schema SDL; callers must perform their own structural compatibility check first.
     pub async fn add_schema(&self, sdl: &str) -> Result<()> {
         match self {
             Self::Graphql(graphql) => {
@@ -351,9 +317,6 @@ impl ConfigAccess {
         }
     }
 
-    /// Return the declared field shape for one collection. HTTP callers use
-    /// DefraDB's read-only collection-version API, which EmbeddedNode exposes
-    /// without enabling destructive collection management.
     pub async fn collection_fields(&self, collection: &str) -> Result<Option<BTreeSet<String>>> {
         Ok(self.collection_version(collection).await?.map(|version| {
             version
@@ -367,7 +330,6 @@ impl ConfigAccess {
         }))
     }
 
-    /// The names of every collection the node has registered, sorted.
     pub async fn collection_names(&self) -> Result<BTreeSet<String>> {
         match self {
             Self::Local(local) => Ok(local.node().list_collections()?.into_iter().collect()),
@@ -402,9 +364,6 @@ impl ConfigAccess {
         }
     }
 
-    /// Return the active DefraDB collection version so callers that own a
-    /// schema contract can compare field kinds, directives, and indexes—not
-    /// merely the set of field names.
     pub async fn collection_version(&self, collection: &str) -> Result<Option<Value>> {
         crate::graphql::validate_collection_identifier(collection)?;
         match self {
@@ -451,12 +410,6 @@ pub struct ExistingDocumentRef {
     pub deleted: bool,
 }
 
-/// Derive the REST API base URL from a GraphQL endpoint.
-///
-/// The GraphQL endpoint is expected to end with `/graphql` (e.g.
-/// `http://host:port/api/v0/graphql`). Stripping that suffix gives the API
-/// base `http://host:port/api/v0`, from which paths like `/tx` (begin) and
-/// `/tx/{id}` (commit/discard) are appended.
 pub fn graphql_api_base(graphql: &str) -> Result<String> {
     graphql
         .trim()
@@ -472,11 +425,7 @@ fn is_probably_local_graphql_endpoint(graphql: &str) -> bool {
     graphql.contains("127.0.0.1") || graphql.contains("localhost")
 }
 
-/// Operator guidance appended to HTTP GraphQL errors. CLI-flavored on
-/// purpose; non-CLI constructors of `Graphql` access (desktop
-/// `request_timeline`) strip these hint lines before surfacing the error.
-/// Never reaches agent-facing tool errors (the runtime always writes
-/// through the embedded node).
+/// Operator guidance appended to HTTP GraphQL errors; CLI-flavored and stripped by non-CLI consumers.
 pub fn graphql_diagnostic_hint(graphql: &str) -> String {
     if is_probably_local_graphql_endpoint(graphql) {
         "Next:\n  1. If this home is not initialized, run `gents init`\n  2. Start the runtime with `gents server`\n  3. Inspect it with `gents status`".to_string()
@@ -500,10 +449,7 @@ pub async fn post_graphql(graphql: &GraphqlEndpoint, query: &str) -> Result<Valu
     .await
 }
 
-/// Execute one HTTP GraphQL read with caller-selected transport retry options.
-///
-/// Mutations are rejected before network I/O so HTTP reads cannot bypass the
-/// canonical committed-write owner.
+/// Execute one HTTP GraphQL read; mutations are rejected before network I/O.
 pub async fn query_graphql_with_options(
     graphql: &GraphqlEndpoint,
     query: &str,

@@ -221,8 +221,6 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
     Ok(())
 }
 
-/// Fields in reading order: the ceiling and the surfaces it clamps, how to
-/// proceed, then provenance.
 #[derive(Serialize)]
 struct ExplainReport<'a> {
     node_did: &'a str,
@@ -259,8 +257,6 @@ fn shell_quoted_path(path: &Path) -> Result<String> {
         .into_owned())
 }
 
-/// The host ceiling explained agents are clamped by: the serving runtime's
-/// own when one answers, since `gents server` flags override init.json.
 struct HostCeiling {
     mode: ToolCeilingArg,
     root: Option<String>,

@@ -15,8 +15,6 @@ import { renderIn, testApp } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 import { deferred } from "./deferred";
 
-/* the step card on screen; a later step is paced in after the one before
-   has had its time, so it is waited for */
 const shownStep = (text: string) =>
   waitFor(() => expect(screen.getByTestId("startup-step")).toHaveTextContent(text), {
     timeout: 2_000,
@@ -194,8 +192,6 @@ describe("desktop startup screen", () => {
       expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
     expect(screen.queryByTestId("startup-retry")).not.toBeInTheDocument();
-    // Restoration probes once; the expanded local card also resolves its
-    // default root without blocking entry to the first-run screen.
     await waitFor(() => {
       expect(managedServerStatus).toHaveBeenCalledTimes(2);
     });
@@ -389,8 +385,6 @@ describe("desktop startup screen", () => {
   });
 
   it("starts the client again when a retry follows a failed start", async () => {
-    /* the client stays stopped until a start succeeds; each read repeats
-       the same stopped client, so nothing about the read itself changes */
     let running = false;
     const fetchDesktopSnapshot = vi.fn(async () => snapshot(true, running));
     const startDesktopClient = vi

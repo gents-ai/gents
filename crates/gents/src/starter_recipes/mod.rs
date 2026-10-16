@@ -1,14 +1,3 @@
-//! Versioned starter recipes for authoring ordinary agent configuration.
-//!
-//! Recipes are a catalog and rendering aid only. A resolved recipe contains a
-//! literal system prompt and a canonical [`Tools`] proposal; it does not become
-//! a durable runtime selector or bypass the existing agent materializer.
-//! Consumers must keep direct, open-ended agent authoring available without
-//! selecting a recipe. When a recipe is useful, its editable output goes through
-//! the same preview, admission, and materialization path as a hand-authored
-//! agent. Recipe identifiers and provenance must never drive runtime
-//! selection, automatic upgrades, or replacement of later user edits.
-
 use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
@@ -113,10 +102,6 @@ const CATALOG: &[StarterRecipeDefinition] = &[
     },
 ];
 
-/// Stable identifier for an optional starter draft.
-///
-/// This value is authoring provenance, not a required agent kind or runtime
-/// selector. Generic agent creation must not require one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StarterRecipeId {
     Coding,
@@ -201,13 +186,9 @@ pub struct StarterRecipeDefinition {
     pub summary: &'static str,
     pub inputs: &'static [StarterRecipeInputSpec],
     #[serde(skip)]
-    // Private authoring-time asset. The resolved AgentContext system prompt is
-    // literal; these placeholders are not a runtime template layer.
     prompt_asset: &'static str,
 }
 
-/// The workspace choice Setup already resolves against the process ceiling.
-/// This value narrows a recipe proposal; it does not admit the path itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum StarterWorkspaceScope {
@@ -230,13 +211,6 @@ pub struct StarterRecipeRenderInput {
     pub guided_concerns: Vec<String>,
 }
 
-/// Complete, editable authoring output from an optional starter. Materialization stores
-/// `system_prompt` literally and persists `recommended_tools` as an ordinary
-/// canonical `Tools` document after the existing owner admits it.
-///
-/// After resolution, callers may freely edit or discard this proposal. Its
-/// provenance records where the initial draft came from; it does not assert
-/// continued conformance to the recipe and must not trigger later rewrites.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ResolvedStarterRecipe {
     pub recipe_id: StarterRecipeId,
@@ -259,10 +233,6 @@ pub fn starter_recipe(id: StarterRecipeId) -> &'static StarterRecipeDefinition {
         .expect("every stable recipe id must have one catalog entry")
 }
 
-/// Resolve an optional recipe without mutating configuration. The caller
-/// supplies the canonical identity fields that the existing agent
-/// materializer owns. The returned draft must use the same canonical
-/// preview/admission/materialization path as directly authored configuration.
 pub fn resolve_starter_recipe(
     id: StarterRecipeId,
     node_did: &str,

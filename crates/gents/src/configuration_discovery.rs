@@ -1,9 +1,7 @@
 //! Bounded, read-only discovery of explicitly selected foreign agent configuration.
 //!
-//! Discovery is deliberately not import. It reads a small allowlist of configuration,
-//! instruction, and skill-manifest paths beneath caller-selected roots and returns an
-//! inert, source-attributed inventory. It never evaluates environment variables, runs
-//! configured commands, reads credential/history stores, or decides Gents authority.
+//! Discovery never evaluates environment variables, runs configured commands,
+//! reads credential/history stores, or decides Gents authority.
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -202,9 +200,8 @@ impl MappingSupport {
     }
 }
 
-/// Sanitized, category-specific facts. Every string entering these variants passes
-/// through the redactor; structured secret values and raw executable arguments are
-/// never inserted at all.
+/// Sanitized, category-specific facts; structured secret values and raw
+/// executable arguments are never inserted at all.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DiscoveryFacts {
@@ -310,8 +307,7 @@ pub struct ConfigurationDiscoveryInventory {
 }
 
 impl ConfigurationDiscoveryInventory {
-    /// The only model-facing serializer. Callers should not serialize source files or
-    /// parser intermediates alongside this value.
+    /// The only model-facing serializer.
     pub fn to_model_json_pretty(&self) -> serde_json::Result<String> {
         let output = serde_json::to_string_pretty(self)?;
         if output.len() > MAX_MODEL_INVENTORY_JSON_BYTES {
@@ -356,16 +352,14 @@ enum ConfigFormat {
     McpJson,
 }
 
-/// Scan only the selected roots. Errors affecting one source or file are represented in
-/// the inventory so a partial result cannot be mistaken for a complete laptop inventory.
 pub fn discover_configuration(request: &DiscoveryRequest) -> ConfigurationDiscoveryInventory {
     discover_configuration_inner(request, None)
 }
 
-/// Apply the same bounded scan while requiring every resolved source root to remain
-/// beneath an already-authorized canonical tool root. This is the model-facing adapter
-/// boundary; the scanner rechecks containment after path resolution so a replaced source
-/// root cannot widen the caller's file authority.
+/// Requires every resolved source root to remain beneath an
+/// already-authorized canonical tool root; the scanner rechecks containment
+/// after path resolution so a replaced source root cannot widen the caller's
+/// file authority.
 pub fn discover_configuration_within(
     request: &DiscoveryRequest,
     containment_root: &Path,
@@ -751,7 +745,6 @@ impl Scanner {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            // A raced-in FIFO must not block before we can verify the opened file.
             options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
         }
         let mut file = match options.open(&path) {

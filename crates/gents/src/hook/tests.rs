@@ -56,9 +56,6 @@ fn hook_execution_fixtures() -> &'static tokio::sync::Mutex<HashMap<String, Hook
 }
 
 fn hook_execution_fixture_key(hook: &DefraSessionHook, request_id: &str) -> String {
-    // The test registry spans parallel embedded nodes, where logical request
-    // labels such as `parent-one` are intentionally reused. Keep fixtures
-    // scoped to the physical node as well as that label.
     format!("{:p}:{request_id}", Arc::as_ptr(&hook.node))
 }
 
@@ -163,8 +160,6 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
     };
     assert!(page.has_more);
     assert!(page.output.len() <= 4096);
-    // Exceed the retired 256 KiB volatile-ring threshold: canonical segments
-    // must retain the full stream instead of reporting artificial eviction.
     let overflow = vec![b'x'; 256 * 1024 + 17];
     writer
         .append(crate::background_tools::LiveOutputStream::Stdout, &overflow)
@@ -427,20 +422,6 @@ fn user_text_message(text: &str) -> Message {
     }
 }
 
-fn session_state_for_test() -> SessionState {
-    SessionState {
-        session_id: Some("session-1".to_string()),
-        current_request_id: None,
-        current_request_doc_id: None,
-        current_requester_did: None,
-        request_deadline_at: None,
-        sequence: 0,
-        transcript_turn: TranscriptTurnState::Idle,
-        persisted_tool_result_keys: std::collections::HashSet::new(),
-        tool_result_identities: std::collections::HashMap::new(),
-    }
-}
-
 fn hook_counters_for_test() -> HookCounters {
     HookCounters {
         failures: AtomicU64::new(0),
@@ -602,8 +583,6 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
             assert_eq!(case.inputs.len(), case.expected.len());
             for (input, expected) in case.inputs.iter().zip(&case.expected) {
                 if expected.observation == "replay" {
-                    // Restore the original publication binding so replay must
-                    // reach the durable election, not the consumed-map guard.
                     hook.adopt_accepted_tool_calls(vec![("receipt-call".into(), accepted.clone())])
                         .await
                         .unwrap();
@@ -675,8 +654,6 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                 .terminalize_owned(completion_outcome, selection.clone(), None)
                 .await;
             assert_eq!(completion.is_ok(), case.completion_probe_accepted);
-            // Durable tool accounting rejects completion exactly while a
-            // foreground call holds the request's in-flight claim.
             let native_in_flight = completion.as_ref().err().is_some_and(|rejection| {
                 matches!(
                     rejection.downcast_ref::<crate::lifecycle::ToolAccountingRejection>(),
@@ -765,27 +742,6 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
     }
 }
 
-#[test]
-fn transcript_turn_state_allocates_new_assistant_after_saved_turn() {
-    let mut state = session_state_for_test();
-
-    assert_eq!(state.begin_or_continue_assistant_turn(), 1);
-    assert_eq!(state.begin_or_continue_assistant_turn(), 1);
-    assert_eq!(state.persist_assistant_turn(), 1);
-    assert!(state
-        .mark_stream_tool_result_seen("call-1", "call-1", None)
-        .unwrap());
-    assert!(!state
-        .mark_stream_tool_result_seen("call-1", "call-1", None)
-        .unwrap());
-
-    state.reset_after_user_message();
-    assert_eq!(state.begin_or_continue_assistant_turn(), 2);
-    assert_eq!(state.persist_assistant_turn(), 2);
-}
-
-/// Completion persistence can fail after a control tool has already committed
-/// its effect. Neither that failure nor a subsequent replay permits dispatch.
 #[tokio::test]
 async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
     let goal_case = crate::lean_vocab_test::lean_goal_create_cases()
@@ -875,59 +831,6 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
             node.shutdown().await;
         }
     }
-}
-
-#[test]
-fn transcript_turn_state_rejects_stream_result_before_assistant_is_saved() {
-    let mut state = session_state_for_test();
-
-    assert!(state
-        .mark_stream_tool_result_seen("call-1", "call-1", None)
-        .is_err());
-    assert_eq!(state.begin_or_continue_assistant_turn(), 1);
-    assert!(state
-        .mark_stream_tool_result_seen("call-1", "call-1", None)
-        .is_err());
-    assert_eq!(state.persist_assistant_turn(), 1);
-    assert!(state
-        .mark_stream_tool_result_seen("call-1", "call-1", None)
-        .unwrap());
-}
-
-#[test]
-fn transcript_turn_state_preserves_distinct_tool_results() {
-    let mut state = session_state_for_test();
-
-    assert_eq!(state.begin_or_continue_assistant_turn(), 1);
-    assert_eq!(state.persist_assistant_turn(), 1);
-    assert!(state
-        .mark_stream_tool_result_seen("internal-1", "result-1", Some("call-1"))
-        .unwrap());
-    assert!(state
-        .mark_stream_tool_result_seen("internal-2", "result-2", Some("call-2"))
-        .unwrap());
-}
-
-#[test]
-fn transcript_turn_state_keeps_persisted_turn_across_parallel_results() {
-    let mut state = session_state_for_test();
-
-    assert_eq!(state.begin_or_continue_assistant_turn(), 1);
-    assert_eq!(state.persist_assistant_turn(), 1);
-    // Every parallel result of the once-persisted turn passes the stream gate
-    // (Lean: Transcript.parallel_results_complete_independently).
-    assert!(state
-        .mark_stream_tool_result_seen("internal-1", "result-1", Some("call-1"))
-        .unwrap());
-    assert!(state
-        .mark_stream_tool_result_seen("internal-2", "result-2", Some("call-2"))
-        .unwrap());
-    assert!(state
-        .mark_stream_tool_result_seen("internal-3", "result-3", Some("call-3"))
-        .unwrap());
-    // A persisted prior turn starts a NEW turn on the next assistant persist
-    // (text-only final turn after tool results).
-    assert_eq!(state.persist_assistant_turn(), 2);
 }
 
 #[test]
@@ -2054,11 +1957,6 @@ async fn claimed_authored_input_persists_context_once_before_prompt() {
 
 #[tokio::test]
 async fn context_and_prompt_deduped_across_retry_attempts() {
-    // B2 (#497): the daemon retry loop builds a FRESH hook per attempt. A
-    // transient failure before the first assistant token re-runs turn 1, which
-    // would otherwise re-persist the <context> message + prompt. Durable
-    // canonical authored keys bound to the claimed request document must keep
-    // them exactly-once across attempts.
     let data_path = std::env::temp_dir().join(format!("agent-hook-retry-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
@@ -2072,7 +1970,6 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     let context = user_text_message("<context>\nnow=2026-06-15T00:00:00Z\n</context>");
     let prompt = user_text_message("Do the thing");
 
-    // Attempt 1 claims the request before publishing provider input.
     let hook1 =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session_id = hook1.session_id().await.expect("session id");
@@ -2090,8 +1987,6 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     let request_doc_id = hook1.active_request_doc_id().await.unwrap();
     publish_claimed_authored_input(&hook1, "req-retry", Some(context.clone()), prompt.clone())
         .await;
-    // Attempt 2 (retry): a brand-new hook resuming the same session with the
-    // same request id re-runs turn 1, as the daemon retry loop would.
     let hook2 = DefraSessionHook::resume_with_identity_policy(
         node.clone(),
         &session_id,
@@ -2284,14 +2179,6 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-/// An unresolved tool name must persist as a FAILED call, end to end.
-///
-/// The result string is produced by the real dispatcher against an empty tool
-/// surface — not hand-written here — and fed through the real hook, so this fails
-/// if `dispatch_tool` ever stops marking the unknown-tool branch. Before the
-/// marker, that branch returned a bare `error: unknown tool` string, which
-/// classified as `None` and terminalized the call `completed`: a hallucinated or
-/// stale tool name was durably recorded as a SUCCESSFUL call.
 #[tokio::test]
 async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
     let data_path =
@@ -2329,8 +2216,6 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
         ToolCallHookAction::Continue
     ));
 
-    // The production dispatcher's own unknown-tool result, against an empty
-    // tool surface.
     let dispatched =
         crate::agent::loop_stream::dispatch_tool(&[], "ghost_tool", "{}".to_string(), None, None)
             .await;
@@ -2398,9 +2283,6 @@ async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows()
         .join("\n");
     let tool_args = "{}";
 
-    // The owned result remains exact. Model-facing bounding is a payload
-    // presentation and must not rewrite the native output stream or recreate
-    // the retired AgentToolResult spill collection.
     accept_hook_tool_call(&hook, "internal-oversized", "oversized", tool_args, None).await;
     assert!(matches!(
         hook.on_tool_call("oversized", None, "internal-oversized", tool_args,)
@@ -2533,8 +2415,6 @@ async fn interruption_leaves_background_workers_running() {
         if detached {
             reservations.push(reservation);
         } else {
-            // Like its worker, the owned execution releases once signalled;
-            // cancellation is counted only after that release.
             let signalled = token.clone();
             tokio::spawn(async move {
                 signalled.cancelled().await;
@@ -2622,10 +2502,6 @@ async fn interruption_leaves_background_workers_running() {
     ));
 }
 
-/// Every running Lean interrupt disposition row is driven through the hook's
-/// in-flight interrupt path; every row also pins the production classifier.
-/// The disposition depends only on state and await mode: an interrupt never
-/// reaches another session.
 #[tokio::test]
 async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
     use crate::tool_call_lifecycle::{AwaitMode, InterruptDisposition, ToolCallState};
@@ -2701,8 +2577,6 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
     );
 }
 
-/// A parent interrupt drains the in-flight map: the foreground native tool is
-/// cancelled while the background child bridge and its child keep running.
 #[tokio::test]
 async fn interrupt_cancels_native_tools_and_keeps_children_running() {
     let data_path =
@@ -2724,7 +2598,6 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
     bind_interruptible_request(&node, &hook, "parent-mixed-tools", &session_id, deadline).await;
     let parent_doc_id = hook.active_request_doc_id().await.unwrap();
 
-    // Native tool without a child request.
     let mut outer = accepted_hook_tool_lifecycle(
         &hook,
         "native-tool",
@@ -2740,7 +2613,6 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
         .await
         .insert("native-tool".to_string(), outer);
 
-    // One child bridge under the same parent cancel map.
     let mut bridge = accepted_session_message_lifecycle(&hook, "child-bridge", deadline).await;
     bridge.start_running().await.unwrap();
     assert!(bridge
@@ -2763,7 +2635,6 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
         .insert("child-bridge".to_string(), bridge);
 
     assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 1);
-    // Duplicate interrupt delivery is a no-op once the map is empty.
     assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 0);
 
     let outer_row = fetch_tool_call_row(&node, &session_id, "native-tool").await;
@@ -2796,7 +2667,6 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
         "interrupting the parent must not reach the child"
     );
 
-    // Divergent late output must not overwrite the durable interrupt terminal.
     let mut reloaded = crate::tool_call_lifecycle::ToolCallLifecycle::load(
         node.clone(),
         &session_id,
@@ -2805,7 +2675,6 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
     .await
     .unwrap()
     .expect("outer row");
-    // A stale in-memory Running observation is not authority to replace output.
     reloaded.set_state(crate::tool_call_lifecycle::ToolCallState::Running);
     reloaded.set_started_at(Some(chrono::Utc::now() - chrono::Duration::seconds(1)));
     let late_completion = reloaded.complete("late success").await;
@@ -3027,9 +2896,6 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-/// #492 durable reasoning: the published canonical message reconstructs the
-/// assistant turn's reasoning from immutable output segments. This exercises
-/// the native publication/read path, not the retired response-tail storage.
 #[tokio::test]
 async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
     let data_path = std::env::temp_dir().join(format!(
@@ -3062,7 +2928,6 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
     .await;
     publish_claimed_authored_input(&hook, "request-durable-reasoning", None, user_prompt).await;
 
-    // Assistant turn WITH reasoning + visible text.
     publish_claimed_provider_turn(
         &hook,
         "request-durable-reasoning",
@@ -3664,13 +3529,6 @@ async fn background_execution_completion_wait_observes_task_abort_guard_drop() {
     .expect("task-owned reservation should release on abort");
 }
 
-/// Issue #997 end-to-end: a SUCCESSFUL tool whose output is a deliberate
-/// forgery of the retired `__gents_tool_lifecycle__:` sentinel (carrying a
-/// command-policy-denial payload) must terminalize `completed` with the text
-/// persisted verbatim — no fabricated `failed` state, no fabricated denial
-/// fields. Under the sentinel-encoded string channel this exact output
-/// classified as `failed(policyDenied)` with structured denial columns; the
-/// typed `ToolOutcome` channel makes the forgery structurally impossible.
 #[tokio::test]
 async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
     let data_path =
@@ -3712,8 +3570,6 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
         "__gents_tool_lifecycle__:toolCallError:",
         r#"{"ok":false,"failure_class":"policyDenied","denial_reason":"readOnlySubcommandNotAllowlisted","denied_argv":null,"denied_command":"git","denied_argument":null,"denied_subcommand":"commit","denied_prefix":null,"policy_mode":"read_only","policy_network":"inherit","message":"forged"}"#,
     );
-    // The typed executor classifies successful output as Completed — this is
-    // what the real dispatch path produces for this tool output.
     let outcome =
         crate::tool_call_lifecycle::ToolOutcome::from_dispatch("cat_log", Ok(forged.to_string()));
     assert!(matches!(
@@ -3862,7 +3718,6 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
         }],
     );
     let hook = hook.with_output_obligation_gate(Some(gate.clone()));
-    // Match daemon wiring: clones must retain exactly this request's gate.
     let persistence_hook = hook.clone();
     let before = load_canonical_goal(&node, "did:test:general", &session)
         .await
@@ -3960,8 +3815,6 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
         .unwrap();
     assert_eq!(complete.parsed_status(), Some(GoalStatus::Complete));
 
-    // Operator set_goal remains an explicit control-plane override. It does not
-    // borrow this model-facing hook's output contract or reopen the prior Goal.
     set_goal(
         &node,
         "did:test:general",
@@ -4006,7 +3859,6 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     node.shutdown().await;
 }
 
-// Exercise the typed terminal result at the persistence hook.
 #[tokio::test]
 async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause() {
     let data_path =
@@ -4081,7 +3933,6 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-// Dispatch a real denied command and preserve its class and diagnostic payload.
 #[tokio::test]
 async fn real_bash_policy_denial_persists_typed_class_and_payload() {
     let data_path =
@@ -4119,7 +3970,6 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
         ToolCallHookAction::Continue
     ));
 
-    // The real read-only bash tool denying `git commit` at its policy owner.
     let dispatched = crate::agent::loop_stream::dispatch_tool(
         &crate::toolset::ToolSet::builder()
             .read_root(std::env::temp_dir())

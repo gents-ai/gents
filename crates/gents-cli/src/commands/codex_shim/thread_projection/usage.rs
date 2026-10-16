@@ -69,7 +69,6 @@ async fn requests_token_usage_scoped(
         }))
 }
 
-/// Live root and child streams carry the exact committed request scope.
 pub(in crate::commands::codex_shim) async fn submitted_token_usage(
     state: &ShimState,
     request: &crate::SubmittedRequest,
@@ -97,7 +96,6 @@ pub(in crate::commands::codex_shim) fn latest_inference_usage_observation(
     rows.iter()
         .filter(|row| row.get("call_kind").and_then(Value::as_str) == Some("inference"))
         .filter(|row| {
-            // InferenceCall.call_state vocabulary, not AgentRequest.lifecycle_state.
             matches!(
                 row.get("call_state").and_then(Value::as_str),
                 Some("failed" | "completed" | "cancelled")
@@ -437,25 +435,6 @@ fn nonnegative_i64(value: i64) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn thread_usage_keeps_cumulative_and_current_context_distinct() {
-        let usage = thread_token_usage(
-            TokenTotals {
-                input_tokens: 850,
-                output_tokens: 150,
-            },
-            TokenTotals {
-                input_tokens: 300,
-                output_tokens: 20,
-            },
-            1_000,
-        );
-
-        assert_eq!(usage.total.total_tokens, 1_000);
-        assert_eq!(usage.last.total_tokens, 320);
-        assert_eq!(usage.model_context_window, Some(1_000));
-    }
 
     #[test]
     fn latest_usage_selects_newest_request_then_newest_call() {

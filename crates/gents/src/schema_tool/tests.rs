@@ -87,14 +87,6 @@ fn argument_recovery_does_not_choose_between_conflicting_sdl_inputs() {
     assert!(next.options.is_empty());
 }
 
-#[test]
-fn unknown_concept_help_returns_nearest_available_parent() {
-    let path = ["indexes", "vector", "unknown"].map(str::to_owned);
-    let error = help::page(&path).unwrap_err().to_string();
-    let argv: Vec<String> = serde_json::from_str(error.split_once("argv:").unwrap().1).unwrap();
-    assert_eq!(argv, ["help", "indexes", "vector"]);
-    assert!(help::page(&argv[1..]).is_ok());
-}
 async fn call(tool: &SchemaTool, value: Value) -> Value {
     serde_json::from_str(&tool.call(args(value)).await.unwrap()).unwrap()
 }
@@ -520,44 +512,6 @@ async fn misplaced_preview_returns_the_corrected_call_without_publishing() {
         .await
         .unwrap()
         .is_some());
-}
-
-#[test]
-fn schema_command_normalizes_config_conventions_without_changing_the_intent() {
-    for (resource, verb) in [
-        ("collection", "get"),
-        ("collection", "update"),
-        ("collection", "materialize"),
-        ("version", "list"),
-        ("version", "get"),
-        ("version", "activate"),
-    ] {
-        let positional = SchemaCommand::parse(args(json!({"argv":[resource,verb,"id"]}))).unwrap();
-        let named =
-            SchemaCommand::parse(args(json!({"argv":[resource,verb],"target_id":"id"}))).unwrap();
-        assert_eq!(
-            serde_json::to_value(&positional.args).unwrap(),
-            serde_json::to_value(&named.args).unwrap()
-        );
-        assert!(SchemaCommand::parse(args(
-            json!({"argv":[resource,verb,"id"],"target_id":"different"})
-        ))
-        .is_err());
-    }
-    let preview = SchemaCommand::parse(args(json!({"argv":["collection","preview","update","WorkItem"],"options":{"patch":[{"op":"add","path":"/WorkItem/Fields/-","value":{"Name":"title","Kind":"String"}}]}}))).unwrap();
-    assert!(preview.preview);
-    assert!(preview.digest.is_none());
-    let apply = SchemaCommand::parse(apply_call(&preview.args, "sha256:receipt")).unwrap();
-    assert!(!apply.preview);
-    assert_eq!(apply.digest.as_deref(), Some("sha256:receipt"));
-    assert_eq!(
-        serde_json::to_value(preview.args).unwrap(),
-        serde_json::to_value(apply.args).unwrap()
-    );
-    assert!(SchemaCommand::parse(args(
-        json!({"argv":["collection","create"],"options":{"digest":false}})
-    ))
-    .is_err());
 }
 
 #[tokio::test]

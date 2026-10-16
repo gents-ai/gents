@@ -5,28 +5,10 @@ import { withLiveDesktop } from "./tauri-driver-live/harness";
 import { describeLive, logTurn } from "./tauri-driver-live/helpers";
 import { createFixtureHelpers } from "./live-bridge-runner/adapter";
 
-/**
- * Live conformance witness for EventDelivery D1/D2.
- *
- * Lean source: crates/gents/proofs/Proofs/EventDelivery/Properties.lean
- *   - D1_delivery_convergence at :62
- *   - D2_fair_delivery_latency at :119
- *
- * Each `it()` block is annotated with the Lean theorem it witnesses.
- * If a theorem's statement changes, this file MUST be updated to match —
- * see AGENTS.md "Foundation": spec changes are authoritative.
- *
- * P2P replication itself (defradb.rs add_replicator + iroh gossip) is
- * not Lean-modeled in this repo — the persisted-on-A → persisted-on-B
- * chain is a conformance witness, not a theorem witness.
- *
- * IMPORTANT: The write is issued to the *remote* node (via the test-only
- * bridge remote-save endpoint) and the read
- * is issued to the *desktop* node (via fetchSnapshot → desktop_core).
- * This write-on-A → visible-on-B chain is the actual D1/D2 cross-node
- * propagation witness.  A same-node roundtrip would not validate the P2P
- * subscription path at all.
- */
+/* Live conformance witness for EventDelivery D1/D2 (Lean proofs): update this
+   file when a theorem's statement changes. The write must go to the remote node
+   and the read to the desktop node; a same-node roundtrip would not exercise
+   the P2P subscription path. */
 describeLive("Tauri app live replication (EventDelivery witnesses)", () => {
   it("D1/D2: a remote write converges on the desktop node within the subscription window", async () => {
     await withLiveDesktop(async ({ runner, deployment }) => {
@@ -36,10 +18,6 @@ describeLive("Tauri app live replication (EventDelivery witnesses)", () => {
       const sentinel = `repl-d1-${Date.now()}`;
 
       const fixture = createFixtureHelpers(runner);
-      // Canonical agent save request: one Agent document. The system prompt
-      // lives on the referenced AgentContext, so the sentinel is carried on
-      // the agent document's display_name; the context linkage
-      // (agent.contextId → deployment.contexts) is asserted unchanged below.
       await fixture.saveAgentConfigOnRemote({
         document: {
           node_did: agent!.nodeDid,

@@ -59,30 +59,19 @@ export function logShellEvent(message: string) {
 
 type ClientLifecycleParams = {
   api: DesktopApiAdapter;
-  /** the local server's owner, which startup observes and restarts through */
   localServer: Pick<LocalServerActions, "restoreLocalServer" | "restartLocalServer">;
   supportsManagedServer: boolean;
   stores: ShellStores;
-  /** reads the selected session again after a restart */
   refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
 };
 
-/** What automatic recovery remembers between observations of the client. */
 export type ClientRecovery = {
-  /** startup has already tried to start the client once */
   autostartAttempted: boolean;
   autoRestartInFlight: boolean;
   lastP2PAutoRestartAt: number | null;
   lastObservedP2PHealth: P2PHealth | null;
 };
 
-/**
- * The desktop client's process lifecycle: startup and the managed server,
- * snapshot reads published to the client and fleet stores, single-flight
- * starts and bounded restarts. Made once; each function reads the stores
- * when it runs. Failures here are the client's own state, shown in the
- * banner through the client store's error.
- */
 export function createClientLifecycle({
   api,
   localServer,
@@ -113,9 +102,6 @@ export function createClientLifecycle({
   }
 
   const publication = createSnapshotPublicationOwner((next) => {
-    /* by key first, so a screen reading the fleet sees the same read. A
-     read that changed nothing keeps the snapshot it repeats, so no one
-     reading the client is notified either. */
     const fleetBefore = fleet.getState();
     applyFleetSnapshot(fleet, next);
     const before = client.getState().snapshot;
@@ -123,8 +109,6 @@ export function createClientLifecycle({
       before !== null &&
       fleet.getState() === fleetBefore &&
       equal(withoutDeployments(before), withoutDeployments(next));
-    /* what did not change keeps its object, so a screen reading one part
-       (sync health, the bootstrap) is not notified when another changed */
     if (!unchanged) client.setState({ snapshot: shareUnchanged(before, next) });
     resolveStartupPhase(next);
     recover();
@@ -170,8 +154,6 @@ export function createClientLifecycle({
 
   async function mutateSnapshot<T>(operation: () => Promise<T>): Promise<T> {
     const accepted = await operation();
-    // Mutation payloads can predate reads issued while they were pending.
-    // Observe committed state after acceptance; failed writes don't revoke reads.
     await refreshSnapshot();
     return accepted;
   }
@@ -196,9 +178,6 @@ export function createClientLifecycle({
     }
   });
 
-  /* Automatic recovery, where this window owns it: asked after every read, a
-     repeated one included (startup run again reads the same stopped client),
-     and again when a start, stop or send that held it back ends. */
   function recover() {
     if (!ownsAutomaticRecovery()) return;
     const { snapshot, starting, stopping } = client.getState();
@@ -214,8 +193,6 @@ export function createClientLifecycle({
     restartIfWedged(snapshot.client.p2pHealth ?? null, held);
   }
 
-  /* A health seen while a restart could not run is left unobserved, so the
-     restart is weighed against it once what held it back ends. */
   function restartIfWedged(health: P2PHealth | null, held: boolean) {
     if (!health || health.status === "healthy") {
       recovery.lastObservedP2PHealth = health;
@@ -253,9 +230,7 @@ export function createClientLifecycle({
   async function startClient() {
     try {
       await ensureDesktopClientStarted();
-    } catch {
-      // The shared owner already published the exact bridge error.
-    }
+    } catch {}
   }
 
   const initializeDesktop = singleFlight(async (): Promise<void> => {
@@ -268,8 +243,6 @@ export function createClientLifecycle({
       try {
         localServerAvailable = await localServer.restoreLocalServer(abort.signal);
       } catch (error) {
-        // A legacy or broken ~/.gents must not block first-run setup or
-        // already-saved remote peers. Surface the error after the app is up.
         localServerAvailable = false;
         setError(errorText(error));
         if (await home.adopt(error)) {
@@ -369,8 +342,6 @@ export function createClientLifecycle({
         await home.adopt(error);
       }
     } finally {
-      /* cleared first: ending the start and stop asks recovery again, which
-         weighs a wedged transport seen during this restart */
       recovery.autoRestartInFlight = false;
       setStopping(false);
       setStarting(false);
@@ -381,40 +352,20 @@ export function createClientLifecycle({
     recovery,
     clientAutostarts,
     home,
-    /** Shows, or clears with null, the client's own failure in the banner. */
     setError,
-    /** Reads the client and publishes it to the client and fleet stores;
-        only the newest read issued publishes, and a read that changed
-        nothing notifies no one. */
     refreshSnapshot,
-    /** Runs a write, then reads the client again; the write's result is
-        returned whether or not that read succeeds. */
     mutateSnapshot,
-    /** Starts the client, sharing one start among every caller while it is
-        in flight. A failure is shown in the banner and rethrown. */
     ensureDesktopClientStarted,
-    /** Starts the client and swallows its failure, which the banner shows. */
     startClient,
-    /** Startup: restores the managed server where this window owns it, then
-        reads the client. One run at a time; a second call joins it. */
     initializeDesktop,
-    /** Stops waiting for the managed server and continues startup without
-        it. */
     skipManagedServerWait,
-    /** Restarts a managed server whose start failed, with the node and
-        authority that start reported, then runs startup again. */
     restartManagedServer,
-    /** Whether this window owns a managed server, which startup checks first. */
     supportsManagedServer,
-    /** Runs startup again from the beginning. */
     retryStartup,
-    /** Stops and starts the client, a bounded number of times, then reads
-        the session the person still has open. One restart at a time. */
     restartDesktopClient,
   };
 }
 
-/* the read without its deployments, which the fleet store compares by key */
 function withoutDeployments(snapshot: DesktopClientSnapshot) {
   return snapshot.client
     ? { ...snapshot, client: { ...snapshot.client, deployments: null } }

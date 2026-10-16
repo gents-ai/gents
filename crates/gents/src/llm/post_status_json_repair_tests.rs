@@ -1,7 +1,3 @@
-//! Escape repair preserves large report bodies and rejects incomplete input.
-//! Direct tool calls have no provider termination observation, so JSON EOF does
-//! not establish that a token limit caused the malformed arguments.
-
 use crate::llm::tool::{Tool, ToolDefinition, ToolDyn, ToolError, UnparseableArgsKind};
 use serde::{Deserialize, Serialize};
 
@@ -56,9 +52,6 @@ impl Tool for PostStatusTool {
     }
 }
 
-/// A realistic ~5–8 KB steward markdown body: embedded newlines, backticks,
-/// fenced code blocks, and SINGLE-backslash sequences (regex + Windows/UNC
-/// paths) that are NOT legal JSON string escapes.
 fn large_steward_markdown_body() -> String {
     let mut body = String::new();
     body.push_str("# Steward Status — host-check\n\n");

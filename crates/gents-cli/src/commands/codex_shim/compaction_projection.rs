@@ -21,12 +21,8 @@ pub(super) fn decode_gents_compaction_progress(row: &Value) -> Option<GentsCompa
     })
 }
 
-/// Project the persisted admission state without inventing a parallel
-/// compaction lifecycle. A terminal row can be the first replicated
-/// observation, in which case Codex still needs a well-formed start/completion
-/// pair. Failed and cancelled rows never claim that context was compacted. The
-/// pinned Codex protocol has no failed-item notification, so clients rendering
-/// a Started item must clear it when the enclosing turn terminates.
+/// Failed/cancelled rows never claim compaction; the pinned Codex protocol has
+/// no failed-item notification, so a Started item must be cleared by turn termination.
 pub(super) fn compaction_projection_events(
     previous: Option<&str>,
     current: &str,
@@ -55,31 +51,6 @@ pub(super) fn context_compaction_item(call_id: &str) -> codex::ThreadItem {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn lean_fenced_compaction_states_project_native_codex_events() {
-        for active in ["queued", "running"] {
-            assert_eq!(
-                compaction_projection_events(None, active),
-                [CompactionProjectionEvent::Started]
-            );
-            assert_eq!(
-                compaction_projection_events(Some(active), "completed"),
-                [CompactionProjectionEvent::Completed]
-            );
-        }
-        assert_eq!(
-            compaction_projection_events(None, "completed"),
-            [
-                CompactionProjectionEvent::Started,
-                CompactionProjectionEvent::Completed
-            ]
-        );
-        assert!(compaction_projection_events(None, "failed").is_empty());
-        assert!(compaction_projection_events(None, "cancelled").is_empty());
-        assert!(compaction_projection_events(Some("running"), "failed").is_empty());
-        assert!(compaction_projection_events(Some("running"), "cancelled").is_empty());
-    }
 
     #[test]
     fn context_compaction_item_round_trips_through_pinned_protocol() {

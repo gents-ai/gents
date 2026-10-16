@@ -1,18 +1,45 @@
 import Mathlib.Data.List.Basic
 import Proofs.Request.State
+import Proofs.ScopeTemplates.State
 
-/-! Eval core contract (#1515): the closed outcome vocabulary and its projection
-onto evidence classes.
-
-The governing rule: anything the subject under evaluation could cause counts
-against it; only what it cannot cause is excluded. A `provider` outcome needs a
-reason, because a candidate prompt can cause a context overflow (`rejected`) but
-not an outage (`unavailable`). A `provider` outcome with no reason is `unknown`:
-the evaluator could not tell, and an unknown never helps a candidate.
-
-Refinement boundaries: checks, reducers over numeric scores, and trial scheduling
-are outside this model. -/
 namespace Eval
+
+/-- Eval evidence may retain backend configuration metadata. Backend auth must
+not enter evidence through either a projection or a filter, and other credential
+collections remain excluded. DefraDB DID/ACP authorization still governs reads. -/
+def documentCaptureAllowed (collection : String) (fields filterFields : List String) : Bool :=
+  (!ScopeTemplates.credentialCollections.contains collection || collection == "InferenceBackend") &&
+    !(collection == "InferenceBackend" && (fields ++ filterFields).contains "auth")
+
+theorem credential_capture_is_backend (collection : String) (fields filterFields : List String)
+    (credential : ScopeTemplates.credentialCollections.contains collection = true)
+    (allowed : documentCaptureAllowed collection fields filterFields = true) :
+    collection = "InferenceBackend" := by
+  have member := List.contains_iff_mem.mp credential
+  simp [documentCaptureAllowed, member] at allowed
+  exact allowed.1
+
+theorem backend_auth_not_captured (fields filterFields : List String)
+    (auth : "auth" ∈ fields ++ filterFields) :
+    documentCaptureAllowed "InferenceBackend" fields filterFields = false := by
+  have contains : (fields ++ filterFields).contains "auth" = true :=
+    List.contains_iff_mem.mpr auth
+  rw [documentCaptureAllowed, contains]
+  decide
+
+theorem oauth_credentials_not_captured (fields filterFields : List String) :
+    documentCaptureAllowed "OAuthCredential" fields filterFields = false := by
+  simp [documentCaptureAllowed, ScopeTemplates.credentialCollections]
+
+theorem backend_metadata_captured (fields filterFields : List String)
+    (public : "auth" ∉ fields ++ filterFields) :
+    documentCaptureAllowed "InferenceBackend" fields filterFields = true := by
+  have contains : (fields ++ filterFields).contains "auth" = false := by
+    cases h : (fields ++ filterFields).contains "auth" with
+    | false => rfl
+    | true => exact (public (List.contains_iff_mem.mp h)).elim
+  rw [documentCaptureAllowed, contains]
+  decide
 
 inductive OutcomeKind where
   | passed | modelAcceptance | deadline | tool | runtime | skippedPrerequisite
@@ -171,7 +198,6 @@ def classify : OutcomeKind → Option ProviderReason → EvidenceClass
   | .grader, _ => .unknown
   | .unknown, _ => .unknown
 
-/-- Outcomes a subject can bring about through its own behavior. -/
 def subjectCausable : OutcomeKind → Option ProviderReason → Bool
   | .modelAcceptance, _ => true
   | .deadline, _ => true
@@ -181,7 +207,6 @@ def subjectCausable : OutcomeKind → Option ProviderReason → Bool
   | .provider, some .rejected => true
   | _, _ => false
 
-/-- A subject can never move one of its own failures out of the denominator. -/
 theorem subject_causable_is_never_excluded (k : OutcomeKind) (r : Option ProviderReason)
     (h : subjectCausable k r = true) : classify k r ≠ .notEvidence := by
   cases k <;> cases r <;> simp_all [subjectCausable, classify]
@@ -196,8 +221,6 @@ theorem only_passed_passes (k : OutcomeKind) (r : Option ProviderReason) :
     classify k r = .pass ↔ k = .passed := by
   cases k <;> cases r <;> simp [classify]
   all_goals (rename_i reason; cases reason <;> simp [classify])
-
-/-! ## Case class: the class of a case-trial is the class of its worst verdict -/
 
 inductive CaseClass where
   | scored | unknown | notEvidence
@@ -215,7 +238,6 @@ def caseClass (verdicts : List EvidenceClass) : CaseClass :=
   else if verdicts.any (· == .unknown) then .unknown
   else .scored
 
-/-- Adding a verdict never improves a case's class. -/
 theorem caseClass_cons_rank (v : EvidenceClass) (vs : List EvidenceClass) :
     (caseClass vs).rank ≤ (caseClass (v :: vs)).rank := by
   cases v <;> simp only [caseClass, List.any_cons] <;>

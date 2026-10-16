@@ -64,21 +64,12 @@ async fn start_response_runtime(label: &str) -> Result<ResponseTestRuntime> {
 struct MaterializedResponse<'a> {
     request_id: &'a str,
     session_id: &'a str,
-    /// Text of the closed assistant Text stream; None means no text stream.
     message_content: Option<&'a str>,
-    /// Text of the closed assistant Reasoning stream; empty means none.
     message_reasoning: &'a str,
-    /// Request lifecycle state for the seeded terminal selection.
     lifecycle_state: RequestLifecycleState,
-    /// `true` stamps the seeded header as the terminalization owner's
-    /// selection; `false` leaves the terminal request with no selection yet
-    /// (the canonical `Loading` observation).
     stamp_terminal_selection: bool,
 }
 
-/// Create the canonical request row for a fixture. Lifecycle is the only
-/// request state; the terminal selection is stamped separately by the
-/// terminalization owner.
 async fn create_fixture_request(
     runtime: &ResponseTestRuntime,
     request_id: &str,
@@ -101,10 +92,6 @@ async fn create_fixture_request(
     gents_protocol::graphql::extract_mutation_doc_id(&request, "AgentRequest")
 }
 
-/// Stamp the terminalization owner's selection onto a terminal request so
-/// `observe_request_output` resolves the referenced header and its segment
-/// dependencies. The JSON column travels as a typed GraphQL variable,
-/// preserving its object shape verbatim.
 async fn stamp_terminal_message(
     runtime: &ResponseTestRuntime,
     request_doc_id: &str,
@@ -157,14 +144,9 @@ async fn insert_materialized_response(
     let now = chrono::Utc::now().to_rfc3339();
     let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(&runtime.graphql));
 
-    // Canonical request row: lifecycle is the only request state; the terminal
-    // selection (`TerminalOutput`) is stamped by the terminalization owner.
     let request_doc_id =
         create_fixture_request(runtime, request_id, session_id, lifecycle_state).await?;
 
-    // Canonical closed source: one provider turn whose closing record carries
-    // the text and reasoning streams. Payload bytes live only in the segment;
-    // nothing here writes a second durable copy.
     let source = OutputSource::ProviderTurn {
         scope: CaptureScope {
             kind: CaptureScopeKind::Inference,
@@ -176,8 +158,6 @@ async fn insert_materialized_response(
     let text_stream = message_content.map(str::as_bytes);
     let reasoning_stream = (!message_reasoning.is_empty()).then(|| message_reasoning.as_bytes());
     let reasoning_stream_index = u32::from(text_stream.is_some());
-    // One flush covers both streams; runs cover the payload exactly in
-    // arrival order, with the opening run of each stream declaring it.
     let mut payload = String::new();
     let mut runs: Vec<SegmentRun> = Vec::new();
     if let Some(bytes) = text_stream {
@@ -234,8 +214,6 @@ async fn insert_materialized_response(
     let close_doc_id =
         gents_protocol::graphql::extract_mutation_doc_id(&segment_response, "AgentOutputSegment")?;
 
-    // Canonical header: payloads are {close_doc_id, stream} references into the
-    // closed source above; small structure stays inline.
     let mut blocks: Vec<MessageBlock> = Vec::new();
     if message_content.is_some() {
         blocks.push(MessageBlock::Text {
@@ -285,8 +263,6 @@ async fn insert_materialized_response(
     let message_doc_id =
         gents_protocol::graphql::extract_mutation_doc_id(&header_response, "AgentMessage")?;
 
-    // Stamp the terminalization owner's selection onto the terminal request so
-    // `observe_request_output` resolves the exact header and its dependencies.
     if stamp_terminal_selection {
         stamp_terminal_message(runtime, &request_doc_id, &message_doc_id, lifecycle_state).await?;
     }
@@ -344,11 +320,6 @@ fn response_wait_failure(
     )
 }
 
-/// A terminal request with a selection the canonical reader rejects (header
-/// scope mismatch, wrong role, or unreadable dependencies) surfaces the
-/// `Invalid` observation: `show` prints the nonterminal `invalid` envelope and
-/// `wait` rejects that observation before terminal materialization, without
-/// timing out.
 async fn assert_invalid_terminal_selection(
     runtime: &ResponseTestRuntime,
     request_id: &str,
@@ -414,8 +385,6 @@ async fn response_show_hydrates_materialized_content_like_response_wait() -> Res
         shown_envelope.get("kind").and_then(Value::as_str),
         Some("terminal_message")
     );
-    // `response show` and `response wait` hydrate the same canonical terminal
-    // message into an identical user-facing presentation.
     assert_eq!(shown_envelope, waited_envelope);
     let shown_presentation = &shown_envelope["presentation"];
     assert_eq!(
@@ -431,7 +400,6 @@ async fn response_show_hydrates_materialized_content_like_response_wait() -> Res
         Some(durable_reasoning.as_str())
     );
 
-    // The canonical request metadata travels in the same envelope.
     let shown_request = &shown["request"];
     assert_eq!(
         shown_request.get("request_id").and_then(Value::as_str),
@@ -445,8 +413,6 @@ async fn response_show_hydrates_materialized_content_like_response_wait() -> Res
         shown_request.get("lifecycle_state").and_then(Value::as_str),
         Some(RequestLifecycleState::Completed.as_str())
     );
-    // The terminal selection points back at the seeded header, whose own
-    // canonical identity matches the seeded request/session coordinates.
     assert_eq!(
         shown_envelope
             .pointer("/header/request_doc_id")
@@ -486,11 +452,6 @@ async fn response_show_hydrates_materialized_content_like_response_wait() -> Res
 async fn response_show_diagnoses_missing_materialized_message() -> Result<()> {
     let runtime = start_response_runtime("missing").await?;
 
-    // A terminal request with no selection yet is the canonical `Loading`
-    // observation: `show` prints the nonterminal envelope and `wait` reports
-    // the materialization timeout with the diagnostic hint. The seeded header
-    // carries an empty text stream (an opening run of zero bytes); it is never
-    // selected, so presentation never reads it.
     let loading_request_id = format!("response-loading-{}", Uuid::new_v4().simple());
     let loading_session_id = format!("session-loading-{}", Uuid::new_v4().simple());
     insert_materialized_response(
@@ -524,8 +485,6 @@ async fn response_show_diagnoses_missing_materialized_message() -> Result<()> {
     );
     assert!(loading_wait_error.contains(&loading_request_id));
 
-    // A text-only terminal header presents the text and leaves reasoning
-    // absent (not empty).
     let text_request_id = format!("response-text-only-{}", Uuid::new_v4().simple());
     let text_session_id = format!("session-text-only-{}", Uuid::new_v4().simple());
     insert_materialized_response(
@@ -558,8 +517,6 @@ async fn response_show_diagnoses_missing_materialized_message() -> Result<()> {
         "text-only terminal output must not fabricate empty reasoning"
     );
 
-    // A reasoning-only terminal header keeps the reasoning and presents an
-    // empty body without inventing an unused text stream.
     let reasoning_request_id = format!("response-reasoning-{}", Uuid::new_v4().simple());
     let reasoning_session_id = format!("session-reasoning-{}", Uuid::new_v4().simple());
     insert_materialized_response(
@@ -588,9 +545,6 @@ async fn response_show_diagnoses_missing_materialized_message() -> Result<()> {
         Some("preserve this reasoning-only output")
     );
 
-    // A terminal request whose selection points at a header scoped to a
-    // different request is rejected by the canonical reader (`Invalid`), never
-    // presented as this request's answer.
     let scoped_request_id = format!("response-scoped-{}", Uuid::new_v4().simple());
     let scoped_session_id = format!("session-scoped-{}", Uuid::new_v4().simple());
     let scoped_message_doc_id = insert_materialized_response(
@@ -623,9 +577,6 @@ async fn response_show_diagnoses_missing_materialized_message() -> Result<()> {
     .await?;
     assert_invalid_terminal_selection(&runtime, &mismatched_request_id).await?;
 
-    // An interrupted terminal request keeps its lifecycle; with a completed
-    // header the terminal selection still presents, while the request row
-    // carries the interrupted lifecycle.
     let interrupted_request_id = format!("response-interrupted-{}", Uuid::new_v4().simple());
     let interrupted_session_id = format!("session-interrupted-{}", Uuid::new_v4().simple());
     insert_materialized_response(

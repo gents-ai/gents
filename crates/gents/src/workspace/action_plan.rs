@@ -104,7 +104,6 @@ pub struct SealWorkspaceAction {
     pub produced_by_request_doc_id: String,
 }
 
-/// Operator-only freeze of an unchanged base. No producer request is implied.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct FreezeWorkspaceBaseAction {
@@ -112,8 +111,6 @@ pub struct FreezeWorkspaceBaseAction {
     pub base_sha: String,
 }
 
-/// How the host applies a sealed workspace onto trunk. v1 `git_worktree_diff`
-/// only implements `apply_diff` — workers have no commit to cherry-pick/merge.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IntegrateMode {
@@ -149,7 +146,6 @@ pub struct CleanupWorkspaceAction {
     pub workspace_id: String,
 }
 
-/// Builtin ActionPlan emitter: structured fields → the same ABI WASM will use.
 pub fn emit_create_workspace_plan(action: CreateWorkspaceAction) -> ActionPlan {
     ActionPlan {
         abi: ACTION_PLAN_ABI,
@@ -207,15 +203,12 @@ impl HostAction {
     }
 }
 
-/// Sorted-key JSON for a validated ActionPlan. Rejects NaN/Inf and host paths.
 pub(crate) fn action_plan_canonical_json(plan: &ActionPlan) -> Result<String, String> {
     let value = serde_json::to_value(plan).map_err(|error| error.to_string())?;
     reject_illegal_plan_value(&value)?;
     canonical_json_string(&value)
 }
 
-/// Parse ActionPlan JSON. Unknown action types, extra fields, NaN, and host
-/// paths deny the entire plan.
 pub(crate) fn parse_action_plan_json(raw: &str) -> Result<ActionPlan, String> {
     let value: Value =
         serde_json::from_str(raw).map_err(|error| format!("ActionPlan is not JSON: {error}"))?;
@@ -230,7 +223,6 @@ pub(crate) fn parse_action_plan_json(raw: &str) -> Result<ActionPlan, String> {
     })
 }
 
-/// Sorted object keys, no NaN/Inf. Used for module_id and planner input.
 pub(crate) fn canonical_json_string(value: &Value) -> Result<String, String> {
     reject_non_finite_numbers(value)?;
     serde_json::to_string(&sort_json(value)).map_err(|error| error.to_string())
@@ -453,9 +445,6 @@ fn require_capability(capabilities: &BTreeSet<String>, cap: &str) -> Result<()> 
     }
 }
 
-/// Platform-independent host-path shape: leading `/` `\`, `~`, `file:`,
-/// single-letter drive (`C:`, `C:foo`, `C:\...`), or a `..` segment split on
-/// `/` or `\`. Does not use `Path` so Windows separators are visible on Unix.
 pub(crate) fn looks_like_host_path(text: &str) -> bool {
     let text = text.trim();
     if text.is_empty() {

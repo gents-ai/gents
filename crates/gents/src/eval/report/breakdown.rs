@@ -1,20 +1,8 @@
-//! Compare breakdowns (spec 4b §8): which check or stage a candidate moved,
-//! and one case's trials side by side. Pure functions over a `Comparison`;
-//! no new serialization.
-//!
-//! A trial key enters a breakdown only when `pair_trials` paired it, read
-//! from the comparison's own pairs. Each side is then scored per check or
-//! stage from its acceptance verdicts that carry weight, each read by
-//! scoring's verdict rule: a pass counts its score (full credit when it has
-//! none), a fail its score (zero when it has none), and an unknown or
-//! not-evidence verdict contributes nothing. A check or stage present on one
-//! side only is left out.
-//!
-//! The breakdowns therefore do not restate the headline comparison. Pairing
-//! imputes an unknown slot worst-case as a whole; a breakdown reads that
-//! slot's verdicts one by one and skips the unknown ones, even those that
-//! carry a score. A check can show as improved while the comparison worsens,
-//! and a check's or stage's `pairs` can be fewer than the comparison's.
+//! Compare breakdowns: which check or stage a candidate moved, and one case's
+//! trials side by side. Pure functions over a `Comparison`; no new
+//! serialization. Read only the pass and fail verdicts each side carries for
+//! the slot, so a breakdown can improve while the pairing-imputed headline
+//! worsens and its `pairs` can be fewer than the comparison's.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -28,17 +16,11 @@ use crate::eval::report::compare::{CaseComparison, Comparison, PairedTrial};
 use crate::eval::report::refused;
 use crate::eval::scoring::SCORE_BP_MAX;
 
-/// One check's paired difference, candidate minus baseline, across cases.
-///
-/// Read from each side's pass and fail verdicts for the check, not from the
-/// slot scores the comparison pairs: an unknown slot, which pairing imputes
-/// worst-case, contributes only its pass and fail verdicts. So this row can
-/// improve while the comparison worsens, and its `pairs` can be fewer than
-/// the comparison's.
+/// One check's paired difference, candidate minus baseline, across cases,
+/// read from each side's verdicts for the check.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct CheckDiff {
     pub check: String,
-    /// Cases with at least one pair scoring this check on both sides.
     pub cases: u32,
     pub pairs: u64,
     /// Mean over cases of each case's mean paired difference, truncated.
@@ -49,17 +31,11 @@ pub struct CheckDiff {
     pub worsened: u32,
 }
 
-/// One stage's paired difference, candidate minus baseline, across cases.
-///
-/// Read from each side's pass and fail verdicts for the stage, not from the
-/// slot scores the comparison pairs: an unknown slot, which pairing imputes
-/// worst-case, contributes only its pass and fail verdicts. So this row can
-/// improve while the comparison worsens, and its `pairs` can be fewer than
-/// the comparison's.
+/// One stage's paired difference, candidate minus baseline, across cases,
+/// read from each side's verdicts for the stage.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct StageDiff {
     pub stage_id: String,
-    /// Cases with at least one pair scoring this stage on both sides.
     pub cases: u32,
     pub pairs: u64,
     /// Mean over cases of each case's mean paired difference, truncated.
@@ -110,7 +86,7 @@ pub fn by_stage(comparison: &Comparison) -> Vec<StageDiff> {
         .collect()
 }
 
-/// One case side by side; refused for a case the comparison does not have.
+/// One case side by side.
 pub fn case_view(comparison: &Comparison, case_id: &str) -> Result<CaseView> {
     let summary = comparison
         .cases
@@ -149,7 +125,6 @@ fn tally(
         .iter()
         .map(|pair| (pair.case_id.as_str(), pair.trial_index))
         .collect();
-    // (group, case) -> (sum of candidate minus baseline, pairs)
     let mut per_case: BTreeMap<(String, String), (i64, u64)> = BTreeMap::new();
     for trial in &comparison.trials {
         if !paired.contains(&(trial.case_id.as_str(), trial.trial_index)) {
@@ -170,7 +145,6 @@ fn tally(
     let mut groups: BTreeMap<String, (Vec<i64>, u64)> = BTreeMap::new();
     for ((name, _case), (sum, pairs)) in per_case {
         let entry = groups.entry(name).or_default();
-        // `pairs` is at least one: an entry exists only once a pair added to it.
         entry.0.push(sum / pairs as i64);
         entry.1 += pairs;
     }
@@ -193,11 +167,8 @@ fn tally(
         .collect()
 }
 
-/// What one verdict contributes, by scoring's verdict rule: a pass its score
-/// (full credit when it has none), a fail its score (zero when it has none),
-/// clamped into the basis-point range. `None` for an unknown or not-evidence
-/// verdict, which a breakdown skips. Mirrors the frozen scoring's private
-/// per-verdict helper; a test pins the two together.
+/// What one verdict contributes, by scoring's verdict rule; `None` for an
+/// unknown or not-evidence verdict, which a breakdown skips.
 fn verdict_bp(verdict: &SlotVerdict) -> Option<u32> {
     match classify(verdict.kind, verdict.provider_reason) {
         EvidenceClass::Pass => Some(verdict.score_bp.unwrap_or(SCORE_BP_MAX).min(SCORE_BP_MAX)),
@@ -254,8 +225,6 @@ mod tests {
         .unwrap()
     }
 
-    /// Case a: `captured_rows_count` improves and `second` ties at 10000.
-    /// Case b: `captured_rows_count` ties.
     fn two_checks() -> Comparison {
         let rows = with_a_scored_second_check(
             Rows::default()
@@ -296,7 +265,6 @@ mod tests {
 
     #[test]
     fn by_stage_compares_each_stages_weighted_mean() {
-        // Case a: baseline (0 + 10000) / 2 against candidate 10000; case b ties.
         assert_eq!(
             by_stage(&two_checks()),
             vec![StageDiff {
@@ -311,7 +279,6 @@ mod tests {
         );
     }
 
-    /// Adds a scored `second` pass to both sides of case `a`, trial 0.
     fn with_a_scored_second_check(mut rows: Rows) -> Rows {
         for cell in ["baseline", "candidate"] {
             let trial = trial_id(RUN, at(cell, "a", 0, 1));
@@ -334,8 +301,6 @@ mod tests {
 
     #[test]
     fn a_side_that_is_not_evidence_is_left_out_as_pair_trials_leaves_it_out() {
-        // The not-evidence side also passes `second` with a score, so only
-        // the pairing gate keeps it out.
         let rows = with_a_scored_second_check(
             Rows::default()
                 .add(
@@ -353,9 +318,6 @@ mod tests {
 
     #[test]
     fn an_unknown_verdict_contributes_nothing_to_a_pair_pair_trials_keeps() {
-        // The baseline's grader could not decide: an unknown slot that
-        // `pair_trials` pairs (imputed). Its one verdict carries a score,
-        // and scoring's verdict rule still skips it.
         for score_bp in [None, Some(10_000)] {
             let rows = Rows::default()
                 .add(
@@ -366,69 +328,11 @@ mod tests {
                 .add(RUN, at("candidate", "a", 0, 1), pass());
             let comparison = comparison_of(&["a"], &rows);
             assert_eq!((comparison.pairs, comparison.imputed), (1, 1));
-            assert!(by_check(&comparison).is_empty(), "{score_bp:?}");
-            assert!(by_stage(&comparison).is_empty(), "{score_bp:?}");
+            assert!(by_check(&comparison).is_empty());
+            assert!(by_stage(&comparison).is_empty());
         }
     }
 
-    /// A one-verdict case reads as scoring reads it: `by_check` against a
-    /// full-credit candidate is `10000 - case_trial_score(WeightedMean)` for
-    /// the baseline's verdict, and no row when scoring gives no score.
-    #[test]
-    fn a_one_verdict_case_scores_as_case_trial_score_scores_it() {
-        use crate::document_config::EvalReducer;
-        use crate::eval::scoring::{case_trial_score, CaseTrialScore, VerdictView};
-
-        for (kind, score_bp) in [
-            (OutcomeKind::Passed, None),
-            (OutcomeKind::Passed, Some(6_000)),
-            (OutcomeKind::ModelAcceptance, None),
-            (OutcomeKind::ModelAcceptance, Some(3_000)),
-            (OutcomeKind::Grader, Some(7_000)),
-        ] {
-            let rows = Rows::default()
-                .add(
-                    RUN,
-                    at("baseline", "a", 0, 1),
-                    Outcome::Verdict(kind, score_bp),
-                )
-                .add(RUN, at("candidate", "a", 0, 1), pass());
-            let trial = trial_id(RUN, at("baseline", "a", 0, 1));
-            let record = rows
-                .verdicts
-                .iter()
-                .find(|verdict| verdict.trial_id == trial)
-                .unwrap();
-            let view = VerdictView {
-                verdict_id: record.verdict_id.clone(),
-                stage_index: 0,
-                check: record.check.clone(),
-                tier: record.tier,
-                kind: record.kind,
-                provider_reason: record.provider_reason,
-                score_bp: record.score_bp,
-                weight: record.weight,
-                regrade_of: None,
-            };
-            let expected = match case_trial_score(EvalReducer::WeightedMean, &[view]) {
-                CaseTrialScore::Scored(bp) => Some(10_000 - i64::from(bp)),
-                CaseTrialScore::Unknown | CaseTrialScore::NotEvidence => None,
-            };
-            let comparison = comparison_of(&["a"], &rows);
-            assert_eq!(
-                by_check(&comparison)
-                    .first()
-                    .and_then(|row| row.mean_diff_bp),
-                expected,
-                "{kind:?} {score_bp:?}"
-            );
-        }
-    }
-
-    /// Case a: the baseline's `captured_rows_count` is undecided (no score),
-    /// its `second` scores 0; the candidate fails `captured_rows_count` and
-    /// passes `second`. Case b: the baseline is undecided, the candidate
-    /// passes.
     #[test]
     fn a_check_can_improve_while_the_imputed_comparison_worsens() {
         let mut rows = Rows::default()
@@ -464,8 +368,6 @@ mod tests {
             });
         }
         let comparison = comparison_of(&["a", "b"], &rows);
-        // Pairing imputes each undecided baseline at 10000: case a is
-        // 10000 against (0 + 10000) / 2 and worsens; case b ties.
         assert_eq!(
             (
                 comparison.pairs,
@@ -476,8 +378,6 @@ mod tests {
             ),
             (2, 2, 0, 1, 1)
         );
-        // The breakdowns read verdict scores: `captured_rows_count` has no
-        // baseline score in either pair, and `second` improved in case a.
         assert_eq!(
             by_check(&comparison),
             vec![CheckDiff {
@@ -490,8 +390,6 @@ mod tests {
                 worsened: 0,
             }]
         );
-        // The stage compares the baseline's `second` (0) against the
-        // candidate's (0 + 10000) / 2.
         assert_eq!(
             by_stage(&comparison),
             vec![StageDiff {

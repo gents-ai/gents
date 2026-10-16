@@ -1,5 +1,3 @@
-//! Private conflict classification and shared retry policy for committed writes.
-
 use std::fmt;
 use std::time::Duration;
 
@@ -79,8 +77,7 @@ pub(super) fn is_transaction_conflict_text(text: &str) -> bool {
 }
 
 pub(super) fn graphql_value_is_transaction_conflict(value: &serde_json::Value) -> bool {
-    // Share the embedded DB's classification, including its JSON null/absent
-    // representation of no result. Malformed replies remain non-replayable.
+    // Share the embedded DB's classification, including its JSON null/absent representation of no result.
     <query::QueryResponse as serde::Deserialize>::deserialize(value)
         .is_ok_and(|response| response.is_transaction_conflict())
 }

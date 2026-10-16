@@ -56,10 +56,10 @@ impl ObserverMetrics {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StoreProjectionRevision {
     pub store_version: u64,
-    /// Advances for observed request, session and tool-call lineage inputs, not
-    /// transcript invalidations. This is the UI lineage-cache revision.
+    /// Advances for request/session/tool-call lineage inputs, not transcript
+    /// invalidations; this is the UI lineage-cache revision.
     pub provenance_version: u64,
-    /// Advances for request events without changing the UI lineage-cache revision.
+    /// Advances for request events without changing the lineage-cache revision.
     pub request_event_version: u64,
 }
 
@@ -79,9 +79,8 @@ enum ProvenanceUpdate {
     Invalidate,
 }
 
-/// Captures publication ordering without retaining the entire previous snapshot.
-/// Unknown ownership invalidates every scope; classified changes invalidate only
-/// their actual owners, so unrelated traffic cannot starve a scoped reload.
+/// Captures publication ordering: unknown ownership invalidates every scope;
+/// classified changes invalidate only their actual owners.
 #[derive(Clone, Default)]
 pub(crate) struct StoreReadFence {
     all: Arc<()>,
@@ -238,8 +237,8 @@ impl ObservedStore {
         self.resync_tx.subscribe()
     }
 
-    /// Coalesces stale async publishers into the observer's existing bounded
-    /// authoritative reload loop; callers never start their own retry.
+    /// Coalesces stale async publishers into the observer's bounded
+    /// authoritative reload loop.
     pub(crate) fn request_resync(&self, node_did: Option<&str>) {
         self.enqueue_resync_request(node_did);
         self.resync_tx.send_modify(|generation| {
@@ -254,7 +253,6 @@ impl ObservedStore {
             .lock()
             .expect("pending resync lock poisoned");
         if pending.full {
-            // A full reload already subsumes this request.
         } else if let Some(node_did) = node_did {
             pending.node_dids.insert(node_did.to_owned());
             if pending.node_dids.len() > MAX_PENDING_SCOPES {
@@ -366,9 +364,8 @@ impl ObservedStore {
     }
 
     /// Publish a structural database change without retaining its transcript
-    /// payload in the process-wide observer. Consumers reconcile by issuing a
-    /// bounded DefraDB projection for the selected session. Tool-call changes
-    /// also invalidate lineage, although their payloads are never retained.
+    /// payload; consumers reconcile with a bounded DefraDB projection for the
+    /// selected session. Tool-call changes also invalidate lineage.
     pub fn invalidate_projection(&self, provenance_changed: bool) -> u64 {
         let notice = {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
@@ -394,7 +391,6 @@ impl ObservedStore {
         notice.revision.store_version
     }
 
-    /// Classifies physical request events using the retained owner index.
     pub(crate) fn observe_request_event(&self, doc_id: Option<&str>) -> u64 {
         let mut state = self.state.write().expect("store snapshot lock poisoned");
         let scope = state.snapshot.request_event_scope(doc_id);
@@ -499,8 +495,8 @@ fn provenance_update(patch: &ClientStore) -> ProvenanceUpdate {
     }
 }
 
-/// These are observations used by the lineage read, including the remote
-/// request's lifecycle. Lease renewal and streamed text cannot change them.
+/// Lineage-read observations including the remote request lifecycle; lease
+/// renewal and streamed text cannot change them.
 fn same_provenance_inputs(before: &ClientStore, after: &ClientStore) -> bool {
     before.requests.len() == after.requests.len()
         && before.requests.iter().zip(&after.requests).all(|(a, b)| {

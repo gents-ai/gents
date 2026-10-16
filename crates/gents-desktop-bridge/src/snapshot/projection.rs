@@ -184,9 +184,6 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
     deployment.inference_sampling.clear();
     deployment.inference_execution.clear();
     for environment in &mut deployment.agent_environments {
-        // Keep coarse capability labels: chat clients need an honest account
-        // of the agent's authority. Referenced profile labels and host paths
-        // remain config-only.
         environment.inference_profile_name = None;
         environment.workspace_root = None;
     }

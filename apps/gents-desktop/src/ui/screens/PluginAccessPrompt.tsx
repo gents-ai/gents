@@ -1,5 +1,3 @@
-/* A running plugin call asking whether it may read a path outside the
-   working folder and the allowed folders. The call waits for the answer. */
 import { shortPath } from "@/lib/paths";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -31,12 +29,8 @@ export function PluginAccessPrompt() {
   const answering = useRef(false);
   const active = useRef(false);
   const failed = useRef<string | null>(null);
-  /* one read out at a time; an answer outdates the one out, which may have
-     read the queue before the answer reached the host */
   const reading = useRef(false);
-  /* the bridge's announce is edge-triggered with no replay: a change seen
-     while a read or an answer is out must run one more read, or it stays
-     unseen until the next queue change */
+  // announce is edge-triggered with no replay: a change seen while a read is out must re-read
   const dirty = useRef(false);
   const [asks] = useState(newestWins);
 
@@ -128,6 +122,7 @@ export function PluginAccessPrompt() {
   async function answer(decision: PluginApprovalDecision) {
     if (!question || answering.current) return;
     answering.current = true;
+    // A decision makes any read that was pending for this prompt stale.
     asks.supersede();
     let answered = false;
     try {

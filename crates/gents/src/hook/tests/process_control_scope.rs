@@ -172,8 +172,6 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
     })
     .await
     .expect("wait owner registered");
-    // No daemon interrupt subscriber runs in this fixture: the persisted
-    // interrupt is observed by the wait owner, not its competing caller sweep.
     crate::interrupt::interrupt_request(&node, request_id)
         .await
         .unwrap();
@@ -302,9 +300,6 @@ async fn run_process_control_scope(requester_did: Option<&str>) {
         requester_did,
     )
     .await;
-    // The real session FIFO admits one owned request at a time. The foreign
-    // caller receives its own request after the spawning parent completes;
-    // the background worker must outlive that parent completion.
     assert_eq!(
         owner.session_id().await.as_deref(),
         Some(session_id.as_str())

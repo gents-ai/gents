@@ -1,10 +1,6 @@
 import Proofs.ToolExecution
 import Proofs.Conformance.ContractTypes
 
-/-!
-# Tool Call Conformance Machine
--/
-
 namespace Conformance.Contracts
 
 def toolCallStates : List ToolExecution.ToolCallState :=
@@ -56,16 +52,9 @@ def toolCallWithState (state : ToolExecution.ToolCallState) : ToolExecution.Tool
   , persistence := .committed
   }
 
-/-- Mode evidence for the executable `foreground` arm. The ordinary running
-sample starts in foreground and already exercises `background`; this sample
-closes the inverse mode-flip row. -/
 def toolCallModeSamples : List ToolExecution.ToolCallContext :=
   [ { toolCallWithState .running with awaitMode := .background } ]
 
-/-- Named transition rows for the ToolCall machine. Mode flips are
-state-preserving on `ToolCallState`, so the pair-based `legalTransitions` list
-cannot express them. An `agent_new`/`agent_message` row closes through the
-same `complete`/`fail` edges as every other row; there are no bridge edges. -/
 def toolCallNamedTransitions : List NamedTransition :=
   [ { name := "complete"
     , source := "running"

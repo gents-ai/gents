@@ -35,8 +35,6 @@ def composedInvariantWitnesses : List ComposedInvariantWitness :=
     , toolCurrentTime := expiredPendingTool.currentTime
     , deadlineExceeded := decide withExpiredPendingTool.request.deadlineExceeded
     , wellFormedSource := "ComposedState.wellFormed_from_initial"
-    -- `tool_spawn` is the canonical acceptance boundary: the pending tool is
-    -- already a member of the composed durable tool set before dispatch.
     , preToolPersisted := decide
         (withExpiredPendingTool.hasToolByCallId expiredPendingTool.callId)
     , cancelCause := some (ToolExecution.CancelCause.toDefraDB .deadline)

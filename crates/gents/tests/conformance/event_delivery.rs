@@ -19,8 +19,6 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(2);
 const RESCAN_TEST_INTERVAL: Duration = Duration::from_millis(50);
 
 pub(super) async fn event_delivery_transition_cases_match_contract() {
-    // These rows describe substrate bookkeeping, not a source-owner observation.
-    // The ledger retains their missing runtime coverage; do not replay a second World.
     const UNOBSERVED: [&str; 8] = [
         "persist_into_empty",
         "persist_extends_set",
@@ -41,12 +39,10 @@ pub(super) async fn event_delivery_transition_cases_match_contract() {
             continue;
         }
         if case.name == "handle_ready_trigger_preserves_pending_sibling" {
-            siblings += 1; // Driven by the dedicated two-trigger EventSource test.
+            siblings += 1;
             continue;
         }
         if matches!(&case.action, LeanEventDeliveryAction::Release { .. }) {
-            // Private cooldown prestate is hydrated by the native owner test
-            // watcher::tests::generated_release_cases_preserve_native_session_order.
             releases += 1;
             continue;
         }
@@ -124,8 +120,6 @@ pub(super) async fn event_delivery_convergence_traces_match_runtime_or_deviation
         for action in &trace.actions {
             match action {
                 LeanEventDeliveryAction::Persist { doc } => {
-                    // The mock bus receives no update here: delivery must come
-                    // from the real source's rescan of persisted documents.
                     runtime
                         .persist_runtime_doc(doc, pending.len())
                         .await
@@ -275,9 +269,6 @@ impl ProductionEventDeliveryDriver {
         for (index, doc) in world.persistent_set.iter().enumerate() {
             self.persist_runtime_doc(doc, index).await?;
             if world.processed_set.contains(doc) {
-                // Poll through the owner to seed Watcher cooldown. Keep the
-                // request pending; marking it completed would test a different filter.
-                // Current witnesses put processed documents first in FIFO order.
                 match &mut self.runtime {
                     ProductionRuntime::Watcher { watcher } => {
                         let request = poll_watcher(watcher).await?;
@@ -411,8 +402,6 @@ impl ProductionEventDeliveryDriver {
                 let expected = self.production_doc_id(doc)?;
                 self.wait_for_emitted_doc(&expected, DELIVERY_TIMEOUT)
                     .await?;
-                // The emitted physical document id was checked above; return
-                // its logical fixture id for comparison with the generated row.
                 Ok(doc.to_string())
             }
         }

@@ -74,8 +74,6 @@ describe("desktop client restart selection ordering", () => {
   it.each(["start", "restart"])(
     "observes successful %s after an intervening stopped refresh",
     async (operation) => {
-      /* the start or restart asked for, alone: a view that does not own
-         automatic recovery does not start the client by itself */
       ownership.main = false;
       const start = deferred<Record<string, unknown>>();
       const stopped = {
@@ -203,8 +201,6 @@ describe("desktop client restart selection ordering", () => {
         .mockResolvedValue(ready),
       startDesktopClient: vi.fn().mockResolvedValue(ready),
     };
-    /* the stopped client starts by itself; its start succeeds, and the read
-       after it fails */
     const lifecycle = lifecycleFor(api);
     await waitFor(() => expect(lifecycle.startupPhase).toBe("client-error"));
     expect(api.startDesktopClient).toHaveBeenCalledOnce();

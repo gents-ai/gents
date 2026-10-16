@@ -13,11 +13,10 @@ use super::ports;
 /// Bound on replacement ports tried after a lost bind race.
 const MAX_STOLEN_PORT_ATTEMPTS: u32 = 3;
 
-/// Positive evidence that the child's preflight bind found `addr` already
-/// taken. The context string alone is not enough: `serve.rs` attaches it to
-/// every bind failure, so descriptor exhaustion or a permission error would
-/// otherwise be misread as a stolen port and silently retried. Unix renders
-/// `io::ErrorKind::AddrInUse` as this text on both macOS and Linux.
+/// Positive evidence that the child's preflight bind found `addr` taken; the
+/// context string alone would misread descriptor exhaustion or permission
+/// errors as a stolen port. `io::ErrorKind::AddrInUse` renders as this text
+/// on macOS and Linux.
 pub fn is_address_in_use(text: &str, addr: &str) -> bool {
     text.contains(&format!("embedded HTTP listener cannot bind to {addr}"))
         && text.contains("Address already in use")
@@ -67,10 +66,8 @@ impl ServeProcess {
     }
 
     /// Run a fallible future and, on failure, attach the server's captured
-    /// stdout/stderr to the error chain (the original failure stays as the
-    /// cause) so mid-test connection failures are diagnosable (#1041). A
-    /// failure to read the capture files is reported in place of the logs
-    /// rather than silently rendering as an empty (silent-looking) server.
+    /// stdout/stderr to the error chain so mid-test connection failures are
+    /// diagnosable; capture-read failures are reported in place of the logs.
     pub async fn capturing<T>(
         &self,
         fut: impl std::future::Future<Output = Result<T>>,
@@ -141,7 +138,6 @@ pub fn run_desktop_init_json(node_home: &Path, desktop_home: &Path, label: &str)
 }
 
 pub fn run_init_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
-    // Test homes keep their store key in a file, never the login keychain.
     let mut command_args = vec!["init", "--store-key-custody", "file"];
     command_args.extend_from_slice(args);
     run_cli_json(home_dir, &command_args)
@@ -159,12 +155,9 @@ fn codex_shim_opt_out(extra_args: &[&str]) -> &'static [&'static str] {
     }
 }
 
-/// Spawn a `gents server` and wait for its readiness JSON.
-///
-/// Never replaces a raced-away port: a caller holding this signature cannot
-/// observe a port change, so moving the server would strand it on a port
-/// nothing is listening on. Use `spawn_server_with_ready_json_recovering`
-/// to opt into recovery and take the resulting port back.
+/// Spawn a `gents server` and wait for its readiness JSON. Never replaces a
+/// raced-away port: a caller holding this signature cannot observe a port
+/// change, so moving the server would strand it on a dead port.
 pub fn spawn_server_with_ready_json(
     home_dir: &Path,
     port: u16,
@@ -192,12 +185,8 @@ pub fn spawn_server_with_ready_json_in(
 }
 
 /// `spawn_server_with_ready_json`, but if the child's preflight bind finds
-/// the requested port already taken and this process reserved that port,
-/// release it, allocate another and respawn.
-///
-/// Returns the port the child actually bound, which may differ from `port`.
-/// Derive `graphql_url` and every other address from the returned port,
-/// after this call.
+/// the requested port taken and this process reserved it, release it,
+/// allocate another and respawn. Derive addresses from the returned port.
 pub fn spawn_server_with_ready_json_recovering(
     home_dir: &Path,
     port: u16,
@@ -207,10 +196,6 @@ pub fn spawn_server_with_ready_json_recovering(
     spawn_server_with_ready_json_inner(home_dir, port, extra_args, envs, true, None)
 }
 
-/// Single owner of the readiness wait and the port-replacement policy.
-/// `recover_stolen_port` gates replacement by zeroing the attempt budget, so
-/// the non-recovering caller keeps reporting the child's own bind failure.
-/// The 30s budget spans the whole sequence, replacements included.
 fn spawn_server_with_ready_json_inner(
     home_dir: &Path,
     port: u16,
@@ -272,8 +257,6 @@ fn spawn_server_with_ready_json_inner(
                     attempts_left -= 1;
                     ports::release(port);
                     port = ports::allocate_port()?;
-                    // Reap the losing child before its replacement starts, so
-                    // two servers never hold the same home.
                     drop(serve);
                     continue 'attempt;
                 }
@@ -352,8 +335,6 @@ pub fn spawn_server_with_env(
     Ok(ServeProcess::with_logs(child, stdout_log, stderr_log))
 }
 
-/// The home a spawned `gents server` resolves: `--home`, then `GENTS_HOME`,
-/// then `$HOME/.gents` under the fixture `HOME`.
 fn served_home_dir(home_dir: &Path, extra_args: &[&str], envs: &[(&str, &str)]) -> PathBuf {
     if let Some(index) = extra_args.iter().position(|arg| *arg == "--home") {
         if let Some(home) = extra_args.get(index + 1) {
@@ -373,8 +354,8 @@ fn served_home_dir(home_dir: &Path, extra_args: &[&str], envs: &[(&str, &str)]) 
 }
 
 /// Foreground test servers must retain ordinary CLI stderr even when the test
-/// runner itself was launched from a native service environment. Explicit
-/// fixture overrides are applied afterward so native logging remains testable.
+/// runner was launched from a native service environment; explicit fixture
+/// overrides are applied afterward so native logging remains testable.
 pub(crate) fn configure_foreground_server_env(command: &mut Command, envs: &[(&str, &str)]) {
     command.env_remove("GENTS_SYSTEM_LOG");
     for (name, value) in envs {
@@ -382,13 +363,9 @@ pub(crate) fn configure_foreground_server_env(command: &mut Command, envs: &[(&s
     }
 }
 
-/// Wait until something accepts TCP on `port`.
-///
-/// Any listener satisfies this, so a success is not evidence that `serve`
-/// owns the port: if an unrelated process holds it, this returns as soon as
-/// that process answers. Use `spawn_server_with_ready_json_recovering` when
-/// ownership matters -- the child publishes its readiness JSON only after an
-/// instance-specific probe confirms the listener is its own.
+/// Wait until something accepts TCP on `port`; an unrelated process holding
+/// the port also satisfies this, so a success is not evidence `serve` owns
+/// it.
 pub fn wait_for_port(port: u16, serve: &mut ServeProcess) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {

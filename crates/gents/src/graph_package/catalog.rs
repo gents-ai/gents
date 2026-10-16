@@ -6,7 +6,6 @@ use crate::graph_pipeline::{EntryBinding, ResultContract};
 use crate::pack::PackInstallOptions;
 pub use crate::pack::PackageExternalDependency;
 
-/// Graph packages use the common manifest and canonical configuration loader.
 pub type GraphPackageManifest = crate::pack::PackManifest;
 pub type PackageCapabilityTemplate = crate::graph_pipeline::StageCapability;
 
@@ -85,16 +84,10 @@ pub fn load_archive_graph_package_with_environment(
     )
 }
 
-/// Where a graph's compiled plan travels inside its pack: the graph id in the
-/// snake_case every pack file name uses.
 pub fn graph_plan_path(graph_id: &str) -> String {
     format!("graphs/{}.plan.json", graph_id.replace('-', "_"))
 }
 
-/// Compiles every graph a pack declares from its files, for the placeholder
-/// owner `node_did`. A plan names no owner, so the result is the plan any
-/// install of these files compiles; `gents pack build` ships it and install
-/// recompiles to verify it.
 pub fn compile_pack_graphs(
     manifest: &crate::pack::PackManifest,
     asset: &dyn Fn(&str) -> Result<Vec<u8>>,
@@ -123,9 +116,6 @@ pub fn compile_pack_graphs(
         .collect()
 }
 
-/// Loads a graph pack as an install would and compiles every graph it
-/// declares for the placeholder owner `node_did`, writing nothing. Returns
-/// the plans; a shipped plan that differs from its recompilation is refused.
 pub fn check_graph_pack(
     archive: &crate::pack_archive::PackArchive,
     node_did: &str,
@@ -145,9 +135,6 @@ pub fn check_graph_pack(
     Ok(plans)
 }
 
-/// Refuses a pack whose shipped plan for `compiled`'s graph differs from what
-/// this build compiles: it was built by another compiler, or edited after
-/// build. A pack that ships no plan is compiled at install, as always.
 pub fn verify_shipped_plan(
     compiled: &crate::graph_pipeline::GraphPlan,
     asset: &dyn Fn(&str) -> Option<Vec<u8>>,
@@ -204,9 +191,6 @@ fn load_package_from_assets(
         resolved_digest == package_digest,
         "graph distribution digest changed after resolution"
     );
-    // Capabilities reference the same owned Task documents as ordinary packs.
-    // Port/topology/caller/schema checks remain in the compiler and publication
-    // owner; this loader never constructs behavior/model/tool overrides.
     for surface in &config.datastore_tool_surfaces {
         for entry in surface.entries.iter().flatten() {
             entry
@@ -219,7 +203,6 @@ fn load_package_from_assets(
             capability.node_did == options.node_did,
             "foreign graph capability owner"
         );
-        // A plugin node's artifact was matched and pinned when the config loaded.
         let Some(task_id) = capability.target.task_id() else {
             continue;
         };
@@ -252,9 +235,6 @@ mod tests {
         }
     }
 
-    /// The checked-in `review_graph` fixture directory. Callers pack it
-    /// fresh with `pack_dir`, so mutating the resulting bytes never touches
-    /// this path or another test's copy.
     fn review_graph_dir() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packs/review_graph")
     }

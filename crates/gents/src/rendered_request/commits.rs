@@ -1,40 +1,24 @@
-//! The one implementation of rendered-request field-commit reads.
+//! The one implementation of rendered-request field-commit reads. Integrity
+//! comes from the witnessed commit chain, never a writer-supplied digest.
 //!
-//! For capture v2 the CID witnesses the stored capture container, while a
-//! logical delta recursively pins the CID of every base container needed to recover the
-//! canonical value. Integrity comes from that witnessed chain, not from a
-//! writer-supplied digest. Reading a field commit has two traps every consumer
-//! would otherwise rediscover:
-//!
-//! * `_commits` accepts exactly ONE `docID`; two or more is a parse error.
-//!   Batched reads therefore alias one `_commits` field per document
-//!   ([`field_commits_in_txn`]) instead of handing several docIDs to one
-//!   field.
-//! * Its `fieldName` filter is evaluated **in memory**, with
-//!   `filter.matches(..).unwrap_or(true)` — a malformed filter silently
-//!   degrades to *no* filter, which combined with `limit: 1` returns an
-//!   arbitrary commit. So this helper sends no `fieldName` filter at all and
-//!   selects the `request_json` commit in Rust, where a mistake is a type
-//!   error instead of a wrong answer.
-//!
-//! `[]` from `_commits` is reported as explicit *Unavailable* (`Ok(None)`),
-//! never "unchanged"; a GraphQL error is an error.
+//! Two DefraDB `_commits` constraints this helper encodes:
+//! * `_commits` accepts exactly ONE `docID`; batched reads alias one field per
+//!   document ([`field_commits_in_txn`]).
+//! * Its `fieldName` filter is evaluated in memory and silently degrades to no
+//!   filter on a malformed input, so no `fieldName` filter is sent; the field
+//!   is selected in Rust instead.
 
 use anyhow::{Context, Result};
 
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 
-/// The field-commit witness for a stored rendered-request field value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestJsonCommit {
     pub cid: String,
     pub height: i64,
 }
 
-/// Read the current `request_json` field-commit CID for one `RenderedRequest`
-/// document. `Ok(None)` is explicit *Unavailable*: the document has no commits
-/// visible on this node, or none for `request_json`.
 pub async fn request_json_commit(
     access: &ConfigAccess,
     doc_id: &str,
@@ -58,20 +42,11 @@ pub async fn field_commit(
     select_field_commit(&response, field_name)
 }
 
-/// Maximum `_commits` aliases in one statement of
-/// [`field_commits_in_txn`]. 32 matches the repo's other aliased batch
-/// (`persist_prepared_documents`), which sits under DefraDB's per-level field
-/// width guardrail (100 fields at the pinned rev); a capture with more block
-/// documents issues further statements rather than one unbounded query.
+/// Maximum `_commits` aliases in one statement of [`field_commits_in_txn`],
+/// under DefraDB's per-level field width guardrail; larger captures issue
+/// further statements.
 pub const FIELD_COMMIT_ALIAS_BATCH: usize = 32;
 
-/// Read the field commits of many documents through `execute`, one aliased
-/// `_commits` field per document and at most [`FIELD_COMMIT_ALIAS_BATCH`]
-/// aliases per statement. Results answer one-for-one in `doc_ids` order.
-///
-/// The capture sink reads inside the transaction that creates the blocks and
-/// the manifest pinning them, so the pins commit as one unit; the reader
-/// re-checks them through its own executor with the same selection.
 pub(crate) async fn field_commits<F, Fut>(
     doc_ids: &[String],
     field_name: &str,
@@ -105,7 +80,6 @@ tokio::task_local! {
     static FIELD_COMMIT_STATEMENTS: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
-/// Run `future`, counting the batched `_commits` statements issued on this task.
 #[cfg(test)]
 pub(crate) async fn count_field_commit_statements<F: std::future::Future>(
     future: F,
@@ -120,7 +94,6 @@ pub(crate) async fn count_field_commit_statements<F: std::future::Future>(
     )
 }
 
-/// [`field_commits`] inside the caller's transaction.
 pub(crate) async fn field_commits_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     doc_ids: &[String],
@@ -134,10 +107,6 @@ pub(crate) async fn field_commits_in_txn(
     .await
 }
 
-/// Pure selection over one batched `_commits` response: for every document of
-/// the batch, in order, the highest commit for `field_name` under its alias.
-/// An alias the response omits, or answers with anything but a commits array,
-/// is an error — the batched read may not silently drop a document.
 fn select_batched_field_commits(
     response: &serde_json::Value,
     batch: &[String],
@@ -162,8 +131,6 @@ fn select_batched_field_commits(
         .collect()
 }
 
-/// Pure selection over a `_commits` response: pick the highest
-/// `request_json` field commit, in Rust rather than in a query filter.
 #[cfg(test)]
 fn select_request_json_commit(response: &serde_json::Value) -> Result<Option<RequestJsonCommit>> {
     select_field_commit(response, "request_json")
@@ -181,9 +148,6 @@ pub(super) fn select_field_commit(
     Ok(highest_field_commit(commits, field_name))
 }
 
-/// The highest commit for `field_name` within one `_commits` result array, in
-/// Rust rather than in a query filter. A commit without the named field, a
-/// `cid` or a `height` is not a candidate; no candidates is `None`.
 fn highest_field_commit(
     commits: &[serde_json::Value],
     field_name: &str,
@@ -229,9 +193,6 @@ mod tests {
         );
     }
 
-    /// Commits exist, but none for `request_json` — that is Unavailable, not
-    /// "take whichever commit came back", which is exactly the in-memory
-    /// filter failure mode this helper exists to rule out.
     #[test]
     fn commits_without_a_request_json_field_are_unavailable() {
         let response = json!({
@@ -250,8 +211,6 @@ mod tests {
         assert_eq!(select_request_json_commit(&response).unwrap(), None);
     }
 
-    /// A response with no `data._commits` array at all is an error — a missing
-    /// `data` field is not the same statement as "no rows".
     #[test]
     fn a_shapeless_response_is_an_error() {
         assert!(select_request_json_commit(&json!({})).is_err());
@@ -262,9 +221,6 @@ mod tests {
         doc_ids.iter().map(|doc_id| doc_id.to_string()).collect()
     }
 
-    /// The batched selection answers one-for-one in batch order, applying the
-    /// same per-document discipline as the single read: highest commit for the
-    /// field, `None` for a document with none.
     #[test]
     fn batched_selection_answers_per_document_in_order() {
         let response = json!({
@@ -299,9 +255,6 @@ mod tests {
         );
     }
 
-    /// An alias the response dropped is an error naming the document, never a
-    /// silently skipped entry — the batched read must not weaken the per-entry
-    /// verification the single reads gave.
     #[test]
     fn a_dropped_alias_is_an_error_for_its_document() {
         let response = json!({ "data": { "w0": [], "w2": [] } });

@@ -11,8 +11,6 @@ import { publishSnapshot, testApp, withApp } from "./app-fixture";
 
 const account = (credentialId: string) => ({ credentialId }) as ProviderAccountView;
 
-/* two panels showing one agent's accounts, as the inference panel and a
-   backend sheet open beside it do */
 function twoPanels(listProviderAccounts: ReturnType<typeof vi.fn>) {
   const app = testApp({
     api: { listProviderAccounts },

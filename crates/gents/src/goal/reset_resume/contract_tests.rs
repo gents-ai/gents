@@ -33,13 +33,10 @@ struct Contracts {
     goal_reset_resume_cases: Vec<ResetCase>,
 }
 
-/// Lean times are seconds after this instant.
 pub(super) fn at(seconds: i64) -> DateTime<Utc> {
     "2030-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap() + chrono::Duration::seconds(seconds)
 }
 
-/// Stamp the fixture's accounts connected at `seconds`: a sign-in records the
-/// wall clock, which must not decide whether it precedes a limited call.
 pub(super) async fn connect_accounts_at(f: &Fixture, seconds: i64) {
     execute(
         &f.node,
@@ -52,8 +49,6 @@ pub(super) async fn connect_accounts_at(f: &Fixture, seconds: i64) {
     .await;
 }
 
-/// The text a usage-limited call records: the Anthropic rejected-headers
-/// reset when one is reported, else a body with no reset.
 pub(super) fn usage_limit(reset_at: Option<i64>) -> String {
     let text = match reset_at {
         Some(seconds) => {
@@ -89,7 +84,6 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
         let first_child = goal_continuation_identity(&f.goal.goal_id, PARENT, 1)
             .unwrap()
             .request_id;
-        // The limited request is the latest one while the Goal is limited.
         let repeat = case.name == "repeat_limit_resumes_at_its_new_reset";
         let stopped = if repeat { first_child.as_str() } else { PARENT };
         match case.name.as_str() {
@@ -118,7 +112,6 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
             &at(facts.limit_started_at).to_rfc3339(),
         )
         .await;
-        // The goal source records the limit on the Goal it stops.
         let Some(ProviderLimit::UsageExhausted(limit)) =
             classify_provider_limit(&failure, Utc::now())
         else {
@@ -213,10 +206,6 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
     }
 }
 
-/// `Fixture::observe` checks every child against `PARENT`; a second-generation
-/// child descends from the first child, so this projects the Goal and each
-/// child's lineage instead (request 10 = `PARENT`, 20 = the first child, 40 =
-/// its continuation).
 async fn observe_repeat(f: &Fixture, first_child: &str) -> Value {
     let number = |id: &str| match id {
         PARENT => 10,

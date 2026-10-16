@@ -1,6 +1,3 @@
-//! Compare generated composition results with the existing permission owner.
-//! The companion module only converts fixture views to/from runtime values.
-
 use crate::lean_vocab_test::{lean_goal_capability_resolution_cases, lean_tool_policy_cases};
 
 #[path = "tool_policy_codec.rs"]

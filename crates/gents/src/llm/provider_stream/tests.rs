@@ -207,7 +207,6 @@ where
 
 #[tokio::test]
 async fn provider_stream_guard_prevents_rig_synthesizing_success_at_raw_http_eof() {
-    // Reproduce the adapter behavior this seam must fence.
     assert!(first_rig_terminal(FakeProviderHttp { terminal: false })
         .await
         .is_ok());

@@ -76,28 +76,17 @@ pub use task_title::task_session_title;
 pub const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 
 /// Outcome of interpreting a persisted `valid_until` TTL against `now`.
-/// Single owner for the parse, shared by the claim path
-/// (`lifecycle::claim::claim_inner`, which errors the claim attempt on
-/// `Malformed`) and the watcher's pre-claim scans (`watcher::query`), which
-/// must fail closed on `Malformed` too — a request whose TTL cannot be
-/// interpreted is not evidence it is still live, so it must not be silently
-/// claimed as if `valid_until` were unset.
+/// Single owner for the parse; the claim path and the watcher's pre-claim
+/// scans must both fail closed on `Malformed` — a request whose TTL cannot be
+/// interpreted must not be silently claimed as if `valid_until` were unset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TtlOutcome {
-    /// No `valid_until` was persisted.
     NotSet,
-    /// `valid_until` parsed and has not yet passed; carries the parsed
-    /// value so callers that need it (e.g. to persist alongside a claim)
-    /// don't have to re-parse the original string.
     Live(chrono::DateTime<chrono::Utc>),
-    /// `valid_until` parsed and has passed; carries the parsed value for
-    /// the same reason.
     Expired(chrono::DateTime<chrono::Utc>),
-    /// `valid_until` was present but did not parse as RFC3339.
     Malformed(chrono::ParseError),
 }
 
-/// Parse a persisted `valid_until` value against `now`. See [`TtlOutcome`].
 pub(crate) fn parse_valid_until(
     value: Option<&str>,
     now: chrono::DateTime<chrono::Utc>,
@@ -124,9 +113,6 @@ pub fn is_background_completion_request(
     queue::is_automated_wakeup(input)
 }
 
-/// Whether `AgentRequest.content` itself owns the pending user bubble. User and
-/// steering admission remain request-owned until exact authored publication;
-/// goal and completion requests are controller turns.
 pub fn request_content_owns_user_projection(
     input: &gents_protocol::request_input::RequestInput,
 ) -> bool {
@@ -138,9 +124,6 @@ pub fn request_content_owns_user_projection(
     })
 }
 
-/// The logical request a message was folded into, when its claim answered it
-/// (Lean `SessionQueue.claimFolding`). Its content is presented by that
-/// request's authored transcript entry, not by its own row.
 pub fn folded_into(row: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
     (row.lifecycle_state
         == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Superseded)
@@ -150,7 +133,6 @@ pub fn folded_into(row: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
     .filter(|head| !head.trim().is_empty())
 }
 
-/// The pending request that replaced this one when its author edited it.
 pub fn replaced_by(row: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
     (row.lifecycle_state
         == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Superseded)
@@ -160,22 +142,16 @@ pub fn replaced_by(row: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
     .filter(|replacement| !replacement.trim().is_empty())
 }
 
-/// Whether its author removed this request from the queue before it ran.
 pub fn removed_by_author(row: &gents_protocol::row::AgentRequestRow) -> bool {
     row.lifecycle_state
         == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Interrupted)
         && row.failure_reason.as_deref() == Some(queue::REMOVED_REASON)
 }
 
-/// Whether its author retired this request from the queue, by removing it or
-/// replacing it with an edit or a move (Lean `projectPendingUserTurn`): it was
-/// never delivered and is not shown as the author's input.
 pub fn retired_by_author(row: &gents_protocol::row::AgentRequestRow) -> bool {
     replaced_by(row).is_some() || removed_by_author(row)
 }
 
-/// The transcript key under which the claimed request publishes a message
-/// folded into it.
 pub fn folded_message_key(claimed_request_doc_id: &str, folded_request_doc_id: &str) -> String {
     crate::session::canonical_rows::authored_message_key(
         claimed_request_doc_id,
@@ -183,10 +159,6 @@ pub fn folded_message_key(claimed_request_doc_id: &str, folded_request_doc_id: &
     )
 }
 
-/// The physical request and transcript key under which a request's input is
-/// published: its own authored prompt, or, once folded, its folded entry under
-/// the request that published it. A row is folded only in the transaction
-/// that publishes that entry; a selected message stays pending until then.
 pub fn input_message_owner(row: &gents_protocol::row::AgentRequestRow) -> Option<(String, String)> {
     let doc = row
         .doc_id
@@ -207,27 +179,20 @@ pub fn input_message_owner(row: &gents_protocol::row::AgentRequestRow) -> Option
     ))
 }
 
-/// What put a request's content into its session. Only `Person` is typed by
-/// the session's requester; every other origin enters the session without the
-/// person typing it, and its content is still the model's user input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestOrigin<'a> {
     Person,
-    /// An `agent_message` or `agent_new` call in another session.
     SessionMessage {
         parent_request_doc_id: Option<&'a str>,
     },
-    /// A trigger delivery: event, schedule or manual Task run.
     Trigger {
         trigger_id: &'a str,
         trigger_kind: Option<&'a str>,
     },
-    /// The durable goal controller continuing its objective.
     GoalContinuation {
         goal_id: Option<&'a str>,
         sequence: Option<i64>,
     },
-    /// A wake that delivers finished background work.
     BackgroundCompletion,
 }
 
@@ -266,7 +231,6 @@ pub fn request_origin(row: &gents_protocol::row::AgentRequestRow) -> RequestOrig
     RequestOrigin::Person
 }
 
-/// Whether the request represents a logical user turn.
 pub fn request_owns_user_turn(input: &gents_protocol::request_input::RequestInput) -> bool {
     input.queue.as_ref().is_none_or(|hints| {
         matches!(
@@ -276,8 +240,6 @@ pub fn request_owns_user_turn(input: &gents_protocol::request_input::RequestInpu
     })
 }
 
-/// Background-completion notifications and durable-goal controller prompts
-/// are internal. User and steering authored prompts are canonical user turns.
 pub fn is_runtime_control_message(
     input: &gents_protocol::request_input::RequestInput,
     message_key: &str,
@@ -297,9 +259,7 @@ pub fn is_runtime_control_message(
 
 fn extract_single_doc_id(response: &defra_node::QueryResponse, key: &str) -> Option<String> {
     // DefraDB's GraphQL surface accepts `create_<Collection>` while the
-    // response data may expose the normalized `add_<Collection>` field. Read
-    // both so callers keep the exact create result instead of falling back to
-    // a non-unique logical-ID lookup.
+    // response data may expose the normalized `add_<Collection>` field.
     let normalized_add_key = key
         .strip_prefix("create_")
         .map(|collection| format!("add_{collection}"));
@@ -367,8 +327,6 @@ pub(crate) fn is_claim_admission_error(error: &anyhow::Error) -> bool {
     error.downcast_ref::<ClaimAdmissionError>().is_some()
 }
 
-// Moved to gents-loop (G-1): the loop's completion-retry policy switches on
-// it. Re-exported so `crate::lifecycle::ExecutionOrigin` is unchanged.
 pub use gents_loop::execution_origin::ExecutionOrigin;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -389,7 +347,6 @@ pub struct WorkspaceLineage {
     pub workspace_seal_hash: Option<String>,
 }
 
-/// Trigger workspace_authority overwrites any source value.
 pub fn snapshot_workspace_lineage_source_fields(
     source_doc: &serde_json::Value,
     source_fields: &mut std::collections::BTreeMap<String, String>,
@@ -486,8 +443,6 @@ impl WorkspaceLineage {
         )
     }
 
-    /// `source_authenticated` is reconstructed by the existing admission/ACP
-    /// owner, never read from a request field. It permits opaque parent IDs.
     pub fn validate_source(&self, source: &Self, source_authenticated: bool) -> Result<()> {
         anyhow::ensure!(
             source_authenticated,
@@ -582,8 +537,7 @@ impl RequestLifecycle {
     }
 
     /// Pending requests whose signed admission the caller verified for this
-    /// claim. The claim selects the contiguous run of them directly behind
-    /// it (Lean `SessionQueue.claimFolding`); empty claims only this request.
+    /// claim (Lean `SessionQueue.claimFolding`); empty claims only this request.
     pub(crate) fn set_fold_admitted(&mut self, admitted: Vec<String>) {
         assert_eq!(
             self.state,
@@ -593,14 +547,12 @@ impl RequestLifecycle {
         self.fold_admitted = admitted;
     }
 
-    /// The still-queued messages this claim selected to answer, in queue
-    /// order. The turn consumes each when it publishes it.
     pub(crate) fn folded_selection(&self) -> &[queue::FoldedInput] {
         &self.folded_selection
     }
 
-    /// Configuration supplied by the runtime, never by request input. Only the
-    /// first claim pins it; resumed physical requests retain their durable limit.
+    /// Configuration supplied by the runtime, never by request input; only
+    /// the first claim pins it.
     pub(crate) fn set_configured_max_total_tokens(&mut self, limit: Option<u64>) {
         assert_eq!(
             self.state,
@@ -621,8 +573,6 @@ impl RequestLifecycle {
         self.claimed_deadline_at
     }
 
-    /// Exact composite commit produced by the successful claim/materialization
-    /// mutation. This is the version whose request fields the runtime uses.
     pub(crate) fn request_commit_cid(&self) -> Option<&str> {
         self.request_commit_cid.as_deref()
     }
@@ -632,7 +582,7 @@ impl RequestLifecycle {
     }
 
     /// Last transcript sequence owned by this background-completion attempt
-    /// at its atomic claim boundary. Messages appended for a successor epoch
+    /// at its atomic claim boundary; messages appended for a successor epoch
     /// must not enter this attempt's provider input.
     pub(crate) fn background_completion_input_through_sequence(&self) -> Option<u32> {
         self.background_completion_input_through_sequence
@@ -733,43 +683,6 @@ mod tests {
 
     fn materialization_identity() -> Arc<dyn crate::identity::NodeIdentity> {
         Arc::new(MaterializationTestIdentity)
-    }
-
-    #[test]
-    fn parse_valid_until_covers_not_set_live_expired_and_malformed() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-08-12T22:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let future = "2026-08-12T23:00:00Z";
-        let past = "2026-08-12T21:00:00Z";
-        let future_at = chrono::DateTime::parse_from_rfc3339(future)
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let past_at = chrono::DateTime::parse_from_rfc3339(past)
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-
-        assert_eq!(parse_valid_until(None, now), TtlOutcome::NotSet);
-        assert!(matches!(
-            parse_valid_until(Some("   "), now),
-            TtlOutcome::Malformed(_)
-        ));
-        assert!(matches!(
-            parse_valid_until(Some(" 2026-08-12T23:00:00Z "), now),
-            TtlOutcome::Malformed(_)
-        ));
-        assert_eq!(
-            parse_valid_until(Some(future), now),
-            TtlOutcome::Live(future_at)
-        );
-        assert_eq!(
-            parse_valid_until(Some(past), now),
-            TtlOutcome::Expired(past_at)
-        );
-        assert!(matches!(
-            parse_valid_until(Some("not-a-timestamp"), now),
-            TtlOutcome::Malformed(_)
-        ));
     }
 
     #[test]

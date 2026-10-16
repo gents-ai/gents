@@ -112,7 +112,6 @@ pub(crate) struct LeanCodexShimTurnLifecycleCase {
     pub(crate) monotonic: bool,
 }
 
-/// Binding vectors for the runnable-gated Codex shim (#699).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanCodexShimBindingCase {
     pub(crate) witness: String,

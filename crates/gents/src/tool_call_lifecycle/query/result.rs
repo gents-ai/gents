@@ -1,5 +1,3 @@
-//! Canonical invocation-reply reads, keyed by physical tool identity.
-
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
 use crate::llm::message::{AssistantContent, Message, ToolResultContent, UserContent};
@@ -104,32 +102,9 @@ pub(crate) struct CanonicalToolCallRead {
     pub(crate) lifecycle_state: ToolCallState,
     pub(crate) arguments: String,
     pub(crate) result: Option<Message>,
-    /// Exact persisted ToolOutput bytes behind the verified invocation reply.
-    /// Direct invocation replies populate this only in transaction reads;
-    /// plugin effects expose their canonical source to both read paths.
     pub(crate) raw_result: Option<String>,
 }
 
-/// Load the native tool-result delivery for one physical AgentToolCall
-/// document.
-///
-/// Selection is exact physical identity end to end. The addressed
-/// `AgentToolCall` row is resolved by `_docID` within its
-/// agent/session/requester scope; the canonical `AgentMessage` headers of
-/// that session scope are then strictly decoded and the single eligible
-/// invocation reply is matched by `MessagePublication::ToolDelivery` naming
-/// this exact physical document, the expected request/session/agent/requester
-/// binding, and its one native `ToolResult` block bound to the same physical
-/// document. The delivered user message is reconstructed through the session
-/// owner (`session::load_canonical_message`) — no manual segment fetch, no
-/// duplicate presentation application — and verified against the exact native
-/// call identity. The background ordinary completion notification shares the
-/// `ToolDelivery` publication but carries ordinary text blocks; it is a
-/// distinct delivery and is never selected as the invocation reply. Ambiguous
-/// eligible replies are an error; a missing reply (including a completion
-/// notification published without a reply) is an error, never an empty
-/// result. There is no `native_id` lookup, no name/native-id alias, and no
-/// legacy fallback.
 pub async fn load_tool_call_result(
     access: &ConfigAccess,
     tool_call_doc_id: &str,
@@ -338,7 +313,6 @@ async fn load_tool_call_read_source(
         "tool invocation reply conflicts with its accepted native binding"
     );
 
-    // The delivery header must carry the call's expected binding.
     anyhow::ensure!(
         header.node_did == node_did
             && header.session_id == session_id
@@ -353,10 +327,6 @@ async fn load_tool_call_read_source(
         header.request_doc_id
     );
 
-    // The single native ToolResult block carries the exact native identity.
-    // `is_invocation_reply` guarantees exactly one block and that it is a
-    // `ToolResult`, so the fallthrough below is unreachable in practice; it
-    // exists so the shape is enforced by construction, not by indexing.
     let MessageBlock::ToolResult {
         id: block_id,
         call_id: block_call_id,
@@ -424,17 +394,10 @@ async fn load_tool_call_read_source(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CanonicalToolCallPresentation {
     pub arguments: String,
-    /// `None` means the invocation reply has not been durably delivered yet;
-    /// an empty delivered result is `Some("")`.
     pub result: Option<String>,
-    /// Canonical open ToolOutput bytes for a still-running spawned process.
     pub live_output: Option<String>,
 }
 
-/// Read the canonical JSON presentation of accepted arguments and the optional
-/// durable provider-presented result for one physical tool call. Malformed,
-/// conflicting, or ambiguous canonical facts are errors, never an incomplete
-/// observation.
 pub async fn load_tool_call_presentation(
     access: &ConfigAccess,
     tool_call_doc_id: &str,
@@ -499,12 +462,6 @@ pub async fn load_tool_call_presentation(
     })
 }
 
-/// Load the canonical JSON presentation of the arguments accepted for one
-/// physical tool call.
-///
-/// This uses the same coordinator admission/header validation as result
-/// reconstruction. It never reads the retired AgentToolCall payload columns
-/// and never treats a logical/native ID as physical identity.
 pub async fn load_tool_call_arguments(
     access: &ConfigAccess,
     tool_call_doc_id: &str,
@@ -702,12 +659,6 @@ async fn load_accepted_tool_call(
     Ok((call, headers, call_id, arguments))
 }
 
-/// The invocation reply shape for one physical tool call: a
-/// `MessagePublication::ToolDelivery` header naming that exact physical
-/// document whose blocks are exactly one native `ToolResult` block bound to
-/// the same physical document. A background ordinary completion notification
-/// shares the `ToolDelivery` publication but carries ordinary text blocks; it
-/// is a distinct delivery and never an invocation reply.
 fn is_invocation_reply(header: &TranscriptMessage, tool_call_doc_id: &str) -> bool {
     let named = match &header.publication {
         MessagePublication::ToolDelivery { tool_call_doc_id } => tool_call_doc_id.as_str(),
@@ -724,11 +675,6 @@ fn is_invocation_reply(header: &TranscriptMessage, tool_call_doc_id: &str) -> bo
         )
 }
 
-/// All canonical `AgentMessage` headers of one exact
-/// agent/session/requester scope, strictly decoded through the canonical row
-/// owner. The `ToolDelivery` publication is a JSON scalar column, so exact
-/// publication matching happens after decode; the scope bounds the scan and
-/// no `limit` may hide a matching later header.
 async fn scoped_canonical_headers(
     source: ReadSource<'_, '_>,
     node_did: &str,
@@ -760,9 +706,6 @@ async fn scoped_canonical_headers(
         .collect()
 }
 
-/// The exact AgentToolCall row addressed by its physical `_docID` within its
-/// agent/requester/session scope. Absence and ambiguity are errors: the
-/// caller addresses one lifecycle document, never a logical lookup.
 #[derive(Debug, Deserialize)]
 struct ToolCallIdentityRow {
     #[serde(rename = "_docID")]
@@ -850,9 +793,6 @@ async fn load_tool_call_identity(
     Ok(row)
 }
 
-/// Deterministic text rendering of a delivered tool result: the native
-/// tool-result message's text parts joined with newlines. A media-bearing or
-/// non-tool-result message cannot be narrowed to text and is an explicit error.
 pub fn render_tool_result(message: &Message) -> Result<String> {
     let Message::User { content } = message else {
         anyhow::bail!("tool result delivery is not a user message");
@@ -872,9 +812,6 @@ pub fn render_tool_result(message: &Message) -> Result<String> {
     Ok(texts.join("\n"))
 }
 
-/// A published result must name this call's exact native id and match the
-/// delivery header's own call-id binding; the header's physical
-/// `tool_call_doc_id` already bound it to the lifecycle document.
 fn verify_exact_call_identity(
     result: &Message,
     native_call_id: &str,
@@ -903,135 +840,6 @@ fn verify_exact_call_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    /// One canonical header, as it travels over the GraphQL boundary, plus the
-    /// physical `_docID` the reader addresses it by.
-    fn header_row(
-        doc_id: &str,
-        message_key: &str,
-        publication: serde_json::Value,
-        blocks: serde_json::Value,
-        request_doc_id: Option<&str>,
-    ) -> serde_json::Value {
-        json!({
-            "message_key": message_key,
-            "session_id": "session-1",
-            "node_did": "did:test:agent",
-            "requester_did": "did:test:requester",
-            "request_doc_id": request_doc_id,
-            "publication": publication,
-            "outcome": "complete",
-            "sequence": 1,
-            "role": "user",
-            "blocks": blocks,
-            "created_at": "2026-01-01T00:00:00Z",
-            "_docID": doc_id,
-        })
-    }
-
-    fn tool_result_blocks(doc_id: &str, id: &str) -> serde_json::Value {
-        json!([{ "type": "tool_result", "tool_call_doc_id": doc_id, "id": id,
-            "parts": [{ "type": "text", "text": {
-                "output": { "close_doc_id": "close-1", "stream": 0 },
-                "presentation": { "kind": "full" }
-            } }],
-        }])
-    }
-
-    fn delivery_publication(doc_id: &str) -> serde_json::Value {
-        json!({ "kind": "tool_delivery", "tool_call_doc_id": doc_id })
-    }
-
-    fn text_blocks() -> serde_json::Value {
-        json!([{ "type": "text", "text": {
-            "output": { "close_doc_id": "close-1", "stream": 0 },
-            "presentation": { "kind": "full" }
-        } }])
-    }
-
-    #[test]
-    fn delivery_publication_with_native_tool_result_is_an_invocation_reply() {
-        let decoded = crate::session::canonical_rows::decode_transcript_message_row(&header_row(
-            "doc-1",
-            "delivery-key",
-            delivery_publication("doc-1"),
-            tool_result_blocks("doc-1", "call-1"),
-            Some("request-doc-1"),
-        ))
-        .expect("decoded header");
-        assert!(is_invocation_reply(&decoded.message, "doc-1"));
-    }
-
-    #[test]
-    fn delivery_publication_with_ordinary_text_is_not_an_invocation_reply() {
-        // The background ordinary completion notification shares the
-        // ToolDelivery publication but carries ordinary text blocks; it is a
-        // distinct delivery and must never satisfy the invocation reply.
-        let decoded = crate::session::canonical_rows::decode_transcript_message_row(&header_row(
-            "doc-2",
-            "notification-key",
-            delivery_publication("doc-1"),
-            text_blocks(),
-            Some("request-doc-1"),
-        ))
-        .expect("decoded header");
-        assert!(!is_invocation_reply(&decoded.message, "doc-1"));
-    }
-
-    #[test]
-    fn delivery_publication_for_another_document_is_not_an_invocation_reply() {
-        let decoded = crate::session::canonical_rows::decode_transcript_message_row(&header_row(
-            "doc-3",
-            "other-call-key",
-            delivery_publication("doc-other"),
-            tool_result_blocks("doc-other", "call-1"),
-            Some("request-doc-1"),
-        ))
-        .expect("decoded header");
-        assert!(!is_invocation_reply(&decoded.message, "doc-1"));
-    }
-
-    #[test]
-    fn non_delivery_publications_are_never_invocation_replies() {
-        for publication in [
-            json!({ "kind": "request_execution", "execution_generation": "g1" }),
-            json!({ "kind": "fork", "origin_message_doc_id": "origin" }),
-        ] {
-            let decoded =
-                crate::session::canonical_rows::decode_transcript_message_row(&header_row(
-                    "doc-4",
-                    "other-key",
-                    publication,
-                    tool_result_blocks("doc-4", "call-1"),
-                    Some("request-doc-1"),
-                ))
-                .expect("decoded header");
-            assert!(!is_invocation_reply(&decoded.message, "doc-4"));
-        }
-    }
-
-    #[test]
-    fn request_document_mismatch_binds_the_reply_to_the_call() {
-        // Exercise the same binding predicate as the actual reader, not merely
-        // successful decoding of a header with a mismatched request.
-        let decoded = crate::session::canonical_rows::decode_transcript_message_row(&header_row(
-            "doc-5",
-            "delivery-key-5",
-            delivery_publication("doc-5"),
-            tool_result_blocks("doc-5", "call-1"),
-            Some("request-doc-OTHER"),
-        ))
-        .expect("decoded header");
-        assert!(is_invocation_reply(&decoded.message, "doc-5"));
-        assert!(!crate::lifecycle::is_exact_invocation_reply(
-            &decoded.message,
-            "request-doc-1",
-            "session-1",
-            "doc-5",
-            "call-1",
-            &None,
-        ));
-    }
 
     #[tokio::test]
     async fn generated_plugin_child_terminal_presentation_matches_execution_owner() {

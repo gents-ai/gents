@@ -15,7 +15,6 @@ private def agentOpName : AgentOp → String
   | .edit => "edit"
   | .disable => "disable"
 
-/-- Create input under the Agent/AgentContext document field names it authors. -/
 private def agentCreateInputJson (i : AgentCreateInput) : String :=
   "{"
     ++ "\"display_name\":" ++ jsonString i.name ++ ","
@@ -24,7 +23,6 @@ private def agentCreateInputJson (i : AgentCreateInput) : String :=
     ++ "\"clone_from\":" ++ jsonString i.cloneFrom
   ++ "}"
 
-/-- Edit fields as self-config patch entries; an omitted field has no entry. -/
 private def agentEditPatchJson (f : AgentEditFields) : String :=
   let entries : List (FieldKey × Option PatchOp) :=
     [("display_name", f.name), ("system_prompt", f.systemPrompt),
@@ -32,8 +30,6 @@ private def agentEditPatchJson (f : AgentEditFields) : String :=
   jsonArray (entries.filterMap fun (k, op) => op.map fun op =>
     selfConfigPatchEntryJson (k, op.value))
 
-/-- The decision inputs shared by `agent_decision_cases` and
-`agent_materialization_cases`, without a closing brace. -/
 private def agentDecisionRowFields (r : AgentDecisionRow) : String :=
     "\"name\":" ++ jsonString r.name ++ ","
     ++ "\"agents\":" ++ jsonArray (r.catalog.agents.map fun a =>
@@ -106,9 +102,6 @@ private def candidateFixtureJson (f : CandidateFixture) : String :=
           ++ "\"enabled\":" ++ agentBool b.enabled ++ "}")
   ++ "}"
 
-/-- Rows are `materializedAgent` over the shared decision inputs and the
-serialized candidate registry; `session` is the model's resolved configuration
-or null when nothing is materialized. -/
 def agentMaterializationCasesJson : String :=
   jsonArray (agentMaterializationScenarios.map fun r =>
     "{" ++ agentDecisionRowFields { r.decision with name := r.name } ++ ","
@@ -127,9 +120,6 @@ private def optionalNetworkJson : Option CommandPolicy.NetworkMode → String
   | none => "null"
   | some mode => jsonString (networkName mode)
 
-/-- Every combination of the operation's guards and requested network over
-each stored network mode; verdicts come from `SiblingToolsOperation.admitted`
-and `resultNetwork`, never from handwritten expectations. -/
 def siblingToolsOperations : List SiblingToolsOperation := Id.run do
   let mut rows : List SiblingToolsOperation := []
   for owner in [true, false] do
@@ -163,8 +153,6 @@ private def optionalBoolJson : Option Bool → String
   | none => "null"
   | some b => agentBool b
 
-/-- Tool-group selection and graph presentation verdicts, each derived from
-`selectedToolFlag` and `graphToolPresented` over every input combination. -/
 def selfConfigSelectionCasesJson : String :=
   let bools := [false, true]
   let toolFlags := Id.run do

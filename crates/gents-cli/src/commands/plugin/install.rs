@@ -1,9 +1,3 @@
-//! `gents plugin install`: fetch a plugin's pack from the registry and
-//! install the plugins it carries. The pack is downloaded, verified and
-//! stored exactly as `gents pack install` does; only its plugins are
-//! installed, each recorded so `gents plugin run` and `gents plugin list`
-//! find it by name.
-
 use anyhow::{Context, Result};
 use serde_json::json;
 
@@ -69,9 +63,6 @@ mod tests {
 
     use super::super::store;
 
-    /// A real compiled plugin, wrapped by the same code `gents plugin
-    /// publish` uses, with the digest of the pack's bytes a registry
-    /// advertises.
     fn echo_pack() -> (Vec<u8>, String) {
         let afb_bytes = crate::commands::plugin::testing::build_plugin_afb(
             "echo",
@@ -121,8 +112,6 @@ mod tests {
         assert_eq!(store::list_records(home.path()).unwrap().len(), 1);
     }
 
-    /// #2338: against an initialized home, install writes the plugin-store
-    /// record that wakes a running runtime, and remove deletes it again.
     #[tokio::test]
     async fn install_and_remove_record_the_plugin_store_change_in_the_node() {
         use clap::Parser;
@@ -231,8 +220,6 @@ mod tests {
 mod instruction_tests {
     use crate::commands::plugin::store;
 
-    /// A pack whose plugin ships a TOOL.md installs it with the plugin, and the
-    /// model-facing tool shows that markdown rather than the one-line description.
     #[tokio::test]
     async fn a_plugins_tool_markdown_is_what_the_model_sees() {
         let afb = crate::commands::plugin::testing::build_plugin_afb(

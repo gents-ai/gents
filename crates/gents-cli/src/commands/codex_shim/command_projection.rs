@@ -115,8 +115,6 @@ pub(super) fn update_running_background_tools(
         {
             running.insert(tool.tool_call_key.clone());
         }
-        // A started or messaged agent session runs past the turn; the
-        // after-turn watcher completes its item.
         ToolProjectionStatus::Agent(projection)
             if projection.status == ProjectionStatus::InProgress =>
         {

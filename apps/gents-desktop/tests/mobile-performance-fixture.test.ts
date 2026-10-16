@@ -61,8 +61,6 @@ describe("mobile performance fixture structural budgets", () => {
     expect(session?.timelineItems).toHaveLength(
       MOBILE_PERFORMANCE_FIXTURE.largeSessionTimelineItems,
     );
-    // This guards fixture and projection growth; it does not bless full-session
-    // bridge materialization as the eventual product budget.
     expect(serializedBytes(session)).toBeLessThanOrEqual(256 * 1024);
   });
 

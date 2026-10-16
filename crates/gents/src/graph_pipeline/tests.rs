@@ -177,8 +177,6 @@ fn rejects_collection_and_correlation_mismatches() {
     assert!(has_code(&error, DiagnosticCode::InvalidCollection));
 }
 
-/// Capability ports come from installed packs, including registry packs an
-/// agent installs, so a port may not name a protected eval collection.
 #[test]
 fn rejects_ports_on_protected_collections() {
     for protected in crate::document_config::PROTECTED_DATASTORE_COLLECTIONS {
@@ -326,8 +324,6 @@ fn per_group_accepts_a_bounded_source_field_and_validates_timeout() {
     assert!(has_code(&error, DiagnosticCode::InvalidGroupTimeout));
 }
 
-/// The refusal text is native: the model fences only that `latest_only` is
-/// refused, so the message naming the modes that remain is pinned here.
 #[test]
 fn latest_only_refusal_names_the_supported_modes() {
     let mut intent = linear_intent();

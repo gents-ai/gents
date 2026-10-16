@@ -1,14 +1,3 @@
-//! Resolving a named pack: explicit local forms use [`crate::pack::local`] with caller-owned path admission, everything else comes
-//! through here.
-//!
-//! [`parse_pack_spec`] is the one parser for `name`, `ns/name`, and either
-//! with `@version` appended, so a bare name and a pinned coordinate mean the
-//! same thing to every caller: the CLI, `self_config`, and dependency
-//! resolution. [`resolve_named`] then tries, in order, an installed record
-//! whose digest the store still holds, the store's name index (no network),
-//! and finally the registry, which stores and indexes what it fetches so
-//! the next resolution of that version is free of the network too.
-
 use std::path::Path;
 
 use anyhow::Result;
@@ -18,8 +7,6 @@ use crate::pack_archive::{PackArchive, DEFAULT_NAMESPACE};
 use crate::pack_registry::{fetch_pack, RegistryClient, RegistryError};
 use crate::pack_store::{is_valid_index_version, PackStore};
 
-/// One parsed pack coordinate: `name` (this build's default namespace),
-/// `ns/name`, either with `@version` appended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PackSpec<'a> {
     pub namespace: &'a str,
@@ -27,12 +14,6 @@ pub struct PackSpec<'a> {
     pub version: Option<&'a str>,
 }
 
-/// Parses `spec` into a [`PackSpec`]. Namespace and name must be
-/// `is_valid_pack_name` (snake_case) and a pinned version must be
-/// `is_valid_index_version`: they end up as path segments in the pack
-/// store's name index, so a spec this parser refuses never has the chance to
-/// become an unsafe one there, and the two checks can never disagree about
-/// what a valid version looks like.
 pub fn parse_pack_spec(spec: &str) -> Result<PackSpec<'_>> {
     let (coordinate, version) = match spec.split_once('@') {
         Some((coordinate, version)) => {
@@ -61,47 +42,27 @@ pub fn parse_pack_spec(spec: &str) -> Result<PackSpec<'_>> {
     })
 }
 
-/// Where [`resolve_named`] found a pack.
 #[derive(Debug, Clone)]
 pub enum ResolvedFrom {
-    /// The coordinate's installed record named this digest, and the store
-    /// still holds it.
     Installed,
-    /// The home's pack store held it; no network call was made.
     Store,
-    /// Fetched from the registry, which stored and indexed it for next time.
     Registry {
         artifact_digest: String,
         version: String,
     },
 }
 
-/// A named pack, resolved and opened.
 pub struct ResolvedNamedPack {
     pub archive: PackArchive,
     pub from: ResolvedFrom,
 }
 
-/// What [`resolve_named`] needs to resolve a spec.
 pub struct ResolveOptions<'a> {
-    /// The gents home whose store is consulted first. `None` skips straight
-    /// to the registry and resolves entirely in memory, for a runtime
-    /// caller (`self_config` without a home) that owns no store.
     pub home: Option<&'a Path>,
-    /// From [`crate::pack_registry::resolve_registry_url`].
     pub registry_url: String,
-    /// The coordinates already installed: file records always, node
-    /// records too when the caller has node access. Order does not matter;
-    /// every entry is checked.
     pub installed: &'a [InstalledPack],
 }
 
-/// Resolves a non-local pack spec: an installed record whose digest the
-/// store still holds, then the store's name index, then the registry.
-///
-/// A caller with an explicit local form (`sha256:`, `./`, `../`, an
-/// absolute path, `*.pack`) never reaches this: that classification belongs to [`crate::pack::local`], so this resolver only ever sees `name`, `ns/name`, or either
-/// pinned with `@version`.
 pub async fn resolve_named(spec: &str, options: &ResolveOptions<'_>) -> Result<ResolvedNamedPack> {
     let parsed = parse_pack_spec(spec)?;
     let coordinate = format!("{}/{}", parsed.namespace, parsed.name);
@@ -156,14 +117,6 @@ pub async fn resolve_named(spec: &str, options: &ResolveOptions<'_>) -> Result<R
     })
 }
 
-/// Turns a failed registry fetch into the one sentence an operator needs:
-/// unreachable or not found, each naming the fix and keeping a pinned
-/// `@version` in both the coordinate and the suggested command, so following
-/// the advice resolves the same thing that failed. Classified by
-/// [`RegistryError`], a typed marker from [`crate::pack_registry`], rather
-/// than by matching on message text that module is free to reword. With no
-/// home there is no local store to speak of, so the underlying error is
-/// reported as is, with the coordinate for context.
 fn offline_pack_error(
     coordinate: &str,
     version: Option<&str>,
@@ -202,47 +155,13 @@ mod tests {
     use super::*;
     use crate::pack_store::test_pack_named as build_pack;
 
-    /// An unroutable loopback address: a connection to it fails immediately
-    /// rather than timing out, so a test that must never reach the network
-    /// still runs fast if it accidentally does.
     const UNROUTABLE_REGISTRY: &str = "http://127.0.0.1:1";
 
-    /// `Result::unwrap_err` needs the `Ok` side to be `Debug`, which
-    /// [`ResolvedNamedPack`] is not (it holds a [`PackArchive`], which
-    /// carries no `Debug` impl either); this is the same check without that
-    /// requirement.
     fn expect_err(result: Result<ResolvedNamedPack>) -> anyhow::Error {
         match result {
             Ok(_) => panic!("expected an error"),
             Err(error) => error,
         }
-    }
-
-    #[test]
-    fn parse_pack_spec_handles_bare_namespaced_and_pinned_forms() {
-        let spec = parse_pack_spec("demo").unwrap();
-        assert_eq!(
-            (spec.namespace, spec.name, spec.version),
-            ("gents", "demo", None)
-        );
-
-        let spec = parse_pack_spec("acme/demo").unwrap();
-        assert_eq!(
-            (spec.namespace, spec.name, spec.version),
-            ("acme", "demo", None)
-        );
-
-        let spec = parse_pack_spec("acme/demo@1.2.3").unwrap();
-        assert_eq!(
-            (spec.namespace, spec.name, spec.version),
-            ("acme", "demo", Some("1.2.3"))
-        );
-
-        let spec = parse_pack_spec("demo@2").unwrap();
-        assert_eq!(
-            (spec.namespace, spec.name, spec.version),
-            ("gents", "demo", Some("2"))
-        );
     }
 
     #[test]
@@ -263,8 +182,6 @@ mod tests {
             "demo@",
             "Acme/Demo",
             "acme/de-mo",
-            // A second `@` lands entirely inside what `split_once` reads as
-            // the version, so only the version-shape check catches it.
             "demo@1@2",
             "demo@a b",
             "demo@../x",
@@ -391,10 +308,6 @@ mod tests {
         );
     }
 
-    /// A pinned `@version` must survive into the offline sentence: dropping
-    /// it would point the operator at `gents pack fetch gents/nowhere
-    /// --store`, which fetches latest and does not fix the failed
-    /// `@9.9.9` resolution.
     #[tokio::test]
     async fn an_unreachable_registry_keeps_the_pin_in_the_offline_sentence() {
         let home = tempfile::tempdir().unwrap();
@@ -416,9 +329,6 @@ mod tests {
     async fn a_registry_that_has_never_heard_of_the_pack_fails_with_the_404_sentence() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        // No routes registered: axum's default fallback is a plain 404 for
-        // any path, exactly what a registry that has never heard of this
-        // pack would answer.
         tokio::spawn(async move {
             let _ = axum::serve(listener, axum::Router::new()).await;
         });

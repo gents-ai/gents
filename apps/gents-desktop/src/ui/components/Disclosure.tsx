@@ -2,11 +2,6 @@ import type { ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@gents/ui/lib/utils";
 
-/**
- * A section folded away behind its title. A native `<details>`, so a field
- * inside it can be revealed by opening the fold (`focusFirstProblem`), drawn
- * with a chevron in place of the browser's marker.
- */
 export function Disclosure({
   summary,
   className,

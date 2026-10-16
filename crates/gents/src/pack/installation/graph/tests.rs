@@ -119,7 +119,6 @@ async fn a_graph_install_is_recorded_and_remove_leaves_no_graph_documents() {
         .unwrap();
     assert_eq!(remaining["data"]["PackInstallation"], json!([]));
 
-    // A second remove finds no record.
     assert!(
         remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
             .await
@@ -167,11 +166,6 @@ async fn a_non_terminal_graph_run_refuses_removal_and_names_it() {
     assert!(message.contains("code-review"), "{message}");
     assert!(message.contains("gents graph cancel"), "{message}");
 
-    // A run reaching a terminal status unblocks removal. Reaching "cancelled"
-    // legally needs its active request to finish first, which needs a live
-    // provider this test has none of; force the terminal status directly, the
-    // same way this crate's other tests simulate a state no legal transition
-    // reaches on its own.
     let query = access
         .execute(&format!(
             r#"{{ GraphRun(filter: {{ run_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
@@ -221,7 +215,6 @@ async fn remove_deletes_retired_revisions_too() {
     .await
     .unwrap();
 
-    // A metadata-only successor: a new revision, superseding the first.
     let mut successor = load_test_graph_package("review_graph", &options);
     successor.manifest.version.push_str("-successor");
     let second = crate::graph_package::install_loaded_graph_package(
@@ -263,13 +256,6 @@ async fn remove_deletes_retired_revisions_too() {
 
 #[tokio::test]
 async fn an_untracked_graph_is_adopted_on_reinstall_and_survives_removal() {
-    // An operator's graph that already existed before a `PackInstallation`
-    // record for it did (a graph installed before this change, or one
-    // export/import carried over, which brings no record): a later install
-    // of the same package must record its `GraphDefinition` and revision as
-    // adopted, not created, so removing that install leaves them alone (#1
-    // in the review: `required_by=false` recording every graph as created
-    // let removing a dependent delete a graph the operator already had).
     let (node, access, options) = fixture().await;
     let first = install_test_graph_package(&access, OWNER, "review_graph", &options)
         .await
@@ -285,9 +271,6 @@ async fn an_untracked_graph_is_adopted_on_reinstall_and_survives_removal() {
     .await
     .unwrap();
 
-    // Forget the record directly (bypassing `remove_pack`, which would also
-    // take the graph documents with it): the graph and its revision stay
-    // live, exactly as an untracked or import-carried graph would be found.
     let doc_id = access
         .execute(&format!(
             r#"{{ PackInstallation(filter: {{ node_did: {{ _eq: "{OWNER}" }} }}) {{ _docID }} }}"#
@@ -312,9 +295,6 @@ async fn an_untracked_graph_is_adopted_on_reinstall_and_survives_removal() {
     );
     assert_eq!(count(&access, "GraphRevision", "owner_did", OWNER).await, 1);
 
-    // A reinstall of the identical package (standing in for a dependency
-    // install landing on top of the untracked graph) must find and adopt
-    // what is already there rather than materializing a new revision.
     let second =
         install_test_graph_package_explicit(&access, OWNER, "review_graph", &options, false)
             .await
@@ -384,9 +364,6 @@ async fn removal_reports_an_exact_truncated_count_past_the_retained_run_limit() 
     .await
     .unwrap();
 
-    // More terminal runs pinned to the removed revision than the retained-run
-    // report's bound: the report must still name the exact total, not just
-    // "more than N".
     let run_count = super::RETAINED_RUN_REPORT_LIMIT + 2;
     for index in 0..run_count {
         access

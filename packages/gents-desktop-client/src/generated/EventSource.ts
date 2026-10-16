@@ -3,22 +3,15 @@ import type { EventGroup } from "./EventGroup.js";
 import type { WorkspaceAuthority } from "./WorkspaceAuthority.js";
 
 /**
- * Reusable event-source configuration. Trigger owns task selection, enabled
- * state, concurrency, and delivery observations. The existing event engine owns
- * group state independently for each typed trigger/callback consumer.
+ * Reusable event-source configuration; the existing event engine owns group
+ * state independently per typed trigger/callback consumer.
  */
 export type EventSource = { node_did: string, event_source_id: string, display_name?: string | null, source_collection: string,
 /**
- * Absent/null means created, never all events. Explicit values use the
- * existing event engine vocabulary and are validated before installation.
+ * Absent/null means created, never all events.
  */
 event_kind?: string | null, filter?: string | null, correlation_field?: string | null,
 /**
- * Absent processes each document independently. A group requires a
- * correlation_field; that same correlation remains available to templates.
+ * Requires a correlation_field when grouped.
  */
-group?: EventGroup | null, workspace_authority?: WorkspaceAuthority | null, created_at?: string | null, updated_at?: string | null,
-/**
- * Optional UI/discovery labels. References, never tags, determine execution.
- */
-tags?: Array<string> | null, };
+group?: EventGroup | null, workspace_authority?: WorkspaceAuthority | null, created_at?: string | null, updated_at?: string | null, tags?: Array<string> | null, };

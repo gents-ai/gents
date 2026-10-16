@@ -1,4 +1,3 @@
-/* the settings-group pattern from the kit, with the pieces this screen repeats */
 import type { ReactNode } from "react";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { shortPath } from "@/lib/paths";
@@ -18,7 +17,6 @@ export function Group({
   children,
   action,
 }: {
-  /* optional: a panel with one self-explanatory field needs no heading */
   title?: string;
   children: ReactNode;
   action?: ReactNode;
@@ -86,7 +84,6 @@ export function StackedRow({
   );
 }
 
-/* a read-only value, in mono when it is an identifier */
 export function Fact({
   children,
   mono = false,
@@ -106,8 +103,6 @@ export function Fact({
   );
 }
 
-/* A path as it reads: from ~ when it is on this computer, shortened from
-   the left so its own name stays, and whole in its title. */
 export function PathFact({ path, local }: { path: string | null; local: boolean }) {
   const home = useHomeFolder();
   if (!path) return <Fact>{null}</Fact>;

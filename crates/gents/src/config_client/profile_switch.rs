@@ -1,7 +1,3 @@
-//! Moving a profile, and the profiles that share its account, to another
-//! account of the same provider. An operator write: nothing in `self_config`
-//! reaches it.
-
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
@@ -25,51 +21,38 @@ use crate::{Collection, InferenceBackend};
 pub const SWITCH_COST: &str = "After the move the provider's prompt cache starts empty, so the \
                                next turns are slower and use more of the new account's quota.";
 
-/// An account a profile can move to: an enabled backend of the same provider
-/// on another account, with its stored usage.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SwitchCandidate {
     pub label: String,
     pub backend_id: String,
-    /// `offered`, or `not read yet` when the backend's catalog was never read.
     pub models: &'static str,
     pub usage: UsageView,
 }
 
-/// Where `profile` can move, who uses it and what the move costs.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SwitchPlan {
     pub profile: String,
-    /// The account the profile runs on.
     pub account: ServingAccount,
     pub agents: Vec<String>,
-    /// Plugins whose model slot is bound to the profile.
     pub plugin_slots: Vec<String>,
     pub candidates: Vec<SwitchCandidate>,
-    /// The other profiles of `agents` on the same account.
     pub companions: Vec<String>,
     pub cost: &'static str,
 }
 
-/// A committed move.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SwitchReceipt {
     pub headline: String,
     pub profile: String,
-    /// The account the profile now runs on.
     pub account: ServingAccount,
     pub backend_id: String,
     pub agents: Vec<String>,
     pub plugin_slots: Vec<String>,
     pub cost: &'static str,
-    /// Companions the target offers that stayed on the old account.
     pub companions_offered: Vec<String>,
     pub companions_moved: Vec<String>,
 }
 
-/// The accounts `profile_id` can move to. `plugin_slots` are the plugins
-/// bound to the profile on the host, which only the caller can read. With no
-/// candidate, the error says how to add an account.
 pub async fn switch_candidates(
     access: &ConfigAccess,
     node_did: &str,
@@ -131,10 +114,10 @@ pub async fn switch_candidates(
 }
 
 /// Move `profile_id` to `target_backend_id`, and with `move_companions` the
-/// companions the target offers, in one transaction. Refused, writing
-/// nothing, for another provider's account, the same account, an account
-/// that is not enabled and a model the target does not offer. Accounts are
-/// read just before the transaction.
+/// companions the target offers, in one transaction. Refused, writing nothing,
+/// for another provider's account, the same account, a disabled account, or a
+/// model the target does not offer. Accounts are read just before the
+/// transaction.
 pub async fn switch_profile_account(
     access: &ConfigAccess,
     node_did: &str,
@@ -240,7 +223,6 @@ pub async fn switch_profile_account(
         .await
 }
 
-/// `Move profile <P> to <label> (used by N agents and M plugin slots)`.
 fn headline(profile: &str, label: &str, agents: usize, slots: usize) -> String {
     let count = |n: usize, noun: &str| format!("{n} {noun}{}", if n == 1 { "" } else { "s" });
     let mut users = Vec::new();
@@ -256,8 +238,6 @@ fn headline(profile: &str, label: &str, agents: usize, slots: usize) -> String {
     )
 }
 
-/// The provider an account belongs to: the sign-in provider, else the
-/// backend's kind (an API-key backend is its own account).
 fn provider(backend: &InferenceBackend, accounts: &[AccountSummary]) -> String {
     serving_account(backend, accounts)
         .provider
@@ -265,7 +245,6 @@ fn provider(backend: &InferenceBackend, accounts: &[AccountSummary]) -> String {
         .to_owned()
 }
 
-/// One key per account: the sign-in a backend runs on, else the backend.
 fn account_key(backend: &InferenceBackend, accounts: &[AccountSummary]) -> String {
     match backend_account(backend, accounts) {
         Some(Some(account)) => account.credential_id.clone(),
@@ -273,8 +252,6 @@ fn account_key(backend: &InferenceBackend, accounts: &[AccountSummary]) -> Strin
     }
 }
 
-/// The profile, its backend and every backend with its observation, from
-/// one transaction.
 struct Snapshot {
     references: ConfigReferences,
     profile: InferenceProfile,
@@ -313,8 +290,6 @@ impl Snapshot {
         })
     }
 
-    /// The other profiles (own or compaction) of the agents on the
-    /// profile that run on the same account.
     fn companions(&self, accounts: &[AccountSummary]) -> Vec<InferenceProfile> {
         let own = account_key(&self.backend, accounts);
         let ids: BTreeSet<String> = self

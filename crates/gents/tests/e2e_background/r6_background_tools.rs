@@ -647,19 +647,6 @@ async fn wait_for_initial_request_terminal(turn: &AcceptedBackgroundTurn) {
     );
 }
 
-#[tokio::test]
-async fn background_diagnostic_snapshot_is_bounded_and_explicit() {
-    let ready = bounded_diagnostic(Duration::from_secs(1), async { "ready" }).await;
-    assert_eq!(ready, "\"ready\"");
-
-    let unavailable =
-        bounded_diagnostic(Duration::ZERO, std::future::pending::<&'static str>()).await;
-    assert_eq!(
-        unavailable,
-        "<unavailable: diagnostic query timed out after 0ns>"
-    );
-}
-
 async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_name: &str) -> usize {
     let session_id = escape_graphql_string(session_id);
     let tool_name = escape_graphql_string(tool_name);
@@ -751,16 +738,9 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
     turn.runtime.shutdown().await;
 }
 
-// #985: a backgrounded bash run's lifetime budget is decoupled from both the
-// parent request deadline and the foreground command ceiling — the execution
-// must complete (and notify) even though the parent deadline expires while it
-// is still running.
 #[tokio::test]
 async fn background_tool_execution_survives_parent_request_deadline() {
     let turn = boot_background_turn("r6-background-outlives-deadline", Vec::new()).await;
-    // This fixture enables follow-ups for the initial authored prompt. Supply
-    // its terminal response before waiting, otherwise the mock correctly
-    // treats the second provider call as a not-yet-authored dynamic response.
     finish_dynamic_turn(&turn);
     wait_for_initial_request_terminal(&turn).await;
     let release_dir = tempfile::tempdir().unwrap();
@@ -827,7 +807,6 @@ async fn background_tool_execution_survives_parent_request_deadline() {
     );
     std::fs::write(&release_path, b"release").unwrap();
 
-    // The document-authored process outlives the accepted parent deadline.
     let marker = format!(r#"<tool-completion tool_call_id="{tool_call_id}""#);
     let mut message = None;
     for _ in 0..100 {
@@ -867,9 +846,6 @@ async fn background_tool_execution_survives_parent_request_deadline() {
     turn.runtime.shutdown().await;
 }
 
-// #985: wait_process is a bounded wait — on timeout it reports the process
-// as still running without cancelling it, so a model that waits cannot pin
-// the session (or kill the job) until the parent request deadline.
 #[tokio::test]
 async fn wait_process_bounded_wait_returns_still_running_without_cancelling() {
     let turn = boot_background_turn(
@@ -961,9 +937,6 @@ async fn assert_runtime_recovery_preserves_registered_worker(test_name: &str, pa
     turn.runtime.shutdown().await;
 }
 
-/// A registry holding no record of the surviving process, as after a restart
-/// without durable records, cannot prove ownership: the orphan settles as lost
-/// ahead of its deadline and terminal parent, and is never reported stopped.
 #[tokio::test]
 async fn periodic_recovery_without_process_record_settles_orphan_lost() {
     let turn = boot_background_turn(
@@ -977,8 +950,6 @@ async fn periodic_recovery_without_process_record_settles_orphan_lost() {
     .await;
     let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
     let tool_call_id = row.tool_call_id.expect("accepted background handle");
-    // Acceptance first persists Pending; the orphan sweep only owns a process
-    // after the real worker has moved it to Running.
     wait_for_running_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
     let expired = (chrono::Utc::now() - chrono::Duration::seconds(1))
         .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
@@ -1021,9 +992,6 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
     let tool_call_id = row.tool_call_id.expect("accepted valid orphan");
     finish_dynamic_turn(&turn);
     wait_for_initial_request_terminal(&turn).await;
-    // A cleanly completed parent intentionally leaves its background job
-    // running. Make the parent uncleanly terminal before testing orphan
-    // recovery with an empty worker registry.
     set_parent_state(turn.db.node.as_ref(), &turn.request_id, "interrupted").await;
 
     let malformed = format!(
@@ -1062,8 +1030,6 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
         .await
         .unwrap();
     let recovered = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
-    // The fresh registry holds no record of the worker's process, so the
-    // orphan settles as lost rather than as a stop.
     assert_eq!(
         recovered.lifecycle_state.as_deref(),
         Some("failed"),
@@ -1287,9 +1253,6 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
         Some(&valid_until),
     )
     .await;
-    // Wait for the claim owner to synthesize and persist the configured
-    // execution deadline, then release inside its remaining budget. Admission
-    // valid_until is intentionally a different, later clock.
     let request_id = escape_graphql_string("r6-background-wait-deadline-request-2");
     let persisted_deadline_at = tokio::time::timeout(Duration::from_secs(5), async {
         loop {

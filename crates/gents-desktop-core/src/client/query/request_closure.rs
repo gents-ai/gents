@@ -63,10 +63,6 @@ impl Scope {
     }
 }
 
-/// Resolve only request rows reachable from already-authorized session heads,
-/// active rows, or visible page rows. Exact node/session/requester predicates
-/// are applied before decoding; physical references remain physical and
-/// logical queue predecessors retain every matching twin.
 pub(crate) async fn close_request_rows(
     node: &EmbeddedNode,
     seeds: Vec<AgentRequestRow>,

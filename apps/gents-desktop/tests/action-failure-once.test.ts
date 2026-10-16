@@ -9,9 +9,8 @@ import { createConfigActions } from "../src/hooks/configActions";
 import { wasShown } from "../src/hooks/actionFailure";
 import { toastFailure } from "../src/ui/lib/failure";
 
-/* #2043: a failed action is reported once. The action that ran it says what
-   failed; a screen catching the same failure keeps its own state but does
-   not report it again. */
+/* A failed action is reported once: the action names what failed; a screen
+   catching the same failure keeps its own state but does not report it. */
 describe("a failed action", () => {
   const actions = (saveSkillConfig: () => Promise<never>) => {
     const reportFailure = vi.fn();
@@ -24,7 +23,6 @@ describe("a failed action", () => {
   };
 
   it("is reported by its action, naming what failed, and not again by the screen", async () => {
-    /* the bridge rejects with a plain string */
     const { created, reportFailure } = actions(() =>
       Promise.reject("skill name taken"),
     );

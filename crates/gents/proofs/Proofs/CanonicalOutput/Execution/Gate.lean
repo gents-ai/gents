@@ -3,16 +3,6 @@ import Proofs.CanonicalOutput.Execution.ToolDelivery
 import Proofs.CanonicalOutput.Execution.Compaction
 import Proofs.StorageWriteGate
 
-/-!
-# Local gate / canonical transaction composition
-
-The existing scheduling model describes when the gate holder can be polled and
-released. This composition permits only that holder to apply a canonical
-operation, against the current durable world rather than a pre-acquisition
-snapshot. Operations are pure atomic commit results: native mutex exclusion,
-DefraDB commit/rollback and authenticated actor binding remain refinement
-obligations. No claim of cross-process exclusion or scheduler fairness is made.
--/
 namespace CanonicalOutput.Execution.Gate
 
 abbrev Actor := Nat
@@ -71,9 +61,6 @@ def titleRecord (world : World) (record : Segment) : Bool :=
 def titleRecoveryItem (world : World) (item : RecoveryItem) : Bool :=
   titleRecord world item.closing && item.message.isNone
 
-/-- Ordinary title terminalization cannot strand an observed audit source. A
-corrupt source still has the separate policy-revocation escape, which must not
-invent or overwrite its bytes. -/
 def titleSourcesDecided (world : World) : Bool :=
   (requestCoordinates world).all fun coordinate =>
     if coordinate.request != world.requestId || !titleSource coordinate.source then true
@@ -94,9 +81,6 @@ def titleSourcesDecided (world : World) : Bool :=
           | none => false
       | _ => false
 
-/-- A normal request cannot create a title-source record. Existing records do
-not poison renewal or recovery of unrelated sources; each new write is checked
-at its own operation boundary. -/
 def normalOperationAllowed (_world : World) (operation : Operation) : Bool :=
   match operation with
     | .append _ record => !titleSource record.coordinate.source
@@ -109,9 +93,6 @@ def normalOperationAllowed (_world : World) (operation : Operation) : Bool :=
         items.all (fun item => !titleSource item.closing.coordinate.source)
     | _ => true
 
-/-- Title requests may write only their own headerless audit source under the
-existing request lease. No ordinary provider, tool, transcript, goal or wake
-publication can be introduced by this gate. -/
 def titleOperationAllowed (world : World) : Operation → Bool
   | .renew .. => true
   | .append _ record => titleRecord world record
@@ -310,10 +291,6 @@ def scheduling (state : World) (actor : Actor) (event : StorageWriteGate.Event) 
 def atTime (world : World) (now : Time) : World :=
   { world with lease := { world.lease with now := now } }
 
-/-- A gated commit keeps the composed control state. The only queue effect a
-commit carries is an authored publication consuming its selected message
-(`publishAuthoredComposed`): the active request and pending queue stay with
-the handover owner. -/
 def finishCommit (before execution : World) : World :=
   { execution with
     gateOwner := before.gateOwner
@@ -324,9 +301,6 @@ def finishCommit (before execution : World) : World :=
     claimed := before.claimed
     retry := before.retry }
 
-/-- The authoritative read and the result are inside the same held gate.
-Failed evaluation commits nothing. The holder must still finish cleanup/release
-through the scheduling owner; an error is not an implicit unlocked state. -/
 def commit (state : World) (actor : Actor) (now : Time) (operation : Operation) : Option World :=
   if state.gateOwner != some actor || state.gateSchedule.phase != .storage ||
       !StorageWriteGate.pollable state.gateSchedule || now < state.lease.now then none
@@ -382,8 +356,6 @@ theorem acquire_preserves_durable_world (before after : World) (actor : Actor)
   · contradiction
   · cases h; rfl
 
-/-- A core equation, not a postcondition rechecked by a wrapper: successful
-commit evaluated this operation on the latest world held by this gate. -/
 theorem commit_reads_current_world (before after : World) (actor : Actor) (now : Time)
     (operation : Operation) (h : commit before actor now operation = some after) :
     ∃ execution, evaluate operation (atTime before now) = .ok execution ∧
@@ -416,8 +388,6 @@ theorem commit_preserves_composed_control (before after : World) (actor : Actor)
   | error error => simp [heval] at h
   | ok execution => simp [heval] at h; cases h; exact ⟨rfl, rfl, rfl, rfl, rfl⟩
 
-/-- Even when storage has returned, a sibling cannot acquire until the
-existing owner performs the explicit release step. -/
 theorem sibling_waits_for_release (before after : World) (actor other : Actor)
     (now : Time) (operation : Operation)
     (h : commit before actor now operation = some after) (independent : Bool) :
@@ -466,8 +436,6 @@ private theorem publishAuthored_preserves_request_identity (before after : World
     | split at hcore
 
 set_option maxHeartbeats 2000000 in
-/-- Ordinary gated commits cannot retarget the physical request or session.
-Only the separate handover owner changes the active request identity. -/
 theorem evaluate_preserves_request_identity (operation : Operation) (before after : World)
     (h : evaluate operation before = .ok after) :
     after.requestId = before.requestId ∧ after.sessionId = before.sessionId := by

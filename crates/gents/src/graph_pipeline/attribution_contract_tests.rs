@@ -81,8 +81,6 @@ async fn generated_graph_failure_attribution_traces_drive_real_transactions() {
         );
         let empty_fixture = trace.events.iter().all(|event| event.witness.is_none());
         if !empty_fixture {
-            // A third live row allows the lower lexical failed sibling to be
-            // observed while real active work still prevents terminal commit.
             for id in ["a-cause", "z-cause", "m-drain-sentinel"] {
                 super::super::runtime::seed_signed_graph_request(
                     &node,
@@ -110,8 +108,6 @@ async fn generated_graph_failure_attribution_traces_drive_real_transactions() {
                     } else {
                         "failed"
                     };
-                    // Never change an already terminal cause to manufacture a
-                    // later abstract witness. The filter fences fixture legality.
                     execute_fixture(&node, format!(r#"mutation {{ update_AgentRequest(
                         filter: {{ request_id: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "processing" }} }},
                         input: {{ lifecycle_state: "{state}", failure_reason: "cause-{witness}" }}
@@ -127,8 +123,6 @@ async fn generated_graph_failure_attribution_traces_drive_real_transactions() {
             let mut observed = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
                 .await
                 .unwrap();
-            // Check emitted witness against durable facts independently of the
-            // latched error, which correctly stops changing after capture.
             if let Some(witness) = event.witness {
                 let candidate = if event.kind == "observed_failure" {
                     observed.requests.iter().find(|request| {
@@ -164,7 +158,7 @@ async fn generated_graph_failure_attribution_traces_drive_real_transactions() {
                 observed.update_generation = initial_generation + generation;
             }
             match event.kind.as_str() {
-                "observed_failure" => {} // The durable fixture transition above is the observation.
+                "observed_failure" => {}
                 "capture" => {
                     let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
                     let result = capture_failure_txn(txn, &observed).await;
@@ -176,7 +170,6 @@ async fn generated_graph_failure_attribution_traces_drive_real_transactions() {
                             trace.name
                         );
                     }
-                    // Use the emitted decision to drive and observe the real interrupt owner.
                     let after_capture = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
                         .await
                         .unwrap();
@@ -261,8 +254,6 @@ async fn generated_graph_failure_attribution_traces_drive_real_transactions() {
     }
 }
 
-// FailureAttribution.capture_loser_observes_winner: two real observers load the
-// same generation; a cancellation committed between them must remain visible.
 #[tokio::test]
 async fn failure_capture_loser_reloads_cancellation_winner() {
     let (node, run, trigger) = super::super::runtime::attribution_test_fixture(2).await;
@@ -348,7 +339,6 @@ async fn oversized_cancellation_reason_is_rejected_before_any_write() {
 #[tokio::test]
 async fn expired_run_deadline_becomes_durable_failure_evidence() {
     let (node, run, _) = super::super::runtime::attribution_test_fixture(2).await;
-    // Expire the plan's pinned runtime limit without waiting for the clock.
     execute_fixture(
         &node,
         format!(
@@ -367,7 +357,6 @@ async fn expired_run_deadline_becomes_durable_failure_evidence() {
     assert_eq!(evidence["code"], "run_deadline_exceeded");
     assert_eq!(evidence["max_runtime_secs"].as_u64(), Some(60));
     assert!(evidence["deadline_at"].is_string());
-    // Reconciliation must persist the derived deadline evidence.
     let terminal = reconcile_graph_run(&node, None, graph_test_owner(), &run.run_id)
         .await
         .unwrap();
@@ -388,7 +377,6 @@ async fn expired_run_deadline_becomes_durable_failure_evidence() {
 #[tokio::test]
 async fn quiesced_pinned_route_group_becomes_durable_failure_evidence() {
     let (node, run, trigger) = super::super::runtime::attribution_test_fixture(2).await;
-    // Match the pinned trigger and run correlation so load_groups admits it.
     execute_fixture(
         &node,
         format!(
@@ -528,8 +516,6 @@ async fn native_failure_capture_conflict_reloads_cancellation_winner() {
         .await
         .unwrap();
     assert_eq!(initial.update_generation, stale.update_generation);
-    // The direct node operation is an independent native transaction, deliberately
-    // bypassing the local ConfigApplyTxn serialization mutex for this storage race.
     execute_fixture(&node, format!(r#"mutation {{ update_GraphRun(filter: {{ run_id: {{ _eq: "{}" }} }}, input: {{ cancel_requested_at: "2026-09-05T00:00:00Z", update_generation: {} }}) {{ _docID }} }}"#, escape_graphql_string(&run.run_id), stale.update_generation + 1)).await;
     let snapshot = load_graph_run_view_with(&txn, graph_test_owner(), &run.run_id)
         .await

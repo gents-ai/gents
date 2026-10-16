@@ -16,10 +16,6 @@ import { ToolStep, UserMessage } from "@gents/ui/conversation";
 import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
 
-/** A transcript input that ended without being sent. A folded request was
-    consumed when its entry was published, so it was delivered; an input
-    still waiting is the turn being started or is listed with the queue, and
-    carries no chip, so its row keeps its height when it is saved. */
 export function pendingInputState(
   lifecycleState: string | null | undefined,
   foldedIntoRequestId?: string | null,
@@ -135,8 +131,6 @@ export function AutomatedInput({
   );
   const label = originLabel(origin, node, senderTitle);
   const preview = firstLine(content);
-  /* a step in the turn, drawn as the tool steps around it are: what put it
-     there and its first line on one row, its whole input when opened */
   return (
     <div data-testid="automated-input">
       <ToolStep

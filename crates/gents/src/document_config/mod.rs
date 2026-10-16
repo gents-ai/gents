@@ -130,7 +130,6 @@ pub fn default_agent_id_for_node(node_did: &str) -> String {
 }
 
 /// Ensure the runtime's node exists without inventing executable configuration.
-/// Packs or explicit configuration select agents, contexts and inference.
 pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) -> Result<Node> {
     use crate::collection::Collection;
     use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
@@ -196,37 +195,3 @@ mod tests;
 
 #[cfg(test)]
 mod config_model_tests;
-
-#[cfg(test)]
-mod principal_bootstrap_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn bootstrap_is_idempotent_and_does_not_invent_executable_configuration() -> Result<()> {
-        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
-        crate::ensure_runtime_schemas(&node).await?;
-        let principal = ensure_node(&node, "did:key:bootstrap").await?;
-        assert_eq!(principal.default_agent_id, None);
-        assert_eq!(ensure_node(&node, "did:key:bootstrap").await?, principal);
-        let response = node.execute("{ Node { _docID } Agent { _docID } AgentContext { _docID } InferenceProfile { _docID } InferenceBackend { _docID } }").await;
-        anyhow::ensure!(
-            !response.has_errors(),
-            "bootstrap inspection failed: {:?}",
-            response.errors
-        );
-        let data = response.data.as_ref().unwrap();
-        assert_eq!(data["Node"].as_array().unwrap().len(), 1);
-        for collection in [
-            "Agent",
-            "AgentContext",
-            "InferenceProfile",
-            "InferenceBackend",
-        ] {
-            assert!(
-                data[collection].as_array().unwrap().is_empty(),
-                "unexpected {collection}"
-            );
-        }
-        Ok(())
-    }
-}

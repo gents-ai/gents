@@ -48,11 +48,6 @@ pub struct GentsBuilder {
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     agents: Vec<PendingAgent>,
-    /// This runtime's measured probe health (#640), consulted alongside the
-    /// document when admitting an agent_config's backend. Empty by default —
-    /// build paths that run before the prober has an opinion (startup,
-    /// tests) never veto on measured health, matching
-    /// `BackendAdmissionConfig::measured_unhealthy`'s own default.
     backend_health: crate::backend_health::BackendHealthMap,
     plugin_home: Option<std::path::PathBuf>,
 }
@@ -72,9 +67,6 @@ impl GentsBuilder {
         self
     }
 
-    /// Test-only: seed the measured probe health this build should veto on,
-    /// exercising the same `BackendAdmissionConfig` path the runtime
-    /// consults after startup.
     #[cfg(test)]
     pub(crate) fn backend_health(
         mut self,
@@ -94,7 +86,6 @@ impl GentsBuilder {
         self
     }
 
-    /// The gents home whose installed plugins this runtime's tools can call.
     pub fn plugin_home(mut self, home: impl Into<std::path::PathBuf>) -> Self {
         self.plugin_home = Some(home.into());
         self
@@ -135,11 +126,8 @@ impl GentsBuilder {
         self
     }
 
-    /// Install a fail-closed capture sink for end-to-end fault-injection tests.
-    ///
-    /// This deliberately exposes only failure, not arbitrary sink replacement:
-    /// callers must not be able to acknowledge a provider request without
-    /// first making its rendered input durable.
+    /// Fail-closed capture sink for fault-injection tests: callers must not be
+    /// able to acknowledge a provider request without durable rendered input.
     #[doc(hidden)]
     pub fn fail_rendered_request_capture_for_test(mut self, message: impl Into<String>) -> Self {
         let message = Arc::new(message.into());
@@ -267,8 +255,6 @@ impl GentsBuilder {
             startup_readiness: Default::default(),
             #[cfg(test)]
             router_dispatch_probe: None,
-            // Same default as `Gents::from_default_agent_documents`: every
-            // provider request must pass through the durable DefraDB sink.
             rendered_request_capture_factory: Some(
                 self.rendered_request_capture_factory.unwrap_or_else(|| {
                     crate::rendered_request::defra_rendered_request_capture_factory(capture_node)
@@ -569,10 +555,6 @@ impl PendingAgent {
                     backend_id
                 )
             })?;
-        // `BackendAdmissionConfig::is_available` is the single owner of the
-        // enabled/probe_status/measured_unhealthy comparison (#1332); apply
-        // this builder's measured health the same way the reconciler does
-        // before gating on it.
         let observation =
             crate::backend_registry::lookup_backend_observation(node, node_did, &backend_id)
                 .await?
@@ -750,8 +732,6 @@ mod tests {
             agent_config.max_turns_provenance,
             MaxTurnsProvenance::Default
         );
-        // This agent has no InferenceExecution document, so advice naming
-        // only that document would not raise its limit.
         let message = agent_config.max_turns_provenance.describe();
         assert!(
             message.contains("AgentBuilder::max_turns"),

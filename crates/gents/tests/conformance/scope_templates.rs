@@ -31,7 +31,6 @@ fn lean_string_list(definition: &str) -> Vec<String> {
         .collect()
 }
 
-/// A `CollectionRule` of the Lean scope model: `(collection, field, source)`.
 fn lean_collection_rules(definition: &str) -> Vec<(String, String, String)> {
     crate::lean_vocab_test::lean_contract_snapshot()
         .scope_collection_rules
@@ -48,9 +47,6 @@ fn lean_collection_rules(definition: &str) -> Vec<(String, String, String)> {
         .collect()
 }
 
-/// Whether the route the real template owner resolves for `peer_did` selects
-/// the stored `AgentRequest` row `request_doc_id`. DefraDB evaluates the
-/// resolved filter, as it does for the replicator the route installs.
 async fn route_selects_request(
     node: &gents::defra_node::EmbeddedNode,
     template: &ScopeTemplate,
@@ -80,7 +76,6 @@ async fn route_selects_request(
         .is_some_and(|rows| !rows.is_empty())
 }
 
-/// Store one `AgentRequest` whose Lean-named route fields hold the given DIDs.
 async fn store_request_row(
     node: &gents::defra_node::EmbeddedNode,
     fields: &[(&str, &str)],
@@ -163,9 +158,6 @@ fn resolve_template_is_total_over_catalog_and_id_faithful() {
     );
 }
 
-/// Mirrors Lean `client_request_filter_conjoins_requester_and_destination`,
-/// `client_transcript_destination_scoped`, and the exact directional
-/// collection theorems.
 #[test]
 fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
     let transcript_names = lean_string_list("transcriptCollections")
@@ -393,8 +385,6 @@ fn conversation_scope_excludes_another_requester_on_the_same_agent() {
     assert_eq_filter(predicate, "requester_did", "did:key:phone");
 }
 
-/// Mirrors Lean `clientIndex_filter_eq` and
-/// `clientIndex_filters_requester_lineage`.
 #[test]
 fn client_index_scope_is_exactly_the_requester_scoped_literal_index() {
     let template = resolve_template("client-index").expect("client-index in catalog");
@@ -637,9 +627,6 @@ fn app_collection_admission_matches_lean_protocol_disjointness_contract() {
     }
 }
 
-/// Template selection is not ACP authorization. Ordinary routes may never
-/// select credentials; the explicit operator route still needs DID/ACP admission.
-/// The Rust credential set that broad subscriptions exclude is Lean's.
 #[test]
 fn ordinary_routes_exclude_credentials_and_operator_selection_remains_explicit() {
     assert_eq!(

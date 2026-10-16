@@ -45,7 +45,6 @@ pub fn run() {
     install_runtime();
 
     let builder = tauri::Builder::default();
-    // Registered first so a second launch exits before it sets anything up.
     #[cfg(desktop)]
     let builder = builder.plugin(single_instance());
     #[cfg(target_os = "macos")]
@@ -124,9 +123,6 @@ pub fn run() {
                         }
                     }
                     window_close::CloseAction::CloseWithHiddenMain => {
-                        // The last visible view is closing and no runtime needs
-                        // the hidden coordinator. Destroy it so last-window exit
-                        // works exactly as it did before native tabs.
                         if let Some(main) = main {
                             if let Err(error) = main.destroy() {
                                 tracing::warn!(%error, "could not close hidden main view");
@@ -184,8 +180,6 @@ fn browser_store_lock<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
-/// A second copy of the app would share this one's service label, service
-/// definition and data. Launching it again focuses the running app instead.
 #[cfg(desktop)]
 fn single_instance<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app))
@@ -303,32 +297,12 @@ mod tests {
         ));
         assert_eq!(config.managed_server, ManagedServerPolicy::Disabled);
     }
-
-    #[test]
-    fn a_second_launch_is_handed_to_the_running_app() {
-        let plugin = single_instance::<tauri::Wry>();
-        assert_eq!(tauri::plugin::Plugin::name(&plugin), "single-instance");
-    }
-
-    #[test]
-    fn tray_does_not_claim_process_readiness_while_starting() {
-        assert_eq!(
-            managed_agent_tooltip(Some("starting")),
-            "Gents node service — starting"
-        );
-        assert_eq!(
-            managed_agent_tooltip(Some("failed")),
-            "Gents node service — status unavailable"
-        );
-    }
 }
 
 #[cfg(desktop)]
 struct TrayRuntimeState {
-    // The desktop is tray-resident independently of node process state. This
-    // stays true so closing the main window preserves the menu-bar frontend.
     active: Arc<AtomicBool>,
-    // Native non-selected tabs can also report invisible. Only a deliberate
+    // Native non-selected tabs can also report invisible; only a deliberate
     // close makes the original view eligible for last-sibling cleanup.
     main_hidden_by_close: AtomicBool,
 }

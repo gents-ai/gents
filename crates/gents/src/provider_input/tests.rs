@@ -403,14 +403,11 @@ async fn openrouter_projection_matches_the_actual_rig_wire_body() {
     assert!(actual.to_string().contains("openrouter-visible-reasoning"));
 }
 
-/// A Claude request with `images` image parts in one tool result, or the
-/// same result with a short note in place of each image.
 fn claude_image_request(images: usize, as_images: bool) -> CompletionRequest {
     use crate::llm::message::{
         DocumentSourceKind, Image, ImageMediaType, ToolCall, ToolFunction, ToolResultContent,
         UserContent,
     };
-    // Alternate base64 and URL images: Claude charges both by their pixels.
     let part = |index: usize| {
         if as_images {
             ToolResultContent::Image(Image {
@@ -449,9 +446,6 @@ fn claude_image_request(images: usize, as_images: bool) -> CompletionRequest {
     request
 }
 
-/// Each Claude image block costs at least the per-image ceiling, however
-/// short its base64, so a request that fits without its images but not with
-/// them is refused at admission.
 #[test]
 fn claude_images_are_estimated_at_their_token_ceiling() {
     use gents_loop::provider_input::CLAUDE_IMAGE_TOKENS;
@@ -488,8 +482,6 @@ fn claude_images_are_estimated_at_their_token_ceiling() {
     ));
 }
 
-/// The Messages wire sends `build_messages_body` verbatim (no rig DTO, no
-/// rewrite), so the projection is that body; `openai_wire_api` is ignored.
 #[test]
 fn claude_messages_projection_is_the_messages_body_regardless_of_wire() {
     let mut request = core_request("claude-visible reasoning");

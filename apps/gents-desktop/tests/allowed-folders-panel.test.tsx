@@ -9,7 +9,6 @@ import { renderIn, testApp } from "./app-fixture";
 const list = vi.fn();
 const add = vi.fn();
 const remove = vi.fn();
-/* every folder command answers with the list as it now stands */
 const answering = (dirs: { path: string; access: string }[]) => {
   for (const command of [list, add, remove]) command.mockResolvedValue({ dirs });
 };

@@ -6,8 +6,6 @@ import { fleetNodes } from "../src/ui/lib/scope";
 import { NodeHoverCard } from "../src/ui/screens/HoverCards";
 import { node, renderIn, testApp } from "./app-fixture";
 
-/* this machine was set up with /Users/me/work; its node is did:key:home,
-   paired by enrollment like any peer */
 function cardFor(nodeDid: string) {
   const app = testApp({
     snapshot: {

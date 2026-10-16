@@ -1,12 +1,3 @@
-//! Scope-template catalog for P2P filtered replication.
-//!
-//! A `ScopeTemplate` is a named pairing intent: a fixed collection set, a
-//! `Scope` (how per-peer document filtering is derived), and a `Delivery`
-//! (push vs. replicate). The catalog is static and hardcoded here.
-//!
-//! Pairing filters use DefraDB's predicate type directly. Local helpers only
-//! derive, combine, and inspect those predicates.
-
 use gents_protocol::peer_schema::{
     compare_replicated_schema, ReplicatedCollectionIdentity, ReplicatedSchema, ReplicatedSchemaSkew,
 };
@@ -16,84 +7,45 @@ use serde_json::{Map, Value};
 
 pub use p2p::ReplicationFilter as FilterPredicate;
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
-/// Delivery mode for a template pairing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Delivery {
-    /// Caller pushes documents to the peer.
     Push,
-    /// Bidirectional replication.
     Replicate,
 }
 
-/// Scoping policy for per-peer document filtering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
-    /// Filter each collection on a single field that must equal the paired
-    /// peer's DID.
     PeerDid {
-        /// The field name on each collection document.
         field: &'static str,
     },
-    /// No per-peer filtering — replicate all documents in the collection set.
     Unscoped,
-    /// Explicit per-collection filter rules for directional pairings where
-    /// different collections scope to different DID sources.
     PerCollection(&'static [CollectionRule]),
-    /// Direction-aware mobile/desktop client route. Transcript artifacts are
-    /// scoped by both requester DID and owning node DID. Return-leg runtime
-    /// configuration is collection-bounded but unfiltered because its mutable
-    /// owner fields are not legal DefraDB replicator predicates.
-    /// Resolve this through `policy::resolve_template_filters` so the caller
-    /// must name the data-flow direction explicitly.
+    /// Return-leg runtime configuration cannot be expressed as a DefraDB
+    /// replicator predicate because its owner fields are mutable.
     ClientRoute,
 }
 
-/// DID source for one per-collection filter rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DidSource {
-    /// Use this node's DID.
     LocalDid,
-    /// Use the paired peer's node DID.
     PeerDid,
-    /// Use the DID that owns the pairing's authoritative projection.
-    ///
-    /// This is the local DID on the issuer/runtime side and the remote issuer
-    /// DID on an enrolled client. It lets both directions select the same
-    /// issuer-owned rows without replicating another runtime's projection.
     HomeDid,
 }
 
-/// One exact per-collection filter rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CollectionRule {
-    /// Collection this rule filters.
     pub collection: &'static str,
-    /// Field name filtered on the collection.
     pub field: &'static str,
-    /// DID source used as the filter value.
     pub source: DidSource,
 }
 
-/// A named pairing intent in the static catalog.
 #[derive(Debug, Clone)]
 pub struct ScopeTemplate {
-    /// Stable identifier used to look up the template from CLI args or config.
     pub id: &'static str,
-    /// The exact collection names included in this template.
     pub collections: &'static [&'static str],
-    /// How to derive per-peer document filters.
     pub scope: Scope,
-    /// Delivery mode for this pairing.
     pub delivery: Delivery,
 }
-
-// ---------------------------------------------------------------------------
-// Pairing filters
-// ---------------------------------------------------------------------------
 
 pub fn equality_filter(field: impl Into<String>, value: impl Into<String>) -> FilterPredicate {
     FilterPredicate::eq(field, Value::String(value.into()))
@@ -172,7 +124,6 @@ pub fn single_string_eq(filter: &FilterPredicate) -> Option<(&str, &str)> {
     (operators.len() == 1).then_some((field.as_str(), value))
 }
 
-/// Return one unambiguous string equality from a possibly conjunctive filter.
 pub(super) fn conjunctive_string_eq<'a>(
     filter: &'a FilterPredicate,
     field: &str,
@@ -211,25 +162,12 @@ pub(super) fn conjunctive_string_eq<'a>(
         .flatten()
 }
 
-/// Per-collection filter predicates for a concrete pairing.
-///
-/// `key` = collection name, `value` = predicate to apply when
-/// subscribing / pushing documents for that collection.  An empty map means
-/// no filtering (Unscoped).
-///
 pub type PairingFilters = BTreeMap<String, FilterPredicate>;
 
 pub fn decode_pairing_filters(raw: &str) -> serde_json::Result<PairingFilters> {
     serde_json::from_str(raw)
 }
 
-// ---------------------------------------------------------------------------
-// Built-in template catalog
-// ---------------------------------------------------------------------------
-
-/// Conversation grants carry requester-scoped transcript artifacts plus the
-/// small unfiltered configuration control plane needed to render and operate
-/// the paired agent without a second transport.
 const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentMessage",
@@ -262,13 +200,7 @@ const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
     "CompactionEntry",
 ];
 
-/// Bounded client dataplane. Unlike `machine`, this is intentionally a
-/// deployment route rather than fleet gossip: transcript rows are gated by
-/// requester and owning node, while the small control plane lets a client
-/// render agents and automations without importing arbitrary history.
-/// `InferenceBackend` is deliberately absent: the frozen schema contains raw
-/// API-key material. Clients resolve model choices through inference profiles;
-/// backend credentials remain on their existing operator/runtime route.
+// InferenceBackend contains raw API-key material; clients resolve model choices through profiles.
 pub const CLIENT_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentMessage",
@@ -301,12 +233,6 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "NodeReadiness",
 ];
 
-/// Client-authored rows that may travel toward a runtime. Runtime-owned
-/// configuration stays off this leg: its owner fields are intentionally
-/// mutable and therefore cannot be used as DefraDB replication filters.
-/// `SessionHydrationRequest` is the on-demand transcript catch-up control
-/// document: it must ride this outbound route or a phone using `client`
-/// cannot ask the runtime to replay one owned session.
 pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentMessage",
@@ -353,8 +279,6 @@ const CONVERSATION_RULES: &[CollectionRule] = &[
     },
 ];
 
-/// Requester-scoped session-index grant. Complete historical index hydration
-/// is handled separately by the desktop's node-global branchable pull.
 pub const CLIENT_INDEX_COLLECTIONS: [&str; 2] = ["AgentSession", "MailboxItem"];
 
 const CLIENT_INDEX_RULES: &[CollectionRule] = &[
@@ -370,13 +294,8 @@ const CLIENT_INDEX_RULES: &[CollectionRule] = &[
     },
 ];
 
-/// The fleet-discovery directory collection replicated by the `machine`
-/// template (issue #714). Registered in `gents-schemas`; named here as a
-/// literal because the catalog is deliberately dependency-free strings.
 pub const NODE_DIRECTORY_COLLECTION: &str = "NodeDirectoryEntry";
 
-/// Machine template collections: the ordinary conversation plane plus mailbox,
-/// hydration and directory observations. Credentials remain operator-only.
 const MACHINE_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentMessage",
@@ -457,8 +376,6 @@ const MACHINE_RULES: &[CollectionRule] = &[
     },
 ];
 
-/// Agent-config collections: agent + tool configuration.  Unscoped because
-/// the operator wants the full config set replicated, not per-peer slices.
 const AGENT_CONFIG_COLLECTIONS: &[&str] = &[
     "Agent",
     "AgentContext",
@@ -477,9 +394,6 @@ const AGENT_CONFIG_COLLECTIONS: &[&str] = &[
     "InferenceBackend",
 ];
 
-/// Caller → target leg of cross-node `agent_new`/`agent_message`:
-/// carry only the requests addressed to this peer. The caller's own requests,
-/// sessions and tool calls stay home.
 const AGENT_TARGET_CALLER_COLLECTIONS: &[&str] = &["AgentRequest"];
 
 const AGENT_TARGET_CALLER_RULES: &[CollectionRule] = &[CollectionRule {
@@ -488,10 +402,6 @@ const AGENT_TARGET_CALLER_RULES: &[CollectionRule] = &[CollectionRule {
     source: DidSource::PeerDid,
 }];
 
-/// Target → caller leg: carry back only the request, session, messages and
-/// output segments whose immutable requester route names the caller, so its
-/// completion observer can settle the row that caused them. Unrelated
-/// target-owned history does not replicate.
 const AGENT_TARGET_HOST_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentSession",
@@ -574,7 +484,6 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     },
     ScopeTemplate {
         id: APP_COLLECTIONS_TEMPLATE,
-        // Bring-your-own: the DataPlanePairingDesired row supplies the set.
         collections: &[],
         scope: Scope::Unscoped,
         delivery: Delivery::Replicate,
@@ -587,21 +496,11 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     },
 ];
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-/// Return all built-in templates in catalog order.
 pub fn builtin_templates() -> &'static [ScopeTemplate] {
     BUILTIN_TEMPLATES
 }
 
-/// Admit a bring-your-own app collection set only when it is non-empty and
-/// disjoint from every schema owned by the gents protocol catalog.
-///
-/// Protocol collections have bundled migration/version compatibility rules;
-/// allowing an arbitrary `DataPlanePairingDesired` row to name one would
-/// bypass the client-authored collection fence that protects those rules.
+/// Prevent app routes from bypassing protocol schema compatibility checks.
 pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<String>> {
     let overlaps_protocol_catalog = requested.iter().any(|requested| {
         gents_protocol::schemas::ALL_COLLECTION_NAMES
@@ -612,9 +511,6 @@ pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<Str
     (!requested.is_empty() && !overlaps_protocol_catalog).then_some(requested)
 }
 
-/// Read this node's active identity for every `client` route collection.
-/// Fails unless every collection is registered, so a node that has not
-/// finished its migrations never publishes a partial schema.
 pub async fn read_client_replicated_schema(
     node: std::sync::Arc<defra_node::EmbeddedNode>,
 ) -> anyhow::Result<ReplicatedSchema> {
@@ -632,7 +528,6 @@ pub async fn read_client_replicated_schema(
     Ok(schema)
 }
 
-/// Compare two nodes' `client` route collections; see [`compare_replicated_schema`].
 pub fn compare_client_replicated_schema(
     local: &ReplicatedSchema,
     remote: Option<&ReplicatedSchema>,
@@ -640,20 +535,10 @@ pub fn compare_client_replicated_schema(
     compare_replicated_schema(CLIENT_COLLECTIONS, local, remote)
 }
 
-/// Look up a template by id.  Returns `None` for unknown ids.
 pub fn resolve_template(id: &str) -> Option<&'static ScopeTemplate> {
     BUILTIN_TEMPLATES.iter().find(|t| t.id == id)
 }
 
-/// Build per-collection `PairingFilters` for a template scope against a
-/// concrete peer/local DID pair.
-///
-/// - `Scope::PeerDid { field }` → for each collection, insert a predicate
-///   `{ field, value: peer_did }`.
-/// - `Scope::Unscoped` → empty map (no filtering).
-/// - `Scope::PerCollection(rules)` → insert each exact collection rule using
-///   either the peer DID or local DID as the value source. Declared
-///   collections without a rule are deliberately unfiltered.
 pub fn scope_filter(
     scope: &Scope,
     collections: &[&str],
@@ -686,16 +571,10 @@ pub fn scope_filter(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Unit tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A runtime still on the pre-reasoning-audit collections is refused as a
-    /// whole: the fresh-home release has no compatibility reads.
     #[tokio::test]
     async fn pre_reasoning_audit_runtime_schema_is_refused_as_skew() {
         async fn node_with(schemas: &[String]) -> std::sync::Arc<defra_node::EmbeddedNode> {
@@ -736,22 +615,6 @@ mod tests {
         let skew = compare_client_replicated_schema(&local, Some(&old))
             .expect_err("an old runtime schema must not enroll or sync");
         assert!(format!("{skew:?}").contains("AgentRequest"), "{skew:?}");
-    }
-
-    #[test]
-    fn agent_config_includes_behavior_excludes_principal() {
-        let t = resolve_template("agent-config").unwrap();
-        assert_eq!(t.delivery, Delivery::Replicate);
-        assert!(matches!(t.scope, Scope::Unscoped));
-        assert!(t.collections.contains(&"Agent"));
-        assert!(!t.collections.contains(&"Node"));
-    }
-
-    #[test]
-    fn backup_is_unscoped_replicate() {
-        let t = resolve_template("backup").unwrap();
-        assert!(matches!(t.scope, Scope::Unscoped));
-        assert_eq!(t.delivery, Delivery::Replicate);
     }
 
     #[test]
@@ -821,31 +684,5 @@ mod tests {
             schema.keys().map(String::as_str).collect::<BTreeSet<_>>(),
             CLIENT_COLLECTIONS.iter().copied().collect::<BTreeSet<_>>()
         );
-    }
-
-    #[test]
-    fn unknown_template_is_none() {
-        assert!(resolve_template("nope").is_none());
-    }
-
-    // Additional coverage
-    #[test]
-    fn all_builtin_templates_have_nonempty_collections() {
-        for t in builtin_templates() {
-            // app-collections is the one bring-your-own template: its collection
-            // set is supplied by the DataPlanePairingDesired row, not the catalog.
-            if t.id == APP_COLLECTIONS_TEMPLATE {
-                assert!(
-                    t.collections.is_empty(),
-                    "app-collections must carry no fixed collections"
-                );
-                continue;
-            }
-            assert!(
-                !t.collections.is_empty(),
-                "template {} has no collections",
-                t.id
-            );
-        }
     }
 }

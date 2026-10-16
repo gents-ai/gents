@@ -372,9 +372,6 @@ pub(super) async fn handle_thread_request(
         codex::ClientRequest::ThreadSettingsUpdate {
             request_id, params, ..
         } => {
-            // `set_codex_thread_settings` is the single writer of the per-thread
-            // cwd sidecar entry (it resolves `params.cwd` against `state.cwd`),
-            // so the handler must not re-resolve and re-write it here.
             set_codex_thread_settings(state, &params.thread_id, &params).await?;
             send_result(outbound, request_id, codex::ThreadSettingsUpdateResponse {}).await
         }

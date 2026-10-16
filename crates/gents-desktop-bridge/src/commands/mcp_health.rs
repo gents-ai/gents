@@ -13,19 +13,6 @@ use gents_protocol::tool_service_health::ToolServiceHealthState;
 
 use super::super::types::{MCPServiceHealthView, McpServiceProbeResult};
 
-/// Read every persisted `ToolServiceHealthState` row scoped to the
-/// desktop's currently selected node. Bridges directly to the GraphQL
-/// store rather than the in-memory `ServiceHealthMap` because the node
-/// runtime (and therefore the in-memory state) lives in a separate
-/// process — the persisted collection is the only path the desktop has
-/// to the K-model state.
-///
-/// Rows are written by a `node_did`; on a replicated desktop node the local
-/// DefraDB sees rows from every replicated node. The selected-node
-/// filter keeps the rail's view consistent with the rest of the desktop
-/// (the same `selected_node_did` scopes config, transcripts, and
-/// triggers). Returns an empty Vec when no node is selected — the rail
-/// renders the existing empty state.
 pub async fn load_mcp_services_with_health(core: &ClientCore) -> Result<Vec<MCPServiceHealthView>> {
     let Some(node_did) = core.selected_node_did() else {
         return Ok(Vec::new());
@@ -82,12 +69,6 @@ pub(crate) async fn load_mcp_services_with_health_for_node(
     rows.into_iter().map(view_from_row).collect()
 }
 
-/// `display_state` is the collapsed three-state projection
-/// (`ToolServiceHealthState::project`) of the persisted `status` column.
-/// A row with a missing or unrecognized `status` is a data error — this
-/// command surfaces it as `Err` rather than inventing a synthetic
-/// classification, so a corrupt/legacy row fails loudly instead of
-/// silently rendering as healthy.
 pub(crate) fn view_from_row(row: ToolServiceHealthStateRow) -> Result<MCPServiceHealthView> {
     let display_state = ToolServiceHealthState::parse_opt(row.status.as_deref())
         .ok_or_else(|| {

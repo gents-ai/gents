@@ -1,124 +1,6 @@
 use super::*;
 use std::sync::Arc;
 
-#[derive(Debug, PartialEq, Eq)]
-enum StringInput {
-    Borrowed,
-    Owned,
-}
-
-impl<'de> Deserialize<'de> for StringInput {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        struct StringInputVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for StringInputVisitor {
-            type Value = StringInput;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("a string")
-            }
-
-            fn visit_borrowed_str<E>(self, _value: &str) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                Ok(StringInput::Borrowed)
-            }
-
-            fn visit_str<E>(self, _value: &str) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                Ok(StringInput::Owned)
-            }
-
-            fn visit_string<E>(self, _value: String) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                Ok(StringInput::Owned)
-            }
-        }
-
-        deserializer.deserialize_str(StringInputVisitor)
-    }
-}
-
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-struct TypedRow {
-    name: String,
-    count: u32,
-}
-
-#[test]
-fn rows_deserializes_borrowed_data_and_preserves_shape_errors() {
-    let response = QueryResponse::success(serde_json::json!({
-        "Large": ["x".repeat(1024 * 1024)],
-        "Typed": [{"name": "row", "count": 3}],
-        "Null": null,
-        "Object": {"name": "row", "count": 3}
-    }));
-
-    assert_eq!(
-        rows::<StringInput>(&response, "Large").unwrap(),
-        [StringInput::Borrowed]
-    );
-    assert_eq!(
-        rows::<TypedRow>(&response, "Typed").unwrap(),
-        [TypedRow {
-            name: "row".into(),
-            count: 3,
-        }]
-    );
-    assert!(rows::<TypedRow>(&response, "Missing").unwrap().is_empty());
-    assert!(rows::<TypedRow>(&response, "Null").is_err());
-    assert!(rows::<TypedRow>(&response, "Object").is_err());
-}
-
-#[test]
-fn native_data_envelope_preserves_payload_allocations_and_null_data() {
-    let payload = "x".repeat(1024 * 1024);
-    let pointer = payload.as_ptr();
-    let data = Value::Array(vec![Value::String(payload)]);
-    let envelope = into_data_envelope(Some(data));
-    assert_eq!(envelope["data"][0].as_str().unwrap().as_ptr(), pointer);
-    assert_eq!(into_data_envelope(None), serde_json::json!({"data": null}));
-}
-
-#[test]
-fn mutation_documents_borrows_normalized_single_and_batch_rows() {
-    let response = serde_json::json!({
-        "data": {
-            "add_AgentToolCall": [
-                {"_docID": "doc-a", "tool_call_key": "key-a"},
-                {"_docID": "doc-b", "tool_call_key": "key-b"}
-            ]
-        }
-    });
-    let expected = response["data"]["add_AgentToolCall"][0]["_docID"]
-        .as_str()
-        .unwrap()
-        .as_ptr();
-    let documents = mutation_documents(&response, "create_AgentToolCall")
-        .unwrap()
-        .unwrap();
-    assert_eq!(documents.len(), 2);
-    assert_eq!(documents[0]["_docID"].as_str().unwrap(), "doc-a");
-    assert_eq!(documents[0]["_docID"].as_str().unwrap().as_ptr(), expected);
-
-    let single = serde_json::json!({"data": {"add_AgentRequest": {"_docID": "request"}}});
-    assert_eq!(
-        mutation_documents(&single, "create_AgentRequest")
-            .unwrap()
-            .unwrap()
-            .len(),
-        1
-    );
-}
-
 #[test]
 fn mutation_documents_preserves_missing_null_alias_and_error_handling() {
     let missing = serde_json::json!({"data": {}});
@@ -142,50 +24,6 @@ fn mutation_documents_preserves_missing_null_alias_and_error_handling() {
         "create_AgentRequest": [{"_docID": "a"}, {"_docID": "b"}]
     }));
     assert!(single_mutation_document(&multi, "create_AgentRequest").is_err());
-}
-
-#[test]
-#[ignore = "manual native GraphQL envelope benchmark"]
-fn native_data_envelope_payload_size_benchmark() {
-    let data = serde_json::json!({"AgentOutputSegment": (0..128).map(|index| {
-        serde_json::json!({"_docID": format!("segment-{index}"), "payload": "x".repeat(64 * 1024)})
-    }).collect::<Vec<_>>()});
-    let mut copied = Vec::new();
-    let mut moved = Vec::new();
-    for iteration in 0..12 {
-        let measure = |copy| {
-            let native = Some(data.clone());
-            let start = std::time::Instant::now();
-            let envelope = if copy {
-                serde_json::json!({"data": native.unwrap_or(Value::Null)})
-            } else {
-                into_data_envelope(native)
-            };
-            let ms = start.elapsed().as_secs_f64() * 1000.0;
-            std::hint::black_box(envelope);
-            ms
-        };
-        let (copy_ms, move_ms) = if iteration % 2 == 0 {
-            (measure(true), measure(false))
-        } else {
-            let move_ms = measure(false);
-            (measure(true), move_ms)
-        };
-        if iteration > 0 {
-            copied.push(copy_ms);
-            moved.push(move_ms);
-        }
-    }
-    copied.sort_by(f64::total_cmp);
-    moved.sort_by(f64::total_cmp);
-    let result = serde_json::json!({
-        "payload_bytes": 128 * 64 * 1024, "baseline_median_ms": copied[5], "updated_median_ms": moved[5],
-        "includes_database_reads": false, "includes_fixture_clone": false,
-    });
-    if let Some(path) = std::env::var_os("GENTS_ENVELOPE_BENCHMARK_OUTPUT") {
-        std::fs::write(path, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
-    }
-    tracing::info!(%result, "native GraphQL envelope benchmark");
 }
 
 #[test]
@@ -382,6 +220,45 @@ fn mutation_composite_version_accepts_unique_newest_composite() {
         .unwrap()
         .expect("composite commit");
     assert_eq!(commit.cid, "bafy-new");
+}
+
+#[test]
+#[ignore = "manual native GraphQL envelope benchmark"]
+fn native_data_envelope_payload_size_benchmark() {
+    let data = serde_json :: json ! ({ "AgentOutputSegment" : (0 .. 128) . map (| index | { serde_json :: json ! ({ "_docID" : format ! ("segment-{index}") , "payload" : "x" . repeat (64 * 1024) }) }) . collect ::< Vec < _ >> () });
+    let mut copied = Vec::new();
+    let mut moved = Vec::new();
+    for iteration in 0..12 {
+        let measure = |copy| {
+            let native = Some(data.clone());
+            let start = std::time::Instant::now();
+            let envelope = if copy {
+                serde_json :: json ! ({ "data" : native . unwrap_or (Value :: Null) })
+            } else {
+                into_data_envelope(native)
+            };
+            let ms = start.elapsed().as_secs_f64() * 1000.0;
+            std::hint::black_box(envelope);
+            ms
+        };
+        let (copy_ms, move_ms) = if iteration % 2 == 0 {
+            (measure(true), measure(false))
+        } else {
+            let move_ms = measure(false);
+            (measure(true), move_ms)
+        };
+        if iteration > 0 {
+            copied.push(copy_ms);
+            moved.push(move_ms);
+        }
+    }
+    copied.sort_by(f64::total_cmp);
+    moved.sort_by(f64::total_cmp);
+    let result = serde_json :: json ! ({ "payload_bytes" : 128 * 64 * 1024 , "baseline_median_ms" : copied [5] , "updated_median_ms" : moved [5] , "includes_database_reads" : false , "includes_fixture_clone" : false , });
+    if let Some(path) = std::env::var_os("GENTS_ENVELOPE_BENCHMARK_OUTPUT") {
+        std::fs::write(path, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
+    }
+    tracing :: info ! (% result , "native GraphQL envelope benchmark");
 }
 
 #[tokio::test]

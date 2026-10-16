@@ -167,11 +167,9 @@ describe("inference setup persistence", () => {
           maxConcurrent: "1",
         },
       }).document.inference_backends![0]!;
-    /* another account: its own backend, naming it */
     const other = planFor("acct-2");
     expect(other.auth).toEqual({ kind: "node_oauth", account_ref: "acct-2" });
     expect(other.backend_id).not.toBe("claude");
-    /* the original account keeps its backend */
     const same = planFor(null);
     expect(same.auth).toEqual({ kind: "node_oauth" });
     expect(same.backend_id).toBe("claude");

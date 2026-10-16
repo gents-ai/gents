@@ -45,13 +45,7 @@ pub async fn run_openai_oneshot_with_tools(
     let tool_runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), agent.node_did());
     let tool_surface = agent
         .tools
-        .resolve(
-            &node,
-            agent.node_did(),
-            // The oneshot path has no host plugin store; a plugin tool it
-            // names resolves no identity and fails closed at build time.
-            &Default::default(),
-        )
+        .resolve(&node, agent.node_did(), &Default::default())
         .await?;
     let allowed_targets = tool_surface::resolve_agent_target_descriptions(&tool_surface);
     let prompt_builder = LayeredPromptBuilder::new(agent, &tool_surface, &allowed_targets);
@@ -61,8 +55,6 @@ pub async fn run_openai_oneshot_with_tools(
     let mut tools = tool_surface.build_tools(&tool_runtime).await?;
     tools.extend(extra_tools);
     let tools = Arc::new(tools);
-    // Background executions run through `call_tool_managed`, which owns the
-    // deadline/cancellation envelope — no per-tool wrapper needed.
     let background_tool_registry = BackgroundToolRegistry::from_config(
         tool_surface.build_tools(&tool_runtime).await?,
         tool_surface.background_tools(),
@@ -112,19 +104,6 @@ async fn run_oneshot_with_completion_client<C>(
 where
     C: ProviderClient,
 {
-    // exemption: one-shot does not wrap `model` in the daemon's
-    // `AdmissionRegistry`. Admission enforces a per-backend concurrency
-    // ceiling (`BackendAdmissionConfig`, built from the backend document's
-    // `max_concurrent`/`max_queue_depth`/`probe_status`) so multiple daemon
-    // slots sharing one backend stay bounded; it requires a registry that has
-    // been `reconcile()`-d with that config, which only the daemon's runtime
-    // reconciler drives. `ResolvedAgent` here carries no such fields (by
-    // design — one-shot is a single ad hoc call, not a slot pool with
-    // contention to bound), so plugging in a fresh, never-reconciled registry
-    // would make every completion fail immediately with "BackendGone: backend
-    // admission controller is not active" rather than skip the ceiling.
-    // Pinned by `oneshot_completes_without_backend_admission_reconciliation`
-    // in `tests/misc/oneshot_admission_exemption.rs`.
     let model = client.completion_model(&agent.model_name);
     let mut config = loop_config(
         agent,
@@ -231,9 +210,6 @@ async fn run_oneshot_owned<M: ProviderModel>(
         .as_deref()
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&chrono::Utc));
-    // A fresh one-shot has no restored assistant history. Accepted turns may
-    // still continue through tools, so bind their reasoning to the same
-    // physical header/close/capture owner used by the daemon.
     config.replay = crate::provider_input::replay::owned_replay_input(
         node.clone(),
         request.clone(),
@@ -310,8 +286,6 @@ async fn run_oneshot_owned<M: ProviderModel>(
     .await;
     hook.set_request_deadline_at(config.deadline).await;
     let provider_profile = config.provider_input_counter.profile();
-    // Both entry points publish through the same durable processor. The
-    // lifecycle's independent renewal task owns liveness; output never renews.
     let inference = async {
         let mut stream = Box::pin(crate::agent::loop_stream::run_loop_stream(
             model,
@@ -411,8 +385,6 @@ async fn run_oneshot_owned<M: ProviderModel>(
                 lifecycle_result,
                 Ok(TerminalizeResult::Won | TerminalizeResult::AlreadySame)
             ) {
-                // A one-shot process has no periodic daemon sweep. Reuse the
-                // recovery owner before returning an expired execution to its caller.
                 RequestLifecycle::recover_all(&node, agent.node_did()).await?;
             }
             let close_result = if matches!(lifecycle_result, Ok(TerminalizeResult::Won)) {

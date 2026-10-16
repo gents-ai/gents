@@ -1,4 +1,3 @@
-//! Publish an already claimed continuation through the existing Goal transaction.
 mod wait_observation;
 
 use super::*;
@@ -23,7 +22,6 @@ pub(crate) async fn publish_claimed_continuation(
     let stopped = std::sync::Mutex::new(None);
     let stopped_ref = &stopped;
     // Preserve the automatic queue writer's node actor; target identity signs
-    // the child independently of the database actor.
     let receipt = crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
@@ -54,9 +52,6 @@ pub(crate) async fn publish_claimed_continuation(
     Ok(receipt)
 }
 
-/// Stop only the observed claim while its parent is still the idle session
-/// head. Publication writes the same Goal row, so a conflicting child commit
-/// retries this transaction and must pass these observations again.
 pub(crate) async fn stop_claimed_continuation_for_unavailable_agent(
     node: &std::sync::Arc<EmbeddedNode>,
     observed: &GoalDocument,
@@ -110,7 +105,6 @@ pub(crate) async fn stop_claimed_continuation_for_unavailable_agent(
     ).await
 }
 
-/// The invalid-evidence stop staged by the attempt that committed, if any.
 type StoppedReason = std::sync::Mutex<Option<String>>;
 
 async fn stage_claimed_continuation(
@@ -122,7 +116,6 @@ async fn stage_claimed_continuation(
     wrapup: bool,
     stopped: &StoppedReason,
 ) -> Result<Option<GoalResumeReceipt>> {
-    // A conflicted attempt's stop never committed.
     *stopped.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
     anyhow::ensure!(
         identity.did() == observed.node_did,
@@ -178,9 +171,6 @@ async fn stage_claimed_continuation(
         children.len() <= 1,
         "ambiguous claimed continuation receipt"
     );
-    // A first publication writes the session's current hop. A replay takes the
-    // published continuation's own signed hop: the session has moved on since,
-    // and its rows cannot reproduce the set the first publication read.
     let session_hop = match children.first() {
         Some(child) => child
             .request_hop
@@ -260,7 +250,6 @@ async fn stage_claimed_continuation(
     {
         wait_observation::WaitEvidence::Absent => {}
         wait_observation::WaitEvidence::Running => return Ok(None),
-        // No Goal write: the claim stays and the next reconciliation retries.
         wait_observation::WaitEvidence::Unavailable(error) => return Err(error),
         wait_observation::WaitEvidence::Invalid(error) => {
             *stopped.lock().unwrap_or_else(|poison| poison.into_inner()) =
@@ -299,8 +288,6 @@ async fn stage_claimed_continuation(
     let status = escape_graphql_string(&goal.status);
     let parent_id = escape_graphql_string(parent_request_id);
     let timestamp = escape_graphql_string(&now.to_rfc3339());
-    // Updating the timestamp makes this a real write on the same Goal row as
-    // pause/completion/resume, so competing transactions cannot both publish.
     let response = txn
         .execute(&format!(
             r#"mutation {{ update_Goal(filter: {{
@@ -337,9 +324,6 @@ async fn stage_claimed_continuation(
     }))
 }
 
-/// Uses the existing Goal pause/abandon transitions under the publication
-/// claim guard. Readiness stops preserve retry provenance; invalid wait
-/// evidence records its failure because that claim cannot be recovered.
 async fn stop_claimed_continuation_in_txn(
     txn: &ConfigApplyTxn<'_>,
     goal: &GoalDocument,

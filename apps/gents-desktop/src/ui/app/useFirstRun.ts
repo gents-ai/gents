@@ -55,7 +55,6 @@ export function useFirstRun(generation: number, startupReady: boolean) {
   return {
     phase,
     initConfigStatus: facts.initConfigStatus,
-    /** An authoritative setup decision was made or the wizard completed. */
     settled: phase !== "unknown",
     finish: () => setHeld({ generation, phase: "done" }),
   };

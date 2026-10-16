@@ -1,6 +1,3 @@
-//! A session-message row outlives the request that made its call: recovery
-//! never settles it, or reaches the request it caused, from the caller's fate.
-
 use crate::lifecycle::{RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
 use crate::tool_call_lifecycle::admission_fixture::{
     published_session_message_with_owner, PublishedAdmission, PublishedAdmissionOptions,

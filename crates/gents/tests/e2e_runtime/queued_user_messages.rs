@@ -50,9 +50,6 @@ async fn queue_user_message(
     assert!(!created.has_errors(), "{:?}", created.errors);
 }
 
-/// Two messages written while the session is busy are answered by one turn:
-/// the first claims, the second is superseded into it, and both reach the
-/// provider in order as distinct user messages.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn messages_queued_behind_a_busy_turn_are_answered_by_one_inference() {
     let db = test_db("queued-user-messages").await;
@@ -82,7 +79,6 @@ async fn messages_queued_behind_a_busy_turn_are_answered_by_one_inference() {
         },
     )
     .await;
-    // The active turn's next provider turn waits on the test.
     prepared.backend.enable_dynamic_followups(prompt);
     configure_engineer_mailbox(&db, &did).await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();

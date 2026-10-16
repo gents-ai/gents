@@ -243,10 +243,7 @@ pub(super) async fn handle_basic_request(
     }
 }
 
-/// The stored usage of the account the session's backend names, with a
-/// plan only for ChatGPT: other providers' plans are not Codex plan types.
-/// Never reads the provider: on-demand reads belong to the runtime. Usage
-/// gates nothing, so a failed load answers as if nothing were stored.
+/// Stored usage of the session backend's account; on-demand provider reads belong to the runtime.
 async fn session_usage(state: &ShimState) -> Option<StoredUsage> {
     let load = async {
         let profile = load_bound_agent(state).await?.inference_profile;
@@ -323,7 +320,6 @@ mod tests {
         }
     }
 
-    /// Binds the session's agent to `backend` through one profile.
     async fn bind(node: &Arc<EmbeddedNode>, backend: InferenceBackend) {
         let access = ConfigAccess::local(node.clone());
         write_inference_backend_document(&access, &backend)
@@ -572,7 +568,6 @@ mod tests {
         let tempdir = tempfile::tempdir().unwrap();
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        // No agent is bound, so loading the session's account fails.
         let state = state(node, &tempdir);
         let (outbound, mut received) = mpsc::unbounded_channel();
         let request: codex::ClientRequest =

@@ -28,7 +28,6 @@ const running = {
   },
 } as unknown as DesktopClientSnapshot;
 
-/* every bridge call answers; the client is running throughout */
 function bridgeApi(): Record<string, ReturnType<typeof vi.fn>> {
   return new Proxy(
     { fetchDesktopSnapshot: vi.fn(async () => running) },

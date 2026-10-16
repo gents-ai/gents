@@ -1,6 +1,3 @@
-//! EmbeddedNode-seeded CLI suites: read/format surfaces that need a store
-//! but no server process.
-
 mod support;
 
 #[path = "suites/cli_adapter_interop_roundtrip.rs"]

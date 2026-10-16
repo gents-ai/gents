@@ -70,8 +70,6 @@ impl<'de> Deserialize<'de> for DynamicToolSpec {
     }
 }
 
-// === Threads, Turns, and Items ===
-// Thread APIs
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartParams {
@@ -89,11 +87,9 @@ pub struct ThreadStartParams {
     /// resolved against the effective cwd for the thread.
     pub runtime_workspace_roots: Option<Vec<PathBuf>>,
     pub approval_policy: Option<AskForApproval>,
-    /// Override where approval requests are routed for review on this thread
-    /// and subsequent turns.
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox: Option<SandboxMode>,
-    /// Named profile id for this thread. Cannot be combined with `sandbox`.
+    /// Cannot be combined with `sandbox`.
     pub permissions: Option<String>,
     pub config: Option<HashMap<String, JsonValue>>,
     pub service_name: Option<String>,
@@ -102,10 +98,7 @@ pub struct ThreadStartParams {
     pub personality: Option<Personality>,
     pub ephemeral: Option<bool>,
     pub session_start_source: Option<ThreadStartSource>,
-    /// Optional client-supplied analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
-    /// Optional sticky environments for this thread.
-    ///
     /// Omitted selects the default environment when environment access is
     /// enabled. Empty disables environment access for turns that do not
     /// provide a turn override. Non-empty selects the first environment as the
@@ -119,9 +112,7 @@ pub struct ThreadStartParams {
     /// This is for internal use only (e.g. Codex Cloud).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub experimental_raw_events: bool,
-    /// Deprecated and ignored by app-server. Kept only so older clients can
-    /// continue sending the field while rollout persistence always uses the
-    /// limited history policy.
+    /// Deprecated and ignored by app-server; older clients may still send it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub persist_extended_history: bool,
 }
@@ -129,14 +120,12 @@ pub struct ThreadStartParams {
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MockExperimentalMethodParams {
-    /// Test-only payload field.
     pub value: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MockExperimentalMethodResponse {
-    /// Echoes the input `value`.
     pub echoed: Option<String>,
 }
 
@@ -148,21 +137,15 @@ pub struct ThreadStartResponse {
     pub model_provider: String,
     pub service_tier: Option<String>,
     pub cwd: AbsolutePathBuf,
-    /// Thread-scoped runtime workspace roots used to materialize
-    /// `:workspace_roots`.
     #[serde(default)]
     pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
-    /// Instruction source files currently loaded for this thread.
     #[serde(default)]
     pub instruction_sources: Vec<AbsolutePathBuf>,
     pub approval_policy: AskForApproval,
-    /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
-    /// Legacy sandbox policy retained for compatibility. Experimental clients
-    /// should prefer `activePermissionProfile` for profile provenance.
+    /// Legacy sandbox policy retained for compatibility; prefer
+    /// `activePermissionProfile` for profile provenance.
     pub sandbox: SandboxPolicy,
-    /// Named or implicit built-in profile that produced the active
-    /// permissions, when known.
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -172,21 +155,14 @@ pub struct ThreadStartResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSettingsUpdateParams {
     pub thread_id: String,
-    /// Override the working directory for subsequent turns.
     pub cwd: Option<PathBuf>,
-    /// Override the approval policy for subsequent turns.
     pub approval_policy: Option<AskForApproval>,
-    /// Override where approval requests are routed for subsequent turns.
     pub approvals_reviewer: Option<ApprovalsReviewer>,
-    /// Override the sandbox policy for subsequent turns.
     pub sandbox_policy: Option<SandboxPolicy>,
-    /// Select a named permissions profile id for subsequent turns. Cannot be
-    /// combined with `sandboxPolicy`.
+    /// Cannot be combined with `sandboxPolicy`.
     pub permissions: Option<String>,
-    /// Override the model for subsequent turns.
     pub model: Option<String>,
-    /// Override the service tier for subsequent turns. `null` clears the
-    /// current service tier; omission leaves it unchanged.
+    /// `null` clears the current service tier; omission leaves it unchanged.
     #[serde(
         default,
         deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
@@ -194,16 +170,12 @@ pub struct ThreadSettingsUpdateParams {
         skip_serializing_if = "Option::is_none"
     )]
     pub service_tier: Option<Option<String>>,
-    /// Override the reasoning effort for subsequent turns.
     pub effort: Option<ReasoningEffort>,
-    /// Override the reasoning summary for subsequent turns.
     pub summary: Option<ReasoningSummary>,
     /// EXPERIMENTAL - Set a pre-set collaboration mode for subsequent turns.
-    ///
     /// For `collaboration_mode.settings.developer_instructions`, `null` means
     /// "use the built-in instructions for the selected mode".
     pub collaboration_mode: Option<CollaborationMode>,
-    /// Override the personality for subsequent turns.
     pub personality: Option<Personality>,
 }
 
@@ -237,39 +209,25 @@ pub struct ThreadSettingsUpdatedNotification {
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-/// There are three ways to resume a thread:
-/// 1. By thread_id: load the thread from disk by thread_id and resume it.
-/// 2. By history: instantiate the thread from memory and resume it.
-/// 3. By path: load the thread from disk by path and resume it.
-///
-/// For non-running threads, the precedence is: history > non-empty path > thread_id.
-/// If using history or a non-empty path for a non-running thread, the thread_id
-/// param will be ignored.
-///
-/// If thread_id identifies a running thread, app-server rejoins that thread and
-/// treats a non-empty path as a consistency check against the active rollout path.
-/// Empty string path values are treated as absent.
-///
-/// Prefer using thread_id whenever possible.
+/// Precedence for non-running threads: history > non-empty path > thread_id;
+/// thread_id is ignored when history or a non-empty path is given. If
+/// thread_id identifies a running thread, app-server rejoins that thread and
+/// treats a non-empty path as a consistency check against the active rollout
+/// path. Empty string path values are treated as absent. Prefer thread_id.
 pub struct ThreadResumeParams {
     pub thread_id: String,
 
     /// [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
-    /// If specified, the thread will be resumed with the provided history
-    /// instead of loaded from disk.
     pub history: Option<Vec<ResponseItem>>,
 
-    /// [UNSTABLE] Specify the rollout path to resume from.
-    /// If specified for a non-running thread, the thread_id param will be ignored.
-    /// If thread_id identifies a running thread, the path must match the active
-    /// rollout path.
+    /// [UNSTABLE] Rollout path to resume from; must match the active rollout
+    /// path when thread_id identifies a running thread.
     #[serde(
         default,
         deserialize_with = "crate::protocol::serde_helpers::deserialize_empty_path_as_none"
     )]
     pub path: Option<PathBuf>,
 
-    /// Configuration overrides for the resumed thread, if any.
     pub model: Option<String>,
     pub model_provider: Option<String>,
     #[serde(
@@ -280,29 +238,21 @@ pub struct ThreadResumeParams {
     )]
     pub service_tier: Option<Option<String>>,
     pub cwd: Option<String>,
-    /// Replace the thread's runtime workspace roots. Relative paths are
-    /// resolved against the effective cwd for the thread.
     pub runtime_workspace_roots: Option<Vec<PathBuf>>,
     pub approval_policy: Option<AskForApproval>,
-    /// Override where approval requests are routed for review on this thread
-    /// and subsequent turns.
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox: Option<SandboxMode>,
-    /// Named profile id for the resumed thread. Cannot be combined with
-    /// `sandbox`.
+    /// Cannot be combined with `sandbox`.
     pub permissions: Option<String>,
     pub config: Option<HashMap<String, serde_json::Value>>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
-    /// When true, return only thread metadata and live-resume state without
-    /// populating `thread.turns`. This is useful when the client plans to call
-    /// `thread/turns/list` immediately after resuming.
+    /// Return only thread metadata and live-resume state without populating
+    /// `thread.turns`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
-    /// Deprecated and ignored by app-server. Kept only so older clients can
-    /// continue sending the field while rollout persistence always uses the
-    /// limited history policy.
+    /// Deprecated and ignored by app-server; older clients may still send it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub persist_extended_history: bool,
 }
@@ -315,21 +265,15 @@ pub struct ThreadResumeResponse {
     pub model_provider: String,
     pub service_tier: Option<String>,
     pub cwd: AbsolutePathBuf,
-    /// Thread-scoped runtime workspace roots used to materialize
-    /// `:workspace_roots`.
     #[serde(default)]
     pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
-    /// Instruction source files currently loaded for this thread.
     #[serde(default)]
     pub instruction_sources: Vec<AbsolutePathBuf>,
     pub approval_policy: AskForApproval,
-    /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
-    /// Legacy sandbox policy retained for compatibility. Experimental clients
-    /// should prefer `activePermissionProfile` for profile provenance.
+    /// Legacy sandbox policy retained for compatibility; prefer
+    /// `activePermissionProfile` for profile provenance.
     pub sandbox: SandboxPolicy,
-    /// Named or implicit built-in profile that produced the active
-    /// permissions, when known.
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -337,26 +281,19 @@ pub struct ThreadResumeResponse {
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-/// There are two ways to fork a thread:
-/// 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread.
-/// 2. By path: load the thread from disk by path and fork it into a new thread.
-///
-/// If using a non-empty path, the thread_id param will be ignored.
-/// Empty string path values are treated as absent.
-///
-/// Prefer using thread_id whenever possible.
+/// Non-empty path takes precedence over thread_id; empty string path values
+/// are treated as absent. Prefer thread_id.
 pub struct ThreadForkParams {
     pub thread_id: String,
 
-    /// [UNSTABLE] Specify the rollout path to fork from.
-    /// If specified, the thread_id param will be ignored.
+    /// [UNSTABLE] Rollout path to fork from; if specified, thread_id is
+    /// ignored.
     #[serde(
         default,
         deserialize_with = "crate::protocol::serde_helpers::deserialize_empty_path_as_none"
     )]
     pub path: Option<PathBuf>,
 
-    /// Configuration overrides for the forked thread, if any.
     pub model: Option<String>,
     pub model_provider: Option<String>,
     #[serde(
@@ -367,32 +304,23 @@ pub struct ThreadForkParams {
     )]
     pub service_tier: Option<Option<String>>,
     pub cwd: Option<String>,
-    /// Replace the thread's runtime workspace roots. Relative paths are
-    /// resolved against the effective cwd for the thread.
     pub runtime_workspace_roots: Option<Vec<PathBuf>>,
     pub approval_policy: Option<AskForApproval>,
-    /// Override where approval requests are routed for review on this thread
-    /// and subsequent turns.
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox: Option<SandboxMode>,
-    /// Named profile id for the forked thread. Cannot be combined with
-    /// `sandbox`.
+    /// Cannot be combined with `sandbox`.
     pub permissions: Option<String>,
     pub config: Option<HashMap<String, serde_json::Value>>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
-    /// Optional client-supplied analytics source classification for this forked thread.
     pub thread_source: Option<ThreadSource>,
-    /// When true, return only thread metadata and live fork state without
-    /// populating `thread.turns`. This is useful when the client plans to call
-    /// `thread/turns/list` immediately after forking.
+    /// Return only thread metadata and live fork state without populating
+    /// `thread.turns`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
-    /// Deprecated and ignored by app-server. Kept only so older clients can
-    /// continue sending the field while rollout persistence always uses the
-    /// limited history policy.
+    /// Deprecated and ignored by app-server; older clients may still send it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub persist_extended_history: bool,
 }
@@ -405,21 +333,15 @@ pub struct ThreadForkResponse {
     pub model_provider: String,
     pub service_tier: Option<String>,
     pub cwd: AbsolutePathBuf,
-    /// Thread-scoped runtime workspace roots used to materialize
-    /// `:workspace_roots`.
     #[serde(default)]
     pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
-    /// Instruction source files currently loaded for this thread.
     #[serde(default)]
     pub instruction_sources: Vec<AbsolutePathBuf>,
     pub approval_policy: AskForApproval,
-    /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
-    /// Legacy sandbox policy retained for compatibility. Experimental clients
-    /// should prefer `activePermissionProfile` for profile provenance.
+    /// Legacy sandbox policy retained for compatibility; prefer
+    /// `activePermissionProfile` for profile provenance.
     pub sandbox: SandboxPolicy,
-    /// Named or implicit built-in profile that produced the active
-    /// permissions, when known.
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -455,39 +377,29 @@ pub enum ThreadUnsubscribeStatus {
     Unsubscribed,
 }
 
-/// Parameters for `thread/increment_elicitation`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadIncrementElicitationParams {
-    /// Thread whose out-of-band elicitation counter should be incremented.
     pub thread_id: String,
 }
 
-/// Response for `thread/increment_elicitation`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadIncrementElicitationResponse {
-    /// Current out-of-band elicitation count after the increment.
     pub count: u64,
-    /// Whether timeout accounting is paused after applying the increment.
     pub paused: bool,
 }
 
-/// Parameters for `thread/decrement_elicitation`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDecrementElicitationParams {
-    /// Thread whose out-of-band elicitation counter should be decremented.
     pub thread_id: String,
 }
 
-/// Response for `thread/decrement_elicitation`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDecrementElicitationResponse {
-    /// Current out-of-band elicitation count after the decrement.
     pub count: u64,
-    /// Whether timeout accounting remains paused after applying the decrement.
     pub paused: bool,
 }
 
@@ -581,17 +493,16 @@ pub struct ThreadGoalClearResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadMetadataUpdateParams {
     pub thread_id: String,
-    /// Patch the stored Git metadata for this thread.
-    /// Omit a field to leave it unchanged, set it to `null` to clear it, or
-    /// provide a string to replace the stored value.
+    /// Omit a field to leave it unchanged, `null` to clear it, or a string to
+    /// replace the stored value.
     pub git_info: Option<ThreadMetadataGitInfoUpdateParams>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadMetadataGitInfoUpdateParams {
-    /// Omit to leave the stored commit unchanged, set to `null` to clear it,
-    /// or provide a non-empty string to replace it.
+    /// Omit to leave unchanged, `null` to clear, or a non-empty string to
+    /// replace.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -599,8 +510,8 @@ pub struct ThreadMetadataGitInfoUpdateParams {
         deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option"
     )]
     pub sha: Option<Option<String>>,
-    /// Omit to leave the stored branch unchanged, set to `null` to clear it,
-    /// or provide a non-empty string to replace it.
+    /// Omit to leave unchanged, `null` to clear, or a non-empty string to
+    /// replace.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -608,8 +519,8 @@ pub struct ThreadMetadataGitInfoUpdateParams {
         deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option"
     )]
     pub branch: Option<Option<String>>,
-    /// Omit to leave the stored origin URL unchanged, set to `null` to clear it,
-    /// or provide a non-empty string to replace it.
+    /// Omit to leave unchanged, `null` to clear, or a non-empty string to
+    /// replace.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -676,10 +587,9 @@ pub struct ThreadCompactStartResponse {}
 #[serde(rename_all = "camelCase")]
 pub struct ThreadShellCommandParams {
     pub thread_id: String,
-    /// Shell command string evaluated by the thread's configured shell.
-    /// Unlike `command/exec`, this intentionally preserves shell syntax
-    /// such as pipes, redirects, and quoting. This runs unsandboxed with full
-    /// access rather than inheriting the thread sandbox policy.
+    /// Runs unsandboxed with full access rather than inheriting the thread
+    /// sandbox policy; shell syntax such as pipes, redirects, and quoting is
+    /// preserved.
     pub command: String,
 }
 
@@ -713,74 +623,58 @@ pub struct ThreadBackgroundTerminalsCleanResponse {}
 #[serde(rename_all = "camelCase")]
 pub struct ThreadRollbackParams {
     pub thread_id: String,
-    /// The number of turns to drop from the end of the thread. Must be >= 1.
-    ///
-    /// This only modifies the thread's history and does not revert local file changes
-    /// that have been made by the agent. Clients are responsible for reverting these changes.
+    /// Number of turns to drop from the end of the thread; must be >= 1. Only
+    /// modifies the thread's history, not local file changes made by the
+    /// agent; clients are responsible for reverting those.
     pub num_turns: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadRollbackResponse {
-    /// The updated thread after applying the rollback, with `turns` populated.
-    ///
-    /// The ThreadItems stored in each Turn are lossy since we explicitly do not
-    /// persist all agent interactions, such as command executions. This is the same
-    /// behavior as `thread/resume`.
+    /// ThreadItems stored in each Turn are lossy since command executions and
+    /// similar agent interactions are not persisted; same as `thread/resume`.
     pub thread: Thread,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadListParams {
-    /// Opaque pagination cursor returned by a previous call.
     pub cursor: Option<String>,
-    /// Optional page size; defaults to a reasonable server-side value.
     pub limit: Option<u32>,
-    /// Optional sort key; defaults to created_at.
     pub sort_key: Option<ThreadSortKey>,
-    /// Optional sort direction; defaults to descending (newest first).
     pub sort_direction: Option<SortDirection>,
-    /// Optional provider filter; when set, only sessions recorded under these
-    /// providers are returned. When present but empty, includes all providers.
+    /// When set, only sessions recorded under these providers are returned;
+    /// when present but empty, includes all providers.
     pub model_providers: Option<Vec<String>>,
-    /// Optional source filter; when set, only sessions from these source kinds
-    /// are returned. When omitted or empty, defaults to interactive sources.
+    /// When set, only sessions from these source kinds are returned; omitted
+    /// or empty defaults to interactive sources.
     pub source_kinds: Option<Vec<ThreadSourceKind>>,
-    /// Optional archived filter; when set to true, only archived threads are returned.
-    /// If false or null, only non-archived threads are returned.
+    /// When true, only archived threads are returned; otherwise only
+    /// non-archived threads.
     pub archived: Option<bool>,
-    /// Optional cwd filter or filters; when set, only threads whose session cwd
-    /// exactly matches one of these paths are returned.
+    /// Only threads whose session cwd exactly matches one of these paths.
     pub cwd: Option<ThreadListCwdFilter>,
-    /// If true, return from the state DB without scanning JSONL rollouts to
-    /// repair thread metadata. Omitted or false preserves scan-and-repair
-    /// behavior.
+    /// Return from the state DB without scanning JSONL rollouts to repair
+    /// thread metadata.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub use_state_db_only: bool,
-    /// Optional substring filter for the extracted thread title.
     pub search_term: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSearchParams {
-    /// Opaque pagination cursor returned by a previous call.
     pub cursor: Option<String>,
-    /// Optional page size; defaults to a reasonable server-side value.
     pub limit: Option<u32>,
-    /// Optional sort key; defaults to created_at.
     pub sort_key: Option<ThreadSortKey>,
-    /// Optional sort direction; defaults to descending (newest first).
     pub sort_direction: Option<SortDirection>,
-    /// Optional source filter; when set, only sessions from these source kinds
-    /// are returned. When omitted or empty, defaults to interactive sources.
+    /// When set, only sessions from these source kinds are returned; omitted
+    /// or empty defaults to interactive sources.
     pub source_kinds: Option<Vec<ThreadSourceKind>>,
-    /// Optional archived filter; when set to true, only archived threads are returned.
-    /// If false or null, only non-archived threads are returned.
+    /// When true, only archived threads are returned; otherwise only
+    /// non-archived threads.
     pub archived: Option<bool>,
-    /// Required substring/full-text query for thread search.
     pub search_term: String,
 }
 
@@ -825,13 +719,10 @@ pub enum SortDirection {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadListResponse {
     pub data: Vec<Thread>,
-    /// Opaque cursor to pass to the next call to continue after the last item.
-    /// if None, there are no more items to return.
     pub next_cursor: Option<String>,
-    /// Opaque cursor to pass as `cursor` when reversing `sortDirection`.
-    /// This is only populated when the page contains at least one thread.
-    /// Use it with the opposite `sortDirection`; for timestamp sorts it anchors
-    /// at the start of the page timestamp so same-second updates are not skipped.
+    /// Cursor for reversing `sortDirection`; only populated when the page
+    /// contains at least one thread. For timestamp sorts it anchors at the
+    /// start of the page timestamp so same-second updates are not skipped.
     pub backwards_cursor: Option<String>,
 }
 
@@ -846,32 +737,24 @@ pub struct ThreadSearchResult {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSearchResponse {
     pub data: Vec<ThreadSearchResult>,
-    /// Opaque cursor to pass to the next call to continue after the last item.
-    /// if None, there are no more items to return.
     pub next_cursor: Option<String>,
-    /// Opaque cursor to pass as `cursor` when reversing `sortDirection`.
-    /// This is only populated when the page contains at least one thread.
-    /// Use it with the opposite `sortDirection`; for timestamp sorts it anchors
-    /// at the start of the page timestamp so same-second updates are not skipped.
+    /// Cursor for reversing `sortDirection`; only populated when the page
+    /// contains at least one thread. For timestamp sorts it anchors at the
+    /// start of the page timestamp so same-second updates are not skipped.
     pub backwards_cursor: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadLoadedListParams {
-    /// Opaque pagination cursor returned by a previous call.
     pub cursor: Option<String>,
-    /// Optional page size; defaults to no limit.
     pub limit: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadLoadedListResponse {
-    /// Thread ids for sessions currently loaded in memory.
     pub data: Vec<String>,
-    /// Opaque cursor to pass to the next call to continue after the last item.
-    /// if None, there are no more items to return.
     pub next_cursor: Option<String>,
 }
 
@@ -898,7 +781,6 @@ pub enum ThreadActiveFlag {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadReadParams {
     pub thread_id: String,
-    /// When true, include turns and their items from rollout history.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include_turns: bool,
 }
@@ -925,13 +807,10 @@ pub struct ThreadInjectItemsResponse {}
 #[serde(rename_all = "camelCase")]
 pub struct ThreadTurnsListParams {
     pub thread_id: String,
-    /// Opaque cursor to pass to the next call to continue after the last turn.
     pub cursor: Option<String>,
-    /// Optional turn page size.
     pub limit: Option<u32>,
-    /// Optional turn pagination direction; defaults to descending.
     pub sort_direction: Option<SortDirection>,
-    /// How much item detail to include for each returned turn; defaults to summary.
+    /// How much item detail to include per turn; defaults to summary.
     pub items_view: Option<TurnItemsView>,
 }
 
@@ -939,13 +818,10 @@ pub struct ThreadTurnsListParams {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadTurnsListResponse {
     pub data: Vec<Turn>,
-    /// Opaque cursor to pass to the next call to continue after the last turn.
-    /// if None, there are no more turns to return.
     pub next_cursor: Option<String>,
-    /// Opaque cursor to pass as `cursor` when reversing `sortDirection`.
-    /// This is only populated when the page contains at least one turn.
-    /// Use it with the opposite `sortDirection` to include the anchor turn again
-    /// and catch updates to that turn.
+    /// Cursor for reversing `sortDirection`; only populated when the page
+    /// contains at least one turn, anchors at that turn so its updates are
+    /// caught when re-reading in the opposite direction.
     pub backwards_cursor: Option<String>,
 }
 
@@ -954,11 +830,8 @@ pub struct ThreadTurnsListResponse {
 pub struct ThreadTurnsItemsListParams {
     pub thread_id: String,
     pub turn_id: String,
-    /// Opaque cursor to pass to the next call to continue after the last item.
     pub cursor: Option<String>,
-    /// Optional item page size.
     pub limit: Option<u32>,
-    /// Optional item pagination direction; defaults to ascending.
     pub sort_direction: Option<SortDirection>,
 }
 
@@ -966,11 +839,9 @@ pub struct ThreadTurnsItemsListParams {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadTurnsItemsListResponse {
     pub data: Vec<ThreadItem>,
-    /// Opaque cursor to pass to the next call to continue after the last item.
-    /// if None, there are no more items to return.
     pub next_cursor: Option<String>,
-    /// Opaque cursor to pass as `cursor` when reversing `sortDirection`.
-    /// This is only populated when the page contains at least one item.
+    /// Cursor for reversing `sortDirection`; only populated when the page
+    /// contains at least one item.
     pub backwards_cursor: Option<String>,
 }
 
@@ -987,7 +858,6 @@ pub struct ThreadTokenUsageUpdatedNotification {
 pub struct ThreadTokenUsage {
     pub total: TokenUsageBreakdown,
     pub last: TokenUsageBreakdown,
-    // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
 }
 
@@ -1001,7 +871,6 @@ pub struct TokenUsageBreakdown {
     pub reasoning_output_tokens: i64,
 }
 
-// Thread/Turn lifecycle notifications and item progress events
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartedNotification {
@@ -1054,7 +923,7 @@ pub struct ThreadGoalClearedNotification {
     pub thread_id: String,
 }
 
-/// Deprecated: Use `ContextCompaction` item type instead.
+/// Deprecated: use `ContextCompaction` item type instead.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextCompactedNotification {

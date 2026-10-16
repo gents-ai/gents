@@ -1,9 +1,7 @@
-/* The pieces both session views put around their composer. */
 import type { ReactNode } from "react";
 import type { SendStatus } from "@source-inc/gents-desktop-chat";
 import type { ShellView } from "@/../hooks/shellView";
 
-/** Add only local composer emptiness; every other blocker belongs to ClientShell. */
 export function presentedComposerSendStatus(
   draft: string,
   canonicalNonEmptyStatus: SendStatus,
@@ -17,10 +15,6 @@ export function presentedComposerSendStatus(
       };
 }
 
-/* The line under the composer: the chat's folder at its start, the send's
-   status at its end. It keeps one line of room whether or not either has
-   anything to show, so a status arriving and leaving never moves the
-   composer, or a person's eye with it. */
 export function ComposerFooter({
   folder,
   status,
@@ -36,9 +30,6 @@ export function ComposerFooter({
   );
 }
 
-/** Display the existing workflow owner's observation, never infer queue health. */
-/* A running turn is left out: the transcript's activity line and the Stop
-   button already say it, and every message sent during it steers. */
 export function SessionSubmissionStatus({
   activityStatus,
   hint,

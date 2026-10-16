@@ -2,10 +2,6 @@ import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
-// Bounded argument-validation controls for tests/run-live-test.mjs. These run
-// the helper directly and the script as a child process (without launching
-// vitest or any live backend).
-
 import { resolveLiveProvider } from "./run-live-test.mjs";
 
 const SCRIPT = resolve(import.meta.dirname, "run-live-test.mjs");

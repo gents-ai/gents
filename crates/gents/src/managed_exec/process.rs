@@ -36,8 +36,6 @@ pub(crate) struct ManagedExecRequest {
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) max_output_bytes: usize,
     pub(crate) stdin: Vec<u8>,
-    /// `None` inherits the daemon environment. `Some` replaces it wholesale
-    /// with the supplied, already-filtered environment.
     pub(crate) environment: Option<HashMap<String, String>>,
     pub(crate) tool_name: Option<String>,
     pub(crate) live_output: Option<LiveToolOutputWriter>,

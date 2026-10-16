@@ -34,7 +34,7 @@ const pretty = (value: string) => {
   }
 };
 
-/* kinds an icon already says on its own: dropped when the row has one */
+/* kinds an icon already says on its own */
 const SAID_BY_ICON = new Set(["read", "edited", "$"]);
 
 export function ToolSummary({
@@ -44,7 +44,6 @@ export function ToolSummary({
 }: {
   tool: RenderedToolCallView;
   className?: string;
-  /** the row shows a kind icon, so a kind word that only repeats it is left out */
   withIcon?: boolean;
 }) {
   const s = toolSummary(tool);
@@ -74,7 +73,6 @@ function Payload({
 }: {
   label: string;
   value?: string | null;
-  /** say how many lines it holds, for output long enough to scroll */
   counted?: boolean;
 }) {
   if (!value?.trim()) return null;
@@ -112,7 +110,6 @@ function Meta({ items }: { items: (string | null | undefined)[] }) {
   );
 }
 
-/* the body: outputs, contents, the diff, the live tail */
 export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
   const p = tool.presentation;
   const live = tool.statusKind === "running" ? tool.partialOutputTail : null;
@@ -247,8 +244,6 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
   );
 }
 
-/* a running command's newest lines are the ones that matter: the box keeps
-   to its foot as output arrives, unless the reader has scrolled up */
 function LiveOutput({ subject, tail }: { subject: string; tail: string }) {
   const [scroller, owner] = useScroller();
   useFollowTail(scroller, subject);
@@ -270,8 +265,6 @@ function LiveOutput({ subject, tail }: { subject: string; tail: string }) {
 }
 
 function RevealFile({ path }: { path: string }) {
-  /* the tool ran on the selected node: its paths are this machine's only
-     when that node is the one this machine runs */
   const node = useSelectedNode();
   const homeDid = useHomeDid();
   const label = revealInFolderLabel();

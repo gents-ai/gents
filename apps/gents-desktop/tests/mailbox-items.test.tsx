@@ -7,7 +7,6 @@ import type { DesktopApp } from "../src/hooks/desktopApp";
 import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
 import { node, testApp, withApp } from "./app-fixture";
 
-/* the hover cards are not what these cases are about */
 vi.mock("../src/ui/screens/HoverCards", () => ({
   NodeHoverCard: ({ children }: { children: ReactElement }) => children,
   AgentHoverCard: ({ children }: { children: ReactElement }) => children,
@@ -17,7 +16,6 @@ const item = (over: Partial<MailboxItemView> = {}): MailboxItemView => ({
   itemId: "item-1",
   itemKey: "key-1",
   requesterDid: "did:key:person",
-  /* the node that lists the item: the bridge lists a node's own items */
   nodeDid: "did:key:node",
   status: "open",
   kind: "finished",
@@ -40,7 +38,6 @@ const item = (over: Partial<MailboxItemView> = {}): MailboxItemView => ({
   ...over,
 });
 
-/* a mailbox holding `items`, whose answers reach the bridge as `send` */
 const mailboxWith = (
   items: MailboxItemView[],
   send: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({}),
@@ -100,8 +97,6 @@ describe("mailbox item", () => {
         item({ itemId: "b", title: "text", payload: "## Next\n1. review" }),
       ]),
     );
-    /* by card, not by position: the list orders items newest first, and
-       the two fixtures are created a moment apart */
     const bodyOf = (title: string) =>
       within(
         screen.getByRole("heading", { name: title }).closest("article")!,
@@ -172,7 +167,6 @@ describe("mailbox question", () => {
         },
       }),
     );
-    // a sent answer may wait behind the asking turn; it cannot be sent twice
     expect(await screen.findByText("Answer sent to the agent.")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Claude" })).toBeNull();
   });
@@ -275,7 +269,6 @@ describe("a mailbox opened from a node", () => {
     });
     expect(screen.getByRole("heading", { name: "From B" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "From A" })).not.toBeInTheDocument();
-    /* back on the mailbox without a node, the narrowing it was left with holds */
     view.rerender(<MailboxScreen />);
     expect(screen.queryByRole("heading", { name: "From A" })).not.toBeInTheDocument();
   });

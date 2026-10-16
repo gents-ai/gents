@@ -1,13 +1,3 @@
-//! `compare`: two cells' paired statistics (spec 4a §1).
-//!
-//! The pairs are the optimizer's: each report's counted slot scores joined by
-//! `pair_trials` on `(case_id, trial_index)`. The statistics are
-//! `optimization::policy::decide`'s own numbers on those pairs, seeded as
-//! `optimization show` seeds a decision over the same runs, so the p-value an
-//! operator reads is the one the optimizer would compute. Without a policy
-//! they are computed under the placeholder defaults, whose only influence on
-//! them is the Monte Carlo sample count above twenty cases.
-
 use std::collections::BTreeMap;
 
 use anyhow::Result;
@@ -32,16 +22,9 @@ pub struct CaseComparison {
     pub pairs: u64,
     pub baseline_mean_bp: Option<u32>,
     pub candidate_mean_bp: Option<u32>,
-    /// Mean paired difference, candidate minus baseline, truncated.
     pub diff_bp: Option<i64>,
 }
 
-/// Each gate `decide` applies, as far as it can be read from outside it.
-///
-/// `sufficient`, `no_case_regression` and `cost_ok` are `optimization::policy`'s
-/// own gate functions on the evidence `decide` read. `decide` does not expose
-/// its improvement gate, so `significant` and `min_effect` restate it from the
-/// decision's numbers; a test pins them to `decide`'s outcome.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct GateView {
     pub sufficient: bool,
@@ -85,14 +68,11 @@ pub struct Comparison {
     pub pairs: usize,
     pub dropped_baseline: usize,
     pub dropped_candidate: usize,
-    /// Pairs in which an unknown side was imputed worst-case.
     pub imputed: usize,
     pub p_ppm: Option<u64>,
     /// Only after [`Comparison::with_policy`]: the optimizer decides by
     /// default, never a comparison.
     pub policy: Option<PolicyOutcome>,
-    /// Every `(case_id, trial_index)` either cell has, in that order, with
-    /// each side's counted verdicts.
     pub trials: Vec<PairedTrial>,
     #[serde(skip)]
     paired: PairedEvidence,
@@ -104,10 +84,8 @@ pub struct Comparison {
     seed: u64,
 }
 
-/// What a caller may relax about [`compare`]'s refusals.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CompareOptions {
-    /// Compare a pilot run as if it were evidence.
     pub include_pilot: bool,
 }
 
@@ -157,8 +135,6 @@ pub fn compare(
     let cand = cell(candidate, candidate_cell)?;
     let (base_scores, cand_scores) = (trial_scores(base), trial_scores(cand));
     let paired = pair_trials(&base_scores, &cand_scores);
-    // Seeded over the distinct run ids, as `optimization show` seeds a
-    // decision over the runs it read.
     let mut seed_runs = vec![left.run_id.clone()];
     if right.run_id != left.run_id {
         seed_runs.push(right.run_id.clone());
@@ -198,9 +174,6 @@ pub fn compare(
 }
 
 impl Comparison {
-    /// The evidence `decide` reads under `policy`: the pairs, the baseline
-    /// run's case list, and the two cells' token totals by
-    /// `optimization::evidence::totals`.
     pub fn evidence(&self, policy: &PolicyV2) -> Evidence {
         evidence_from_pairs(
             &self.paired,
@@ -209,17 +182,14 @@ impl Comparison {
         )
     }
 
-    /// `pair_trials`' own pairs, each naming its `(case_id, trial_index)`.
     pub(crate) fn pairs(&self) -> &[Pair] {
         &self.paired.pairs
     }
 
-    /// The Monte Carlo seed: `decision_seed` over the distinct run ids.
     pub fn seed(&self) -> u64 {
         self.seed
     }
 
-    /// Decide under `policy` and restate the statistics under it.
     pub fn with_policy(mut self, policy: &PolicyV2) -> Self {
         let evidence = self.evidence(policy);
         let report = self.restate(policy);
@@ -248,7 +218,6 @@ impl Comparison {
         self
     }
 
-    /// Decide under `policy` and restate the statistics from that decision.
     pub(crate) fn restate(&mut self, policy: &PolicyV2) -> DecisionReport {
         let report = decide(Mode::Improve, policy, &self.evidence(policy), self.seed);
         self.improved = report.improved;
@@ -260,7 +229,6 @@ impl Comparison {
     }
 }
 
-/// One cell's side of a trial key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SideTrial {
     pub class: SlotClass,
@@ -268,7 +236,6 @@ pub struct SideTrial {
     pub verdicts: Vec<SlotVerdict>,
 }
 
-/// Both cells at one `(case_id, trial_index)`, as the breakdowns read them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PairedTrial {
     pub case_id: String,
@@ -327,14 +294,6 @@ fn trial_scores(cell: &CellReport) -> Vec<TrialScore> {
         .collect()
 }
 
-/// How many of `pair_trials`' pairs were imputed: keys both cells hold as
-/// evidence where at least one side is unknown.
-///
-/// `pair_trials` (`eval::scoring`) reports its pairs but not which of them it
-/// imputed, so this mirrors its rule: a key a cell repeats reads as unknown in
-/// that cell, a not-evidence side drops the key, and an unknown side on a kept
-/// key is imputed worst-case. A test pins the count to `pair_trials`' own
-/// result on the same scores.
 fn imputed(baseline: &[TrialScore], candidate: &[TrialScore]) -> usize {
     let index = |scores: &[TrialScore]| {
         let mut index: BTreeMap<(String, u32), CaseTrialScore> = BTreeMap::new();
@@ -412,8 +371,6 @@ mod tests {
             .clone()
     }
 
-    /// a improves, b ties, c worsens, d's baseline is unknown (imputed a
-    /// pass, so it ties), and e's baseline is not evidence (no pair).
     fn five_cases() -> (EvalDefinition, Rows) {
         let definition = definition(&["a", "b", "c", "d", "e"]);
         let rows = Rows::default()
@@ -515,9 +472,6 @@ mod tests {
                 paired.dropped_candidate
             )
         );
-        // One pair per case, so the common scale is 1 and the per-case
-        // differences in case order a, b, c, d are the raw ones. One run:
-        // its id once, as `optimization show` seeds a one-run decision.
         let seed = decision_seed(&[RUN.to_owned()]);
         assert_eq!(comparison.seed(), seed);
         assert_eq!(
@@ -674,14 +628,11 @@ mod tests {
 
     const SIX: [&str; 6] = ["a", "b", "c", "d", "e", "f"];
 
-    /// Twenty-one case ids, for the Monte Carlo branch above twenty cases.
     const MANY: [&str; 21] = [
         "c00", "c01", "c02", "c03", "c04", "c05", "c06", "c07", "c08", "c09", "c10", "c11", "c12",
         "c13", "c14", "c15", "c16", "c17", "c18", "c19", "c20",
     ];
 
-    /// `cases`, two trials each: the baseline fails and the candidate passes
-    /// every one. The last `unmetered` candidate trials report no usage.
     fn improving(cases: &[&'static str], unmetered: usize) -> (EvalDefinition, Rows) {
         let definition = definition(cases);
         let mut rows = Rows::default();
@@ -700,8 +651,6 @@ mod tests {
         (definition, rows)
     }
 
-    /// The comparison's policy outcome and `decide` on the optimizer's own
-    /// evidence for the same documents.
     fn against_the_optimizer(
         cases: &[&'static str],
         unmetered: usize,
@@ -779,7 +728,6 @@ mod tests {
         assert!(outcome.calibrated);
     }
 
-    /// The defaults sized to another round count are still the placeholder.
     #[test]
     fn the_defaults_with_other_max_rounds_are_a_placeholder() {
         let policy = PolicyV2 {
@@ -796,9 +744,6 @@ mod tests {
         assert!(!comparison.policy.unwrap().calibrated);
     }
 
-    /// Above twenty cases `decide` samples, so the seed matters.
-    /// The comparison of one run's two cells seeds as `optimization show`
-    /// recomputes that run's decision: over the run id once.
     #[test]
     fn above_twenty_cases_the_p_value_is_the_one_optimization_show_computes() {
         let policy = PolicyV2::uncalibrated();
@@ -808,8 +753,6 @@ mod tests {
         assert!(expected.p_ppm.is_some());
     }
 
-    /// Before `with_policy` a comparison carries no decision: the optimizer
-    /// decides, never a comparison.
     #[test]
     fn a_comparison_has_no_policy_outcome_until_asked() {
         let (definition, rows) = five_cases();
@@ -825,12 +768,8 @@ mod tests {
         assert!(comparison.policy.is_none());
     }
 
-    /// `significant` and `min_effect` restate `decide`'s improvement gate,
-    /// which `policy.rs` does not expose: whenever every other gate passes,
-    /// `decide` accepts exactly when both hold. Each combination is reached.
     #[test]
     fn significance_and_effect_restate_decides_improvement_gate() {
-        // Per case, two trials each: (baseline passes, candidate passes).
         let scenario = |outcomes: &[(&'static str, bool, bool)], policy: &PolicyV2| {
             let cases: Vec<&str> = outcomes.iter().map(|(case, ..)| *case).collect();
             let definition = definition(&cases);
@@ -898,9 +837,6 @@ mod tests {
         assert_eq!(scenario(&tied, &defaults), (false, Some(false)));
     }
 
-    /// At `min_effect_bp: 0` a mean difference between -1 and 0 bp truncates
-    /// to a `mean_diff_bp` of 0, whose sign the report cannot see; `decide`
-    /// compares the untruncated total and finds the effect short.
     #[test]
     fn a_sub_basis_point_mean_under_a_zero_effect_threshold_is_not_restated() {
         let policy = PolicyV2 {
@@ -911,7 +847,6 @@ mod tests {
         let mut rows = Rows::default();
         for &case in &SIX {
             for index in 0..2 {
-                // Case a loses one basis point per trial; the rest tie.
                 let candidate_bp = if case == "a" { 9_999 } else { 10_000 };
                 rows = rows.add(RUN, at(BASELINE_CELL, case, index, 1), pass());
                 rows = rows.add(

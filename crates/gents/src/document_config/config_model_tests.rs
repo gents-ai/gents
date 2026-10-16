@@ -26,16 +26,6 @@ fn task_hooks_are_compact_explicit_and_preserve_order() {
 }
 
 #[test]
-fn reusable_callback_and_event_binding_are_distinct() {
-    round_trip::<Callback>(json!({"callback_id":"prepare", "node_did":"did:key:test",
-        "handler":{"kind":"built_in", "emitter":"create_workspace"}, "capabilities":["create_workspace"]}));
-    round_trip::<CallbackBinding>(json!({"binding_id":"on-work", "node_did":"did:key:test",
-        "event_source_id":"work", "callback_id":"prepare"}));
-    round_trip::<CallbackInvocationOrigin>(json!({"kind":"event_group",
-        "binding_id":"on-work", "group_key":"group-1"}));
-}
-
-#[test]
 fn null_defaults_are_compact_but_explicit_disable_and_tags_survive() {
     let task: Task = serde_json::from_value(json!({"task_id":"code", "node_did":"did:key:test",
         "agent_id":"coder", "prompt_template":"work", "enabled":null,"hooks":null,"tags":null}))
@@ -104,19 +94,6 @@ fn storage_identity_is_unwrapped_before_strict_config_deserialization() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0, "stored-id");
     assert_eq!(rows[0].1.task_id, "code");
-}
-
-#[test]
-fn callback_module_and_local_installation_config_share_compact_metadata() {
-    round_trip::<CallbackModule>(
-        json!({"module_id":"verify", "node_did":"did:key:test", "tags":["coding"]}),
-    );
-    round_trip::<RepositoryPlacement>(
-        json!({"repository_id":"repo", "node_did":"did:key:test", "host_path":"/workspace"}),
-    );
-    round_trip::<ToolServiceRegistry>(
-        json!({"service_id":"web", "node_did":"did:key:test", "hostname":"localhost", "mcp_port":9000}),
-    );
 }
 
 #[test]

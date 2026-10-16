@@ -1,13 +1,10 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 
-/// Canonical authored document bundle for both ordinary and graph packs.
-/// The loader resolves sidecars/environment values before decoding these same
-/// types. The shared loader fills missing root node_did from PackInstallOptions;
-/// explicit owners must match. Foreign delegation/provenance DIDs are never rewritten.
-/// Validate ownership, references, unknown authoring keys, and resource
-/// bounds before persistence. Sparse patches use a separate representation.
-/// Graph topology/revisions add composition, never another model-selection path.
+/// Canonical authored document bundle for both ordinary and graph packs; the
+/// loader fills missing root node_did from PackInstallOptions and explicit
+/// owners must match. Validate ownership, references, unknown authoring keys,
+/// and resource bounds before persistence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

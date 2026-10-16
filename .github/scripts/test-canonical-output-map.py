@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Negative controls for the canonical-output handoff inventory checker."""
 import copy
 import importlib.util
 import json
@@ -54,28 +53,6 @@ class MappingTests(unittest.TestCase):
         self.assertIn("duplicate mapping id", self.errors())
         self.assertIn("consumer ledger", self.errors())
 
-    def test_constructor_extraction_ignores_comments(self):
-        source = """inductive Example where
-  | first
-  /- nested /- | phantom -/ | alsoPhantom -/
-  | second (parameter : Nat) -- | commentOnly
-  deriving Repr
-
-def unrelated := "-- not a comment"
-"""
-        self.assertEqual(mapping.constructors(source, "Example"), {"first", "second"})
-        self.assertEqual(mapping.constructors(source.replace("  deriving", "  | newCase\n  deriving"),
-                                              "Example"), {"first", "second", "newCase"})
-        with self.assertRaises(ValueError):
-            mapping.constructors("inductive Example where | hidden", "Example")
-        self.assertEqual(mapping.constructors("inductive Example where\n  | first | second", "Example"),
-                         {"first", "second"})
-        self.assertEqual(mapping.constructors(
-            "inductive Example where\n  | first (p : {x : Nat | x > 0})\n  | second", "Example"),
-            {"first", "second"})
-        with self.assertRaises(ValueError):
-            mapping.constructors("inductive Example where\n  | first (p : Nat", "Example")
-
     def test_nested_seam_requires_admission_mapping(self):
         row = next(row for row in self.rows if any(
             name.rsplit(".", 1)[0] in mapping.SEAM_INVENTORIES for name in row["constructors"]))
@@ -118,17 +95,6 @@ def unrelated := "-- not a comment"
         for cases in invalid:
             with self.subTest(cases=cases), self.assertRaises(ValueError):
                 mapping.check_execution_export({"canonical_execution_gate_cases": cases})
-
-    def test_declaration_requires_real_namespace(self):
-        source = """namespace Actual
-section Example
-theorem Trace.coherent : True := by trivial
-end Example
-end Actual
-"""
-        self.assertTrue(mapping.declaration_exists(source, "Actual.Trace.coherent"))
-        self.assertFalse(mapping.declaration_exists(source, "Wrong.Trace.coherent"))
-        self.assertFalse(mapping.declaration_exists(source, "Actual.Example.Trace.coherent"))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,3 @@
-/* Which inference backends exist, which run on a subscription account,
-   and what counts as a healthy one. */
 import type {
   InferenceAuthMethod,
   InferenceProviderId,
@@ -23,7 +21,6 @@ export const KINDS = [
   { value: "AnthropicApiKey", label: "Anthropic API key" },
 ];
 
-/* subscription kinds, and the provider name their account carries */
 export const SUBSCRIPTION: Record<
   string,
   {
@@ -32,7 +29,6 @@ export const SUBSCRIPTION: Record<
     authMethod: InferenceAuthMethod;
     title: string;
     note: string;
-    /* the provider its account signs in through */
     login: OauthProvider;
   }
 > = {

@@ -119,12 +119,6 @@ fn visit_lean(dir: &Path, offenders: &mut Vec<String>) {
 #[test]
 fn rig_vocabulary_confined_to_the_seam() {
     let root = repo_root();
-    // The seam moved into `gents-loop`, it did not widen: the three files
-    // that convert, project and drive rig types are the same three, at
-    // their new paths. The shims left behind in this crate
-    // (`llm::rig_compat`, `provider_input`, `agent::stream_processor`) are
-    // re-exports carrying no rig vocabulary of their own, so they are off
-    // this list rather than on it dead.
     let allowed: BTreeSet<&str> = [
         "crates/gents-loop/src/rig_compat.rs",
         "crates/gents-loop/src/provider_input.rs",
@@ -219,8 +213,6 @@ fn visit_rust(
     }
 }
 
-/// AGENTS.md requires the protocol crate's persisted vocabulary to be rig-free at
-/// runtime. Fence it: rig-core must not appear in its [dependencies].
 #[test]
 fn protocol_crate_runtime_is_rig_free() {
     let root = repo_root();

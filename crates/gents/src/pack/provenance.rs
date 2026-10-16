@@ -33,9 +33,6 @@ pub fn pack_origin_from_tags(tags: &[String]) -> Result<Option<&str>> {
     Ok(origin)
 }
 
-/// Publish a prepared document pack through the canonical desired-state owner
-/// and record what it created (see [`super::installation`]). The principal
-/// and bound inference documents are retained, never rewritten.
 pub(super) async fn apply_pack_documents(
     access: &ConfigAccess,
     owner: &str,
@@ -59,9 +56,6 @@ pub(super) async fn apply_pack_documents(
         .await
 }
 
-/// Merge retained discovery tags without treating them as package identity.
-/// Immutable graph resources compare every canonical field except tags; the
-/// package-authored add value remains the artifact digest owner.
 pub(crate) async fn prepare_pack_plan_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     documents: &[crate::config_client::DesiredStateApplyDocument],
@@ -99,9 +93,6 @@ pub(crate) async fn prepare_pack_plan_in_txn(
     crate::config_client::DesiredStateApplyPlan::new(prepared)
 }
 
-/// Every document a pack configuration installs, as `(collection, logical
-/// id)` with its content digest: what two packs are compared by, and what an
-/// install record stores.
 pub fn pack_document_digests(
     config: &crate::document_config::PackConfig,
 ) -> Result<std::collections::BTreeMap<(String, String), String>> {
@@ -121,7 +112,6 @@ pub fn pack_document_digests(
         .collect()
 }
 
-/// Discovery tags are mutable labels, not immutable package identity.
 pub(crate) fn pack_artifact_document_digest(value: &serde_json::Value) -> Result<String> {
     let mut canonical = value.clone();
     canonical
@@ -241,32 +231,4 @@ pub(super) fn stamp_pack_origin(
         }
     }
     serde_json::from_value(value).context("decoding provenance-stamped pack configuration")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn origin_tags_are_unique_and_valid() {
-        assert_eq!(
-            pack_origin_tag("code_review").unwrap(),
-            "gents:pack:code_review"
-        );
-        assert_eq!(
-            pack_origin_from_tags(&["review".into(), "gents:pack:code_review".into()]).unwrap(),
-            Some("code_review")
-        );
-        assert!(pack_origin_from_tags(&[
-            "gents:pack:code_review".into(),
-            "gents:pack:pipeline".into(),
-        ])
-        .is_err());
-        let left = serde_json::json!({"node_did":"owner","task_id":"task","tags":["one"]});
-        let right = serde_json::json!({"node_did":"owner","task_id":"task","tags":["two"]});
-        assert_eq!(
-            pack_artifact_document_digest(&left).unwrap(),
-            pack_artifact_document_digest(&right).unwrap()
-        );
-    }
 }

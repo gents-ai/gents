@@ -6,12 +6,6 @@ import type { EvalStage } from "./EvalStage.js";
 
 export type EvalCase = { case_id: string, split: EvalSplit, reducer: EvalReducer, fixtures?: EvalFixtures | null, stages: Array<EvalStage>,
 /**
- * How many rows each collection should hold when the case is done,
- * for a watcher to measure a trial's progress against; `schemas` counts
- * the collections the subject registers. Never graded: an entry replaces
- * the goal a `captured_rows_count` check of that collection implies. A
- * trial observes the configuration collections, its captures'
- * collections and the collections the subject registers; an entry for
- * any other collection reads as unobserved.
+ * Per-collection row counts for a trial watcher; never graded.
  */
 goal?: { [key in string]?: number } | null, };

@@ -32,7 +32,6 @@ describeLive("Tauri app live bridge runner agent config", () => {
         },
         { timeout: 30_000 },
       );
-      /* an agent edits its own instructions (its context) on its page */
       await driver.openConfig();
       await driver.openConfigSection("agents");
       await driver.openConfigItem(agentId);

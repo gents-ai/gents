@@ -119,8 +119,6 @@ async fn tools_set_persists_host_root_and_export_round_trips_it() -> Result<()> 
         ],
     )?;
     let export = tempdir.path().join("export");
-    // Exercise offline export explicitly: do not depend on runtime discovery
-    // selecting the server while it still holds the embedded datastore lock.
     server.child.kill()?;
     server.child.wait()?;
     run_cli_text(
@@ -164,10 +162,6 @@ fn explained_tool_names(explanation: &Value, agent_id: &str) -> Result<Vec<Strin
         })
 }
 
-/// `gents server` flags override the init.json ceiling, so a running node is
-/// explained by the ceiling it enforces, including its registered CLI tools
-/// and its cwd-resolved root, and only an unserved home falls back to
-/// init.json, labelled as such.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
@@ -212,7 +206,6 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
 
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    // The server's cwd is `home`, so the relative root names `workspace`.
     let mut server = spawn_server_with_env(
         &home,
         port,
@@ -255,8 +248,6 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
         "{live}"
     );
 
-    // Another home's CLI, on another cwd, reaching the node by --graphql
-    // explains that node under the root the server resolved.
     let remote = run_cli_json(&elsewhere, &["tools", "explain", "--graphql", &graphql])?;
     assert_eq!(remote["node_did"], owner.as_str(), "{remote}");
     assert_eq!(
@@ -323,8 +314,6 @@ fn assert_keys_in_order(report: &str, keys: &[&str]) {
     );
 }
 
-/// A root the server cannot resolve builds no host tools, so explain must
-/// not project one from however that path resolves on the CLI host.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tools_explain_refuses_a_live_root_the_server_cannot_resolve() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
@@ -332,7 +321,6 @@ async fn tools_explain_refuses_a_live_root_the_server_cannot_resolve() -> Result
     fs::create_dir_all(&home)?;
     let dangling = home.join("dangling");
     std::os::unix::fs::symlink(home.join("missing"), &dangling)?;
-    // Without host tools the agent needs no root, so the node still serves.
     run_init_json(
         &home,
         &[
@@ -365,8 +353,6 @@ async fn tools_explain_refuses_a_live_root_the_server_cannot_resolve() -> Result
     Ok(())
 }
 
-/// A home's runtime.json that names another node's runtime must not explain
-/// that node as this home's.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tools_explain_refuses_a_home_whose_runtime_serves_another_node() -> Result<()> {
     let tempdir = tempfile::tempdir()?;

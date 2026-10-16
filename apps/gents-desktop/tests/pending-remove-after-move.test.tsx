@@ -33,7 +33,6 @@ describe("removing after a move", () => {
     );
     fireEvent.click(await moveItem(screen.getAllByTestId("queued-input")[2]!, "up"));
     await waitFor(() => expect(onEdit).toHaveBeenCalledTimes(1));
-    /* the refreshed queue: c and b swapped, under new ids as the runtime issues them */
     const moved = [entry("a"), entry("c2"), entry("b2")];
     view.rerender(
       <PendingTray queued={moved.map(turn)} queue={moved} onEdit={onEdit} />,

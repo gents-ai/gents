@@ -390,8 +390,6 @@ async fn create_request(
     );
 }
 
-/// All lifecycle states are durable markers, and the full delivery key keeps
-/// membership generations separate without adding a second persisted marker.
 #[tokio::test]
 async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
     let (node, materializer) = materializer_with_node().await;
@@ -494,8 +492,6 @@ async fn materializer_rejects_workspace_from_different_explicit_owner() {
     );
 }
 
-/// Canonical per-document gates survive source-kind edits. Correlation is
-/// lineage here; only owner and logical Trigger ID define the concurrency scope.
 #[tokio::test]
 async fn trigger_wide_gate_and_supersede_survive_kind_change_and_preserve_exclusion() {
     let (node, materializer) = materializer_with_node().await;
@@ -693,8 +689,6 @@ async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace(
     ensure_runtime_schemas(&node).await.unwrap();
     let behavior = integration_test_agent("general");
     let owner = behavior.node_did().to_string();
-    // The event-source document carries the workspace id and authority but
-    // not its owner. The canonical workspace owner supplies that binding.
     insert_ready_workspace(&node, "ws-incomplete", &owner, &owner).await;
     let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
@@ -1435,7 +1429,6 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
                     claim_owners.push(lifecycle);
                 }
             }
-            // Simulate losing the cursor acknowledgement and removing config.
             tx.send(snapshot_with_agent_and_schedules(
                 behavior.clone(),
                 HashMap::new(),

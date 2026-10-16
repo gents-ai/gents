@@ -23,8 +23,6 @@ vi.mock("../src/hooks/desktopApp", async (original) => {
 
 import App from "../src/App";
 
-/* #2043: a failed action reaches the person as one toast, reported by the
-   action itself, with no state for the app to copy and clear */
 describe("the app's failure reporter", () => {
   it("is the app's toast", () => {
     const bridge = {

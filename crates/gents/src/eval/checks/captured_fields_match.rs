@@ -1,6 +1,3 @@
-//! `captured_fields_match`: whether a documents capture's rows hold the
-//! expected field values, graded per row and expectation.
-
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -11,20 +8,9 @@ use crate::eval::checks::{
 };
 use crate::eval::runner::executor::{CaptureResult, StageEvidence};
 
-/// Params: `{ "name": <capture>, "expect": [{ "field", "equals" | "contains"
-/// | "matches" }], "min_rows": <u64>?, "max_rows": <u64>? }`. Every (row,
-/// expectation) pair is one requirement, over at least `min_rows` rows
-/// (default 1): a row the capture lacks fails every expectation, and so does
-/// every row past `max_rows`. `field` is a dotted path of object keys into
-/// the row; `contains` and `matches` read a string field as its text and any
-/// other value as its JSON.
-///
-/// Feedback states the expected values. It is written only on the train
-/// split, and the held-out split is what catches a candidate that hard-codes
-/// them.
+/// Feedback states the expected values; it is written only on the train split, so the held-out split catches a candidate that hard-codes them.
 pub struct CapturedFieldsMatch;
 
-/// Rows whose mismatches feedback spells out.
 const SHOWN_ROWS: usize = 3;
 
 #[derive(Deserialize)]
@@ -297,7 +283,6 @@ mod tests {
     use crate::eval::runner::scripted::ScriptedExecutor;
     use crate::eval::OutcomeKind;
 
-    /// One completed stage whose `items` capture holds `rows`.
     fn stage(rows: Vec<Value>) -> StageEvidence {
         let mut evidence = ScriptedExecutor::passed_evidence("did:x", "s1", "items", rows);
         evidence.stages.remove(0)

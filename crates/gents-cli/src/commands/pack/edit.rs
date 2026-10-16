@@ -1,12 +1,3 @@
-//! `gents pack add`, `gents pack remove-part` and `gents pack fmt`: editing a
-//! pack directory while keeping `manifest.json` consistent with its files.
-//!
-//! Every edit writes the file it needs and records it in the manifest
-//! (assets, schemas, inference slots, plugins) in the same step, so the asset
-//! list is never maintained by hand. `manifest.json` and `pack_config.json`
-//! are written in canonical form (sorted keys, two-space indent, trailing
-//! newline), which is also what `fmt` writes, so an edit's diff is the edit.
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -51,8 +42,6 @@ impl PackEdit {
         self.manifest["kind"].as_str().unwrap_or_default()
     }
 
-    /// The configuration, created (and the pack made a documents pack) when
-    /// an assets pack gains its first document.
     pub(super) fn config(&mut self) -> Result<&mut Map<String, Value>> {
         if self.config.is_none() {
             anyhow::ensure!(
@@ -122,7 +111,6 @@ impl PackEdit {
         Ok(())
     }
 
-    /// Writes a new file and declares it.
     pub(super) fn create_file(&mut self, path: &str, contents: impl AsRef<[u8]>) -> Result<()> {
         let target = self.dir.join(path);
         anyhow::ensure!(!target.exists(), "{path} already exists");
@@ -160,8 +148,6 @@ fn write_json(path: &Path, value: &Value) -> Result<()> {
         .with_context(|| format!("writing {}", path.display()))
 }
 
-/// `review-bot` -> `review_bot`: document ids are kebab-case, directories
-/// snake_case.
 fn snake(id: &str) -> String {
     id.replace('-', "_")
 }
@@ -346,7 +332,6 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<
     }
 }
 
-/// `ReviewJob` -> `review_job`, for a schema file name.
 fn super_snake(name: &str) -> String {
     let mut out = String::new();
     for (index, ch) in name.chars().enumerate() {
@@ -614,7 +599,6 @@ pub(crate) fn remove_part(args: PackRemovePartArgs) -> Result<()> {
                     std::fs::remove_file(&path)
                         .with_context(|| format!("removing {}", path.display()))?;
                 }
-                // A prebuilt plugin's directory holds nothing but its TOOL.md.
                 if let Some(dir) = path.parent() {
                     let _ = std::fs::remove_dir(dir);
                 }

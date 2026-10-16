@@ -1,7 +1,3 @@
-//! Model-facing DefraDB schema administration. Configuration documents and data
-//! access retain their existing owners; the tool delegates schema operations to
-//! ConfigAccess and DefraDB, under an explicit node-management capability.
-
 use crate::config_client::ConfigAccess;
 use crate::defra_node::EmbeddedNode;
 use crate::llm::tool::{Tool, ToolDefinition};
@@ -286,8 +282,6 @@ impl SchemaTool {
                     .as_array()
                     .context("patch must be an array")?
                     .clone();
-                // The version test reaches DefraDB with the patch; a stale caller
-                // cannot silently apply its positional edits to another schema.
                 patch.insert(0,json!({"op":"test","path":format!("/{}/VersionID",target()?),"value":before["VersionID"]}));
                 access
                     .patch_collection_schema(target()?, &Value::Array(patch))
@@ -324,9 +318,6 @@ async fn find_version(access: &ConfigAccess, id: &str) -> Result<Value> {
         .context("version not found; use version list and copy its VersionID")
 }
 
-/// Product schemas are tied to compiled protocol contracts and the migration
-/// registry. Runtime administration may evolve application collections, but
-/// changing a product contract requires a matching application release.
 fn ensure_application_collection(name: &str) -> Result<()> {
     crate::graphql::validate_collection_identifier(name)?;
     ensure!(!crate::migration::DEFAULT_REGISTRY.managed_names().any(|n| n==name), "{name} is a Gents-managed schema; its evolution belongs to the product migration registry. Use config for its documents");

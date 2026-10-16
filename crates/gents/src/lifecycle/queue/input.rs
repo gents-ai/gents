@@ -1,7 +1,3 @@
-//! Canonical typed queue input. The JSON metadata wrapper and its hints
-//! parser are deleted; queue facts are the typed `RequestInput.queue`
-//! decoded by `gents_protocol::row::AgentRequestRow`.
-
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
 use gents_protocol::row::AgentRequestRow;
 
@@ -20,8 +16,6 @@ pub(crate) fn is_automated_wakeup(input: &RequestInput) -> bool {
     input.queue.as_ref().is_some_and(queue_is_automated_wakeup)
 }
 
-/// The coalescing domain of a row's queue input, when it is a keyed
-/// background-completion wake.
 pub(crate) fn row_queue(row: &AgentRequestRow) -> Option<&RequestQueue> {
     row.input.as_ref()?.queue.as_ref()
 }
@@ -30,8 +24,6 @@ pub(crate) fn row_is_automated_wakeup(row: &AgentRequestRow) -> bool {
     row_queue(row).is_some_and(queue_is_automated_wakeup)
 }
 
-/// Stamp the durable wake format marker on a freshly created background wake.
-/// An incoming caller queue never authorizes the internal wake marker.
 pub(crate) fn background_wake_queue(
     queue: &RequestQueue,
     queued_after_request_id: Option<String>,

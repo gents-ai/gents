@@ -1,14 +1,3 @@
-//! `gents pack import`: turn another ecosystem's plugin into a pack
-//! directory for review. It never installs.
-//!
-//! Recognized sources: Agent Plugins (`plugin.json`), Claude Code
-//! (`.claude-plugin/plugin.json`), Codex (`.codex-plugin/plugin.json`),
-//! Hermes (`plugin.yaml`), an MCP registry `server.json`, and a single Agent
-//! Skill (`SKILL.md`), from a directory or a git URL. Every part is built with
-//! the same operations `gents pack add` uses, so the result passes the same
-//! checks, and the generated README says what was converted, what needs a
-//! port, and what was dropped and why.
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -102,7 +91,6 @@ fn is_git_url(source: &str) -> bool {
     source.starts_with("https://") || source.starts_with("git@") || source.ends_with(".git")
 }
 
-/// Clones `url` shallowly and returns the commit it checked out.
 fn clone(url: &str, into: &Path) -> Result<String> {
     let status = std::process::Command::new("git")
         .args(["clone", "--depth", "1", "--quiet", url])
@@ -354,9 +342,6 @@ fn import_skill(dir: &Path, pack: &mut PackEdit, report: &mut Report) -> Result<
     Ok(())
 }
 
-/// Copies a skill's supporting files as declared assets, renaming them to
-/// the snake_case every pack file uses. `scripts/` is reported, never copied:
-/// gents does not run skill support files.
 fn copy_support_files(
     root: &Path,
     dir: &Path,
@@ -421,8 +406,6 @@ fn import_markdown_dir(
     Ok(())
 }
 
-/// Replaces a prompt `pack add` wrote with the body of `source`, without its
-/// frontmatter.
 fn write_prompt(pack: &PackEdit, path: &str, source: &Path) -> Result<()> {
     let text =
         std::fs::read_to_string(source).with_context(|| format!("reading {}", source.display()))?;
@@ -440,7 +423,6 @@ fn has(pack: &mut PackEdit, key: &str, field: &str, id: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// `Extract Tables` or `extract_tables` -> `extract-tables`: a document id.
 fn kebab(name: &str) -> String {
     let mut out = String::new();
     for ch in name.chars() {
@@ -465,7 +447,6 @@ fn snake(name: &str) -> String {
     kebab(name).replace('-', "_")
 }
 
-/// A file name in the snake_case pack files use, keeping its extension.
 fn file_name(name: &str) -> String {
     if matches!(name, "README.md" | "SKILL.md" | "Cargo.toml" | "Cargo.lock") {
         return name.to_owned();

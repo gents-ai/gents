@@ -53,15 +53,6 @@ def requestTransitionAction? (source target : String) : Option String :=
     source
     target
 
-/-- Request edges that no single `RequestContext.Action` takes, but that
-recovery legitimately performs on persisted rows.
-
-`claimed -> dead` and `processing -> dead` are corrupt-generation revocation:
-an expired generation whose canonical output is corrupt is revoked with
-outcome `dead` (`CanonicalOutput.Execution.revokeCorrupt`, `policyRevoke`).
-The request machine alone does not model it, so
-publishing these as `illegal` made the emitted contract assert that Rust has no
-writer for edges the product actually performs. -/
 def requestRecoverySweepReachable : RequestState → RequestState → Bool
   | .claimed, .dead => true
   | .processing, .dead => true

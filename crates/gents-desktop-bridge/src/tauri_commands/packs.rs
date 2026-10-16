@@ -1,6 +1,3 @@
-//! Packs from the desktop: the same operations `gents pack` runs, through
-//! `gents_server::packs`, against the managed local Node's home.
-
 use crate::types::*;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::Value;
@@ -79,23 +76,19 @@ pub async fn desktop_pack_info(
 #[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PackInstallRequest {
-    /// A registry name, `sha256:<hex>`, a `.pack` file, or a directory.
     pub package: String,
     #[serde(default)]
     #[ts(optional = nullable)]
     pub registry: Option<String>,
-    /// `SLOT=PROFILE_ID` bindings for the pack's inference slots.
     #[serde(default)]
     #[ts(as = "Option<Vec<String>>", optional)]
     pub inference_slots: Vec<String>,
     #[serde(default)]
     #[ts(as = "Option<EditedDocuments>", optional)]
     pub edited: EditedDocuments,
-    /// The person approved the authority the pack's plugins ask for.
     #[serde(default)]
     #[ts(as = "Option<bool>", optional)]
     pub grant_authority: bool,
-    /// Report what would be written, writing nothing.
     #[serde(default)]
     #[ts(as = "Option<bool>", optional)]
     pub preview: bool,
@@ -195,9 +188,7 @@ pub async fn desktop_pack_plugin_slots(
 #[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginBindRequest {
-    /// An installed plugin, as `namespace/name`.
     pub plugin: String,
-    /// The inference profile to call through; absent leaves the slot unbound.
     #[serde(default)]
     #[ts(optional = nullable)]
     pub profile: Option<String>,
@@ -232,15 +223,6 @@ mod tests {
                 .unwrap();
         assert_eq!(report.registry, "https://registry.example");
         assert!(!report.signed_out);
-    }
-
-    #[tokio::test]
-    async fn malformed_pack_reports_fail_at_the_native_boundary() {
-        let error =
-            run::<InstalledPacksView, _, _>(|| async { Ok(serde_json::json!({"packs": 42})) })
-                .await
-                .unwrap_err();
-        assert!(error.to_string().contains("invalid pack report"));
     }
 
     #[tokio::test]

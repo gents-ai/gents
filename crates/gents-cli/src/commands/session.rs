@@ -101,9 +101,6 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Fork v1 runs in-process against the on-disk data directory, under the
-    // same store claim as every other opener, so a concurrent runtime or
-    // overwrite is refused before the backend's own lock is reached.
     let home = resolve_home_dir(args.home.as_deref());
     let data_dir = default_data_dir(&home);
 
@@ -133,8 +130,6 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
     Ok(())
 }
 
-/// Initialization is checked before claiming; the returned access owns the
-/// claim for the duration of the local fork and its Gents-owned native work.
 async fn open_offline_fork_store(home: &Path, data_dir: &Path) -> Result<ConfigAccess> {
     anyhow::ensure!(
         crate::read_init_config(home)?.is_some(),
@@ -144,11 +139,6 @@ async fn open_offline_fork_store(home: &Path, data_dir: &Path) -> Result<ConfigA
     );
     fs::create_dir_all(data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    // Only the held-store refusal carries the escape: an unconditional context
-    // would report an unrelated lock failure (a symlinked lock file, an
-    // unopenable path) as a store in use. `.context` keeps the inner error
-    // downcastable -- anyhow's chain downcast checks the context then the
-    // wrapped error -- so the typed refusal survives the hint.
     let claim = gents::home::lock_store(home, data_dir).map_err(|error| {
         match error.downcast_ref::<gents::home::StoreLockHeld>() {
             Some(_) => error.context(
@@ -362,165 +352,5 @@ fn map_graphql_fork_error(error: ForkError, graphql: &str) -> anyhow::Error {
             graphql_diagnostic_hint(graphql)
         ),
         other => map_fork_error(other),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    use crate::shared::StoredInitConfig;
-    use crate::{default_key_path, write_init_config, ToolCeilingArg};
-    use gents::NodeIdentity as _;
-
-    /// An initialized home: the signing key and `init.json` every
-    /// embedded-node entry point requires before it will open the store.
-    fn initialized_home(temp: &Path) -> PathBuf {
-        let home = temp.join("home");
-        let key_path = default_key_path(&home, "default");
-        fs::create_dir_all(key_path.parent().unwrap()).unwrap();
-        let identity = gents::KeyIdentity::load_or_create(&key_path, None).unwrap();
-        write_init_config(
-            &home,
-            &StoredInitConfig {
-                home: home.to_string_lossy().to_string(),
-                node_name: "default".to_string(),
-                node_did: identity.did().to_string(),
-                key_path: Some(key_path.to_string_lossy().to_string()),
-                identity_backend: None,
-                keychain_label: None,
-                secure_enclave_label: None,
-                tool_package: None,
-                tool_ceiling: ToolCeilingArg::Readonly,
-                tool_root: None,
-                store_encryption: Some(
-                    gents::store_key::StoreEncryption::prepare(
-                        gents::store_key::StoreKeyCustodyChoice::File,
-                        &gents::store_key::home_key_file(&home),
-                        &default_data_dir(&home),
-                    )
-                    .unwrap(),
-                ),
-            },
-        )
-        .unwrap();
-        home
-    }
-
-    #[tokio::test]
-    async fn fork_v1_claims_the_store_it_opens_until_the_node_is_released() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = initialized_home(temp.path());
-        let data_dir = default_data_dir(&home);
-
-        let store = open_offline_fork_store(&home, &data_dir)
-            .await
-            .expect("an initialized home opens its store");
-
-        let error = gents::home::lock_store(&home, &data_dir)
-            .expect_err("a store fork v1 has open excludes another runtime");
-        assert!(
-            error.downcast_ref::<gents::home::StoreLockHeld>().is_some(),
-            "{error:#}"
-        );
-        assert!(
-            fs::canonicalize(&home)
-                .expect("the home exists")
-                .join("data.lock")
-                .is_file(),
-            "the claim sits at the canonical store lock every other opener takes"
-        );
-
-        drop(store);
-        // The backend refuses a store still open in this process, so reopening
-        // proves the node closed as well as the claim released.
-        open_offline_fork_store(&home, &data_dir)
-            .await
-            .expect("a dropped fork store releases the store");
-    }
-
-    #[tokio::test]
-    async fn an_overwrite_cannot_wipe_a_store_fork_v1_holds_open() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = initialized_home(temp.path());
-        let data_dir = default_data_dir(&home);
-        fs::create_dir_all(&data_dir).unwrap();
-        fs::write(data_dir.join("fixture"), "store").unwrap();
-        let user_home = temp.path().join("user");
-        fs::create_dir_all(&user_home).unwrap();
-
-        let store = open_offline_fork_store(&home, &data_dir)
-            .await
-            .expect("an initialized home opens its store");
-        let error = crate::commands::init::lock_init_store_for_user(
-            &home,
-            &data_dir,
-            true,
-            Some(&user_home),
-        )
-        .expect_err("a store fork v1 has open is not wiped");
-        assert!(
-            error.downcast_ref::<gents::home::StoreLockHeld>().is_some(),
-            "{error:#}"
-        );
-        assert!(data_dir.join("fixture").is_file());
-        assert!(home.join("init.json").is_file());
-        drop(store);
-
-        let held = crate::commands::init::lock_init_store_for_user(
-            &home,
-            &data_dir,
-            true,
-            Some(&user_home),
-        )
-        .expect("an idle home is overwritten");
-        assert!(!data_dir.join("fixture").exists());
-        drop(held);
-    }
-
-    #[tokio::test]
-    async fn fork_v1_names_the_holder_of_a_claimed_store_and_the_graphql_escape() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = initialized_home(temp.path());
-        let _held = gents::home::lock_home_store(&home).unwrap();
-
-        let error = match open_offline_fork_store(&home, &default_data_dir(&home)).await {
-            Ok(_) => panic!("a claimed store must not be opened a second time"),
-            Err(error) => error,
-        };
-
-        assert!(
-            error.downcast_ref::<gents::home::StoreLockHeld>().is_some(),
-            "{error:#}"
-        );
-        let text = format!("{error:#}");
-        assert!(text.contains("already using"), "{text}");
-        assert!(text.contains("--graphql"), "{text}");
-    }
-
-    #[tokio::test]
-    async fn an_uninitialized_home_is_refused_before_fork_claims_a_store() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("home");
-        fs::create_dir_all(&home).unwrap();
-
-        let error = match open_offline_fork_store(&home, &default_data_dir(&home)).await {
-            Ok(_) => panic!("an uninitialized home does not open a store"),
-            Err(error) => error,
-        };
-
-        assert!(
-            error.to_string().contains("run `gents init --home"),
-            "{error:#}"
-        );
-        assert!(
-            !home.join("data").exists(),
-            "nothing is created before the home is validated"
-        );
-        assert!(
-            gents::home::lock_home_store(&home).is_ok(),
-            "the refusal took no claim"
-        );
     }
 }

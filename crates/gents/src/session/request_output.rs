@@ -1,9 +1,3 @@
-//! Typed canonical output observation for one exact physical request.
-//!
-//! This composes the modeled live-target selector and live classifier with the
-//! exact terminal selection reader. It stores no response-shaped state and
-//! never chooses among retained partial attempts for the product answer.
-
 use anyhow::{Context, Result};
 use gents_protocol::output::live::{
     observed_request_execution_owner, project_live, select_live_target, LiveObservation,
@@ -29,8 +23,6 @@ use super::canonical_rows::{
 pub struct CanonicalPresentation {
     pub body_markdown: String,
     pub reasoning_markdown: Option<String>,
-    /// Exact live-target coordinate selected by the canonical owner. Native
-    /// terminal presentations have no active source and leave this absent.
     pub selected_source: Option<CanonicalSelectedSource>,
 }
 
@@ -51,8 +43,6 @@ pub enum CanonicalRequestOutput {
     Conflicted,
     Invalid,
     Retracted,
-    /// Diagnostic history only. Callers must not present this as the current
-    /// or terminal answer.
     RetainedPartial(Vec<LiveStream>),
     Published {
         header: gents_protocol::output::TranscriptMessage,
@@ -173,9 +163,6 @@ async fn load_facts(
     Ok((segments, messages))
 }
 
-/// Observe canonical output for one already-selected physical request row.
-/// Request admission input remains on `AgentRequestRow`; it is never folded
-/// into this output projection.
 pub async fn observe_request_output(
     access: &ConfigAccess,
     request: &AgentRequestRow,
@@ -297,11 +284,9 @@ pub async fn observe_request_output(
         denied_segments: &[],
         dependency_denials: &[],
         owner: OwnerLiveness {
-            // This is the last durable active-owner observation, not fresh
-            // write authorization. Lease expiry/recovery is decided only by
-            // the lifecycle owner; this read projection never compares its
-            // own wall clock. A stray generation on Pending therefore cannot
-            // establish liveness.
+            // Last durable active-owner observation, not fresh write
+            // authorization; lease expiry/recovery is decided only by the
+            // lifecycle owner, never this read projection's wall clock.
             current_request: observed_request_execution_owner(request),
             live_tools: Vec::new(),
         },

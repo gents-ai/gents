@@ -48,8 +48,6 @@ pub fn derive_tool_call_cause(
         });
     }
 
-    // An interrupt latch reaches only its own request: no cancellation
-    // crosses from one request to another, so the latch is this row's cause.
     if req.interrupt_requested_at.is_some() {
         let at = req.interrupt_requested_at.clone();
         return Some(DerivedCancelCauseView {

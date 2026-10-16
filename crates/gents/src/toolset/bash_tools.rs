@@ -11,8 +11,6 @@ use super::shared::{
 };
 use super::BACKGROUND_COMMAND_TIMEOUT_SECS;
 
-/// Add corrective argv guidance only after the existing authority rejects the
-/// literal executable. Admitted filenames containing spaces remain unchanged.
 fn validate_read_only_bash_input(
     command: &str,
     args: &[String],
@@ -108,7 +106,6 @@ impl ReadOnlyBashTool {
         }
     }
 
-    /// Lifetime advertised for `spawn_process` runs of this tool.
     pub(super) fn with_background_lifetime(mut self, lifetime: Duration) -> Self {
         self.background_lifetime = lifetime;
         self
@@ -155,7 +152,6 @@ impl UnrestrictedBashTool {
         }
     }
 
-    /// Lifetime advertised for `spawn_process` runs of this tool.
     pub(super) fn with_background_lifetime(mut self, lifetime: Duration) -> Self {
         self.background_lifetime = lifetime;
         self
@@ -386,7 +382,6 @@ mod input_tests {
             validate_read_only_bash_input("rm", &[], &policy),
             Err(ToolError::PolicyDenial(_))
         ));
-        // Explicitly admitted literal executable names are never split or rejected.
         policy.allowed_argv_prefixes = vec![vec!["literal executable".into()]];
         assert!(validate_command_policy("literal executable", &[], &policy).is_ok());
         assert!(validate_read_only_bash_input("literal executable", &[], &policy).is_ok());

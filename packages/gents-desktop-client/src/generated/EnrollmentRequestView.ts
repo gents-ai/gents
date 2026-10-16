@@ -2,7 +2,6 @@
 
 export type EnrollmentRequestView = { requestId: string, networkId: string, adminDid: string, serverPeer: string,
 /**
- * Presentation-only label advertised by the authenticated status endpoint.
- * It is never used for enrollment authority or route selection.
+ * Presentation-only label; never enrollment authority or route selection.
  */
 serverLabel: string | null, ownerNode: string, state: string, expiresAt: string, };

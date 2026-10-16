@@ -4,35 +4,25 @@ import Mathlib.Data.List.Defs
 /-!
 # Canonical filesystem-root admission
 
-This model starts *after* the host path resolver has produced a canonical
-component sequence.  Resolving existing prefixes, following symlinks, retaining
-nonexistent suffixes, and re-resolving at execution are Rust refinement
-obligations; Lean does not model the host filesystem or claim TOCTOU safety.
-
-Authority is ordered by path containment.  A candidate is admitted only when it
-is equal to or below a published root.  Component-prefix containment admits a
-least-privilege descendant without admitting string-prefix siblings.
-
-Publication retains whether the operator authored any root policy.  No
-documents may use the process ceiling as a backwards-compatible default, but
-an explicit policy whose enabled set is empty is a revocation and must not
-fall back to that broader ceiling.
+The model starts after the host path resolver has produced a canonical
+component sequence; resolving prefixes, following symlinks, and
+re-resolving at execution are Rust refinement obligations, and Lean
+claims no TOCTOU safety. Publication resolution is fail-closed, and an
+explicit policy whose enabled set is empty is a revocation, never a
+fallback to the process ceiling.
 -/
 
 namespace PeerRegistryDiscovery
 namespace RootAdmission
 
-/-- A host-observed path after the canonical path owner has resolved it.
-`anchor` identifies the filesystem root/volume (for example POSIX `/`, a
-Windows drive, or a UNC share). Components, rather than rendered strings,
-define containment within that anchor. -/
+/-- `anchor` identifies the filesystem root/volume (POSIX `/`, a Windows
+drive, a UNC share); containment is defined by components, not rendered
+strings, within that anchor. -/
 structure CanonicalPath where
   anchor : String
   components : List String
   deriving DecidableEq, Repr
 
-/-- `ceiling` contains `candidate` exactly when the ceiling's canonical
-components are a prefix of the candidate's canonical components. -/
 def contains (ceiling candidate : CanonicalPath) : Prop :=
   ceiling.anchor = candidate.anchor ∧
     ceiling.components.IsPrefix candidate.components
@@ -41,8 +31,6 @@ instance (ceiling candidate : CanonicalPath) : Decidable (contains ceiling candi
   unfold contains
   infer_instance
 
-/-- Resolution failure is fail-closed.  A successful candidate must be equal
-to or narrower than at least one published root. -/
 def admitted (published : Finset CanonicalPath) (candidate : Option CanonicalPath) : Prop :=
   match candidate with
   | none => False
@@ -53,13 +41,11 @@ instance (published : Finset CanonicalPath) (candidate : Option CanonicalPath) :
   unfold admitted
   cases candidate <;> infer_instance
 
-/-- The operator-local workspace-root policy after document and process-ceiling
-resolution. `configured` records fail-closed policy state: either a
-`WorkspaceRoot` document was supplied (including disabled documents), or an
-explicit process ceiling was supplied but could not be resolved. `enabled`
-contains only enabled, resolved roots. Keeping those facts separate prevents
-an all-disabled, all-invalid, or invalid-ceiling policy from looking like an
-unconfigured deployment. -/
+/-- `configured` records fail-closed policy state: either a `WorkspaceRoot`
+document was supplied (including disabled documents), or an explicit process
+ceiling was supplied but could not be resolved. Keeping it separate from
+`enabled` prevents an all-disabled, all-invalid, or invalid-ceiling policy
+from looking like an unconfigured deployment. -/
 structure PublicationPolicy where
   configured : Bool
   enabled : Finset CanonicalPath
@@ -80,9 +66,6 @@ def defaultRoots : Option CanonicalPath → Finset CanonicalPath
   | none => ∅
   | some ceiling => {ceiling}
 
-/-- Explicit roots are published only when contained by the process ceiling.
-When there are no root documents, the ceiling remains the legacy default.
-An explicit-but-empty policy publishes nothing. -/
 def publishedRoots (policy : PublicationPolicy) : Finset CanonicalPath :=
   if policy.configured then
     policy.enabled.filter (withinCeiling policy.ceiling)
@@ -97,17 +80,11 @@ theorem all_disabled_revokes_without_ceiling_fallback (ceiling : Option Canonica
     publishedRoots ⟨true, ∅, ceiling⟩ = ∅ := by
   simp [publishedRoots]
 
-/-- An explicitly supplied process ceiling that failed host resolution is
-represented by configured policy with no resolved ceiling. It publishes no
-authority and cannot admit an authored root through the legacy no-policy
-fallback. -/
 theorem invalid_ceiling_fails_closed (candidate : CanonicalPath) :
     publishedRoots ⟨true, ∅, none⟩ = ∅ ∧
       ¬ admitted (publishedRoots ⟨true, ∅, none⟩) (some candidate) := by
   simp [publishedRoots, admitted]
 
-/-- Explicit publication never invents the process ceiling or another root:
-every published path came from the enabled document set. -/
 theorem explicit_publication_subset (policy : PublicationPolicy)
     (hconfigured : policy.configured = true) :
     publishedRoots policy ⊆ policy.enabled := by
@@ -115,8 +92,6 @@ theorem explicit_publication_subset (policy : PublicationPolicy)
   simp [publishedRoots, hconfigured] at hroot
   exact hroot.1
 
-/-- With a process ceiling, every explicitly published root is contained by
-that ceiling.  Publication can narrow authority but cannot widen it. -/
 theorem explicit_publication_under_ceiling (enabled : Finset CanonicalPath)
     (ceiling root : CanonicalPath)
     (hroot : root ∈ publishedRoots ⟨true, enabled, some ceiling⟩) :
@@ -124,8 +99,6 @@ theorem explicit_publication_under_ceiling (enabled : Finset CanonicalPath)
   simp [publishedRoots, withinCeiling] at hroot
   exact hroot.2
 
-/-- A narrower explicit root does not republish the broader ceiling unless the
-ceiling was itself explicitly enabled. -/
 theorem narrower_policy_does_not_publish_ceiling (ceiling nested : CanonicalPath)
     (hneq : nested ≠ ceiling) :
     ceiling ∉ publishedRoots ⟨true, {nested}, some ceiling⟩ := by
@@ -147,49 +120,30 @@ theorem descendant_admitted (published : Finset CanonicalPath) (ceiling : Canoni
     admitted published (some ⟨ceiling.anchor, ceiling.components ++ suffix⟩) := by
   exact ⟨ceiling, h, rfl, List.prefix_append _ _⟩
 
-/-- Admission never widens authority: it returns a published ceiling witness
-whose canonical components prefix the selected path. -/
 theorem admitted_has_published_ceiling (published : Finset CanonicalPath)
     (candidate : CanonicalPath) (h : admitted published (some candidate)) :
     ∃ ceiling ∈ published, contains ceiling candidate := by
   exact h
 
-/-- Adding a path component narrows (or preserves) path authority. -/
 theorem descendant_transitive (outer inner candidate : CanonicalPath)
     (hOuter : contains outer inner) (hInner : contains inner candidate) :
     contains outer candidate := by
   exact ⟨hOuter.1.trans hInner.1, hOuter.2.trans hInner.2⟩
 
-/-- Equal component sequences on different filesystem anchors never confer
-authority. This prevents a drive/volume collision from becoming containment. -/
+/-- Prevents a drive/volume collision from becoming containment. -/
 theorem distinct_anchor_rejected (left right : String) (components : List String)
     (h : left ≠ right) :
     ¬ contains ⟨left, components⟩ ⟨right, components⟩ := by
   simp [contains, h]
 
-/-- A component-wise sibling is not a descendant merely because its rendered
-name shares a string prefix. -/
 theorem prefix_sibling_rejected (base sibling : String) (tail : List String)
     (h : base ≠ sibling) :
     ¬ contains ⟨"/", [base]⟩ ⟨"/", sibling :: tail⟩ := by
   simp [contains, h]
 
-/-!
-## Root-selection admission
-
-The root-selection contracts belong to the root-admission owner so conformance
-and canonical root consumers reference this namespace directly.
--/
-
-/-- A behavior selection that contains a published root overlaps operator
-authority: the operator narrowed below a grant the behavior already holds.
-Selection then stays valid, because the selection/ceiling meet
-(`effectiveSelectionOk`) clamps the effective root to operator authority before
-use. This tolerance is owned by `storedRootSelectionOk` only: a freshly
+/-- Overlap tolerance is owned by `storedRootSelectionOk` only: a freshly
 authored root must be strictly admitted, so a behavior cannot pre-position a
-wide grant that silently activates when the operator later widens authority.
-Publication itself (`admitted`) stays strictly descendant-or-equal; an
-operator row is authority, not a behavior grant. -/
+wide grant that silently activates when the operator later widens authority. -/
 def overlapping (published : Finset CanonicalPath) (candidate : Option CanonicalPath) : Prop :=
   match candidate with
   | none => False
@@ -200,13 +154,10 @@ instance (published : Finset CanonicalPath) (candidate : Option CanonicalPath) :
   unfold overlapping
   cases candidate <;> infer_instance
 
-/-- Root-selection contract for a freshly authored root. A blank root may
-inherit the runtime default only when the operator has not authored explicit
-workspace-root policy. If there is neither policy nor a process ceiling (an
-empty publication), a successfully resolved authored root is its own narrowing.
-Under explicit policy, a request must select an admitted root so omission
-cannot widen to the process ceiling. The host execution owner resolves again
-before use; this admission contract does not claim TOCTOU safety. -/
+/-- A blank root may inherit the runtime default only when the operator has
+not authored explicit workspace-root policy; under explicit policy a request
+must select an admitted root so omission cannot widen to the process ceiling.
+The host execution owner resolves again before use; no TOCTOU claim. -/
 abbrev rootSelectionOk
     (policyConfigured : Bool)
     (published : Finset CanonicalPath)
@@ -216,14 +167,12 @@ abbrev rootSelectionOk
     (blank = false ∧ policyConfigured = false ∧ published = ∅ ∧ resolved.isSome) ∨
     admitted published resolved
 
-/-- Root-selection contract for a stored grant being re-admitted against
-current policy. The behavior root is authored once while the operator root
-moves independently, so a stored grant that now contains a published root
-(the operator narrowed below it) stays selectable: the selection/ceiling meet
-(`effectiveSelectionOk`) clamps the effective root to operator authority before
-use, and refusing every overlap would strand a narrowed deployment's only
-behavior. Only a re-admitted stored grant gets this tolerance; a write that
-changes the root follows `rootSelectionOk` strictly. -/
+/-- Tolerance for re-admitting a stored grant against current policy: the
+behavior root is authored once while the operator root moves independently,
+so a stored grant the operator narrowed below stays selectable because the
+meet (`effectiveSelectionOk`) clamps it before use; refusing every overlap
+would strand a narrowed deployment's only behavior. A write that changes the
+root follows `rootSelectionOk` strictly. -/
 abbrev storedRootSelectionOk
     (policyConfigured : Bool)
     (published : Finset CanonicalPath)
@@ -232,24 +181,12 @@ abbrev storedRootSelectionOk
   rootSelectionOk policyConfigured published blank resolved ∨
     overlapping published resolved
 
-/-- Selection/ceiling meet for the effective tool root. The behavior root is a
-grant and the operator ceiling is a cap: a selection inside the ceiling keeps
-its narrower grant, a selection containing the narrowed ceiling clamps down to
-the ceiling, and only a selection disjoint from the ceiling is refused. A blank
-selection may inherit the ceiling only while the operator has not authored
-explicit workspace-root policy. Whether the selection itself is admitted
-against published policy is owned by `rootSelectionOk`/`storedRootSelectionOk`;
-this contract owns only the containment meet. The behavior root is authored
-once while the operator root moves independently, so refusing every overlap
-would strand a narrowed deployment's only behavior.
-
-Premise the meet alone cannot close: under a configured multi-root policy that
-publishes roots strictly inside the process ceiling, the clamp arm lands at the
-raw ceiling, which is admitted by neither `admitted` nor any published root.
-The meet is only guaranteed to stay inside published authority under the
-unconfigured default (`unconfigured_meet_stays_published`); with configured
-policy, the execution-boundary re-admission (the native root execution guard)
-is the owner that refuses such an effective root before use. -/
+/-- Selection/ceiling meet for the effective tool root: containment decides
+whether the grant or the cap wins. Premise this meet alone cannot close: under
+a configured multi-root policy publishing roots strictly inside the process
+ceiling, the clamp arm lands at the raw ceiling, admitted by neither `admitted`
+nor any published root; the execution-boundary re-admission (the native root
+execution guard) owns refusing such an effective root before use. -/
 def effectiveSelectionOk
     (policyConfigured : Bool)
     (ceiling : Option CanonicalPath)
@@ -266,8 +203,6 @@ instance (policyConfigured : Bool) (ceiling selection effective : Option Canonic
   unfold effectiveSelectionOk
   cases ceiling <;> cases selection <;> infer_instance
 
-/-- The meet never widens authority: every outcome stays at or below the
-process ceiling. -/
 theorem effective_selection_never_widens (policyConfigured : Bool)
     (ceiling : CanonicalPath) (selection : Option CanonicalPath)
     (effective : Option CanonicalPath)
@@ -281,8 +216,6 @@ theorem effective_selection_never_widens (policyConfigured : Bool)
     · exact ⟨sel, heffective, hcontains⟩
     · exact ⟨ceiling, heffective, rfl, [], by simp⟩
 
-/-- Clamping only narrows: when the selection contains the ceiling, the meet
-lands at or below the selection itself. -/
 theorem clamped_selection_only_narrows (policyConfigured : Bool)
     (ceiling sel : CanonicalPath)
     (hcontains : contains sel ceiling)
@@ -294,12 +227,6 @@ theorem clamped_selection_only_narrows (policyConfigured : Bool)
   · exact ⟨sel, heffective, rfl, [], by simp⟩
   · exact ⟨ceiling, heffective, hcontains⟩
 
-/-- Composition of the meet with publication under the unconfigured default:
-with no operator documents the ceiling is the only published root, so every
-effective root the meet produces — including the clamp of a stored overlapping
-grant — is inside published authority. Under configured policy this can fail
-(see the premise on `effectiveSelectionOk`); the execution-boundary
-re-admission owns that case. -/
 theorem unconfigured_meet_stays_published (ceiling : CanonicalPath)
     (selection effective : Option CanonicalPath)
     (hok : effectiveSelectionOk false (some ceiling) selection effective) :
@@ -320,14 +247,6 @@ theorem unconfigured_meet_stays_published (ceiling : CanonicalPath)
       · rw [heffective]
         exact exact_root_admitted _ ceiling (by simp)
 
-/-- Root-patch contract: `none` is an omitted edit, `some none` a clear and
-`some (some r)` a set. Omission preserves the stored value but must re-admit it
-against current policy, so a stale, blank or revoked stored root cannot bypass
-the gate; a stored grant the operator narrowed below keeps the overlap
-tolerance (`storedRootSelectionOk`) because the meet clamps it before use.
-Rootless Tools (`storedRootRequired = false`) gain no filesystem
-authority and do not fail an unrelated edit. Clear is allowed only without
-explicit policy, and set follows the create rule strictly. -/
 abbrev rootEditSelectionOk
     (policyConfigured : Bool)
     (published : Finset CanonicalPath)

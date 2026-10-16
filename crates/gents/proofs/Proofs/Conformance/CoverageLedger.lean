@@ -1267,8 +1267,6 @@ def caseCoverage : List CoverageEntry :=
       "interrupt::queue_tests::generated_http_overlap_cases_preserve_cutoff"
       "Two observed-identity overlap scripts bind real HTTP transactions against embedded completion publication, including permitted pre-latch phantom survival and post-latch replay. These schedules do not prove arbitrary distributed serialization; exact native queue ordering remains unbound.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
-  -- Inference cases include periodic cadence: startup may defer a live execution
-  -- lease, so the same existing call owner must run after later request repair.
   , tagged (consumerCoverage
       "recovery_sweep_cases"
       "RecoverySweepCases"
@@ -1290,18 +1288,12 @@ def caseCoverage : List CoverageEntry :=
       "ArtifactModeMeetCases"
       "toolset::tests::generated_artifact_mode_meet_cases_drive_command_effect_intersection")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
-  -- Admission uses real signed requests/bindings and managed-launch policy.
-  -- Unsupported-platform coverage supplies the unavailable-host observation to
-  -- the production selector; kernel enforcement remains an external boundary.
   , tagged (boundaryCoverage
       "artifact_admission_cases"
       "ArtifactAdmissionCases"
       boundaryCommandPolicyHostExecutionAssumptionsId
       "workspace::overlay::overlay_tests::generated_artifact_admission_cases_drive_live_binding_and_launch_policy")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
-  -- One consumer covers all five cases: real foreground/background launches
-  -- carrying the same grant, plus persistent LSP denial before pool dispatch.
-  -- The spawned-task witness does not claim durable background-bridge coverage.
   , tagged (boundaryCoverage
       "artifact_spawn_cases"
       "ArtifactSpawnCases"

@@ -1,10 +1,5 @@
 import Proofs.Workspace.PathCapability
 
-/-! Narrow operator operation in the existing Workspace executor. It does not
-relax writer sealing or integration and creates no producer request identity.
-Host capability/placement verification, exact Git base-tree observation and
-active-binding query are adapter evidence, not filesystem or isolation proofs.
--/
 namespace Workspace.PathCapability.OperatorBaseFreeze
 
 structure Evidence where
@@ -19,8 +14,6 @@ structure Evidence where
   delta : List Change
   deriving DecidableEq, Repr
 
-/-- Exact persisted seal recovery does not need a deleted checkout. Both new
-freeze and replay remain authorized by the existing operator capability. -/
 def execute (s : Snapshot) (e : Evidence) : Snapshot × Disposition :=
   let w := s.workspace
   if !e.sealCapability || !e.ownerAndPlacementVerified ||

@@ -1,10 +1,3 @@
-//! Owned multi-turn completion and tool-execution loop.
-//!
-//! This module owns provider-request assembly, retry and retract decisions,
-//! streamed-turn accumulation, tool dispatch, and message threading. Durable
-//! lifecycle effects remain hook-owned; rig remains the provider client and
-//! streaming decoder at the boundary.
-
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -69,23 +62,16 @@ pub use one_shot::{
     OneShotProviderFailure,
 };
 pub use repeated_tool_failure::REPEATED_TOOL_FAILURE_PREFIX;
+pub use request_assembly::resolve_replay_evidence;
 pub use request_assembly::{assemble_new_messages, is_request_context_message};
 pub use request_assembly::{
     assemble_provider_request, association_reduction, provider_messages, provider_view_tagged,
     replay_compaction_prefix_bound, sanitize_tagged_history, select_tagged_assistant_blocks,
 };
-// Not `#[cfg(test)]`: gents' own loop_stream test suite (crates/gents/src/
-// agent/loop_stream/tests/budgeting.rs and request_assembly.rs) calls these
-// directly, and a cfg(test) item in this crate is invisible to a dependent
-// crate's own test build (same reasoning as `rendered_request::transport::
-// CountingInner`).
 pub use request_assembly::{
     clamp_request_output_budget, completion_request_input_components, ensure_context_can_dispatch,
     repair_provider_input,
 };
-// Same reasoning: gents' session replay tests drive the dispatch lookup
-// directly to pin the estimate-seed window.
-pub use request_assembly::resolve_replay_evidence;
 use tool_dispatch::admit_tool;
 pub use tool_dispatch::dispatch_tool;
 
@@ -99,9 +85,6 @@ use turn_threading::{bounded_tool_result, close_streaming_turn};
 pub use turn_threading::{
     replayed_tool_result_text, TOOL_RESULT_IMAGE_NOT_REPLAYED, TOOL_RESULT_IMAGE_OMITTED,
 };
-// The test suite stayed in gents (crates/gents/src/agent/loop_stream/tests/):
-// it builds real DefraSessionHook/EmbeddedNode fixtures for its end-to-end
-// cases and uses `include!` to share one big fixture module across files.
 
 pub use aggregate_budget::{
     aggregate_post_charge_action, AggregatePostChargeAction, AggregateTokenCharge,
@@ -112,13 +95,8 @@ pub use aggregate_budget::{
     AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX,
 };
 
-/// Prefix of the loop's own terminal error for a tool-free turn that returned
-/// no visible text (for example, reasoning only) after its resample budget.
 pub const NO_VISIBLE_OUTPUT_PREFIX: &str = "completion produced no visible output: ";
 
-/// Whether a stream error is the loop's terminal no-visible-output failure.
-/// This is an ordinary unusable model result, not an output-persistence or
-/// ownership invariant.
 pub fn is_no_visible_output_failure(error: &LoopStreamError) -> bool {
     error
         .provider_message()
@@ -163,10 +141,6 @@ where
             match hook.as_ref() { Some(hook) => hook.session_id().await, None => None },
         );
         let mut replay = config.replay.clone();
-        // A recovered durable checkpoint is one exact provider projection even
-        // though rig's loop API carries its final message separately as the
-        // prompt. Sanitize the joined projection before splitting it again so
-        // a tool call in history remains paired with a tool result prompt.
         let mut entry_projection = history;
         entry_projection.push(prompt);
         let mut entry_projection = sanitize_tagged_history(entry_projection)?;
@@ -180,32 +154,20 @@ where
         })?;
         let history = entry_projection;
         let authored_prompt = prompt.message.clone();
-        // Prior requests' per-request context rows must not re-enter provider
-        // history. The current context is assembled into `new_messages`.
-        // Repair may rewrite both vectors in place after provider rejection.
         let mut history: Vec<TaggedMessage> = history
             .into_iter()
             .filter(|row| !is_request_context_message(&row.message))
             .collect();
-        // The running set of messages produced this request. The last element
-        // is always the "prompt" for the next turn (rig semantics): initially
-        // the user message, later the trailing tool-result user message. The
-        // optional per-request context message rides immediately before the
-        // prompt (mirrors Lean `PromptAssembly.Template.assembleWithContext`).
         let mut new_messages: Vec<TaggedMessage> =
             assemble_new_messages(config.context_message.clone(), prompt);
         if hook.is_none() {
             new_messages.extend(config.folded_prompts.iter().map(|row| TaggedMessage::unassociated(row.message.clone())));
         }
-        // Request-local and cumulative across turns, retries, and compaction.
         let mut invalid_tool_progress = invalid_tool_progress::InvalidToolProgress::default();
         let mut repeated_tool_failure = repeated_tool_failure::RepeatedToolFailure::default();
         let aggregate_token_budget = config.aggregate_token_budget.clone();
         let mut current_turn: usize = config.initial_turn_index;
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
-        // Retain the effective native message list whenever request-local
-        // context, reduction, or repair can make transcript reconstruction
-        // differ from the provider input.
         let mut retain_effective_messages_oracle =
             config.context_message.is_some()
                 || config.resume_from_history
@@ -233,9 +195,6 @@ where
             current_turn += 1;
 
             let turn_index = current_turn - 1;
-            // The admitted input is published before anything can reduce the
-            // provider projection or persist a reduction checkpoint, so a
-            // restored checkpoint always follows its accepted input.
             if current_turn == 1 && hook.is_some() && turn_index == 0 && !config.resume_from_history {
                 let authored = config.authored_input.clone().unwrap_or_else(|| AuthoredInput {
                     context: config.context_message.clone(),
@@ -321,9 +280,6 @@ where
             }
 
             let mut attempt = 0_u32;
-            // Repair bypasses budgeted construction, although both dispatch
-            // clamps are reapplied below. The build path is not recoverable
-            // from the transcript, so it rides in the trace.
             let mut build_path = AssemblyBuildPath::Budgeted;
             'attempts: loop {
                 let (mut stream, activity, mut audit_receiver, advertised_tools) = loop {
@@ -334,10 +290,6 @@ where
                     )?;
                     let dispatch_request = prepared_dispatch.request().clone();
                     if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
-                        // `history ++ new_messages` is the effective provider
-                        // message list: post sanitization, post request-context
-                        // filtering, and post any per-turn compaction (which
-                        // rewrote both vectors in place).
                         let effective_messages = history
                             .iter()
                             .chain(new_messages.iter())
@@ -434,13 +386,6 @@ where
                                     )
                                     .await?;
                                     build_path = AssemblyBuildPath::Repair;
-                                    // Repair rewrites `history` and `new_messages` in place, and
-                                    // both are declared outside `'turns`. The durable transcript is
-                                    // never rewritten to match, so every later turn is assembled
-                                    // from messages no `AgentMessage` row reproduces. Mark the
-                                    // effective list ephemeral for the rest of the request, not just
-                                    // this turn — `build_path` resets per turn and would otherwise
-                                    // report `Budgeted` for a turn whose input repair had altered.
                                     retain_effective_messages_oracle = true;
                                     attempt += 1;
                                 }
@@ -480,9 +425,6 @@ where
                 };
                 Some(capture_scope)
             } else if hook.is_some() {
-                // Canonical persistence requires the exact input/output join.
-                // Standalone non-persisting loops have no request authority or
-                // capture scope; they must not fabricate either one.
                 Err(StreamingError::Completion(CompletionError::ProviderError(
                     "provider attempt has no exact rendered-request capture scope".into(),
                 )))?;
@@ -491,10 +433,6 @@ where
                 None
             };
 
-            // Accumulate assistant content twice over: `accumulator` builds the
-            // assistant message we thread back into `new_messages` for the next
-            // turn (reasoning/tool-call/text ordering handled there), while the
-            // yielded items drive the consumer's own accumulation/persistence.
             let mut accumulator = AssistantTurnAccumulator::default();
             let mut pending_calls = Vec::new();
             let mut pending_results: Vec<(ToolCall, String, Vec<ToolResultContent>)> = Vec::new();
@@ -565,29 +503,14 @@ where
                 let item = match item {
                     Ok(item) => {
                         if !saw_stream_item {
-                            // A provider response arrived while this attempt's
-                            // capture was still waiting to be claimed, which
-                            // means the send did not travel through the
-                            // capturing transport. That is a mis-wired client
-                            // stack, and the only honest response is to stop:
-                            // silently continuing would produce a turn whose
-                            // provider input is not durable anywhere.
                             ensure_rendered_request_was_captured(turn_index, attempt)?;
                         }
                         saw_stream_item = true;
                         item
                     }
-                    // Dispatch begins only after this provider stream closes
-                    // and its turn is accepted. No host effect exists here.
                     Err(failure) => {
                         let (classified, error_text) = failure.classify();
-                        // Everything received was already yielded. Release the
-                        // admission permit and provider connection before any
-                        // retry backoff.
                         drop(stream);
-                        // A usage limit is permanent while streaming too
-                        // (Lean `observeFailure .permanent`); resampling
-                        // after partial output cannot clear it.
                         if !saw_stream_item
                             || matches!(classified, InferenceError::UsageLimited(_))
                         {
@@ -635,8 +558,6 @@ where
                                     )
                                     .await?;
                                     build_path = AssemblyBuildPath::Repair;
-                                    // Repair mutates the request-scoped vectors,
-                                    // so retain the effective list for later turns.
                                     retain_effective_messages_oracle = true;
                                     attempt += 1;
                                     continue 'attempts;
@@ -791,9 +712,6 @@ where
                 }
             }
 
-            // An empty stream never enters the item branch above. It is still
-            // proof that `model.stream` dispatched, so it must not reach the
-            // ordinary no-output retry path while this attempt remains armed.
             if !saw_stream_item {
                 ensure_rendered_request_was_captured(turn_index, attempt)?;
             }
@@ -879,9 +797,6 @@ where
             }
 
             if pending_calls.is_empty() && turn_text.trim().is_empty() {
-                // A reasoning-only or empty terminal response is unusable.
-                // With no tool effect to replay, use the proven no-effect
-                // retract transition and resample the same request.
                 match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
                     MidStreamDirective::RetractAndResample { delay } => {
                         yield LoopStreamItem::TurnRetracted {
@@ -918,11 +833,6 @@ where
             }
 
             if let Some(error) = structured_output_error {
-                // The provider completed normally, but the result does not
-                // satisfy the typed contract Rig sent. No tool effect has run,
-                // so this is the same proven CompletionRetry.retract transition
-                // as an interrupted or empty no-effect turn: discard all
-                // streamed content and resample the identical request.
                 match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
                     MidStreamDirective::RetractAndResample { delay } => {
                         yield LoopStreamItem::TurnRetracted {
@@ -975,10 +885,6 @@ where
                 attempt,
                 message: accepted_message,
             };
-            // The consumer has now accepted the provider turn. Only then may
-            // its exact physical capture coordinate enter the next provider
-            // input. Evidence is read from the canonical owner, not from the
-            // mutable accumulator whose content is about to be threaded.
             let accepted_source = match (hook.is_some(), replay.request_doc_id.as_ref(), attempt_capture_scope) {
                 (true, Some(request_doc_id), Some(scope)) => {
                     let turn_index = u32::try_from(turn_index).map_err(|_| {
@@ -1414,8 +1320,6 @@ pub async fn build_request<M: CompletionModel>(
     Ok(builder.build())
 }
 
-/// The send boundary: the one place the provider content order is applied,
-/// after replay association has run over the native-order rows.
 fn assemble_rig_chat_history(
     config: &LoopConfig,
     prompt: &Message,

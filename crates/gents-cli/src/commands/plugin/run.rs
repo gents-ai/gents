@@ -1,17 +1,3 @@
-//! `gents plugin run`: run one installed plugin to completion and print
-//! what it returned. The surface that proves a plugin actually runs, not
-//! just that it parses.
-//!
-//! Running is [`gents::plugin::PluginRunner`]'s job, not this file's: it is
-//! the one place in this workspace that hands a plugin's `.afb` to
-//! `afterburner::afb_run::run_afb_bytes` and refuses admission outright
-//! when the real artifact would dispatch through a path that cannot honor
-//! every declared bound (see that module's own doc, rule 4). This file's
-//! job is narrower: find the installed bytes and retained
-//! [`gents::pack::PackPlugin`] declaration by name, and turn
-//! its typed [`gents::plugin::PluginOutcome`] into either the plugin's own
-//! JSON value or a clear refusal naming which bound was hit.
-
 use std::path::Path;
 use std::sync::Arc;
 
@@ -40,8 +26,6 @@ pub(crate) async fn run(args: PluginRunArgs) -> Result<()> {
         None => serde_json::Value::Null,
     };
     let mut executor = PluginExecutor::new(Some(home.clone()));
-    // The control plane is opened only for a plugin whose model slot is
-    // bound: any other call touches no store.
     if record.declaration.model_slot.is_some() && record.model_binding.is_some() {
         let (access, _) = crate::resolve_config_access(Some(&home), None).await?;
         executor = executor.with_models(Arc::new(AccessModels(access)));
@@ -50,17 +34,6 @@ pub(crate) async fn run(args: PluginRunArgs) -> Result<()> {
     crate::print_json(&output)
 }
 
-/// Admits and calls one installed plugin, returning its own JSON result or
-/// an error naming which bound was hit.
-///
-/// Admission uses the declaration retained at installation. Artifact capability
-/// metadata is not a substitute for a pack author's narrower declaration.
-/// `bind_dir` is the operator's own directory (`--bind-dir`, `within =
-/// None`: the operator already named it directly, so nothing here narrows
-/// it further); `None` calls ordinarily. The executor runs the guest on a
-/// blocking thread (the WASI runtime under it blocks on its own runtime for
-/// host I/O, which panics on an async task's thread) and answers the
-/// plugin's model requests when its slot is bound.
 async fn run_plugin(
     executor: &PluginExecutor,
     record: &InstalledPlugin,
@@ -123,7 +96,6 @@ mod tests {
     use super::*;
     use gents::plugin::PluginRunner;
 
-    /// Stores `record` and its bytes in a fresh home and runs it there.
     async fn run_installed(
         bytes: &[u8],
         record: &InstalledPlugin,
@@ -138,9 +110,6 @@ mod tests {
         run_plugin(&executor, record, input, bind_dir).await
     }
 
-    /// The identity plugin, from the shared fixture: reads all of stdin
-    /// and writes it back unchanged, which is what makes it the vehicle
-    /// for every "does the ABI carry arguments through" test below.
     fn build_echo_plugin() -> Vec<u8> {
         crate::commands::plugin::testing::build_echo_plugin()
     }
@@ -198,7 +167,6 @@ mod tests {
             "type": "object", "required": ["message"],
             "properties": {"message": {"type": "string"}},
         });
-        // No declared authority: never replace this with artifact capabilities.
         declaration.manifold = None;
         gents::plugin::install::install_from_pack(
             home.path(),
@@ -223,8 +191,6 @@ mod tests {
             serde_json::json!({"message": "ok"})
         );
 
-        // An invalid authored admission declaration must fail, not get silently
-        // replaced by the valid manifold embedded in the artifact.
         let mut invalid = record;
         invalid.declaration.manifold = Some(serde_json::json!({"fs": "invalid"}));
         assert!(
@@ -283,12 +249,6 @@ mod tests {
         assert!(message.contains("not installed"), "{message}");
     }
 
-    /// The `bind_plugin_fixture` plugin lists whatever directory it is
-    /// bound to, and nothing without a binding: with a binding it returns
-    /// exactly the files this test put there, and without one the same
-    /// `root` (a real, existing directory) is still unreachable, because
-    /// its declared manifold has no standing `fs` grant of its own -
-    /// binding is the only way in.
     #[tokio::test]
     async fn run_with_bind_dir_reads_only_the_bound_directory() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
@@ -324,12 +284,6 @@ mod tests {
         .expect("running bound to the listing directory must succeed");
         assert_eq!(output, serde_json::json!({"files": ["one.txt", "two.txt"]}));
 
-        // Same real directory, but named directly instead of bound: the
-        // plugin still has no way to reach it, proving the binding (not the
-        // directory's existence) is what grants access. With no preopen for
-        // an unbound path, the guest's own `std::fs::read_dir` call fails
-        // and its `.expect` panics, which surfaces here as a trap - not the
-        // `Success`/`Failed` verdict a routine bound would report.
         let real_root = serde_json::json!({"root": listing.path().to_str().unwrap()});
         let error = run_installed(&bytes, &record, real_root, None)
             .await
@@ -340,10 +294,6 @@ mod tests {
         );
     }
 
-    /// `gents plugin run <name> --bind-dir DIR` with no `--input` at all: the
-    /// binding supplies the plugin's only required field, so an omitted
-    /// operator input (which `run` turns into `Value::Null`) must not be
-    /// refused for not being an object.
     #[tokio::test]
     async fn run_with_bind_dir_and_no_input_succeeds() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
@@ -375,8 +325,6 @@ mod tests {
         .expect("a binding with no --input must supply the only field the plugin needs");
     }
 
-    /// A plugin that asks for access is refused without consent, and the
-    /// grant is recorded with it; the same request later needs none.
     #[test]
     fn requested_authority_needs_consent_and_is_recorded() {
         let bytes = build_echo_plugin();

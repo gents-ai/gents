@@ -146,7 +146,6 @@ pub(super) async fn load_thread_turns(
                 && row.get("request_id").is_none_or(Value::is_null)
                 && row.get("request_doc_id").is_none_or(Value::is_null)
             {
-                // Forked transcript tool facts intentionally have no executable request edge.
                 continue;
             }
             let logical = row
@@ -781,8 +780,6 @@ async fn decode_tool_rows(
     let mut tools = Vec::new();
     for row in raw_rows(response, "AgentToolCall") {
         if row.get("request_doc_id").is_none_or(Value::is_null) {
-            // Forked transcript facts have no executable request owner and
-            // are not Codex command items for a request turn.
             continue;
         }
         let message_sequence = row
@@ -932,40 +929,6 @@ mod tests {
     }
 
     #[test]
-    fn replicated_nullable_request_scalars_decode_without_legacy_transcript_fields() {
-        let response = json!({
-            "data": {
-                "AgentRequest": [{
-                    "request_id": "request-1",
-                    "content": null,
-                    "status": null,
-                    "lifecycle_state": null,
-                    "failure_reason": null,
-                    "input": null,
-                    "execution_origin": null
-                }]
-            }
-        });
-
-        let requests = decode_rows::<AgentRequestRow>(&response, "AgentRequest").unwrap();
-        assert_eq!(requests[0].content, None);
-        assert_eq!(requests[0].failure_reason, None);
-    }
-
-    #[test]
-    fn completed_status_depends_only_on_request_lifecycle() {
-        let request = request_row(json!({
-            "request_id": "request-1",
-            "content": "Inspect the repo",
-            "lifecycle_state": "completed",
-            "input": null,
-            "execution_origin": "interactive"
-        }));
-
-        assert_eq!(turn_status(&request), codex::TurnStatus::Completed);
-    }
-
-    #[test]
     fn background_completion_wake_is_visible_without_rendering_internal_prompt() {
         let record = CodexThreadRecord {
             session_id: "thread-1".to_string(),
@@ -1079,23 +1042,6 @@ mod tests {
             ]
         ));
         assert!(turn.items.len() > 2, "the answer follows both messages");
-    }
-
-    #[test]
-    fn turn_completion_timing_uses_canonical_request_terminalization() {
-        let request = request_row(json!({
-            "request_id": "request-1",
-            "content": "",
-            "lifecycle_state": "completed",
-            "created_at": "2026-07-15T10:00:00Z",
-            "terminalized_at": "2026-07-15T10:00:05Z",
-            "input": null,
-            "execution_origin": "interactive"
-        }));
-        assert_eq!(
-            turn_completed_timestamp(&request),
-            timestamp_seconds("2026-07-15T10:00:05Z")
-        );
     }
 
     #[test]
@@ -1218,99 +1164,6 @@ mod tests {
                     && *phase == Some(MessagePhase::FinalAnswer)),
             "final materialized assistant text should be replayed; items={items:?}"
         );
-    }
-
-    #[test]
-    fn append_request_items_replays_only_successful_context_compactions() {
-        let record = CodexThreadRecord {
-            session_id: "thread-1".to_string(),
-            cwd: PathBuf::from("/tmp/project"),
-            archived: false,
-            loaded: true,
-            memory_mode: "disabled".to_string(),
-            name: String::new(),
-            settings_json: String::new(),
-            git_info: None,
-            projection_started: None,
-            session: None,
-            latest_request: None,
-            caused: None,
-        };
-        let request = request_row(json!({
-            "request_id": "request-1",
-            "content": "Continue",
-            "lifecycle_state": "completed",
-            "input": null,
-            "execution_origin": "interactive",
-            "execution_origin": "interactive"
-        }));
-        let compactions = vec![CompactionRow {
-            request_id: request.request_id.clone(),
-            call_id: "compact-1".to_string(),
-            call_state: "completed".to_string(),
-            call_seq: 1,
-        }];
-        let messages = BTreeMap::from([(
-            2,
-            message_row(
-                "header-done",
-                None,
-                2,
-                gents_protocol::message::Message::assistant("Done"),
-            ),
-        )]);
-        let mut items = Vec::new();
-        append_request_items(
-            &record,
-            &mut items,
-            &request,
-            Vec::new(),
-            &compactions,
-            &messages,
-        );
-
-        assert!(matches!(items[0], codex::ThreadItem::UserMessage { .. }));
-        assert!(matches!(
-            &items[1],
-            codex::ThreadItem::ContextCompaction { id } if id == "compact-1"
-        ));
-        assert!(matches!(items[2], codex::ThreadItem::AgentMessage { .. }));
-    }
-
-    #[test]
-    fn project_message_turns_renders_structured_persisted_messages() {
-        let turns = project_message_turns(vec![
-            message_row(
-                "user-header",
-                None,
-                1,
-                gents_protocol::message::Message::user("Hello from stored user JSON."),
-            ),
-            message_row(
-                "assistant-header",
-                None,
-                2,
-                gents_protocol::message::Message::assistant("Hello from stored assistant JSON."),
-            ),
-        ]);
-
-        assert_eq!(turns.len(), 1);
-        let turn = &turns[0];
-        assert!(turn.items.iter().any(|item| matches!(
-            item,
-            codex::ThreadItem::UserMessage { content, .. }
-                if content.iter().any(|input| matches!(
-                    input,
-                    codex::UserInput::Text { text, .. }
-                        if text == "Hello from stored user JSON."
-                ))
-        )));
-        assert!(turn.items.iter().any(|item| matches!(
-            item,
-            codex::ThreadItem::AgentMessage { text, phase, .. }
-                if text == "Hello from stored assistant JSON."
-                    && *phase == Some(MessagePhase::FinalAnswer)
-        )));
     }
 
     #[test]

@@ -1,9 +1,3 @@
-//! Drive the generated eval outcome projection (`Proofs/Eval.lean`, emitted by
-//! `Proofs/Conformance/Eval.lean` as `eval_outcome_cases`) through the
-//! production classifier. The vocabularies and the projection table live in
-//! Lean; `gents::eval::outcome` is the only Rust owner, so this module compares
-//! against it instead of restating the mapping.
-
 use std::collections::BTreeSet;
 
 use gents::eval::{classify, subject_causable, EvidenceClass, OutcomeKind, ProviderReason};
@@ -25,8 +19,6 @@ pub(super) fn rust_eval_outcome_vocabulary_and_projection_match_lean() {
     );
 
     let cases = lean_eval_outcome_cases();
-    // The count pins the table's size; the set pins its contents, so a duplicated
-    // row can no longer stand in for a missing pair.
     assert_eq!(
         cases.len(),
         OutcomeKind::ALL.len() * (ProviderReason::ALL.len() + 1),

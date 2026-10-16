@@ -1,8 +1,6 @@
 use std::future::Future;
 use std::sync::{Arc, OnceLock};
 
-/// Codex routing state belongs to one main inference execution. The shared
-/// backend client must never retain it; server tokens are opaque and ephemeral.
 pub struct RoutingAffinity {
     session: String,
     token: OnceLock<String>,

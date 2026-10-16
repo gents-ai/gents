@@ -12,9 +12,6 @@ use crate::tool_call_lifecycle::FailureClass;
 use crate::toolset::{CommandPolicyDenial, DenialReason};
 use crate::truncation::{truncate, TruncationLimits, TruncationMode};
 
-// Pure command-policy vocabulary moved to gents-loop (G-1): the loop's tool
-// dispatch classifies a denial into `ToolOutcome` with no process spawn, and
-// this crate's own enforcement (below) needs the same enum, not a copy.
 pub use gents_loop::tool_policy::{
     normalize_workspace_lifecycle_state, CommandExecutionMode, CommandNetworkMode,
     WorkspaceAuthority,
@@ -43,7 +40,6 @@ const CORE_ENV_VARS: &[&str] = &[
     "DEVELOPER_DIR",
 ];
 
-/// Meet the baked command policy with the request's workspace authority.
 pub(crate) fn apply_workspace_authority(
     policy: &CommandExecutionPolicy,
     authority: WorkspaceAuthority,
@@ -64,9 +60,6 @@ pub(crate) fn apply_workspace_authority(
 }
 
 pub(crate) fn effective_command_policy(policy: &CommandExecutionPolicy) -> CommandExecutionPolicy {
-    // This mode has already survived selection/operator ceilings. Its separate
-    // contextual grant is checked asynchronously at every launch, never converted
-    // from a source-write selection and never silently downgraded when missing.
     if policy.mode == CommandExecutionMode::ArtifactWrite {
         return policy.clone();
     }
@@ -86,8 +79,6 @@ pub struct CommandExecutionPolicy {
     pub network_mode: CommandNetworkMode,
     read_only_allowlist: Vec<String>,
     deny_all_argv: bool,
-    /// When set, WorkspaceWrite (and Unrestricted) still deny Git-metadata
-    /// writes. v1 `git_worktree_diff` linked worktrees share refs with trunk.
     deny_git_metadata_writes: bool,
 }
 
@@ -163,8 +154,6 @@ impl CommandExecutionPolicy {
         self
     }
 
-    /// v1 `git_worktree_diff`: workers may edit files under WorkspaceWrite
-    /// but must not mutate shared Git metadata (`git add`/`commit`/…).
     pub fn with_git_worktree_diff(self) -> Self {
         self.with_deny_git_metadata_writes(true)
     }
@@ -173,9 +162,6 @@ impl CommandExecutionPolicy {
         self.deny_git_metadata_writes
     }
 
-    /// User-facing disclosure derived beside the execution-time network
-    /// validator. It describes the enforcement boundary, not observed sandbox
-    /// availability; launch still fails closed when enforcement is unavailable.
     pub fn network_enforcement_disclosure(&self) -> &'static str {
         if self.network_mode != CommandNetworkMode::Disabled {
             return "network is not disabled by this agent policy";
@@ -194,15 +180,12 @@ impl CommandExecutionPolicy {
     }
 }
 
-/// Bash-independent spawn constraints projected from the effective policy meet.
-/// Ignores `bash.tool` and the read-only command allowlist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandConstraints {
     pub allowed_argv_prefixes: Vec<Vec<String>>,
     pub forbidden_argv_prefixes: Vec<Vec<String>>,
     pub network_mode: CommandNetworkMode,
     pub execution_mode: CommandExecutionMode,
-    /// Seatbelt vs none. Never `ReadOnly`. Hashed into the LSP config digest.
     pub sandbox: CommandExecutionMode,
     pub deny_all_argv: bool,
     pub deny_git_metadata_writes: bool,
@@ -222,7 +205,6 @@ impl CommandConstraints {
     }
 }
 
-/// Platform default for an omitted `lsp_config.network_mode`.
 pub fn default_lsp_network_mode() -> CommandNetworkMode {
     if workspace_write_sandbox_enforced() {
         CommandNetworkMode::Disabled
@@ -231,8 +213,6 @@ pub fn default_lsp_network_mode() -> CommandNetworkMode {
     }
 }
 
-/// Seatbelt vs none for an LSP spawn. `ReadOnly` (bash Off) uses the platform
-/// default: macOS `workspace_write`, elsewhere `Unrestricted`.
 pub fn lsp_sandbox_for_effective(execution_mode: CommandExecutionMode) -> CommandExecutionMode {
     match execution_mode {
         CommandExecutionMode::WorkspaceWrite => CommandExecutionMode::WorkspaceWrite,
@@ -248,7 +228,10 @@ pub fn lsp_sandbox_for_effective(execution_mode: CommandExecutionMode) -> Comman
     }
 }
 
-/// PATH lookup + canonicalize. Never admits a path under `tool_root`.
+/// PATH lookup + canonicalize; admission is side-effect free (rustup shim
+/// resolution reads on-disk selection state rather than shelling out, so the
+/// spawned/digested path is the actual host toolchain binary, never a shim
+/// that exits before initialize under an LSP workspace tempdir).
 pub(crate) fn admit_host_executable(
     command: &str,
     tool_root: &Path,
@@ -275,11 +258,6 @@ pub(crate) fn admit_host_executable(
     resolve_rustup_proxy_path(trimmed, canonical, &root).ok_or(DenialReason::WorkspaceExecutable)
 }
 
-/// rustup shims in `~/.cargo/bin` canonicalize to the `rustup` binary. An LSP
-/// workspace tempdir has no rust-toolchain.toml, so that shim exits before
-/// initialize. Resolve rust-analyzer from rustup's on-disk selection state so
-/// admission remains side-effect free and the spawned/digested path is the
-/// actual host toolchain binary, never a PATH lookup or helper subprocess.
 fn resolve_rustup_proxy_path(
     requested: &str,
     admitted: PathBuf,
@@ -387,7 +365,6 @@ fn which_on_host_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-/// Shared PATH / prefix / network / sandbox preparation for bash and LSP.
 pub(crate) async fn prepare_managed_command(
     root: &Path,
     command: &str,
@@ -484,9 +461,6 @@ pub(crate) async fn run_command(
             ..
         } => {
             if request_deadline.is_some_and(|deadline| chrono::Utc::now() >= deadline) {
-                // Never model-facing: the dispatcher's envelope shares this
-                // deadline and its `biased` select resolves the call to
-                // `ToolOutcome::TimedOut` before this text can thread.
                 return Ok("command was stopped at the request deadline".to_string());
             }
             (
@@ -498,8 +472,6 @@ pub(crate) async fn run_command(
                 stderr_truncated,
             )
         }
-        // Never model-facing: the envelope's (fired) cancellation branch is
-        // polled first and resolves the call to `ToolOutcome::Cancelled`.
         ManagedExecOutcome::Cancelled { .. } => return Ok("command was cancelled".to_string()),
         ManagedExecOutcome::SpawnFailed { error } => {
             return Err(anyhow!("spawning managed command failed: {error}").into());
@@ -895,23 +867,16 @@ pub(crate) fn select_sandbox_for_policy(
     }
 }
 
-/// Whether this host can confine commands to a workspace's writable roots.
-/// When false, `workspace_write` bash and ReadWrite workspace bindings fail
-/// closed; there is no unconfined fallback.
 #[cfg(target_os = "macos")]
 pub fn workspace_write_sandbox_enforced() -> bool {
     Path::new(SANDBOX_EXEC).exists()
 }
 
-/// Whether this host can confine commands to a workspace's writable roots.
-/// This build has no WorkspaceWrite sandbox for this OS, so writable
-/// workspaces fail closed.
 #[cfg(not(target_os = "macos"))]
 pub fn workspace_write_sandbox_enforced() -> bool {
     false
 }
 
-/// Sole environment and filesystem-sandbox preparation for bash and managed tools.
 fn artifact_policy_denial(message: impl Into<String>) -> ToolError {
     ToolError::reported_failure(FailureClass::PolicyDenied, message.into())
 }
@@ -951,10 +916,6 @@ async fn prepare_command_launch(
             "CARGO_TARGET_DIR".into(),
             grant.root().join("target").to_string_lossy().into_owned(),
         );
-        // Host Cargo configuration can select a compiler-cache daemon whose
-        // socket and cache are outside this grant. Cargo's explicit empty
-        // environment overrides disable both configured compiler wrappers.
-        // This does not expand the filesystem or network sandbox.
         for name in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"] {
             environment.insert(name.into(), String::new());
         }
@@ -1502,14 +1463,10 @@ struct CommandMetadata {
     stderr_capture_incomplete: bool,
     stdout_truncation: StreamTruncationMetadata,
     stderr_truncation: StreamTruncationMetadata,
-    /// Model-facing next step; present only when the foreground timeout
-    /// stopped the command.
     #[serde(skip_serializing_if = "Option::is_none")]
     hint: Option<String>,
 }
 
-/// The foreground timeout keeps the output captured so far; point the model
-/// at the background owner instead of a blind retry.
 fn foreground_timeout_hint(duration_ms: u64) -> String {
     format!(
         "timed out after {:.1}s; stdout and stderr below were captured before it was stopped. For long-running work use {} and poll its output.",
@@ -1528,7 +1485,6 @@ struct StreamTruncationMetadata {
 
 pub(crate) struct TruncatedStream {
     pub(crate) content: String,
-    /// Byte range of the raw channel shown verbatim in `content`.
     pub(crate) shown: std::ops::Range<usize>,
     metadata: StreamTruncationMetadata,
 }
@@ -1551,9 +1507,6 @@ pub(crate) fn truncate_stream(text: &str, max_bytes: usize) -> TruncatedStream {
     }
 }
 
-/// A stopped command's latest output shows where it stopped, so its channel
-/// keeps the byte-exact tail selected by the terminal diagnostic owner. The
-/// notice uses the shared truncation vocabulary that compaction recognizes.
 pub(crate) fn stopped_stream(text: &str, max_bytes: usize) -> TruncatedStream {
     let tail = crate::tool_call_lifecycle::delivery::terminal_output_tail(text, max_bytes);
     let start = text.len() - tail.len();

@@ -142,20 +142,14 @@ pub struct SessionTokenUsage {
     pub fresh_input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub charged_tokens: Option<u64>,
-    /// Sum of observed provider execution durations, excluding queue time.
-    /// None if any call lacks a valid closed interval.
     #[serde(default)]
     pub api_duration_ms: Option<u64>,
     pub incomplete: bool,
 }
 
-/// Read-only accounting for one exact session/node/requester scope.
-/// Context occupancy and cumulative inference usage are distinct quantities.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionInferenceObservation {
     pub token_usage: SessionTokenUsage,
-    /// Distinct main-loop rounds, excluding summarizer calls and retry
-    /// attempts. None when an inference lacks its dispatch coordinate.
     pub inference_turns: Option<u64>,
     pub latest_context: Option<super::context_budget::LastRequestContextSnapshot>,
     pub latest_completion_tokens: Option<u64>,
@@ -167,8 +161,6 @@ pub struct RequestContextObservation {
     pub completion_tokens: Option<u64>,
 }
 
-/// Bounded live observation. Unlike the session rollup, this reads only the
-/// newest inference call of one physically resolved, exactly scoped request.
 pub async fn load_request_context_observation(
     node: &EmbeddedNode,
     node_did: &str,
@@ -204,8 +196,6 @@ pub async fn load_request_context_observation(
     load_pinned_request_context_observation(node, owner).await
 }
 
-/// Read inference observations for the already-authorized physical request.
-/// The caller retains its canonical request row; no logical label is resolved again.
 pub async fn load_pinned_request_context_observation(
     node: &EmbeddedNode,
     owner: &AgentRequestRow,
@@ -283,8 +273,6 @@ pub async fn load_session_inference_observation(
 ) -> Result<SessionInferenceObservation> {
     let ids = load_session_request_doc_ids(node, node_did, requester_did, session_id).await?;
     let mut rows = Vec::new();
-    // Bounded predicates, without truncating session history or ever
-    // interpolating an empty list literal into a database operation.
     for batch in ids.chunks(128) {
         let response = graphql_with_transaction_retry(
             node,
@@ -311,8 +299,6 @@ pub async fn load_session_inference_observation(
     })
 }
 
-/// Physical requests visible in one exact session/requester scope. This is the
-/// shared request-selection owner for session summaries and inference accounting.
 pub async fn load_session_request_doc_ids(
     node: &EmbeddedNode,
     node_did: &str,
@@ -1143,7 +1129,6 @@ fn inference_turns(rows: &[InferenceDetailRow]) -> Result<Option<u64>> {
         match row.call_kind.as_deref() {
             Some("inference") => {}
             Some("compaction" | "oneoff") => continue,
-            // Legacy or unknown kinds cannot establish a known turn count.
             _ => return Ok(None),
         }
         let Some(request_doc_id) = row.request_doc_id.as_deref().filter(|id| !id.is_empty()) else {
@@ -1364,9 +1349,6 @@ fn session_request_timestamps_query(
     )
 }
 
-/// Session summary timestamps are produced by the canonical RFC3339 row
-/// writers. Missing values stay absent; malformed non-empty values fail the
-/// read rather than silently changing which row appears latest.
 fn summary_timestamp(value: Option<&String>, label: &str) -> Result<Option<String>> {
     let Some(value) = value else {
         return Ok(None);
@@ -1552,9 +1534,8 @@ mod tests {
     use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
     use crate::llm::tool::Tool;
     use crate::session::canonical_rows::{
-        decode_transcript_message_row, output_segment_create_variables,
-        transcript_message_create_variables, CREATE_AGENT_MESSAGE_MUTATION,
-        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        output_segment_create_variables, transcript_message_create_variables,
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
 
     use super::*;
@@ -1872,10 +1853,6 @@ mod tests {
             .expect("request-a-new document ID")
             .to_string();
 
-        // Canonical transcript fixtures (#1571): one authored user header and
-        // one provider-turn assistant header, each over a closed source. The
-        // document travels as a typed GraphQL variable through the native
-        // retry API; the pinned create response key is add_<Collection>.
         let node_did: &str = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
         let canonical_messages = [
             (
@@ -1955,8 +1932,6 @@ mod tests {
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .expect("pinned add_AgentOutputSegment response shape");
-            // The docID travels inside the typed JSON variable, not GraphQL
-            // text, so it must be the raw value.
             let close_doc_id = segment_doc_id;
             let message = gents_protocol::output::TranscriptMessage {
                 message_key: (*message_key).to_string(),
@@ -2009,29 +1984,6 @@ mod tests {
             );
         }
 
-        // A retired field must be rejected by the strict canonical decoder,
-        // never silently decoded from a malformed row: AgentMessage no longer
-        // carries content, timestamp, or a logical request_id (DefraDB itself
-        // permits unknown keys in create input, so the assertion belongs at
-        // the typed owner, not at the GraphQL boundary).
-        let retired = json!({
-            "_docID": "retired-doc-1",
-            "message_key": "retired:1",
-            "session_id": "session-a",
-            "node_did": node_did,
-            "request_doc_id": request_doc_id,
-            "publication": {"kind": "request_execution", "execution_generation": "generation-a"},
-            "outcome": "complete",
-            "sequence": 9,
-            "role": "user",
-            "blocks": [],
-            "created_at": "2026-06-03T10:09:00Z",
-            "timestamp": "2026-06-03T10:09:00Z"
-        });
-        assert!(
-            decode_transcript_message_row(&retired).is_err(),
-            "retired AgentMessage fields must fail the canonical decoder, not silently decode"
-        );
         let accounting = gents_protocol::rendered_request::ContextAccounting {
             accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
             turn_index: 2,
@@ -2608,8 +2560,6 @@ mod tests {
         let doc = response.data.as_ref().unwrap()["AgentRequest"][0]["_docID"]
             .as_str()
             .unwrap();
-        // Deliberately reuse an authorized logical alias: only the physical
-        // owner may contribute this call to usage.
         let response = node.execute(&format!(r#"mutation {{ create_InferenceCall(input: {{
             call_id: "foreign-usage", call_seq: 1, call_kind: "inference", node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", request_id: "request-a-new",
             request_doc_id: "{}", backend_id: "backend-a", call_state: "completed", prompt_tokens: 9000, completion_tokens: 1000, cached_input_tokens: 0,

@@ -42,7 +42,6 @@ enum Action {
     Refuse,
 }
 
-/// `StoreEncryptionUpgrade.next`, including interrupted directory renames.
 fn next(phase: Phase, source: bool, stage: bool, retired: bool) -> Action {
     match (phase, source, stage, retired) {
         (Phase::Copying, true, _, false) => Action::Copy,
@@ -144,13 +143,12 @@ fn save(data: &Path, journal: &Journal, initial: bool) -> Result<()> {
     sync_parent(&path)
 }
 
-/// Read this before allocating a key or consulting the enclosing metadata.
+/// Read this before allocating a key.
 pub fn pending_record(data: &Path) -> Result<Option<StoreEncryption>> {
     Ok(load(data)?.map(|journal| journal.record))
 }
 
-/// Filesystem entries owned by a recorded conversion, for the existing
-/// explicit archive/delete owner. Unrecorded siblings are never adopted.
+/// Unrecorded siblings are never adopted.
 pub fn retirement_entries(data: &Path) -> Result<Vec<PathBuf>> {
     if load(data)?.is_none() {
         return Ok(Vec::new());
@@ -199,8 +197,7 @@ pub fn begin(data: &Path, record: &StoreEncryption) -> Result<()> {
     )
 }
 
-/// The path whose existence prevents regeneration of a lost encryption key.
-/// The original plaintext MANIFEST must not prevent first key creation.
+/// The original plaintext MANIFEST must not prevent first key creation here.
 pub fn key_store_path(data: &Path) -> Result<PathBuf> {
     let journal = load(data)?.context("store upgrade has no durable intent")?;
     Ok(match action(data, journal.phase)? {
@@ -226,15 +223,13 @@ fn action(data: &Path, phase: Phase) -> Result<Action> {
 }
 
 /// Encrypt every raw KV entry through DefraDB's encryption owner, then verify
-/// the entire decrypted destination before publishing it. The completed intent
-/// remains until the enclosing metadata durably records `record` and calls
-/// `finish`. No node, query executor, schema writer or P2P service starts here.
+/// the entire decrypted destination before publishing it. No node, query
+/// executor, schema writer or P2P service starts here.
 pub async fn encrypt_existing(data: &Path, record: &StoreEncryption, key: &StoreKey) -> Result<()> {
     encrypt_existing_with_progress(data, record, key, &mut |_| {}).await
 }
 
-/// Reports only completed copy/verification batches through the caller's
-/// startup progress owner; waiting on I/O never manufactures progress.
+/// Reports only completed copy/verification batches to the startup progress owner.
 pub async fn encrypt_existing_with_progress(
     data: &Path,
     record: &StoreEncryption,
@@ -283,19 +278,14 @@ pub async fn encrypt_existing_with_progress(
     }
 }
 
-/// Call only after the enclosing metadata durably records the pending key and
-/// the native node/schema owners successfully reopen the encrypted store.
 /// Raw KV equality proves byte preservation, not valid DefraDB plaintext:
 /// an unrecorded store encrypted by another key must retain its original until
-/// those owners accept the destination's contents.
-/// Removing the old representation is deferred until that commit; interruption
-/// during removal is retryable without touching the installed encrypted store.
+/// the native node/schema owners accept the destination's contents. Removing
+/// the old representation is deferred until that commit.
 pub fn finish(data: &Path) -> Result<()> {
     let Some(journal) = load(data)? else {
         return Ok(());
     };
-    // The caller supplies both external premises through this function's
-    // contract; this owner can observe only the durable conversion phase.
     ensure!(
         may_finish(journal.phase, true, true),
         "store upgrade is not installed"
@@ -319,8 +309,6 @@ async fn copy_and_verify(
     key: &StoreKey,
     progress: &mut (dyn FnMut(&'static str) + Send),
 ) -> Result<()> {
-    // A retry starts from the original source snapshot, including deletions
-    // an earlier binary might have committed between interrupted upgrades.
     let source =
         RegolithStore::open_with_options(data, crate::storage_backend::regolith_options())?;
     let result = async {
@@ -478,9 +466,6 @@ async fn values_equal(
     Ok(equal)
 }
 
-/// Regolith 0.1.7 owns MANIFEST (and its compaction temporary), LOCK, sst/
-/// and wal/. Other entries belong to host owners, including command recovery
-/// journals, and must survive replacement without following symlinks.
 fn copy_sidecars(source: &Path, destination: &Path) -> Result<()> {
     for entry in fs::read_dir(source)? {
         let entry = entry?;

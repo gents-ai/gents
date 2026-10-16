@@ -1,7 +1,3 @@
-/* The dock: the right column, holding the surfaces a person opened as
-   tabs, one of them showing; the session's menu adds another. The dock owns the
-   card and its header, so a surface draws only its body. It draws
-   nothing while closed or while none of its tabs apply on this route. */
 import { useLayoutEffect, useRef, useState } from "react";
 import { Columns2, MessageSquare, X } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
@@ -14,7 +10,6 @@ import { dockScopeOf, useDockFor } from "./workspace";
 import { useFleet } from "../hooks/useFleet";
 import { useDragReorder } from "../hooks/useDragReorder";
 
-/* the window bar's tabs and the dock's card are drawn apart, and joined by these */
 const DOCK_PANEL_ID = "dock-panel";
 const dockTabId = (surface: string) => `dock-tab-${surface}`;
 
@@ -29,15 +24,11 @@ export function Dock({
 }) {
   const { dock, closeDock } = useDockFor(dockScopeOf(routeName, sessionId));
   const view = dockView(dock, routeName, useSurfaces(), placement);
-  /* the card keeps showing its last surface while the divider settles shut
-     after the store has closed the dock; the shell unmounts it at 0 */
   const last = useRef(view.active);
   if (view.shown && view.active) last.current = view.active;
   const active = view.shown ? view.active : placement === "dock" ? last.current : null;
   if (!active) return null;
   const Body = active.render;
-  /* on a phone the dock is one surface in a bottom sheet: its title and a
-     close, nothing to reorder or hide; the session's menu switches surfaces */
   if (placement === "sheet") {
     const Icon = active.icon;
     return (
@@ -51,7 +42,6 @@ export function Dock({
           <span className="min-w-0 flex-1 truncate text-sm font-medium">
             {active.title}
           </span>
-          {/* the sheet is modal, so the session's menu is out of reach: the same menu here switches surfaces */}
           <PanelMenu routeName={routeName} />
           <Button
             variant="ghost"
@@ -83,9 +73,6 @@ export function Dock({
   );
 }
 
-/* The dock's tab strip, drawn by the window bar over the dock's column: the
-   opened surfaces as tabs, a session tab while the pane is hidden, and the
-   hide button. It shares the workspace store with the dock below it. */
 export function DockTabs({
   sessionId,
   routeName,
@@ -93,8 +80,6 @@ export function DockTabs({
 }: {
   sessionId: string | null;
   routeName: string;
-  /* set while the pane is hidden behind a full dock: a tab with the session's
-     title at the strip's start brings it back */
   paneTab?: { onShow: () => void; progress: number } | null;
 }) {
   const { dock, activate, moveTab, closeTab, closeDock } = useDockFor(
@@ -104,8 +89,6 @@ export function DockTabs({
     useFleet((s) => (sessionId ? s.bySessionId[sessionId]?.title : null)) ?? "Session";
   const tabEls = useRef(new Map<string, HTMLButtonElement>());
   const view = dockView(dock, routeName, useSurfaces(), "dock");
-  /* reordering, the way a browser does it: a press shows the tab, and the
-     order is written when it is let go */
   const reorder = useDragReorder<HTMLDivElement>({
     axis: "x",
     keys: view.tabs.map((tab) => tab.id),
@@ -118,13 +101,9 @@ export function DockTabs({
   const onPress = (e: React.PointerEvent<HTMLElement>, id: string, index: number) => {
     reorder.handle(index).onPointerDown(e);
     if (e.button !== 0) return;
-    /* the drag withholds the press's focus, so the tab takes it here */
     tabEls.current.get(id)?.focus({ preventScroll: true });
     activate(id);
   };
-  /* the tablist's keys (APG tabs, automatic activation): arrows, Home and
-     End move between tabs and show the one reached; Delete closes the tab,
-     and focus follows to the one showing next */
   const refocus = useRef(false);
   useLayoutEffect(() => {
     if (!refocus.current) return;
@@ -155,8 +134,6 @@ export function DockTabs({
     activate(next.id);
     tabEls.current.get(next.id)?.focus();
   };
-  /* the session tab's natural width, so it can grow into place from nothing
-     and the tabs beside it slide over rather than jump */
   const sessionTab = useRef<HTMLButtonElement>(null);
   const [tabWidth, setTabWidth] = useState(0);
   useLayoutEffect(() => {
@@ -169,10 +146,6 @@ export function DockTabs({
       className="flex h-full min-w-0 flex-1 items-center px-2"
     >
       {paneTab && (
-        /* grows and fades in with the divider's last stretch, so it is in
-           place by the time the pane is gone; its width and the space after
-           it are the tab's own, measured, scaled by how far along the stretch
-           the divider is, so at the stretch's start it takes no room at all */
         <div
           className="flex shrink-0 overflow-hidden"
           style={{
@@ -197,8 +170,6 @@ export function DockTabs({
       <div
         role="tablist"
         aria-label="Panels"
-        /* like a browser's tab strip: tabs share the width, up to a comfortable
-             size each, shrink as more open, and scroll once they hit their floor */
         ref={reorder.container}
         className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
@@ -244,16 +215,11 @@ export function DockTabs({
                 </span>
                 <TabBadge surface={s} sessionId={sessionId} />
               </button>
-              {/* the close is always there for the tab showing, on hover for
-                  the rest. A tablist holds only tabs, so it is the pointer's
-                  way to close; the keyboard's is Delete on the tab. */}
               <button
                 type="button"
                 aria-hidden
                 tabIndex={-1}
                 title={`Close ${s.title}`}
-                /* the tab captures the pointer for dragging, which would
-                     redirect this button's click to the tab */
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => closeTab(s.id)}
                 className={cn(
@@ -268,7 +234,6 @@ export function DockTabs({
           );
         })}
       </div>
-      {/* hides the dock and keeps its tabs; the session menu shows it again */}
       <Hint label="Hide panel">
         <Button
           variant="ghost"
@@ -284,8 +249,6 @@ export function DockTabs({
   );
 }
 
-/* a tab's count from the fleet; a number, so the tab re-renders only when
-   it changes */
 function TabBadge({
   surface,
   sessionId,

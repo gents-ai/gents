@@ -1,39 +1,7 @@
-//! List-sync fence for #1123/#1125.
-//!
-//! `gents_migration::CLIENT_AUTHORED_COLLECTIONS` names every collection a
-//! paired client fresh-applies its bundled SDL into and then syncs documents
-//! through — `fresh_apply_parity.rs` (in `gents-migration`) guards those
-//! collections against chained schema evolution. That guard is only as good
-//! as its coverage: this test asserts the list matches the client push
-//! surface gents itself configures, so extending that surface without
-//! extending the guard fails a build instead of silently shipping an
-//! un-guarded collection.
-//!
-//! The load-bearing property is "a client store fresh-applies this
-//! collection's SDL and replicates documents in it", not strict client
-//! authorship: some rows in these collections are minted server-side
-//! (`NodeReadiness` is written by the runtime owner, and the
-//! `NodeDirectoryEntry` rule filters on the home DID), but they
-//! replicate through client stores all the same, and a client store can
-//! only merge a collection whose fresh-applied version identity matches the
-//! server's.
-//!
-//! The surface this fence derives is two parts:
-//! - The `machine` `ScopeTemplate`'s `PerCollection` rules
-//!   (`crates/gents/src/agent/p2p_reconcile/templates.rs`): the collections
-//!   replicated per-pairing to client devices. Collections the template
-//!   lists but leaves unfiltered (`Agent`, `Tools`, ...) are
-//!   deliberately shared config pushed identically to every peer, not part
-//!   of the client-authored plane, and excluded.
-//! - Enrollment protocol collections use their own exact owner-scoped direct
-//!   push path and are cataloged separately from broad client replication.
-//! - Authenticated-enrollment documents exchanged by exact owner-scoped
-//!   direct push. They deliberately stay outside the broad machine template,
-//!   but require the same collection-version parity at both stores.
-//!
-//! Bring-your-own data-plane pairings are fenced separately by
-//! `templates::admit_app_collections`: any overlap with the full protocol
-//! catalog rejects that app layer before it reaches this migration surface.
+//! Client stores can merge only collections whose fresh-applied schema identity
+//! matches the server. Keep the derived client push set aligned with the
+//! migration guard, including owner-scoped enrollment pushes and excluding
+//! shared config collections.
 
 use std::collections::BTreeSet;
 

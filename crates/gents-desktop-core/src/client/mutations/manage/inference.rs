@@ -98,8 +98,6 @@ mod tests {
         let mut other = backend.clone();
         other.node_did = "did:test:other".into();
         upsert_inference_backend(&node, &other).await?;
-        // The retained profile below names this model; publication admits a
-        // profile only against its backend's observed catalog.
         let catalog: BackendModelCatalog = serde_json::from_value(json!({
             "node_did": null,
             "observed_at": "2026-09-10T00:00:00Z",

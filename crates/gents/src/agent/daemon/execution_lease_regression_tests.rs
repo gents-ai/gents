@@ -717,9 +717,6 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     for _ in 0..8 {
         let request = create_routed_request(&node, &agent_config, &node_did).await;
-        // This test counts request inference attempts exactly. A supplied title
-        // prevents optional background title generation from sharing the same
-        // deliberately nonterminal provider and inflating calls/captures.
         let session = gents_protocol::session::AgentSession {
             session_id: request.session_id.clone(),
             node_did: node_did.clone(),
@@ -759,8 +756,6 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
             tokio::pin!(process);
             let mut observed_renewal = false;
             {
-                // Recovery and observation remain independently pollable while
-                // the owning process waits for provider input.
                 let maintenance = async {
                     let mut initial_owner: Option<(String, chrono::DateTime<chrono::FixedOffset>)> =
                         None;
@@ -847,9 +842,6 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                         .contains("durable partial incident text"));
                 }
                 gents_protocol::output::TerminalOutput::NoMessage => {
-                    // Closed unaccepted bytes may remain diagnostics without
-                    // becoming a published answer. Verify that distinction
-                    // through the shared projection, not a raw payload search.
                     use gents_protocol::output::live::{project_live, LiveObservation, LiveTarget, LiveView, OwnerLiveness};
                     use gents_protocol::output::reconstruction::ObservedSegment;
                     use crate::session::canonical_rows::{AGENT_OUTPUT_SEGMENT_FIELDS, decode_output_segment_row};

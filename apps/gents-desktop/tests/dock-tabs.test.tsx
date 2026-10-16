@@ -92,7 +92,6 @@ describe("dragging a dock tab", () => {
   const rect = Element.prototype.getBoundingClientRect;
   beforeAll(() => {
     Element.prototype.setPointerCapture = () => {};
-    /* jsdom lays nothing out: each tab takes a 100px slot by its place */
     Element.prototype.getBoundingClientRect = function (this: Element) {
       const strip = this.parentElement
         ? [...this.parentElement.querySelectorAll("[data-reorder-key]")]
@@ -141,10 +140,7 @@ describe("dragging a dock tab", () => {
     const held = tab("Started sessions");
     fireEvent.pointerDown(held, { button: 0, pointerId: 1, clientX: 150 });
     fireEvent.pointerMove(held, { pointerId: 1, clientX: 250 });
-    /* the first tab closes from the keyboard while the pointer is still
-       down; the strip closes up under the pointer */
     act(() => workspace.closeTab(SCOPE, "trace"));
-    /* over the second slot of what is left, which Diagnostics now holds */
     fireEvent.pointerMove(held, { pointerId: 1, clientX: 150 });
     fireEvent.pointerUp(held, { pointerId: 1, clientX: 150 });
     expect(workspace.dock(SCOPE).tabs).toEqual(["diagnostics", "workers", "notes"]);

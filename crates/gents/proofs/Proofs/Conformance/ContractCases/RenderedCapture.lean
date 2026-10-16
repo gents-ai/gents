@@ -177,8 +177,6 @@ theorem renderedCaptureStorageCases_no_fail_open :
       (fun row => !row.sendPermitted || row.decodedRequest == some row.request) = true := by
   rfl
 
-/-! ## Building the rows -/
-
 private def contractNodeDid : Nat := 7
 private def contractSessionId : Nat := 11
 private def contractRequestId : Nat := 23

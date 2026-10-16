@@ -3,29 +3,21 @@ import Proofs.Triggers.Durable
 namespace EventDelivery.Durable
 open Triggers.Durable
 
-/-- DefraDB supplies a durable first-arrival sequence per receiving node and
-collection, including replicated arrivals. Each physical document appears once;
-this is receiving-node commit order, not global creation or wall-clock order. -/
+/-- This is receiving-node commit order, not global creation or wall-clock order. -/
 structure Arrival where
   position : Nat
   identity : Identity
   deriving DecidableEq, Repr
 
-/-- The native snapshot certifies a complete prefix through `head`, including
-arrivals whose payload is hidden by ACP. The native ACP/read owner classifies
-those as excluded; subscription notifications cannot certify completeness.
-Source documents must remain readable until delivery. -/
+/-- Source documents must remain readable until delivery. -/
 structure Journal where
   head : Nat
   entries : List Arrival
   deriving DecidableEq, Repr
 
-/-- Registration seeds the native head even for disabled consumers. Progress is
-node-local, never replicated, and retained across restart and re-enable. Every
-per-document consumer of a source owns one cursor: a task trigger, whose receipt
-is its `TriggerFire`, and a callback binding, whose receipt is its
-`CallbackInvocation` for the arrival. Each seeds in the configuration
-transaction that registers it, not when an engine first observes the source. -/
+/-- Progress is node-local, never replicated, and retained across restart and
+re-enable. A cursor seeds in the configuration transaction that registers its
+consumer, not when an engine first observes the source. -/
 structure Cursor where
   seeded : Bool := false
   after : Nat := 0
@@ -44,10 +36,8 @@ inductive Disposition where
   | receiptRequired
   deriving DecidableEq, Repr
 
-/-- Eligibility combines filtering and owner visibility under one configuration
-and ACP snapshot. `busy` is the legacy serial engine's observed decision, not a
-caller-selected bypass. Latest-only admits each arrival; superseding execution
-cannot substitute for an authoritative receipt. -/
+/-- `busy` is the legacy serial engine's observed decision, not a caller-selected
+bypass. Superseding execution cannot substitute for an authoritative receipt. -/
 def disposition (mode : ConcurrencyMode) (busy eligible : Bool) : Disposition :=
   if !eligible then .excluded
   else match mode with
@@ -60,7 +50,6 @@ def certified (committed : State) (mode : ConcurrencyMode) (busy : Bool)
   | .excluded | .legacySerialBusy => true
   | .receiptRequired => admitted committed entry.identity
 
-/-- Every intervening arrival is checked: a later receipt cannot certify a gap. -/
 def prefixCertified (cursor : Cursor) (committed : State) (journal : Journal)
     (through : Nat) (mode : ConcurrencyMode) (busy : Bool)
     (eligible : Arrival → Bool) : Bool :=
@@ -83,10 +72,6 @@ def acknowledge (cursor : Cursor) (committed : State) (journal : Journal)
     { cursor with after := through }
   else cursor
 
-/-- Per-document consumers sharing the cursor owner. A task trigger admits under
-its concurrency mode. A callback binding admits like a parallel trigger: every
-eligible arrival needs its receipt. It is enabled only while both its binding
-and its callback are. -/
 inductive Consumer where
   | trigger (mode : ConcurrencyMode) (enabled : Bool)
   | callbackBinding (bindingEnabled callbackEnabled : Bool)
@@ -100,15 +85,12 @@ def Consumer.mode : Consumer → ConcurrencyMode
   | .trigger mode _ => mode
   | .callbackBinding _ _ => .parallel
 
-/-- A disabled consumer excludes nothing: only receipts certify its arrivals,
-so unadmitted ones stay pending until it is enabled again. -/
 def Consumer.eligible (consumer : Consumer) (eligible : Arrival → Bool) : Arrival → Bool :=
   if consumer.enabled then eligible else fun _ => true
 
 /-- A callback binding's receipt is its event `CallbackInvocation`, keyed by
-binding, collection and document. `version` is the source version the
-invocation froze; the receipt omits it, so an edit after admission is never a
-second arrival. -/
+binding, collection and document; an edit after admission is never a second
+arrival. -/
 structure CallbackAdmission where
   identity : Identity
   version : String
@@ -121,8 +103,6 @@ def CallbackAdmission.fire (admission : CallbackAdmission) : Fire :=
 def admitCallback (state : State) (admission : CallbackAdmission) : State :=
   admit state admission.fire
 
-/-- Only history at/before the initial registration seed is exempt. Legacy
-serial's deliberate busy exclusion is outside the reliable-delivery guarantee. -/
 def DeliveredPrefix (initialSeed : Nat) (cursor : Cursor) (committed : State)
     (journal : Journal) (eligible : Arrival → Bool) : Prop :=
   ∀ entry ∈ journal.entries, initialSeed < entry.position →
@@ -253,8 +233,6 @@ theorem legacy_serial_busy_is_explicit_exclusion :
 theorem latest_only_still_requires_receipt (busy : Bool) :
     disposition .latestOnly busy true = .receiptRequired := rfl
 
-/-- Both crash boundaries recover to the exact same single-admission state.
-The admission owner owns the atomic receipt/request pair. -/
 theorem replay_after_admission_crash (committed : State) (fire : Fire) (didCommit : Bool) :
     admitTransaction (admitTransaction committed fire didCommit) fire true =
       admitTransaction committed fire true := by
@@ -273,15 +251,12 @@ theorem admit_callback_receipts (state : State) (admission : CallbackAdmission) 
   · simp_all [CallbackAdmission.fire, admitted]
   · simp [h, CallbackAdmission.fire, Triggers.outcomeSourceAllowed, admitted]
 
-/-- Recovery after an edit finds the same receipt instead of admitting again. -/
 theorem edited_source_not_readmitted (state : State) (admission : CallbackAdmission)
     (version : String) :
     admitCallback (admitCallback state admission) { admission with version } =
       admitCallback state admission :=
   admit_duplicate _ _ (admit_callback_receipts state admission)
 
-/-- Disabling either the binding or its callback holds every unadmitted
-arrival: checkpoints then pass only over receipts. -/
 theorem disabled_consumer_checkpoints_only_receipts (consumer : Consumer)
     (hdisabled : consumer.enabled = false) (initialSeed : Nat) (cursor : Cursor)
     (committed : State) (journal : Journal) (through : Nat) (busy : Bool)

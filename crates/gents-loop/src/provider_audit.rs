@@ -37,7 +37,6 @@ pub async fn recv_one(receiver: &ProviderAuditReceiver) -> Option<ProviderAuditO
     .await
 }
 
-/// Provider observations that Rig's streaming vocabulary cannot carry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClaudeAuditEvent {
     BlockStart { index: u32, kind: ClaudeBlockKind },
@@ -55,7 +54,6 @@ pub enum ClaudeBlockKind {
     RedactedThinking,
 }
 
-/// The attempt identity is captured when the provider stream is constructed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderAuditObservation {
     pub capture_scope: CaptureScope,
@@ -64,8 +62,6 @@ pub struct ProviderAuditObservation {
     pub event: ClaudeAuditEvent,
 }
 
-/// Native auxiliary output events use the capture's existing provider-source
-/// coordinates; no later event may attach to a different attempt.
 #[derive(Clone, Debug)]
 pub struct AuxiliaryOutputObservation {
     pub capture_scope: CaptureScope,

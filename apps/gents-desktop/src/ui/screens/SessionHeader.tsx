@@ -1,5 +1,3 @@
-/* The open session's header: where its work came from, its title, renamed
-   in place, and its goal. */
 import { useState } from "react";
 import { ChevronDown, Pencil, Play, Target, Timer, Zap } from "lucide-react";
 import type { GoalView } from "@source-inc/gents-desktop-client";
@@ -20,8 +18,6 @@ import { ArrowUpRight } from "lucide-react";
 import { duration } from "./tool-summary";
 import { toastFailure } from "@/lib/failure";
 
-/* where this session came from: the session whose call started it, from
-   provenance. It is an ordinary session; the link opens it as one. */
 export function ParentLine({ work }: { work: ParentWork }) {
   if (!work.parent) return null;
   return (
@@ -38,9 +34,6 @@ export function ParentLine({ work }: { work: ParentWork }) {
   );
 }
 
-/* A session nobody started by typing says who did. The list can filter on
-   it and could not show it; the session itself said nothing at all, so a
-   run that arrived overnight looked like one a person had asked for. */
 export function StartedByAutomation({
   summary,
   nodeDid,
@@ -59,8 +52,6 @@ export function StartedByAutomation({
   const name = summary.taskName ?? "a task";
   return (
     <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
-      {/* a task is a Play and a schedule is a Timer, the way the config
-          names them: the mark is the thing it points at */}
       {summary.triggerKind === "schedule" ? (
         <Timer className="size-3 shrink-0" />
       ) : summary.triggerKind === "event" ? (
@@ -69,9 +60,6 @@ export function StartedByAutomation({
         <Play className="size-3 shrink-0" />
       )}
       Started by
-      {/* the task is a thing that exists and can be changed, so the name
-         goes to it: reading why a run happened and deciding it should not
-         happen again are the same errand */}
       {nodeDid && summary.taskId ? (
         <a
           href={href({
@@ -92,8 +80,6 @@ export function StartedByAutomation({
   );
 }
 
-/* the session's title, renamed in place the way the desktop's chat
-   header does: a pencil beside it, Enter or blur saves, Escape reverts */
 export function Title({
   title,
   onRename,
@@ -159,22 +145,12 @@ export function Title({
   );
 }
 
-/* The goal a session runs under, pinned above the composer rather than
-   left at the top of the transcript to scroll away. A goal outlives every
-   turn under it, so it belongs where the next turn is typed: what it is
-   for, how long it has been at it, and — opened — what it has spent and
-   what is holding it up.
-
-   Every field here is the runtime's. What it cannot show is a plan: the
-   projection carries an objective and a budget, not the steps toward it,
-   so "how far along" is answered with elapsed time, continuations and
-   spend rather than a checklist. */
 export function Goal({ goal }: { goal: GoalView }) {
   const [open, setOpen] = useState(false);
   const used = goal.tokenBudget ? goal.tokensUsed / goal.tokenBudget : null;
   const blocked = goal.status === "blocked";
-  /* Wrap-up also completes when a budget-limited goal stops, so only the
-     runtime's status says whether the goal was met. */
+  /* A budget-limited stop also completes wrap-up; runtime status records
+     whether the goal was met. */
   const state =
     goal.status === "complete"
       ? "met"
@@ -232,7 +208,6 @@ export function Goal({ goal }: { goal: GoalView }) {
         </CollapsibleTrigger>
       </div>
       <CollapsibleContent className="px-3 pt-2">
-        {/* what it has spent, which is the budget a goal runs against */}
         {used !== null && (
           <div className="grid gap-1">
             <div className="flex items-baseline justify-between text-xs text-muted-foreground">

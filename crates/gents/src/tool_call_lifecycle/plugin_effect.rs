@@ -41,8 +41,6 @@ impl ToolCallLifecycle {
             .transpose()
     }
 
-    /// The installed-plugin dispatcher is the only caller. The parent must be
-    /// a running, directly admitted tool; descendants cannot mint more effects.
     pub(crate) async fn admit_plugin_effect(
         &self,
         ordinal: u32,

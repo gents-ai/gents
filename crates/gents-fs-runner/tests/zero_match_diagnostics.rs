@@ -1,8 +1,3 @@
-//! Fences for #729: a zero-match search tells the model where it was
-//! anchored — the top-level entries of the searched directory — so a wrong
-//! path anchor is corrected on the first attempt instead of retried through
-//! repeated full walks.
-
 use gents_fs_runner::execute_request_with_base;
 use gents_fs_runner::protocol::{GlobArgs, GrepArgs, NativeFsRunnerRequest};
 use serde_json::Value;
@@ -75,9 +70,6 @@ fn zero_match_grep_reports_search_dir_entries() {
 
 #[test]
 fn budget_exhausted_zero_match_omits_search_dir_entries() {
-    // Review finding: a budget-stopped zero-match is NOT an anchoring
-    // problem; emitting the "your path anchor is wrong" hint sends the model
-    // off to re-anchor a correct pattern.
     let root = unique_root("budget-no-hint");
     for index in 0..30 {
         std::fs::write(root.join(format!("file-{index:02}.txt")), "x").unwrap();

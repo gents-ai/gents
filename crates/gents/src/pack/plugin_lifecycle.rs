@@ -7,15 +7,9 @@ use anyhow::{Context, Result};
 use super::{HomePackInstall, InstalledPackPlugin, PackIdentity, PackKind};
 use crate::plugin::{install, store};
 
-/// The caller supplies operator consent and the existing node notification owner.
-/// Model-facing callers must pass false; a statement in model input is never consent.
-///
-/// Local plugin records, bindings, and the home install pin publish together
-/// under one nonblocking store lock. Once that synchronous local publication
-/// succeeds it is the installed state; a node notification failure or caller
-/// cancellation must not roll it back, because the durable transaction may
-/// have committed without returning its receipt. The notification owner can
-/// reconcile its auxiliary node record on a later operation.
+/// Model-facing callers must pass false; model input never constitutes operator consent.
+/// Local publication is durable before node notification: a failed or cancelled notification
+/// cannot roll back a transaction that may already have committed without returning a receipt.
 #[allow(clippy::too_many_arguments)]
 pub async fn install<F: Future<Output = Result<()>>>(
     home: &Path,
@@ -100,9 +94,8 @@ pub struct LocalPackRemoval {
     pub cache_error: Option<String>,
 }
 
-/// Removes a home pin and its owned plugin records under the same exclusion
-/// used by publication. Cache cleanup runs under that exclusion so a concurrent
-/// reinstall cannot publish into the cache while it is being retired.
+/// Cache cleanup stays under the publication exclusion so a concurrent reinstall cannot
+/// republish into the cache while it is being retired.
 pub fn remove_local<P>(
     home: &Path,
     coordinate: &str,

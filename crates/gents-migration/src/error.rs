@@ -1,12 +1,7 @@
-//! Typed errors for the migration engine.
-
 use thiserror::Error;
 
-/// Errors produced by [`crate::ensure_migrations`].
 #[derive(Debug, Error)]
 pub enum Error {
-    /// Schema registration (`add_schema`) failed for a reason other than
-    /// "already exists".
     #[error("baseline schema registration failed for {collection}: {source}")]
     BaselineRegister {
         collection: String,
@@ -14,13 +9,9 @@ pub enum Error {
         source: anyhow::Error,
     },
 
-    /// A managed collection is absent after baseline registration should have
-    /// created it.
     #[error("managed collection {collection} missing after baseline registration")]
     CollectionMissing { collection: String },
 
-    /// No version in the collection's DAG matches a known pin (database
-    /// predates the migration baseline or was produced by foreign patches).
     #[error(
         "unknown lineage for collection {collection}: versions [{versions}] do not match the migration baseline; export/import required (no legacy support)"
     )]
@@ -29,9 +20,6 @@ pub enum Error {
         versions: String,
     },
 
-    /// The lineage is recognized but the DAG contains a version or edge that
-    /// is neither a pin nor an expected placeholder. Even inactive foreign
-    /// versions change head/priority reconstruction and subsequent CIDs.
     #[error(
         "foreign version in collection {collection}: version_id={version_id} is not in the known pin set"
     )]
@@ -40,7 +28,6 @@ pub enum Error {
         version_id: String,
     },
 
-    /// Active version does not match the pinned baseline/step expectation.
     #[error(
         "version pin mismatch for collection {collection}: expected {expected}, active is {actual}"
     )]
@@ -50,7 +37,6 @@ pub enum Error {
         actual: String,
     },
 
-    /// Active descriptor failed the collection expectation predicate.
     #[error("state verification failed for collection {collection} at step {step}: {detail}")]
     StateVerification {
         collection: String,
@@ -58,7 +44,6 @@ pub enum Error {
         detail: String,
     },
 
-    /// A step could not be applied.
     #[error("migration step {step} failed on collection {collection}: {source}")]
     StepFailed {
         step: String,
@@ -67,27 +52,20 @@ pub enum Error {
         source: anyhow::Error,
     },
 
-    /// Eager materialization failed for one or more managed collections.
     #[error("eager materialization failed: {detail}")]
     MaterializeFailed { detail: String },
 
-    /// Node introspection failed (get_collection / list versions).
     #[error("defra node error: {0}")]
     Node(#[from] anyhow::Error),
 }
 
-/// Result alias for this crate.
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
-    /// The store does not descend from this build's baseline: an older build
-    /// wrote it, and this release has no migration from it.
     pub fn is_unknown_lineage(&self) -> bool {
         matches!(self, Self::UnknownLineage { .. })
     }
 
-    /// The store descends from this baseline but another build (for example
-    /// a newer one) added versions this build does not know.
     pub fn is_foreign_version(&self) -> bool {
         matches!(self, Self::ForeignVersion { .. })
     }

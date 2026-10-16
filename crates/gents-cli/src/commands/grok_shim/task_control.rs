@@ -66,8 +66,8 @@ pub(super) async fn kill(
             caused.scope.requester_did,
         ));
     }
-    // Resolve before mutating. A task ID shared by two visible owners must
-    // not cancel whichever one happens to appear first.
+    // Resolve before mutating: a task ID shared by two visible owners must
+    // not cancel whichever appears first.
     let mut matches = Vec::new();
     for candidate in candidates {
         let response = gents::graphql::graphql_with_transaction_retry(&node, &format!(r#"{{ AgentToolCall(filter: {{session_id: {{_eq: "{}"}}, tool_call_id: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
@@ -111,8 +111,6 @@ pub(super) async fn kill(
     } else {
         "not_found"
     };
-    // Both stock kill sources are operator cancellation. Neither creates a
-    // new request or a synthetic completion; runtime persistence drives UI.
     let _source = request.source;
     Ok(json!({"taskId":request.task_id, "outcome":outcome}))
 }

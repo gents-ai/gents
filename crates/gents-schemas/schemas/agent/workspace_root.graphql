@@ -1,8 +1,3 @@
-# Operator-defined node-local configured workspace roots clients may pick as
-# the file tool root. Local-only config (NOT @branchable): the directory
-# projection publishes the enabled paths via allowed_roots; the raw rows
-# never replicate. TRUST BASIS - operator-only local writes, like every
-# config collection.
 type WorkspaceRoot {
     root_path: String @index(unique: true)
     display_name: String

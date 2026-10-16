@@ -22,7 +22,6 @@ const BRIDGE_ERROR_CODES = new Set<BridgeErrorCode>([
 export class BridgeInvokeError extends Error {
   readonly code: BridgeErrorCode;
   readonly retryable: boolean;
-  /** The unreachable endpoint, for `code === "endpointUnreachable"`. */
   readonly endpoint: string | null;
 
   constructor(payload: BridgeErrorPayload) {

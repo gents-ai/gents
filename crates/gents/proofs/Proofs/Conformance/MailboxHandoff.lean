@@ -17,8 +17,6 @@ private def staleRegistry : RegistryState :=
   let closed := terminalizePrefix old openQuestion.identity.ownerPrefix
   applyCreate closed (question "ask:2" "new-doc" 1 "session" "new?")
 
-/-- Inputs vary one handoff boundary at a time. Expectations below are
-evaluated through the mailbox, tool, lease, and reply owners. -/
 private def cases : List Case :=
   [ { name := "fresh-linked" }
   , { name := "request-mismatch", question := { openQuestion with requestId := 2 } }
@@ -64,8 +62,6 @@ private def ownerOutcome (test : Case) : OwnerOutcome :=
       row.envelope == receipt.question && row.isOpen
   ⟨handoff.isSome, openReceipt, replyPost.isSome⟩
 
-/-- Regression expectations are checked against the composed executable
-owners, not copied into the JSON exporter or a Rust-side policy machine. -/
 theorem generated_case_outcomes_follow_owners :
     cases.map (fun test => (test.name, ownerOutcome test)) =
       [ ("fresh-linked", ⟨true, true, true⟩)

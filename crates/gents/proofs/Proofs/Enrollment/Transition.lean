@@ -90,7 +90,7 @@ inductive Transition : State → State → Prop where
   | merge {pre post : State} (revision : AuthorizationRevision) :
       post = mergeAuthorization pre revision → Transition pre post
 
-/-- The serial operator path; restore/replication merge is deliberately separate. -/
+/-- Restore/replication merge is deliberately separate from the serial path. -/
 def SerialTransition (pre post : State) : Prop :=
   (∃ o, post = observeOffer pre o) ∨
   (∃ o, post = confirmAdminPin pre o) ∨

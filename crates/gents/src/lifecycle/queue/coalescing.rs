@@ -84,7 +84,6 @@ pub async fn reconcile_coalesced_pending_request(
     Ok(Some(survivor))
 }
 
-/// Supersede one still-pending request of `node_did` by the survivor.
 pub(crate) fn supersede_pending_mutation(
     doc_id: &str,
     node_did: &str,

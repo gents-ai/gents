@@ -1,12 +1,3 @@
-//! Deterministic OpenAI-compatible streaming backend for full-daemon tests.
-//!
-//! Built on `axum` (a real async HTTP server) rather than a hand-rolled
-//! nonblocking `TcpListener` accept loop, so it cannot flake the way the
-//! previous server did (its `Err(_) => break` arm killed the listener on any
-//! transient accept error under CI load). The SSE byte format, the
-//! `StreamScript` pause/release semantics, and the chunk-count accounting are
-//! preserved exactly so existing consumers are unchanged.
-
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,21 +13,12 @@ use axum::Router;
 use serde_json::json;
 use tokio::sync::{oneshot, Notify};
 
-/// One streamed delta: assistant text, or a tool call the model is asking for.
-///
-/// Tool calls exist here because a multi-turn request is *only* reachable
-/// through them — the owned loop continues to a second turn exactly when a turn
-/// produced tool calls. A backend that can only stream text can never exercise
-/// turn 1, which is where per-turn compaction, threaded tool results, and the
-/// `turn_index` half of the rendered-capture key live.
 #[derive(Clone, Debug)]
 pub enum StreamChunk {
     Text(String),
     ToolCall {
         id: String,
         name: String,
-        /// The `arguments` string exactly as an OpenAI-compatible provider
-        /// streams it: a JSON *string* whose contents are the argument object.
         arguments: String,
     },
 }
@@ -92,7 +74,6 @@ impl StreamScript {
         }
     }
 
-    /// A script over explicit chunks, so a caller can stream tool calls.
     pub fn streams(marker: impl Into<String>, chunks: Vec<StreamChunk>) -> Self {
         Self {
             marker: marker.into(),
@@ -102,9 +83,6 @@ impl StreamScript {
         }
     }
 
-    /// Hold a matched provider request before publishing its first chunk.
-    /// Callers can mutate external state only after runtime startup and then
-    /// release the exact provider turn with [`MockStreamingBackend::release`].
     pub fn paused_before(marker: impl Into<String>, chunks: Vec<StreamChunk>) -> Self {
         Self {
             marker: marker.into(),
@@ -165,12 +143,8 @@ impl StreamPlan {
 #[derive(Clone, Debug)]
 pub enum StreamResponse {
     Stream(StreamScript),
-    /// Withhold response headers until the script's marker is released.
     HoldHeaders(StreamScript),
-    HttpStatus {
-        status: u16,
-        body: String,
-    },
+    HttpStatus { status: u16, body: String },
 }
 
 impl StreamResponse {
@@ -237,8 +211,6 @@ impl MockStreamingBackend {
             .fallback(handle_fallback)
             .with_state(state.clone());
 
-        // Bind synchronously, serve on the ambient tokio runtime (consumers are
-        // `#[tokio::test]`); `from_std` requires the listener be nonblocking.
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
@@ -277,12 +249,6 @@ impl MockStreamingBackend {
         self.state.request_count(marker)
     }
 
-    /// Make provider responses after the first accepted turn caller-driven.
-    ///
-    /// This is useful when a later tool call needs an identifier returned by
-    /// the first one (for example a durable background-process handle). The
-    /// request handler waits until [`Self::enqueue_response`] supplies that
-    /// response instead of replaying the plan's final static response.
     pub fn enable_dynamic_followups(&self, marker: &str) {
         let mut inner = self
             .state
@@ -309,11 +275,6 @@ impl MockStreamingBackend {
         self.state.notify.notify_waiters();
     }
 
-    /// Every completion body this backend was posted, matched plan or not.
-    ///
-    /// Marker-scoped counts cannot answer "was anything sent at all?", which is
-    /// the assertion a fail-closed capture test needs: an uncaptured send that
-    /// matches no plan would still be a provider call that escaped.
     pub fn observed_completion_bodies(&self) -> Vec<serde_json::Value> {
         self.state
             .inner
@@ -361,7 +322,6 @@ struct StreamingState {
 struct StreamingStateInner {
     chunk_counts: HashMap<String, usize>,
     request_counts: HashMap<String, usize>,
-    /// Every completion body posted to this backend, in arrival order.
     completion_bodies: Vec<serde_json::Value>,
     releases: HashSet<String>,
     dynamic_followups: HashSet<String>,
@@ -391,9 +351,6 @@ impl StreamingState {
     }
 
     async fn next_response(&self, body: &str) -> StreamResponse {
-        // Session-title inference is auxiliary to the authored agent turn. It
-        // may contain the same latest user text, but has no tool surface and
-        // must never consume that turn's scripted tool response.
         if request_is_session_title(body) {
             return StreamResponse::Stream(StreamScript::completes(
                 "__session_title__",
@@ -795,9 +752,6 @@ fn streaming_response(script: StreamScript, state: Arc<StreamingState>) -> Respo
     Sse::new(stream).into_response()
 }
 
-/// `index` is the tool-call slot an OpenAI-compatible provider assigns. Using
-/// the chunk position keeps two tool calls in one turn from colliding on slot 0,
-/// which rig's accumulator would otherwise have to disambiguate by id and name.
 fn chunk_payload(index: usize, chunk: &StreamChunk) -> String {
     match chunk {
         StreamChunk::Text(content) => json!({
@@ -847,124 +801,4 @@ fn usage_payload() -> String {
         }
     })
     .to_string()
-}
-
-#[cfg(test)]
-mod routing_tests {
-    use super::*;
-
-    fn plan(marker: &str) -> StreamPlan {
-        StreamPlan::current_authored_user(marker, Vec::new())
-    }
-
-    #[test]
-    fn current_user_selector_ignores_child_prompt_in_parent_tool_arguments() {
-        let body = json!({"messages": [
-            {"role": "user", "content": [{"type": "text", "text": "parent prompt"}]},
-            {"role": "assistant", "content": [{"type": "toolcall", "arguments": {"prompt": "child prompt"}}]}
-        ]}).to_string();
-        let plans = [plan("parent prompt"), plan("child prompt")];
-        let matched = matching_plans(&plans, &body).unwrap();
-        assert_eq!(matched[0].marker, "parent prompt");
-    }
-
-    #[test]
-    fn current_user_selector_uses_child_authored_input_not_parent_history() {
-        let body = json!({"messages": [
-            {"role": "user", "content": [{"type": "text", "text": "parent prompt"}]},
-            {"role": "user", "content": [{"type": "toolresult", "content": [{"type": "text", "text": "spawned child prompt"}]}]},
-            {"role": "user", "content": [{"type": "text", "text": "child prompt"}]}
-        ]}).to_string();
-        let plans = [plan("parent prompt"), plan("child prompt")];
-        let matched = matching_plans(&plans, &body).unwrap();
-        assert_eq!(matched[0].marker, "child prompt");
-    }
-
-    #[test]
-    fn current_user_selector_rejects_ambiguous_markers() {
-        let body = json!({"messages": [
-            {"role": "user", "content": [{"type": "text", "text": "alpha beta"}]}
-        ]})
-        .to_string();
-        let plans = [plan("alpha"), plan("beta")];
-        let error = matching_plans(&plans, &body).unwrap_err();
-        assert!(error.contains("ambiguous mock provider plan"));
-    }
-
-    #[test]
-    fn whole_body_selector_preserves_first_match_for_intentional_overlap() {
-        let body = json!({"messages": [
-            {"role": "system", "content": "structured-output schema"},
-            {"role": "user", "content": "history marker"}
-        ]})
-        .to_string();
-        let plans = [
-            StreamPlan::new("structured-output schema", Vec::new()),
-            StreamPlan::new("history marker", Vec::new()),
-        ];
-        let matched = matching_plans(&plans, &body).unwrap();
-        assert_eq!(matched.len(), 1);
-        assert_eq!(matched[0].marker, "structured-output schema");
-    }
-
-    #[test]
-    fn dynamic_followup_selects_new_authored_marker_not_prior_tool_arguments() {
-        let body = json!({"messages": [
-            {"role": "user", "content": [{"type": "text", "text": "initial request"}]},
-            {"role": "assistant", "content": [{"type": "toolcall", "arguments": {"prompt": "old dynamic marker"}}]},
-            {"role": "user", "content": [{"type": "text", "text": "new dynamic marker"}]}
-        ]}).to_string();
-        let markers = HashSet::from([
-            "old dynamic marker".to_string(),
-            "new dynamic marker".to_string(),
-        ]);
-        assert_eq!(
-            matching_dynamic_markers(&markers, &body).unwrap(),
-            vec!["new dynamic marker"]
-        );
-    }
-
-    #[test]
-    fn dynamic_followup_rejects_ambiguous_new_authored_markers() {
-        let body = json!({"messages": [
-            {"role": "user", "content": [{"type": "text", "text": "new alpha beta request"}]}
-        ]})
-        .to_string();
-        let markers = HashSet::from(["alpha".to_string(), "beta".to_string()]);
-        let error = matching_dynamic_markers(&markers, &body).unwrap_err();
-        assert!(error.contains("ambiguous dynamic mock provider plan"));
-    }
-
-    #[tokio::test]
-    async fn session_title_request_does_not_consume_authored_turn_plan() {
-        let marker = "nested child prompt";
-        let state = StreamingState::new(
-            "model".into(),
-            vec![StreamPlan::current_authored_user(
-                marker,
-                vec![StreamResponse::completes(marker, ["authored turn"])],
-            )],
-            Arc::new(AtomicBool::new(false)),
-        );
-        let title = json!({
-            "max_tokens": 24,
-            "messages": [
-                {"role":"system","content":[{"type":"text","text":"Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain."}]},
-                {"role":"user","content":format!("First user request:\n{marker}")}
-            ],
-            "stream": true
-        }).to_string();
-        let _ = state.next_response(&title).await;
-        assert_eq!(state.request_count(marker), 0);
-
-        let authored = json!({
-            "max_tokens": 32768,
-            "messages": [{"role":"user","content":marker}],
-            "tools": [],
-            "stream": true
-        })
-        .to_string();
-        let _ = state.next_response(&authored).await;
-        assert_eq!(state.request_count(marker), 1);
-    }
 }

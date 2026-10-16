@@ -12,7 +12,6 @@ const APP_ROOT = resolve(TESTS_ROOT, "..");
 const REPOSITORY_ROOT = resolve(APP_ROOT, "..", "..");
 const DEFAULT_RUNS = 5;
 const DEFAULT_PORT = 1427;
-/* every transcript row, drawn or kept as a box of its height */
 const TRANSCRIPT_ROWS = '[data-testid="transcript-panel"] [data-window-row]';
 const VIEWPORT = { width: 390, height: 844 };
 const TYPING_NEXT_PAINT_BUDGET_MS = 50;
@@ -231,9 +230,6 @@ async function runSample(browserInstance, sampleIndex) {
     }),
   );
 
-  /* Rows far from the view are drawn as boxes, so the oldest row is marked
-     at its wrapper, which a box keeps: a remount while the older page lands
-     would drop the mark. The page is counted by row wrappers too. */
   const rowsBeforeOlderPage = await page.locator(TRANSCRIPT_ROWS).count();
   await page.evaluate((selector) => {
     document.querySelector(selector)?.setAttribute("data-perf-retained", "");
@@ -589,7 +585,6 @@ async function domSnapshot(page) {
     transcriptTurnBlocks: document.querySelectorAll(
       '[data-testid="transcript-panel"] [data-slot="assistant-message"], [data-testid="transcript-panel"] [data-slot="user-message"], [data-testid="transcript-panel"] [data-slot="tool-steps"]',
     ).length,
-    /* loaded rows, drawn or kept as boxes of their height */
     transcriptRows: document.querySelectorAll(
       '[data-testid="transcript-panel"] [data-window-row]',
     ).length,
@@ -737,7 +732,6 @@ function evaluateStructuralAssertions(samples) {
       observedMax: Math.max(
         ...typing.map((scenario) => scenario.dom.transcriptTurnBlocks),
       ),
-      /* five pages loaded; far rows are boxes, so at most that many drawn */
       passed: typing.every(
         (scenario) =>
           scenario.loadedPages === samples[0].fixture.typingLoadedPages &&
@@ -944,7 +938,6 @@ function collectEnvironment(browserVersion) {
 }
 
 async function openMobileNavigation(page) {
-  /* the bar's own Back button leads back to the list */
   await page.getByTestId("window-bar").getByRole("button", { name: "Back" }).click();
   await page
     .locator('[data-testid="session-session-large"]')

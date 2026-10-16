@@ -25,7 +25,6 @@ type PendingUserTurn = Extract<
 >;
 type LiveAssistant = Extract<RenderedTimelineItem, { kind: "liveAssistant" }>;
 
-/** Render the bridge's canonical observation, never infer it from empty text. */
 function MessageAvailability({
   reconstruction,
 }: {

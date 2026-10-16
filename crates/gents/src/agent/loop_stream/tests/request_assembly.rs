@@ -1,4 +1,3 @@
-// Owned-loop request assembly, repair, compaction, and dispatch-boundary tests.
 fn generated_steering_prepared_prompt(
     case: &crate::lean_vocab_test::LeanQueuedSteeringTraceCase,
 ) -> Message {
@@ -233,11 +232,6 @@ async fn loop_entry_sanitizes_a_recovered_checkpoint_as_one_projection() {
     ));
 }
 
-/// Provider-request invariants: what every completion request the loop emits
-/// must satisfy, independent of the scenario that produced it. Mirrors the
-/// provider-side contract that `sanitize_history_for_provider` enforces for
-/// loaded history — the loop must satisfy it by construction for the messages
-/// it threads itself.
 fn assert_provider_request_invariants(turn: usize, history: &[Message]) {
     let mut pending_call_keys: Vec<String> = Vec::new();
     for message in history {
@@ -247,7 +241,6 @@ fn assert_provider_request_invariants(turn: usize, history: &[Message]) {
                     pending_call_keys.is_empty(),
                     "turn {turn}: assistant message before prior turn's tool calls were resolved"
                 );
-                // Ordering: no text or reasoning after a tool call.
                 let mut seen_tool_call = false;
                 for item in content.iter() {
                     match item {
@@ -304,11 +297,7 @@ fn assert_provider_request_invariants(turn: usize, history: &[Message]) {
 
 #[tokio::test]
 async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
-    // Conformance guard for the loop's own threading: across a multi-tool,
-    // multi-turn run, every request's history must pair calls with results and
-    // keep assistant content provider-ordered — by construction, no sanitizer.
     let model = ScriptedModel::new_turns(vec![
-        // Turn 1: text + reasoning + two tool calls in one assistant turn.
         vec![
             RawStreamingChoice::Message("let me check".to_string()),
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
@@ -323,9 +312,7 @@ async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
             )),
             RawStreamingChoice::FinalResponse(()),
         ],
-        // Turn 2: one more tool call.
         echo_tool_turn(),
-        // Turn 3: final text.
         vec![
             RawStreamingChoice::Message("done".to_string()),
             RawStreamingChoice::FinalResponse(()),
@@ -356,12 +343,6 @@ async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
 
 #[tokio::test]
 async fn dirty_caller_history_is_sanitized_at_loop_entry() {
-    // Chokepoint guarantee: EVERY owned-loop consumer (daemon, oneshot,
-    // compaction summarize, title, agent-target sessions) sends provider-valid
-    // history because the loop sanitizes the caller-provided history at entry
-    // — no call site can forget the sanitizer. Feed a dirty history (unpaired
-    // call, orphaned result, text-after-call ordering) and assert the request
-    // on the wire satisfies the provider invariants.
     let unpaired_call = crate::llm::message::ToolCall {
         id: "call-unpaired".to_string(),
         call_id: Some("call-unpaired".to_string()),
@@ -383,14 +364,12 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
         additional_params: None,
     };
     let dirty_history = vec![
-        // Orphaned result: its call was compacted away.
         Message::User {
             content: vec![UserContent::tool_result(
                 "call-gone".to_string(),
                 vec![crate::llm::message::ToolResultContent::text("orphaned")],
             )],
         },
-        // Misordered assistant turn (text AFTER calls) with one unpaired call.
         Message::Assistant {
             id: None,
             content: vec![
@@ -430,7 +409,6 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
     let histories = model.seen_histories().await;
     assert_eq!(histories.len(), 1);
     assert_provider_request_invariants(1, &histories[0]);
-    // The unpaired call is gone but the paired exchange survives.
     let kept_calls: Vec<String> = histories[0]
         .iter()
         .filter_map(|message| match message {
@@ -457,9 +435,6 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
 
 #[test]
 fn assembles_context_immediately_before_prompt() {
-    // Fences Lean `PromptAssembly.Template.assembleWithContext_tail`: when a
-    // per-request context message is present, the assembly ends with exactly
-    // [contextPreamble, prompt] — context immediately precedes the prompt.
     let context = Message::user("<context>\nseat: x\n</context>");
     let prompt = Message::user("hello");
 
@@ -471,10 +446,8 @@ fn assembles_context_immediately_before_prompt() {
     assert!(super::is_request_context_message(&with_context[0].message));
     assert_eq!(with_context[1].message, prompt);
     assert!(with_context.iter().all(|row| row.source.is_none()));
-    // Context is the immediately-preceding entry before the prompt.
     assert_eq!(&with_context[with_context.len() - 2].message, &context);
 
-    // Without a context message, the prompt is the sole (last) entry.
     let without = super::assemble_new_messages(None, TaggedMessage::unassociated(prompt.clone()));
     assert_eq!(without, vec![TaggedMessage::unassociated(prompt)]);
 }
@@ -499,23 +472,21 @@ fn tagged_provider_view_uses_emitted_source_index_for_equal_assistant_rows() {
     let first = tag(1);
     let second = tag(2);
     let identical = Message::assistant("same native bytes");
-    let projected = super::provider_view_tagged(
-        vec![
-            TaggedMessage {
-                message: identical.clone(),
-                source: Some(first.clone()),
-                physical_header: None,
-                block_indices: Vec::new(),
-            },
-            TaggedMessage::unassociated(Message::user("between")),
-            TaggedMessage {
-                message: identical,
-                source: Some(second.clone()),
-                physical_header: None,
-                block_indices: Vec::new(),
-            },
-        ],
-    )
+    let projected = super::provider_view_tagged(vec![
+        TaggedMessage {
+            message: identical.clone(),
+            source: Some(first.clone()),
+            physical_header: None,
+            block_indices: Vec::new(),
+        },
+        TaggedMessage::unassociated(Message::user("between")),
+        TaggedMessage {
+            message: identical,
+            source: Some(second.clone()),
+            physical_header: None,
+            block_indices: Vec::new(),
+        },
+    ])
     .expect("source-indexed projection");
     assert_eq!(projected[0].source.as_ref(), Some(&first));
     assert_eq!(projected[2].source.as_ref(), Some(&second));
@@ -535,8 +506,6 @@ fn is_request_context_message_only_matches_context_user_text() {
     )));
 }
 
-/// A salvageable corrupt-arguments payload must run the intended typed tool,
-/// persist object-shaped arguments, and re-enter the provider as an object.
 #[tokio::test]
 async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
     use crate::llm::tool::{Tool, ToolDefinition};
@@ -568,8 +537,6 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
 
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
-    // The wire parser could not parse the corrupt bytes, so rig carries them as
-    // a raw Value::String — exactly the shape persisted in the production store.
     let poison = serde_json::Value::String(crate::test_support::CORRUPT_TOOL_ARGS_589.to_string());
     let model = ScriptedModel::new_turns(vec![
         vec![
@@ -605,24 +572,18 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
     .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
 
-    // (a) The intended call ran: salvage recovered `tool_name: list_hosts`.
     assert_eq!(
         collected.tool_results,
         vec!["described:list_hosts".to_string()],
         "the salvageable #589 payload must run the intended call, not waste a turn"
     );
 
-    // (b) The next provider request carries object-shaped arguments after the
-    // owned StreamProcessor has published the accepted turn.
     let histories = model.seen_histories().await;
     assert_eq!(histories.len(), 2);
     assert_all_history_tool_args_object_shaped(&histories[1]);
     drop(node);
 }
 
-/// Valid JSON that is not an object must fail
-/// `argumentInvalid` with the model notified (never run), and neither the
-/// durable history nor the next provider request may carry the non-object.
 #[tokio::test]
 async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
     use crate::llm::tool::{Tool, ToolDefinition};
@@ -693,8 +654,6 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
         collected.error
     );
 
-    // The started call terminalized failed/argumentInvalid — never a live
-    // completed call carrying poison (#589's persist gate).
     let resp = node
         .execute("query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }")
         .await;
@@ -715,15 +674,11 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
         "a non-object-args call must terminalize failed/argumentInvalid, got: {rows:?}"
     );
 
-    // The next provider request carries object-shaped args — the [] never
-    // re-egresses.
     let histories = model.seen_histories().await;
     assert_eq!(histories.len(), 2);
     assert_all_history_tool_args_object_shaped(&histories[1]);
 }
 
-/// Every tool call inside a (native) history must carry object-shaped
-/// arguments — the provider-render precondition (#590).
 fn assert_all_history_tool_args_object_shaped(history: &[Message]) {
     for message in history {
         if let Message::Assistant { content, .. } = message {
@@ -740,14 +695,10 @@ fn assert_all_history_tool_args_object_shaped(history: &[Message]) {
     }
 }
 
-/// The repair pass must sanitize loaded history as well as run-threaded
-/// messages.
 #[tokio::test(start_paused = true)]
 async fn repair_sanitizes_poisoned_tool_args_in_loaded_history() {
     let poison = format!("bad{}value", '\u{0007}');
 
-    // The poison lives ONLY in the loaded conversation history — a prior turn's
-    // persisted tool call. The current run produces nothing dirty.
     let poisoned_call = crate::llm::message::ToolCall {
         id: "call-historic".to_string(),
         call_id: Some("call-historic".to_string()),
@@ -776,7 +727,6 @@ async fn repair_sanitizes_poisoned_tool_args_in_loaded_history() {
         "the fixture must actually carry poisoned history"
     );
 
-    // Two identical parse-400s: resample once, then repair.
     let model = ScriptedModel::new_calls(vec![
         ScriptedCall::FailStream(parse_400_error("same")),
         ScriptedCall::FailStream(parse_400_error("same")),
@@ -822,16 +772,6 @@ async fn repair_sanitizes_poisoned_tool_args_in_loaded_history() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Generated PromptAssembly contract consumers.
-//
-// These live in the crate rather than in `tests/conformance/prompt_assembly.rs`
-// because they drive `pub(crate)` production entry points: `assemble_new_messages`
-// and `repair_provider_input`. The sanitize family, whose entry point is public,
-// is fenced from the integration test.
-// ---------------------------------------------------------------------------
-
-/// Text of a single-item user text message, for slot classification.
 fn sole_user_text(message: &Message) -> String {
     match message {
         Message::User { content } => match content.as_slice() {
@@ -842,7 +782,6 @@ fn sole_user_text(message: &Message) -> String {
     }
 }
 
-/// Name the `PromptAssembly.Slot` a message occupies.
 fn classify_slot(message: &Message, is_last: bool, conversation_index: &mut usize) -> String {
     if super::is_request_context_message(message) {
         return "contextPreamble".to_string();
@@ -868,16 +807,6 @@ fn classify_slot(message: &Message, is_last: bool, conversation_index: &mut usiz
     slot
 }
 
-/// Fences the fixed layer order of the assembled request against Lean
-/// `PromptAssembly.assemble`, whose layer-order theorems pin the task prompt
-/// last and deliberately omit runtime-only workspace context.
-///
-/// The summary/conversation layers come from the production
-/// `LayeredPromptBuilder::build`, and the tail from the production
-/// `assemble_new_messages` with no runtime context. The skill-reminder prepend is *mirrored* from
-/// `agent/daemon/request.rs` rather than driven, because it happens inline in
-/// that function's async request flow; the reminders themselves are built by the
-/// production `LayeredPromptBuilder::system_reminder`.
 #[tokio::test]
 async fn generated_layer_cases_pin_the_assembled_request_order() {
     use crate::lean_vocab_test::lean_prompt_assembly_layer_cases;
@@ -920,7 +849,6 @@ async fn generated_layer_cases_pin_the_assembled_request_order() {
             TaggedMessage::unassociated(Message::user("prompt")),
         ));
 
-        // The preamble is a field on the completion request, not a message.
         assert!(
             !builder.preamble().is_empty(),
             "the preamble slot must be carried by the system-prompt field"
@@ -944,12 +872,8 @@ async fn generated_layer_cases_pin_the_assembled_request_order() {
     }
 }
 
-/// Concrete tool-call arguments denoting each abstract `PromptAssembly.ToolArgs`
-/// shape the contract emits.
 fn repair_vector(name: &str) -> serde_json::Value {
     match name {
-        // A `raw` payload is one whose string leaves still carry literal
-        // newlines — exactly what the leaf sanitizer rewrites.
         "object:raw" => serde_json::json!({"k": "line\nbreak"}),
         "object:empty" => serde_json::json!({}),
         "object:sanitized" => serde_json::json!({"k": "no break"}),
@@ -962,9 +886,6 @@ fn repair_vector(name: &str) -> serde_json::Value {
     }
 }
 
-/// Project repaired arguments back onto the abstract shape, mirroring the
-/// `Payload` abstraction in the contract: `empty` is `{}`, `raw` still carries a
-/// literal newline in some string leaf, `sanitized` does not.
 fn repair_shape(value: &serde_json::Value) -> String {
     let serde_json::Value::Object(map) = value else {
         panic!("repair must always yield an object, got {value:?}");
@@ -989,8 +910,6 @@ fn has_raw_leaf(value: &serde_json::Value) -> bool {
 }
 
 fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
-    // `repair_provider_input` re-sanitizes after rewriting arguments, so the
-    // call must be paired or the whole turn is (correctly) dropped.
     let mut history = vec![
         Message::Assistant {
             id: None,
@@ -1020,8 +939,7 @@ fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
         .map(TaggedMessage::unassociated)
         .collect();
     let mut new_messages = Vec::new();
-    super::repair_provider_input(&mut history, &mut new_messages)
-    .unwrap();
+    super::repair_provider_input(&mut history, &mut new_messages).unwrap();
     let repaired = history
         .iter()
         .chain(new_messages.iter())
@@ -1069,8 +987,7 @@ fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
         .map(TaggedMessage::unassociated)
         .collect();
 
-    super::repair_provider_input(&mut history, &mut new_messages)
-    .unwrap();
+    super::repair_provider_input(&mut history, &mut new_messages).unwrap();
 
     assert!(matches!(
         history.as_slice(),
@@ -1101,9 +1018,6 @@ fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
     );
 }
 
-/// Fences Lean `PromptAssembly.repairArgs` — `repair_is_payload_only` (repair
-/// rewrites argument payloads only, never rows, roles, call ids, or ordering)
-/// and `repair_idempotent` (a second pass is a no-op).
 #[test]
 fn generated_repair_cases_drive_tool_argument_repair() {
     use crate::lean_vocab_test::lean_prompt_assembly_repair_cases;
@@ -1137,8 +1051,6 @@ fn generated_repair_cases_drive_tool_argument_repair() {
             case.name
         );
 
-        // `repair_is_payload_only`: object inputs keep their shape, and repair
-        // never rewrites anything outside the payload.
         if case.payload_only {
             assert!(
                 input.is_object(),
@@ -1161,9 +1073,6 @@ fn generated_authored_key(
     }
 }
 
-/// Drive one generated `SessionQueue.TurnInput` through the owned loop, with
-/// or without first-turn compaction, and bind its authored entries and
-/// pre-reduction provider order to the model.
 async fn drive_generated_turn_input(
     case: &crate::lean_vocab_test::LeanFoldTurnInputCase,
     first_turn_compaction: bool,
@@ -1171,9 +1080,17 @@ async fn drive_generated_turn_input(
     let (node, hook, writer, mut lifecycle, docs) = owned_test_hook_with_folded_case(case).await;
     let head = lifecycle.request().clone();
     assert_eq!(
-        lifecycle.folded_selection().iter().map(|row| row.request_doc_id.clone()).collect::<Vec<_>>(),
-        case.folded.iter().map(|row| docs[&row.request_id].clone()).collect::<Vec<_>>(),
-        "{}: native claim selects the modeled queue", case.name,
+        lifecycle
+            .folded_selection()
+            .iter()
+            .map(|row| row.request_doc_id.clone())
+            .collect::<Vec<_>>(),
+        case.folded
+            .iter()
+            .map(|row| docs[&row.request_id].clone())
+            .collect::<Vec<_>>(),
+        "{}: native claim selects the modeled queue",
+        case.name,
     );
     let model = ScriptedModel::new(vec![
         RawStreamingChoice::Message("answered".to_string()),
@@ -1200,7 +1117,11 @@ async fn drive_generated_turn_input(
         let compaction_node = node.clone();
         let request_doc_id = head.doc_id.clone();
         config.turn_compactor = Some(Arc::new(move |request| {
-            *saw.lock().unwrap() = request.messages.iter().map(|row| row.message.clone()).collect();
+            *saw.lock().unwrap() = request
+                .messages
+                .iter()
+                .map(|row| row.message.clone())
+                .collect();
             let published_before_reduction = published_before_reduction.clone();
             let node = compaction_node.clone();
             let request_doc_id = request_doc_id.clone();
@@ -1217,7 +1138,9 @@ async fn drive_generated_turn_input(
                     .unwrap()
                     .len();
                 Ok(TurnCompactionOutcome::Reduced {
-                    messages: vec![TaggedMessage::unassociated(Message::user("compacted prompt"))],
+                    messages: vec![TaggedMessage::unassociated(Message::user(
+                        "compacted prompt",
+                    ))],
                     reduction_key: "folded-first-turn".to_string(),
                 })
             })
@@ -1229,7 +1152,6 @@ async fn drive_generated_turn_input(
             Some(hook.clone()),
             TaggedMessage::unassociated(Message::user(case.head.clone())),
             if first_turn_compaction {
-                // A large session: the history alone exceeds the threshold.
                 vec![
                     TaggedMessage::unassociated(Message::user("x".repeat(8_000))),
                     TaggedMessage::unassociated(Message::assistant("noted")),
@@ -1248,21 +1170,42 @@ async fn drive_generated_turn_input(
     .await;
     assert_eq!(collected.error, None, "{}", case.name);
 
-    let expected_input = case.provider_input.iter().cloned().map(Message::user).collect::<Vec<_>>();
+    let expected_input = case
+        .provider_input
+        .iter()
+        .cloned()
+        .map(Message::user)
+        .collect::<Vec<_>>();
     let histories = model.seen_histories().await;
-    assert_eq!(histories.len(), 1, "{}: one inference answers every message", case.name);
+    assert_eq!(
+        histories.len(),
+        1,
+        "{}: one inference answers every message",
+        case.name
+    );
     if first_turn_compaction {
         let saw = compactor_saw.lock().unwrap().clone();
-        assert!(saw.ends_with(&expected_input), "{}: compaction input", case.name);
+        assert!(
+            saw.ends_with(&expected_input),
+            "{}: compaction input",
+            case.name
+        );
         assert_eq!(
             *published_before_reduction.lock().unwrap(),
             case.authored.len(),
             "{}: the admitted input is accepted before any reduction",
             case.name
         );
-        assert_eq!(histories[0].last(), Some(&Message::user("compacted prompt")));
+        assert_eq!(
+            histories[0].last(),
+            Some(&Message::user("compacted prompt"))
+        );
     } else {
-        assert!(histories[0].ends_with(&expected_input), "{}: provider order", case.name);
+        assert!(
+            histories[0].ends_with(&expected_input),
+            "{}: provider order",
+            case.name
+        );
     }
 
     let scoped_doc_id = crate::graphql::escape_graphql_string(&head.doc_id);
@@ -1274,7 +1217,12 @@ async fn drive_generated_turn_input(
     assert!(!observed.has_errors(), "{:?}", observed.errors);
     let observed = observed.data.unwrap();
     let headers = observed["AgentMessage"].as_array().unwrap();
-    assert_eq!(headers.len(), case.authored.len(), "{}: authored entries", case.name);
+    assert_eq!(
+        headers.len(),
+        case.authored.len(),
+        "{}: authored entries",
+        case.name
+    );
     for (header, authored) in headers.iter().zip(&case.authored) {
         assert_eq!(
             header["message_key"],
@@ -1293,7 +1241,12 @@ async fn drive_generated_turn_input(
         )
         .await
         .unwrap();
-        assert_eq!(native, Message::user(authored.content.clone()), "{}", case.name);
+        assert_eq!(
+            native,
+            Message::user(authored.content.clone()),
+            "{}",
+            case.name
+        );
     }
     for doc in docs.values() {
         let response = crate::graphql::graphql_with_transaction_retry(
@@ -1308,11 +1261,14 @@ async fn drive_generated_turn_input(
         .unwrap();
         let row = &response.data.unwrap()["AgentRequest"][0];
         assert_eq!(row["lifecycle_state"], "superseded", "{}", case.name);
-        assert_eq!(row["superseded_by_request_doc_id"], head.doc_id.as_str(), "{}", case.name);
+        assert_eq!(
+            row["superseded_by_request_doc_id"],
+            head.doc_id.as_str(),
+            "{}",
+            case.name
+        );
     }
 
-    // A redrive of the same request rebuilds its input: every authored
-    // input of the request leaves its provider history.
     let history = crate::session::load_sequenced_history_for_request(
         &node,
         lifecycle.request(),
@@ -1327,9 +1283,6 @@ async fn drive_generated_turn_input(
         .all(|row| !matches!(&row.message, Message::User { .. })));
 }
 
-/// Lean `SessionQueue.TurnInput.providerInput_eq_authored`: each generated
-/// turn publishes its authored entries before the first inference and sends
-/// them in that order as distinct user messages.
 #[tokio::test]
 async fn folded_prompts_publish_and_send_in_queue_order() {
     let cases = crate::lean_vocab_test::lean_fold_turn_input_cases();
@@ -1339,8 +1292,6 @@ async fn folded_prompts_publish_and_send_in_queue_order() {
     }
 }
 
-/// First-turn compaction reduces the provider projection but never the
-/// admitted input the turn publishes.
 #[tokio::test]
 async fn first_turn_compaction_keeps_folded_authored_input() {
     for case in crate::lean_vocab_test::lean_fold_turn_input_cases() {

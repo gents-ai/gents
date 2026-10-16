@@ -213,8 +213,6 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_thread_list_projects_canonical_gents_sessions() -> Result<()> {
-    // Codex is a view over canonical Gents sessions. The source of the request
-    // does not create a second class of persisted session.
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -325,7 +323,6 @@ async fn codex_shim_thread_list_projects_canonical_gents_sessions() -> Result<()
     let _: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
     send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
 
-    // An empty shim-created thread is visible from the process-local adapter.
     send_client_request(
         &mut ws,
         codex::ClientRequest::ThreadStart {

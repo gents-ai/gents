@@ -1,5 +1,3 @@
-//! Embedded-node implementation of the runtime pairing admin seam.
-
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -741,9 +739,6 @@ mod tests {
         .expect("valid canonical daemon fixture")
     }
 
-    /// Accept one `agent_new` call on the coordinator addressed to the
-    /// host node and materialize its Peer request through the
-    /// session-message owner. Returns the caused request id.
     async fn seed_peer_session_message(
         node: &Arc<EmbeddedNode>,
         lifecycle: &crate::lifecycle::RequestLifecycle,
@@ -986,10 +981,6 @@ mod tests {
             .begin_owned_execution(&writer)
             .await
             .expect("begin routed execution");
-        // The child result travels as a real canonical provider turn: the
-        // writer publishes the assistant header plus its payload stream, and
-        // terminalization selects the exact published header instead of a
-        // retired AgentResponse row.
         writer
             .start_provider_attempt(
                 &lifecycle.request().doc_id,
@@ -1111,14 +1102,9 @@ mod tests {
         node.shutdown().await;
     }
 
-    /// Catalog-wide fence for defradb's replication-filter validation: every
-    /// builtin template's filter fields must be `@immutable` in the target
-    /// collection's schema, or `add_replicator` rejects the install at
-    /// pairing time (the exact failure that shipped in #873's merge: the
-    /// machine template filters `NodeDirectoryEntry.source_did`, which the
-    /// amended schema left mutable). Runs against real runtime schemas so a
-    /// new template or filter rule cannot pass review while violating the
-    /// constraint defradb only enforces at install time.
+    /// Every builtin template's filter fields must be `@immutable` in the
+    /// target collection's schema, or `add_replicator` rejects the install at
+    /// pairing time.
     #[tokio::test]
     async fn embedded_all_builtin_template_filters_pass_replicator_validation() {
         let local_test = runtime_test_node().await;
@@ -1137,7 +1123,7 @@ mod tests {
 
         for template in super::super::templates::builtin_templates() {
             if template.collections.is_empty() {
-                continue; // app-collections: bring-your-own collection set.
+                continue;
             }
             let filters = match &template.scope {
                 Scope::ClientRoute => super::super::policy::resolve_template_filters(
@@ -1262,11 +1248,6 @@ mod tests {
         wait_for_active_peer(&receiver_admin).await;
 
         let collections = vec!["AgentRequest".to_string(), "AgentToolCall".to_string()];
-        // Receiver-side authorization mirrors the production embedded P2P setup;
-        // the data flow asserted below is still sender -> receiver. This is a
-        // Push topology: neither peer may subscribe to the whole collections,
-        // because collection subscriptions are an independent unfiltered
-        // gossip path that can race the filtered replicator replay.
         receiver_admin
             .add_replicator(&sender_addresses, &collections, &PairingFilters::default())
             .await
@@ -1289,10 +1270,8 @@ mod tests {
         );
 
         // Give any independently configured route a chance to replay before
-        // installing the sender filter. With the former whole-collection
-        // subscriptions this reliably admitted non-matching seeded rows.
+        // installing the sender filter.
         tokio::time::sleep(Duration::from_millis(250)).await;
-
         let mut filters = PairingFilters::new();
         filters.insert(
             "AgentRequest".to_string(),
@@ -1433,8 +1412,8 @@ mod tests {
         )
         .await;
 
-        // The receiving node's own agent configures the request; the
-        // Peer branch reads only the requester's ACP authority, not a flag.
+        // The receiving node's own agent configures the request; the Peer
+        // branch reads only the requester's ACP authority.
         let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
             "tools_id":"host-tools","node_did":host_did
         }))
@@ -1620,14 +1599,12 @@ mod tests {
         let receiver_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&receiver));
         let sender_addresses = wait_for_peer_info(&sender_admin).await;
         let receiver_addresses = wait_for_peer_info(&receiver_admin).await;
-
         let (match_request_id, match_session_id, match_header_doc_id, match_sequence) =
             seed_agent_target_return_artifacts(&sender, "match", Some("did:key:coord")).await;
         let (unrelated_request_id, _unrelated_session_id, _unrelated_header, _unrelated_sequence) =
             seed_agent_target_return_artifacts(&sender, "unrelated", None).await;
         let (foreign_request_id, _foreign_session_id, _foreign_header, _foreign_sequence) =
             seed_agent_target_return_artifacts(&sender, "foreign", Some("did:key:other")).await;
-
         let template =
             resolve_template(AGENT_TARGET_HOST_TEMPLATE).expect("agent-target-host template");
         let collections = template
@@ -1635,21 +1612,16 @@ mod tests {
             .iter()
             .map(|collection| (*collection).to_string())
             .collect::<Vec<_>>();
-
         sender_admin
             .connect(&receiver_addresses)
             .await
             .expect("connect sender to receiver");
         wait_for_active_peer(&sender_admin).await;
         wait_for_active_peer(&receiver_admin).await;
-        // `agent-target-host` is a Push template. Production deliberately leaves
-        // the subscription set empty so whole collections never gossip; the
-        // two per-peer replicators below are the only authorized channels.
         receiver_admin
             .add_replicator(&sender_addresses, &collections, &PairingFilters::default())
             .await
             .expect("authorize only the agent-target return projection");
-
         let filters = scope_filter(
             &template.scope,
             template.collections,
@@ -1660,7 +1632,6 @@ mod tests {
             .add_replicator(&receiver_addresses, &collections, &filters)
             .await
             .expect("install requester-scoped return replicator");
-
         wait_for_value(&receiver, "AgentRequest", "request_id", &match_request_id).await;
         wait_for_value(&receiver, "AgentMessage", "_docID", &match_header_doc_id).await;
         assert_eq!(
@@ -1668,14 +1639,7 @@ mod tests {
             BTreeSet::from([match_request_id.clone()]),
             "only the requester-routed return request must replicate"
         );
-        // The terminal owner must have selected the exact physical header on
-        // the sender; the same selection must survive replication untouched.
-        let sender_terminal = sender
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID lifecycle_state terminal_output }} }}"#,
-                escape_graphql_string(&match_request_id),
-            ))
-            .await;
+        let sender_terminal = sender . execute (& format ! (r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID lifecycle_state terminal_output }} }}"# , escape_graphql_string (& match_request_id) ,)) . await ;
         let sender_terminal_row = &sender_terminal.data.as_ref().unwrap()["AgentRequest"][0];
         let match_request_doc_id = sender_terminal_row["_docID"]
             .as_str()
@@ -1689,23 +1653,7 @@ mod tests {
             })
             .unwrap()
         );
-        let receiver_message_rows = crate::session::canonical_rows::decode_transcript_message_row(
-            &receiver
-                .execute(&format!(
-                    r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
-                    escape_graphql_string(&match_header_doc_id),
-                    crate::session::canonical_rows::AGENT_MESSAGE_FIELDS,
-                ))
-                .await
-                .data
-                .as_ref()
-                .and_then(|data| data.get("AgentMessage"))
-                .and_then(|rows| rows.as_array())
-                .and_then(|rows| rows.first())
-                .cloned()
-                .expect("replicated canonical AgentMessage"),
-        )
-        .expect("decode replicated canonical AgentMessage");
+        let receiver_message_rows = crate :: session :: canonical_rows :: decode_transcript_message_row (& receiver . execute (& format ! (r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"# , escape_graphql_string (& match_header_doc_id) , crate :: session :: canonical_rows :: AGENT_MESSAGE_FIELDS ,)) . await . data . as_ref () . and_then (| data | data . get ("AgentMessage")) . and_then (| rows | rows . as_array ()) . and_then (| rows | rows . first ()) . cloned () . expect ("replicated canonical AgentMessage") ,) . expect ("decode replicated canonical AgentMessage") ;
         assert_eq!(
             receiver_message_rows.doc_id, match_header_doc_id,
             "AgentMessage replication must preserve the physical header identity"
@@ -1724,16 +1672,11 @@ mod tests {
             BTreeSet::from([match_request_doc_id.clone()]),
             "only the routed return projection's segments must replicate"
         );
-        // Canonical output only carries the header and its segments; the
-        // retired AgentResponse collection must not appear on the return leg.
         let agent_response_rows = receiver.execute("{ AgentResponse { response_key } }").await;
         assert!(
             agent_response_rows.has_errors(),
             "AgentResponse is a retired collection: receiver queries must reject it"
         );
-        // The exact projected child result must reconstruct on the receiver
-        // through the canonical reader. Header replication races segment
-        // replication, so poll until the full dependency closure has arrived.
         let mut projected = None;
         for _ in 0..120 {
             match crate::session::load_canonical_message_from_node(
@@ -1753,7 +1696,6 @@ mod tests {
                         .downcast_ref::<gents_protocol::output::ReconstructionError>()
                         .is_some_and(|error| error.is_incomplete()) =>
                 {
-                    // Missing dependency: replication is still converging.
                     tokio::time::sleep(Duration::from_millis(250)).await;
                     continue;
                 }
@@ -1767,7 +1709,6 @@ mod tests {
             gents_protocol::message::Message::assistant("child result"),
             "receiver must project the exact child result"
         );
-        // Unrouted sessions and foreign requester routes must never replicate.
         assert!(
             !collection_values(&receiver, "AgentRequest", "request_id")
                 .await
@@ -1780,16 +1721,12 @@ mod tests {
                 .contains(&foreign_request_id),
             "foreign-requester artifact leaked to the receiver"
         );
-
-        // The caused session returns with its request so the caller can open
-        // it; sessions the requester did not cause stay on the host.
         wait_for_value(&receiver, "AgentSession", "session_id", &match_session_id).await;
         assert_eq!(
             collection_values(&receiver, "AgentSession", "session_id").await,
             BTreeSet::from([match_session_id.clone()]),
             "only the requester's caused session crosses the return leg"
         );
-
         sender.shutdown().await;
         receiver.shutdown().await;
     }

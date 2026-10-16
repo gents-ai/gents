@@ -15,8 +15,4 @@ mcp_path?: string | null, send_node_did?: boolean | null,
 /**
  * Operator availability gate, distinct from observed connectivity/health.
  */
-enabled?: boolean | null,
-/**
- * Optional UI/discovery labels. References, never tags, determine execution.
- */
-tags?: Array<string> | null, };
+enabled?: boolean | null, tags?: Array<string> | null, };

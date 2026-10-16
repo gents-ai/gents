@@ -38,8 +38,8 @@ use crate::streaming::DefraStreamWriter;
 use crate::watcher::AgentRequest;
 
 /// Task hooks and workspace write/integration effects must finish before their
-/// request terminalizes. Those owners retain their existing completion order;
-/// only requests without such effects may finish inside the steering gate.
+/// request terminalizes; only requests without such effects may finish inside
+/// the steering gate.
 fn permits_natural_finish(request: &AgentRequest, task_owned: bool) -> bool {
     !task_owned
         && crate::lifecycle::queue::heads_user_turn(request)
@@ -54,8 +54,7 @@ fn permits_natural_finish(request: &AgentRequest, task_owned: bool) -> bool {
                 == Some(crate::toolset::WorkspaceAuthority::ReadOnly))
 }
 
-/// Only the winning terminal CAS authorizes follow-up effects. A matching
-/// durable terminal row is an observation, not a second completion event.
+/// Only the winning terminal CAS authorizes follow-up effects.
 async fn terminalize_request(
     lifecycle: &mut RequestLifecycle,
     stream_writer: &DefraStreamWriter,
@@ -103,9 +102,8 @@ async fn finalize_request_failure(
     }
 }
 
-/// Authenticate the exact durable request immediately before claim. Admission
-/// rejection is terminalized here so no caller can accidentally continue into
-/// `claim_with_identity` or provider execution with the stale queued snapshot.
+/// Authenticate the exact durable request immediately before claim so a stale
+/// queued snapshot never reaches provider execution.
 pub(crate) async fn verify_request_at_claim_boundary(
     verifier: &crate::request_admission::AgentRequestAdmissionVerifier,
     node: Arc<defra_node::EmbeddedNode>,
@@ -307,9 +305,8 @@ impl<M: ProviderModel> AgentDaemon<M> {
         self
     }
 
-    /// Attach the filesystem-policy observations assembled with a tool
-    /// surface. Production RuntimeContext and focused owned-loop tests share
-    /// this step so request-time root revalidation cannot be test-only wiring.
+    /// Attach the filesystem-policy observations assembled with a tool surface
+    /// so request-time root revalidation cannot be test-only wiring.
     pub(super) fn with_tool_surface_runtime_policy(
         self,
         guard: Option<crate::tool_surface::RootExecutionGuard>,
@@ -319,13 +316,11 @@ impl<M: ProviderModel> AgentDaemon<M> {
             .with_operator_tool_root(operator_root)
     }
 
-    /// Request-scoped compaction options: the daemon-lifetime knobs plus the
+    /// Request-scoped compaction options: daemon-lifetime knobs plus the
     /// claimed deadline of the request this compaction serves. The deadline is
-    /// a required argument so no call site can omit it — the compactor's
-    /// stored config is daemon-lifetime and carries no deadline, so this is
-    /// the only path by which compaction recovery becomes deadline-aware
-    /// (#1016). Both entry points force summarization: they fire only after
-    /// the caller has established the assembled input is over budget.
+    /// a required argument because the stored daemon-lifetime config carries
+    /// none (#1016). Both entry points fire only after the caller established
+    /// the assembled input is over budget.
     pub(super) fn compaction_options_for_request(
         &self,
         deadline: Option<chrono::DateTime<chrono::Utc>>,
@@ -425,10 +420,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
             let agent_id = self.agent_config.agent_id.clone();
             let backend_id = self.agent_config.backend_id.clone().unwrap_or_default();
 
-            // The slot's fixed workers may be idle or waiting on this shared
-            // active semaphore. Dequeue happens first; no idle worker holds
-            // active capacity. The unbound guard is retained across the whole
-            // process future and bound to the generation only after claim.
+            // The unbound worker-capacity guard stays unbound until claim.
             let active_guard = if let Some(capacity) = current_slot_capacity() {
                 let cancellation = tokio_util::sync::CancellationToken::new();
                 let guard = tokio::select! {
@@ -502,8 +494,8 @@ impl<M: ProviderModel> AgentDaemon<M> {
     }
 
     /// Verify, through the head's own admission owner, each pending message
-    /// that may fold into `request`'s claim. An unverified message is not
-    /// folded: it keeps its own claim, where its admission is decided.
+    /// that may fold into `request`'s claim; an unverified message keeps its
+    /// own claim, where its admission is decided.
     async fn verified_fold_admissions(&self, request: &AgentRequest) -> Vec<String> {
         let candidates = match crate::lifecycle::queue::fold_candidates(&self.node, request).await {
             Ok(candidates) => candidates,
@@ -541,8 +533,6 @@ impl<M: ProviderModel> AgentDaemon<M> {
         shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<()> {
         // Publication and terminal selection belong to this one execution.
-        // Dropping the request future also drops its in-memory projection;
-        // durable transcript and recovery state remain in DefraDB.
         let stream_writer = DefraStreamWriter::new(
             self.node.clone(),
             self.agent_config.node_did(),
@@ -739,9 +729,8 @@ impl<M: ProviderModel> AgentDaemon<M> {
             return Ok(());
         };
         match sealed {
-            // An earlier execution already ran and sealed this work. Its task
-            // hooks are not rerun: host commands are never replayed, and that
-            // execution's remaining cleanup belongs to task hook recovery.
+            // Sealed work is never rerun: host task-hook commands are not
+            // replayed and remaining cleanup belongs to task hook recovery.
             Ok(true) => {
                 if let Err(error) = lifecycle.begin_owned_execution(&stream_writer).await {
                     finalize_request_failure(
@@ -902,16 +891,13 @@ impl<M: ProviderModel> AgentDaemon<M> {
             record.release().await;
         }
 
-        // A revoked execution's terminal was written by the owner that
-        // revoked it; this one only finished its cleanup.
+        // A revoked execution's terminal was written by the revoking owner.
         if ownership_lost.is_cancelled() {
             tracing::warn!(request_id = %request.request_id, "task hooks stopped after execution ownership loss");
             return Ok(());
         }
 
         let (work_reason, release_writer_binding, interruption_source) = match owned_work {
-            // No work ran, so nothing else can hold the writer binding the
-            // request was materialized with.
             None => (None, true, RequestInterruptionSource::TaskHook),
             Some(OwnedWorkOutcome::Interrupted(source)) => (None, false, source),
             Some(OwnedWorkOutcome::OwnershipLost) => return Ok(()),
@@ -1003,10 +989,8 @@ impl<M: ProviderModel> AgentDaemon<M> {
         Ok(())
     }
 
-    /// A workspace-bound automated request receives its writer binding before
-    /// this execution exists. Base freeze refuses an Active writer binding even
-    /// once its request is terminal, so a failure that terminalizes before the
-    /// owned work ran must release it, and only the winning terminal CAS may.
+    /// A workspace-bound automated request's failure before owned work must
+    /// release its Active writer binding; only the winning terminal CAS may.
     async fn finalize_failure_before_work(
         &self,
         lifecycle: &mut RequestLifecycle,
@@ -1096,10 +1080,9 @@ impl<M: ProviderModel> AgentDaemon<M> {
         Ok((hooks, cwd, Some(record), task_owned))
     }
 
-    /// Task hooks run from the agent_config's host-tools root, revalidated through
-    /// its admission owner, or the runtime cwd when the agent_config has none.
-    /// Workspace association for hooks remains an open design question, so a
-    /// hook never runs inside the request's workspace overlay.
+    /// Task hooks run from the agent_config's host-tools root or the runtime
+    /// cwd when it has none; a hook never runs inside the request's workspace
+    /// overlay while workspace integration remains an open design question.
     async fn task_hook_cwd(&self) -> Result<PathBuf> {
         if let Some(guard) = &self.root_execution_guard {
             guard.validate(&self.node).await?;
@@ -1175,7 +1158,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
                         "failed to integrate workspace after integrator success"
                     );
                     // Keep the Active Integrate binding so a retry can observe
-                    // a pending commit-tree and write the durable receipt.
+                    // the pending commit-tree and write the durable receipt.
                     return OwnedWorkOutcome::observed(
                         TaskAgentResult::Failure,
                         Some(error.to_string()),
@@ -1184,8 +1167,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
                 }
                 OwnedWorkOutcome::observed(TaskAgentResult::Success, None, false)
             }
-            // The owned loop returns this only with an interrupt latch
-            // present: a cancellation of active work, not an unknown outcome.
+            // The owned loop returns this only with an interrupt latch present.
             Ok(HandleRequestOutcome::Interrupted(source)) => OwnedWorkOutcome::Interrupted(source),
             Ok(HandleRequestOutcome::FailedAfterResponse(error))
                 if lost_execution_ownership(lifecycle, &error).await =>
@@ -1234,9 +1216,8 @@ impl<M: ProviderModel> AgentDaemon<M> {
     }
 }
 
-/// A work failure caused by, or observed after, losing the execution lease is
-/// not this execution's failure to report: the lease poll and the begin CAS
-/// both surface it as an ordinary error.
+/// A work failure caused by losing the execution lease is not this execution's
+/// failure to report.
 async fn lost_execution_ownership(lifecycle: &RequestLifecycle, error: &anyhow::Error) -> bool {
     if error.is::<crate::lifecycle::ExecutionOwnershipLost>() {
         return true;
@@ -1244,12 +1225,10 @@ async fn lost_execution_ownership(lifecycle: &RequestLifecycle, error: &anyhow::
     matches!(lifecycle.owns_execution().await, Ok(false))
 }
 
-/// What the owned work decided, before the task hook phases react to it.
-/// `release_writer_binding` keeps each arm's existing choice: an integrate
-/// failure retains its Active binding so a retry can observe the pending
-/// commit-tree. Lost ownership is observed as an interruption so cleanup still
-/// runs, and the request's current owner keeps its terminal. A drain failure
-/// leaves the durable execution to recovery and its error to the runtime.
+/// What the owned work decided, before the task hook phases react to it. The
+/// integrate-failure arm retains its Active binding so a retry can observe the
+/// pending commit-tree; a drain failure leaves the durable execution to
+/// recovery and its error to the runtime.
 enum OwnedWorkOutcome {
     Interrupted(RequestInterruptionSource),
     Observed {

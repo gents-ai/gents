@@ -1,9 +1,5 @@
 use super::*;
 
-/// Append an authenticated same-session steering request beneath an exact
-/// committed parent. External adapters provide the user input and physical
-/// parent binding; the runtime remains the sole owner of request admission and
-/// signing. Transcript publication belongs to the owned execution boundary.
 pub async fn enqueue_local_steering_request(
     node: &std::sync::Arc<EmbeddedNode>,
     parent_request_id: &str,
@@ -21,9 +17,6 @@ pub async fn enqueue_local_steering_request(
     enqueue_steering_request(node, &parent, content, input).await
 }
 
-/// Atomically persist the signed steering request. Its admission content is
-/// displayed while queued and is published to the transcript only when owned
-/// execution starts.
 pub(crate) async fn enqueue_steering_request(
     node: &std::sync::Arc<EmbeddedNode>,
     parent: &AgentRequest,
@@ -55,9 +48,8 @@ pub(crate) async fn enqueue_steering_request(
         "lifecycle.enqueue_steering",
         move |txn| {
             Box::pin(async move {
-                // Lean `CausalHop.continuation_preserves_hop`: user steering
-                // copies the session's current hop, read under the write gate
-                // so a higher append committed first is never missed.
+                // Read the session's current hop under the write gate so a
+                // higher append committed first is never missed.
                 let hop = crate::session::load_session_current_hop_in_txn(
                     txn,
                     &parent.node_did,

@@ -203,15 +203,11 @@ pub(super) async fn reconcile_prepared_peer(
     let mut ops_applied = Vec::new();
     let mut replayed_replicators = Vec::new();
 
-    // #664 residual convergence: an agent-target peer can be partitioned longer
-    // than the persisted per-request redrive cap. DefraDB's idempotent
-    // add_replicator path deliberately skips initial replay for an existing
-    // identity, so after a real reconnect force-reinstall every otherwise-
-    // converged agent-target replicator. This replays current owner-authored DAG
-    // heads (including arbitrarily old terminal requests) and does not create
-    // any new same-value request history. If the desired identity itself
-    // changed, the ordinary diff already contains teardown+install and is the
-    // replay; avoid doing it twice.
+    // DefraDB's idempotent add_replicator skips initial replay for an existing
+    // identity (#664), so after a reconnect force-reinstall every otherwise-
+    // converged agent-target replicator to replay owner-authored DAG heads. If
+    // the desired identity changed, the diff already contains the
+    // teardown+install replay; avoid doing it twice.
     if (reconnected || force_replay)
         && desired_state.uses_agent_target_template()
         && fresh_enrollment_generation_or_close(store, enrollment_generation.as_ref()).await
@@ -301,9 +297,8 @@ async fn fresh_enrollment_generation_or_close(
     }
 }
 
-/// Read the live transport without applying mutations and compare it with the
-/// exact desired/persisted ownership tuple. Attestation writers use this seam
-/// so the pairing reconciler remains the only route writer.
+/// Read-only observation seam for attestation writers; the pairing reconciler
+/// remains the only route writer.
 pub async fn observe_owned_pairing_live_matches(
     admin: &dyn RemoteP2pAdmin,
     desired: &PairingDesired,

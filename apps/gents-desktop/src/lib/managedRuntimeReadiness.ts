@@ -23,7 +23,6 @@ export const MANAGED_RUNTIME_READY_TIMEOUT_MS = 30_000;
 const RUNTIME_UNAVAILABLE =
   "The local node is not running, so provider sign-in is unavailable. Start the node and try again.";
 
-/** Raised when the managed runtime cannot be brought to a serving state. */
 export class ManagedRuntimeUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -34,11 +33,6 @@ export class ManagedRuntimeUnavailableError extends Error {
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => globalThis.setTimeout(resolve, ms));
 
-/**
- * Polls the bridge's managed-server readiness observation until the runtime
- * reports secure pairing ready. Shared by first-run provisioning and setup
- * re-entry so both wait on the same owner.
- */
 export async function waitForManagedRuntimePairing(
   api: ReadinessApi,
   { timeoutMs = MANAGED_RUNTIME_READY_TIMEOUT_MS, intervalMs = 250 } = {},
@@ -59,14 +53,6 @@ export async function waitForManagedRuntimePairing(
   return status;
 }
 
-/**
- * Makes sure the local managed runtime is serving before a setup step that
- * writes to it. Setup re-entry opens directly at the provider step, so it
- * reuses first run's owner: start the managed server with its stored
- * authority, then wait for readiness. Never starts a second lifecycle.
- * A runtime that is booting or awaiting macOS approval is waited on within
- * the bridge's bounds, and `onWait` publishes which wait it is in.
- */
 export async function ensureManagedRuntimeServing(
   api: ReadinessApi,
   fallbackNodeName: string,
@@ -86,8 +72,6 @@ export async function ensureManagedRuntimeServing(
     status = await awaitManagedServerSettled(api, status, onWait, settle);
     const unsettled = unsettledManagedServerError(status);
     if (unsettled && unsettled.status.state !== "failed") throw unsettled;
-    // A runtime that is already running is waited on, not restarted; only a
-    // stopped or failed runtime is started again.
     const needsStart =
       status.state === "stopped" ||
       status.state === "failed" ||

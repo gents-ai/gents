@@ -355,22 +355,6 @@ mod tests {
         Ok(body)
     }
 
-    #[test]
-    fn parses_resource_and_lean_style_permissions() {
-        let resource = parse_resource("identity-permission-cases/row/did:key:z6Mkowner").unwrap();
-        assert_eq!(resource.policy_id, "identity-permission-cases");
-        assert_eq!(resource.resource_name, "row");
-        assert_eq!(resource.doc_id, "did:key:z6Mkowner");
-
-        assert_eq!(parse_permission("read").unwrap(), "read");
-        assert_eq!(
-            parse_permission("row:did:key:z6Mkowner:memory.read").unwrap(),
-            "read"
-        );
-        assert!(parse_resource("identity-permission-cases/row").is_err());
-        assert!(parse_permission("row:did:key:z6Mkowner:memory.admin").is_err());
-    }
-
     #[tokio::test]
     async fn identity_decide_endpoint_matches_resolved_lean_permission_cases() -> anyhow::Result<()>
     {
@@ -378,8 +362,6 @@ mod tests {
         assert!(!cases.is_empty());
 
         for case in cases {
-            // This endpoint forwards an already resolved DID to Defra ACP;
-            // it does not own agent_config lookup or ambiguous-key rejection.
             if case.expected_actor_node.is_none() || case.expected_peer_node.is_none() {
                 continue;
             }

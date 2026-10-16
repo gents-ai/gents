@@ -3,7 +3,6 @@ use super::*;
 use gents::startup_readiness::{BuildOutcome, BuildStanding, StartupReadinessOptions};
 
 pub(super) fn generated_startup_readiness_cases_pin_bounded_barrier_release() {
-    // Seeded release requires a positive failure budget.
     assert!(StartupReadinessOptions::default().build_failure_budget > 0);
     let cases = lean_startup_readiness_cases();
     assert_eq!(

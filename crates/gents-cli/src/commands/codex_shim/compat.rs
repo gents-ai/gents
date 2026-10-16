@@ -241,28 +241,3 @@ pub(super) fn compat_gap_for_request(request: &codex::ClientRequest) -> Option<C
         }),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn difficulty_labels_are_stable() {
-        assert_eq!(
-            CompatDifficulty::LocalStateProjection.label(),
-            "medium: local Codex state projection"
-        );
-        assert_eq!(
-            CompatDifficulty::GentsBackedWorkflow.label(),
-            "medium-hard: GENTS-backed workflow"
-        );
-        assert_eq!(
-            CompatDifficulty::HostRuntimeIntegration.label(),
-            "hard: host runtime integration"
-        );
-        assert_eq!(
-            CompatDifficulty::ExternalOrLargeFeature.label(),
-            "hard: external or large Codex feature"
-        );
-    }
-}

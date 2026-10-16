@@ -1,6 +1,3 @@
-/* The provider accounts a subscription backend runs on: which account a
-   backend references, what is wrong with it, and the rows and dialogs that
-   manage it. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
@@ -28,8 +25,6 @@ import { SUBSCRIPTION } from "./inferenceKinds";
 import { errorText } from "../../../lib/errorText";
 import { useSetupCatalog } from "@/hooks/useProviders";
 
-/* the stored account a subscription backend runs on: the one with the
-   backend's reference; no reference is the provider's original account */
 function referencedAccount(
   accounts: readonly ProviderAccountView[],
   provider: string,
@@ -43,7 +38,6 @@ function referencedAccount(
   );
 }
 
-/* the account a subscription backend runs on, if it is stored here */
 export function backendAccount(
   accounts: readonly ProviderAccountView[],
   b: InferenceBackendView,
@@ -52,8 +46,6 @@ export function backendAccount(
   return sub ? referencedAccount(accounts, sub.provider, b.accountRef) : undefined;
 }
 
-/* a backend as a profile sees it: a subscription backend serves only on its
-   enabled account and is named "<label> · <provider>"; others always serve */
 export function profileBackend(
   accounts: readonly ProviderAccountView[],
   b: InferenceBackendView,
@@ -68,9 +60,6 @@ export function profileBackend(
   };
 }
 
-/* what an account action leaves behind: the profiles that fail their next
-   turn, in the CLI's words, and for remove which backends go with it (an
-   added account's backends that no profile uses, as the CLI's remove) */
 export function accountWarnings(
   deployment: NodeView,
   accounts: readonly ProviderAccountView[],
@@ -106,8 +95,6 @@ export type AccountAction = {
   account: ProviderAccountView;
 };
 
-/* rename, disconnect and remove for an account, opened from its row's menu;
-   none of them edits a profile or a backend */
 export function AccountDialogs({
   deployment,
   accounts,
@@ -204,7 +191,6 @@ export function AccountDialogs({
   );
 }
 
-/* the account card for a subscription backend */
 export function AccountRows({
   deployment,
   kind,
@@ -227,13 +213,11 @@ export function AccountRows({
     );
   const stored = referencedAccount(accounts, sub.provider, accountRef);
   const account = stored?.enabled ? stored : undefined;
-  /* signing in here would add a new account, never this one */
   const elsewhere = accountRef !== null && !stored;
   const unsaved = accounts.some((a) => a.provider === sub.provider && a.pendingSave);
   const [busy, setBusy] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
-  /* a sign-in the person stopped ends as a failed login; it is not an error */
   const cancelled = useRef(false);
   const signIn = async () => {
     cancelled.current = false;
@@ -249,8 +233,6 @@ export function AccountRows({
       setSigningIn(false);
     }
   };
-  /* the browser tab may be closed or lost; the sign-in would otherwise wait
-     until it times out */
   const cancelSignIn = () => {
     cancelled.current = true;
     void actions.cancelProviderSignIn(sub.login);

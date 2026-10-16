@@ -45,11 +45,13 @@ pub enum StageTarget {
         plugin: String,
         /// `sha256:<hex>` of the artifact that runs. A pack's own plugin is
         /// pinned when the pack is loaded; compiling an unpinned one fails.
+
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "typescript", ts(optional = nullable))]
         digest: Option<String>,
         /// How many times a failed call may run in all; absent is once. A
         /// retry never follows a call whose results were written.
+
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "typescript", ts(optional = nullable))]
         max_attempts: Option<u32>,
@@ -57,7 +59,6 @@ pub enum StageTarget {
 }
 
 impl StageTarget {
-    /// The attempts a plugin node's call gets in all.
     pub fn max_attempts(&self) -> u32 {
         match self {
             Self::Plugin { max_attempts, .. } => crate::plugin::attempts_allowed(*max_attempts),
@@ -67,7 +68,6 @@ impl StageTarget {
 }
 
 impl StageTarget {
-    /// The Task an agent node runs, if this is one.
     pub fn task_id(&self) -> Option<&str> {
         match self {
             Self::Task { task_id } => Some(task_id),
@@ -80,6 +80,7 @@ impl StageTarget {
 ///
 /// The model can select a capability revision, but cannot author the Task's
 /// agent, prompt, tools, model, or output permissions, nor the plugin that runs.
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -137,16 +138,14 @@ pub struct PortRef {
     pub port: String,
 }
 
-// Graph edges compile into the same event-group configuration used by ordinary
-// triggers. No graph-only count or delivery-policy model.
 pub type GroupCount = crate::document_config::EventGroupCount;
 pub type DeliveryMode = Option<crate::document_config::EventGroup>;
 /// Trigger concurrency on a graph edge. Compilation refuses `latest_only` on
 /// every edge (`DiagnosticCode::InvalidEdgeConcurrency`; Lean
 /// `GraphPipeline.graphEdgeConcurrencyValid`): on a per-document edge a
 /// `latest_only` trigger supersedes the same trigger's in-flight requests,
-/// which would cancel earlier fan-out items; on a grouped edge the trigger
-/// engine never applies the mode.
+/// cancelling earlier fan-out items; on a grouped edge the trigger engine
+/// never applies the mode.
 pub type DeliveryConcurrency = crate::document_config::ConcurrencyMode;
 
 /// Selects a singleton Task invocation in the same pinned graph correlation.
@@ -375,7 +374,6 @@ pub enum DiagnosticCode {
 #[serde(deny_unknown_fields)]
 pub struct Diagnostic {
     pub code: DiagnosticCode,
-    /// Stable JSON-pointer-like location in the submitted intent.
     pub path: String,
     pub message: String,
 }
@@ -389,8 +387,6 @@ pub struct PlannedNode {
     pub target: StageTarget,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<GraphSessionSelection>,
-    /// Where a plugin node writes its result. Empty for an agent node, whose
-    /// model writes its outputs through its own tools.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub output_ports: Vec<PortSpec>,
 }
@@ -450,8 +446,6 @@ pub use crate::toolset::WorkspaceAuthority;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlannedPackageArtifact {
-    /// Canonical collection and owner-scoped authored identity. Resolve the
-    /// physical Defra document through the shared configuration owner.
     pub collection: crate::Collection,
     pub logical_id: String,
     pub content_digest: String,
@@ -462,9 +456,8 @@ pub struct PlannedPackageArtifact {
 pub struct RequiredSchemaDigest {
     pub namespace: String,
     pub digest: String,
-    /// Canonical full-contract digest for each collection in the pinned SDL.
-    /// Peers can compare their active DefraDB collection versions without
-    /// needing the originating binary's bundled catalog.
+    /// Peers compare their active DefraDB collection versions through these
+    /// without the originating binary's bundled catalog.
     pub collection_contract_digests: BTreeMap<String, String>,
 }
 

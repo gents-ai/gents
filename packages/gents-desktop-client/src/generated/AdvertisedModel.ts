@@ -3,8 +3,6 @@ import type { ReasoningEffort } from "./ReasoningEffort.js";
 
 /**
  * Server-advertised model option, scoped by its containing backend catalog.
- * Optional capabilities remain unknown unless discovery or an explicit adapter
- * contract establishes them. No separate document identity or model profile.
  */
 export type AdvertisedModel = { model_name: string, display_name: string | null,
 /**
@@ -12,12 +10,11 @@ export type AdvertisedModel = { model_name: string, display_name: string | null,
  */
 context_window: number | null,
 /**
- * Provider-advertised ceiling for an explicit context override. This is
- * distinct from `context_window` and must never become a default itself.
+ * Provider-advertised ceiling for an explicit context override; must
+ * never become a default itself.
  */
 max_context_window: number | null, max_output_tokens: number | null,
 /**
- * None means unknown; Some(empty) means no configurable reasoning effort.
- * The server advertises these choices without materializing effort profiles.
+ * None unknown; Some(empty) means no configurable reasoning effort.
  */
 reasoning_efforts: Array<ReasoningEffort> | null, };

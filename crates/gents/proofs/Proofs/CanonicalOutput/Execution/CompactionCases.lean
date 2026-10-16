@@ -5,7 +5,6 @@ import Proofs.CanonicalOutput.Execution.ToolDeliveryCases
 namespace CanonicalOutput.Execution.Compaction.Examples
 
 open CanonicalOutput.Execution.Examples
-
 def resultSegment : Segment :=
   { id := 700, coordinate := ⟨10, .tool 600⟩, writer := .tool 600
     flush := some ⟨0, [⟨0, 1, some { block := 0, part := 0, kind := .toolOutput }⟩], [65]⟩
@@ -21,9 +20,6 @@ def resultMessage : MessageEnvelope :=
 
 def boundary : MessageEnvelope := { authoredMessage with sequence := 2 }
 
-/-- An authoritative published snapshot; the execution traces separately prove
-how these immutable artifacts commit. Physical document 600 is deliberately
-unrelated to the native key "native-call". -/
 def published : World :=
   { world 6 with
     segments := [providerTurn, resultSegment, authored]
@@ -90,7 +86,6 @@ def reorderedFork : World :=
   { forked with messages := published.messages ++ published.messages.map (fun message =>
       { copied message with sequence := 2 - message.sequence }) }
 
-/-- Unique child sequence numbers do not authorize reordering copied content. -/
 theorem reordered_fork_cannot_advance_compaction :
     advanceCursor? reorderedFork 2 = none := by native_decide
 
@@ -105,9 +100,6 @@ theorem cannot_rewind_committed_cursor :
     advanceCursor? { published with compactionCursor := some 2 } 1 = none := by
   native_decide
 
-/-- The same owner admits, dispatches, closes, replies, publishes an ordinary
-boundary, and advances the cursor. No seeded delivery row or second allocator
-is used to make the compaction preconditions true. -/
 def executionThroughCompaction : Option Bool := do
   let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
     [foregroundAdmission]).toOption

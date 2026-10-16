@@ -7,8 +7,6 @@ use std::time::Duration;
 async fn capture_scripted_request(
     request: CompletionRequest,
 ) -> Result<serde_json::Value, CompletionError> {
-    // The fake provider still crosses the production capture transport:
-    // serialize its actual input, persist it, then emit its scripted output.
     use rig::http_client::HttpClientExt;
     let dto = rig::providers::openai::completion::CompletionRequest::try_from((
         "scripted".to_owned(),
@@ -181,7 +179,6 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         observations.load(Ordering::SeqCst) > 0,
         "provider must send traffic after semantic progress stops; one-shot returned {result:?}"
     );
-    // No test-driven recovery: the one-shot owner must converge before return.
     let result = node
         .execute(
             r#"{

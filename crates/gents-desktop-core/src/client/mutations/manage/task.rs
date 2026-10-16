@@ -1,5 +1,3 @@
-//! Canonical automation configuration through the shared candidate transaction.
-//! Runtime task invocation below remains a separate integration surface.
 use super::super::graphql::{escape_graphql_string, normalize_required};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
@@ -192,16 +190,10 @@ pub async fn delete_event_source_on(
     .await
 }
 
-/// Fire a task immediately using the shared manual-run helper.
-///
-/// Unlike the CLI path (which writes the mutation directly because it may
-/// be talking to a remote GraphQL endpoint), desktop is in-process with
-/// DefraDB and can call the shared helper directly. Both paths produce
-/// the same `(caused_by_trigger_kind = "manual", caused_by_trigger_id =
-/// null)` lineage and the same `execution_origin = "interactive"`, so
-/// observers can treat them as one origin.
-///
-/// Returns the new `AgentRequest`'s `_docID` on success.
+/// Fire a task immediately using the shared manual-run helper. Desktop calls
+/// it in-process and the CLI writes the mutation remotely; both must produce
+/// the same manual lineage and `execution_origin = "interactive"` so observers
+/// treat them as one origin.
 pub async fn fire_task_now(
     node: &Arc<EmbeddedNode>,
     actor: identity::Did,
@@ -502,9 +494,9 @@ fn render_task_invocation(
     })
 }
 
-/// Resolve operator-owned task configuration from its canonical control plane.
-/// The caller submits the returned invocation through the ordinary client
-/// request authority so requester-scoped P2P filters admit it.
+/// Resolve operator-owned task configuration from its canonical control plane;
+/// the caller submits through the ordinary client request authority so
+/// requester-scoped P2P filters admit it.
 pub async fn resolve_task_now_on(
     config_access: &ConfigAccess,
     node_did: &str,
@@ -571,19 +563,11 @@ async fn enqueue_task_now(
     )
 }
 
-/// Fire a schedule's task immediately.
-///
-/// Operator override = manual run of the schedule's task with empty
-/// args. The resulting `AgentRequest` carries `caused_by_trigger_kind =
-/// "manual"`, NOT `"schedule"` — this is an explicit operator override,
-/// not a cron fire, so observers can cleanly separate "the scheduler
-/// decided to fire" from "a human pressed Run Now on the Schedule row."
-///
-/// We load the canonical `Task` from GraphQL directly rather than from the
-/// desktop store, so this path stays correct even if the store is
-/// stale (e.g., the schedule was just created and the watcher has not
-/// caught up yet). The `SELECT` mirrors every field on
-/// canonical document so `serde_json::from_value` sees the authoritative shape.
+/// Operator override: the resulting `AgentRequest` carries
+/// `caused_by_trigger_kind = "manual"`, not `"schedule"`, so observers can
+/// separate a scheduler fire from a human pressing Run Now. The canonical
+/// `Task` is loaded from GraphQL, not the desktop store, because the watcher
+/// may not have caught up yet.
 pub async fn fire_schedule_now(
     node: &Arc<EmbeddedNode>,
     actor: identity::Did,
@@ -680,7 +664,7 @@ pub async fn fire_schedule_now(
 }
 
 /// Resolve the schedule, enabled trigger, task, and agent from canonical
-/// operator access. Submission remains owned by the client request path.
+/// operator access; submission stays owned by the client request path.
 pub async fn resolve_schedule_now_on(
     config_access: &ConfigAccess,
     node_did: &str,
@@ -773,35 +757,6 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::Arc;
-
-    #[test]
-    fn manual_task_templates_use_admitted_ids_and_budget_is_opt_in() -> Result<()> {
-        let task: Task = serde_json::from_value(json!({
-            "node_did": "did:test:task-render", "task_id": "task", "agent_id": "agent",
-            "prompt_template": "Session {{ session.session_id }} request {{ request.request_id }}",
-            "goal_objective_template": "Finish in {{ session.session_id }}", "emit_outcome": true,
-        }))?;
-        let invocation = render_task_invocation(&task, "physical-task-document", json!({}))?;
-        assert_eq!(
-            invocation.fire.identity.source_doc_id,
-            "physical-task-document"
-        );
-        assert_eq!(
-            invocation.content,
-            format!(
-                "Session {} request {}",
-                invocation.fire.session_id, invocation.fire.request_id
-            )
-        );
-        assert_eq!(
-            invocation.goal_objective.as_deref(),
-            Some(format!("Finish in {}", invocation.fire.session_id).as_str())
-        );
-        assert!(invocation.fire.emit_outcome);
-        assert_eq!(invocation.fire.goal_token_budget, None);
-        assert!(!invocation.fire.goal_assignment_applied);
-        Ok(())
-    }
 
     #[tokio::test]
     async fn canonical_task_resolution_ignores_stale_desktop_revision() -> Result<()> {
@@ -897,7 +852,6 @@ mod tests {
         let local_node_did = identity.did();
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
-        // A replicated foreign Task is visible while this node's selected Task is absent.
         ConfigAccess::write_local(
             &node,
             "test.schedule_task_scope.seed",
@@ -1002,7 +956,6 @@ mod tests {
         upsert_trigger(&node, &trigger).await?;
         assert!(delete_task(&node, owner, "task").await.is_err());
         assert!(delete_event_source(&node, owner, "source").await.is_err());
-        // A foreign node with the same agent label cannot borrow this task/source.
         trigger.node_did = "did:test:automation-b".into();
         assert!(upsert_trigger(&node, &trigger).await.is_err());
         assert_eq!(

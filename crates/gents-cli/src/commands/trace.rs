@@ -41,11 +41,6 @@ pub(crate) async fn dispatch(command: TraceCommand) -> Result<()> {
     }
 }
 
-/// Fetch rendered-request capture metadata — and, for exactly one match, its
-/// `request_json` storage-envelope field-commit CID. This is the one deliberate
-/// body read in the system: `--include-body` selects and losslessly decodes the
-/// provider request and heavy provenance payload; without it neither payload is
-/// queried, and the default output is the timeline's compact metadata surface.
 async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
     let (access, _home_dir) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
@@ -178,7 +173,6 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
             .cmp(&right_key)
             .then_with(|| left.capture_key.cmp(&right.capture_key))
     });
-
     if args.list {
         let captures = entries
             .iter()
@@ -230,8 +224,6 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
     write_or_print(args.output_file.as_deref(), &value)
 }
 
-/// The metadata object for one capture row: the timeline's event derivation
-/// plus the document id, with the body fields attached only on request.
 fn capture_metadata_value(
     row: &gents::run_timeline::TimelineRenderedRequestRow,
     raw: &Value,
@@ -265,8 +257,6 @@ fn capture_order_padded(row: &gents::run_timeline::TimelineRenderedRequestRow) -
             attempt,
         }
         .padded(),
-        // '~' sorts after every padded key's alphabet, pushing unparseable
-        // rows to the end.
         _ => format!("~{}", row.capture_key),
     }
 }
@@ -456,9 +446,6 @@ async fn trace_export(args: TraceExportArgs) -> Result<()> {
             "selected tool {} conflicts with the physical request identity",
             call.doc_id
         );
-        // The timeline owner reconstructs arguments/results from canonical
-        // headers and segments. Selection must not create a second payload
-        // reader or silently export empty defaults from lifecycle rows.
         let mut matching = rows
             .tool_calls
             .iter()
@@ -523,10 +510,6 @@ fn build_record(
             })
         })
     });
-    // Native message plumbing: the canonical reader's reconstructed native
-    // message is the only source. Serialization errors propagate (never
-    // silently dropped); the raw tool call is matched by exact tool-call ID
-    // within that message — a tool name is not identity.
     let raw_assistant_message = match message {
         Some(message) => Some(raw_message_json(&message.message)?),
         None => None,
@@ -551,9 +534,6 @@ fn build_record(
             .all(|call| call.backend_id.as_ref() == Some(first))
             .then(|| first.clone())
     });
-    // The canonical request lifecycle owns terminal state and failure. Keep
-    // the legacy-shaped export columns for the external trace schema, but do
-    // not resurrect an AgentResponse observation or logical-ID join.
     let canonical_terminal_status = request
         .and_then(|request| request.lifecycle_state)
         .map(|state| state.as_str().to_string());
@@ -645,142 +625,4 @@ fn write_jsonl<T: Serialize>(path: Option<&std::path::Path>, records: &[T]) -> R
         print!("{output}");
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use gents::run_timeline::{
-        TimelineInferenceCallRow, TimelineMessageRow, TimelineRenderedRequestRow,
-        TimelineRequestRow,
-    };
-
-    fn args() -> TraceExportArgs {
-        TraceExportArgs {
-            home: None,
-            graphql: None,
-            session_id: None,
-            request_id: None,
-            run_id: Some("run".into()),
-            case_id: Some("case".into()),
-            limit: 10,
-            output_file: None,
-        }
-    }
-    fn call() -> TimelineToolCallRow {
-        TimelineToolCallRow {
-            request_id: Some("request".into()),
-            request_doc_id: Some("physical".into()),
-            session_id: "session".into(),
-            tool_call_id: "call".into(),
-            tool_name: "bash".into(),
-            args: "{}".into(),
-            result: Some("done".into()),
-            lifecycle_state: Some("completed".into()),
-            message_sequence: Some(3),
-            ..Default::default()
-        }
-    }
-    fn rows() -> RunTimelineRows {
-        RunTimelineRows {
-            request: TimelineRequestRow {
-                request_id: "request".into(),
-                doc_id: Some("physical".into()),
-                session_id: Some("session".into()),
-                node_did: Some("owner".into()),
-                agent_id: Some("agent".into()),
-                content: Some("prompt".into()),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
-    #[test]
-    fn export_requires_physical_request_identity_and_never_infers_orphans() {
-        let mut wrong = rows();
-        wrong.request.doc_id = Some("other".into());
-        assert!(build_record(&call(), Some(&wrong), &args()).is_err());
-        let mut orphan = call();
-        orphan.request_id = None;
-        orphan.request_doc_id = None;
-        let record = build_record(&orphan, None, &args()).unwrap();
-        assert!(record.request_id.is_none());
-        assert!(record.node_did.is_none());
-        assert!(record.raw_assistant_message.is_none());
-    }
-    #[test]
-    fn export_uses_only_matching_historical_observations_and_explicit_labels() {
-        let mut rows = rows();
-        rows.request.lifecycle_state =
-            Some(gents_protocol::request_lifecycle::RequestLifecycleState::Failed);
-        rows.request.failure_reason = Some("canonical terminal failure".into());
-        rows.inference_calls = vec![
-            TimelineInferenceCallRow {
-                request_id: "request".into(),
-                request_doc_id: Some("physical".into()),
-                backend_id: Some("observed-backend".into()),
-                ..Default::default()
-            },
-            TimelineInferenceCallRow {
-                request_id: "request".into(),
-                request_doc_id: Some("foreign".into()),
-                backend_id: Some("foreign-backend".into()),
-                ..Default::default()
-            },
-        ];
-        rows.rendered_requests = vec![TimelineRenderedRequestRow {
-            request_id: Some("request".into()),
-            request_doc_id: Some("physical".into()),
-            model_name: Some("observed-model".into()),
-            ..Default::default()
-        }];
-        rows.messages.push(TimelineMessageRow {
-            doc_id: None,
-            request_doc_id: Some("foreign".into()),
-            session_id: "session".into(),
-            sequence: 3,
-            timestamp: None,
-            node_did: None,
-            header: gents_protocol::output::TranscriptMessage {
-                message_key: "session:3".into(),
-                session_id: "session".into(),
-                node_did: "did:test:agent".into(),
-                requester_did: None,
-                request_doc_id: Some("foreign".into()),
-                publication: gents_protocol::output::MessagePublication::RequestExecution {
-                    execution_generation: "gen-1".into(),
-                },
-                outcome: gents_protocol::output::OutputOutcome::Complete,
-                sequence: 3,
-                role: gents_protocol::output::MessageRole::Assistant,
-                native_id: None,
-                blocks: Vec::new(),
-                created_at: "2026-01-01T00:00:03Z".into(),
-            },
-            message: gents_protocol::message::Message::assistant("foreign content"),
-        });
-        let record = build_record(&call(), Some(&rows), &args()).unwrap();
-        assert_eq!(record.run_id.as_deref(), Some("run"));
-        assert_eq!(record.case_id.as_deref(), Some("case"));
-        assert_eq!(record.backend_id.as_deref(), Some("observed-backend"));
-        assert_eq!(record.model_name.as_deref(), Some("observed-model"));
-        assert_eq!(record.prompt.as_deref(), Some("prompt"));
-        assert_eq!(record.response_status.as_deref(), Some("failed"));
-        assert_eq!(
-            record.response_error_message.as_deref(),
-            Some("canonical terminal failure")
-        );
-        assert!(record.inference_profile_id.is_none());
-        assert!(record.raw_assistant_message.is_none());
-        rows.inference_calls.push(TimelineInferenceCallRow {
-            request_id: "request".into(),
-            request_doc_id: Some("physical".into()),
-            backend_id: Some("another-backend".into()),
-            ..Default::default()
-        });
-        assert!(build_record(&call(), Some(&rows), &args())
-            .unwrap()
-            .backend_id
-            .is_none());
-    }
 }

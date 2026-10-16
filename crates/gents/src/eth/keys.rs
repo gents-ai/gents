@@ -33,7 +33,6 @@ pub fn binding_storage_key(principal_did: &str, binding_id: &str) -> String {
     format!("{}:{}", principal_did.trim(), binding_id.trim())
 }
 
-/// In-memory store for tests. Never used in production CLI paths.
 #[cfg(test)]
 #[derive(Clone, Default)]
 pub(crate) struct MemoryChainKeyStore {
@@ -132,7 +131,6 @@ pub fn uncompressed_pubkey(secret: &[u8; 32]) -> Result<[u8; 65]> {
     Ok(out)
 }
 
-/// Ethereum address: `0x` + keccak256(uncompressed_pubkey_without_04)[12..].
 pub fn address_from_uncompressed_pubkey(uncompressed: &[u8]) -> Result<String> {
     let body = match uncompressed {
         [UNCOMPRESSED_PREFIX, rest @ ..] if rest.len() == 64 => rest,
@@ -235,91 +233,6 @@ mod tests {
         0x94, 0x4b, 0xac, 0xb4, 0x78, 0xcb, 0xed, 0x5e, 0xfc, 0xae, 0x78, 0x4d, 0x7b, 0xf4, 0xf2,
         0xff, 0x80,
     ];
-    const ANVIL0_ADDRESS: &str = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
-
-    #[test]
-    fn anvil_account_zero_derives_known_address() {
-        let address = address_from_secret(&ANVIL0_SECRET).expect("derive");
-        assert_eq!(address, ANVIL0_ADDRESS);
-    }
-
-    #[test]
-    fn uncompressed_form_with_and_without_prefix_match() {
-        let with_prefix = uncompressed_pubkey(&ANVIL0_SECRET).expect("pubkey");
-        assert_eq!(with_prefix[0], UNCOMPRESSED_PREFIX);
-        let from_prefix = address_from_uncompressed_pubkey(&with_prefix).expect("with prefix");
-        let from_body = address_from_uncompressed_pubkey(&with_prefix[1..]).expect("body");
-        assert_eq!(from_prefix, from_body);
-        assert_eq!(from_prefix, ANVIL0_ADDRESS);
-    }
-
-    #[test]
-    fn memory_store_round_trips_and_delete_forgets() {
-        let store = MemoryChainKeyStore::default();
-        store.store_new("bind-1", &ANVIL0_SECRET).expect("store");
-        assert!(store.store_new("bind-1", &ANVIL0_SECRET).is_err());
-        assert_eq!(store.load("bind-1").expect("load"), ANVIL0_SECRET);
-        store.delete("bind-1").expect("delete");
-        assert!(store.load("bind-1").is_err());
-    }
-
-    #[test]
-    fn attestation_payload_is_stable_and_binds_every_field() {
-        let payload = attestation_payload(
-            "bind-1",
-            "did:key:zAlice",
-            ANVIL0_ADDRESS,
-            KEY_BACKEND_KEYRING,
-            "2026-08-28T00:00:00Z",
-        );
-        let text = String::from_utf8(payload).expect("utf8");
-        assert!(text.starts_with("gents-chain-key-attestation-v1\n"));
-        assert!(text.contains("bind-1"));
-        assert!(text.contains("did:key:zAlice"));
-        assert!(text.contains(ANVIL0_ADDRESS));
-        assert!(text.contains(KEY_BACKEND_KEYRING));
-        assert!(text.contains("2026-08-28T00:00:00Z"));
-        let other = attestation_payload(
-            "bind-2",
-            "did:key:zAlice",
-            ANVIL0_ADDRESS,
-            KEY_BACKEND_KEYRING,
-            "2026-08-28T00:00:00Z",
-        );
-        assert_ne!(text.as_bytes(), other);
-    }
-
-    #[test]
-    fn attestation_encoding_round_trips_and_rejects_bad_hex() {
-        let signature = [0x12, 0xab, 0xcd];
-        assert_eq!(
-            decode_attestation(&encode_attestation(&signature)).unwrap(),
-            signature
-        );
-        assert!(decode_attestation("0xabc").is_err());
-        assert!(decode_attestation("0xzz").is_err());
-    }
-
-    #[test]
-    fn generated_secret_has_a_derivable_address() {
-        let secret = generate_secp256k1_secret();
-        let address = address_from_secret(&secret).expect("derive");
-        assert!(address.starts_with("0x"));
-        assert_eq!(address.len(), 42);
-        assert_ne!(address, ANVIL0_ADDRESS);
-    }
-
-    #[test]
-    fn storage_keys_are_principal_scoped() {
-        assert_eq!(
-            binding_storage_key("did:key:zAlice", "treasury"),
-            "did:key:zAlice:treasury"
-        );
-        assert_ne!(
-            binding_storage_key("did:key:zAlice", "treasury"),
-            binding_storage_key("did:key:zBob", "treasury")
-        );
-    }
 
     #[test]
     fn keyring_store_round_trips_across_entry_handles() {

@@ -1,8 +1,5 @@
 import Proofs.ClientShell.Projection
 
-/-- Once the matching request is observed terminal, a snapshot retires the local
-awaiting latch and permits a follow-up under the ordinary admission premises.
-This is a projection guarantee, not a transport delivery deadline. -/
 theorem matching_terminal_snapshot_allows_follow_up
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
     (sid : SessionId) (req : RequestId) (obs : SessionObservation)
@@ -20,7 +17,6 @@ theorem matching_terminal_snapshot_allows_follow_up
   simp [step, snapshotAdvanceWorkflow, observesRequest, hw, hfind, hreq, projectSendDecision,
     hsel, hnode, hclient, hagent_match, hturn, hterminal]
 
-/-- A terminal observation for another request cannot acknowledge this submit. -/
 theorem unrelated_terminal_does_not_retire_awaiting
     (store : LocalStore) (sid : SessionId) (req : RequestId)
     (obs : SessionObservation) (hfind : store.find sid = some obs)
@@ -30,9 +26,6 @@ theorem unrelated_terminal_does_not_retire_awaiting
     snapshotAdvanceWorkflow (.awaiting sid req) store = .awaiting sid req := by
   simp [snapshotAdvanceWorkflow, observesRequest, hfind, hother, hunqueued, hunfolded]
 
-/-- A locally observed request can precede its mutation acknowledgment. The
-acknowledgment consumes the current observation instead of reinstating a latch
-that would need another notification to clear. -/
 theorem observed_before_ack_retires_without_another_snapshot
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
     (sid : SessionId) (req : RequestId) (obs : SessionObservation)
@@ -126,8 +119,6 @@ theorem awaiting_retires_only_on_observed_request
     · exact ⟨obs, rfl, h_obs⟩
     · simp [snapshotAdvanceWorkflow, h_find, h_obs] at h_adv
 
-/-- A message queued behind a running turn is observed without becoming the
-turn, so the submission retires while the turn it waits behind keeps running. -/
 theorem queued_observation_retires_awaiting
     (s : ShellState) (store store' : LocalStore) (h : TransportHealth)
     (ctx : SubmitContext) (sid : SessionId) (req : RequestId) (obs : SessionObservation)
@@ -185,8 +176,6 @@ theorem select_session_preserves_same_session_awaiting
     (step s (.user (.selectSession sid)) store h ctx).workflow = .awaiting sid req := by
   simp [step, workflowAfterSelectSession, h_wf]
 
-/-- A submission folded into a claimed turn before any snapshot showed it
-queued still retires the awaiting latch. -/
 theorem folded_observation_retires_awaiting
     (s : ShellState) (store store' : LocalStore) (h : TransportHealth)
     (ctx : SubmitContext) (sid : SessionId) (req : RequestId) (obs : SessionObservation)

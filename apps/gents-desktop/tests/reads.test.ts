@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import { newestWins, newestWinsBy, singleFlight } from "../src/lib/reads";
 
-/* a promise the test settles */
 function later<T>() {
   let resolve!: (value: T) => void;
   let reject!: (cause: unknown) => void;

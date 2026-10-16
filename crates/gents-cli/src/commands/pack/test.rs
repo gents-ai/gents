@@ -1,5 +1,3 @@
-//! CLI adapter for the shared plugin-case test owner.
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -60,8 +58,6 @@ pub(crate) async fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
 mod tests {
     use super::*;
 
-    /// Driven from an async task, as `gents pack test` runs it: calling a
-    /// guest there directly panics inside the WASI runtime.
     #[tokio::test]
     async fn a_scaffolded_plugin_passes_its_case_and_a_wrong_expectation_fails() {
         let root = tempfile::tempdir().unwrap();
@@ -103,8 +99,6 @@ mod tests {
         );
     }
 
-    /// A plugin granted a network allow-list reaches it through the host
-    /// while its case runs.
     #[tokio::test]
     async fn a_case_fetches_through_the_host_from_a_granted_host() {
         let port = crate::commands::plugin::testing::hello_server().await;
@@ -113,9 +107,6 @@ mod tests {
         assert_eq!(results[0].passed, 1, "{:?}", results[0].failures);
     }
 
-    /// A case's `bind` field binds the directory named relative to the case
-    /// file itself, so the fixture's `list_files` plugin sees exactly the
-    /// fixture tree checked in beside its own case file.
     #[tokio::test]
     async fn a_bind_case_binds_its_fixture_directory() {
         let dir = crate::commands::plugin::testing::build_bind_plugin_fixture();

@@ -15,7 +15,6 @@ const runner = {
   deploymentLabel: "desktop-live",
   nodeDid: "did:key:zLive",
   toolRoot: "/private/tmp/gents-live",
-  /* what the live run measured of the transcript, none of it under test here */
   transcriptQueryCount: 0,
   transcriptQueriedRows: 0,
   transcriptMessageQueryLimit: 0,

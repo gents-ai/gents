@@ -134,6 +134,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 acp.workspace = true
 futures = "0.3"
 gents-lean-contract.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite = "0.26.2"
 
 [target.'cfg(unix)'.dev-dependencies]

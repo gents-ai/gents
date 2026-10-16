@@ -1,12 +1,5 @@
 import Proofs.CanonicalOutput.Execution.SessionComposition
 
-/-!
-# Claim, queue, and retry coherence
-
-The claim owner binds the physical request document to its retry owner. Normal
-claims also own the active logical queue entry. Title claims use authenticated
-parent provenance instead and do not modify the session queue.
--/
 namespace CanonicalOutput.Execution.SessionComposition
 
 def ClaimCoherent (state : World) : Prop :=

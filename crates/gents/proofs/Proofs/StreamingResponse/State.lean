@@ -2,15 +2,6 @@ import Proofs.CanonicalOutput.TerminalPayload
 import Proofs.CanonicalOutput.Execution.Projection
 import Proofs.CanonicalOutput.Hydration
 
-/-!
-# Immutable output observation
-
-This replaces the mutable AgentResponse model. Published views come only from a
-typed MessageEnvelope that passes full canonical reconstruction. Live preview
-is a validated contiguous open prefix owned by the exact live request generation
-or tool. Retained Partial diagnostics require an exact terminal selection first.
-Request lifecycle, ACP and writer authorization remain supplied observations.
--/
 namespace StreamingResponse
 
 open CanonicalOutput
@@ -82,8 +73,6 @@ def messageScoped (observation : Observation) (message : MessageEnvelope) : Bool
         | .error _ => false
     | _ => message.header.request == some observation.request
 
-/-- Scope failure is structural invalidity, but an unavailable fork origin is
-still a replica observation and retains its missing/denied/conflict class. -/
 def messageScopeResult (observation : Observation)
     (message : MessageEnvelope) : Except View Unit :=
   if message.header.session != observation.session ||
@@ -152,9 +141,6 @@ def messageCoordinateConflict (messages : List MessageEnvelope)
       (other.header.session == message.header.session && other.key == message.key) ||
       (other.header.session == message.header.session && other.sequence == message.sequence))
 
-/-- Contiguous ordinal reconstruction for an open source. This stops at the
-first gap and rejects twins, malformed consumed runs, wrong writers and timestamp regressions.
-It is never used for authored output, which requires an immutable header. -/
 inductive OpenError where | loading | conflicted | invalid
   deriving DecidableEq, Repr
 
@@ -170,9 +156,9 @@ def contiguousFlushes (records : List Segment) (writer : Writer) :
           let rest ← contiguousFlushes records writer (ordinal + 1) fuel
           .ok (flush :: rest)
 
-/-- The durable audit reads the same validated dense prefix as live output, but
-keeps every received field and native declaration. A missing replica ordinal
-ends the observed prefix; closure state never widens its replay eligibility. -/
+/-- The durable audit keeps every received field and native declaration of the
+same validated dense prefix as live output; a missing replica ordinal ends the
+observed prefix. -/
 def reconstructAuditPrefix (observation : Observation) (limit : Option Nat) :
     Except OpenError Streams := do
   let source := CanonicalOutput.Execution.sourceData

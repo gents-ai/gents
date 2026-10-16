@@ -7,7 +7,6 @@ import type {
 
 import { actionFailure, shownFailure } from "./actionFailure";
 
-/** Each configuration change the bridge takes, as a failure names it. */
 const CHANGES = {
   saveNodeConfig: "save the node",
   setDefaultAgent: "set the default agent",
@@ -41,7 +40,6 @@ export type ConfigRequest<K extends ConfigChange> = Parameters<DesktopApiAdapter
 
 type ConfigActionParams = {
   api: DesktopApiAdapter;
-  /** shows a failed action to the person, once */
   reportFailure: (message: string) => void;
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
 };
@@ -68,16 +66,7 @@ export function createConfigActions({
   }
 
   return {
-    /**
-     * A configuration change: the bridge's write, then a fresh read once it
-     * lands, and one report naming what failed: the change's own name, or
-     * what the person did when the screen knows it better (a switch turned
-     * on writes a patch). The caller still sees the failure, to keep what
-     * the person typed.
-     */
     changeConfig,
-    /** Tries a tool service's connection without saving it. The screen that
-        asks shows the answer, and a failure, its own way. */
     testToolService: (
       request: ToolServiceTestRequest,
     ): Promise<ToolServiceTestResult> => api.testToolService(request),

@@ -1,15 +1,3 @@
-//! The recorder seam: the document operations the loop performs.
-//!
-//! The loop writes one trial row, its verdicts and its completion, and reads
-//! back what a run has already written so a resumed run plans only what it
-//! still owes. Naming those four as a trait lets a test crash the loop between
-//! any two of them without a fault-injection path in the runtime.
-//!
-//! A recorder never interprets a failure. Whatever it returns as `Err` is a
-//! failure of the record, not of the trial, so the loop propagates it
-//! unchanged rather than inventing an outcome for a trial that may well have
-//! succeeded.
-
 use std::path::Path;
 
 use anyhow::Result;
@@ -42,9 +30,6 @@ pub trait Recorder: Send + Sync {
 
     async fn load_trials(&self, owner: &str, run_id: &str) -> Result<Vec<TrialRecord>>;
 
-    /// The run's report as the documents written so far derive it, for the
-    /// loop's `report.json`; `None` from a recorder with no documents to
-    /// derive it from.
     async fn report(
         &self,
         _owner: &str,
@@ -55,12 +40,9 @@ pub trait Recorder: Send + Sync {
     }
 }
 
-/// The recorder every real run uses: the eval documents themselves.
 pub struct DocumentRecorder<'a> {
     access: &'a ConfigAccess,
-    /// Parallel trials share one report store. Serialize their bookkeeping
-    /// transactions to avoid exhausting conflict retries over HTTP; trial
-    /// execution and each trial's own database remain concurrent.
+    /// Avoid HTTP conflict retries for shared report-store writes.
     writes: tokio::sync::Mutex<()>,
 }
 

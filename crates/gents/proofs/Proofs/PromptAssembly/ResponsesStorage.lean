@@ -39,7 +39,6 @@ def xaiApiEndpoint : String := "https://api.x.ai/v1"
 
 def encryptedReasoningInclude : String := "reasoning.encrypted_content"
 
-/-- Exact xAI API endpoint, ignoring ASCII case and any trailing `/`. -/
 def atXaiApi (endpoint : String) : Bool :=
   (endpoint.dropRightWhile (· == '/')).toLower == xaiApiEndpoint
 
@@ -116,9 +115,6 @@ def cases : List Case :=
   , case "xai_api_key_chat_completions" .openAiCompatible .chatCompletions
       "https://api.x.ai/v1" ]
 
-/-- The effort an `OpenAiCompatible` Responses request sends. At the xAI API
-endpoint only an effort the model's catalog advertises is sent; unknown support
-and unadvertised efforts are omitted (mirrors `ClaudeMap.selectedEffort`). -/
 def sentEffort (endpoint : String) (advertised : Option (List String))
     (requested : Option String) : Option String :=
   if atXaiApi endpoint then

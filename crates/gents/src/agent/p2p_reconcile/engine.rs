@@ -1,5 +1,3 @@
-//! Runtime pairing reconcile engine.
-
 mod desired;
 mod enrollment;
 mod reconcile;
@@ -34,7 +32,7 @@ pub const MAX_CONCURRENT_PEER_PREPARATIONS: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnrollmentEndpointEntry {
-    /// Durable materialization key; may be directional and is not a transport peer id.
+    /// Durable materialization key, not a transport peer id.
     pub desired_id: String,
     pub peer_id: String,
     pub node_did: String,
@@ -82,8 +80,6 @@ pub struct PairingTickOutcome {
     pub replayed_replicators: Vec<String>,
     pub desired_read_failed: bool,
     pub peer_active: bool,
-    /// True only when a post-reconcile live read matches the owned desired
-    /// address, collection set, and effective filter.
     pub live_route_matches: bool,
 }
 
@@ -117,10 +113,6 @@ pub trait PairingStateStore: Send + Sync {
 
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>>;
 
-    /// Called once at the start of each sweep, before the per-peer loop. Lets a
-    /// store amortize per-sweep work (e.g. computing the membership-materializable
-    /// set once instead of re-verifying every signature for every peer — the
-    /// O(N²) the naive per-peer gate would do). Default is a no-op.
     async fn begin_sweep(&self) -> Result<()> {
         Ok(())
     }

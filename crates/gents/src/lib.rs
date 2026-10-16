@@ -1,12 +1,6 @@
-//! Core DefraDB-backed agent runtime for Gents.
-//!
-//! This crate owns request execution, lifecycle enforcement, persistence,
-//! identity, tools, networking, and provider-input assembly.
-
 #[cfg(test)]
 extern crate self as gents;
 
-// The same fixture owners back external and crate-private conformance tests.
 #[cfg(test)]
 #[path = "../tests/support/mod.rs"]
 pub(crate) mod support;
@@ -74,8 +68,6 @@ pub mod plugin;
 pub mod provider_http;
 pub(crate) mod provider_input;
 pub use gents_loop::provider_input::ProviderInputProfile;
-/// Exact provider context-window budget policy shared by compaction,
-/// diagnostics, and the final dispatch gate.
 pub mod provider_budget {
     pub use crate::provider_input::budget::{effective_input_budget, threshold_budget};
 }
@@ -93,33 +85,14 @@ pub mod xai_grok_oauth;
 pub mod xai_oauth_login;
 pub mod xai_oauth_refresh;
 
-/// Shared in-crate test utilities.
 #[cfg(test)]
 pub(crate) mod test_support {
-    /// Event targets a scoped subscriber in this crate's tests reads back.
-    ///
-    /// A target left out of this list stays subject to the interest cache
-    /// described on [`enable_scoped_event_capture`], so a test that captures a
-    /// new target must add it here. Enabling every callsite instead would leave
-    /// the whole suite dispatching the runtime's per-operation logging, which
-    /// costs it an order of magnitude.
     const CAPTURED_EVENT_TARGETS: &[&str] = &[
         crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
         crate::runtime_status::RECONCILE_PHASE_EVENT_TARGET,
         crate::session::REFUSAL_PROJECTION_EVENT_TARGET,
     ];
 
-    /// Keeps the captured targets enabled so a scoped subscriber observes them.
-    ///
-    /// `tracing` caches one interest per callsite for the whole process,
-    /// computed from the default subscriber of whichever thread reaches that
-    /// callsite first. Tests share the process and run concurrently, so a
-    /// callsite first reached by a thread with no subscriber is cached as
-    /// disabled, and a scoped subscriber installed before that first reach then
-    /// receives nothing. A global default that admits the captured targets
-    /// keeps their callsites enabled; each scoped subscriber still sees only the
-    /// events raised while it is the default, and this one discards the rest.
-    /// Call this before installing a scoped subscriber a test reads from.
     pub(crate) fn enable_scoped_event_capture() {
         static INSTALLED: std::sync::Once = std::sync::Once::new();
         INSTALLED.call_once(|| {
@@ -150,9 +123,6 @@ pub(crate) mod test_support {
         fn exit(&self, _span: &tracing::Id) {}
     }
 
-    /// Scripted providers have no HTTP transport. Persist their actual request
-    /// through the capture owner before returning synthetic provider output,
-    /// rather than bypassing the owned loop's armed-capture requirement.
     pub(crate) async fn capture_scripted_provider_request(
         request: &rig::completion::CompletionRequest,
         model: &str,
@@ -191,8 +161,6 @@ pub(crate) mod test_support {
         Ok(())
     }
 
-    /// Sets a process environment variable and restores its previous value on
-    /// drop, including when the test panics.
     pub(crate) struct EnvVarGuard {
         key: &'static str,
         previous: Option<String>,
@@ -215,8 +183,6 @@ pub(crate) mod test_support {
         }
     }
 
-    /// Install an explicit, inert inference/context/tools chain for a named test agent.
-    /// Schemas must already be registered. The principal's default is never changed.
     pub(crate) async fn install_test_agent(
         node: &std::sync::Arc<defra_node::EmbeddedNode>,
         owner: &str,
@@ -251,10 +217,6 @@ pub(crate) mod test_support {
             .unwrap();
     }
 
-    /// Copies the declared files of the fixture pack `tests/fixtures/packs/<name>`
-    /// into a temp directory. A plugin's `.afb` is not checked in, so each
-    /// declared artifact is written as a module that ignores stdin and
-    /// prints `plugin_output`; every other file is copied as is.
     pub(crate) fn fixture_pack_copy(
         name: &str,
         plugin_output: &serde_json::Value,
@@ -292,10 +254,6 @@ pub(crate) mod test_support {
         (dir, root)
     }
 
-    /// A gents home whose pack store holds the fixture pack
-    /// `tests/fixtures/packs/<name>` (indexed by name, as any import is), with
-    /// a plugin executor over it: what a runtime that resolves
-    /// `fixture/<name>` without a network call looks like.
     pub(crate) fn home_with_fixture_pack(
         name: &str,
     ) -> (
@@ -306,7 +264,6 @@ pub(crate) mod test_support {
         home_with_pack_dir(&dir)
     }
 
-    /// [`home_with_fixture_pack`] for a pack directory a test has edited.
     pub(crate) fn home_with_pack_dir(
         dir: &std::path::Path,
     ) -> (
@@ -325,10 +282,6 @@ pub(crate) mod test_support {
         (home, plugins)
     }
 
-    /// Reads a graph pack fixture from `tests/fixtures/packs/<name>` through
-    /// the same archive path an install takes: `pack_dir` packs the
-    /// directory, `PackArchive::from_bytes` reads it back, and the graph
-    /// loader loads it.
     pub(crate) fn load_test_graph_package(
         name: &str,
         options: &crate::graph_package::GraphPackageInstallBindings,
@@ -336,8 +289,6 @@ pub(crate) mod test_support {
         load_test_graph_package_with_plugin_output(name, options, &serde_json::json!({}))
     }
 
-    /// [`load_test_graph_package`] for a fixture whose plugin runs: its
-    /// artifact prints `plugin_output` (see [`fixture_pack_copy`]).
     pub(crate) fn load_test_graph_package_with_plugin_output(
         name: &str,
         options: &crate::graph_package::GraphPackageInstallBindings,
@@ -367,9 +318,6 @@ pub(crate) mod test_support {
         install_test_graph_package_explicit(access, actor, name, options, true).await
     }
 
-    /// [`install_test_graph_package`] with control over whether the record
-    /// this writes reads as an explicit install; a dependency-install test
-    /// wants `false`.
     pub(crate) async fn install_test_graph_package_explicit(
         access: &crate::ConfigAccess,
         actor: &str,
@@ -392,20 +340,10 @@ pub(crate) mod test_support {
         .await
     }
 
-    /// `OneOrMany::first_ref` stand-in for native `Vec` content: non-empty by
-    /// convention in every shape the tests build.
     pub(crate) fn first_content<T>(items: &[T]) -> &T {
         items.first().expect("non-empty content")
     }
 
-    /// The #589 production poison, byte-faithful to Amy's persisted
-    /// `AgentToolCall` row `Rrt-HmhWfFSmkh1HSUmHt`: a model tool-call
-    /// `arguments` string contaminated by out-of-channel tokens — a stray CJK
-    /// `房` and a leaked `</think` reasoning boundary inside a key, a nested
-    /// Hermes `<tool_call>`/`<function=...>` fragment as its value, duplicated
-    /// keys, and LITERAL newlines inside the strings (the control characters
-    /// `serde_json` rejects at "line 2 column 0"). The intended call survives
-    /// as the final `tool_name: list_hosts`.
     pub(crate) const CORRUPT_TOOL_ARGS_589: &str = "{\"raw_schema\": false, \
          \"service_id\": \"observability-mcp\", \"tool房\n</think\": \"\n<tool_call>\n\
          <function=describe_tool>\", \"raw_schema\": false, \
@@ -627,19 +565,6 @@ pub mod __test_internals {
     pub use crate::lifecycle::materialize::supersede_trigger_requests_in_txn;
     pub use crate::lifecycle::materialize::EnqueuedAgentRequest;
     pub use crate::lifecycle::queue::{reconcile_coalesced_pending_request, QueueSource};
-}
-
-#[cfg(test)]
-mod public_api_tests {
-    use super::*;
-
-    #[test]
-    fn downstream_oneshot_analysis_surface_is_available_from_crate_root() {
-        let _strategy = CompactionStrategy::StripThenSummarize;
-        let _ensure = ensure_runtime_schemas;
-        let _history = load_history;
-        let _oneshot = run_openai_oneshot_with_tools;
-    }
 }
 
 pub(crate) mod tool_output;

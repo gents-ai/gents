@@ -1,7 +1,5 @@
 use serde::Deserialize;
 
-/// One shared compaction decision/outcome row emitted by
-/// `Compaction.ReductionEngine`.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanReductionEngineCase {
     pub(crate) name: String,

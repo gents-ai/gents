@@ -1,4 +1,3 @@
-/* How long the client waits and how often it asks; tests shorten them. */
 export type AppTiming = {
   p2pAutoRestartCooldownMs: number;
   clientRestartMaxAttempts: number;

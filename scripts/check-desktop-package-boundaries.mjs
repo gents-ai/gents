@@ -460,9 +460,6 @@ const desktopAppFactory = readFileSync(
   join(root, "apps/gents-desktop/src/hooks/desktopApp.ts"),
   "utf8",
 );
-/* the app's factory takes the bridge's adapter rather than reaching for a
-   global one, and the host makes one bridge and one app for the window's
-   life, passing the same bridge's listener to the runtime */
 const appOwnsInjectedBridge =
   /export function createDesktopApp\(\{\s*api,[^}]*\}: DesktopAppParams\)/m.test(
     desktopAppFactory,
@@ -642,12 +639,7 @@ for (const [path, maximumLines] of [
   }
 }
 
-/* Screens read stores and call named actions; only the app's owners (in
-   src/hooks and src/lib) reach the native bridge. A component that imports
-   Tauri or holds the bridge's API fails. */
 const desktopRoot = join(root, "apps/gents-desktop");
-/* whether a `{ … } = useApp()` destructuring, nested braces and all, names
-   `api` */
 function destructuresApi(source) {
   for (const end of source.matchAll(/\}\s*=\s*useApp\(\)/g)) {
     let depth = 0;
@@ -695,9 +687,6 @@ for (const file of [
     );
   }
 }
-/* Tauri is the shell's native side: the app reaches it through one module,
-   and the bridge through the client package. The end-to-end boot modules
-   drive the shell directly; they are test scaffolding, not app code. */
 const reachesTauri = new Set([
   "src/lib/nativeShell.ts",
   "src/lib/nativeLocalE2e.ts",

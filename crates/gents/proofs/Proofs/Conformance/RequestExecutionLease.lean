@@ -143,8 +143,6 @@ def leaseCases : List LeaseCase :=
     , action := .appendOutput .observingReplica 101
     , expected := none
     }
-  /- This is an explicit owner heartbeat only. It does not assert provider
-  progress and does not replace stream-idle or request/tool deadline owners. -/
   , { name := "explicit_owner_heartbeat_extends_at_due_time"
     , pre := processing 101 5 10 8
     , action := .renew .mutationWriteGate 101 10
@@ -582,8 +580,6 @@ def observedLeaseExpected (testCase : ObservedLeaseCase) : Option (World Generat
   let current ← replay? testCase.pre testCase.intervening
   commitObservedTransaction? current observation
 
-/-- This counterexample records the existing native admission/commit gap rather
-than hiding it behind a bounded-latency assumption. -/
 theorem clock_passage_is_not_storage_conflict :
     (observedLeaseCases[1]? >>= observedLeaseExpected) =
       some (processing 101 20 35 25) := by

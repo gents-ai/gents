@@ -1,14 +1,3 @@
-//! The M2 eval-runner canary: two cases run end to end on real embedded trial
-//! homes against a scripted model, and the run's refusals are asked at the
-//! door rather than after a home exists.
-//!
-//! This is the acceptance test for the runner stack. Nothing here mocks the
-//! runner: `run` freezes the request, the embedded executor creates one
-//! DefraDB home per trial, installs the frozen pack and inference binding,
-//! boots a runtime, submits one request per stage and reads the captures back
-//! out. Only the provider is scripted. A failure here is a defect in the
-//! stack, not in this file.
-
 mod support;
 
 use std::path::{Path, PathBuf};
@@ -31,24 +20,11 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 use support::streaming_backend::{MockStreamingBackend, StreamPlan, StreamResponse};
-
-/// The model name the scripted backend advertises and the canary profile names.
 const MODEL: &str = "canary-model";
-
-/// One marker per stage prompt, so the scripted backend can answer each stage
-/// differently. A later stage of the same case carries the earlier stage's
-/// prompt in its conversation history, so the plans are ordered from the last
-/// stage to the first: [`MockStreamingBackend`] takes the first plan whose
-/// marker the request body contains.
 const SOLO_MARKER: &str = "canary-solo";
 const REPORT_MARKER: &str = "canary-report";
 const CONFIRM_MARKER: &str = "canary-confirm";
-
-/// The app collection a case's fixtures seed and the `items` capture reads.
 const CANARY_ITEM_SDL: &str = "type CanaryItem {\n  item_id: String\n  label: String\n}\n";
-
-/// What the trigger pack's task renders for the seeded row, so it is both the
-/// scripted backend's marker and the content the fired request must carry.
 const SEED_MARKER: &str = "Seeded item: wh-1";
 const SEED_ITEM_SDL: &str = "type SeedItem {\n  label: String\n}\n";
 const QUIET_ITEM_SDL: &str = "type QuietItem {\n  label: String\n}\n";
@@ -95,8 +71,6 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripte
             .all(|verdict| verdict.kind == OutcomeKind::Passed && verdict.score_bp == Some(10_000)),
         "{verdicts:#?}"
     );
-    // The verdicts are evidence-derived: every one of them is the seeded
-    // `items` capture counted by the check the case named.
     assert!(
         verdicts
             .iter()
@@ -114,9 +88,6 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripte
         "the scripted backend reports usage in its final chunk: {:?}",
         completion.usage
     );
-
-    // The trial home outlived the run, so the file capture can be read again
-    // out of the retained home rather than only out of the evidence.
     let recollected = executor
         .recollect(&locator(two), &request.captures)
         .await
@@ -137,10 +108,6 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripte
         outside_workspace.is_empty(),
         "nothing in the trial's workspace pointed out of it: {outside_workspace:?}"
     );
-
-    // Each trial's home was read live while it ran, and the snapshot it
-    // ended on is kept with its evidence record; the run's view for
-    // watchers carries both trials.
     for (case_id, record) in evidence_records(&canary.runs_dir(), &request.run_id, &trials) {
         let live = &record["live"];
         let stages = if case_id == "two-stage" { 2 } else { 1 };
@@ -165,8 +132,6 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripte
         .expect("the loop leaves its view beside the run");
     assert_eq!(view.trials.len(), 2);
     assert_eq!(view.report.cells[0].counts.pass, 2);
-
-    // An identical second run in a fresh launching home anchors the same way.
     let (again, repeat) = canary_request(backend.endpoint(), "run-canary").await;
     let repeat_executor =
         EmbeddedExecutor::new(DocumentRuntimeOptions::default(), again.runs_dir());
@@ -184,13 +149,6 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripte
         .await
         .unwrap();
     assert_eq!(anchors(&trials), anchors(&repeated));
-
-    // `TrialCompletion` carries no evidence digest, so the loop records each
-    // trial's own beside its home. The digest covers the trial's request ids
-    // and its messages' timestamps, both new in every run, so two runs of one
-    // case digest differently by construction. What has to agree across runs
-    // is the anchor the digest was taken over; what the digest itself pins is
-    // that it follows the evidence, so two trials of one run differ in it.
     for (run_id, runs_dir, trials) in [
         (&request.run_id, canary.runs_dir(), &trials),
         (&repeat.run_id, again.runs_dir(), &repeated),
@@ -213,13 +171,6 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripte
         );
     }
 }
-
-/// A seed stage writes a document instead of a prompt: the pack's own
-/// EventTrigger fires its task, and the stage observes that request, which is
-/// the pack's real trigger chain under evaluation rather than a prompt to it.
-/// `gents init` binds its default profile to an InferenceExecution, so a
-/// subject profile from init names one. The trial home must receive that
-/// execution and the retry policy it names, or the profile points at nothing.
 #[tokio::test]
 async fn a_subject_profile_bound_to_an_execution_and_retry_policy_starts_its_trial() {
     let backend = MockStreamingBackend::start_with_plans(MODEL, answering_plans()).unwrap();
@@ -387,8 +338,6 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
         (OutcomeKind::Passed, &json!(1)),
         "the fired request is the stage's evidence: {verdicts:#?}"
     );
-    // AC4: the captured request carries the task's rendered template, read
-    // back out of the retained trial home with the capture's own filter.
     let seeded = trial(&trials, "seeded");
     let home_dir = canary
         .runs_dir()
@@ -430,10 +379,6 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
         );
     }
 }
-
-/// A seed stage whose collection no trigger watches: nothing fires, so the
-/// stage ends unsubmitted once its own deadline passes, and the slot is owed
-/// another attempt rather than scored.
 #[tokio::test]
 async fn a_seed_stage_no_trigger_fires_for_ends_unsubmitted_at_its_deadline() {
     let backend = MockStreamingBackend::start_with_plans(MODEL, Vec::new()).unwrap();
@@ -487,10 +432,6 @@ async fn a_seed_stage_no_trigger_fires_for_ends_unsubmitted_at_its_deadline() {
         "no request reached the provider"
     );
 }
-
-/// A seed stage in a home whose event sources cannot reconcile, here because
-/// the pack's `SeedItem` schema is not among the fixtures: the reconcile error
-/// ends the stage at once rather than waiting out the runtime-ready budget.
 #[tokio::test]
 async fn a_seed_stage_whose_event_sources_do_not_reconcile_fails_at_once() {
     let backend = MockStreamingBackend::start_with_plans(MODEL, Vec::new()).unwrap();
@@ -539,10 +480,6 @@ async fn a_seed_stage_whose_event_sources_do_not_reconcile_fails_at_once() {
 
 #[tokio::test]
 async fn a_failing_first_stage_skips_the_second_and_grades_it_skipped_prerequisite() {
-    // The report stage answers 503 on every attempt, so the interactive retry
-    // ladder (one retry) is spent and the request fails on the provider
-    // boundary. `max_infra_retries: 0` keeps the slot from being planned again,
-    // and `breaker_threshold: 10` keeps one empty trial from stopping the run.
     let mut plans = answering_plans();
     plans[1] = StreamPlan::new(
         REPORT_MARKER,
@@ -624,7 +561,6 @@ async fn a_failing_first_stage_skips_the_second_and_grades_it_skipped_prerequisi
 
 #[tokio::test]
 async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_any_home() {
-    // Nothing is ever called, so the endpoint only has to be well formed.
     let (canary, base) = canary_request("http://127.0.0.1:1/v1", "run-refused").await;
     let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), canary.runs_dir());
     let registry = CheckRegistry::builtin();
@@ -691,27 +627,9 @@ async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_a
         );
     }
 }
-
-/// One case, one trial per case, two cells against one real provider: do the
-/// two arms of a pair answer identically at the seed they share?
-///
-/// A pair is how the runner shares a seed. A trial's seed is
-/// `seed_base + trial_index` (`plan::plan`), so two trials of one case are
-/// deliberately different draws and could never answer this question; the two
-/// cells at one trial index are the same draw. Both cells here name the same
-/// pack, behavior and profile, so the seed is the only thing they share and the
-/// only thing that could make them agree.
-///
-/// The finding is reported, not asserted. Equality at one seed is evidence the
-/// provider honoured it; inequality means it ignored the seed, or is not
-/// deterministic at all. Both are legitimate answers about a provider, which is
-/// why sampling runs at `temperature: 0.7`: at 0.0 the arms would agree
-/// whatever the provider did with the seed, and the run would report nothing.
 #[tokio::test]
 #[ignore = "needs GENTS_EVAL_TARGET and a real backend"]
 async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honoured() {
-    // A test binary installs no subscriber, so an unreported finding is a
-    // dropped one, even under `--nocapture`.
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_ansi(false)
@@ -784,8 +702,6 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
             .iter()
             .find(|trial| trial.identity.cell_id == cell_id)
             .unwrap_or_else(|| panic!("no {cell_id} trial in {trials:#?}"));
-        // `recollect` reopens the retained trial home and reads its assistant
-        // messages; the first one is the arm's answer.
         let evidence = executor
             .recollect(&locator(trial), &[])
             .await
@@ -816,11 +732,6 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
         "seed honoured?"
     );
 }
-
-/// The launching home and everything the canary installed into it.
-///
-/// It owns the home and its directories: a `ConfigAccess` alone would keep the
-/// node alive while its temporary directory was already removed.
 struct Canary {
     _home: EmbeddedHome,
     access: ConfigAccess,
@@ -855,12 +766,6 @@ impl Canary {
             .unwrap();
     }
 }
-
-/// A launching home with the canary definition, its inference documents and
-/// one request against the checked-in canary pack.
-///
-/// The request's owner is the launching home's DID: the run belongs to the
-/// principal that launched it, and each trial gets its own DID of its own.
 async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
     let home = EmbeddedHome::create_temp("eval-canary").await.unwrap();
     let access = ConfigAccess::local(home.node.clone());
@@ -903,9 +808,6 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
 
     let request = RunRequest {
         run_id: run_id.to_string(),
-        // The launching home both owns this run and evaluates it. They are
-        // separate facts about it, so both are supplied rather than one
-        // standing in for the other.
         evaluator_did: owner.clone(),
         owner,
         definition_id: "canary".into(),
@@ -922,8 +824,6 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
         seed_base: 1000,
         deadline_secs: Some(120),
         concurrency: 1,
-        // An acceptance test wants the defect, not a retry that hides it, and
-        // one empty trial must not stop the run.
         max_infra_retries: 0,
         breaker_threshold: 10,
         purpose: "eval".into(),
@@ -945,10 +845,6 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
     };
     (canary, request)
 }
-
-/// Two cases on the validation split: one stage, then two. Every stage counts
-/// the rows of the `items` capture, so a stage that ran says the same thing
-/// about its subject wherever it sits in a case.
 fn definition_document(owner: &str) -> Value {
     json!({
         "definition_id": "canary",
@@ -981,10 +877,6 @@ fn definition_document(owner: &str) -> Value {
         ],
     })
 }
-
-/// One case whose stage seeds a `QuietItem` row, which no trigger of the pack
-/// watches, under a deadline short enough for the test to wait out. The
-/// pack's own event source reconciles only when `schemas` holds `SeedItem`.
 fn quiet_seed_definition_document(owner: &str, definition_id: &str, schemas: &[&str]) -> Value {
     json!({
         "definition_id": definition_id,
@@ -1016,9 +908,6 @@ fn quiet_seed_definition_document(owner: &str, definition_id: &str, schemas: &[&
         }],
     })
 }
-
-/// One case whose stage seeds a `SeedItem` row and reads back the request the
-/// trigger pack fired for it.
 fn seed_definition_document(owner: &str) -> Value {
     json!({
         "definition_id": "seed",
@@ -1077,10 +966,6 @@ fn backend_document(owner: &str, backend_id: &str, endpoint: &str, auth: Value) 
         "max_queue_depth": 100,
     })
 }
-
-/// A backend that would spend the launching node's own subscription
-/// credential. `node_oauth` is only compatible with a node-scoped OAuth
-/// provider kind, so the refusal has to be asked of a realistic document.
 fn subscription_backend_document(owner: &str, backend_id: &str) -> Value {
     json!({
         "node_did": owner,
@@ -1101,10 +986,6 @@ fn profile_document(owner: &str, profile_id: &str, backend_id: &str, model: &str
         "sampling_id": "canary-sampling",
     })
 }
-
-/// One plan per stage marker, last stage first: a stage-2 request carries
-/// stage 1's prompt in its history, and the backend takes the first plan whose
-/// marker the body contains.
 fn answering_plans() -> Vec<StreamPlan> {
     vec![
         StreamPlan::new(
@@ -1136,9 +1017,6 @@ fn locator(trial: &TrialRecord) -> TrialLocator {
         home_hint: trial.identity.home_hint.clone(),
     }
 }
-
-/// What each case's trial anchored to, by case: the comparable part of a run's
-/// result, independent of which home it ran in.
 fn anchors(trials: &[TrialRecord]) -> Vec<(String, Anchor)> {
     let mut anchors = trials
         .iter()
@@ -1157,9 +1035,6 @@ fn anchors(trials: &[TrialRecord]) -> Vec<(String, Anchor)> {
     anchors.sort_by(|left, right| left.0.cmp(&right.0));
     anchors
 }
-
-/// What the loop recorded beside each retained trial home, by case: the
-/// `evidence.json` holding that trial's evidence digest and its anchor.
 fn evidence_records(runs_dir: &Path, run_id: &str, trials: &[TrialRecord]) -> Vec<(String, Value)> {
     let mut records = trials
         .iter()
@@ -1186,9 +1061,6 @@ fn evidence_records(runs_dir: &Path, run_id: &str, trials: &[TrialRecord]) -> Ve
     records.sort_by(|left, right| left.0.cmp(&right.0));
     records
 }
-
-/// The canary pack with its one `Tools` document rewritten to grant this
-/// host's shell, which is what an embedded trial may never be handed.
 fn write_pack_with_unrestricted_bash(source: &Path, destination: &Path) {
     copy_tree(source, destination);
     let path = destination.join("pack_config.json");

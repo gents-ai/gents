@@ -67,7 +67,6 @@ const view = (
   calls: [],
 });
 
-/* the parent work of the child session, selected on its node */
 function parentWorkOf(provenance: SessionProvenanceView | null) {
   const app = testApp({
     deployments: [node({ nodeDid: NODE, sessions: [parent, other, child] })],
@@ -93,7 +92,6 @@ describe("the sessions that sent work into this one", () => {
     expect(result.current.hasSenders).toBe(true);
     expect(result.current.sentBy("req-child")?.sessionId).toBe("session-parent");
     expect(result.current.sentBy("req-child-2")?.summary?.title).toBe("Reviewer");
-    /* the person's own turn, and a turn with no request, have no sender */
     expect(result.current.sentBy("req-mine")).toBeNull();
     expect(result.current.sentBy(null)).toBeNull();
   });

@@ -1,8 +1,3 @@
-//! Schema migration entry points — thin re-export of `gents-migration`.
-//!
-//! The lens-first engine owns baseline registration, chain replay, lineage
-//! verification, and (when upstream supports it) materialization.
-
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -16,10 +11,6 @@ pub use gents_migration::{
     MigrationStepOwned, Registry, DEFAULT_BASELINE, DEFAULT_REGISTRY, DEFAULT_STEPS,
 };
 
-/// Production bootstrap entry used by CLI, desktop, and runtime startup.
-///
-/// Registers the canonical baseline SDL, applies configured migration steps,
-/// and verifies collection lineages. The current registry has no historical steps.
 pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
     crate::config_client::ConfigAccess::local(node)
         .run_local_owned(|node| async move { ensure_migrations_borrowed(node.as_ref()).await })

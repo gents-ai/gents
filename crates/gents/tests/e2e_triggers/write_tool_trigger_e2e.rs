@@ -35,9 +35,6 @@ async fn register_action_request_schema(node: &EmbeddedNode) {
         .expect("add_schema for ActionRequest");
 }
 
-/// Publish canonical desired-state documents through the shared apply owner.
-/// Exact owner (node_did) is authored on every document; the desired-state
-/// owner validates same-owner references before committing.
 async fn apply_documents(
     node: &Arc<EmbeddedNode>,
     documents: Vec<(Collection, serde_json::Value)>,

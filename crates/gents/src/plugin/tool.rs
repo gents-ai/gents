@@ -1,9 +1,3 @@
-//! An installed plugin offered to the model as a tool.
-//!
-//! The model sees the plugin's own name, description and input schema, and
-//! supplies only the arguments. Which artifact runs, and with what authority,
-//! is the installed record's, resolved when the tool surface is built.
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -27,16 +21,12 @@ pub struct PluginTool {
     executor: Arc<PluginExecutor>,
     record: InstalledPlugin,
     definition: ToolDefinition,
-    /// The root the operator gave the agent's file tools: the working folder
-    /// of a session that has no workspace folder of its own.
     root: Option<PathBuf>,
     input_fields: Vec<WriteToolField>,
     tool_calls: bool,
 }
 
 impl PluginTool {
-    /// The tool `plugin` names, refused when it is not installed or no
-    /// longer the pinned artifact.
     pub fn resolve(
         executor: Arc<PluginExecutor>,
         plugin: &PluginToolRef,

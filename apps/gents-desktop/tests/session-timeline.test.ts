@@ -388,9 +388,6 @@ describe("session timeline page merging", () => {
     ).toEqual(["authored-r", "k2"]);
   });
 
-  /* A request authors rows besides the person's message: the workspace
-     instructions it publishes beside the prompt arrive as their own row and
-     must not retire the pending turn standing in for the message. */
   it.each(["older", "tip"] as const)(
     "keeps a queued input when only the request's context row is saved on the %s page",
     (direction) => {
@@ -688,8 +685,6 @@ describe("session timeline page merging", () => {
   });
 
   it("never adds rows above the first one shown when the tip starts earlier", () => {
-    /* the live tail left the end of the newest page, so the page reaches
-       one row further back */
     const current = session(["k2", "k3", "live-assistant"], {
       totalItems: 4,
       pageItems: 3,

@@ -1,15 +1,3 @@
-//! Journaled host executor for isolated workspaces (PR 4 / PR 7 / PR 8).
-//!
-//! ActionPlans carry no absolute destination. The host places a worktree as a
-//! deterministic child of the repository checkout parent, journals each action
-//! Validated → Executing → EffectObserved → ResultDocsWritten, and writes a
-//! replicated [`IsolatedWorkspaceDoc`] plus a local [`WorkspacePlacementDoc`].
-//! Writer success seals the tree, persists a [`WorkspaceReceiptDoc`], and
-//! freezes instruction provenance from `base_sha`. After seal, concurrent
-//! ReadOnly reviewers bind with `seal_hash` checks. Integration and cleanup
-//! are typed host actions — never worker bash against trunk, never implicit
-//! disk teardown.
-
 mod action_plan;
 pub(crate) mod adapter;
 mod artifact;
@@ -84,7 +72,6 @@ mod tests;
 #[cfg(test)]
 pub(crate) use overlay::overlay_tests::{artifact_test_fixture, ArtifactTestFixture};
 
-// Query/decoder and stamping remain owned by Workspace for native graph publication.
 pub(crate) use overlay::{
     decode_isolated_workspace_record_response, isolated_workspace_record_query,
 };

@@ -2,31 +2,13 @@
 import type { ReconstructionState } from "./ReconstructionState.js";
 import type { RequestOriginView } from "./RequestOriginView.js";
 
-export type MessageView = { messageKey: string, requestId: string | null,
+export type MessageView = { messageKey: string, requestId: string | null, ownsTurn: boolean, sequence: number | null, role: string | null, displayRole: string | null, displayContent: string | null, reasoning: string | null, hasToolCalls: boolean, hasToolResults: boolean,
 /**
- * Whether this row is the person's own message for its request (the
- * authored prompt publication) rather than a row the request also
- * authors: workspace context, tool delivery, reminders.
- */
-ownsTurn: boolean, sequence: number | null, role: string | null, displayRole: string | null, displayContent: string | null, reasoning: string | null, hasToolCalls: boolean, hasToolResults: boolean,
-/**
- * Explicit canonical reconstruction outcome.  A header is durable even
- * while one of its immutable dependencies is still replicating, so the
- * UI must not mistake absent presentation text for an empty message.
+ * Durable even while an immutable dependency is still replicating.
  */
 reconstructionState: ReconstructionState, reconstructionError?: string | null, deniedDependencyDocId?: string | null, runtimeControl: boolean,
 /**
- * The request whose input this entry publishes
- * (`gents::lifecycle::input_message_owner`); for a folded entry, the
- * folded request rather than the request it was published under.
+ * The request whose input this entry publishes; for a folded entry, the
+ * folded request.
  */
-inputRequestId?: string | null,
-/**
- * Set for input that entered the session without the person typing it.
- */
-origin?: RequestOriginView | null,
-/**
- * A user entry's text blocks as published, untrimmed and joined by
- * newlines; the presented body normalizes whitespace.
- */
-inputText?: string | null, timestamp: string | null, };
+inputRequestId?: string | null, origin?: RequestOriginView | null, inputText?: string | null, timestamp: string | null, };

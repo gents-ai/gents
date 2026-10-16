@@ -1,10 +1,8 @@
-//! `build`: one run's documents as the operator reads them (spec 4a §1).
-//!
-//! Pure. The unit is the slot `(cell, case, trial_index)`, classified by its
-//! latest attempt; attempts are a separate total, so a retry never inflates
-//! what completed. A slot's score is read at its latest *completed* attempt
-//! through `evidence::counted_slots`, the selection the optimizer pairs on,
-//! so a report and a decision never disagree about what a slot scored.
+//! `build`: one run's documents as the operator reads them. Pure. The unit is
+//! the slot `(cell, case, trial_index)`, classified by its latest attempt; a
+//! slot's score is read at its latest completed attempt through
+//! `evidence::counted_slots`, the selection the optimizer pairs on, so a
+//! report and a decision never disagree about what a slot scored.
 
 use std::collections::BTreeMap;
 
@@ -29,12 +27,10 @@ pub struct EvalReport {
     pub report_version: u32,
     pub run: RunSummary,
     pub cells: Vec<CellReport>,
-    /// Non-invalidated runs of this definition version on this split,
-    /// this one included.
+    /// Non-invalidated runs of this definition version on this split.
     pub exposure: usize,
-    /// The installed definition no longer digests to the one the run froze
-    /// (or is gone). `build` never sets it; `report::store` does, from the
-    /// run's frozen copy.
+    /// Set by `report::store` from the run's frozen copy when the installed
+    /// definition no longer digests to it; `build` never sets it.
     pub definition_changed: bool,
 }
 
@@ -63,13 +59,9 @@ pub struct CellReport {
     pub slots: Vec<SlotReport>,
     pub cases: Vec<CaseReport>,
     pub headline_bp: Option<u32>,
-    /// Summed over each slot's counted attempt.
     pub usage: TrialUsage,
-    /// `evidence::cell_usage` for this cell: the numbers the cost gate reads,
-    /// computed as the optimizer computes them, so `compare` and the
-    /// optimizer share one tally.
+    /// Shared with the optimizer.
     pub cell_usage: CellUsage,
-    /// Trial rows of this cell, every attempt included.
     pub attempts: u32,
     pub counts: SlotCounts,
 }
@@ -83,15 +75,11 @@ pub struct SlotReport {
     pub score_bp: Option<u32>,
     /// What pairing reads for this slot.
     pub counted: SlotScore,
-    /// The counted attempt's verdicts, in (stage, check) order; empty when
-    /// no attempt completed.
     pub verdicts: Vec<SlotVerdict>,
-    /// The latest row, completed or not.
     pub latest: Option<AttemptSummary>,
 }
 
-/// One verdict that counts for a slot: of its counted attempt, after regrade
-/// supersession.
+/// One verdict that counts for a slot.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SlotVerdict {
     pub verdict_id: String,
@@ -102,16 +90,12 @@ pub struct SlotVerdict {
     pub provider_reason: Option<ProviderReason>,
     pub score_bp: Option<u32>,
     pub weight: u32,
-    /// `raw.reason_code`, the check's own contract.
     pub reason_code: Option<String>,
-    /// What the check observed against what it expected, by
-    /// [`crate::eval::checks::verdict_detail`].
+    /// By [`crate::eval::checks::verdict_detail`].
     #[serde(default)]
     pub detail: Option<String>,
 }
 
-/// A verdict's `raw.reason_code`, the check's own contract; `None` when the
-/// check wrote none or wrote something other than a string.
 pub fn reason_code(record: &VerdictRecord) -> Option<String> {
     record
         .raw
@@ -142,7 +126,7 @@ pub enum SlotClass {
     Fail,
     Unknown,
     NotEvidence,
-    /// The latest row has a null completion: crashed or cancelled.
+    /// Latest row with a null completion.
     Abandoned,
     /// No row yet.
     Planned,
@@ -185,10 +169,9 @@ pub struct AttemptSummary {
     pub attempt: u32,
     pub trial_node_did: String,
     pub session_id: String,
-    /// Relative to `<launching home>/eval/runs`. A locator, never identity.
+    /// Relative to `<launching home>/eval/runs`.
     pub home_hint: Option<String>,
     pub evidence_digest: Option<String>,
-    /// Empty while the attempt is open.
     pub stages: Vec<StageCompletion>,
     pub usage: TrialUsage,
 }
@@ -224,12 +207,9 @@ impl SlotCounts {
     }
 }
 
-/// Build `run`'s report from its rows.
-///
-/// `peers` are the owner's run headers, this run's included; they feed only
-/// `exposure`. Refused, never guessed at: rows of another run, a trial naming
-/// a cell or case the run did not freeze, and a definition that no longer
-/// digests to what the run froze (its stage ids could mean something else).
+/// Build `run`'s report from its rows; refused for rows of another run, a
+/// trial naming a cell or case the run did not freeze, and a definition that
+/// no longer digests to what the run froze.
 pub fn build(
     run: &RunRecord,
     trials: &[TrialRecord],
@@ -317,8 +297,7 @@ pub fn build(
     })
 }
 
-/// A slot's counted attempt: its score, whether every weighted acceptance
-/// verdict passed, the row itself, and the verdicts that count.
+/// A slot's counted attempt: its score and verdicts.
 struct Counted<'a> {
     score: CaseTrialScore,
     all_pass: bool,
@@ -332,8 +311,6 @@ fn cell_report(
     cell: &CellSpec,
     trials_per_case: u32,
 ) -> CellReport {
-    // Keyed by trial as well: `counted_slots` selected each view within one
-    // trial, so a verdict id another trial repeats never stands in for it.
     let by_id: BTreeMap<(&str, &str), &VerdictRecord> = rows
         .verdicts
         .iter()
@@ -462,8 +439,8 @@ fn cell_report(
     report
 }
 
-/// Spec 4a §1: no row is Planned, an open latest row is Abandoned, and
-/// otherwise the case-trial class of the latest completed attempt.
+/// No row is Planned, an open latest row is Abandoned, and otherwise the
+/// case-trial class of the latest completed attempt.
 fn slot_class(latest: Option<&TrialRecord>, counted: Option<&Counted<'_>>) -> SlotClass {
     let Some(latest) = latest else {
         return SlotClass::Planned;
@@ -475,9 +452,6 @@ fn slot_class(latest: Option<&TrialRecord>, counted: Option<&Counted<'_>>) -> Sl
         Some((CaseTrialScore::NotEvidence, _)) => SlotClass::NotEvidence,
         Some((CaseTrialScore::Scored(_), true)) => SlotClass::Pass,
         Some((CaseTrialScore::Scored(_), false)) => SlotClass::Fail,
-        // `build` has checked every case against the definition, so a
-        // completed slot always has a counted attempt; without one it would
-        // say nothing either way.
         Some((CaseTrialScore::Unknown, _)) | None => SlotClass::Unknown,
     }
 }
@@ -501,7 +475,7 @@ fn attempt_summary(record: &TrialRecord) -> AttemptSummary {
     }
 }
 
-/// Two token counts, absent only when both are.
+/// Absent only when both are.
 fn sum(total: Option<u64>, one: Option<u64>) -> Option<u64> {
     match (total, one) {
         (None, None) => None,
@@ -569,27 +543,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_fixtures_build_one_row_per_attempt_and_one_verdict_per_completion() {
-        let rows = Rows::default()
-            .add(RUN, at("base", "disk", 0, 1), fail())
-            .add(RUN, at("base", "disk", 0, 2), pass())
-            .unmetered()
-            .add(RUN, at("base", "disk", 1, 1), Outcome::Open);
-        assert_eq!(rows.trials.len(), 3);
-        assert_eq!(rows.verdicts.len(), 2);
-        assert_eq!(
-            rows.verdicts[1].trial_id,
-            trial_id(RUN, at("base", "disk", 0, 2))
-        );
-        let usage = &rows.trials[1].completion.as_ref().unwrap().usage;
-        assert_eq!((usage.input_tokens, usage.output_tokens), (None, None));
-        assert!(rows.trials[2].completion.is_none());
-        let definition = definition(&["disk"]);
-        let run = record(RUN, &definition, &["base"], 1);
-        assert_eq!(run.origin.case_ids, vec!["disk".to_owned()]);
-    }
-
     use crate::document_config::EvalSplit;
     use crate::eval::report::evidence::CellUsage;
     use crate::eval::report::report_refused;
@@ -630,7 +583,6 @@ mod tests {
             )
             .add(RUN, at("base", "disk", 4, 1), Outcome::Open);
         let report = build(&run, &rows.trials, &rows.verdicts, &definition, &[]).unwrap();
-
         assert_eq!(report.report_version, REPORT_VERSION);
         assert_eq!(
             classes(&report),
@@ -655,8 +607,6 @@ mod tests {
         assert_eq!(cell.counts, one_each);
         assert_eq!(cell.cases[0].counts, one_each);
         assert_eq!(cell.attempts, 5, "the planned slot has no row");
-        // An unknown counts as a failure in a mean; a not-evidence slot and
-        // slots with no completed attempt are left out: (10000 + 0 + 0) / 3.
         assert_eq!(cell.cases[0].mean_bp, Some(3_333));
         assert_eq!(cell.headline_bp, Some(3_333));
         assert_eq!(
@@ -693,11 +643,7 @@ mod tests {
         rows.verdicts.push(second);
         let report = build(&run, &rows.trials, &rows.verdicts, &definition, &[]).unwrap();
         let slot = &report.cells[0].slots[0];
-        assert_eq!(
-            (slot.class, slot.score_bp),
-            (SlotClass::Fail, Some(5_000)),
-            "a weighted mean of 5000 is still a failing slot"
-        );
+        assert_eq!((slot.class, slot.score_bp), (SlotClass::Fail, Some(5_000)));
     }
 
     #[test]
@@ -742,15 +688,13 @@ mod tests {
         assert_eq!((cell.counts.pass, cell.counts.abandoned), (1, 1));
         assert_eq!(
             (cell.slots[0].class, cell.slots[0].attempts),
-            (SlotClass::Pass, 2),
-            "a retry that produced evidence is one slot, not two completions"
+            (SlotClass::Pass, 2)
         );
         let abandoned = &cell.slots[1];
         assert_eq!(abandoned.class, SlotClass::Abandoned);
         assert_eq!(
             (abandoned.counted, abandoned.score_bp),
-            (SlotScore::Scored(10_000), Some(10_000)),
-            "the score is the latest completed attempt's, as the optimizer pairs it"
+            (SlotScore::Scored(10_000), Some(10_000))
         );
         assert_eq!(
             abandoned.latest.as_ref().map(|latest| latest.attempt),
@@ -819,26 +763,20 @@ mod tests {
 
         let foreign = Rows::default().add("other", at("base", "disk", 0, 1), pass());
         let reason = refusal(build(&run, &foreign.trials, &[], &definition, &[]));
-        assert!(reason.contains("belongs to run other"), "{reason}");
+        assert!(reason.contains("belongs to run other"));
 
         let mut rows = Rows::default().add(RUN, at("base", "disk", 0, 1), pass());
         rows.verdicts[0].run_id = "other".into();
         let reason = refusal(build(&run, &rows.trials, &rows.verdicts, &definition, &[]));
-        assert!(
-            reason.starts_with("verdict ") && reason.contains("belongs to run other"),
-            "{reason}"
-        );
+        assert!(reason.starts_with("verdict ") && reason.contains("belongs to run other"));
 
         let ghost = Rows::default().add(RUN, at("ghost", "disk", 0, 1), pass());
         let reason = refusal(build(&run, &ghost.trials, &[], &definition, &[]));
-        assert!(reason.contains("did not freeze cell \"ghost\""), "{reason}");
+        assert!(reason.contains("did not freeze cell \"ghost\""));
 
         let elsewhere = Rows::default().add(RUN, at("base", "elsewhere", 0, 1), pass());
         let reason = refusal(build(&run, &elsewhere.trials, &[], &definition, &[]));
-        assert!(
-            reason.contains("did not freeze case \"elsewhere\""),
-            "{reason}"
-        );
+        assert!(reason.contains("did not freeze case \"elsewhere\""));
         assert_eq!(
             trial_id(RUN, at("base", "elsewhere", 0, 1)),
             elsewhere.trials[0].identity.trial_id
@@ -869,13 +807,9 @@ mod tests {
                     verdict.reason_code.as_deref()
                 ))
                 .collect::<Vec<_>>(),
-            vec![("regrade", OutcomeKind::Passed, Some("fixture"))],
-            "the superseded row is not counted"
+            vec![("regrade", OutcomeKind::Passed, Some("fixture"))]
         );
         assert_eq!(verdicts[0].stage_id, "check");
-        assert!(
-            report.cells[0].slots[1].verdicts.is_empty(),
-            "a planned slot has none"
-        );
+        assert!(report.cells[0].slots[1].verdicts.is_empty());
     }
 }

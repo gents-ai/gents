@@ -4,35 +4,27 @@ import type { BackendProviderKind } from "./BackendProviderKind.js";
 import type { OpenAiWireApi } from "./OpenAiWireApi.js";
 
 /**
- * Shared provider connection. Model and generation choices live in profiles.
- * Authentication is explicit and must be compatible with the provider adapter.
- * OAuth credentials remain resolved through the invoking principal's DID.
+ * Shared provider connection. Authentication must be compatible with the
+ * provider adapter; OAuth credentials resolve through the invoking principal's DID.
  */
 export type InferenceBackend = { node_did: string, backend_id: string, name: string, provider_kind: BackendProviderKind, openai_wire_api?: OpenAiWireApi | null, endpoint: string,
 /**
- * Required explicit choice; missing or invalid credentials never fall back
- * to unauthenticated access. The same selection governs discovery and calls.
+ * Missing/invalid credentials never fall back to unauthenticated access.
  */
 auth: BackendAuth,
 /**
- * Connection establishment only, not the total streaming response duration.
- * Default 10s, bounded by the active operation's deadline.
+ * Connection establishment only; default 10s, bounded by the operation deadline.
  */
 connect_timeout_secs?: number | null,
 /**
- * Total model-discovery request timeout. Default 10s for all discovery callers.
+ * Total model-discovery request timeout; default 10s.
  */
 discovery_timeout_secs?: number | null,
 /**
- * Shared backend capacity across all profiles and models using this connection.
- * Absent/null resolves to 1; an explicit value must be positive.
+ * Shared backend capacity across profiles; absent resolves to 1.
  */
 max_concurrent?: number | null,
 /**
- * Absent/null resolves to 100; zero disables queueing, negatives are invalid.
+ * Absent resolves to 100; zero disables queueing.
  */
-max_queue_depth?: number | null, enabled?: boolean | null,
-/**
- * Optional UI/discovery labels. References, never tags, determine execution.
- */
-tags?: Array<string> | null, };
+max_queue_depth?: number | null, enabled?: boolean | null, tags?: Array<string> | null, };

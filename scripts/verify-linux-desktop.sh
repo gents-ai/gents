@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-# Run inside the disposable Debian release container, not on a developer host.
 [[ "$(uname -m)" == x86_64 && "$(id -u)" == 0 ]]
 shopt -s nullglob
 debs=(target/release/bundle/deb/*.deb)
@@ -25,7 +23,6 @@ required=$(objdump -T "$binary" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sed 's/GLIBC
 
 smoke() {
   local label="$1" executable="$2" smoke_root smoke_user status log
-  # Each installer gets an ordinary user and fresh home, without Vite or a CLI.
   smoke_root=$(mktemp -d /tmp/gents-desktop-smoke.XXXXXX)
   smoke_user="gents-smoke-${smoke_root##*.}"
   log="target/desktop-smoke-${label}.log"
@@ -55,8 +52,7 @@ chmod +x "${images[0]}"
 appimage_path=$(realpath "${images[0]}")
 smoke appimage "$appimage_path"
 
-# The bundled CLI must run with no AppImage environment, because the user
-# service runs a copy of it that outlives the mount. No service is installed.
+# The user service runs a bundled CLI after the AppImage mount is gone.
 appimage_extract=$(mktemp -d /tmp/gents-appimage-extract.XXXXXX)
 (
   cd "$appimage_extract"

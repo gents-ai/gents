@@ -27,7 +27,6 @@ theorem deserializeWireFields_serializeWireFields (fields : CanonicalFields) :
     simpa using decodeWireFields_serializeWireFieldList fields []
   rw [hdecode]
 
-/-- Actual length-framed, concatenated wire bytes are injective. -/
 theorem serializeWireFields_injective : Function.Injective serializeWireFields := by
   intro a b h
   have := congrArg deserializeWireFields h
@@ -64,7 +63,6 @@ theorem hexBytePair_injective :
   split at hhigh <;> split at hhigh <;> split at hlow <;> split at hlow <;>
   omega
 
-/-- Actual rendered lower-case ASCII/UTF-8 hex bytes are injective. -/
 theorem utf8HexBytes_injective : Function.Injective utf8HexBytes := by
   intro a
   induction a with
@@ -94,7 +92,6 @@ theorem canonicalDigestFromFields_injective :
   have hserialized := congrArg Digest.serializedBytes h
   exact canonicalSerializedFields_injective hserialized
 
-/-- Equality of the actual wire-rendered digest bytes implies exact canonical fields. -/
 theorem renderDigest_canonical_injective :
     Function.Injective (fun fields => renderDigest (canonicalDigestFromFields fields)) := by
   intro a b h
@@ -107,7 +104,6 @@ theorem canonicalRequestDigest_eq_implies_fields_eq {a b : Request}
     canonicalRequestFields a = canonicalRequestFields b :=
   canonicalDigestFromFields_injective h
 
-/-- Collision resistance is supplied by the production hash, never asserted internally. -/
 theorem production_hash_equality_implies_fields_eq
     (hash : WireBytes → String) (hhash : ProductionHashCollisionResistant hash)
     {a b : CanonicalFields}
@@ -115,7 +111,6 @@ theorem production_hash_equality_implies_fields_eq
     a = b :=
   canonicalSerializedFields_injective (hhash h)
 
-/-- Transport observations and verification results are derived, never signed payload fields. -/
 theorem canonical_fields_exclude_observed_peer (r : Request) (value : String) :
     canonicalRequestFields { r with observedCandidatePeer := value } =
       canonicalRequestFields r := by rfl
@@ -278,7 +273,6 @@ theorem current_enrollment_grants_peer_admission {s : State} {r : Request} {d : 
 theorem empty_authorization_wellFormed : AuthorizationWellFormed ({} : State) := by
   simp [AuthorizationWellFormed]
 
-/-- A restore merge preserves serial well-formedness exactly when its tie is identical. -/
 theorem mergeAuthorization_preserves_wellFormed
     {s : State} {revision : AuthorizationRevision}
     (hwf : AuthorizationWellFormed s)
@@ -376,7 +370,6 @@ theorem revoke_preserves_wellFormed
       ⟨current, hcurrent, hsame, by omega⟩
   · exact hwf
 
-/-- Every serial operator transition preserves well-formedness. -/
 theorem SerialTransition.preserves_wellFormed
     {pre post : State} (step : SerialTransition pre post)
     (hwf : AuthorizationWellFormed pre) : AuthorizationWellFormed post := by
@@ -399,7 +392,6 @@ theorem SerialReachable.preserves_wellFormed
   | refl => exact hwf
   | tail previous step ih => exact step.preserves_wellFormed ih
 
-/-- Equal-sequence conflicting replicas invalidate both contenders. -/
 theorem equal_sequence_conflict_has_no_unique_maximum
     {s : State} {a b : AuthorizationRevision}
     (ha : a ∈ s.authorizations) (hb : b ∈ s.authorizations)
@@ -554,7 +546,6 @@ theorem server_ready_refines_hydration_admission
       (reverseHydrationRequestFor r session) := by
   exact enrollment_ready_refines_directional_hydration_admission hready howner
 
-/-- Every directional route admitted by projection belongs to an exact unique current approval. -/
 theorem projected_hydration_admission_requires_exact_current_approval
     {s : State} {selectedNetwork : String} {direction : RouteDirection}
     {sessions : Finset SessionHydration.SessionOwner}

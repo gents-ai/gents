@@ -105,10 +105,6 @@ impl EnrollmentDecisionService {
 }
 
 impl EnrollmentDecisionService {
-    /// The operator check for a signed runtime command other than an
-    /// enrollment one: the signer is this runtime's identity, the signature
-    /// covers `payload`, and the nonce is consumed once. The caller checks
-    /// the command's time window first.
     pub(crate) async fn authenticate_signed(
         &self,
         signer_did: &str,
@@ -131,8 +127,8 @@ impl EnrollmentDecisionService {
 const OPERATOR_NONCE_RETENTION_SECONDS: i64 = 5 * 60;
 
 /// Atomically consume one signed operator nonce before any protected read or
-/// decision. The durable unique key survives process restart; storing only a
-/// domain-separated digest avoids retaining the bearer value itself.
+/// decision; the durable unique key survives restart and the stored digest
+/// never retains the bearer value itself.
 async fn consume_operator_nonce(
     node: &Arc<EmbeddedNode>,
     admin_did: &str,

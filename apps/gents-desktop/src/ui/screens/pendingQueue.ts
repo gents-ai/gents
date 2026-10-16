@@ -1,7 +1,3 @@
-/* What the pending tray shows and what an edit to it sends, kept apart from
-   the tray's rendering. An edit always carries the whole observed queue as
-   its fence; the runtime refuses one made against a queue that has since
-   changed. */
 import type {
   PendingQueueEditRequest,
   PendingQueueEntryView,
@@ -19,8 +15,6 @@ export type PendingRow =
       index: number;
     };
 
-/* The native snapshot owns arrival order, including already claimed inputs.
-   Queue controls determine editability without reordering that snapshot. */
 export function pendingRows(
   queued: readonly PendingTurnView[],
   queue: readonly PendingQueueEntryView[] | null,
@@ -40,9 +34,6 @@ export function pendingRows(
   });
 }
 
-/* A move rewrites the contiguous run it crosses. Every entry in that run
-   must be editable and in the moved entry's execution group, so an input
-   never jumps over another group or a message it may not edit. */
 export function moveRun(
   queue: readonly PendingQueueEntryView[],
   from: number,
@@ -55,8 +46,6 @@ export function moveRun(
   return run.every((item) => item.editable && item.editGroup === group) ? run : null;
 }
 
-/* Two of a person's messages the runtime groups apart: what sets a group
-   is the runtime's, so the tray says only that they differ. */
 export function separatedBySettings(
   queue: readonly PendingQueueEntryView[],
   a: number,

@@ -1,8 +1,3 @@
-//! The backend provider vocabulary the loop's request-projection layer
-//! (`provider_input`) switches on. `gents`'s own `backend_provider` module
-//! carries the rest (model discovery over reqwest, OAuth guidance) and
-//! re-exports this enum so its callers see one type.
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -18,12 +13,8 @@ pub enum BackendProviderKind {
     ChatGptCodex,
     #[serde(rename = "XaiGrokOAuth")]
     XaiGrokOAuth,
-    /// Claude subscription over Messages HTTP, authenticated with an
-    /// node-scoped `OAuthCredential` (`claude-subscription`) written by
-    /// `gents claude-login`.
     #[serde(rename = "ClaudeCliSubscription")]
     ClaudeCliSubscription,
-    /// Anthropic API key over Messages HTTP; `api_key` or `environment` auth.
     #[serde(rename = "AnthropicApiKey")]
     AnthropicApiKey,
 }
@@ -62,8 +53,7 @@ impl BackendProviderKind {
         }
     }
 
-    /// Backends that authenticate with node-scoped `OAuthCredential` documents
-    /// rather than a fleet-global API key. These must not be fleet-probed.
+    /// Must not be fleet-probed because credentials are node-scoped documents.
     pub fn is_node_scoped_oauth(self) -> bool {
         matches!(
             self,
@@ -71,7 +61,6 @@ impl BackendProviderKind {
         )
     }
 
-    /// Kinds that speak the native Anthropic Messages wire.
     pub fn uses_messages_wire(self) -> bool {
         matches!(self, Self::ClaudeCliSubscription | Self::AnthropicApiKey)
     }

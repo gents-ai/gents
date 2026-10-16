@@ -124,9 +124,8 @@ async fn assert_access_control(
         .any(|collection| !collection.is_empty()));
 }
 
-/// Serve the home for one phase on its own runtime. Dropping the runtime
-/// stops the node's detached HTTP and P2P tasks, which is what releases the
-/// store for the next opener.
+/// Dropping the phase runtime stops the node's detached HTTP/P2P tasks,
+/// which releases the store for the next opener.
 fn serve_phase(
     data_dir: &Path,
     principal: &str,
@@ -151,10 +150,6 @@ fn serve_phase(
     result
 }
 
-/// A NAC-enabled served home refuses anonymous HTTP writes and schema
-/// changes, admits its principal's signed requests and the node's own
-/// in-process P2P administration, and keeps doing so after the existing store
-/// is reopened.
 #[test]
 fn served_home_admits_only_its_principal_across_restart() -> Result<()> {
     let home = tempfile::tempdir()?;

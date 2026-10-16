@@ -1,7 +1,5 @@
 import Proofs.CanonicalOutput.Execution.Gate
 import Proofs.CanonicalOutput.Execution.BackgroundContinuation
-
-/-! Atomic local-gate composition for notification publication plus its queue owner. -/
 namespace CanonicalOutput.Execution.BackgroundGate
 
 def committedQueue (before : SessionQueue.SessionQueueState)

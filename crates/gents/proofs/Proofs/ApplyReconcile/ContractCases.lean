@@ -1,10 +1,6 @@
 import Proofs.ApplyReconcile.Publication
 import Proofs.Conformance.ContractTypes
 import Mathlib.Data.Finset.Card
-
-/-! Executable publication witnesses. Fixture rows call `publish` itself; there
-is no second installer or per-write ordering contract. Regenerate JSON and replace
-the old Rust bridge in the next conformance layer. -/
 namespace ApplyReconcile.ContractCases
 
 open Conformance.Contracts
@@ -75,7 +71,6 @@ private def docRefJson (d : DocRef) : String :=
     ++ ",\"id\":" ++ jsonString d.id
     ++ ",\"node_did\":" ++ jsonString d.nodeDid ++ "}"
 
-/-- Project fixture keys only; no installer logic is duplicated here. -/
 private def desiredJson (keys : List DocRef) (desired : DocRef → Option DesiredFields) : String :=
   jsonArray (keys.filterMap fun d => (desired d).map fun f =>
     "{\"ref\":" ++ docRefJson d
@@ -110,7 +105,6 @@ def applyReconcileCasesJson : String :=
 
 private def boolJson (b : Bool) : String := if b then "true" else "false"
 
-/-- `expected` rows: `content` is `null` when the document must be absent. -/
 private def expectedJson (rows : List (DocRef × Option DesiredFields)) : String :=
   jsonArray (rows.map fun (d, f) =>
     "{\"ref\":" ++ docRefJson d ++ ",\"content\":"

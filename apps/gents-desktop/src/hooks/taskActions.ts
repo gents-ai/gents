@@ -9,10 +9,8 @@ import { selection, type SelectionStore } from "./selectionStore";
 
 type TaskActionParams = {
   api: DesktopApiAdapter;
-  /** the selection, whose intent a run's result is checked against */
   store: SelectionStore;
   refreshSnapshot: () => Promise<void>;
-  /** shows a failed action to the person, once */
   reportFailure: (message: string) => void;
 };
 
@@ -22,8 +20,6 @@ export function createTaskActions({
   refreshSnapshot,
   reportFailure,
 }: TaskActionParams) {
-  /* a run, then the client read again once the bridge accepted it; a
-     failed read shows in the banner like any read, and the run stands */
   async function run(label: string, start: () => Promise<TaskRunResult>) {
     const intentGeneration = selection.captureIntent(store);
     try {
@@ -38,18 +34,8 @@ export function createTaskActions({
   }
 
   return {
-    /**
-     * Runs a schedule now and reads the client again once the bridge accepts
-     * it. A failure to start is reported once, unless the person has moved
-     * on, then rethrown.
-     */
     runSchedule: (request: ScheduleRunRequest) =>
       run("run the schedule", () => api.runSchedule(request)),
-    /**
-     * Runs a task now and reads the client again once the bridge accepts it.
-     * A failure to start is reported once, unless the person has moved on,
-     * then rethrown.
-     */
     runTask: (request: TaskRunRequest) =>
       run("run the task", () => api.runTask(request)),
   };

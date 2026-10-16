@@ -1,11 +1,3 @@
-//! Which executable a native Gents service runs, and where it has to live.
-//!
-//! A service definition outlives the desktop process that wrote it, so the
-//! executable it names must outlive it too. A packaged build launched from a
-//! temporary AppImage mount keeps a copy of its runtime under the desktop
-//! home and points the service at that copy; every other install points at
-//! the executable where it already sits.
-
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -13,34 +5,30 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::error::{BridgeError, BridgeErrorCode};
 
-/// Where the runtime copied out of a packaged build is kept, relative to the
-/// desktop home.
 const RUNTIME_DIR: &str = "runtime";
 
-/// Names a copy still being written, so it is never mistaken for the runtime.
 const INCOMING_PREFIX: &str = ".incoming.";
 
-/// How long a staged copy must sit untouched before it counts as abandoned.
 const ABANDONED_COPY_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
-/// Refresh and start run in one process. One lock keeps them from publishing
-/// the same destination at the same time.
+/// One lock keeps refresh and start from publishing the same destination at
+/// the same time.
 static INSTALL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 static INSTALL_ATTEMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// A resolved runtime executable and what it takes to make a service own it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ServiceExecutable {
-    /// The executable already sits at a path that survives the desktop app.
     InPlace(PathBuf),
-    /// The executable ships inside a temporary AppImage mount. `installed` is
-    /// the copy under the desktop home that the service definition names.
-    Packaged { source: PathBuf, installed: PathBuf },
+    /// Inside a temporary AppImage mount; `installed` is the durable copy a
+    /// service definition names.
+    Packaged {
+        source: PathBuf,
+        installed: PathBuf,
+    },
 }
 
 impl ServiceExecutable {
-    /// The path a service definition points at.
     pub(crate) fn service_path(&self) -> &Path {
         match self {
             Self::InPlace(path) => path,
@@ -48,9 +36,8 @@ impl ServiceExecutable {
         }
     }
 
-    /// Puts the bytes behind [`Self::service_path`] in place, and reports
-    /// whether they changed. Callers do this before a definition is installed
-    /// or started, and at startup, never on a status read.
+    /// Runs before a definition is installed or started, and at startup,
+    /// never on a status read.
     pub(crate) fn install(&self) -> Result<bool, BridgeError> {
         let Self::Packaged { source, installed } = self else {
             return Ok(false);
@@ -67,9 +54,6 @@ impl ServiceExecutable {
     }
 }
 
-/// Resolves the runtime executable a native service should run, preferring an
-/// explicit `GENTS_BIN`, then the executable shipped beside the desktop app,
-/// then `PATH`.
 pub(crate) fn resolve_service_executable<R: Runtime>(
     app: &AppHandle<R>,
     desktop_home: &Path,
@@ -153,11 +137,6 @@ fn classify_with_package(
     ServiceExecutable::InPlace(executable)
 }
 
-/// Refuses to record a runtime the service would lose. macOS runs a
-/// quarantined app from a randomized App Translocation mount, and serves a
-/// disk image read-only under `/Volumes` only until it is ejected; a service
-/// definition naming either stops launching once the app quits or moves. A
-/// writable volume holds a durable install.
 pub(crate) fn ensure_installable_location(path: &Path) -> Result<(), BridgeError> {
     refuse_transient_location(path, read_only_mount(path))
 }
@@ -199,8 +178,7 @@ fn read_only_mount(_path: &Path) -> bool {
     false
 }
 
-/// Copies the packaged runtime to its durable path, keyed by content so an
-/// upgraded package refreshes it and an unchanged one costs only a read.
+/// Copies the packaged runtime to its durable path, keyed by content.
 fn install_packaged_executable(source: &Path, installed: &Path) -> std::io::Result<bool> {
     let _guard = INSTALL_LOCK
         .lock()
@@ -212,10 +190,9 @@ fn install_packaged_executable(source: &Path, installed: &Path) -> std::io::Resu
         std::io::Error::other("the service executable path has no parent directory")
     })?;
     std::fs::create_dir_all(directory)?;
-    // A running service holds the previous inode open, so new bytes land
-    // beside it and are renamed over it. Writing the path in place would fail
-    // with ETXTBSY. The attempt number keeps two callers in this process from
-    // sharing one staging file: a rename would then publish a short file.
+    // A running service holds the previous inode open (ETXTBSY); new bytes
+    // land beside it and rename over it. The attempt number keeps two callers
+    // from sharing one staging file.
     let attempt = INSTALL_ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let incoming = directory.join(format!("{INCOMING_PREFIX}{}.{attempt}", std::process::id()));
     discard_abandoned_copies(directory);
@@ -231,12 +208,9 @@ fn install_packaged_executable(source: &Path, installed: &Path) -> std::io::Resu
     Ok(true)
 }
 
-/// Whether the durable copy already holds the packaged bytes. Comparing the
-/// copy itself, rather than a record of what was written, stays true whichever
-/// build wrote it last and whatever interrupted the write.
+/// Whether the durable copy already holds the packaged bytes.
 fn already_installed(source: &Path, installed: &Path) -> std::io::Result<bool> {
-    // A symlink is not the copy. Following it would treat the link target as
-    // installed and let the service definition record that target.
+    // A symlink is not the copy: following it would record the link target.
     if !regular_executable(installed) {
         return Ok(false);
     }
@@ -261,9 +235,8 @@ fn regular_executable(path: &Path) -> bool {
     }
 }
 
-/// Removes copies a killed process left mid-write, so a crash costs one
-/// abandoned file rather than one per crash. The age bound keeps this clear of
-/// a copy another process is writing right now.
+/// Removes copies a killed process left mid-write; the age bound keeps this
+/// clear of a copy another process is writing right now.
 fn discard_abandoned_copies(directory: &Path) {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return;
@@ -292,8 +265,7 @@ fn discard_abandoned_copies(directory: &Path) {
 }
 
 fn stage(source: &Path, incoming: &Path) -> std::io::Result<()> {
-    // `create_new` fails if the name exists, including when it is a symlink,
-    // so the write cannot be redirected at a path someone else planted.
+    // `create_new` cannot be redirected at a symlink or planted path.
     let mut output = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -306,7 +278,7 @@ fn stage(source: &Path, incoming: &Path) -> std::io::Result<()> {
             use std::os::unix::fs::PermissionsExt;
             output.set_permissions(std::fs::Permissions::from_mode(0o700))?;
         }
-        // Durable before the rename, so a crash cannot publish a short file.
+        // Sync before the rename, so a crash cannot publish a short file.
         output.sync_all()
     })();
     if copied.is_err() {
@@ -316,7 +288,6 @@ fn stage(source: &Path, incoming: &Path) -> std::io::Result<()> {
     copied
 }
 
-/// Streams the file so a large packaged runtime costs one buffer, not its size.
 fn content_digest(path: &Path) -> std::io::Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = blake3::Hasher::new();
@@ -371,15 +342,11 @@ mod tests {
             classify_with_package(PathBuf::from("/usr/bin/gents"), desktop_home(), None, None),
             ServiceExecutable::InPlace(PathBuf::from("/usr/bin/gents"))
         );
-        // Packaging outside AppImage, macOS bundles included, exports neither
-        // variable and keeps owning its executable in place.
         let bundled = PathBuf::from("/Applications/Gents.app/Contents/MacOS/gents");
         assert_eq!(
             classify_with_package(bundled.clone(), desktop_home(), None, None),
             ServiceExecutable::InPlace(bundled)
         );
-        // An extracted AppRun exports APPDIR without APPIMAGE, and that
-        // directory is as durable as the user left it.
         assert_eq!(
             classify_with_package(
                 PathBuf::from("/opt/gents/squashfs-root/usr/bin/gents"),
@@ -409,8 +376,6 @@ mod tests {
                 }
             );
         }
-        // A runtime outside the mount stays where it is even while an
-        // AppImage launcher is active.
         assert_eq!(
             classify_with_package(
                 PathBuf::from("/usr/bin/gents"),
@@ -609,8 +574,6 @@ mod tests {
                 error.message
             );
         }
-        // A writable external volume or a development GENTS_BIN there is a
-        // durable install.
         for accepted in [
             "/Volumes/External/Applications/Gents.app/Contents/MacOS/gents",
             "/Volumes/dev/gents/target/debug/gents",

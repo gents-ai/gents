@@ -1,15 +1,14 @@
 import Proofs.CompletionRetry.OutputObligation
 import Proofs.GraphPipeline.LogicalInvocation
 
-/-!
-Membership reuses the existing finite physical ancestry projection.
+namespace CompletionRetry.OutputObligation.Logical
+open GraphPipeline.LogicalInvocation
+
+/-- Membership reuses the existing finite physical ancestry projection.
 `Attempt.pinnedRoot` means an admitted invocation entry in this instantiation;
 non-graph automated roots are supported. This does not require a GraphRun.
 The runtime must verify existing request signatures/physical links; booleans
-are validation facts, not a new ACL or a cryptographic proof.
--/
-namespace CompletionRetry.OutputObligation.Logical
-open GraphPipeline.LogicalInvocation
+are validation facts, not a new ACL or a cryptographic proof. -/
 
 structure Write where
   callDoc : Nat
@@ -20,17 +19,17 @@ structure Write where
 
 /-- Union by physical completed tool-call identity, not result-document identity.
 Two distinct completed calls updating the same result remain two writes, exactly
-as in the existing owner. This does not prove output-document uniqueness. -/
+as in the existing owner. Does not prove output-document uniqueness. -/
 def completedIds (rows : List Attempt) (edges : List Edge) (root tool : Nat)
     (writes : List Write) : List Nat :=
   ((writes.filter fun w => w.completed && w.tool == tool &&
       roots rows edges w.requestDoc == [root]).map Write.callDoc).eraseDups
 
-/-- Activation inherits the authenticated entry rather than the continuation's `goal` trigger kind. The contract is the runtime's current configured tool
+/-- Activation inherits the authenticated entry rather than the continuation's
+`goal` trigger kind. The contract is the runtime's current configured tool
 surface, shared as one gate instance by loop and model hook; no root config pin.
-Expected count and
-countValid retain the existing count-field parser/consistency semantics, now
-observed over exactly this same union of completed writes. -/
+Expected count and countValid retain the existing count-field parser/consistency
+semantics, observed over exactly this same union of completed writes. -/
 def decision (rows : List Attempt) (edges : List Edge) (root current tool : Nat)
     (scope : Scope) (entry : ActivationContext) (contract : State)
     (writes : List Write) : Decision :=
@@ -42,8 +41,8 @@ def decision (rows : List Attempt) (edges : List Edge) (root current tool : Nat)
 
 /-- Model-requested Goal completion uses the same observed decision as the owned
 completion loop, then existing status/sequence CAS. Explicit operator lifecycle
-control is unchanged. No new transaction or status writer. This model makes no
-atomic phantom/document-witness or immutable-configuration guarantee. -/
+control is unchanged; no new transaction or status writer. Makes no atomic
+phantom/document-witness or immutable-configuration guarantee. -/
 def completeGoal (goal : Goals.State) (gate : Decision) : Option Goals.State :=
   if gate == .complete then Goals.step? goal .complete else none
 
@@ -80,7 +79,6 @@ private def contract : State := ⟨2,0,none,true⟩
 private def first : Write := ⟨100,10,1,true⟩
 private def second : Write := ⟨200,20,1,true⟩
 
-/-- No graph record required: triggered entry plus authenticated Goal child. -/
 theorem continuation_inherits_trigger_obligation :
     decision [parent,child] [physicalEdge] 10 20 1 .trigger entry contract
       [first] = .continue := by decide

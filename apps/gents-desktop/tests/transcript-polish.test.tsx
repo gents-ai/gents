@@ -22,7 +22,6 @@ import { NO_PARENT } from "../src/ui/screens/parentWork";
 import { renderIn, testApp } from "./app-fixture";
 import { liveAssistant } from "./timeline-fixture";
 
-/* the rows read the selected node from the app */
 const render = (ui: ReactElement) => renderIn(testApp(), ui);
 
 function tool(
@@ -163,7 +162,6 @@ describe("long command output", () => {
   });
 
   it("keeps a running command's live output at its newest line until the reader scrolls up", () => {
-    /* jsdom has no ResizeObserver: this one reports the output growing */
     const observers = new Set<() => void>();
     vi.stubGlobal(
       "ResizeObserver",
@@ -194,11 +192,9 @@ describe("long command output", () => {
 
     rerender(<ToolBody tool={running("a\nb")} />);
     grow();
-    /* the foot: the bottom of the output at the bottom of the box */
     expect(viewport.scrollTop).toBe(500 - 160);
 
     act(() => {
-      /* the reader's own wheel, then the scroll it makes */
       viewport.dispatchEvent(new Event("wheel"));
       viewport.scrollTop = 0;
       viewport.dispatchEvent(new Event("scroll"));

@@ -87,9 +87,6 @@ impl CallbackEngine {
             match load_event_source(&self.node, &binding.event_source_id, &binding.node_did).await {
                 Ok(Some(source)) => {
                     if source.group.is_none() {
-                        // Configuration applies seed this cursor when they
-                        // register the binding; this covers bindings written
-                        // outside them.
                         if !self.cursor_bindings.contains_key(&binding.binding_id) {
                             let _ = self.load_cursor(binding, &source).await;
                         }
@@ -136,10 +133,6 @@ impl CallbackEngine {
         }
     }
 
-    /// Marks the documents already in `collection` as history for grouped
-    /// bindings, except those of a graph run already underway on one of
-    /// `consumers`' own revisions: those are live work the new consumer must
-    /// still deliver.
     async fn seed_seen_docs(
         &mut self,
         collection: &str,
@@ -281,8 +274,8 @@ impl CallbackEngine {
         }
     }
 
-    /// Advances `binding`'s cursor through `position` when every arrival up
-    /// to it is admitted as an invocation or excluded by the cursor owner.
+    /// Advances the cursor when every arrival up to it is admitted or
+    /// excluded by the cursor owner.
     async fn checkpoint(
         &self,
         binding: &CallbackBindingDoc,
@@ -309,10 +302,6 @@ impl CallbackEngine {
         .await
     }
 
-    /// Per-document bindings deliver from their receiving-node arrival cursor,
-    /// the owner task triggers use: an arrival after a binding's registration
-    /// stays pending until admitted as an invocation or excluded, however late
-    /// this engine first observes the source.
     pub(super) async fn deliver_arrivals(&mut self, collection: Option<&str>) {
         let bindings = match list_enabled_bindings(self.node.as_ref(), &self.node_did).await {
             Ok(bindings) => bindings,
@@ -402,8 +391,7 @@ impl CallbackEngine {
                 }
                 after = position.to_owned();
             }
-            // A page ends at `min(head, after + limit)`; the journal is drained
-            // only when a page makes no progress.
+            // The journal is drained only when a page makes no progress.
             let next = page["next"]
                 .as_str()
                 .context("arrival query omitted next cursor")?;
@@ -417,8 +405,6 @@ impl CallbackEngine {
         }
     }
 
-    /// Grouped bindings admit their sealed groups; per-document bindings
-    /// deliver from their arrival cursor instead.
     pub(super) async fn handle_created_doc(&mut self, collection: &str, doc_id: &str) {
         let bindings = match list_enabled_bindings(self.node.as_ref(), &self.node_did).await {
             Ok(bindings) => bindings,
@@ -451,9 +437,6 @@ impl CallbackEngine {
         }
     }
 
-    /// Admits `doc_id` for `binding` when the binding's persisted source is
-    /// `grouped` (or per-document) and both binding and callback are still
-    /// enabled; the engine's binding snapshot may be stale.
     pub(super) async fn materialize_for_binding(
         &mut self,
         binding: &CallbackBindingDoc,
@@ -570,7 +553,6 @@ impl CallbackEngine {
         self.publish_invocation(invocation, &callback).await
     }
 
-    /// One string field of a source document.
     async fn source_field(
         &self,
         collection: &str,

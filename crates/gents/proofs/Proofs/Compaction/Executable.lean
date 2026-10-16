@@ -8,13 +8,13 @@ open Transcript (MessageRow StrictlyIncreasingMessages)
 def fixtureCallSymbol : Nat := PromptView.providerCallSymbol "1" none
 def fixtureSecondCallSymbol : Nat := PromptView.providerCallSymbol "2" none
 
-/-- The fixtures the Rust conformance driver builds, keyed by row count.
 
-`tests/conformance/streaming_compaction.rs::compaction_messages_for_case`
-constructs the same shapes out of `gents::llm::message::Message`, so the
-`safeBoundary` values below are computed from the model and checked against
-production's `compaction::pair_safe_boundary` on the corresponding Rust
-fixture. -/
+
+
+
+
+
+
 def caseFixture : Nat → List Transcript.MessageRow
   | 1 => [⟨0, 0, 0, .user, .toolResult fixtureCallSymbol ⟨0, 0, 37⟩⟩]
   | 2 => [⟨0, 0, 0, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
@@ -28,9 +28,9 @@ def caseFixture : Nat → List Transcript.MessageRow
           ⟨3, 0, 3, .assistant, .ordinary⟩]
   | _ => []
 
-/-- The straddling split: a budget index of 2 lands between the assistant
-announcement and its result, and the boundary retreats to 1 so the turn stays
-whole in the retained tail. -/
+
+
+
 theorem caseFixture_boundaries_pinned :
     pairSafeBoundary (caseFixture 3) 2 = 1 ∧
       pairSafeBoundary (caseFixture 3) 1 = 1 ∧
@@ -38,19 +38,19 @@ theorem caseFixture_boundaries_pinned :
       pairSafeBoundary (caseFixture 2) 1 = 0 := by
   refine ⟨?_, ?_, ?_, ?_⟩ <;> decide
 
-/-- The reduction ceiling and the split it admits, both derived before any
-summary completion. The tagged assistant rows are the exact projection of the
-four whole-message fixture rows (assistant positions 1 and 3). -/
+
+
+
 structure ProtectedReplayCompactionCase where
   name : String
   messageCount : Nat
   rawIndex : Nat
   required : List PromptAssembly.ClaudeMap.ReplayTag
   rows : List PromptAssembly.ClaudeMap.TaggedReplayRow
-  /-- `replayReductionCeiling`'s refusal name; `""` when it resolved. -/
+
   ceilingError : String
-  /-- The resolved ceiling. `none` is no open round, so the retention target
-  alone bounds the split. -/
+
+
   ceiling : Option Nat
   selectedSplit : Option Nat
   outcome : String
@@ -59,7 +59,7 @@ structure ProtectedReplayCompactionCase where
 private def protectedTag : PromptAssembly.ClaudeMap.ReplayTag :=
   { request := 7, source := .provider 2 1 0 }
 
-/-- A provider coordinate no row in the fixture view carries. -/
+
 private def absentTag : PromptAssembly.ClaudeMap.ReplayTag :=
   { request := 7, source := .provider 2 2 0 }
 
@@ -141,7 +141,7 @@ structure CompactionReducerCase where
   postMessageCount    : Nat
   preservesPairs      : Bool
   preservesOrder      : Bool
-  /-- Only reducers with a modeled gate report it; raw strip/sanitize have none. -/
+
   gateOpen            : Option Bool
   publicationReady    : Bool
   providerFixpoint    : Bool
@@ -149,12 +149,12 @@ structure CompactionReducerCase where
   safeToReduce        : Bool
   reducerIsIdentity   : Bool
   reducerIsIdempotent : Bool
-  /-- The raw token-budget index production computes before any adjustment. -/
+
   splitIndex          : Nat
-  /-- Where the boundary lands after retreating to a turn boundary. Computed by
-  `pairSafeBoundary`, not asserted. -/
+
+
   safeBoundary        : Nat
-  /-- Rows surviving the reduction. -/
+
   retainedCount       : Nat
   deriving Repr
 
@@ -227,9 +227,9 @@ private def ordinaryPublication (row : Transcript.MessageRow) :
 private def assistantCallPublication (row : Transcript.MessageRow)
     (callIds : Finset Nat) :
     List CanonicalOutput.Segment × CanonicalOutput.MessageEnvelope :=
-  -- The executable fixture vocabulary contains these two native keys. If a
-  -- fixture escapes it, reconstructed symbols no longer match and the gate
-  -- fails closed.
+
+
+
   let indexed := ([fixtureCallSymbol, fixtureSecondCallSymbol].filter
     (fun call => call ∈ callIds)).zipIdx
   let records := indexed.map fun entry =>
@@ -278,9 +278,9 @@ private def toolResultPublication (row : Transcript.MessageRow) (call : Nat) :
     , blocks, createdAt := 0 }
   ([record], message)
 
-/-- Each fixture row is backed by reconstructable native content of the same
-shape. Tool result logical/hash identity remains the typed Transcript bridge;
-the canonical envelope supplies its exact physical call and bytes. -/
+
+
+
 private def publishedObservation
     (row : Transcript.MessageRow) : StreamingResponse.Observation :=
   let publication := match row.kind with
@@ -366,8 +366,8 @@ theorem distinct_native_keys_have_distinct_symbols :
     fixtureCallSymbol ≠ fixtureSecondCallSymbol := by
   native_decide
 
-/-- Fixtures invoke the real reducers and the finite immutable-publication /
-provider-stability gate. Nonzero result payloads make a missing strip observable. -/
+
+
 private def reducerCase (name group : String) (reducer : Reducer)
     (count splitIndex : Nat) (publicationReady : Bool := true) :
     CompactionReducerCase :=
@@ -465,14 +465,14 @@ theorem reused_row_symbol_suffix_does_not_shift_closed_prefix :
     (PromptAssembly.sanitizeTurn (history ++ suffix)).take history.length = history := by
   native_decide
 
-/-! ## Conditional global-view active-history cursor cases
 
-These fixtures exercise the row-level global proof model for the database
-optimization. Transferring them to production requires the unique-id alignment
-premise and a separate content-bearing per-turn model. The cursor is a raw-row
-split, while `compacted` is measured in the sanitized provider view; the model
-therefore searches only splits satisfying `CursorDenotes` rather than treating
-the provider count as a raw offset. -/
+
+
+
+
+
+
+
 
 def cursorFixture : List Transcript.MessageRow :=
   [ ⟨0, 0, 0, .user, .toolResult 99 ⟨0, 0, 0⟩⟩

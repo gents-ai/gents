@@ -66,8 +66,6 @@ impl Fixture {
         lifecycle
     }
 
-    /// A request left processing by an execution that is gone, with an
-    /// expired lease: exactly what request recovery terminalizes.
     async fn abandoned_request(&self, interrupt_requested: bool) -> String {
         let mut lifecycle = self.claimed(Duration::from_secs(1)).await;
         let writer =
@@ -107,7 +105,6 @@ impl Fixture {
     }
 }
 
-/// A real command that logs its own start and exits with `code`.
 fn logging_hook(generated: &LeanTaskHook, log: &Path, code: i64) -> TaskHook {
     TaskHook {
         hook_id: generated.hook_id.clone(),
@@ -125,13 +122,10 @@ fn logging_hook(generated: &LeanTaskHook, log: &Path, code: i64) -> TaskHook {
     }
 }
 
-/// An observed attempt of unknown outcome was recorded as started with no
-/// result; every other observation is its recorded result.
 fn recorded(result: &LeanCommandResult) -> Option<HookCommandResult> {
     (*result != LeanCommandResult::Interrupted).then(|| result.to_native())
 }
 
-/// Writes the durable record a crashed, started execution left behind.
 async fn persist_crashed(store: &TaskHookRecordStore, record: TaskHookRecord) {
     let handle = store.begin(record).expect("claim the record");
     handle
@@ -167,9 +161,6 @@ fn log_lines(log: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Drives every generated recovery case through the production startup
-/// sequence: request recovery decides the terminal from the latch it reads,
-/// then task hook recovery runs remaining cleanup from a durable host record.
 #[tokio::test]
 async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_records() {
     let cases = lean_task_hook_recovery_cases();
@@ -274,9 +265,6 @@ async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_reco
     }
 }
 
-/// Drives the task hook sweep's generated witnesses through the production
-/// sweep: a resolved request's record is released, one whose request is still
-/// owned or whose executor is live is left untouched.
 #[tokio::test]
 async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
     let cases = lean_recovery_sweep_cases()
@@ -347,8 +335,6 @@ fn generated(hook_id: &str, phase: &str) -> LeanTaskHook {
     }
 }
 
-/// A restart while a hook command survives stops that command through its
-/// recorded identity before running the remaining cleanup.
 #[cfg(unix)]
 #[tokio::test]
 async fn recovery_stops_a_surviving_hook_command_before_cleanup() {
@@ -396,9 +382,6 @@ async fn recovery_stops_a_surviving_hook_command_before_cleanup() {
     assert!(restarted.task_hook_records().list().is_empty());
 }
 
-/// Runtime shutdown cancels a recovered cleanup command like a live one: the
-/// launched attempt is recorded interrupted and never replayed, and cleanup
-/// shutdown kept from launching stays recorded for the next start.
 #[tokio::test]
 async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
     let fixture = Fixture::new().await;
@@ -475,8 +458,6 @@ async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
     assert!(restarted.task_hook_records().list().is_empty());
 }
 
-/// Recovered cleanup runs only from a root its owner still admits; otherwise
-/// each remaining occurrence is recorded as refused and the record dropped.
 #[tokio::test]
 async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
     let fixture = Fixture::new().await;

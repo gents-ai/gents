@@ -1,11 +1,3 @@
-//! Canonical runtime-authored node-readiness wire contract.
-//!
-//! Runtime configuration is never treated as proof that an agent can accept
-//! work. The source projector admits only installed dispatchers not vetoed by
-//! explicit unavailability or a generation-owned startup demotion. The client
-//! projector then fails closed on missing, malformed, non-ready, or generation-
-//! skewed observations. This is last-known application state, not connectivity.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
@@ -65,8 +57,6 @@ pub enum AgentReadinessUnavailableReason {
 }
 
 impl AgentReadinessUnavailableReason {
-    /// Stable presentation-safe admission message. Resolver diagnostics are
-    /// deliberately excluded from durable request state and client views.
     pub const fn public_message(self) -> &'static str {
         match self {
             Self::AgentDisabled => "behavior is disabled",
@@ -96,12 +86,8 @@ impl AgentReadinessUnavailableReason {
     ];
 }
 
-/// Routing's admission message for an agent the active runtime does not assign.
 pub const BEHAVIOR_NOT_ASSIGNED_MESSAGE: &str = "behavior is not assigned to this runtime";
 
-/// Whether `failure_reason` is exactly one of routing's pre-dispatch
-/// behavior-unavailability rejections. Routing writes these stable messages,
-/// never resolver diagnostics, so exact comparison identifies the cause.
 pub fn is_behavior_unavailable_rejection(failure_reason: &str) -> bool {
     failure_reason == BEHAVIOR_NOT_ASSIGNED_MESSAGE
         || AgentReadinessUnavailableReason::ALL
@@ -161,8 +147,6 @@ pub fn effective_agent_readiness_admission(
     }
 }
 
-/// Pure source projector shared by the runtime publisher and Lean-generated
-/// conformance harness. Unavailability and startup demotion veto a dispatcher.
 pub fn project_node_readiness_source(
     process_state: NodeReadinessProcessState,
     active_generation: u64,
@@ -313,8 +297,6 @@ pub fn decode_node_readiness_snapshot(
     struct Version {
         format_version: u32,
     }
-    // An unsupported wire version can have a different payload shape, so
-    // classify its version before applying the current strict schema.
     let version = serde_json::from_str::<Version>(&row.snapshot_json)
         .map_err(|_| AgentReadinessUnknownReason::ReadinessMalformed)?;
     if version.format_version != NODE_READINESS_FORMAT_VERSION {
@@ -345,11 +327,6 @@ pub fn decode_node_readiness_snapshot(
     Ok(snapshot)
 }
 
-/// Strict operational summary from the sole durable readiness authority.
-/// Missing, malformed, non-ready, or generation-skewed observations fail
-/// closed and never manufacture agent counts from configuration rows.
-/// Document age does not establish runtime liveness. Transport health has its
-/// own database owner.
 pub fn project_node_readiness_summary(
     row: Option<&NodeReadinessRow>,
     expected_node_did: &str,
@@ -395,9 +372,6 @@ pub fn project_node_readiness_summary(
     })
 }
 
-/// Project the runtime-authored row into the only legal client readiness
-/// states. Configured identifiers are validated exactly, never normalized.
-/// Readiness changes only when the runtime publishes a semantic change.
 pub fn project_node_readiness<'a>(
     row: Option<&NodeReadinessRow>,
     expected_node_did: &str,

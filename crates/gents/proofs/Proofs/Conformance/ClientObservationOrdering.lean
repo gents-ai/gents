@@ -17,7 +17,6 @@ private def firstRunName : ClientSnapshotObservation.FirstRunPhase → String
   | .active => "active"
   | .done => "done"
 
-/-- Expected guard outcomes are evaluated from the executable Lean owner. -/
 def main : IO Unit := do
   let rows := (List.range 5).flatMap fun current =>
     (List.range 5).map fun captured =>

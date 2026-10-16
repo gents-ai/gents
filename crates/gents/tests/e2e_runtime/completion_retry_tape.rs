@@ -154,9 +154,6 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
         &format!("recover across a long backoff {marker}"),
     )
     .await;
-    // Allow setup and the first real HTTP failure to finish before expiring
-    // the lease. Scheduled retry pacing leaves a backoff window; it must not
-    // count as semantic progress or grant the next provider call ownership.
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
@@ -247,9 +244,6 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     assert!(rows["AgentRequest"][0]["failure_reason"]
         .as_str()
         .is_some_and(|reason| reason.contains("execution lease expired")));
-    // Claim publishes authored admission input even when the provider returns
-    // no bytes. Retraction/closure records may also survive a failed attempt;
-    // neither is successful provider output from the forbidden retry.
     for segment in rows["AgentOutputSegment"].as_array().unwrap() {
         let source: gents_protocol::output::OutputSource =
             serde_json::from_value(segment["source"].clone()).unwrap();
@@ -280,8 +274,6 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     );
 }
 
-/// Scheduler delay can exhaust the claim deadline before the first dispatch;
-/// retry admission itself is checked with fixed time in the retry owner tests.
 #[tokio::test]
 async fn deadline_tight_fails_cleanly() {
     let marker = "deadline-tight";
@@ -397,8 +389,6 @@ async fn interactive_budget_is_quick() {
     )
     .await;
 
-    // The observation window follows the request's timing envelope; the
-    // elapsed assert below is the property under test and stays fixed.
     let terminal_state = wait_for_request_terminal_state(
         db.node.as_ref(),
         &request_doc_id,
@@ -430,9 +420,6 @@ async fn interactive_budget_is_quick() {
     agent.shutdown().await;
 }
 
-/// Stall responses hold the HTTP connection open without further bytes until
-/// the mock stops, so only the owned loop's provider idle window can end the
-/// attempt. The execution lease keeps its default: the window is independent.
 async fn start_stall_tape(
     marker: &str,
     responses: Vec<StreamResponse>,
@@ -559,8 +546,6 @@ async fn provider_silent_between_chunks_retracts_and_retries() {
     .await;
 }
 
-/// A scheduled retry backs off for seconds; the stalled call must already be
-/// terminal (its admission slot returned) while that backoff is running.
 #[tokio::test]
 async fn stalled_call_is_terminal_before_the_retry_backoff_ends() {
     let marker = "stall-releases-permit";

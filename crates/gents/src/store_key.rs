@@ -35,7 +35,6 @@ use crate::storage_backend::{IncompatibleStore, IncompatibleStoreKind};
 
 pub mod upgrade;
 
-/// The only store encryption record version this build writes and reads.
 pub const STORE_ENCRYPTION_VERSION: u32 = 1;
 
 const STORE_KEY_LEN: usize = 32;
@@ -58,8 +57,7 @@ impl Default for StoreKeyCustodyChoice {
     }
 }
 
-/// A store's recorded encryption: persisted with the store's home (a gents
-/// home's `init.json`, the desktop client's `store-encryption.json`).
+/// A store's recorded encryption.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoreEncryption {
     pub version: u32,
@@ -70,9 +68,7 @@ pub struct StoreEncryption {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "custody", rename_all = "kebab-case")]
 pub enum StoreKeyCustody {
-    /// Login-keychain generic password under this label.
     MacosKeychain { keychain_label: String },
-    /// Owner-only key file at the store owner's key-file path.
     File,
 }
 

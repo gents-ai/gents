@@ -126,9 +126,8 @@ theorem incoherent_terminal_request_cannot_renew
     step? pre (.renew .mutationWriteGate generation deadline) = none := by
   cases outcome <;> simp_all [step?, hlease, Outcome.requestState, renewableLifecycle]
 
-/-- Two successful renewals of one fixed-duration lease are cadence-separated.
-The premise explicitly advances only the owner's monotonic clock; it is not a
-scheduler-liveness claim. -/
+/-- Two successful renewals of one fixed-duration lease are cadence-separated;
+the clock premise is not a scheduler-liveness claim. -/
 theorem consecutive_renewals_obey_cadence
     (firstPre firstPost secondPre secondPost : World Generation)
     (generation : Generation) (duration firstDeadline secondTime : Time)

@@ -24,8 +24,6 @@ impl ToolDyn for PanickingTool {
     }
 }
 
-// Arbitrary Rust ToolDyn panics belong at this internal owner. Product-facing
-// spawn_process fixtures exercise document-authored tools instead.
 #[tokio::test]
 async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
     let dir = tempfile::tempdir().unwrap();

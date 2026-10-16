@@ -5,8 +5,6 @@ pub(super) fn resource_target(resource: &str) -> Option<SelfConfigTarget> {
 }
 
 impl ConfigCommandTool {
-    /// Familiar resource verbs adapt to the existing patch, agent and cleanup
-    /// owners. They neither widen category grants nor bypass per-resource guards.
     pub(super) async fn crud(&self, argv: &[String]) -> Result<Option<String>> {
         let Some(resource) = argv.first().map(String::as_str) else {
             return Ok(None);
@@ -245,8 +243,6 @@ impl ConfigCommandTool {
                     validation.await
                 })
             });
-            // An unselected or newly created document cannot affect the
-            // invoking chain. Bound updates keep its existing guard slots.
             request.guard_selected_chain = bound;
         }
         if target == SelfConfigTarget::InferenceBackend {
@@ -283,8 +279,6 @@ impl ConfigCommandTool {
             .map(Some)
     }
 
-    /// Exact-ID routing chooses the existing owner; automation_request rechecks
-    /// that ownership in the write transaction, including both trigger targets.
     async fn automation_core(
         &self,
         target: SelfConfigTarget,
@@ -371,9 +365,8 @@ impl ConfigCommandTool {
         .await
     }
 
-    /// A batch is an ordered composition of existing transactions, not a new
-    /// write owner. Failed item i leaves items before i committed and later
-    /// items unattempted; callers receive every attempted item's receipt.
+    /// Ordered composition of existing transactions: a failed item leaves
+    /// later items unattempted; callers receive every attempted item's receipt.
     pub(super) async fn batch(&self, argv: &[String]) -> Result<String> {
         let parsed = ParsedArgs::parse(&argv[1..])?;
         anyhow::ensure!(

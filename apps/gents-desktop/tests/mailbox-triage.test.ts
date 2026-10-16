@@ -1,5 +1,3 @@
-/* The mailbox's order: what needs a decision first, the soonest deadline
-   first within a group, and a search that reaches into the payload. */
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import { describe, expect, it } from "vitest";
 import { groupItems, matches, orderItems, triageOf } from "@/screens/mailbox-triage";

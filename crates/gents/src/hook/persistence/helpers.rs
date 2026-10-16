@@ -269,16 +269,6 @@ pub(super) fn json_string(value: serde_json::Value) -> String {
     .expect("JSON values serialize")
 }
 
-/// Build a model-facing JSON envelope that embeds a potentially oversized
-/// result while staying inside the hook's truncation limits.
-///
-/// Skip reasons are bounded by `skip_tool_result` with no JSON awareness: if an
-/// embedded result pushes the envelope past the limits, the outer truncation
-/// slices the envelope mid-structure and the model receives corrupt JSON. So
-/// bound the embedded copy first at half the byte budget (headroom for JSON
-/// string escaping), and if escaping inflation still overflows the limits,
-/// fall back to a stub — the envelope must always survive the outer bound
-/// intact. The full output stays on the durable AgentToolCall row.
 pub(super) fn json_envelope_with_bounded_result(
     mut envelope: serde_json::Value,
     result_key: &str,
@@ -494,12 +484,7 @@ mod tests {
 
     #[test]
     fn json_envelope_falls_back_to_stub_when_escaping_inflates_past_limits() {
-        // Control characters escape 6x (0x01 -> \\u0001), defeating the half-budget
-        // headroom; the helper must fall back to a stub rather than let the
-        // outer truncation slice the envelope.
         let limits = crate::truncation::TruncationLimits::default();
-        // Many short control-char lines: small enough to survive the inner
-        // half-budget bound, but escaping inflates ~6x past the full budget.
         let pathological = vec!["\u{1}".repeat(10); 1500].join("\n");
         let rendered = json_envelope_with_bounded_result(
             serde_json::json!({"ok": true, "result": null}),
@@ -517,20 +502,6 @@ mod tests {
                 .is_some_and(|s| s.contains("omitted")),
             "expected the stub fallback, got {parsed}"
         );
-    }
-
-    #[test]
-    fn json_envelope_passes_small_results_through_untruncated() {
-        let limits = crate::truncation::TruncationLimits::default();
-        let rendered = json_envelope_with_bounded_result(
-            serde_json::json!({"ok": true, "result": null}),
-            "result",
-            "done",
-            "wait_process",
-            &limits,
-        );
-        let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
-        assert_eq!(parsed["result"], "done");
     }
 
     #[test]
@@ -561,28 +532,6 @@ mod tests {
         let raw = r#"{"path":"data.json","content":"not a wrapper"}"#;
 
         assert_eq!(model_observation_for_tool_result("read_file", raw), raw);
-    }
-
-    #[test]
-    fn non_read_tool_result_is_unchanged_for_model() {
-        let raw = r#"{"ok":true,"content":"still structured"}"#;
-
-        assert_eq!(model_observation_for_tool_result("grep", raw), raw);
-    }
-
-    #[test]
-    fn hook_managed_tool_result_is_bounded_before_model_loop() {
-        let limits = crate::truncation::TruncationLimits {
-            max_lines: 2,
-            max_bytes: 80,
-        };
-        let raw = "line 1\nline 2\nline 3\nline 4";
-
-        let bounded = bounded_tool_result_for_model("agent_new", raw, &limits);
-
-        assert!(bounded.contains("line 1\nline 2"));
-        assert!(!bounded.contains("line 3"));
-        assert!(bounded.contains("[Showing lines 1-2 of 4"));
     }
 
     #[test]

@@ -1,8 +1,3 @@
-//! Fences for #732: walks respect .gitignore files encountered in
-//! the walked tree (nested repos under a home-directory tool root get their
-//! generated junk filtered before it consumes walk budget), while dotfiles
-//! stay visible — agents rely on `.github/...` patterns and dotfile listings.
-
 use gents_fs_runner::execute_request_with_base;
 use gents_fs_runner::protocol::{GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
 use serde_json::Value;

@@ -8,7 +8,6 @@ import { createProviderStore } from "../src/hooks/providerStore";
 const AGENT = "did:key:agent";
 const account = (credentialId: string) => ({ credentialId }) as ProviderAccountView;
 
-/* a promise the test settles */
 function later<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => (resolve = done));

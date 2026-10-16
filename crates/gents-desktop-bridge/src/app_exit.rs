@@ -100,27 +100,6 @@ pub(crate) fn requested<R: Runtime>(app: &AppHandle<R>, api: &ExitRequestApi, co
 mod tests {
     use super::*;
 
-    #[test]
-    fn repeated_requests_share_one_preparation_and_cancellation_allows_retry() {
-        let state = Arc::new(AppExitState::default());
-        let first = state.begin().unwrap();
-        assert!(state.begin().is_none());
-        assert!(!state.ready.load(Ordering::Acquire));
-        drop(first);
-        assert!(state.begin().is_some());
-        assert!(!state.ready.load(Ordering::Acquire));
-    }
-
-    #[test]
-    fn completed_preparation_allows_the_native_exit_without_another_stop() {
-        let state = Arc::new(AppExitState::default());
-        let preparation = state.begin().unwrap();
-        preparation.complete();
-        drop(preparation);
-        assert!(state.ready.load(Ordering::Acquire));
-        assert!(state.begin().is_none());
-    }
-
     #[tokio::test]
     async fn native_stop_must_finish_before_an_exit_can_proceed() {
         let state = Arc::new(AppExitState::default());

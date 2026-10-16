@@ -1,7 +1,5 @@
 use serde::Deserialize;
 
-/// One create-and-compare delivery evaluated by
-/// `Compaction.DurableReduction.persist` in Lean.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanDurableReductionCase {
     pub(crate) name: String,

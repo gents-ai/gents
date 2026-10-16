@@ -1,24 +1,14 @@
 //! Contract-section deserialization targets shared by the trigger, apply
 //! publication, runtime-reconcile, client-agent-readiness, and
-//! startup-readiness conformance consumers. Every struct mirrors the JSON
-//! emitted by the Lean owners:
+//! startup-readiness conformance consumers:
 //!
 //! - triggers: `Proofs/Conformance/Triggers/Contracts.lean`
 //! - apply publication: `Proofs/ApplyReconcile/Publication.lean` +
 //!   `Proofs/ApplyReconcile/ContractCases.lean`
 //! - runtime reconcile / readiness: `Proofs/RuntimeReconcile/*.lean`
-//!
-//! The trigger consumers (`tests/conformance/triggers.rs`) are owned by the
-//! trigger worker; this file only keeps the deserialization surface honest
-//! against the emitted JSON.
 
 use super::*;
 
-/// A trigger-dispatch case. `intent_task_id` is the task named by the dispatch
-/// intent; `selected_task_id` is the task the dispatcher actually selected.
-/// Schedules and event sources select their configured task before common
-/// context/inference resolution, so a stale intent task id is overridden and
-/// the selected id differs; manual dispatches carry no selected task.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanTriggerDispatchCase {
     pub(crate) name: String,
@@ -44,7 +34,6 @@ pub(crate) struct LeanTriggerDispatchCase {
     pub(crate) request_count_after: usize,
 }
 
-/// The shared trigger/callback key, including its owner and config identity.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanEventGroupKeyContract {
     pub(crate) node_did: String,
@@ -114,7 +103,6 @@ pub(crate) struct LeanClientAgentReadinessCase {
     pub(crate) expected_runtime_admissible: bool,
 }
 
-/// A document key (`{collection, id}`) as referenced inside publication rows.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanApplyDocRef {
     pub(crate) node_did: String,
@@ -122,8 +110,6 @@ pub(crate) struct LeanApplyDocRef {
     pub(crate) id: String,
 }
 
-/// A desired-state row of a publication candidate: its key, owning node DID,
-/// content, and the references that must close inside the candidate.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanApplyDesiredRow {
     #[serde(rename = "ref")]
@@ -132,8 +118,6 @@ pub(crate) struct LeanApplyDesiredRow {
     pub(crate) refs: Vec<LeanApplyDocRef>,
 }
 
-/// A runtime observation row: a document key and the live value recorded for
-/// it. Observations are never written by a publication.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanApplyLiveRow {
     #[serde(rename = "ref")]
@@ -141,41 +125,25 @@ pub(crate) struct LeanApplyLiveRow {
     pub(crate) value: String,
 }
 
-/// An atomic-publication case (`Publication.lean`): `publish old candidate`
-/// replaces the whole desired snapshot with the candidate when the candidate's
-/// reference closure holds, and leaves the prior state untouched otherwise.
-/// The retired ranked/per-write fields (steps, write/prune order, selected
-/// docs, prefix/retry machinery) are no longer emitted and no longer modeled.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanApplyReconcileCase {
     pub(crate) name: String,
-    /// Whether the candidate's references close (`referencesClosed`).
     pub(crate) accepted: bool,
-    /// The complete desired snapshot the publication would install.
     pub(crate) candidate: Vec<LeanApplyDesiredRow>,
-    /// Desired state before the publication (fixed retained skill row).
     pub(crate) pre_desired: Vec<LeanApplyDesiredRow>,
-    /// Runtime observations before the publication (fixed key scaffold plus
-    /// the candidate keys).
     pub(crate) pre_live: Vec<LeanApplyLiveRow>,
-    /// Live state after publication: observations preserved verbatim.
     pub(crate) expected_after_live: Vec<LeanApplyLiveRow>,
-    /// Desired state after one publication.
     pub(crate) expected_after_desired: Vec<LeanApplyDesiredRow>,
-    /// Desired state after republishing the same candidate (idempotence).
     pub(crate) expected_retry_desired: Vec<LeanApplyDesiredRow>,
-    /// Fixture agreement that observations survive the publication.
     pub(crate) observations_preserved: bool,
 }
 
-/// Semantic readiness publication traces, independent of elapsed idle time.
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanReadinessPublicationCase {
     pub(crate) states: Vec<u64>,
     pub(crate) publishes: Vec<bool>,
 }
 
-/// Startup-readiness vectors for the bounded build-failure barrier (#559).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanStartupReadinessCase {
     pub(crate) witness: String,

@@ -1,9 +1,3 @@
-/* Inputs waiting on the running turn, stacked on the composer's top edge:
-   they are the next thing the agent reads, not transcript. A person's own
-   messages can be edited (in the composer), removed and reordered (drag by
-   the row, or the row's menu); every change applies at the next safe step.
-   Inputs that arrived on their own (a background result, a message from
-   another session) are listed and not editable. */
 import {
   useEffect,
   useLayoutEffect,
@@ -41,8 +35,6 @@ import {
 import { useComposerEdit } from "./session/composerEdit";
 import { AutomatedInput } from "./TranscriptInputs";
 
-/** The selected session's waiting messages and the edit that changes them;
-    the tray and the composer's editing share it. */
 export function useSessionQueue() {
   const { actions } = useApp();
   const pending = useSelectedSessionFields((session) =>
@@ -66,7 +58,6 @@ export function useSessionQueue() {
   return { pending, queue: pending?.pendingQueue ?? null, onEdit };
 }
 
-/** The selected session's tray, reading its own queue. */
 export function SelectedPendingTray() {
   const { pending, queue, onEdit } = useSessionQueue();
   const edit = useComposerEdit();
@@ -93,19 +84,12 @@ export function PendingTray({
   queued: readonly PendingTurnView[];
   queue?: readonly PendingQueueEntryView[] | null;
   onEdit?: (edit: QueueEdit) => Promise<void>;
-  /** the message the composer is editing: the tray holds still around it */
   editingDocId?: string | null;
-  /** hands a message to the composer to edit; without it there is no Edit */
   onBeginEdit?: (entry: PendingQueueEntryView) => void;
 }) {
   const rows = useMemo(() => pendingRows(queued, queue), [queued, queue]);
   const [busy, setBusy] = useState(false);
-  /* messages the person's own edits replaced or removed: they leave the
-     queue by that edit, not because the agent took them */
   const edited = useRef(new Set<string>()).current;
-  /* Every edit fences on the queue it was made against, so the tray holds
-     still while one is on its way; and a change to the queue while a message
-     is in the composer could replace it under the edit. */
   const locked = busy || editingDocId !== null;
   const apply = async (edit: QueueEdit | null): Promise<boolean> => {
     if (!edit || !onEdit || !queue || locked) return false;
@@ -118,14 +102,13 @@ export function PendingTray({
       await onEdit(edit);
       return true;
     } catch {
-      // The action owner reports why; the queue stays as the runtime holds it.
+      // The action owner reports the failure; the runtime retains the queue.
       return false;
     } finally {
       setBusy(false);
     }
   };
   const editable = Boolean(onEdit && queue);
-  /* a move is open between two rows when the runtime would take it */
   const canMove = (from: number, to: number) => {
     const a = rows[from];
     const b = rows[to];
@@ -146,7 +129,6 @@ export function PendingTray({
       return Promise.resolve(false);
     return apply(moveEdit(queue, a.index, b.index));
   };
-  /* a neighbour the runtime will not reorder with, for saying why */
   const separated = (from: number, to: number) => {
     const a = rows[from];
     const b = rows[to];
@@ -163,7 +145,6 @@ export function PendingTray({
     axis: "y",
     keys: rows.map((row) => row.turn.requestId),
     canMove,
-    /* a dropped row waits in its new slot until the runtime answers */
     commit: move,
     animateReorders: true,
   });
@@ -177,7 +158,6 @@ export function PendingTray({
       role="list"
       aria-label="Pending messages"
     >
-      {/* the agent takes from the head, so what it took folds away there */}
       {leaving.map((row) => (
         <div
           key={`leaving:${row.turn.requestId}`}
@@ -207,7 +187,6 @@ export function PendingTray({
             data-reorder-key={row.turn.requestId}
             data-editing={beingEdited || undefined}
             style={reorder.style(position)}
-            /* the whole row is what a person grabs; its buttons stay buttons */
             {...(draggable ? rowDrag(reorder.handle(position)) : {})}
             className={cn(
               "border-b border-border/60 bg-raised px-3 py-1.5 text-sm select-none last:border-b-0",
@@ -260,11 +239,6 @@ export function PendingTray({
 
 const NO_TURNS: readonly PendingTurnView[] = [];
 
-/* The runtime's queue is read after the rows the tray draws, so a message
-   it listed and lists no longer, while the rows still hold it, is one the
-   agent has taken and the transcript has yet to show. Only a message once
-   listed counts: the runtime lists fewer inputs than the rows hold (none
-   still binding a workspace, say). */
 function useTaken(
   queue: readonly PendingQueueEntryView[] | null,
   edited: ReadonlySet<string>,
@@ -281,10 +255,6 @@ function useTaken(
 
 const LEAVE_MS = 200;
 
-/* Rows that just left, kept long enough to fold away. Only a plain
-   departure is drawn so: when a row arrives in the same change, one row is
-   taking another's place (an edit landing), and the person's own edits and
-   removals settle in place. */
 function useLeavingRows(rows: PendingRow[], edited: ReadonlySet<string>): PendingRow[] {
   const previous = useRef(rows);
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
@@ -310,14 +280,11 @@ function useLeavingRows(rows: PendingRow[], edited: ReadonlySet<string>): Pendin
     const pending = timers.current;
     return () => pending.forEach(clearTimeout);
   }, []);
-  /* a message the runtime put back is a row again, not a leaving one */
   return leaving.filter(
     (row) => !rows.some((current) => current.turn.requestId === row.turn.requestId),
   );
 }
 
-/* a waiting input the agent has taken: still drawn here until the
-   transcript shows it, with nothing left to do to it */
 function TakenRow({ row }: { row: PendingRow }) {
   return (
     <div className="flex min-w-0 items-center gap-2" data-taken>
@@ -333,9 +300,6 @@ function TakenRow({ row }: { row: PendingRow }) {
   );
 }
 
-/* A press on one of the row's controls is the control's, not a drag. React
-   hands the row presses from its menu too, which opens outside the row, so
-   only a press on the row itself starts one. */
 function rowDrag(handle: ReturnType<ReturnType<typeof useDragReorder>["handle"]>) {
   return {
     ...handle,
@@ -348,8 +312,6 @@ function rowDrag(handle: ReturnType<ReturnType<typeof useDragReorder>["handle"]>
   };
 }
 
-/* a control waits while an edit is on its way, and most arrive at once: it
-   dims only if the wait is long enough to see, and comes back at once */
 const SLOW_DIM = "disabled:delay-300";
 
 function MessageRow({
@@ -360,10 +322,8 @@ function MessageRow({
   actions,
 }: {
   row: Extract<PendingRow, { kind: "message" }>;
-  /** the person's own message: it shows the grip, dimmed while it cannot move */
   own: boolean;
   draggable: boolean;
-  /** in the composer right now: the row says so in place of its controls */
   editing: boolean;
   actions: {
     locked: boolean;
@@ -371,7 +331,6 @@ function MessageRow({
     onRemove: () => void;
     up: (() => void) | null;
     down: (() => void) | null;
-    /** a neighbour was sent with different settings */
     separated: boolean;
   } | null;
 }) {

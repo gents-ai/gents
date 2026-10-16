@@ -1,9 +1,3 @@
-//! Durable request-local provider-context reductions (#1127).
-//!
-//! `CompactionEntry` remains the session-prefix fact consumed by request
-//! loading. This module owns the different per-turn entity: an immutable exact
-//! provider projection, persisted before the owned loop may activate it.
-
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
@@ -29,10 +23,6 @@ pub struct SourceBoundary {
     pub boundary_version: u32,
     pub request_doc_id: String,
     pub request_commit_cid: String,
-    /// The newest canonical transcript fact visible when the exact provider
-    /// source projection was reduced. The projection itself is stored in the
-    /// prefix/suffix payloads; this bounded high-water mark ties it to the
-    /// append-only transcript without copying the session or its history.
     pub canonical_through: Option<TranscriptFactRef>,
 }
 
@@ -42,7 +32,6 @@ pub struct ProducerCallRef {
     pub call_seq: i64,
 }
 
-/// Physical associations contain no copied payload or reconstructed witness.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ReplayRowAssociation {
@@ -143,8 +132,6 @@ impl ProviderContextReduction {
             .context("decoding ProviderContextReduction replay_associations_json")
     }
 
-    /// Return the already validated stored checkpoint with the exact retained
-    /// source sidecar. A synthesized summary is unassociated by construction.
     pub(crate) fn checkpoint_tagged_messages(&self) -> Result<Vec<TaggedMessage>> {
         let prefix: Vec<Message> = serde_json::from_str(&self.compacted_prefix_json)
             .context("decoding ProviderContextReduction compacted_prefix_json")?;
@@ -171,8 +158,6 @@ impl ProviderContextReduction {
             .context("decoding ProviderContextReduction source_boundary_json")
     }
 
-    /// Only this newest checkpoint directly shapes the restored provider view;
-    /// `load_unconsumed_for_request` returns the full lineage separately.
     pub fn active_reduction_keys(&self) -> Vec<String> {
         vec![self.reduction_key.clone()]
     }
@@ -200,9 +185,6 @@ pub(crate) struct NewProviderContextReduction<'a> {
     pub compacted_tokens: usize,
 }
 
-/// Scope-specific metadata for committing the shared exact reduction as a
-/// request-local durable fact. Prefix, suffix, checkpoint, and count come only
-/// from `ExactReduction` and cannot be supplied independently by the caller.
 pub(crate) struct NewExactProviderContextReduction<'a> {
     pub(crate) node_did: &'a str,
     pub(crate) requester_did: Option<&'a str>,
@@ -511,10 +493,9 @@ pub async fn load_for_request(
     Ok(rows)
 }
 
-/// Restore only the crash cut this fact closes: a durable checkpoint that no
-/// subsequent RenderedRequest consumed. Once captured for a provider call, a
-/// restarted request deliberately derives from canonical history instead of
-/// pretending the call outcome is known.
+/// Restore only the crash cut this fact closes; once captured for a provider
+/// call, a restarted request deliberately derives from canonical history
+/// instead of pretending the call outcome is known.
 pub async fn load_unconsumed_for_request(
     node: &EmbeddedNode,
     request_doc_id: &str,
@@ -594,8 +575,6 @@ pub async fn load_unconsumed_for_request(
     Ok((!consumed).then(|| (latest.clone(), lineage_keys)))
 }
 
-/// Consumption is an explicit, supported join from an inference capture to a
-/// reduction, never an inference from clocks or unrelated/opaque rows.
 pub fn rendered_capture_cites_reduction(
     capture_scope: &str,
     capture_turn_index: i64,
@@ -857,10 +836,6 @@ fn validate_recoverable_rows(rows: &[ProviderContextReduction]) -> Result<()> {
     Ok(())
 }
 
-/// Project the existing whole-native split onto assistant occurrences only;
-/// this is representation alignment, not a second continuation policy. The
-/// executable ClaudeMap owner decides association validity and required-row
-/// survival in its prescribed first-error order.
 pub(crate) fn validate_replay_associations(
     associations: &ReplayAssociations,
     prefix: &[Message],
@@ -915,10 +890,6 @@ pub(crate) fn validate_replay_associations(
     Ok(())
 }
 
-/// The rendered summary is immutable provider input: rebuilding it using a
-/// newer prompt renderer can change recovery. The suffix already has its own
-/// immutable field. Version 1 stores only the exact rendered prefix; the array
-/// representation remains readable for facts written before this codec.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CheckpointPrefix {

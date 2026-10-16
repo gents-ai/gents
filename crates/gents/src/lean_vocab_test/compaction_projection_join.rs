@@ -9,10 +9,6 @@ pub(crate) struct LeanRebuiltProjectionInput {
     pub(crate) retained_suffix: Vec<usize>,
 }
 
-/// Model fixture for the join between canonical projection, estimation,
-/// reduction, rebuilt projection, and dispatch authorization. Token counts are
-/// abstract observations supplied by an adapter; they are not serialization
-/// or tokenizer proofs.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCompactionProjectionJoinCase {
@@ -57,9 +53,6 @@ pub(crate) struct CompactionProjectionJoinObservation {
     pub(crate) output_tokens: Option<usize>,
 }
 
-/// Run a native composed owner against model inputs and compare all externally
-/// observable callback invocations and the final decision centrally. The
-/// adapter never receives the model's expected result.
 pub(crate) trait CompactionProjectionJoinAdapter {
     type Error: std::fmt::Display;
 

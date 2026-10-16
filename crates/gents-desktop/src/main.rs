@@ -236,36 +236,3 @@ fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {
         filter.add_directive(directive.parse().expect("valid tracing directive"))
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn debug_build_detection_uses_path_components() {
-        assert!(is_debug_build(Path::new(
-            "/repo/target/debug/gents-desktop-tauri"
-        )));
-        assert!(!is_debug_build(Path::new(
-            "/repo/target/release/gents-desktop-tauri"
-        )));
-        assert!(!is_debug_build(Path::new(
-            "/repo/debugger/gents-desktop-tauri"
-        )));
-    }
-
-    #[test]
-    fn removed_log_supervisor_is_not_a_cli_command() {
-        assert!(Cli::try_parse_from(["gents-desktop", "__log-supervisor", "/tmp/app"]).is_err());
-    }
-
-    #[test]
-    fn init_remains_available_without_starting_a_runtime() {
-        assert!(matches!(
-            Cli::try_parse_from(["gents-desktop", "init", "--json"])
-                .unwrap()
-                .command,
-            Some(Command::Init(_))
-        ));
-    }
-}

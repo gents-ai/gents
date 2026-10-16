@@ -2,8 +2,7 @@
 import type { ConfigComponentPatch } from "./ConfigComponentPatch.js";
 
 /**
- * Existing-document edits only. Canonical patch admission protects identities;
- * omitted values remain unchanged, including redacted credentials. All edits
- * are validated and committed together. No implicit creation or removal.
+ * Existing-document edits only; omitted values (including redacted
+ * credentials) stay unchanged and all edits commit together.
  */
 export type ConfigComponentsPatchRequest = { nodeDid: string, patches: Array<ConfigComponentPatch>, };

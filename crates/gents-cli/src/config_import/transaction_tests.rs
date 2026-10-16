@@ -1,7 +1,3 @@
-//! Exercises the production transaction adapter's commit/discard lifecycle.
-//! This recorder does not establish atomic configuration snapshot publication;
-//! that requires the runtime installer to implement ApplyReconcile.publish.
-
 use super::*;
 use axum::{extract::State, routing::post, Json, Router};
 use serde_json::json;
@@ -24,7 +20,6 @@ impl RecordingGraphqlState {
     fn committed_state(&self) -> Vec<String> {
         self.committed.lock().expect("committed lock").clone()
     }
-
     fn tx_lifecycle_counts(&self) -> (u64, u64, u64) {
         (
             self.tx_begin_count.load(Ordering::SeqCst),

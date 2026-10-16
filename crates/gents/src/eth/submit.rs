@@ -1,8 +1,5 @@
-//! Durable simulate-before-sign Ethereum submission.
-//!
-//! The exact signed bytes are journaled before broadcast. Recovery therefore
-//! polls or rebroadcasts the same transaction hash instead of choosing a new
-//! nonce and repeating the action.
+//! Journaled simulate-before-sign submission: signed bytes are persisted before
+//! broadcast so recovery rebroadcasts the same transaction hash, never a new nonce.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -326,8 +323,6 @@ async fn resume_submission<T: JsonRpcTransport>(
         }
     }
 
-    // A transport error after broadcast is an unknown outcome, not permission
-    // to choose a new nonce. The durable row keeps recovery on these bytes.
     Ok(SubmitReceipt {
         tx_hash: record.tx_hash,
         status: SubmitStatus::SubmittedUnknown,
@@ -1039,7 +1034,6 @@ mod tests {
         assert_eq!(first.status, SubmitStatus::SubmittedUnknown);
         assert_eq!(first.receipt, None, "no receipt was ever observed");
 
-        // The durable row stays in submitted_unknown with the signed bytes.
         let row = load_submission(&node, "did:key:zAlice:8453:unknown-1")
             .await
             .expect("load")
@@ -1048,11 +1042,10 @@ mod tests {
         assert_eq!(row.tx_hash, first.tx_hash);
 
         let original_raw = row.raw_transaction.clone();
-        // Recover the unknown result by rebroadcasting the journaled bytes.
         let transport = Scripted::new(vec![
-            ok(json!("0x2105")), // eth_chainId (fresh client)
-            ok(Value::Null),     // receipt poll: not yet mined
-            ok(json!({})),       // rebroadcast accepted (hash recomputed from the raw tx)
+            ok(json!("0x2105")),
+            ok(Value::Null),
+            ok(json!({})),
             ok(json!({"status": "0x1"})),
         ]);
         let recovery_calls = Arc::clone(&transport.calls);
@@ -1073,8 +1066,6 @@ mod tests {
         assert_eq!(second.tx_hash, first.tx_hash, "same bytes recovered");
         assert_eq!(second.status, SubmitStatus::ConfirmedSuccess);
 
-        // Recovery journaled one broadcast per submission attempt, and the
-        // final nonce on the row is the one from the FIRST submission.
         let row = load_submission(&node, "did:key:zAlice:8453:unknown-1")
             .await
             .expect("load")
@@ -1100,10 +1091,6 @@ mod tests {
 
     #[tokio::test]
     async fn reused_idempotency_key_for_a_different_request_is_rejected() {
-        // Negative owner case for `verify_existing`: the second submission
-        // under one key must be rejected on the request hash BEFORE any
-        // signing, nonce selection, or broadcast, and the durable row must
-        // still belong to the first request.
         let (_temp, node) = node().await;
         let transport = Scripted::new(submission_script("0x1"));
         let calls = Arc::clone(&transport.calls);
@@ -1128,7 +1115,6 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        // Same key, different `to` address -> different request hash.
         let mut conflicting = request("conflict-1");
         conflicting.to = Some("0x0000000000000000000000000000000000000001".to_string());
         let error = submit_transaction(
@@ -1150,9 +1136,6 @@ mod tests {
             "{message:#}"
         );
 
-        // The rejection happened at the identity check: no extra nonce probe
-        // or send was issued for the conflicting request, and the durable row
-        // is untouched.
         let sends = calls
             .lock()
             .unwrap()

@@ -1,5 +1,3 @@
-//! Runtime-facing contract metadata for the Lean EventDelivery model.
-
 use crate::trigger_engine::event_source::EventSource;
 use crate::watcher::DefraWatcher;
 

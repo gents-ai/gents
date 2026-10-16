@@ -101,8 +101,6 @@ async fn fixture_with_http(
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::test_support::install_test_agent(&node, &did, BEHAVIOR).await;
     let session = case.session_id.to_string();
-    // Runtime-signed background wakes use the signing DID as requester. The
-    // generated agent/requester identity pair maps to that same native DID.
     crate::session::ensure_session_with_agent_id_and_requester_did(
         &node,
         &session,

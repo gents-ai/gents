@@ -1,7 +1,3 @@
-//! Provider idle window at the attempt seam. A provider silent at the
-//! transport is a transport-class attempt failure handed to the completion
-//! retry owner; it never becomes a separate retry path.
-
 use std::future::Future;
 use std::time::Duration;
 
@@ -57,11 +53,6 @@ impl ProviderAttemptFailure {
     }
 }
 
-/// Drive one provider future (the stream constructor or one `next`) while
-/// the attempt's transport is idle for less than `idle`. Without a window or
-/// an armed attempt, the future runs unbounded. Expiry drops only `future`;
-/// the caller must drop the attempt's stream before any retry backoff so its
-/// admission permit is released.
 pub(super) async fn within_provider_idle<F: Future>(
     future: F,
     idle: Option<Duration>,

@@ -111,7 +111,6 @@ async fn runtime_seal_case(unowned: bool) {
         )
         .unwrap();
     }
-    // A persisted domain-level acceptance is input/evidence, never path authority.
     query(&node, r#"mutation { create_CapabilityReviewVerdict(input: { workspace_id: "runtime-capability", accepted: true }) { _docID } }"#).await;
     let before_head = git(&fx.repo, &["rev-parse", "HEAD"]);
     let before_readme = fs::read(fx.repo.join("README.md")).unwrap();
@@ -210,7 +209,7 @@ async fn runtime_seal_case(unowned: bool) {
     assert!(!fx.repo.join(".tmp-build/test-build.log").exists());
     drop(owner);
     node.shutdown().await;
-    // Preserve the DB directory for Defra background tasks, as migration tests do.
+    // Keep the DB directory alive for Defra background tasks.
     std::mem::forget(db_dir);
 }
 

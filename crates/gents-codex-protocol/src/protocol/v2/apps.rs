@@ -5,22 +5,16 @@ use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
-/// EXPERIMENTAL - list available apps/connectors.
 pub struct AppsListParams {
-    /// Opaque pagination cursor returned by a previous call.
     pub cursor: Option<String>,
-    /// Optional page size; defaults to a reasonable server-side value.
     pub limit: Option<u32>,
-    /// Optional thread id used to evaluate app feature gating from that thread's config.
     pub thread_id: Option<String>,
-    /// When true, bypass app caches and fetch the latest data from sources.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_refetch: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-/// EXPERIMENTAL - app metadata returned by app-list APIs.
 pub struct AppBranding {
     pub category: Option<String>,
     pub developer: Option<String>,
@@ -65,7 +59,6 @@ pub struct AppMetadata {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-/// EXPERIMENTAL - app metadata returned by app-list APIs.
 pub struct AppInfo {
     pub id: String,
     pub name: String,
@@ -79,12 +72,6 @@ pub struct AppInfo {
     pub install_url: Option<String>,
     #[serde(default)]
     pub is_accessible: bool,
-    /// Whether this app is enabled in config.toml.
-    /// Example:
-    /// ```toml
-    /// [apps.bad_app]
-    /// enabled = false
-    /// ```
     #[serde(default = "default_enabled")]
     pub is_enabled: bool,
     #[serde(default)]
@@ -93,7 +80,6 @@ pub struct AppInfo {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-/// EXPERIMENTAL - app metadata summary for plugin responses.
 pub struct AppSummary {
     pub id: String,
     pub name: String,
@@ -116,17 +102,13 @@ impl From<AppInfo> for AppSummary {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-/// EXPERIMENTAL - app list response.
 pub struct AppsListResponse {
     pub data: Vec<AppInfo>,
-    /// Opaque cursor to pass to the next call to continue after the last item.
-    /// If None, there are no more items to return.
     pub next_cursor: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-/// EXPERIMENTAL - notification emitted when the app list changes.
 pub struct AppListUpdatedNotification {
     pub data: Vec<AppInfo>,
 }

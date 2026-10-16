@@ -1,4 +1,3 @@
-//! Real persisted graph invocations; request signatures use the actual target key.
 use super::*;
 use crate::goal::{set_goal, GoalStatus};
 use crate::graph_pipeline::runtime::graph_test_owner;
@@ -277,11 +276,6 @@ async fn generated_graph_logical_invocations_drive_persisted_run_projection() {
     for case in snapshot.graph_logical_invocation_cases {
         assert_eq!(case.root, 10, "{}", case.name);
         if case.name == "pinned_root_has_authenticated_parent" {
-            // Abstract rejection outside the production admission domain:
-            // roots require event/schedule authority, whereas authenticated
-            // parent edges require Goal/local-control authority. The ancestry
-            // owner also excludes its entry from the parent map. This row does
-            // not yet have a faithful runtime projection (CoverageLedger).
             continue;
         }
         replayed += 1;
@@ -297,8 +291,6 @@ async fn generated_graph_logical_invocations_drive_persisted_run_projection() {
             }
             let mut original_goal = goal.clone();
             if row.doc == 30 || case.name == "historical_head_canonical_goal_mismatch" {
-                // Historical replacement Goal identities produce different durable
-                // retry keys. Each original signed physical edge remains causal.
                 original_goal.goal_id = "historical-other-goal".into();
             }
             let child = signed_child(
@@ -584,7 +576,6 @@ async fn typed_resume_advances_graph_generation_with_signed_child() {
         .unwrap();
     assert_eq!(resumed.parsed_status(), Some(GoalStatus::Active));
     assert_eq!(resumed.continuation_sequence(), 1);
-    // Acknowledgment retry must not acquire another graph generation.
     let repeated = crate::goal::resume_goal_request(
         &crate::ConfigAccess::local(node.clone()),
         &identity,
@@ -610,7 +601,6 @@ async fn typed_resume_advances_graph_generation_with_signed_child() {
 async fn automatic_claimed_publication_obeys_graph_fence() {
     for cancel in [false, true] {
         let (node, run, goal, identity, _temp) = signed_invocation_fixture(3).await;
-        // A persisted successful claim, before automatic child publication.
         execute(&node, &format!(r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ continuation_sequence: 1, last_continued_from_request_id: "graph-logical-root" }}) {{ _docID }} }}"#, goal.doc_id)).await;
         let observed = crate::goal::load_goal_by_id(&node, identity.did(), &goal.goal_id)
             .await
@@ -779,13 +769,7 @@ async fn plain_graph_root_factory_fences_publication_and_cancellation() {
         .await
         .unwrap();
     assert_eq!(published.update_generation, before.update_generation + 1);
-    assert_eq!(
-        published.requests.len(),
-        2,
-        "factory row is an authenticated graph root"
-    );
-    // Emulate a durable executor observation before cancellation, without a
-    // provider or synthetic lease owner in this publication-boundary test.
+    assert_eq!(published.requests.len(), 2);
     execute(&node, r#"mutation { update_AgentRequest(filter: { request_id: { _eq: "plain-factory-root" } }, input: { lifecycle_state: "completed" }) { _docID } }"#).await;
     request_graph_run_cancellation(
         &node,
@@ -935,8 +919,6 @@ async fn signed_foreign_graph_roots_cannot_change_invocation_or_failure() {
         crate::sign_agent_request_create(signer, &mut create)
             .await
             .unwrap();
-        // The actual publication fence rejects the correctly signed foreign
-        // target; direct DB seeding below models a replicated untrusted row.
         let txn = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
             .await
             .unwrap();

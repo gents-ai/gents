@@ -1,10 +1,3 @@
-//! Launch the Codex TUI as a separate process pointed at the local shim.
-//!
-//! The shim speaks Codex's app-server protocol, but the TUI itself is not part
-//! of the Gents binary. Keeping that product boundary at the process edge
-//! avoids linking Codex's runtime, sandbox, provider, and terminal dependency
-//! graphs into every `gents` installation.
-
 use std::io::IsTerminal;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -84,8 +77,6 @@ fn codex_command_args(args: &CodexArgs) -> Vec<String> {
 }
 
 fn resolve_endpoint(remote: &str) -> Result<RemoteEndpoint> {
-    // Codex accepts both absolute (`unix:///tmp/shim.sock`) and relative
-    // (`unix://shim.sock`) socket paths.
     if remote.starts_with("unix://") {
         return Ok(RemoteEndpoint::UnixSocket);
     }

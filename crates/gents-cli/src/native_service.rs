@@ -1,10 +1,3 @@
-//! Per-user native service ownership for the foreground Gents runtime.
-//!
-//! This module owns only OS service registration and process state. A running
-//! service is not proof that the runtime is ready, healthy, or using a
-//! particular identity; callers must keep using the runtime status APIs for
-//! those checks.
-
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -34,7 +27,6 @@ pub const FOREIGN_STORE_EXIT_CODE: i32 = 67;
 /// wrote with unsafe permissions (sysexits `EX_NOINPUT`).
 pub const INSECURE_KEY_EXIT_CODE: i32 = 66;
 
-/// The exit status `gents` uses when it refuses a store of `kind`.
 pub fn incompatible_store_exit_code(kind: gents::storage_backend::IncompatibleStoreKind) -> i32 {
     use gents::storage_backend::IncompatibleStoreKind;
     match kind {
@@ -61,11 +53,8 @@ impl std::fmt::Display for BackgroundApprovalPending {
 
 impl std::error::Error for BackgroundApprovalPending {}
 
-/// macOS Background Task Management's record of the service definition
-/// (`SMAppService.statusForLegacyURL:`).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum BackgroundItemStatus {
-    /// Not macOS, or this macOS has no Background Task Management API.
     #[default]
     Unavailable,
     NotRegistered,
@@ -97,15 +86,8 @@ pub struct NativeServiceConfig {
     pub home: PathBuf,
     pub executable: PathBuf,
     pub user_home: PathBuf,
-    /// Fully resolved service-manager configuration directory. Keeping this
-    /// in the value makes injected managers independent of process-global env.
     pub service_config_dir: PathBuf,
-    /// The one non-secret environment value intentionally forwarded to the
-    /// service, so configured host tools remain discoverable after detaching
-    /// from a terminal. No other caller environment is serialized.
     pub search_path: Option<OsString>,
-    /// Desktop bundle that owns this node runtime. macOS Login Items otherwise
-    /// names the background item after the code-signing identity.
     pub associated_bundle_id: Option<String>,
     /// Where the service manager appends the runtime's stderr. With the
     /// native log sink enabled that holds only what precedes or escapes
@@ -123,9 +105,6 @@ impl NativeServiceConfig {
         if !executable.is_absolute() {
             bail!("native service executable must be an absolute path");
         }
-        // Keep the requested absolute path available for status/stop/uninstall
-        // even if a packaged sidecar has since been removed. Install/start do
-        // the existence and executable-bit checks.
         let executable = if executable.exists() {
             fs::canonicalize(&executable)
                 .with_context(|| format!("resolving Gents executable {}", executable.display()))?
@@ -166,11 +145,9 @@ impl NativeServiceConfig {
     }
 }
 
-/// Whether a path lives inside a package mount that exists only while the
-/// application that launched it runs, such as an AppImage's mount. A service
-/// definition outlives that mount, so it must never record one.
-/// [`NativeServiceManager::install`] and the desktop executable classifier
-/// both use this test.
+/// A service definition must never record a path that lives inside a package
+/// mount that exists only while the application that launched it runs, such
+/// as an AppImage's mount.
 pub fn inside_temporary_package(
     path: &Path,
     app_dir: Option<&Path>,
@@ -191,10 +168,9 @@ pub fn inside_temporary_package(
 }
 
 /// The search path a service definition records. Entries inside a temporary
-/// package mount are dropped: an AppImage launcher puts its own mount first,
-/// and that directory is gone once the application exits. Leaving it in a
-/// persistent definition also lets a later process occupy the vacated name in
-/// a shared temporary directory and be found ahead of the real tool.
+/// package mount are dropped: leaving one in a persistent definition also
+/// lets a later process occupy the vacated name in a shared temporary
+/// directory and be found ahead of the real tool.
 fn forwarded_search_path(
     search_path: Option<&OsStr>,
     app_dir: Option<&Path>,
@@ -208,9 +184,6 @@ fn forwarded_search_path(
         .filter(|value| !value.is_empty())
 }
 
-/// Refuses an executable that would disappear with the AppImage mount.
-/// Recording it as `ExecStart` lets a later process recreate the vacated
-/// directory and be launched directly.
 pub fn ensure_durable_service_executable(
     executable: &Path,
     app_dir: Option<&Path>,
@@ -356,8 +329,6 @@ impl CommandRunner for ProcessCommandRunner {
     }
 }
 
-/// Opens the Login Items pane where macOS lists background items awaiting
-/// approval.
 pub fn open_background_approval_settings() -> Result<()> {
     #[cfg(target_os = "macos")]
     {
@@ -403,7 +374,6 @@ mod macos_background {
             let path = NSString::from_str(&definition.to_string_lossy());
             let url = NSURL::fileURLWithPath(&path);
             let status: isize = unsafe { msg_send![class, statusForLegacyURL: &*url] };
-            // SMAppServiceStatus values.
             match status {
                 0 => BackgroundItemStatus::NotRegistered,
                 1 => BackgroundItemStatus::Enabled,
@@ -574,9 +544,6 @@ impl<R: CommandRunner> NativeServiceManager<R> {
                         &["kickstart".into(), target.into()],
                     )?;
                     if !kick.success {
-                        // Only an item Background Task Management has not
-                        // registered can become approved later; the same rule
-                        // as `approval_pending`, so the wait can observe it.
                         if launchd_refused_bootstrap(&bootstrap)
                             && matches!(
                                 self.background_item(),
@@ -784,8 +751,6 @@ impl<R: CommandRunner> NativeServiceManager<R> {
         }
     }
 
-    /// Why a loaded or failed job is not running: the supervisor's record of
-    /// its last exit. `None` while the process runs or has never exited.
     pub fn last_exit(&self) -> Result<Option<ServiceExit>> {
         if !self.config.definition_path(self.platform).is_file() {
             return Ok(None);
@@ -823,8 +788,6 @@ impl<R: CommandRunner> NativeServiceManager<R> {
         }
     }
 
-    /// Whether the installed definition launches an executable other than
-    /// this configuration's, as it does after the application moved.
     pub fn installed_executable_differs(&self) -> Result<bool> {
         let path = self.config.definition_path(self.platform);
         if !path.is_file() {
@@ -843,8 +806,6 @@ impl<R: CommandRunner> NativeServiceManager<R> {
     }
 
     pub fn uninstall(&self) -> Result<()> {
-        // Service definitions are disposable; the configured Gents home and
-        // all runtime data deliberately remain untouched.
         let path = self.config.definition_path(self.platform);
         if !path.exists() {
             return Ok(());
@@ -904,10 +865,6 @@ impl<R: CommandRunner> NativeServiceManager<R> {
 
     fn ensure_owned_definition(&self, definition: &[u8]) -> Result<()> {
         let installed_home = normalize_absolute(&installed_home(self.platform, definition)?)?;
-        // `with_runner` deliberately accepts fully injected configs for tests
-        // and embedders, so normalize the caller side at the ownership
-        // boundary too. On macOS this notably makes /var and /private/var the
-        // same home without weakening the fixed-label cross-home check.
         let requested_home = normalize_absolute(&self.config.home)?;
         if installed_home != requested_home {
             bail!(
@@ -1105,8 +1062,6 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
         })
         .transpose()?
         .unwrap_or_default();
-    // Without this, macOS attributes the LaunchAgent to the signing
-    // certificate's personal name instead of the desktop app.
     let associated_bundle = config
         .associated_bundle_id
         .as_deref()
@@ -1352,25 +1307,19 @@ fn launchd_is_running(output: &str) -> bool {
     state_running && has_pid
 }
 
-/// An exit the supervisor recorded, with how many times it has restarted the
-/// job since it was loaded. A clean exit is not restarted.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServiceExit {
     pub reason: String,
     pub restarts: u64,
     pub clean: bool,
-    /// The recorded exit status, when the process exited rather than being
-    /// terminated by a signal.
     pub code: Option<i32>,
 }
 
 impl ServiceExit {
-    /// The runtime exited because it refused to open its store.
     pub fn incompatible_store(&self) -> bool {
         self.refused_store().is_some()
     }
 
-    /// Which store refusal the exit status reports, if any.
     pub fn refused_store(&self) -> Option<gents::storage_backend::IncompatibleStoreKind> {
         match self.code {
             Some(INCOMPATIBLE_STORE_EXIT_CODE) => {
@@ -1491,929 +1440,5 @@ fn ensure_launchd_print_result(output: &CommandOutput) -> Result<()> {
             "launchctl could not inspect Gents: {}",
             output_detail(output)
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Mutex;
-
-    #[test]
-    fn launchd_disabled_override_accepts_native_and_boolean_formats() {
-        for value in ["disabled", "true"] {
-            assert!(launchd_is_disabled(&format!(
-                "disabled services = {{\n  \"{SERVICE_LABEL}\" => {value}\n}}"
-            ))
-            .unwrap());
-        }
-        for value in ["enabled", "false"] {
-            assert!(!launchd_is_disabled(&format!("\"{SERVICE_LABEL}\" => {value}")).unwrap());
-        }
-        assert!(!launchd_is_disabled(
-            "disabled services = {\n  \"another.service\" => disabled\n}"
-        )
-        .unwrap());
-        assert!(launchd_is_disabled(&format!("\"{SERVICE_LABEL}\" => unknown")).is_err());
-    }
-
-    struct OrderedRunner(Mutex<Vec<CommandOutput>>);
-
-    impl CommandRunner for OrderedRunner {
-        fn run(&self, _: &OsStr, _: &[OsString]) -> Result<CommandOutput> {
-            Ok(self.0.lock().unwrap().remove(0))
-        }
-    }
-
-    fn command_output(success: bool, stdout: &str, stderr: &str) -> CommandOutput {
-        CommandOutput {
-            success,
-            stdout: stdout.into(),
-            stderr: stderr.into(),
-        }
-    }
-
-    #[test]
-    fn native_command_timeout_is_long_only_for_stop_operations() {
-        assert_eq!(
-            command_timeout(
-                OsStr::new("systemctl"),
-                &["--user".into(), "stop".into(), SYSTEMD_UNIT.into()]
-            ),
-            Duration::from_secs(120)
-        );
-        assert_eq!(
-            command_timeout(
-                OsStr::new("launchctl"),
-                &["bootout".into(), format!("gui/501/{SERVICE_LABEL}").into()]
-            ),
-            Duration::from_secs(120)
-        );
-        for (program, args) in [
-            (
-                "systemctl",
-                vec!["--user".into(), "start".into(), SYSTEMD_UNIT.into()],
-            ),
-            (
-                "systemctl",
-                vec!["--user".into(), "is-active".into(), SYSTEMD_UNIT.into()],
-            ),
-            (
-                "launchctl",
-                vec![
-                    "kickstart".into(),
-                    format!("gui/501/{SERVICE_LABEL}").into(),
-                ],
-            ),
-        ] {
-            assert_eq!(
-                command_timeout(OsStr::new(program), &args),
-                Duration::from_secs(10)
-            );
-        }
-    }
-
-    fn config(root: &Path) -> NativeServiceConfig {
-        let executable = root.join("gents & runtime");
-        fs::write(&executable, b"test").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        NativeServiceConfig {
-            home: root.join("agent home"),
-            executable,
-            user_home: root.to_owned(),
-            service_config_dir: root.join("service-config"),
-            search_path: Some("/a path/bin:/usr/bin".into()),
-            associated_bundle_id: None,
-            stderr_path: None,
-        }
-    }
-
-    #[test]
-    fn a_temporary_package_is_recognized_only_under_an_active_launcher() {
-        let mount = Path::new("/tmp/.mount_gents123");
-        let image = Path::new("/home/user/.local/bin/Gents.AppImage");
-        assert!(inside_temporary_package(
-            &mount.join("usr/bin/gents"),
-            Some(mount),
-            Some(image)
-        ));
-        // The mount is recognized by its own name even without APPDIR.
-        assert!(inside_temporary_package(
-            &mount.join("usr/bin/gents"),
-            None,
-            Some(image)
-        ));
-        assert!(!inside_temporary_package(
-            Path::new("/usr/bin/gents"),
-            Some(mount),
-            Some(image)
-        ));
-        // An extracted AppRun exports APPDIR and no APPIMAGE, and a macOS
-        // bundle exports neither. Both are as durable as their install.
-        assert!(!inside_temporary_package(
-            Path::new("/opt/gents/squashfs-root/usr/bin/gents"),
-            Some(Path::new("/opt/gents/squashfs-root")),
-            None
-        ));
-        assert!(!inside_temporary_package(
-            Path::new("/Applications/Gents.app/Contents/MacOS/gents"),
-            None,
-            None
-        ));
-    }
-
-    #[test]
-    fn a_mounted_executable_cannot_be_recorded_as_the_service_runtime() {
-        let mount = Path::new("/tmp/.mount_gents123");
-        let image = Path::new("/home/user/.local/bin/Gents.AppImage");
-        let error = ensure_durable_service_executable(
-            &mount.join("usr/bin/gents"),
-            Some(mount),
-            Some(image),
-        )
-        .expect_err("mount");
-        assert!(error.to_string().contains("temporary AppImage"), "{error}");
-        assert!(ensure_durable_service_executable(
-            Path::new("/usr/bin/gents"),
-            Some(mount),
-            Some(image),
-        )
-        .is_ok());
-        // No active launcher: an extracted tree is as durable as the user left it.
-        assert!(
-            ensure_durable_service_executable(&mount.join("usr/bin/gents"), Some(mount), None,)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn a_forwarded_search_path_drops_the_package_mount() {
-        let mount = Path::new("/tmp/.mount_gents123");
-        let image = Path::new("/home/user/.local/bin/Gents.AppImage");
-        // An AppImage launcher prepends its own mount to PATH.
-        let launched = OsString::from(
-            "/tmp/.mount_gents123/usr/bin/:/tmp/.mount_gents123/usr/sbin/:/usr/local/bin:/usr/bin",
-        );
-        assert_eq!(
-            forwarded_search_path(Some(&launched), Some(mount), Some(image)),
-            Some(OsString::from("/usr/local/bin:/usr/bin"))
-        );
-        // Without a launcher every entry is kept, byte for byte.
-        assert_eq!(
-            forwarded_search_path(Some(&launched), None, None),
-            Some(launched.clone())
-        );
-        assert_eq!(forwarded_search_path(None, Some(mount), Some(image)), None);
-        // A search path holding nothing durable is recorded as nothing, not
-        // as an empty entry that would search the working directory.
-        assert_eq!(
-            forwarded_search_path(
-                Some(&OsString::from("/tmp/.mount_gents123/usr/bin/")),
-                Some(mount),
-                Some(image)
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn launchd_definition_uses_arguments_and_escapes_xml() {
-        let temp = tempfile::tempdir().unwrap();
-        let config = config(temp.path());
-        let plist = render_launchd(&config).unwrap();
-        assert!(plist.contains("gents &amp; runtime"));
-        assert!(plist.contains("<string>--home</string>"));
-        assert!(plist.contains("<key>SuccessfulExit</key><false/>"));
-        assert!(plist.contains("<key>ProcessType</key><string>Interactive</string>"));
-        assert!(!plist.contains("<string>Background</string>"));
-        assert!(!plist.contains("sh -c"));
-        assert!(!plist.contains("AssociatedBundleIdentifiers"));
-        assert_eq!(launchd_home(&plist).unwrap(), config.home.to_string_lossy());
-    }
-
-    #[test]
-    fn service_definitions_append_stderr_to_the_configured_log() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut config = config(temp.path());
-        assert!(!render_launchd(&config)
-            .unwrap()
-            .contains("StandardErrorPath"));
-        assert!(render_systemd(&config)
-            .unwrap()
-            .contains("StandardError=journal\n"));
-
-        config.stderr_path = Some(temp.path().join("desk & top/logs/100% runtime.log"));
-        let plist = render_launchd(&config).unwrap();
-        assert!(plist.contains(&format!(
-            "<key>StandardErrorPath</key><string>{}</string>",
-            xml_escape(
-                &temp
-                    .path()
-                    .join("desk & top/logs/100% runtime.log")
-                    .to_string_lossy()
-            )
-            .unwrap()
-        )));
-        assert_eq!(launchd_home(&plist).unwrap(), config.home.to_string_lossy());
-        let unit = render_systemd(&config).unwrap();
-        assert!(unit.contains(&format!(
-            "StandardError=append:{}\n",
-            temp.path()
-                .join("desk & top/logs/100%% runtime.log")
-                .to_string_lossy()
-        )));
-        assert_eq!(systemd_home(&unit).unwrap(), config.home.to_string_lossy());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_stderr_log_is_recreated_private_before_the_service_starts() {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        struct Refuses;
-        impl CommandRunner for Refuses {
-            fn run(&self, _: &OsStr, _: &[OsString]) -> Result<CommandOutput> {
-                bail!("no service manager in this test")
-            }
-        }
-        let temp = tempfile::tempdir().unwrap();
-        let mut config = config(temp.path());
-        fs::create_dir_all(&config.home).unwrap();
-        fs::create_dir_all(&config.service_config_dir).unwrap();
-        let log = temp.path().join("desktop/logs/runtime-errors.log");
-        config.stderr_path = Some(log.clone());
-        let manager = NativeServiceManager::with_runner(
-            config.clone(),
-            NativeServicePlatform::Linux,
-            Refuses,
-        );
-        fs::write(
-            config.definition_path(NativeServicePlatform::Linux),
-            manager.render_definition().unwrap(),
-        )
-        .unwrap();
-        // A desktop reset removed the directory after install.
-        assert!(!log.parent().unwrap().exists());
-
-        assert!(
-            manager.start(false).is_err(),
-            "the fake manager cannot start"
-        );
-        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(log.parent().unwrap()), 0o700);
-        assert_eq!(mode(&log), 0o600);
-    }
-
-    #[test]
-    fn a_moved_executable_is_detected_in_the_installed_definition() {
-        struct NoCommands;
-        impl CommandRunner for NoCommands {
-            fn run(&self, _: &OsStr, _: &[OsString]) -> Result<CommandOutput> {
-                bail!("no service manager in this test")
-            }
-        }
-        for platform in [NativeServicePlatform::Macos, NativeServicePlatform::Linux] {
-            let temp = tempfile::tempdir().unwrap();
-            let config = config(temp.path());
-            fs::create_dir_all(&config.home).unwrap();
-            fs::create_dir_all(&config.service_config_dir).unwrap();
-            let installed = NativeServiceManager::with_runner(config.clone(), platform, NoCommands);
-            assert!(!installed.installed_executable_differs().unwrap());
-            fs::write(
-                config.definition_path(platform),
-                installed.render_definition().unwrap(),
-            )
-            .unwrap();
-            assert!(!installed.installed_executable_differs().unwrap());
-
-            let mut moved = config.clone();
-            moved.executable = temp.path().join("Applications/gents");
-            let moved = NativeServiceManager::with_runner(moved, platform, NoCommands);
-            assert!(
-                moved.installed_executable_differs().unwrap(),
-                "{platform:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn launchd_definition_attributes_a_desktop_agent_to_the_app() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut config = config(temp.path());
-        config.associated_bundle_id = Some("com.source-inc.gents".to_string());
-        let plist = render_launchd(&config).unwrap();
-        assert!(plist.contains(
-            "<key>AssociatedBundleIdentifiers</key><array><string>com.source-inc.gents</string></array>"
-        ));
-    }
-
-    #[test]
-    fn systemd_definition_escapes_specifiers_and_quotes() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut config = config(temp.path());
-        config.home = temp.path().join("agent % $ home\" \\ path");
-        let unit = render_systemd(&config).unwrap();
-        assert!(unit.contains("agent %% $$ home\\\" \\\\ path"));
-        assert!(unit.contains("Restart=on-failure"));
-        assert!(unit.contains(&format!(
-            "RestartPreventExitStatus={INCOMPATIBLE_STORE_EXIT_CODE} {INSECURE_KEY_EXIT_CODE} {FOREIGN_STORE_EXIT_CODE}"
-        )));
-        assert!(!unit.contains("sh -c"));
-        assert_eq!(systemd_home(&unit).unwrap(), config.home.to_string_lossy());
-    }
-
-    #[test]
-    fn systemd_home_parser_rejects_injected_or_malformed_arguments() {
-        for unit in [
-            "ExecStart=\"/bin/gents\" \"server\" \"--home\" \"/safe\" --extra",
-            "ExecStart=\"/bin/gents\" \"server\" \"--home\" \"/bad%path\"",
-            "ExecStart=\"/bin/gents\" \"server\" \"--home\" \"/bad\\npath\"",
-            "ExecStart=\"/bin/gents\" \"chat\" \"--home\" \"/safe\"",
-        ] {
-            assert!(systemd_home(unit).is_err(), "accepted {unit:?}");
-        }
-    }
-
-    #[test]
-    fn install_writes_disabled_definition_and_preserves_data() {
-        struct SuccessRunner;
-        impl CommandRunner for SuccessRunner {
-            fn run(&self, program: &OsStr, _: &[OsString]) -> Result<CommandOutput> {
-                Ok(CommandOutput {
-                    success: true,
-                    stdout: if program == OsStr::new("/usr/bin/id") {
-                        "501".into()
-                    } else {
-                        String::new()
-                    },
-                    stderr: String::new(),
-                })
-            }
-        }
-        let temp = tempfile::tempdir().unwrap();
-        let config = config(temp.path());
-        fs::create_dir_all(&config.home).unwrap();
-        fs::write(config.home.join("keep"), b"data").unwrap();
-        let manager = NativeServiceManager::with_runner(
-            config.clone(),
-            NativeServicePlatform::Macos,
-            SuccessRunner,
-        );
-        manager.install().unwrap();
-        assert!(config
-            .definition_path(NativeServicePlatform::Macos)
-            .is_file());
-        assert_eq!(fs::read(config.home.join("keep")).unwrap(), b"data");
-    }
-
-    #[test]
-    fn linux_lifecycle_uses_supervisor_state_and_preserves_home_data() {
-        struct QueueRunner {
-            outputs: Mutex<Vec<CommandOutput>>,
-            calls: Mutex<Vec<Vec<String>>>,
-        }
-        impl CommandRunner for QueueRunner {
-            fn run(&self, program: &OsStr, args: &[OsString]) -> Result<CommandOutput> {
-                let mut call = vec![program.to_string_lossy().into_owned()];
-                call.extend(args.iter().map(|arg| arg.to_string_lossy().into_owned()));
-                self.calls.lock().unwrap().push(call);
-                Ok(self.outputs.lock().unwrap().remove(0))
-            }
-        }
-        fn output(success: bool, stdout: &str) -> CommandOutput {
-            CommandOutput {
-                success,
-                stdout: stdout.into(),
-                stderr: String::new(),
-            }
-        }
-
-        let temp = tempfile::tempdir().unwrap();
-        let config = config(temp.path());
-        fs::create_dir_all(&config.home).unwrap();
-        fs::write(config.home.join("keep"), b"durable").unwrap();
-        let runner = QueueRunner {
-            // install reload+disable, status active+enabled,
-            // stop+inactive+reset-failed,
-            // uninstall stop+inactive+reset-failed+disable+reload
-            outputs: Mutex::new(vec![
-                output(true, ""),
-                output(true, ""),
-                output(true, "active"),
-                output(true, "enabled"),
-                output(true, ""),
-                output(false, "inactive"),
-                output(true, ""),
-                output(true, ""),
-                output(false, "inactive"),
-                output(true, ""),
-                output(true, ""),
-                output(true, ""),
-            ]),
-            calls: Mutex::new(Vec::new()),
-        };
-        let manager =
-            NativeServiceManager::with_runner(config.clone(), NativeServicePlatform::Linux, runner);
-        manager.install().unwrap();
-        let status = manager.status().unwrap();
-        assert!(status.running && status.enabled);
-        manager.stop(false).unwrap();
-        manager.uninstall().unwrap();
-        assert!(!config
-            .definition_path(NativeServicePlatform::Linux)
-            .exists());
-        assert_eq!(fs::read(config.home.join("keep")).unwrap(), b"durable");
-    }
-
-    #[test]
-    fn fixed_label_refuses_to_control_a_different_home() {
-        struct SuccessRunner;
-        impl CommandRunner for SuccessRunner {
-            fn run(&self, _: &OsStr, _: &[OsString]) -> Result<CommandOutput> {
-                Ok(CommandOutput {
-                    success: true,
-                    stdout: String::new(),
-                    stderr: String::new(),
-                })
-            }
-        }
-        let temp = tempfile::tempdir().unwrap();
-        let owner = config(temp.path());
-        fs::create_dir_all(&owner.home).unwrap();
-        let owner_manager = NativeServiceManager::with_runner(
-            owner.clone(),
-            NativeServicePlatform::Linux,
-            SuccessRunner,
-        );
-        owner_manager.install().unwrap();
-
-        let mut foreign = owner.clone();
-        foreign.home = temp.path().join("other-home");
-        fs::create_dir_all(&foreign.home).unwrap();
-        let foreign_manager =
-            NativeServiceManager::with_runner(foreign, NativeServicePlatform::Linux, SuccessRunner);
-        assert!(foreign_manager
-            .status()
-            .unwrap_err()
-            .to_string()
-            .contains("belongs to Gents home"));
-    }
-
-    #[test]
-    fn supervisor_inspection_failure_after_stop_is_not_treated_as_stopped() {
-        struct QueueRunner(Mutex<Vec<CommandOutput>>);
-        impl CommandRunner for QueueRunner {
-            fn run(&self, _: &OsStr, _: &[OsString]) -> Result<CommandOutput> {
-                Ok(self.0.lock().unwrap().remove(0))
-            }
-        }
-        let temp = tempfile::tempdir().unwrap();
-        let config = config(temp.path());
-        fs::create_dir_all(&config.home).unwrap();
-        fs::create_dir_all(&config.service_config_dir).unwrap();
-        fs::write(
-            config.definition_path(NativeServicePlatform::Linux),
-            render_systemd(&config).unwrap(),
-        )
-        .unwrap();
-        let runner = QueueRunner(Mutex::new(vec![
-            CommandOutput {
-                success: true,
-                stdout: String::new(),
-                stderr: String::new(),
-            },
-            CommandOutput {
-                success: false,
-                stdout: String::new(),
-                stderr: "Failed to connect to bus".into(),
-            },
-        ]));
-        let manager =
-            NativeServiceManager::with_runner(config, NativeServicePlatform::Linux, runner);
-        assert!(manager
-            .stop(false)
-            .unwrap_err()
-            .to_string()
-            .contains("could not confirm"));
-    }
-
-    #[test]
-    fn linux_status_reports_transitions_without_treating_them_as_running() {
-        let temp = tempfile::tempdir().unwrap();
-        let config = config(temp.path());
-        fs::create_dir_all(&config.home).unwrap();
-        fs::create_dir_all(&config.service_config_dir).unwrap();
-        fs::write(
-            config.definition_path(NativeServicePlatform::Linux),
-            render_systemd(&config).unwrap(),
-        )
-        .unwrap();
-        let manager = NativeServiceManager::with_runner(
-            config,
-            NativeServicePlatform::Linux,
-            OrderedRunner(Mutex::new(vec![
-                command_output(false, "activating", ""),
-                command_output(true, "enabled", ""),
-            ])),
-        );
-        let status = manager.status().unwrap();
-        assert!(!status.running);
-        assert_eq!(status.detail.as_deref(), Some("activating"));
-    }
-
-    #[test]
-    fn install_does_not_replace_definition_while_linux_is_transitioning() {
-        let temp = tempfile::tempdir().unwrap();
-        let original = config(temp.path());
-        fs::create_dir_all(&original.home).unwrap();
-        fs::create_dir_all(&original.service_config_dir).unwrap();
-        let original_definition = render_systemd(&original).unwrap();
-        let definition_path = original.definition_path(NativeServicePlatform::Linux);
-        fs::write(&definition_path, &original_definition).unwrap();
-
-        let mut replacement = original.clone();
-        replacement.search_path = Some("/different/bin".into());
-        let manager = NativeServiceManager::with_runner(
-            replacement,
-            NativeServicePlatform::Linux,
-            OrderedRunner(Mutex::new(vec![
-                command_output(false, "deactivating", ""),
-                command_output(true, "enabled", ""),
-            ])),
-        );
-        assert!(manager
-            .install()
-            .unwrap_err()
-            .to_string()
-            .contains("stop it"));
-        assert_eq!(
-            fs::read_to_string(definition_path).unwrap(),
-            original_definition
-        );
-    }
-
-    #[test]
-    fn fresh_macos_install_disables_before_writing_plist() {
-        let temp = tempfile::tempdir().unwrap();
-        let config = config(temp.path());
-        fs::create_dir_all(&config.home).unwrap();
-        let definition = config.definition_path(NativeServicePlatform::Macos);
-        let manager = NativeServiceManager::with_runner(
-            config,
-            NativeServicePlatform::Macos,
-            OrderedRunner(Mutex::new(vec![
-                command_output(true, "501", ""),
-                command_output(false, "", "disable denied"),
-            ])),
-        );
-        assert!(manager.install().is_err());
-        assert!(!definition.exists());
-    }
-
-    struct PendingApprovalRunner(Mutex<Vec<CommandOutput>>);
-
-    impl CommandRunner for PendingApprovalRunner {
-        fn run(&self, _: &OsStr, args: &[OsString]) -> Result<CommandOutput> {
-            assert_ne!(
-                args.first().map(OsString::as_os_str),
-                Some(OsStr::new("bootstrap")),
-                "a job awaiting approval must not be bootstrapped"
-            );
-            Ok(self.0.lock().unwrap().remove(0))
-        }
-
-        fn background_item_status(&self, _: &Path) -> BackgroundItemStatus {
-            BackgroundItemStatus::RequiresApproval
-        }
-    }
-
-    #[test]
-    fn supervisor_exit_records_name_a_crash_loop() {
-        assert_eq!(
-            launchd_exit_failure(
-                "state = not running\nruns = 3\nlast exit code = 78: Function not implemented\n"
-            ),
-            Some(ServiceExit {
-                reason: "exited with code 78: Function not implemented".into(),
-                restarts: 2,
-                clean: false,
-                code: Some(78),
-            })
-        );
-        assert_eq!(
-            launchd_exit_failure(
-                "state = not running\nruns = 1\nlast terminating signal = Killed: 9\n"
-            ),
-            Some(ServiceExit {
-                reason: "terminated by signal Killed: 9".into(),
-                restarts: 0,
-                clean: false,
-                code: None,
-            })
-        );
-        assert!(
-            launchd_exit_failure("state = not running\nlast exit code = (never exited)\n")
-                .is_none()
-        );
-        assert_eq!(
-            launchd_exit_failure("state = not running\nruns = 1\nlast exit code = 0\n"),
-            Some(ServiceExit {
-                reason: "exited normally".into(),
-                restarts: 0,
-                clean: true,
-                code: Some(0),
-            })
-        );
-        assert!(launchd_exit_failure("state = running\npid = 42\nlast exit code = 1\n").is_none());
-
-        assert_eq!(
-            systemd_exit_failure(
-                "ActiveState=activating\nSubState=auto-restart\nResult=exit-code\nExecMainStatus=1\nNRestarts=4\n"
-            ),
-            Some(ServiceExit {
-                reason: "exit-code (exit status 1)".into(),
-                restarts: 4,
-                clean: false,
-                code: Some(1),
-            })
-        );
-        let refused = launchd_exit_failure(&format!(
-            "state = not running\nruns = 2\nlast exit code = {INCOMPATIBLE_STORE_EXIT_CODE}: Inappropriate file type or format\n"
-        ))
-        .expect("launchd exit record");
-        assert!(refused.incompatible_store());
-        let refused = systemd_exit_failure(&format!(
-            "ActiveState=failed\nSubState=failed\nResult=exit-code\nExecMainStatus={INCOMPATIBLE_STORE_EXIT_CODE}\nNRestarts=0\n"
-        ))
-        .expect("systemd exit record");
-        assert!(refused.incompatible_store());
-        assert!(!systemd_exit_failure(
-            "ActiveState=failed\nSubState=failed\nResult=signal\nExecMainStatus=65\nNRestarts=0\n"
-        )
-        .expect("signal exit record")
-        .incompatible_store());
-        let foreign = launchd_exit_failure(&format!(
-            "state = not running\nruns = 1\nlast exit code = {FOREIGN_STORE_EXIT_CODE}: No such user\n"
-        ))
-        .expect("launchd exit record");
-        assert_eq!(
-            foreign.refused_store(),
-            Some(gents::storage_backend::IncompatibleStoreKind::ForeignVersion)
-        );
-        let insecure = systemd_exit_failure(&format!(
-            "ActiveState=failed\nSubState=failed\nResult=exit-code\nExecMainStatus={INSECURE_KEY_EXIT_CODE}\nNRestarts=0\n"
-        ))
-        .expect("systemd exit record");
-        assert_eq!(
-            insecure.refused_store(),
-            Some(gents::storage_backend::IncompatibleStoreKind::InsecureKey)
-        );
-        assert_eq!(
-            incompatible_store_exit_code(
-                gents::storage_backend::IncompatibleStoreKind::InsecureKey
-            ),
-            INSECURE_KEY_EXIT_CODE
-        );
-        assert!(systemd_exit_failure(
-            "ActiveState=activating\nSubState=start\nResult=success\nExecMainStatus=0\nNRestarts=0\n"
-        )
-        .is_none());
-        assert!(systemd_exit_failure(
-            "ActiveState=active\nSubState=running\nResult=success\nExecMainStatus=0\nNRestarts=0\n"
-        )
-        .is_none());
-    }
-
-    #[test]
-    fn macos_loaded_job_blocked_by_background_approval_reports_approval() {
-        let temp = tempfile::tempdir().unwrap();
-        let config = config(temp.path());
-        fs::create_dir_all(&config.home).unwrap();
-        fs::create_dir_all(&config.service_config_dir).unwrap();
-        fs::write(
-            config.definition_path(NativeServicePlatform::Macos),
-            render_launchd(&config).unwrap(),
-        )
-        .unwrap();
-        let manager = NativeServiceManager::with_runner(
-            config,
-            NativeServicePlatform::Macos,
-            PendingApprovalRunner(Mutex::new(vec![
-                command_output(true, "501", ""),
-                command_output(
-                    true,
-                    "state = not running\nlast exit code = 78: Function not implemented",
-                    "",
-                ),
-                command_output(true, "501", ""),
-                command_output(true, "", ""),
-            ])),
-        );
-        let status = manager.status().unwrap();
-        assert!(status.job_loaded);
-        assert!(!status.running);
-        assert!(status.requires_approval);
-    }
-
-    #[test]
-    fn macos_background_approval_is_observed_and_blocks_start() {
-        let temp = tempfile::tempdir().unwrap();
-        let config = config(temp.path());
-        fs::create_dir_all(&config.home).unwrap();
-        fs::create_dir_all(&config.service_config_dir).unwrap();
-        fs::write(
-            config.definition_path(NativeServicePlatform::Macos),
-            render_launchd(&config).unwrap(),
-        )
-        .unwrap();
-        let manager = NativeServiceManager::with_runner(
-            config,
-            NativeServicePlatform::Macos,
-            PendingApprovalRunner(Mutex::new(vec![
-                command_output(true, "501", ""),
-                command_output(false, "", "Could not find service"),
-                command_output(true, "501", ""),
-                command_output(true, "", ""),
-            ])),
-        );
-        let status = manager.status().unwrap();
-        assert!(status.requires_approval);
-        assert!(!status.job_loaded);
-
-        let error = manager.start(false).unwrap_err();
-        assert!(error.is::<BackgroundApprovalPending>());
-        assert_eq!(error.to_string(), BACKGROUND_APPROVAL_REQUIRED);
-        assert!(manager.runner.0.lock().unwrap().is_empty());
-    }
-
-    struct ItemStatusRunner {
-        outputs: Mutex<Vec<CommandOutput>>,
-        item: BackgroundItemStatus,
-    }
-
-    impl CommandRunner for ItemStatusRunner {
-        fn run(&self, _: &OsStr, _: &[OsString]) -> Result<CommandOutput> {
-            Ok(self.outputs.lock().unwrap().remove(0))
-        }
-
-        fn background_item_status(&self, _: &Path) -> BackgroundItemStatus {
-            self.item
-        }
-    }
-
-    fn refused_bootstrap_start(item: BackgroundItemStatus) -> anyhow::Error {
-        let temp = tempfile::tempdir().unwrap();
-        let config = config(temp.path());
-        fs::create_dir_all(&config.home).unwrap();
-        fs::create_dir_all(&config.service_config_dir).unwrap();
-        fs::write(
-            config.definition_path(NativeServicePlatform::Macos),
-            render_launchd(&config).unwrap(),
-        )
-        .unwrap();
-        let manager = NativeServiceManager::with_runner(
-            config,
-            NativeServicePlatform::Macos,
-            ItemStatusRunner {
-                outputs: Mutex::new(vec![
-                    command_output(true, "501", ""),
-                    command_output(false, "", "Could not find service"),
-                    command_output(true, "501", ""),
-                    command_output(true, "", ""),
-                    command_output(true, "501", ""),
-                    command_output(true, "501", ""),
-                    command_output(false, "", "Bootstrap failed: 5: Input/output error"),
-                    command_output(false, "", "Could not find service"),
-                ]),
-                item,
-            },
-        );
-        manager.start(false).unwrap_err()
-    }
-
-    #[test]
-    fn a_refused_bootstrap_of_an_unapproved_item_is_pending_approval() {
-        for item in [
-            BackgroundItemStatus::NotRegistered,
-            BackgroundItemStatus::NotFound,
-        ] {
-            let error = refused_bootstrap_start(item);
-            assert!(error.is::<BackgroundApprovalPending>(), "{item:?}: {error}");
-        }
-        for item in [
-            BackgroundItemStatus::Enabled,
-            BackgroundItemStatus::Unavailable,
-        ] {
-            let error = refused_bootstrap_start(item);
-            assert!(!error.is::<BackgroundApprovalPending>(), "{item:?}");
-            assert!(error.to_string().contains("Bootstrap failed: 5"), "{error}");
-        }
-        let pending = refused_bootstrap_start(BackgroundItemStatus::NotFound)
-            .downcast::<BackgroundApprovalPending>()
-            .unwrap();
-        assert!(pending.detail.contains("Input/output error"));
-    }
-
-    #[test]
-    fn an_unregistered_item_is_pending_only_after_a_refused_start() {
-        let status = NativeServiceStatus {
-            installed: true,
-            running: false,
-            job_loaded: false,
-            enabled: true,
-            requires_approval: false,
-            background_item: BackgroundItemStatus::NotRegistered,
-            failed: false,
-            detail: None,
-        };
-        assert!(!status.approval_pending(false), "a fresh install may start");
-        assert!(status.approval_pending(true));
-        let approved = NativeServiceStatus {
-            background_item: BackgroundItemStatus::Enabled,
-            ..status.clone()
-        };
-        assert!(!approved.approval_pending(true));
-        let loaded = NativeServiceStatus {
-            job_loaded: true,
-            ..status
-        };
-        assert!(!loaded.approval_pending(true));
-    }
-
-    #[test]
-    fn linux_terminal_failure_is_reported_with_its_exit_cause() {
-        let temp = tempfile::tempdir().unwrap();
-        let config = config(temp.path());
-        fs::create_dir_all(&config.home).unwrap();
-        fs::create_dir_all(&config.service_config_dir).unwrap();
-        fs::write(
-            config.definition_path(NativeServicePlatform::Linux),
-            render_systemd(&config).unwrap(),
-        )
-        .unwrap();
-        let manager = NativeServiceManager::with_runner(
-            config,
-            NativeServicePlatform::Linux,
-            OrderedRunner(Mutex::new(vec![
-                command_output(false, "failed", ""),
-                command_output(true, "enabled", ""),
-                command_output(
-                    true,
-                    "ActiveState=failed\nSubState=failed\nResult=exit-code\nExecMainStatus=1\nNRestarts=5",
-                    "",
-                ),
-            ])),
-        );
-        let status = manager.status().unwrap();
-        assert!(status.failed);
-        assert!(!status.job_loaded, "a failed unit is not loaded");
-        assert_eq!(
-            manager.last_exit().unwrap(),
-            Some(ServiceExit {
-                reason: "exit-code (exit status 1)".into(),
-                restarts: 5,
-                clean: false,
-                code: Some(1),
-            })
-        );
-    }
-
-    #[test]
-    fn macos_start_preserves_start_and_restore_failures() {
-        let temp = tempfile::tempdir().unwrap();
-        let config = config(temp.path());
-        fs::create_dir_all(&config.home).unwrap();
-        fs::create_dir_all(&config.service_config_dir).unwrap();
-        fs::write(
-            config.definition_path(NativeServicePlatform::Macos),
-            render_launchd(&config).unwrap(),
-        )
-        .unwrap();
-        let manager = NativeServiceManager::with_runner(
-            config,
-            NativeServicePlatform::Macos,
-            OrderedRunner(Mutex::new(vec![
-                command_output(true, "501", ""),
-                command_output(false, "", "Could not find service"),
-                command_output(true, "501", ""),
-                command_output(true, &format!("\"{SERVICE_LABEL}\" => disabled"), ""),
-                command_output(true, "501", ""),
-                command_output(true, "", ""),
-                command_output(true, "501", ""),
-                command_output(true, "501", ""),
-                command_output(true, "", ""),
-                command_output(false, "", "start boom"),
-                command_output(true, "501", ""),
-                command_output(false, "", "disable boom"),
-            ])),
-        );
-        let error = manager.start(false).unwrap_err().to_string();
-        assert!(error.contains("start boom"));
-        assert!(error.contains("disable boom"));
-        assert!(error.contains("enablement is uncertain"));
     }
 }

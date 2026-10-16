@@ -1,5 +1,3 @@
-/* A new Tools document drafted beside the page that needs it: the full
-   editor, nothing saved until Create, and the caller gets the id. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
 import { EditorSheet } from "./EditorSheet";
@@ -12,7 +10,6 @@ export function ToolsSheet({
 }: {
   deployment: NodeView;
   open: boolean;
-  /* the new document's id, or null when discarded */
   onClose: (toolsId: string | null) => void;
 }) {
   const [draft, setDraft] = useState(() => newToolsDocument(deployment));

@@ -157,10 +157,8 @@ async fn load_mcp_services(
     access: &ConfigAccess,
     service_id: Option<&str>,
 ) -> Result<Vec<McpHealthCheckService>> {
-    // The exact `service_id` read carries no `order`: DefraDB plans an ordered
-    // read as a `service_id` index scan and applies `limit` to the scanned
-    // document list before the scan's `status` filter, so an offline row
-    // sharing the id would hide the online one.
+    // No `order` on the exact `service_id` read: DefraDB applies `limit` to the
+    // scanned document list before the scan's `status` filter, so an ordered
     let registry_args = match service_id {
         Some(service_id) => format!(
             r#"filter: {{ _and: [{{ status: {{ _eq: "online" }} }}, {{ service_id: {{ _eq: "{}" }} }}] }}, limit: 1"#,
@@ -396,9 +394,6 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    /// DefraDB's ordered read collapses to the lowest public document id, so the
-    /// offline row has to hold the lowest id and the online row the highest for
-    /// an ordered read to hide the online row.
     async fn registry_with_an_offline_twin() -> (ConfigAccess, String) {
         let node = Arc::new(
             gents::defra_node::EmbeddedNode::builder()

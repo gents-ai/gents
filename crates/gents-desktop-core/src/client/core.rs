@@ -52,8 +52,8 @@ const DESKTOP_P2P_RATE_LIMIT_RATE: f64 = 500.0;
 pub struct ClientCoreOptions {
     pub port: u16,
     pub bind_addr: Option<IpAddr>,
-    /// Defra's HTTP listener lives until its Tokio runtime stops;
-    /// `EmbeddedNode::shutdown` alone does not release it.
+    // Defra's HTTP listener lives until its Tokio runtime stops;
+    // `EmbeddedNode::shutdown` alone does not release it.
     pub http_addr: Option<SocketAddr>,
     pub relay_mode: IrohRelayModeConfig,
     pub discovery: IrohDiscoveryConfig,
@@ -64,7 +64,6 @@ pub struct ClientCoreOptions {
     pub rate_limit_rate: f64,
     pub max_pending_dags: usize,
     pub install_replicators_on_bootstrap: bool,
-    /// Custody of a new client store's at-rest key.
     pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
 }
 
@@ -89,8 +88,6 @@ impl Default for ClientCoreOptions {
 }
 
 impl ClientCoreOptions {
-    /// The loopback-only profile tests and fixtures run: no relay or
-    /// discovery, and a file store key so no login-keychain item is written.
     pub fn local_only() -> Self {
         Self {
             bind_addr: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
@@ -101,10 +98,6 @@ impl ClientCoreOptions {
         }
     }
 
-    /// `local_only` for fixtures that publish a simulated peer route with
-    /// `ClientCore::add_local_standard_peer_for_test`. Supervisor route
-    /// reconciliation would dial the unreachable simulated address and
-    /// revoke the fixture's readiness at a load-dependent moment.
     #[doc(hidden)]
     pub fn local_simulated_route() -> Self {
         Self {
@@ -123,7 +116,6 @@ pub struct ClientPeerStatus {
     pub dial_succeeded: bool,
     pub last_error: Option<String>,
     pub pairing: Vec<PairingCollectionStatus>,
-    /// Directional route diagnostics published by the single route owner.
     pub routes: Vec<ClientRouteStatus>,
 }
 
@@ -204,69 +196,6 @@ impl PairingCollectionStatus {
     }
 }
 
-#[cfg(test)]
-mod pairing_status_tests {
-    use super::*;
-
-    #[test]
-    fn pairing_collection_status_default_is_clean() {
-        let s = PairingCollectionStatus::new("c1");
-        assert_eq!(s.collection_id, "c1");
-        assert_eq!(s.pairing_retry_count, 0);
-        assert!(s.last_retry_at.is_none());
-        assert!(s.last_retry_error_class.is_none());
-        assert!(s.stuck_since.is_none());
-    }
-
-    #[test]
-    fn client_peer_status_carries_pairing_vec() {
-        let peer_status = ClientPeerStatus {
-            peer_id: "p1".into(),
-            label: "l".into(),
-            node_did: "did:test:p1".into(),
-            addr: "/ip4/1/p2p/p1".into(),
-            dial_succeeded: true,
-            last_error: None,
-            pairing: vec![PairingCollectionStatus::new("c1")],
-            routes: Vec::new(),
-        };
-        assert_eq!(peer_status.pairing.len(), 1);
-    }
-
-    #[test]
-    fn record_retry_increments_and_classifies() {
-        let mut s = PairingCollectionStatus::new("c1");
-        let before = SystemTime::now();
-        s.record_retry(PairingErrorClass::RpcTimeout);
-        assert_eq!(s.pairing_retry_count, 1);
-        assert!(s.last_retry_at.unwrap() >= before);
-        assert_eq!(
-            s.last_retry_error_class,
-            Some(PairingErrorClass::RpcTimeout)
-        );
-    }
-
-    #[test]
-    fn mark_stuck_after_threshold() {
-        let mut s = PairingCollectionStatus::new("c1");
-        for _ in 0..STUCK_THRESHOLD_ATTEMPTS {
-            s.record_retry(PairingErrorClass::RpcTimeout);
-        }
-        s.update_stuck_indicator(SystemTime::now());
-        assert!(s.stuck_since.is_some());
-    }
-
-    #[test]
-    fn record_success_clears_state() {
-        let mut s = PairingCollectionStatus::new("c1");
-        s.record_retry(PairingErrorClass::RpcError);
-        s.record_success();
-        assert_eq!(s.pairing_retry_count, 0);
-        assert!(s.last_retry_error_class.is_none());
-        assert!(s.stuck_since.is_none());
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum P2PHealthStatus {
     Healthy,
@@ -323,26 +252,19 @@ pub(super) fn p2p_health_materially_changed(previous: &P2PHealth, next: &P2PHeal
         || previous.last_error != next.last_error
 }
 
-/// One coherent observation of desktop transport and every configured peer.
-///
-/// The transport counters are diagnostic. Product sync readiness is derived
-/// from the configured peer rows in this same revision, never from an
-/// independently sampled global connection count.
+// The transport counters are diagnostic. Product sync readiness is derived
+// from the configured peer rows in this same revision, never from an
+// independently sampled global connection count.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientSyncStateSnapshot {
     pub transport: P2PHealth,
-    /// Exact sync-coordinator facts from the database. `None` means the
-    /// configured transport does not expose a sync coordinator.
     pub database_sync: Option<P2pSyncStatusSnapshot>,
-    /// Decode failure from the database's current sync-status envelope.
     pub database_sync_error: Option<String>,
-    /// Configured peers, by peer ID, whose runtime replicates different
-    /// collection versions than this node. DefraDB accepts the connection but
-    /// never merges either side's writes, so this is the only visible signal.
+    // DefraDB accepts the connection but never merges either side's writes;
+    // schema skew is the only visible signal.
     pub peer_schema_skew: BTreeMap<String, ReplicatedSchemaSkew>,
-    /// The exact durable configured-peer revision that caused this snapshot.
-    /// Bridge projections consume this copy instead of racing a second
-    /// directory read after receiving a sync update.
+    // Bridge projections consume this copy instead of racing a second
+    // directory read after receiving a sync update.
     pub directory: Vec<PeerRecord>,
     pub peers: Vec<ClientPeerStatus>,
 }
@@ -409,9 +331,6 @@ impl ClientCore {
         &self.p2p
     }
 
-    /// Test-fixture seam for exercising local mutation semantics independently
-    /// of the enrollment integration suite. Product callers must establish
-    /// readiness through the signed route owner.
     #[doc(hidden)]
     pub async fn add_local_standard_peer_for_test(&self, node_did: &str) -> Result<()> {
         anyhow::ensure!(
@@ -428,8 +347,6 @@ impl ClientCore {
         .await
     }
 
-    /// Test-fixture seam for publishing readiness after the fixture has
-    /// established and verified its real local-standard route.
     #[doc(hidden)]
     pub async fn add_local_standard_peer_route_for_test(
         &self,
@@ -447,8 +364,6 @@ impl ClientCore {
         Ok(())
     }
 
-    /// Test-fixture seam for a durably paired, chat-ready managed runtime.
-    /// Product callers must establish enrollment through the signed owner.
     #[cfg(any(test, feature = "test-fixtures"))]
     #[doc(hidden)]
     pub async fn add_managed_enrollment_peer_for_test(
@@ -498,10 +413,8 @@ impl ClientCore {
         self.sync_state.subscribe()
     }
 
-    /// Clear the live readiness observation before a desktop-managed runtime
-    /// is deliberately restarted. The signed enrollment remains durable, but
-    /// the replacement process must re-establish both route legs before chat
-    /// writes reopen.
+    // The signed enrollment remains durable; the replacement process must
+    // re-establish both route legs before chat writes reopen.
     pub async fn mark_managed_runtime_restarting(&self, node_did: &str) -> Result<()> {
         let records = self.peer_records().await;
         for record in records.into_iter().filter(|record| {

@@ -1,49 +1,3 @@
-//! The capture seam: the last `HttpClientExt` before the network client.
-//!
-//! ## Why here
-//!
-//! Four provider kinds, three of which edit the body after rig has serialized
-//! it:
-//!
-//! | stack (outermost → innermost) | rewrite below the assembled request |
-//! |---|---|
-//! | `BearerAuthHttpClient<_, ChatGptCodexPolicy>` (aka `ChatGptCodexHttpClient`) → *capture* → reqwest | hoists the first system text into `instructions` and strips system items from `input`, sets `store:false`/`stream:true`, requests `reasoning.encrypted_content` when `store:false`, deletes `max_output_tokens`/`temperature`/`top_p`, forces `strict:false` on every tool |
-//! | `BearerAuthHttpClient<_, XaiGrokOAuthPolicy>` (aka `XaiGrokOAuthHttpClient`) → *capture* → reqwest | injects `store:false` and requests `reasoning.encrypted_content` |
-//! | `SessionTaggingHttpClient` → `ResponsesNormalizingHttpClient` → *capture* → reqwest | rewrites prior assistant items into typed, id-bearing, annotated Responses items |
-//! | `SessionTaggingHttpClient` → *capture* → reqwest (Chat Completions), openrouter → *capture* → reqwest | none |
-//!
-//! Installing the capture *innermost* means it observes the body after every
-//! one of those edits and immediately before the network client receives it, so
-//! `request_json` is what the provider was sent rather than what the loop
-//! intended. It also means there is no code path to the provider that skips
-//! capture — the alternative, capturing in the loop, leaves three of four
-//! stacks describing a request nobody sent.
-//!
-//! ## Fail-closed
-//!
-//! When a capture is armed and this client is about to post a completion body,
-//! the durable write happens *first*. If it fails — malformed body, DTO build
-//! error, DefraDB rejection, or an integrity conflict on the capture key — the
-//! send returns an error and the inner client is never called. `Proofs/
-//! RenderedCapture.lean`'s `capture_failure_blocks_send` is the property; this
-//! is the only place the implementation can honour it, because this is the only
-//! place that owns both the bytes and the decision to send them.
-//!
-//! The contract is stated positively, which matters. "Capture succeeded" is one
-//! premise; "no capture was armed, so forward" is a *different* premise, and it
-//! is the one under which a whole completion loop — the pre-request compaction
-//! summarizer — once reached the provider with no durable row and no warning.
-//! So inside a capture scope, a completion body with nothing armed and nothing
-//! previously claimed is refused outright: a call nothing can name is a call
-//! this transport will not make. Only two things forward without a row: a
-//! non-completion path (`/models`, `/key`, multipart), and a send outside any
-//! scope, which means no request is running in this task at all.
-//!
-//! One armed attempt may legitimately produce several outbound bodies — rig's
-//! SSE event source reconnects by re-posting the request. Once the first body
-//! is durable, an exact resend reuses that result; changed bytes go back through
-//! the sink and become the integrity error they should be.
-
 use std::fmt;
 use std::future::Future;
 
@@ -57,8 +11,8 @@ use sha2::{Digest, Sha256};
 use super::scope::{self, CaptureClaim, PendingCapture, RequestCaptureScope};
 use super::RenderedRequestSource;
 
-/// Transport wrapper that persists the outbound completion body before it is
-/// sent. Install it as the innermost wrapper of every provider stack.
+/// Persist the exact provider body before sending; a failed capture refuses
+/// the request (`capture_failure_blocks_send` in `Proofs/RenderedCapture.lean`).
 #[derive(Clone, Debug, Default)]
 pub struct RenderedRequestCapturingHttpClient<H> {
     inner: H,
@@ -70,37 +24,23 @@ impl<H> RenderedRequestCapturingHttpClient<H> {
     }
 }
 
-/// What a send should do with the request it is holding.
 enum CaptureDecision {
-    /// Not a completion body, or no capture scope installed at all. Forward
-    /// unchanged.
     Forward,
-    /// Capture first; forward only on success.
     Capture {
         scope: std::sync::Arc<RequestCaptureScope>,
         pending: Box<PendingCapture>,
         source: RenderedRequestSource,
         durable_body_fingerprint: Option<[u8; 32]>,
-        /// Scheme and authority of the URI this body was actually posted to,
-        /// e.g. `https://api.openai.com`. Observed at the seam rather than read
-        /// from configuration, because a backend document can be edited between
-        /// reconcile and send — this says where the bytes went, not where they
-        /// were meant to go. `None` when the URI carries no authority.
-        ///
-        /// Deliberately not the full URI: proxies can prepend distinct paths,
-        /// and query strings on some providers carry credentials.
         provider_endpoint: Option<String>,
         provider_route_path_sha256: Option<String>,
         destination_fingerprint: [u8; 32],
     },
-    /// A completion body inside a request that armed nothing. Refuse.
     Refuse {
         scope: std::sync::Arc<RequestCaptureScope>,
         path: String,
     },
 }
 
-/// Scheme and host authority only — never userinfo, path, or query.
 fn provider_endpoint_of(scheme: Option<&str>, authority: Option<&str>) -> Option<String> {
     let authority = authority?;
     let authority = authority
@@ -116,9 +56,6 @@ fn provider_route_path_sha256(path: &str, has_query: bool) -> Option<String> {
     (!has_query).then(|| format!("{:x}", Sha256::digest(path.as_bytes())))
 }
 
-/// Uses the same non-secret destination identity as durable capture. A query
-/// can select a different proxy route, so an unrecorded query cannot authorize
-/// reasoning replay on the strength of its path alone.
 pub fn replay_issuer_for_destination(
     family: &str,
     destination: &rig::http_client::Uri,
@@ -156,10 +93,6 @@ fn decide(
     let Some(source) = RenderedRequestSource::for_request_path(path) else {
         return CaptureDecision::Forward;
     };
-    // No scope at all means no request is running in this task — a CLI probe or
-    // a library embedding. Inside a scope the answer is never "forward
-    // silently": either a capture names this body, or nothing can, and the
-    // latter is a refusal.
     let Some((scope, claim)) = scope::claim_pending() else {
         return CaptureDecision::Forward;
     };
@@ -192,7 +125,6 @@ fn decide(
     }
 }
 
-/// Persist the body, or produce the transport error that refuses the send.
 async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_client::Result<()> {
     let (
         scope,
@@ -273,8 +205,7 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
             Ok(())
         }
         Err((stage, error)) => {
-            // Never log the payload: this record exists precisely because the
-            // body is the whole conversation.
+            // Never log the payload.
             tracing::error!(
                 capture_scope = %capture_scope,
                 request_id = %scope.context().request_id,
@@ -315,11 +246,10 @@ where
         let inner = self.inner.clone();
         let (parts, body) = req.into_parts();
         let body: Bytes = body.into();
-        // The decision — and therefore the `take_pending` that consumes the
-        // arm — has to happen here, in the caller's task, not inside the
-        // returned future: `HttpClientExt::send` returns a `'static` future
-        // that the provider client may poll from anywhere, and a task-local is
-        // not visible from a task that did not install it.
+        // The decision must happen here, in the caller's task: `HttpClientExt::
+        // send` returns a `'static` future the provider client may poll from
+        // anywhere, and a task-local is not visible from a task that did not
+        // install it.
         let decision = decide(
             parts.uri.path(),
             provider_endpoint_of(
@@ -350,9 +280,8 @@ where
         U: From<Bytes>,
         U: WasmCompatSend + 'static,
     {
-        // No provider in this runtime posts a completion as multipart; audio
-        // and file uploads travel this way. Forward untouched, and in
-        // particular do not consume an armed capture.
+        // No provider in this runtime posts a completion as multipart; do not
+        // consume an armed capture.
         let inner = self.inner.clone();
         async move { HttpClientExt::send_multipart(&inner, req).await }
     }
@@ -389,7 +318,6 @@ where
         };
         async move {
             capture_or_refuse(decision, &body).await?;
-            // The idle window opens at the send, after admission and capture.
             if let Some(activity) = &activity {
                 activity.touch();
             }
@@ -413,18 +341,6 @@ where
     }
 }
 
-/// Terminal transport for capture-seam tests: counts and records every body it
-/// is asked to send, and answers with an empty success. A capture failure must
-/// leave `sends` at zero.
-///
-/// It lives outside `mod tests` because the provider wrappers that must sit
-/// *above* the capture seam — ChatGPT Codex, xAI Grok — assemble their real
-/// stack over it in their own modules to prove the row describes the rewritten
-/// body rather than the one rig serialized.
-// Not `#[cfg(test)]`: `gents`'s own native test code (chatgpt_codex,
-// xai_grok_oauth, oneshot) builds real provider transport stacks over this
-// double, and a cfg(test) item in this crate is invisible to a dependent
-// crate's own test build.
 #[derive(Clone, Debug, Default)]
 pub struct CountingInner {
     pub sends: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -441,7 +357,7 @@ impl CountingInner {
     }
 }
 
-// Not `#[cfg(test)]`, for the same reason as `CountingInner` above.
+// Not `#[cfg(test)]`, for the same reason as `CountingInner`.
 mod counting_inner_impl {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
@@ -660,14 +576,10 @@ mod tests {
             manifest.provider_route_path_sha256,
             provider_route_path_sha256("/v1/responses", false)
         );
-        // The Codex rewrite is visible in the row because the row *is* the
-        // rewritten body.
         assert_eq!(rendered.request_json["instructions"], "hoisted");
         assert_eq!(rendered.request_json["store"], false);
         assert_eq!(rendered.tools_json[0]["strict"], false);
         assert_eq!(rendered.messages_json[0]["role"], "user");
-        // The model column reports the model the provider was actually asked
-        // for, not the behavior's configured name.
         assert_eq!(rendered.model_name, "wire-model");
         assert_eq!(
             rendered.sampling_json["max_tokens"],
@@ -749,8 +661,6 @@ mod tests {
         assert_eq!(manifest.provider_family, None);
     }
 
-    /// The fail-closed property. A sink error must terminate the send with the
-    /// inner transport untouched.
     #[tokio::test]
     async fn a_failed_capture_issues_no_http_call() {
         let inner = CountingInner::default();
@@ -803,8 +713,6 @@ mod tests {
         assert!(seen.lock().expect("seen").is_empty());
     }
 
-    /// A `/models` listing inside an armed scope must not consume the turn's
-    /// identity, and must not be captured as if it were a completion.
     #[tokio::test]
     async fn non_completion_paths_pass_through_without_consuming_the_arm() {
         let inner = CountingInner::default();
@@ -833,8 +741,6 @@ mod tests {
         assert!(seen.lock().expect("seen").is_empty());
     }
 
-    /// Outside a request scope — CLI probes, model listings at startup — the
-    /// wrapper is transparent.
     #[tokio::test]
     async fn without_a_scope_the_client_is_transparent() {
         let inner = CountingInner::default();
@@ -847,11 +753,6 @@ mod tests {
         assert_eq!(inner.sends.load(Ordering::SeqCst), 1);
     }
 
-    /// The positive half of fail-closed, and the fence over the defect that
-    /// motivated it: a completion loop that runs inside a request without
-    /// arming a capture (the pre-request compaction summarizer did exactly
-    /// this, because its scope did not span it) must not reach the provider.
-    /// The old contract forwarded this body silently.
     #[tokio::test]
     async fn a_completion_inside_a_scope_that_never_armed_is_refused() {
         let inner = CountingInner::default();
@@ -884,10 +785,6 @@ mod tests {
         assert!(seen.lock().expect("seen").is_empty());
     }
 
-    /// rig's SSE event source reconnects by re-posting the same request. That
-    /// second body has no arm of its own, but it is not unexplained: it belongs
-    /// to the attempt already claimed. Once the first write is durable, an
-    /// exact resend reuses it instead of paying for another synchronous write.
     #[tokio::test]
     async fn a_transport_resend_reuses_the_durable_capture_rather_than_being_refused() {
         let inner = CountingInner::default();
@@ -908,16 +805,8 @@ mod tests {
         .await;
 
         let seen = seen.lock().expect("seen");
-        assert_eq!(
-            seen.len(),
-            1,
-            "an identical resend must not rewrite DefraDB"
-        );
-        assert_eq!(
-            (seen[0].turn_index, seen[0].attempt),
-            (2, 1),
-            "a resend keeps the coordinates of the attempt it re-posts"
-        );
+        assert_eq!(seen.len(), 1);
+        assert_eq!((seen[0].turn_index, seen[0].attempt), (2, 1));
         assert_eq!(inner.sends.load(Ordering::SeqCst), 2);
     }
 
@@ -979,8 +868,6 @@ mod tests {
         assert_eq!(inner.sends.load(Ordering::SeqCst), 2);
     }
 
-    /// Chat Completions bodies name their message list `messages`, and the
-    /// derived views have to follow the wire shape actually posted.
     #[tokio::test]
     async fn chat_completions_bodies_index_the_messages_field() {
         let inner = CountingInner::default();

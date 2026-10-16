@@ -1,8 +1,6 @@
 import Proofs.Optimization
 import Proofs.Conformance.ContractTypes
 
-/-! Generated witnesses for the optimization promotion policy. Rust must reproduce
-both integer gates, the cost gate and the ordered decision exactly. -/
 namespace Conformance.Optimization
 
 open Conformance.Contracts

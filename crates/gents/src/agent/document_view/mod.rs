@@ -17,8 +17,6 @@ pub(crate) struct DocumentRecord<T> {
     pub(crate) value: T,
 }
 
-/// One principal's canonical documents. Logical keys are scoped by this view's
-/// principal; loader rejects duplicates and no global-ID fallback is permitted.
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentRuntimeView {
     pub(crate) node: DocumentRecord<Node>,
@@ -61,7 +59,6 @@ pub(crate) enum ControlUpdateOutcome {
 }
 
 impl DocumentRuntimeView {
-    /// Ready means the resolver returns a row for this principal.
     pub(super) fn resolves_oauth_credential(
         &self,
         provider: &str,
@@ -101,7 +98,6 @@ impl DocumentRuntimeView {
 #[cfg(test)]
 mod tests;
 
-/// Resolve selected surface documents within this principal's tool owner.
 pub(crate) fn merge_surface_tools(
     tools: &Tools,
     view: &DocumentRuntimeView,
@@ -120,8 +116,6 @@ pub(crate) struct ExpandedEthTools {
     pub calls: Vec<crate::eth::ResolvedEthCall>,
 }
 
-/// Expand `eth_tool_ids` into query and call tools. Missing / foreign ids fail closed.
-/// Disabled EthTools are skipped. Empty `query_methods` / `calls` advertise nothing.
 pub(crate) fn expand_eth_tools(
     selection: &Tools,
     view: &DocumentRuntimeView,

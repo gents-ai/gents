@@ -205,11 +205,6 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
     };
     use std::time::Duration;
 
-    // The model uses symbolic Nat/request and physical document IDs; this
-    // positive owner-sequence regression maps those to signed request rows.
-    // It calls the mailbox tool and terminal owner explicitly: it does not
-    // prove an AgentToolCall result was observed by the completion loop.
-    // The local-self admission also keeps requester and agent DIDs equal.
     let modeled = crate::lean_vocab_test::lean_contract_snapshot()
         .mailbox_handoff_cases
         .iter()
@@ -387,7 +382,6 @@ fn generated_reply_cases_drive_claim_validation() {
                 "content": "Approved", "created_at": "2026-01-01T00:00:00Z"
             })).unwrap()
         ).unwrap();
-        // Keep the empty-requester witness rather than relying on row normalization.
         request.requester_did = Some(text("requester_did").into());
         let result = reply::validate_reply_claim(
             &item,

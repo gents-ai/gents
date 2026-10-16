@@ -1,9 +1,3 @@
-//! Declarative, schema-bounded single-collection query tool.
-//!
-//! Sibling of [`crate::defra_write::BoundedWriteTool`]: each instance is locked
-//! to one [`QueryToolDecl`] — one collection, a fixed projection, optional
-//! runtime-filled filters. The model never names the collection.
-
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Result};
@@ -65,7 +59,6 @@ impl BoundedQueryTool {
         self
     }
 
-    /// The DatastoreToolSurface that declared this tool, named by refusals.
     pub fn declared_by(mut self, surface_id: Option<String>) -> Self {
         self.surface_id = surface_id;
         self
@@ -94,10 +87,6 @@ impl BoundedQueryTool {
         Ok(())
     }
 
-    /// Mirrors [`crate::defra_write::BoundedWriteTool::ensure_well_formed`]:
-    /// the protected-collection rule holds at use as well as at configuration
-    /// validation, so a persisted surface that somehow names one is refused
-    /// here instead of reaching the datastore.
     fn ensure_well_formed(&self) -> Result<()> {
         if !self.decl.is_well_formed() {
             bail!(

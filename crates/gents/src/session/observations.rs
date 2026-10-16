@@ -10,8 +10,6 @@ use std::collections::BTreeMap;
 const REQUEST_FACT_SESSION_BATCH_SIZE: usize =
     crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH;
 
-/// Authoritative request fact read from `AgentRequest` rows for observation
-/// advancement. The pure mirror of Lean `AgentSession.RequestFact`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRequestFact {
     pub node_did: String,
@@ -20,14 +18,10 @@ pub struct SessionRequestFact {
     pub requester_did: Option<String>,
     pub agent_id: String,
     pub created_at: String,
-    /// The signed causal hop (`request_hop`).
     pub hop: u32,
     pub observed: gents_protocol::session::SessionRequestObservation,
 }
 
-/// Canonical newest ordering: `created_at` then logical `request_id`, both
-/// descending. The physical `_docID` is exact identity for refresh/retry and
-/// is never an extra sort key.
 fn request_fact_newer(a: &SessionRequestFact, b: &SessionRequestFact) -> bool {
     let (a_created, b_created) = match (
         chrono::DateTime::parse_from_rfc3339(&a.created_at),
@@ -40,9 +34,6 @@ fn request_fact_newer(a: &SessionRequestFact, b: &SessionRequestFact) -> bool {
         || (a_created == b_created && a.observed.request_id > b.observed.request_id)
 }
 
-/// Whether `incoming` is the canonical latest request across `rows` under the
-/// session's exact requester scope, including the currently observed row.
-/// Duplicate logical roots fail instead of a limit-1 silent pick.
 fn incoming_is_canonical_latest(
     session: &gents_protocol::session::AgentSession,
     rows: &[SessionRequestFact],
@@ -104,15 +95,11 @@ fn requester_filter(requester_scope: Option<Option<&str>>) -> String {
             escape_graphql_string(requester_did)
         )
     } else {
-        // Exact absent scope: requester_did must be null.
         r#", requester_did: { _eq: null }"#.to_string()
     };
     requester_filter
 }
 
-/// Read the complete scoped request facts (created_at + identity + state)
-/// inside the caller's transaction. `all_requesters` selects the explicit
-/// background/all-requester scope; the ordinary route never widens.
 pub(crate) async fn load_scoped_request_facts_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     session: &gents_protocol::session::AgentSession,
@@ -242,9 +229,6 @@ pub(crate) fn session_current_hop(facts: &[SessionRequestFact]) -> u32 {
         .unwrap_or(0)
 }
 
-/// [`session_current_hop`] over every requester of a session, in a caller's
-/// transaction. Every same-session continuation copies it and every
-/// cross-session cause climbs past it.
 pub(crate) async fn load_session_current_hop_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -255,7 +239,6 @@ pub(crate) async fn load_session_current_hop_in_txn(
     ))
 }
 
-/// [`load_session_current_hop_in_txn`] in its own read transaction.
 pub(crate) async fn load_session_current_hop(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
@@ -289,9 +272,6 @@ pub async fn load_latest_request_in_txn(
     latest_request_fact(rows)
 }
 
-/// Read complete request histories for several sessions in bounded statements
-/// inside the caller's transaction, then select each head with the same
-/// identity and parsed-time ordering as [`load_latest_request_in_txn`].
 pub(crate) async fn load_latest_requests_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -362,8 +342,6 @@ async fn count_request_fact_batch_queries<F: std::future::Future>(future: F) -> 
     (output, queries.load(std::sync::atomic::Ordering::Relaxed))
 }
 
-/// Validate that `incoming` matches the session owner's scope and agent,
-/// mirroring the Lean `advance` guard.
 fn validate_incoming_scope(
     session: &gents_protocol::session::AgentSession,
     incoming: &SessionRequestFact,
@@ -437,10 +415,6 @@ pub(crate) async fn advance_refused_request_observation_in_txn(
     .await
 }
 
-/// Which boundary the observation owner serves: read-side ambiguity errors on
-/// `Claim` (an ambiguous session refuses the claim) and no-ops on `Refusal`
-/// (Lean `AgentSession.advance` leaves the session untouched unless the
-/// incoming row is provably its canonical latest).
 #[derive(Clone, Copy)]
 enum ObservationBoundary {
     Claim,

@@ -1,5 +1,3 @@
-//! Apply-owned `DatastoreToolSurface` documents.
-
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
@@ -10,7 +8,6 @@ use super::surface_tool::{
     deserialize_optional_surface_tools, serialize_optional_surface_tools, SurfaceToolDecl,
 };
 
-/// Document-layer view of a `DatastoreToolSurface` row.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -27,7 +24,6 @@ pub struct DatastoreToolSurfaceDocument {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub enabled: bool,
-    /// Canonical create/query tool declarations selected through Tools.datastore.
     #[serde(
         default,
         deserialize_with = "deserialize_optional_surface_tools",
@@ -39,7 +35,6 @@ pub struct DatastoreToolSurfaceDocument {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub created_at: Option<String>,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -49,7 +44,6 @@ pub struct DatastoreToolSurfaceDocument {
     pub tags: Vec<String>,
 }
 
-/// List canonical surface configurations owned by the selected principal.
 pub async fn list_datastore_tool_surfaces(
     node: &EmbeddedNode,
     node_did: &str,

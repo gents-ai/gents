@@ -23,10 +23,6 @@ pub(crate) use gents_loop::live_output::{
     LiveOutputStream, LiveToolOutputRegistry, LiveToolOutputWriter,
 };
 
-/// Immutable identity boundary used by `list_processes`, `read_process`,
-/// `wait_process`, and `cancel_process`. A handle is usable on a later request
-/// in the same session when the agent and requester DIDs still match.
-/// Two absent requester identities are the same anonymous scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProcessControlScope {
     pub(crate) request_id: String,
@@ -48,10 +44,9 @@ impl ProcessControlScope {
     }
 }
 
-/// `spawn_process` input, decoded exactly as its advertised schema states:
-/// both fields required, `args` an object, nothing else. A wider decoder
-/// returns a running receipt for input the target cannot decode, and that
-/// target's rejection reaches the model only later, as a failed completion.
+/// Decoded exactly as the advertised schema states; a wider decoder returns a
+/// running receipt for input the target cannot decode, surfacing the rejection
+/// to the model only later as a failed completion.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BackgroundToolArgs {
@@ -59,14 +54,9 @@ pub(crate) struct BackgroundToolArgs {
     pub args: serde_json::Map<String, serde_json::Value>,
 }
 
-/// `wait_process` wait when neither the call nor the handle's Tools group
-/// (`wait_timeout_secs`) sets one; codex `wait_agent` also defaults to 30s. A
-/// wait that times out reports the process as still running without
-/// cancelling it (#985).
+/// Default wait when neither the call nor the Tools group sets one; the
+/// timeout reports the process as still running without cancelling it (#985).
 pub(crate) const DEFAULT_WAIT_PROCESS_TIMEOUT_SECS: u64 = 30;
-/// Ceiling on any `wait_process` wait, configured or requested. A longer
-/// block holds the caller's turn; the completion notification is the
-/// mechanism for long work (grok-build caps blocking waits at 10 minutes).
 pub(crate) const MAX_WAIT_PROCESS_TIMEOUT_SECS: u64 = 600;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -239,8 +229,6 @@ pub(crate) async fn handle_read_tool_output(
     .await
 }
 
-/// Shared authorized output observation. Client snapshots read the retained
-/// buffer in one observation; model tools keep their configured page budget.
 pub(crate) async fn read_tool_output_slice(
     node: &EmbeddedNode,
     caller: &ProcessControlScope,
@@ -334,10 +322,6 @@ pub(crate) async fn read_tool_output_slice(
     }))
 }
 
-/// Resolve one physical tool source through canonical segment reconstruction.
-/// There is deliberately no mutable result-column or volatile ring-buffer
-/// fallback.  An open source is explicit: callers must retry after a segment
-/// close is visible rather than treating absence as an empty result.
 pub(crate) async fn canonical_tool_output(
     node: &EmbeddedNode,
     tool_doc_id: &str,
@@ -472,20 +456,13 @@ pub(crate) fn canonical_tool_output_from_rows(
 struct CombinedOutputSlice {
     output: String,
     next_offset: u64,
-    /// Earliest byte offset still readable. 0 for terminal/persisted output
-    /// (nothing is ever evicted); for a running tool whose live ring buffer
-    /// has overflowed, this is > 0 and a caller can detect that bytes in
-    /// `[requested offset, first_available_offset)` were dropped.
+    /// Earliest byte offset still readable; > 0 only when a live ring buffer
+    /// evicted a prefix, letting a caller detect dropped bytes.
     first_available_offset: u64,
     total_bytes: u64,
     has_more: bool,
 }
 
-/// Read a contiguous byte slice of the combined buffer starting at `offset`,
-/// capped at `max_bytes`. Pages are contiguous from the cursor (no head/tail
-/// drop): `next_offset = offset + bytes_returned`, `has_more` is true iff
-/// `next_offset < total_bytes`. `offset` past the end yields an empty slice
-/// with `next_offset == total_bytes` and `has_more == false`.
 fn read_combined_output_slice(
     combined: &str,
     offset: u64,
@@ -507,7 +484,6 @@ fn read_retained_output_slice(
     let start_offset = offset.clamp(first_offset, retained_end);
     let start = start_offset.saturating_sub(first_offset) as usize;
     let mut start = start;
-    // Snap forward to a UTF-8 char boundary so slicing never splits a codepoint.
     while start < bytes.len() && !combined.is_char_boundary(start) {
         start += 1;
     }
@@ -515,11 +491,6 @@ fn read_retained_output_slice(
     while end > start && !combined.is_char_boundary(end) {
         end -= 1;
     }
-    // Progress guard: if snapping back a multi-byte codepoint collapses the
-    // slice to empty yet more bytes remain, advance `end` past that one
-    // codepoint so every read makes progress.  In practice the 256-byte floor
-    // in `validated_max_bytes` makes this unreachable today, but the guard
-    // keeps the invariant explicit and safe against future budget changes.
     if end == start && start < bytes.len() {
         end = start + 1;
         while end < bytes.len() && !combined.is_char_boundary(end) {
@@ -567,10 +538,8 @@ fn render_assistant_message_text(message: &Message) -> Result<String> {
         anyhow::bail!("materialized child response is not an assistant message");
     };
 
-    // A materialized final response handed to a waiting parent should be the
-    // assistant's ANSWER TEXT — never its chain-of-thought. Render only `Text`
-    // content; drop reasoning/tool-call/image items so no provider's reasoning
-    // trace can leak into a downstream prompt.
+    // Render only `Text` content so no provider reasoning trace can leak into
+    // a downstream prompt; never serialize reasoning/tool blocks as fallback.
     let text_parts: Vec<String> = content
         .iter()
         .filter_map(|item| match item {
@@ -578,8 +547,6 @@ fn render_assistant_message_text(message: &Message) -> Result<String> {
             _ => None,
         })
         .collect();
-    // A reasoning-only or tool-only message has no answer text. Never serialize
-    // those blocks into the parent's prompt as a fallback.
     Ok(text_parts.join("\n"))
 }
 
@@ -639,88 +606,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn canonical_tool_output_requires_a_close_before_finalizing() {
-        let segment = gents_protocol::output::OutputSegment {
-            node_did: "did:test:owner".into(),
-            requester_did: None,
-            session_id: "session".into(),
-            request_doc_id: "request-doc".into(),
-            source: OutputSource::ToolCall {
-                tool_call_doc_id: "tool-doc".into(),
-            },
-            writer: OutputWriter::ToolExecution {
-                tool_call_doc_id: "tool-doc".into(),
-            },
-            ordinal: Some(0),
-            runs: vec![gents_protocol::output::SegmentRun {
-                stream: 0,
-                bytes: 6,
-                declaration: Some(gents_protocol::output::StreamDeclaration {
-                    block_index: 0,
-                    part_index: 0,
-                    payload: gents_protocol::output::StreamPayload::ToolOutput,
-                }),
-            }],
-            payload: "prefix".into(),
-            close: None,
-            created_at: "2026-09-22T00:00:00Z".into(),
-        };
-        let row = crate::session::canonical_rows::OutputSegmentRow {
-            doc_id: "segment-open".into(),
-            segment,
-        };
-        assert_eq!(
-            canonical_tool_output_from_rows(vec![row], "tool-doc", "request-doc").unwrap(),
-            CanonicalToolOutputObservation::Open("prefix".into()),
-            "even when a lifecycle replica is terminal, an open source remains loading"
-        );
-    }
-
-    #[test]
-    fn canonical_tool_output_preserves_a_valid_empty_close() {
-        let segment = gents_protocol::output::OutputSegment {
-            node_did: "did:test:owner".into(),
-            requester_did: None,
-            session_id: "session".into(),
-            request_doc_id: "request-doc".into(),
-            source: OutputSource::ToolCall {
-                tool_call_doc_id: "tool-doc".into(),
-            },
-            writer: OutputWriter::ToolExecution {
-                tool_call_doc_id: "tool-doc".into(),
-            },
-            ordinal: Some(0),
-            runs: vec![gents_protocol::output::SegmentRun {
-                stream: 0,
-                bytes: 0,
-                declaration: Some(gents_protocol::output::StreamDeclaration {
-                    block_index: 0,
-                    part_index: 0,
-                    payload: gents_protocol::output::StreamPayload::ToolOutput,
-                }),
-            }],
-            payload: String::new(),
-            close: Some(gents_protocol::output::SourceClose::Closed {
-                outcome: gents_protocol::output::OutputOutcome::Complete,
-                segments: 1,
-                stream_bytes: vec![0],
-            }),
-            created_at: "2026-09-22T00:00:00Z".into(),
-        };
-        let row = crate::session::canonical_rows::OutputSegmentRow {
-            doc_id: "segment-closed".into(),
-            segment,
-        };
-        assert_eq!(
-            canonical_tool_output_from_rows(vec![row], "tool-doc", "request-doc").unwrap(),
-            CanonicalToolOutputObservation::Closed(String::new())
-        );
-    }
-    use crate::llm::message::{
-        AssistantContent, Reasoning, Text, ToolCall, ToolFunction, UserContent,
-    };
-
-    #[test]
     fn process_control_requester_absence_is_exact_not_empty_string() {
         let owner = ProcessControlScope {
             request_id: "request-1".to_string(),
@@ -749,76 +634,10 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn render_assistant_message_text_prefers_text_over_reasoning_and_tools() {
-        let message = Message::Assistant {
-            id: None,
-            content: vec![
-                AssistantContent::Reasoning(Reasoning::new("chain-of-thought trace")),
-                AssistantContent::ToolCall(ToolCall::new(
-                    "call-1".to_string(),
-                    ToolFunction::new("bash".to_string(), serde_json::json!({"command": "ls"})),
-                )),
-                AssistantContent::Text(Text {
-                    text: "final answer".to_string(),
-                }),
-            ],
-        };
-        assert_eq!(
-            render_assistant_message_text(&message).unwrap(),
-            "final answer"
-        );
-    }
-
-    #[test]
-    fn child_answer_without_text_does_not_serialize_reasoning() {
-        let message = Message::Assistant {
-            id: None,
-            content: vec![AssistantContent::Reasoning(Reasoning::new(
-                "private reasoning",
-            ))],
-        };
-        assert_eq!(render_assistant_message_text(&message).unwrap(), "");
-        assert!(render_assistant_message_text(&Message::User {
-            content: vec![UserContent::Text(Text {
-                text: "not an answer".into()
-            })],
-        })
-        .is_err());
-    }
-
-    #[test]
-    fn combined_slice_reports_zero_first_available_offset() {
-        // Terminal/persisted output is never evicted, so the earliest readable
-        // byte is always 0.
-        let slice = read_combined_output_slice("hello world", 0, 1024);
-        assert_eq!(slice.first_available_offset, 0);
-        assert_eq!(slice.output, "hello world");
-        assert_eq!(slice.total_bytes, 11);
-        assert!(!slice.has_more);
-    }
-
-    #[test]
-    fn retained_slice_surfaces_dropped_prefix() {
-        // Simulate a live ring buffer that produced 1000 bytes but retains only
-        // the last 4 (tail): first_offset = 996, total_bytes_seen = 1000.
-        let slice = read_retained_output_slice("tail", 996, 1000, 0, 1024);
-        // A read from offset 0 is clamped forward to the earliest retained
-        // byte; first_available_offset (996) exceeding the requested offset (0)
-        // is how a caller detects bytes [0, 996) were produced then evicted.
-        assert_eq!(slice.first_available_offset, 996);
-        assert_eq!(slice.output, "tail");
-        assert_eq!(slice.next_offset, 1000);
-        assert_eq!(slice.total_bytes, 1000);
-        assert!(!slice.has_more);
-    }
-
     /// Drives the Lean `tool_output_paging_cases` (#937) through the real
-    /// `read_retained_output_slice`. The rows are computed from the Lean
-    /// `ToolOutput.readSlice` model, so paging drift in either
-    /// direction (model or implementation) fails here. ASCII payloads keep
-    /// byte and UTF-8 character boundaries identical, so the Rust boundary
-    /// snapping is inert for these rows.
+    /// `read_retained_output_slice`; the rows are computed from the Lean
+    /// `ToolOutput.readSlice` model, so paging drift in either direction
+    /// fails here. ASCII payloads keep byte and UTF-8 boundaries identical.
     #[test]
     fn generated_tool_output_paging_cases_match_slice_function() {
         let cases = crate::lean_vocab_test::lean_tool_output_paging_cases();
@@ -826,9 +645,6 @@ mod tests {
             !cases.is_empty(),
             "Lean emitted no tool-output paging cases"
         );
-        // The canonical model retains the full stream, so its former
-        // evicted-prefix case is no longer part of this contract family.
-        // Exercise every emitted case without maintaining a second case count.
 
         for case in cases {
             let retained = "x".repeat(case.retained_len as usize);

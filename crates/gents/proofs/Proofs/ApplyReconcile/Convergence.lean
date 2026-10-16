@@ -4,9 +4,7 @@ import Proofs.ApplyReconcile.Publication
 namespace ApplyReconcile
 
 /-- Accepted publication realizes every desired field before the same canonical
-registry decoder and readiness projection run. Publication alone does not make
-invalid or disabled agents runnable. This theorem imposes no collection rank,
-so legitimate configuration-reference cycles remain supported. -/
+registry decoder and readiness projection run. -/
 theorem publication_resolved_snapshot
     (M : Manifest) (L : LiveState) (hM : M.referencesClosed = true)
     (decode : RegistryDecoder) (owner : String) (encode : String → AgentId)
@@ -18,8 +16,6 @@ theorem publication_resolved_snapshot
   unfold LiveState.toResolvedSnapshot
   rw [publish_realizes L M hM]
 
-/-- Every authored agent is classified, while readiness still requires its
-complete common resolution and the runtime owner's availability observation. -/
 theorem publication_coverage
     (M : Manifest) (L : LiveState) (hM : M.referencesClosed = true)
     (decode : RegistryDecoder) (owner : String) (encode : String → AgentId)
@@ -31,7 +27,6 @@ theorem publication_coverage
   exact snapshot_coverage M.docs decode owner (M.agentNames owner) encode hencode
     defaultAgent runtimeAvailable
 
-/-- Publication does not bypass resolution failures in the runtime readiness owner. -/
 theorem publication_rejected_configuration_unavailable
     (M : Manifest) (L : LiveState) (hM : M.referencesClosed = true)
     (decode : RegistryDecoder) (owner name : String) (encode : String → AgentId)

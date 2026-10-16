@@ -31,8 +31,6 @@ impl LeanR4cBackgroundWorkCase {
     }
 }
 
-/// Interrupt disposition witness computed by the Lean
-/// `Background.Interrupt.interruptTool` for one owned tool-call shape.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanInterruptDispositionCase {
     pub(crate) name: String,
@@ -43,9 +41,6 @@ pub(crate) struct LeanInterruptDispositionCase {
     pub(crate) post_await_mode: String,
 }
 
-/// Paging witness over the retained output window (#937): inputs plus the
-/// slice outputs computed from the Lean `Background.ToolOutput.readSlice`
-/// model, consumed against `read_retained_output_slice`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanToolOutputPagingCase {
     pub(crate) name: String,
@@ -85,21 +80,16 @@ pub(crate) struct LeanR6BackgroundingCase {
     pub(crate) max_retries: Option<usize>,
     #[serde(default)]
     pub(crate) post_retry_count: Option<usize>,
-    /// Lean's opaque numeric redrive source request id (`wake.requestId`).
     #[serde(default)]
     pub(crate) redrive_source_request_id: Option<u64>,
-    /// Before/after causal hop: redrive preserves the failed source's hop.
     #[serde(default)]
     pub(crate) pre_depth: Option<u64>,
     #[serde(default)]
     pub(crate) post_depth: Option<u64>,
-    /// Before/after retry parent: the successor's parent is the failed source
-    /// request itself.
     #[serde(default)]
     pub(crate) pre_parent_request_id: Option<u64>,
     #[serde(default)]
     pub(crate) post_parent_request_id: Option<u64>,
-    /// Before/after execution deadline: redrive creates no new deadline.
     #[serde(default)]
     pub(crate) pre_execution_deadline: Option<u64>,
     #[serde(default)]
@@ -116,7 +106,6 @@ pub(crate) struct LeanR6BackgroundingCase {
     pub(crate) wake_created: Option<bool>,
     #[serde(default)]
     pub(crate) redrive_allowed: Option<bool>,
-    /// `ToolOperation` of an executed native-lifecycle row.
     #[serde(default)]
     pub(crate) operation: Option<String>,
 }

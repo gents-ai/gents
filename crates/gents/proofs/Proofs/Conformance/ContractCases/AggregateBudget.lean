@@ -200,8 +200,6 @@ private def toCase (witness : AggregateTokenBudgetWitness) : AggregateTokenBudge
 def aggregateTokenBudgetCases : List AggregateTokenBudgetCase :=
   witnesses.map toCase
 
-/-- Restart observations distinguish zero usage from no prior rows while
-preserving the same accounted spend. Mixed rows charge both durable components. -/
 theorem restart_cases_pinned :
     (aggregateTokenBudgetCases.take 2).map
       (fun row => (row.used, row.effectiveOutputTokens, row.nextUsed)) =
@@ -213,9 +211,6 @@ theorem physical_scope_case_pinned :
       (fun row => (row.used, row.effectiveOutputTokens, row.nextUsed)) =
       some (375, 525, some 525) := by rfl
 
-/-- Decoded execution-owner facts, not caller overrides. Zero is an exhausted
-runtime ledger, never an alias for unlimited (authored zero limits are rejected
-by configuration validation before this boundary). -/
 structure BudgetRehydrationCase where
   name : String
   requestDocId : String

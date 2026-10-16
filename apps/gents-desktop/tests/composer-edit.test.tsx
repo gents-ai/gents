@@ -44,7 +44,6 @@ const turn = (row: PendingQueueEntryView): PendingTurnView => ({
   origin: null,
   createdAt: null,
 });
-/* a running session with messages waiting behind its turn */
 const session = (queue: PendingQueueEntryView[]) =>
   ({
     sessionId: "session",
@@ -103,7 +102,6 @@ describe("editing a waiting message in the composer", () => {
     await user.click(within(rowFor("a")).getByRole("button", { name: "Edit" }));
     expect(screen.getByTestId("editing-message")).toBeInTheDocument();
     expect(composerBox()).toHaveValue("message a");
-    /* the button saves the edit; the chip's X, not the field's, is the way out */
     expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     await user.clear(composerBox());
@@ -126,7 +124,6 @@ describe("editing a waiting message in the composer", () => {
     await user.type(composerBox(), "half a thought");
     await user.click(within(rowFor("a")).getByRole("button", { name: "Edit" }));
     expect(composerBox()).toHaveValue("message a");
-    /* the composer takes focus, so the edit goes on where the person types */
     await waitFor(() => expect(composerBox()).toHaveFocus());
     await user.keyboard("{Escape}");
     expect(screen.queryByTestId("editing-message")).toBeNull();
@@ -154,7 +151,6 @@ describe("editing a waiting message in the composer", () => {
     await user.clear(composerBox());
     await user.type(composerBox(), "corrected{Enter}");
     await waitFor(() => expect(editPendingQueue).toHaveBeenCalled());
-    /* still in the composer while it is saved; the queue holds still */
     expect(screen.getByTestId("editing-message")).toBeInTheDocument();
     expect(within(rowFor("b")).getByRole("button", { name: "Remove" })).toBeDisabled();
     await act(async () => reject(new Error("The message queue changed.")));
@@ -176,7 +172,6 @@ describe("editing a waiting message in the composer", () => {
     await waitFor(() =>
       expect(screen.getByTestId("editing-message").dataset.reached).toBe("true"),
     );
-    /* a key meant to save never becomes a send */
     await user.click(composerBox());
     await user.keyboard("{Enter}");
     expect(sendChatMessage).not.toHaveBeenCalled();
@@ -215,7 +210,6 @@ describe("editing a waiting message in the composer", () => {
     );
     await user.click(screen.getByRole("button", { name: "Send as a new message" }));
     await waitFor(() => expect(sendChatMessage).toHaveBeenCalled());
-    /* the only copy of the text stays, to send again or keep */
     await waitFor(() => expect(composerBox()).toHaveValue("message a and more"));
     expect(screen.getByTestId("editing-message")).toBeInTheDocument();
   });
@@ -229,7 +223,6 @@ describe("editing a waiting message in the composer", () => {
     await user.clear(composerBox());
     await user.type(composerBox(), "corrected{Enter}");
     await waitFor(() => expect(editPendingQueue).toHaveBeenCalled());
-    /* a correction typed while the save is out does not take */
     await user.type(composerBox(), " again");
     expect(composerBox()).toHaveValue("corrected");
     await act(async () => resolve());

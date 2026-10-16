@@ -70,15 +70,10 @@ pub(super) fn build_pending_turn(
         .lifecycle_state
         .map(|state| state.as_str().to_string());
     let content = normalize_optional(request.content.as_deref())?;
-    // A folded row is consumed in the transaction that publishes its entry
-    // under the claiming request; a replica can hold the row first.
     let owner = gents::lifecycle::input_message_owner(request);
     if folded_into.is_some() && owner.is_none() {
         return None;
     }
-    // Pending ownership is session state, not visible-page state. A materialized
-    // user row outside the current window must still suppress the request-owned
-    // placeholder at the tip.
     let transcript = node_did.map_or_else(
         || transcript_store.transcript(session_id),
         |node_did| transcript_store.transcript_for_node(session_id, node_did),
@@ -192,7 +187,6 @@ mod retry_tests {
         assert!(shown("waiting"));
         assert!(!shown("edited"));
         assert!(!shown("removed"));
-        /* an interruption its author did not ask for still says it was not sent */
         assert!(shown("stopped"));
     }
 }

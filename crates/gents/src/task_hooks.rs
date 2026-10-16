@@ -25,22 +25,12 @@ pub(crate) use records::RecordedHookAttempt;
 pub(crate) use records::TaskHookRecordHandle;
 pub(crate) use records::{recover_task_hook_records, TaskHookRecord, TaskHookRecordStore};
 
-/// `TaskHooks.defaultHookTimeoutSecs`: the executor's own bound for a hook that
-/// configures none. Callers consume [`effective_timeout_secs`] rather than
-/// re-deriving it.
 pub(crate) const DEFAULT_TASK_HOOK_TIMEOUT_SECS: u64 = 120;
 
-/// Captured stdout/stderr retained per attempt so a failing gate can name what
-/// the command said without holding an unbounded host stream in memory.
 const HOOK_OUTPUT_BYTE_CAP: usize = 64 * 1024;
 
-/// Hook output copied into a request's `failure_reason`. That field replicates
-/// to every peer with the request, so only the tail of the output is kept.
 const FAILURE_REASON_OUTPUT_CAP: usize = 4 * 1024;
 
-/// `TaskHook.effectiveTimeout`. A nonpositive configured value is rejected by
-/// `Task::validate`, so it cannot reach execution; this function still mirrors
-/// the model there rather than substituting the default.
 pub(crate) fn effective_timeout_secs(hook: &TaskHook) -> u64 {
     match hook.timeout_secs {
         None => DEFAULT_TASK_HOOK_TIMEOUT_SECS,
@@ -48,19 +38,12 @@ pub(crate) fn effective_timeout_secs(hook: &TaskHook) -> u64 {
     }
 }
 
-/// `TaskHooks.CommandResult`. `Exited { code: None }` is a signal-terminated
-/// child: no exit status exists, so it can never satisfy the modeled success
-/// condition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum HookCommandResult {
-    Exited {
-        code: Option<i64>,
-    },
+    Exited { code: Option<i64> },
     LaunchFailed,
     TimedOut,
-    /// Cancelled, or an outcome the executor cannot observe. Terminal and
-    /// reported, never retried.
     Interrupted,
 }
 
@@ -84,18 +67,15 @@ impl HookCommandResult {
 pub(crate) struct HookAttempt {
     pub(crate) hook_id: String,
     pub(crate) result: HookCommandResult,
-    /// Operator-facing detail: captured output, or the launch error.
     pub(crate) detail: String,
 }
 
-/// `TaskHooks.PrimaryError`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HookPrimaryError {
     Hook(String),
     Agent,
 }
 
-/// `TaskHooks.TaskOutcome`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) enum TaskHookOutcome {
     #[default]
@@ -105,8 +85,6 @@ pub(crate) enum TaskHookOutcome {
 }
 
 impl TaskHookOutcome {
-    /// `TaskOutcome.toRequestState`, expressed through the existing request
-    /// terminal owner rather than a second terminal vocabulary.
     pub(crate) fn terminal_outcome(&self) -> RequestTerminalOutcome {
         match self {
             Self::Success => RequestTerminalOutcome::Completed,
@@ -116,7 +94,6 @@ impl TaskHookOutcome {
     }
 }
 
-/// `TaskHooks.AgentResult`: one observation of the owned execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TaskAgentResult {
     Success,
@@ -125,7 +102,6 @@ pub(crate) enum TaskAgentResult {
     Interrupted,
 }
 
-/// `TaskHooks.RunResult`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct TaskHookRun {
     pub(crate) outcome: TaskHookOutcome,
@@ -137,7 +113,6 @@ pub(crate) struct TaskHookRun {
 }
 
 impl TaskHookRun {
-    /// `RunResult.cleanupErrors`.
     pub(crate) fn cleanup_errors(&self) -> Vec<String> {
         self.finally_attempted
             .iter()
@@ -146,7 +121,6 @@ impl TaskHookRun {
             .collect()
     }
 
-    /// `RunResult.finalOutcome`.
     pub(crate) fn final_outcome(&self) -> TaskHookOutcome {
         match &self.outcome {
             TaskHookOutcome::Success => phase_outcome(&self.finally_attempted),
@@ -154,8 +128,6 @@ impl TaskHookRun {
         }
     }
 
-    /// What the operator's gate said, for the durable failure reason the
-    /// terminal owner records.
     pub(crate) fn hook_failure_reason(&self, hook_id: &str) -> String {
         let attempt = self
             .before_attempted
@@ -187,9 +159,6 @@ fn failure_reason_tail(detail: &str) -> String {
     }
 }
 
-/// `TaskHooks.HookExec`: one attempt observation per configured occurrence.
-/// Cwd, environment, launch, capture, timeout and process termination stay with
-/// the host execution owner; implementations translate its outcome.
 #[async_trait::async_trait]
 pub(crate) trait TaskHookExec: Send + Sync {
     async fn attempt(&self, hook: &TaskHook) -> HookAttempt;
@@ -199,7 +168,6 @@ fn hooks_of_phase(hooks: &[TaskHook], phase: TaskHookPhase) -> impl Iterator<Ite
     hooks.iter().filter(move |hook| hook.phase == phase)
 }
 
-/// `TaskHooks.runPhase`.
 async fn run_phase(
     hooks: &[TaskHook],
     phase: TaskHookPhase,
@@ -217,7 +185,6 @@ async fn run_phase(
     attempts
 }
 
-/// `TaskHooks.runFinally`.
 async fn run_finally(hooks: &[TaskHook], exec: &dyn TaskHookExec) -> Vec<HookAttempt> {
     let mut attempts = Vec::new();
     for hook in hooks_of_phase(hooks, TaskHookPhase::Finally) {
@@ -226,7 +193,6 @@ async fn run_finally(hooks: &[TaskHook], exec: &dyn TaskHookExec) -> Vec<HookAtt
     attempts
 }
 
-/// `TaskHooks.phaseOutcome`.
 fn phase_outcome(attempts: &[HookAttempt]) -> TaskHookOutcome {
     match attempts.iter().find(|attempt| !attempt.result.succeeded()) {
         None => TaskHookOutcome::Success,
@@ -237,9 +203,6 @@ fn phase_outcome(attempts: &[HookAttempt]) -> TaskHookOutcome {
     }
 }
 
-/// `TaskHooks.runTask`: the single orchestration. Preparation decides whether
-/// the owned execution runs, its observation selects one ordinary after-phase,
-/// then every cleanup hook is attempted.
 pub(crate) async fn run_task_hooks<Work, Fut>(
     hooks: &[TaskHook],
     exec: &dyn TaskHookExec,
@@ -283,9 +246,7 @@ where
     run
 }
 
-/// Cancellation sources for one task execution's hooks. A user interrupt
-/// cancels ordinary-phase commands only; runtime shutdown cancels every phase
-/// (`TaskHooks.runFinally`).
+/// User interrupts cancel ordinary phases; shutdown also cancels `finally` hooks.
 #[derive(Clone)]
 pub(crate) struct TaskHookCancellation {
     shutdown: CancellationToken,
@@ -299,7 +260,6 @@ impl Default for TaskHookCancellation {
 }
 
 impl TaskHookCancellation {
-    /// Cancellation that runtime shutdown, `shutdown`, also cancels.
     pub(crate) fn under(shutdown: &CancellationToken) -> Self {
         let shutdown = shutdown.child_token();
         let interrupt = shutdown.child_token();
@@ -326,11 +286,6 @@ impl TaskHookCancellation {
         }
     }
 
-    /// Cancels hooks when the request's interrupt observer latches, the
-    /// execution lease owner observes this execution lost the request (a
-    /// revocation writes no interrupt latch), or the runtime shuts down. The
-    /// first two cancel ordinary phases only. A closed channel stops being
-    /// watched; its last value still counts.
     pub(crate) fn follow(
         &self,
         mut interrupt: tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
@@ -361,14 +316,7 @@ impl TaskHookCancellation {
     }
 }
 
-/// Runs one configured occurrence through the host execution owner. The cwd is
-/// the behavior's already-admitted host-tools root, so a hook cannot select a
-/// workspace overlay of its own.
-///
-/// Hook time is spent inside the request deadline fixed at claim. A hook's
-/// own timeout is not shortened to fit it, so a `before` hook that outlives
-/// the deadline leaves the owned work to fail with the owned loop's deadline
-/// error rather than starting late.
+/// Hooks run in the admitted host root and remain inside the request deadline fixed at claim.
 pub(crate) struct ManagedTaskHookExec {
     cwd: PathBuf,
     cancellation: TaskHookCancellation,
@@ -400,7 +348,6 @@ impl ManagedTaskHookExec {
         self
     }
 
-    /// Records each attempt in `record` before its command launches.
     pub(crate) fn with_record(mut self, record: Option<TaskHookRecordHandle>) -> Self {
         self.record = record;
         self
@@ -425,16 +372,13 @@ fn detail(stdout: &[u8], stderr: &[u8]) -> String {
 
 #[async_trait::async_trait]
 impl TaskHookExec for ManagedTaskHookExec {
-    /// A command whose cancellation already fired is not launched at all, so it has no host
-    /// effect to account for and is not recorded; one whose attempt cannot be
-    /// recorded is not launched either, since recovery could then replay it.
+    /// Persist the attempt before launch so recovery cannot repeat an unrecorded host effect.
     async fn attempt(&self, hook: &TaskHook) -> HookAttempt {
         let refused = |result, detail: String| HookAttempt {
             hook_id: hook.hook_id.clone(),
             result,
             detail,
         };
-        // Admission bounds the timeout (`TaskHooks.admitted_timeout_bounded`).
         let deadline_at =
             Utc::now() + chrono::Duration::seconds(effective_timeout_secs(hook) as i64);
         let cancellation = self.cancellation.for_phase(hook.phase);
@@ -452,8 +396,6 @@ impl TaskHookExec for ManagedTaskHookExec {
                 );
             }
         }
-        // TaskHooks.ownershipCheckedExec: read after the durable attempt write,
-        // so that host I/O cannot age the launch's ownership observation.
         let refusal = if hook.phase != TaskHookPhase::Finally {
             match &self.execution {
                 Some((node, request_doc_id, lease)) => match lease
@@ -546,17 +488,6 @@ impl TaskHookExec for ManagedTaskHookExec {
     }
 }
 
-/// The hooks of the Task a claimed request was fired from. The Task fire
-/// receipt written with the request names it for scheduled, event and manual
-/// runs; an automated request without a receipt falls back to its Trigger's
-/// Task. A goal-backed Task's receipt names only its opening request, so its
-/// continuations run without hooks.
-///
-/// A request bound to a Task that is gone or disabled by claim time fails:
-/// running it without the hooks it was fired under would skip the operator's
-/// gates, so the binding fails closed. Claim admission already refuses an
-/// automated request whose Trigger is gone.
-/// The owner flag remains true for a Task with no configured hooks.
 pub(crate) async fn resolve_request_task_hooks(
     node: &EmbeddedNode,
     request: &AgentRequest,

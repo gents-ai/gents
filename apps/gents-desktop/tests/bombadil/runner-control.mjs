@@ -78,10 +78,6 @@ export async function stopProcess(
     return;
   }
   if (alreadyExited) {
-    // The leader exited on its own, so the group signal only targets surviving
-    // children (Chrome). Poll for their drain across the full SIGTERM grace —
-    // racing against the leader's (already settled) exit would reduce the
-    // grace window to zero and escalate straight to SIGKILL.
     if (await waitForProcessGroupDrain(child.pid, graceMs, killByPid)) {
       return;
     }
@@ -110,9 +106,6 @@ export async function stopProcess(
     ]);
     if (leaderDrain.kind === "timeout" || !groupDrained) {
       if (alreadyExited) {
-        // The run's own exit status is authoritative; a straggling (possibly
-        // zombie, awaiting reaping) group member must not turn a finished run
-        // into a failure. Surface it loudly and leave cleanup to the OS.
         console.warn(
           `[bombadil] process group ${child.pid ?? "unknown"} did not drain within ${killDrainMs}ms after SIGKILL; leaving cleanup to the OS`,
         );
@@ -168,9 +161,6 @@ function sendSignal(
         return true;
       }
       if (error?.code === "EPERM" && ignorePermissionDenied) {
-        // A naturally exited Bombadil leader can leave a process-group ID that
-        // macOS reports as unsignalable. The successful child result remains
-        // authoritative; cleanup must not turn that run into a failure.
         return false;
       }
       throw error;

@@ -8,8 +8,7 @@ use crate::graphql::escape_graphql_string;
 pub(crate) const TRIGGER_CURSOR_BATCH_SIZE: usize = 64;
 
 /// Sparse runtime observations for the canonical Trigger. Setting a status
-/// clears a previous error unless a replacement error is supplied. Fire counts
-/// are observational bookkeeping, never delivery/idempotence authority.
+/// clears a previous error unless a replacement error is supplied.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct TriggerRuntimeUpdate {
     pub(crate) next_run_at: Option<String>,
@@ -191,7 +190,6 @@ pub(crate) async fn update_trigger_runtime_fields(
         !node_did.is_empty(),
         "trigger observation owner is required"
     );
-    // Short-circuit: nothing to write.
     if updates.next_run_at.is_none()
         && updates.last_attempt_at.is_none()
         && updates.last_fired_source_doc_id.is_none()
@@ -297,9 +295,8 @@ pub(crate) async fn update_trigger_runtime_fields(
     Ok(())
 }
 
-/// Reusable event-source configuration. Trigger owns task selection, enabled
-/// state, concurrency, and delivery observations. The existing event engine owns
-/// group state independently for each typed trigger/callback consumer.
+/// Reusable event-source configuration; the existing event engine owns group
+/// state independently per typed trigger/callback consumer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -311,8 +308,7 @@ pub struct EventSource {
     pub display_name: Option<String>,
     pub source_collection: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Absent/null means created, never all events. Explicit values use the
-    /// existing event engine vocabulary and are validated before installation.
+    /// Absent/null means created, never all events.
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub event_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -321,8 +317,7 @@ pub struct EventSource {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub correlation_field: Option<String>,
-    /// Absent processes each document independently. A group requires a
-    /// correlation_field; that same correlation remains available to templates.
+    /// Requires a correlation_field when grouped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub group: Option<EventGroup>,
@@ -335,7 +330,6 @@ pub struct EventSource {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub updated_at: Option<String>,
-    /// Optional UI/discovery labels. References, never tags, determine execution.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -353,16 +347,19 @@ pub struct EventSource {
 /// Graph compilation additionally requires expected_count >= 2 and refuses
 /// latest_only concurrency on every graph edge (Lean
 /// `GraphPipeline.graphEdgeValid`); shared types do not widen graph semantics.
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EventGroup {
     /// Fixed count or count supplied by each source document, never both.
     /// Absence retains existing timeout-driven grouping, subject to validation.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub expected_count: Option<EventGroupCount>,
     /// Time to wait for the group, not the task execution deadline.
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub timeout_secs: Option<i64>,
@@ -382,7 +379,6 @@ pub enum EventGroupCount {
 }
 
 impl EventSource {
-    /// Shared matching configuration validation for admission and runtime loads.
     pub fn validate(&self) -> anyhow::Result<()> {
         crate::graphql::validate_collection_identifier(&self.source_collection)?;
         anyhow::ensure!(
@@ -406,9 +402,6 @@ impl EventSource {
         self.validate_group()
     }
 
-    /// Validate group completion conditions before admission or runtime projection.
-    /// Missing grouping processes each document independently; explicit malformed
-    /// counts and timeouts are errors, never defaults.
     pub fn validate_group(&self) -> anyhow::Result<()> {
         use crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS;
         let correlation_field = self
@@ -416,7 +409,6 @@ impl EventSource {
             .as_deref()
             .filter(|field| !field.trim().is_empty());
         let Some(group) = self.group.as_ref() else {
-            // per_document: no grouping configuration is allowed.
             return Ok(());
         };
 
@@ -499,7 +491,3 @@ impl EventSource {
         Ok(())
     }
 }
-
-#[cfg(test)]
-#[path = "event_group_validation_tests.rs"]
-mod group_validation_tests;

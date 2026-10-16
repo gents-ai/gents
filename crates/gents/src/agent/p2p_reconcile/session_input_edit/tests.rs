@@ -152,10 +152,6 @@ impl Fixture {
     }
 }
 
-/// Native image of one modeled local queue: model request IDs bind to native
-/// request IDs, and model commands bind to signed intents and their documents.
-/// The modeled active request holds its native claim, which selected the
-/// modeled folding run.
 struct ModeledQueue {
     fixture: Fixture,
     request_ids: HashMap<u64, String>,
@@ -274,10 +270,6 @@ impl ModeledQueue {
         .await
     }
 
-    /// Maps model time monotonically onto wall time around the processing
-    /// instants: a bound reached by every processing is past, one reached by none
-    /// is future, and one between earlier and later processing elapses before the
-    /// later processing runs.
     fn instant(&self, model: u64) -> DateTime<Utc> {
         let offset = i64::try_from(model).unwrap();
         if self.nows.iter().all(|now| model <= *now) {
@@ -360,7 +352,6 @@ impl ModeledQueue {
         )
         .await
         .unwrap();
-        // Presigning requires the observed queue; the signed intent carries the modeled one.
         edit.expected_request_doc_ids = model
             .expected
             .iter()
@@ -405,8 +396,6 @@ impl ModeledQueue {
         } else {
             let command = self.intent(model, authority).await;
             if let Some((_, (doc, _))) = self.commands.iter().find(|((id, _), _)| *id == model.id) {
-                // A second signed intent under a recorded command ID is refused by
-                // the unique immutable command identity before any processing.
                 let doc = doc.clone();
                 let written = ConfigAccess::local(self.fixture.node.clone()).write("test.edit.collision", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{ command_id: "{}", requester_did: "{}", node_did: "{}", session_id: "{}", intent_json: "{}" }}) {{ _docID }} }}"#,
                     escape_graphql_string(&command.command_id), escape_graphql_string(&command.requester_did), escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id), escape_graphql_string(&serde_json::to_string(&command).unwrap()))).await;

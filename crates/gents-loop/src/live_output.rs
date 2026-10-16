@@ -7,17 +7,12 @@ use anyhow::Context;
 use gents_protocol::output::{PayloadPresentation, PresentationPart};
 use tokio::sync::Mutex;
 
-/// Compact command-runner output starts with this prefix and one metadata
-/// JSON object on its own line, followed by the captured streams.
 pub const COMMAND_OUTPUT_META_PREFIX: &str = "gents_exec: ";
 
-/// Command metadata fields that differ between runs of the same command:
-/// wall-clock duration, and the foreground-timeout hint rendered from it.
 pub const COMMAND_OUTPUT_VOLATILE_FIELDS: [&str; 2] = ["duration_ms", "hint"];
 
 /// Rendered between stdout and stderr when a live buffer's combined stream
-/// starts carrying stderr bytes. Matches the finished-result renderer in
-/// `gents::background_tools`, which imports this same constant.
+/// starts carrying stderr bytes; shared verbatim with `gents::background_tools`.
 pub const STDERR_BOUNDARY: &str = "\n--- stderr ---\n";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,14 +23,11 @@ pub enum LiveOutputStream {
 
 #[derive(Debug, Clone, Default)]
 pub struct LiveToolOutputRegistry {
-    /// Execution registration only. Payload bytes are canonical segments, not
-    /// a volatile ring store.
     inner: Arc<Mutex<HashMap<String, LiveToolOutputState>>>,
 }
 
 #[derive(Debug, Default)]
 struct LiveToolOutputState {
-    /// Channel-to-canonical byte coordinates, never captured payload bytes.
     receipts: [Vec<OutputReceipt>; 2],
     prepared: Option<PreparedToolPresentation>,
     plugin_receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
@@ -55,8 +47,6 @@ pub struct PreparedToolPresentation {
     pub presentation: PayloadPresentation,
 }
 
-/// Native output append authority supplied by the host. The guest registry
-/// tracks receipts and presentation without depending on DefraDB.
 pub trait CanonicalOutputAppender: std::fmt::Debug + Send + Sync {
     fn append<'a>(
         &'a self,
@@ -112,7 +102,6 @@ impl LiveToolOutputRegistry {
             .and_then(|state| state.plugin_receipt.clone())
     }
 
-    /// Ids of every tool call currently holding a live buffer.
     pub async fn live_ids(&self) -> Vec<String> {
         self.inner.lock().await.keys().cloned().collect()
     }
@@ -251,20 +240,12 @@ impl LiveToolOutputRegistry {
     }
 }
 
-/// How a finished command's text frames its two captured channels.
 #[derive(Debug, Clone, Copy)]
 pub enum CommandPresentationLayout<'a> {
-    /// One JSON object: `stdout` and `stderr` string fields, then metadata.
     JsonObject { metadata_json: &'a str },
-    /// `{head}stdout:\n{stdout}\nstderr:\n{stderr}`, with `(empty)` for an
-    /// empty channel; `json_string` encodes the whole text as one JSON string.
     Labeled { head: &'a str, json_string: bool },
 }
 
-/// One captured command channel: its complete raw text, the text shown for
-/// it, and the byte range of `raw` shown verbatim. The range is a prefix or a
-/// suffix of `raw`; anything else in `rendered` is a literal notice before a
-/// suffix or after a prefix.
 #[derive(Debug, Clone)]
 pub struct CapturedChannel<'a> {
     pub raw: &'a str,
@@ -442,9 +423,6 @@ pub struct LiveToolOutputWriter {
     tool_call_id: String,
     canonical: Option<Arc<dyn CanonicalOutputAppender>>,
     append_gate: Arc<Mutex<()>>,
-    /// A subprocess may split a Unicode scalar across OS reads.  Canonical
-    /// segment runs count UTF-8 bytes, so never turn each read into a lossy
-    /// string independently.
     pending_utf8: Arc<Mutex<[Vec<u8>; 2]>>,
 }
 
@@ -502,8 +480,6 @@ impl LiveToolOutputWriter {
             .await;
     }
 
-    /// Commits any incomplete trailing sequence as the replacement character
-    /// whole-stream lossy decoding gives it, so receipts cover the raw text.
     async fn flush_pending(&self) {
         let Some(binding) = &self.canonical else {
             return;
@@ -544,9 +520,6 @@ impl LiveToolOutputWriter {
     }
 }
 
-/// Decodes `pending` exactly as `String::from_utf8_lossy` decodes the whole
-/// stream: each invalid sequence becomes one U+FFFD, and an incomplete tail
-/// stays pending for the next read unless the stream has ended.
 fn drain_utf8(pending: &mut Vec<u8>, end_of_stream: bool) -> String {
     let mut text = String::new();
     let mut consumed = 0;
@@ -663,7 +636,6 @@ mod tests {
         let writer = registry
             .canonical_writer_for("tool".into(), appender.clone())
             .await;
-        // Interleave the channels so ranges must follow receipts, not order.
         let (out_a, out_b) = stdout.raw.split_at(stdout.raw.len() / 2);
         writer
             .append(LiveOutputStream::Stdout, out_a.as_bytes())
@@ -782,9 +754,6 @@ mod tests {
 
     #[test]
     fn composed_command_presentation_keeps_interleaved_unicode_raw_bytes_once() {
-        // Source order is capture order: stdout `é`, stderr `!`, stdout `x`.
-        // The presentation selects channels in renderer order without copying
-        // either channel's raw bytes into a terminal segment.
         let source = "é!x";
         let stdout = vec![
             OutputReceipt {
@@ -858,8 +827,6 @@ mod tests {
         let writer = registry
             .canonical_writer_for("tool".into(), appender.clone())
             .await;
-        // An invalid byte beside a scalar split across reads, then a
-        // truncated trailing sequence the process never completes.
         for read in [&b"\xff\xc3"[..], b"\xa9\xe2"] {
             writer.append(LiveOutputStream::Stdout, read).await;
         }

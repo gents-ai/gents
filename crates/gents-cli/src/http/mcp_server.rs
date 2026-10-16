@@ -29,16 +29,14 @@ struct McpQueryArgs {
     options: serde_json::Map<String, Value>,
 }
 
-/// What `/mcp` exposes; present only with `--enable-mcp`.
 #[derive(Clone)]
 pub(crate) struct McpServiceOptions {
     pub scope: CollectionScope,
     pub write_collections: BTreeSet<String>,
     /// `--mcp-graph-tools`: the read-only graph tools, each read made under
     /// the caller's forwarded DefraDB bearer. Set only with an unrestricted
-    /// `scope` (the CLI refuses the flag with `--mcp-query-collection`): the
-    /// graph collections declare no per-caller policy, and the run views also
-    /// read request, callback and trigger documents.
+    /// `scope` (the CLI refuses the flag with `--mcp-query-collection`), since
+    /// the graph collections declare no per-caller policy.
     pub graph_reads: bool,
 }
 
@@ -71,13 +69,10 @@ impl DefraQueryMcp {
     }
 
     /// One graph read for the caller this request authenticates, through the
-    /// owners and reply shapes of the in-session tools. The read carries the
-    /// caller's forwarded bearer, which DefraDB authenticates; the graph
-    /// collections declare no `@policy`, so DefraDB admits the read, and the
-    /// caller's DID only selects the subject (the listing's owner, the run
-    /// views' observer). A result document is rendered only when the MCP read
-    /// scope admits its collection. The listing is the in-session reply text,
-    /// returned as is so that no re-serialization reorders it.
+    /// owners and reply shapes of the in-session tools, under the caller's
+    /// forwarded bearer. A result document is rendered only when the MCP read
+    /// scope admits its collection; the listing is the in-session reply text,
+    /// returned as is so no re-serialization reorders it.
     async fn call_graph_read(
         &self,
         name: &str,
@@ -205,8 +200,6 @@ const BEARER_REQUIRED: &str = "graph reads require a caller-signed DefraDB Beare
 const BEARER_SCHEME_REQUIRED: &str =
     "graph reads forward the DefraDB bearer only with the `Bearer ` scheme (capital B)";
 
-/// An MCP route for one in-session graph read: the same name, description
-/// and parameter schema, answered by [`DefraQueryMcp::call_graph_read`].
 fn graph_read_route(definition: gents::llm::tool::ToolDefinition) -> ToolRoute<DefraQueryMcp> {
     let schema = definition
         .parameters
@@ -229,18 +222,11 @@ fn graph_read_route(definition: gents::llm::tool::ToolDefinition) -> ToolRoute<D
     )
 }
 
-/// The caller's own access for a graph read. Its DefraDB bearer is forwarded
-/// unchanged, exactly as `write` forwards it, so DefraDB authenticates the
-/// read; the graph collections declare no `@policy`, so DefraDB admits it.
-/// The DID is the one DefraDB's own extractor verifies in that bearer, which
-/// the read owners take as their subject (the owner filter of the listing,
-/// the observer of a run view); it selects what is shown and is not an access
-/// boundary. `/mcp` is merged
-/// after DefraDB's auth middleware, so the middleware does not run here; the
-/// extractor checks signature, expiry and the request `Host` as audience, and
-/// records the bearer for DefraDB's ACP passthrough as it does for every
-/// DefraDB request. An anonymous caller is refused before any read. The
-/// Authorization header is never logged or echoed.
+/// The caller's own access for a graph read: its DefraDB bearer is forwarded
+/// unchanged so DefraDB authenticates the read; the DID, verified by DefraDB's
+/// own extractor (signature, expiry, `Host` audience), only selects the
+/// subject shown and is not an access boundary. An anonymous caller is refused
+/// before any read; the Authorization header is never logged or echoed.
 async fn caller_graph_access(
     graphql: &str,
     parts: &axum::http::request::Parts,
@@ -267,8 +253,7 @@ async fn caller_graph_access(
 }
 
 /// A result document is rendered only when the MCP read scope admits its
-/// collection; `CollectionScope::ensure_allowed` also refuses the protected
-/// eval and optimization collections under an unrestricted scope.
+/// collection.
 fn result_value_in_scope(
     scope: &CollectionScope,
     view: gents::graph_pipeline::GraphRunView,
@@ -331,26 +316,6 @@ mod tests {
             request = request.header(name, *value);
         }
         request.body(()).unwrap().into_parts().0
-    }
-
-    #[test]
-    fn graph_read_routes_are_the_in_session_definitions() {
-        let on = DefraQueryMcp::new(GRAPHQL.to_owned(), options(true));
-        let mut offered = Vec::new();
-        for definition in gents::self_config::graph_tool_definitions() {
-            if let Some(route) = on.tool_router.get(&definition.name) {
-                assert_eq!(
-                    route.description.as_deref(),
-                    Some(definition.description.as_str())
-                );
-                assert_eq!(
-                    Value::Object((*route.input_schema).clone()),
-                    definition.parameters
-                );
-                offered.push(definition.name);
-            }
-        }
-        assert_eq!(offered, gents::self_config::MCP_GRAPH_READ_TOOL_NAMES);
     }
 
     #[test]

@@ -9,16 +9,6 @@ import Proofs.StorageWriteGate
 import Proofs.Background.CompletionContinuation
 import Proofs.CompletionRetry.State
 
-/-!
-# Canonical output execution composition
-
-This layer composes immutable output records, the request lease owner, terminal
-selection, and transcript/tool-intent publication. DefraDB transaction isolation,
-ACP evidence, genesis/CID validation, and the monotonic owner clock remain native
-boundaries. Every mutating transition below represents one local
-`MutationWriteGate` critical section; no cross-process mutex claim is made.
--/
-
 namespace CanonicalOutput.Execution
 
 abbrev Generation := Nat
@@ -42,8 +32,6 @@ structure GoalChildReceipt where
   authenticated : Bool
   deriving DecidableEq, Repr
 
-/-- Exact signed title admission projected into the local gate. The parent
-identities are provenance, not authority over the title's lease or output. -/
 structure TitleBinding where
   physicalRequest : DocId
   logicalRequest : RequestId
@@ -74,8 +62,6 @@ structure Activation where
   generation : Generation
   duration : Time
   deadline : Time
-  /-- Pending requests whose signed admission the claim verified for folding
-  (`SessionQueue.claimFolding`); empty claims only the head. -/
   admitted : List RequestId := []
   deriving DecidableEq, Repr
 
@@ -88,9 +74,6 @@ structure ClaimedBinding where
 
 end Handover
 
-/-- A physical tool document and the existing lifecycle context that will back
-the accepted call. The context's older logical identifiers are not document
-authority and need not equal `document`. -/
 structure ToolAdmission where
   document : DocId
   context : ToolExecution.ToolCallContext
@@ -113,8 +96,6 @@ def ToolGenesis.fromContext (context : ToolExecution.ToolCallContext) : ToolGene
   , logicalRequestId := context.requestId
   , operation := context.operation }
 
-/-- Exact accepted-header ownership plus the durable uncertainty handoff
-(`stuck_since`). It never claims that a running host effect has stopped. -/
 structure OwnedTool where
   document : DocId
   requestDoc : DocId
@@ -127,9 +108,6 @@ structure OwnedTool where
   stuckSince : Option Time := none
   deriving DecidableEq, Repr
 
-/-- Input bytes and the child lifecycle commit together. The selected
-installed-plugin grant is enforced before this admission by the invocation
-owner (`ToolPolicy.PluginCalls.available`). -/
 structure PluginEffectAdmission where
   document : DocId
   parentToolDoc : DocId
@@ -145,9 +123,6 @@ structure SpawnedToolAdmission where
   context : ToolExecution.ToolCallContext
   deriving DecidableEq, Repr
 
-/-- Authenticated projection of the existing durable wake AgentRequest and
-its physical document binding. Logical `entry.requestId` is never substituted
-for `wakeDocument`. -/
 structure WakeDocumentBinding where
   entry : SessionQueue.QueueEntry
   node : Nat
@@ -162,15 +137,11 @@ structure World where
   requestId : DocId
   sessionId : SessionId
   purpose : RequestPurpose
-  /-- Authenticated nodeDid supplied by existing DID/ACP ownership at the
-  local gate. It is not inferred from a source. -/
   nodeDid : Nat
   lease : RequestExecutionLease.World Generation
   segments : List Segment
   messages : List MessageEnvelope
   transcript : Transcript.TranscriptState
-  /-- Authoritative session compaction cursor. Fresh tool-result publication
-  must allocate strictly beyond it; exact replay does not allocate. -/
   compactionCursor : Option Transcript.Sequence := none
   toolContexts : List OwnedTool := []
   terminalSelection : Option TerminalSelection
@@ -193,10 +164,6 @@ def World.currentGeneration? (world : World) : Option Generation :=
   | .active generation _ _ => some generation
   | _ => none
 
-/-- Evidence projected from the existing cancellation and tool-policy owners at
-the same local gate. This execution model does not duplicate either policy
-machine; it makes their admission boundary explicit instead of treating a
-published pending row as unconditional permission to start external work. -/
 structure DispatchPermit where
   call : ToolExecution.ToolCallId
   cancellationAllows : Bool
@@ -209,10 +176,6 @@ inductive IntegrityError where
   | invalidWriter (coordinate : Coordinate)
   deriving DecidableEq, Repr
 
-/-- One keyed provider source in an atomic recovery batch. `closing` may be a
-previously committed, byte-identical Partial closure (lost acknowledgement); it
-is never replaced. `message` is absent exactly when recovery found no Text
-stream worth publishing. -/
 structure RecoveryItem where
   closing : Segment
   message : Option MessageEnvelope
@@ -237,8 +200,6 @@ inductive Error where
   | publicationIncomplete
   deriving DecidableEq, Repr
 
-/-- The execution model carries no denial oracle. ACP-denied dependency behavior
-is already modeled by reconstruction/hydration and remains a native input here. -/
 def noDeniedDocuments : List DocId := []
 
 end CanonicalOutput.Execution

@@ -1,9 +1,7 @@
 import Proofs.GoalAutomation.ResetResume
 import Proofs.Conformance.GoalOperatorResume
 
-/-! #2121: reset resume cases replayed against the Rust owner. Times are
-seconds after 2030-01-01T00:00:00Z. Every case commits; a case that is not due
-or not usage-limited publishes nothing. -/
+/-! Times are seconds after 2030-01-01T00:00:00Z. -/
 namespace Conformance.GoalResetResumeContracts
 open GoalAutomation.OperatorResume
 open Conformance.GoalOperatorResumeContracts (parentBinding snapshotJson requestJson)
@@ -11,14 +9,11 @@ open Conformance.GoalOperatorResumeContracts (parentBinding snapshotJson request
 def limited : Snapshot :=
   ⟨⟨.usageLimited, 0, false, false⟩, 0, none, 10, [], 37, some 1000⟩
 def request : Request := ⟨.usageLimited, 0, true, true, true, true, parentBinding⟩
-/-- Explicit durable expectation, never computed from `resumeBy`. -/
 def resumed : Snapshot :=
   ⟨⟨.active, 0, false, false⟩, 1, some 10, 20, [parentBinding], 37, some 1000⟩
-/-- Limited call started at 0, reset reported for 3600, read at 3600. -/
 def due : ResetFacts := ⟨true, some 3600, 0, 3600, true, true, true⟩
 def paused : Snapshot := { limited with goal := { limited.goal with status := .paused } }
 
-/-- The first child (request 20) stopped on a second limit, started at 3600. -/
 def limitedAgain : Snapshot :=
   { resumed with goal := { resumed.goal with status := .usageLimited } }
 def childBinding : Binding :=

@@ -71,14 +71,9 @@ async fn authored_user_entries(
     entries
 }
 
-/// Seeded replay: a folded turn stops after publishing some or all of its
-/// admitted input; with all of it published, a first-turn reduction
-/// checkpoint is persisted behind it. The test then re-pends the same
-/// physical request directly (production lease expiry terminalizes it
-/// instead) and runs it through the daemon. The replayed request restores
-/// the checkpoint without treating its provider tail as the prompt,
-/// publishes each authored key exactly once, and consumes the folded message
-/// once.
+/// Seeded replay: a folded turn stops after publishing part of its admitted
+/// input; the replayed request restores the first-turn reduction checkpoint
+/// without treating its provider tail as the prompt.
 #[tokio::test]
 async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_restore() {
     for (published_before_crash, persist_checkpoint) in [(0, false), (1, false), (2, true)] {
@@ -129,8 +124,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         .await;
         let folded_key = crate::lifecycle::queue::folded_input_key(&folded.doc_id);
 
-        // First execution: claim with the selection, publish part of the
-        // input, maybe persist the reduction checkpoint, then crash.
+        // First execution: claim, publish part of the input, then crash.
         let writer = crate::streaming::DefraStreamWriter::new(
             node.clone(),
             agent_config.node_did(),
@@ -419,13 +413,10 @@ async fn scripted_daemon(
     .unwrap()
 }
 
-/// Lean `SessionQueue.FoldCases.retrySelectionCases`: a failed request is
-/// retried while a fresh message waits queued behind the retry, so the
-/// retry's claim selects it. Whether the retry resumes and whether it answers
-/// the selected message come from `CurrentInput.admitResume` and
-/// `CurrentInput.answersSelection`. A message the retry does not answer stays
-/// queued, is absent from the retry's input and publications, and then runs
-/// exactly once on its own turn.
+/// Lean `SessionQueue.FoldCases.retrySelectionCases`: whether the retry
+/// resumes and answers the selected message comes from the Lean cases; a
+/// message the retry does not answer stays queued and runs exactly once on
+/// its own turn.
 #[tokio::test]
 async fn generated_retry_selection_cases_bind_to_the_daemon() {
     let cases = crate::lean_vocab_test::lean_retry_selection_cases();

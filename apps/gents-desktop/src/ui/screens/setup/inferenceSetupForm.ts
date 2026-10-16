@@ -14,8 +14,6 @@ import {
   type InferenceSettingsDraft,
 } from "../inference/InferenceModelControls";
 
-/** An account a provider is connected through: discovery and the saved
-    backend name it by `accountRef`, or run on the original when it is null. */
 export type SignedIn = { credentialId: string; accountRef: string | null };
 
 export type ProviderId = InferenceProviderId;
@@ -26,11 +24,8 @@ export type ConnectionDraft = {
   apiKey: string;
 };
 
-/** What the form is waiting on; it is busy while there is one. */
 export type SetupOp = "signIn" | "retrySave" | "discover" | "describe" | "save";
 
-/** Whether a local node's managed runtime, which sign-in and the save
-    write through, is known to be serving. */
 export type RuntimeGate = "idle" | "checking" | "ready" | "unavailable";
 
 type ModelChoice = {
@@ -38,7 +33,6 @@ type ModelChoice = {
   search: string;
   pickerOpen: boolean;
   name: string;
-  /** typed by hand, where discovery allows it */
   manual: boolean;
   recommendation: InferenceModelRecommendation | null;
   settings: InferenceSettingsDraft | null;
@@ -48,30 +42,19 @@ type ModelChoice = {
 export type SetupForm = {
   op: SetupOp | null;
   error: string | null;
-  /** the provider chosen; null until the person chooses, while the catalog's
-      first stands */
   provider: ProviderId | null;
-  /** each provider's connection as edited; one not edited is the catalog's
-      defaults */
   connections: Partial<Record<ProviderId, ConnectionDraft>>;
   runtimeGate: RuntimeGate;
   accounts: {
     stored: readonly ProviderAccountView[];
-    /** the account each provider is connected through: its credential, and
-        which of the provider's accounts it is (null, the original) */
     signedIn: Partial<Record<ProviderId, SignedIn>>;
     pendingSave: Partial<Record<ProviderId, true>>;
-    /** providers the person set aside an account for, to sign in with
-        another: a read does not connect the stored one again */
     switching: Partial<Record<ProviderId, true>>;
-    /** a read has landed, so whether an account is connected is known */
     observed: boolean;
   };
   accountLabel: string;
   signInHint: string | null;
   authUrl: string | null;
-  /** a provider the person just chose, whose sign-in starts by itself once
-      it can; `asked` tells two choices of the same provider apart */
   autoSignIn: { provider: ProviderId; asked: number } | null;
   model: ModelChoice;
 };
@@ -85,7 +68,6 @@ export type SetupEvent =
       type: "connectionEdited";
       provider: ProviderId;
       connection: ConnectionDraft;
-      /** a new connection method is a choice too: its sign-in starts by itself */
       autoSignIn?: boolean;
     }
   | { type: "runtimeGate"; gate: RuntimeGate; error?: string }
@@ -93,13 +75,10 @@ export type SetupEvent =
   | {
       type: "accountsRead";
       accounts: readonly ProviderAccountView[];
-      /** adding a backend signs in a further account; only its own sign-in
-          connects */
       seedSignedIn: boolean;
     }
   | { type: "pendingSaveCleared"; provider: ProviderId }
   | { type: "connected"; provider: ProviderId; account: SignedIn }
-  /** the person set the connected account aside, to sign in with another */
   | { type: "signedOut"; provider: ProviderId }
   | { type: "autoSignInTaken" }
   | { type: "authUrl"; url: string | null }
@@ -145,8 +124,6 @@ export function initialSetupForm(fixedProvider?: ProviderId): SetupForm {
   };
 }
 
-/* the connection changed, so what was discovered through the old one no
-   longer applies; the search and the picker stay as the person left them */
 const modelCleared = (model: ModelChoice): ModelChoice => ({
   ...model,
   discovery: null,
@@ -188,7 +165,6 @@ export function setupFormReducer(form: SetupForm, event: SetupEvent): SetupForm 
     case "failed":
       return { ...form, error: event.error };
     case "providerPicked":
-      /* choosing the provider already shown is a choice too */
       if (event.provider === event.current)
         return { ...form, autoSignIn: asked(form, event.provider) };
       return {
@@ -279,8 +255,6 @@ export function setupFormReducer(form: SetupForm, event: SetupEvent): SetupForm 
     case "labelEdited":
       return { ...form, accountLabel: event.label };
     case "modelsDiscovered":
-      /* discovery supplies choices, but the person makes the one model
-         decision: even a one-item catalog is never accepted implicitly */
       return {
         ...form,
         model: {
@@ -334,8 +308,6 @@ export function setupFormReducer(form: SetupForm, event: SetupEvent): SetupForm 
   }
 }
 
-/** A provider's connection before the person edits it: the catalog's
-    default method and endpoint, and no key. */
 export const connectionDefaults = (
   option: InferenceProviderOption,
 ): ConnectionDraft => ({
@@ -360,7 +332,6 @@ export function providerSignInState(accounts: readonly ProviderAccountView[]) {
   return next;
 }
 
-/** Providers whose completed sign-in the bridge holds after a failed save. */
 export function providerPendingSaveState(accounts: readonly ProviderAccountView[]) {
   const next: Partial<Record<ProviderId, true>> = {};
   for (const [providerId, credentialKind] of Object.entries(PROVIDER_CREDENTIAL_KIND)) {
@@ -372,7 +343,6 @@ export function providerPendingSaveState(accounts: readonly ProviderAccountView[
   return next;
 }
 
-/** The provider whose sign-in a connection method is, if it is one. */
 export const oauthProviderFor = (method: InferenceAuthMethod): OauthProvider | null =>
   method === "chat_gpt_oauth"
     ? "openai"

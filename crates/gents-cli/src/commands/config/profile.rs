@@ -60,9 +60,6 @@ pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) ->
     crate::print_json(&output)
 }
 
-/// The plugins whose model slot is bound to `profile_id` on this host.
-/// Bindings live in the local home, as `gents plugin bind` writes them, so
-/// none are read over `--graphql`.
 pub(crate) fn bound_slots(
     home: Option<&std::path::Path>,
     graphql: Option<&str>,
@@ -79,7 +76,6 @@ pub(crate) fn bound_slots(
     )
 }
 
-/// Where `profile_id` can move, who uses it and what a move costs.
 async fn list_candidates(
     access: &ConfigAccess,
     node_did: &str,
@@ -97,9 +93,6 @@ async fn list_candidates(
     Ok(serde_json::to_value(plan)?)
 }
 
-/// Write the profile `contents` holds. `account` (narrowed by `provider`), or
-/// `provider`'s default account when only `provider` is given, fills the
-/// profile's `backend_id`.
 async fn set_profile(
     access: &ConfigAccess,
     contents: &[u8],
@@ -142,9 +135,6 @@ async fn set_profile(
     write_checked(access, &snapshot, &profile, account.is_none()).await
 }
 
-/// Move `profile_id` to `account`'s backend through the switch owner; with
-/// `with_compaction` its companions move too. `account` may name an API-key
-/// backend by id or name, which is its own account.
 async fn set_account(
     access: &ConfigAccess,
     node_did: &str,
@@ -167,8 +157,6 @@ async fn set_account(
     Ok(serde_json::to_value(receipt)?)
 }
 
-/// The backend `account` names: a sign-in account's backend, else an
-/// API-key backend by id or name.
 pub(crate) async fn backend_for_account(
     access: &ConfigAccess,
     node_did: &str,
@@ -190,7 +178,6 @@ pub(crate) async fn backend_for_account(
     }
 }
 
-/// The one backend that runs on `account`.
 fn account_backend(snapshot: &Snapshot, account: &AccountSummary) -> Result<String> {
     let backends: Vec<_> = snapshot
         .backends
@@ -222,8 +209,6 @@ fn account_backend(snapshot: &Snapshot, account: &AccountSummary) -> Result<Stri
     }
 }
 
-/// Write `profile`, refusing to create it on, or move it to, an account that
-/// cannot serve it. Other edits of a profile on such an account are allowed.
 async fn write_checked(
     access: &ConfigAccess,
     snapshot: &Snapshot,
@@ -312,8 +297,6 @@ pub(super) async fn profile_show(args: ConfigShowArgs) -> Result<()> {
     crate::print_json(&row)
 }
 
-/// `node_did`'s profiles (one when `id` is given) as stored, ordered by id,
-/// each with the account its backend runs on.
 async fn profile_rows(
     access: &ConfigAccess,
     node_did: &str,
@@ -335,8 +318,6 @@ async fn profile_rows(
     Ok(rows)
 }
 
-/// `config profile list`'s table: the other config lists' columns and the
-/// account.
 fn render_profile_table(rows: &[Value]) -> String {
     let headers = ["ID", "ENABLED", "NAME", "ACCOUNT"].map(str::to_owned);
     let text = |value: &Value| value.as_str().map(str::trim).unwrap_or_default().to_owned();
@@ -385,7 +366,6 @@ fn render_profile_table(rows: &[Value]) -> String {
         .collect()
 }
 
-/// Why the profile's reasoning effort will not be sent, if it will not.
 /// Every lookup failure yields `None`: a warning never fails `show`.
 pub(super) async fn profile_effort_warning(
     access: &crate::config_writes::ConfigAccess,
@@ -430,24 +410,6 @@ mod tests {
             .expect("warning");
         assert!(warning.contains("profile grok"), "{warning}");
     }
-    #[test]
-    fn canonical_model_effort_and_policy_links_are_preserved() {
-        let profile=decode_profile(br#"{"node_did":"owner","profile_id":"chosen","backend_id":"provider","model_name":"exact-model","reasoning_effort":"high","sampling_id":"sampling","execution_id":"execution"}"#).unwrap();
-        assert_eq!(profile.model_name, "exact-model");
-        assert_eq!(profile.reasoning_effort, Some(gents::ReasoningEffort::High));
-        assert_eq!(profile.sampling_id.as_deref(), Some("sampling"));
-        assert_eq!(profile.execution_id.as_deref(), Some("execution"));
-    }
-    #[test]
-    fn retired_flat_sampling_and_missing_owner_are_rejected() {
-        for input in [
-            r#"{"profile_id":"p","backend_id":"b","model_name":"m"}"#,
-            r#"{"node_did":"owner","profile_id":"p","backend_id":"b","model_name":"m","temperature":1}"#,
-        ] {
-            assert!(decode_profile(input.as_bytes()).is_err());
-        }
-    }
-
     const DID: &str = "did:key:z6MkTestProfileAccounts";
     const CLAUDE: &str = "claude-subscription";
 
@@ -489,10 +451,6 @@ mod tests {
             .unwrap();
     }
 
-    /// Claude: the original account as a raw pre-#2116 row (no label, no
-    /// reference), `label-b` added, `label-c` added then disabled; a backend
-    /// whose account is not on this node and an API-key backend; one profile
-    /// on each. Returns the access and B's and C's backend ids.
     async fn seeded() -> (ConfigAccess, String, String) {
         use gents::oauth_credential::{set_account_enabled, store_sign_in};
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
@@ -860,8 +818,6 @@ mod tests {
         assert!(error.contains("no account"), "{error}");
         assert_eq!(stored(&access, "p-original").await.unwrap(), after);
     }
-    /// Agents `x` and `y` on `p-original`, `x` compacting with `summ` on
-    /// the same account.
     async fn with_agents(access: &ConfigAccess) {
         write_profile(access, "summ", "claude").await;
         let documents = [

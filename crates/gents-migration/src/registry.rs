@@ -1,55 +1,36 @@
-//! Baseline table and declarative step chain.
-//!
-//! Types are lifetime-parameterized so tests can inject discovered pins
-//! (`DynamicRegistry`) while production keeps `'static` constants.
-
 use crate::expectation::CollectionExpectation;
 
-/// One collection registered at the migration baseline (lineage root).
 #[derive(Debug, Clone, Copy)]
 pub struct BaselineCollection<'a> {
-    /// Collection name (must match the SDL type name).
     pub name: &'a str,
-    /// GraphQL SDL for `add_schema`.
     pub sdl: &'a str,
-    /// Pinned root VersionID. Production entries must specify a pin; dynamic
-    /// registries may omit it while authoring a new migration.
     pub expected_version: Option<&'a str>,
-    /// Full post-state expectation for the active baseline version.
     pub expected_state: CollectionExpectation,
 }
 
-/// Embedded wasm + args for a lens edge.
 #[derive(Debug, Clone, Copy)]
 pub struct LensSpec<'a> {
-    /// Raw wasm module bytes (always `from_bytes` — never path).
     pub wasm: &'a [u8],
-    /// Optional JSON args string for the module.
     pub args_json: Option<&'a str>,
 }
 
-/// One declarative migration step.
 #[derive(Debug, Clone, Copy)]
 pub enum MigrationStep<'a> {
-    /// Register a collection that did not exist at the baseline.
     AddCollection {
         id: &'a str,
         sdl: &'a str,
         expected_version: Option<&'a str>,
         expected_state: CollectionExpectation,
     },
-    /// Versioned change (field add/rename) with optional lens.
     PatchVersioned {
         id: &'a str,
         collection: &'a str,
-        /// RFC 6902 patch; must include IsActive:false for the safe sequence.
         patch: &'a str,
         lens: Option<LensSpec<'a>>,
         expected_version: Option<&'a str>,
         expected_transform: Option<&'a str>,
         expected_state: CollectionExpectation,
     },
-    /// In-place metadata change (indexes, embeddings) — no new version CID.
     PatchInPlace {
         id: &'a str,
         collection: &'a str,
@@ -59,7 +40,6 @@ pub enum MigrationStep<'a> {
 }
 
 impl<'a> MigrationStep<'a> {
-    /// Stable step id for errors and reports.
     pub fn id(&self) -> &'a str {
         match self {
             Self::AddCollection { id, .. }
@@ -68,7 +48,6 @@ impl<'a> MigrationStep<'a> {
         }
     }
 
-    /// Primary collection this step touches, when applicable.
     pub fn collection(&self) -> Option<&'a str> {
         match self {
             Self::AddCollection { .. } => None,
@@ -79,7 +58,6 @@ impl<'a> MigrationStep<'a> {
     }
 }
 
-/// Full migration registry: baseline + ordered step chain.
 #[derive(Debug, Clone, Copy)]
 pub struct Registry<'a> {
     pub baseline: &'a [BaselineCollection<'a>],
@@ -87,7 +65,6 @@ pub struct Registry<'a> {
     pub ordinary_indexes: &'a [OrdinaryIndex<'a>],
 }
 
-/// Named ordinary index that must be present on a managed collection.
 #[derive(Debug, Clone, Copy)]
 pub struct OrdinaryIndex<'a> {
     pub collection: &'a str,
@@ -95,7 +72,6 @@ pub struct OrdinaryIndex<'a> {
     pub fields: &'a [OrdinaryIndexField<'a>],
 }
 
-/// One ordered field in an ordinary index definition.
 #[derive(Debug, Clone, Copy)]
 pub struct OrdinaryIndexField<'a> {
     pub name: &'a str,
@@ -103,18 +79,11 @@ pub struct OrdinaryIndexField<'a> {
 }
 
 impl<'a> Registry<'a> {
-    /// Names of every collection managed by this registry (baseline only;
-    /// AddCollection steps extend the managed set at apply time).
     pub fn managed_names(&self) -> impl Iterator<Item = &'a str> + '_ {
         self.baseline.iter().map(|b| b.name)
     }
 }
 
-// ---------------------------------------------------------------------------
-// Owned / dynamic registry (tests + pin authoring)
-// ---------------------------------------------------------------------------
-
-/// Owned baseline entry for dynamic registries.
 #[derive(Debug, Clone)]
 pub struct BaselineCollectionOwned {
     pub name: String,
@@ -123,14 +92,12 @@ pub struct BaselineCollectionOwned {
     pub expected_state: CollectionExpectation,
 }
 
-/// Owned lens spec (wasm held by the owner).
 #[derive(Debug, Clone)]
 pub struct LensSpecOwned {
     pub wasm: Vec<u8>,
     pub args_json: Option<String>,
 }
 
-/// Owned step for dynamic registries.
 #[derive(Debug, Clone)]
 pub enum MigrationStepOwned {
     AddCollection {
@@ -156,7 +123,6 @@ pub enum MigrationStepOwned {
     },
 }
 
-/// Heap-owned registry used by conformance tests that discover pins at runtime.
 #[derive(Debug, Clone, Default)]
 pub struct DynamicRegistry {
     pub baseline: Vec<BaselineCollectionOwned>,
@@ -164,8 +130,6 @@ pub struct DynamicRegistry {
 }
 
 impl DynamicRegistry {
-    /// Borrow as a [`Registry`] for the engine. The returned views are valid
-    /// for the lifetime of `self`.
     pub fn as_registry(&self) -> (Vec<BaselineCollection<'_>>, Vec<MigrationStep<'_>>) {
         let baseline = self
             .baseline
@@ -229,10 +193,6 @@ impl DynamicRegistry {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Default production registry (canonical baseline, zero steps)
-// ---------------------------------------------------------------------------
-
 macro_rules! baseline_entry {
     ($name:expr, $sdl:expr, $version:literal) => {
         BaselineCollection {
@@ -244,9 +204,6 @@ macro_rules! baseline_entry {
     };
 }
 
-/// Fresh canonical schema baseline. Root pins are checked against DefraDB;
-/// historical migrations are intentionally absent from this refactor baseline.
-/// Re-author pins after changing the protocol catalog with the pin-authoring test.
 pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_BACKEND_NAME,
@@ -650,7 +607,6 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
 ];
 
-/// Future schema evolution starts here, after the canonical baseline lands.
 pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[];
 
 static AGENT_REQUEST_NODE_SESSION_FIELDS: &[OrdinaryIndexField<'static>] = &[
@@ -755,7 +711,6 @@ static AGENT_OUTPUT_SOURCE_FIELDS: &[OrdinaryIndexField<'static>] = &[
     },
 ];
 
-/// Ordinary indexes reconciled on fresh and existing stores.
 pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
     OrdinaryIndex {
         collection: gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
@@ -789,27 +744,16 @@ pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
     },
 ];
 
-/// Production registry: canonical pinned baseline plus future migrations.
 pub static DEFAULT_REGISTRY: Registry<'static> = Registry {
     baseline: DEFAULT_BASELINE,
     steps: DEFAULT_STEPS,
     ordinary_indexes: DEFAULT_ORDINARY_INDEXES,
 };
 
-/// Embedded fixture lens wasm (built by `build.rs`).
 pub fn fixture_lens_wasm() -> &'static [u8] {
     include_bytes!(env!("GENTS_LENS_FIXTURE_ADD_LABEL_WASM_PATH"))
 }
 
-// ---------------------------------------------------------------------------
-// Client-authored collections
-// ---------------------------------------------------------------------------
-
-/// Collections authored by paired clients must share the server's fresh-apply
-/// schema root. A versioned migration has predecessor heads and therefore a
-/// different CID from fresh application, even with identical final fields.
-/// In-place steps can also diverge metadata without changing that CID.
-/// `fresh_apply_parity` and the baseline step guard enforce both constraints.
 pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::AGENT_REQUEST_NAME,
     gents_protocol::schemas::AGENT_MESSAGE_NAME,

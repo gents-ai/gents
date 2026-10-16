@@ -24,7 +24,6 @@ async fn insert_row(node: &Arc<EmbeddedNode>, input: serde_json::Value) -> Strin
     .unwrap()
 }
 
-/// Modeled requester 1 is the agent's owning node; 2 is another signer.
 fn requester_did(db: &TestDb, requester: Option<u64>) -> Option<String> {
     match requester {
         Some(1) => Some(db.node_did().to_owned()),
@@ -34,8 +33,6 @@ fn requester_did(db: &TestDb, requester: Option<u64>) -> Option<String> {
     }
 }
 
-/// The modeled turn context is the request's execution settings; context 1
-/// differs from the head only in its working directory.
 pub(super) fn generated_input(entry: &LeanFoldQueueEntry) -> RequestInput {
     let source: QueueSource = serde_json::from_value(json!(entry.source)).unwrap();
     let policy: QueuePolicy = serde_json::from_value(json!(entry.policy)).unwrap();
@@ -173,8 +170,6 @@ fn modeled_id(row: &FoldRow) -> u64 {
     row.request_id.parse().unwrap()
 }
 
-/// The native active turn: its lifecycle, the run its claim selected, and
-/// how many of those it has published.
 pub(super) struct ActiveTurn {
     pub(super) lifecycle: RequestLifecycle,
     selected: Vec<u64>,
@@ -257,7 +252,6 @@ async fn drive(case: &LeanFoldQueueCase) {
     let db = test_db(&case.name).await;
     let session_id = case.session_id.to_string();
     let mut bound: HashMap<u64, String> = HashMap::new();
-    // Native queue order: admission order of rows still pending.
     let mut arrivals: Vec<u64> = Vec::new();
     let mut active: Option<ActiveTurn> = None;
     let mut claims = Vec::new();
@@ -464,7 +458,6 @@ async fn authored_keys(node: &EmbeddedNode, request_doc_id: &str) -> Vec<String>
         .collect()
 }
 
-/// Durable facts a rejected step must leave unchanged.
 async fn durable_facts(node: &EmbeddedNode, session_id: &str) -> serde_json::Value {
     let session = escape_graphql_string(session_id);
     let response = crate::graphql::graphql_with_transaction_retry(
@@ -486,16 +479,6 @@ async fn durable_facts(node: &EmbeddedNode, session_id: &str) -> serde_json::Val
     data
 }
 
-/// Lean `FoldPublication.cases`: each composed script runs through the
-/// native claim, authored publication, provider publication and terminal
-/// owners, and every step's acceptance, queue and authored keys match the
-/// model. Seeded replay: production lease expiry terminalizes the request
-/// (`canonical_recovery`), so a model `recover` step is driven by re-pending
-/// the same physical request directly and claiming it under a fresh
-/// generation; this binds publication reuse and fencing on a replayed
-/// request, not a production reclaim path. A rejected step leaves durable state unchanged. A native
-/// terminal commit is the model's terminalize-then-finish boundary, so queue
-/// facts are compared after `finish`.
 #[tokio::test]
 async fn generated_fold_publication_scripts_bind_to_native_owners() {
     use crate::lean_vocab_test::LeanFoldPublicationStep as Step;
@@ -527,8 +510,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
         [
             "streaming_boundary_does_not_take_input",
             "natural_completion_during_stream_refuses"
-        ],
-        "only unsafe-boundary premises are delegated to loop tests"
+        ]
     );
     for case in cases.iter().chain(steering_cases).filter(|case| {
         !case.steps.iter().any(|step| {
@@ -932,7 +914,6 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
         .iter()
         .find(|case| case.name == "expired_steering_is_barrier")
         .unwrap();
-    // Expired and malformed TTLs are the two native encodings of `fresh = false`.
     for (variant, ttl) in ["2000-01-01T00:00:00Z", "not-a-timestamp"]
         .into_iter()
         .enumerate()
@@ -952,8 +933,6 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
             let doc = if entry.fresh {
                 enqueue_signed(&db, session_id, entry, index + 1).await
             } else {
-                // Corrupt TTL cannot pass canonical signing; seed it directly to
-                // exercise the reader's fail-closed handling of stored corruption.
                 enqueue_with_ttl(&db, session_id, entry, index + 1, Some(ttl)).await
             };
             bound.insert(entry.request_id, doc);

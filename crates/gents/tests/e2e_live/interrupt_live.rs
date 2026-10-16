@@ -1,35 +1,3 @@
-//! Live end-to-end interrupt test against an OpenAI-compatible streaming backend.
-//!
-//! Normal test runs skip this file because it depends on a reachable live
-//! inference target named by `GENTS_EVAL_TARGET`. To run it locally:
-//!
-//! ```bash
-//! GENTS_LIVE_OPENAI=1 GENTS_EVAL_TARGET=workstation-1 \
-//! cargo test -p gents --test e2e_live -- live_interrupt_mid_stream_on_openai_compatible -- --ignored --nocapture
-//! ```
-//!
-//! The backend fixture follows the typed `session_message_live.rs` pattern:
-//! the target's node-DID-scoped `InferenceBackend` plus an `InferenceProfile`
-//! selecting the target's model with high reasoning effort, an `InferenceSampling`
-//! document (temperature 1.0, top_p 0.95), an `AgentContext`, and the
-//! `Agent` the runtime request binds to — all applied through
-//! `apply_fixture_documents` and booted via
-//! `Gents::from_default_agent_documents`. The canonical profile output
-//! budget (32,768 tokens) is left in place so the stream is still mid-flight
-//! when the interrupt is latched.
-//!
-//! Observation and assertions are canonical (#1571): the test polls the
-//! visible provider Inference source through
-//! `gents_protocol::output::live::project_live` under the request's exact
-//! current execution owner until a TEXT (not reasoning) prefix is visible,
-//! interrupts through the public physical request cancellation API
-//! (`interrupt_request_by_doc_id`), waits for the interrupted lifecycle plus
-//! the cancelled inference call, then reads the terminal request's
-//! `terminal_output` selection. A selected message is reconstructed through
-//! `gents::session::load_canonical_message_from_node`; `NoMessage` is checked
-//! through the protocol-owned retained-partial view. No
-//! `AgentResponse` rows are read anywhere in this file.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -73,8 +41,6 @@ const LIVE_AGENT_ID: &str = "live-interrupt";
 const LIVE_SAMPLING_ID: &str = "live-interrupt:live-sampling";
 const LIVE_CONTEXT_ID: &str = "live-interrupt:context";
 
-/// Live streams at human reading speed; a 40-char TEXT prefix appears long
-/// before the 32,768-token canonical output budget is reached.
 const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(300);
 const TERMINAL_TIMEOUT: Duration = Duration::from_secs(30);
 const OBSERVATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -105,10 +71,6 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     )
     .await;
 
-    // Observe canonically: poll the visible provider Inference source through
-    // the protocol live projection with the request's exact current execution
-    // owner until a TEXT (not reasoning) prefix is visible. Any conflicted or
-    // invalid canonical state fails immediately inside the observation.
     let (observed_row, before_interrupt, provider_scopes) =
         wait_for_visible_text_prefix(&db.node, &request_doc_id, MIN_VISIBLE_PREFIX_CHARS).await?;
     let node_did = observed_row
@@ -137,8 +99,6 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
         assert!(scope.seq >= 1, "provider capture scopes allocate from 1");
     }
 
-    // Physical request cancellation through the public interrupt owner, bound
-    // to the exact physical request and principal scope observed above.
     interrupt_request_by_doc_id(
         &db.node,
         &request_doc_id,
@@ -152,9 +112,6 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     let call = wait_for_inference_call_state(&db.node, request_id, "cancelled").await;
     assert_eq!(call.failure_reason.as_deref(), Some("Cancelled"));
 
-    // The interrupted terminal row must keep the exact execution owner observed
-    // before the interrupt. It may publish a partial header or retain the
-    // partial source with the canonical `NoMessage` selection.
     let row = wait_for_interrupted_terminal_row(&db.node, &request_doc_id).await?;
     assert_eq!(
         row.execution_generation.as_deref(),
@@ -174,8 +131,6 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     )
     .await?;
 
-    // Stability: after the interrupted lifecycle is persisted, the terminal
-    // selection and its exact reconstruction never move.
     tokio::time::sleep(Duration::from_millis(750)).await;
     let settled_row = fetch_request_row(&db.node, &request_doc_id).await?;
     assert_eq!(
@@ -249,15 +204,10 @@ async fn assert_terminal_partial(
     Ok(())
 }
 
-/// One canonical observation round: the exact physical request row plus the
-/// TEXT body projected from the request's visible provider Inference sources.
 #[derive(Debug)]
 struct CanonicalObservation {
     row: AgentRequestRow,
-    /// Concatenated TEXT (never reasoning) stream bytes from the live
-    /// projection of every visible provider Inference source.
     text: String,
-    /// The capture scopes of the observed provider Inference coordinates.
     provider_scopes: Vec<CaptureScope>,
 }
 
@@ -295,9 +245,6 @@ async fn fetch_request_row(node: &EmbeddedNode, request_doc_id: &str) -> Result<
     Ok(row)
 }
 
-/// Read the exact request row plus its canonical output facts and project the
-/// visible provider Inference sources through the protocol live owner. Every
-/// conflicted/invalid/denied classification fails instead of retrying.
 async fn observe_request(
     node: &EmbeddedNode,
     request_doc_id: &str,
@@ -359,9 +306,6 @@ async fn observe_request(
         .map(|header| (header.doc_id.as_str(), &header.message))
         .collect::<Vec<_>>();
 
-    // The unique provider Inference coordinates visible in this request. Other
-    // capture scopes (title generation, compaction) are not the observed
-    // source and are ignored, exactly like the shared CLI projection.
     let mut coordinates: Vec<(OutputSource, OutputWriter)> = Vec::new();
     let mut provider_scopes: Vec<CaptureScope> = Vec::new();
     for segment in &segments {
@@ -422,8 +366,6 @@ async fn observe_request(
                     }
                 }
             }
-            // Not reconstructable yet, or a superseded/retracted attempt:
-            // keep polling; the next round observes the current owner.
             LiveView::Loading | LiveView::Absent | LiveView::Retracted => {}
             LiveView::Published { .. } => {
                 anyhow::bail!("provider Inference turn published while the live interrupt polls mid-stream output")
@@ -441,8 +383,6 @@ async fn observe_request(
     })
 }
 
-/// Poll the canonical observation until a TEXT (not reasoning) prefix of at
-/// least `min_len` chars is visible under the request's exact current owner.
 async fn wait_for_visible_text_prefix(
     node: &EmbeddedNode,
     request_doc_id: &str,
@@ -480,7 +420,6 @@ async fn wait_for_visible_text_prefix(
     }
 }
 
-/// Poll for the interrupted terminal row with its terminalization facts.
 async fn wait_for_interrupted_terminal_row(
     node: &EmbeddedNode,
     request_doc_id: &str,
@@ -521,9 +460,6 @@ async fn boot_interrupt_agent(db: &TestDb, target: &InferenceTarget) -> Result<B
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("live-openai-interrupt"));
     let node_did = identity.did().to_string();
 
-    // Install the actual node-DID-scoped live fixture documents the runtime
-    // reconciler resolves: backend, profile, sampling, context, behavior, and
-    // the principal selecting the behavior as default.
     upsert_live_backend(&db.node, &node_did, target).await;
 
     let agent = Gents::from_default_agent_documents(
@@ -544,21 +480,12 @@ async fn boot_interrupt_agent(db: &TestDb, target: &InferenceTarget) -> Result<B
     Ok(BootedAgent::new(shutdown_tx, handle, node_did))
 }
 
-/// Install the typed live backend fixture documents (the
-/// `session_message_live.rs` pattern): an actual node-DID-scoped
-/// `InferenceBackend` plus the profile/sampling/context/behavior documents the
-/// default behavior resolves through, with the principal's
-/// `default_agent_id` bound to `LIVE_AGENT_ID`. The profile selects the
-/// target's model with high reasoning effort.
 async fn upsert_live_backend(node: &Arc<EmbeddedNode>, node_did: &str, target: &InferenceTarget) {
     let mut principal = ensure_node(node, node_did)
         .await
         .expect("ensure live interrupt fixture principal");
 
     let backend = target.backend(node_did);
-    // Sampling matches the live GLM-5.3 deployment settings; `max_tokens`
-    // rides the profile's canonical output budget (32,768), leaving the
-    // stream long enough to interrupt mid-flight.
     let sampling = InferenceSampling {
         node_did: node_did.to_string(),
         sampling_id: LIVE_SAMPLING_ID.to_string(),

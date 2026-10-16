@@ -60,8 +60,6 @@ async fn configure_session_chain(db: &TestDb) {
     .await;
 }
 
-/// Every message of the session in sequence order, reconstructed through the
-/// canonical message owner.
 async fn session_transcript(node: &EmbeddedNode, node_did: &str) -> Vec<TranscriptRow> {
     let session_id = escape_graphql_string(SESSION_ID);
     let response = node
@@ -116,10 +114,6 @@ async fn wait_for_transcript_marker(node: &EmbeddedNode, node_did: &str, marker:
     }
 }
 
-/// The observer appends the started session's completion notification to the
-/// caller's session. A prompt authored after a restart must be sequenced after
-/// that notification, not over it: the resumed runtime's hook sequence is
-/// read from the durable transcript rather than from the stopped runtime.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
     let db = test_db("e2e-session-order").await;

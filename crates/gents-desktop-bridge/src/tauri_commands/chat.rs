@@ -35,7 +35,6 @@ pub async fn desktop_session_snapshot(
     .await
 }
 
-/// The bounded session read behind `desktop_session_snapshot`.
 pub(crate) async fn session_snapshot(
     core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
     session_id: String,
@@ -74,8 +73,6 @@ pub(crate) async fn session_snapshot(
     let hydrate_started = std::time::Instant::now();
     let mut hydration_observation = None;
     if let Some(node_did) = node_did.as_deref() {
-        // Its transcript reads as empty here and a hydration request would be
-        // refused, so the local header alone answers without any remote read.
         if core
             .session_unreadable_reason(&session_id, node_did)
             .is_some()

@@ -1,10 +1,3 @@
-//! Read-only native-JSON graph proposal preview.
-//!
-//! Authoritative `StageCapability` values currently come only from installed
-//! graph packs. This adapter therefore compiles explicitly proposed capability
-//! shapes for syntax and topology feedback, but never represents them as
-//! configured authority or sends the resulting plan to publication.
-
 use serde::{Deserialize, Serialize};
 
 use crate::graph_pipeline::{

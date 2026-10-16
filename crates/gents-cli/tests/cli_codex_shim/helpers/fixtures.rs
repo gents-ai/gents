@@ -36,10 +36,6 @@ async fn exact_request_binding(
     ))
 }
 
-/// The next free canonical sequence in a live session, chosen only after the
-/// runtime has claimed `request_doc_id` and appended its prompt header.
-/// Seeding earlier races that append: both headers would take the same
-/// sequence, and canonical header lookup rejects sequence twins as conflicts.
 async fn next_session_message_sequence(
     graphql: &str,
     node_did: &str,
@@ -294,8 +290,6 @@ async fn seed_canonical_tool_transcript(
         )
         .await?;
     }
-    // Fail at the seam rather than as a later projection timeout: the shim
-    // reads this tool through the same canonical owner.
     let presentation = gents::tool_call_lifecycle::load_tool_call_presentation(
         &access,
         tool_call_doc_id,
@@ -593,8 +587,6 @@ pub(super) async fn seed_background_completion_wake(
     );
     gents::sign_agent_request_create(identity, &mut source).await?;
     let source_fields = source.graphql_input_fields().map_err(anyhow::Error::msg)?;
-    // Publish the source and terminalize it in one DefraDB transaction so the
-    // live watcher can never observe this fixture-only source as executable.
     let source_response = graphql_query(
         graphql,
         &format!(
@@ -653,8 +645,6 @@ pub(super) async fn seed_background_completion_wake(
     Ok(request_id)
 }
 
-/// Seed the running first request of a session caused by `parent_request_id`,
-/// under the parent's principal and agent. Returns `(request_id, session_id)`.
 pub(super) async fn seed_caused_running_request(
     graphql: &str,
     parent_request_id: &str,
@@ -668,7 +658,6 @@ pub(super) async fn seed_caused_running_request(
         .as_deref()
         .map(|did| format!(r#"requester_did: "{}","#, escape_graphql_string(did)))
         .unwrap_or_default();
-    // The session is opened by an agent_new call on the parent request.
     let parent = graphql_query(
         graphql,
         &format!(
@@ -682,7 +671,6 @@ pub(super) async fn seed_caused_running_request(
         .and_then(Value::as_str)
         .context("parent request binding missing session")?
         .to_string();
-    // The call is lineage evidence only; no assistant header is projected.
     let sequence = 1_000;
     let tool_call_id = format!("codex-agent-new-{}", Uuid::new_v4().simple());
     let tool = graphql_query(
@@ -749,7 +737,6 @@ pub(super) async fn seed_caused_running_request(
         now = escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
     );
     graphql_query(graphql, &mutation).await?;
-    // The runtime records the starting request as the session's provenance.
     graphql_query(
         graphql,
         &format!(

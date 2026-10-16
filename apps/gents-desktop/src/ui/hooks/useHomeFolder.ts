@@ -16,13 +16,11 @@ function subscribe(listener: () => void) {
         home = found;
         for (const notify of listeners) notify();
       })
-      /* without it paths show in full, which is still correct */
       .catch(() => undefined);
   }
   return () => listeners.delete(listener);
 }
 
-/** The home folder, or null until it is known or outside the shell. */
 export function useHomeFolder(): string | null {
   return useSyncExternalStore(
     subscribe,

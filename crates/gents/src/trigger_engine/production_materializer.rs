@@ -1,22 +1,3 @@
-//! Production `MaterializerHandle` used by the `TriggerEngine` at runtime.
-//!
-//! Bridges the engine's trigger-neutral materialize/concurrency API to the
-//! concrete lifecycle + DefraDB surface:
-//!
-//! * `materialize` enqueues a pending `AgentRequest` with populated
-//!   `TriggerLineage` so the normal watcher/router/daemon path claims and
-//!   executes it while preserving `caused_by_trigger_id` /
-//!   `caused_by_trigger_kind`.
-//! * `has_active_runtime_request_for_trigger` performs a GraphQL query against
-//!   `AgentRequest`, filtering on the owner-scoped logical trigger and
-//!   the active runtime lifecycle states (`pending`, `claimed`, `processing`).
-//! * `supersede_active_runtime_requests_for_trigger` transitions every matching
-//!   active runtime request to `lifecycle_state = superseded`.
-//!
-//! Agent lookup happens against a `watch::Receiver<Arc<ActiveRuntimeSnapshot>>`
-//! so the materializer always sees the latest resolved snapshot without
-//! needing to re-query the DB at fire time.
-
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -282,8 +263,8 @@ impl MaterializerHandle for ProductionMaterializer {
             let (enqueued, conversation_title) = if let Some(prepared) = &delivery {
                 let fire = &prepared.receipt;
                 let title = task_session_title(&task_label);
-                // A fire into an existing session is written under the
-                // requester that owns it (Lean `Enrollment.runtimeRequesterScope`).
+                // Written under the requester that owns the session
+                // (Lean `Enrollment.runtimeRequesterScope`).
                 let session_scope = if prepared.target_existing
                     && matches!(trigger_kind, TriggerKind::Event | TriggerKind::Schedule)
                 {
@@ -447,22 +428,13 @@ impl MaterializerHandle for ProductionMaterializer {
             .unwrap_or_default();
         let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         Box::pin(async move {
-            // Canonical owner/trigger match plus active runtime lifecycle state.
-            // The DID scope is load-bearing (#605): the replicated store also
-            // holds other agents' requests for the same human-chosen trigger
-            // id, and those must never gate this agent's fires.
-            //
-            // Rows are fetched (not just existence-checked) because a claimed
-            // or processing row past its persisted claim deadline is
-            // terminal-in-effect and must not gate: the owning loop enforces
-            // the same deadline in-memory (`await_with_request_deadline`
-            // aborts the attempt), so only a wedged orphan — e.g. an owner
-            // whose store was rebuilt — can sit past-deadline in an active
-            // state, and such a row would otherwise gate forever. Expiry is
-            // evaluated here rather than in the filter to avoid relying on
-            // lexicographic string comparison over RFC3339 in the store. Do
-            // not cap this result: a pile-up of expired orphan rows must not
-            // hide a later live row and let Serial double-fire.
+            // The DID scope is load-bearing (#605): the store also holds
+            // other agents' requests for the same trigger id. Rows are
+            // fetched (not existence-checked) because a claimed/processing
+            // row past its persisted deadline must not gate; expiry is
+            // evaluated here, not via lexicographic RFC3339 in the filter,
+            // and the result is never capped (a pile-up of expired rows
+            // must not hide a later live row and let Serial double-fire).
             let query = format!(
                 r#"query {{
                     AgentRequest(

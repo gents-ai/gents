@@ -2,8 +2,6 @@ import Proofs.CanonicalOutput.Execution.RequestCoherence
 
 namespace CanonicalOutput.Execution
 
-/-- Key-preserving edits commute with singleton lookup, including its rejection
-of ambiguous keys. No uniqueness assumption is needed for this frame. -/
 theorem filter_map_key {α κ : Type} [BEq κ] (rows : List α)
     (key : α → κ) (document : κ) (edit : α → α)
     (stable : ∀ row, key (edit row) = key row) :

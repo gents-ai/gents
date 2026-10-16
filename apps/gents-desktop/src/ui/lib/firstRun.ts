@@ -1,6 +1,6 @@
-/* First-run is unfinished until a local node can actually run inference.
-   gents init writes a placeholder backend, so a non-empty backends list is
-   not enough; a key, OAuth, env var, or a healthy probe is. */
+// First-run is unfinished until a local node can actually run inference:
+// `gents init` writes a placeholder backend, so a non-empty backends list
+// is not enough; a key, OAuth, env var, or a healthy probe is.
 import type { NodeView } from "../../hooks/fleetStore";
 import type {
   DesktopClientSnapshot,
@@ -58,10 +58,6 @@ export function shouldRebindSetupDefault(
   return defaultProfile?.backend_id === `${deployment.nodeDid}:backend`;
 }
 
-/** The node first-run setup configured: the one this machine runs, else the
-    first listed. Setup also runs when remote nodes are already paired and
-    only this machine's node lacks inference, so the first listed node may
-    be a remote one. */
 export function nodeSetUp(snapshot: DesktopClientSnapshot) {
   const nodes = snapshot.client?.deployments ?? [];
   return (
@@ -71,9 +67,6 @@ export function nodeSetUp(snapshot: DesktopClientSnapshot) {
   );
 }
 
-/** Whether the bridge has read this node's configuration from the node
-    itself. Until it has, the desktop's copy lacks the node's backends and
-    Node configuration, so what it is missing is unread, not unset. */
 export function configIsRead(
   snapshot: Pick<DesktopClientSnapshot, "client">,
   nodeDid: string | null | undefined,

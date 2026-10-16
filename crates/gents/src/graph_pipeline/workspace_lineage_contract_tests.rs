@@ -1,5 +1,3 @@
-//! Child of graph_pipeline::run. Real installed plan, signed requests, Workspace
-//! owner provisioning, and native publication transaction; no policy simulator.
 use super::*;
 use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lifecycle::WorkspaceLineage;
@@ -183,8 +181,6 @@ impl Fixture {
         request.caused_by_trigger_kind = Some("event".into());
         request.caused_by_trigger_doc_id = Some(row["_docID"].as_str().unwrap().into());
         request.caused_by_correlation = Some(self.run.correlation.clone());
-        // Bootstrap uses the actual seed. Downstream resolver intentionally derives
-        // lineage from entry receipt, not the content of this discovery pointer.
         request.caused_by_source_doc_id = Some(self.run.seed_doc_id.clone());
         request.workspace_id = lineage.workspace_id.clone();
         request.workspace_authority = lineage.workspace_authority.clone();
@@ -306,7 +302,6 @@ async fn generated_graph_workspace_cases_drive_installed_plan_and_signed_receipt
                     .await
                     .unwrap();
                 if root["authenticated_target"] == false {
-                    // Tamper after signing: a copied route cannot authenticate.
                     request.content.push_str(" unauthenticated mutation");
                 }
                 execute(&fx.node, &request.graphql_mutation().unwrap()).await;
@@ -514,8 +509,6 @@ async fn native_stale_publication_rolls_back_child(fx: &Fixture) {
             Ok(json!({"data":response.data.unwrap_or(Value::Null)}))
         }
     }
-    // Supported local ConfigApplyTxn serializes writes; direct native handles
-    // deliberately expose storage conflict resolution like existing graph tests.
     let left = fx.node.runner().begin_txn(false).await.unwrap();
     let right = fx.node.runner().begin_txn(false).await.unwrap();
     let one = Native {
@@ -557,8 +550,6 @@ async fn native_stale_publication_rolls_back_child(fx: &Fixture) {
     let winner = fx.request("native-winner", "scan", &first.lineage).await;
     let loser = fx.request("native-loser", "scan", &second.lineage).await;
     for (executor, observed, request) in [(&one, &first, &winner), (&two, &second, &loser)] {
-        // This is the SAME validated mutation builder used by the production
-        // fence, not a test reimplementation of generation or admission policy.
         let mutation = super::super::runtime::graph_publication_generation_update(
             &observed.run,
             &observed.digest,
@@ -619,7 +610,6 @@ async fn native_stale_publication_rolls_back_child(fx: &Fixture) {
 
 #[tokio::test]
 async fn signed_tuple_must_equal_the_authenticated_entry_observation() {
-    // Compare the signed tuple with the authenticated entry receipt.
     let fx = Fixture::new(true, false).await;
     let root = fx.request("entry", "recon", &fx.tuple()).await;
     execute(&fx.node, &root.graphql_mutation().unwrap()).await;
@@ -635,7 +625,6 @@ async fn signed_tuple_must_equal_the_authenticated_entry_observation() {
     workspace_lineage::fence_root_workspace_in_txn(&txn, &genuine)
         .await
         .unwrap();
-    // Observe the generation staged by the shared publication owner.
     let staged = txn
         .execute("{ GraphRun { update_generation } }")
         .await
@@ -653,8 +642,6 @@ async fn signed_tuple_must_equal_the_authenticated_entry_observation() {
     let error = workspace_lineage::fence_root_workspace_in_txn(&txn, &tampered_request)
         .await
         .expect_err("a seal hash differing from the entry observation must be denied");
-    // finalize_graph_workspace rejects the conflicting explicit seal before the
-    // staged-tuple comparison can run.
     assert!(
         error
             .to_string()
@@ -662,8 +649,6 @@ async fn signed_tuple_must_equal_the_authenticated_entry_observation() {
         "unexpected denial: {error:#}"
     );
     txn.discard().await.unwrap();
-    // Missing explicit hints pass finalization, but the signed tuple must still
-    // include the resolved binding at the publication fence.
     let omitted = fx
         .request("omitted-scan", "scan", &WorkspaceLineage::default())
         .await;
@@ -753,8 +738,6 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
             .expect("canonical installed surface");
         let entries = declared.entries.clone().unwrap_or_default();
         let mut selection = ResolvedToolSelection::default();
-        // Include the installed query declarations: their runtime source fills
-        // tell EventSource which evidence fields the scanner must inherit.
         for entry in entries {
             match entry {
                 SurfaceToolDecl::Create(write) => selection.write_tools.push(write),
@@ -848,9 +831,6 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
         CancellationToken::new(),
     );
     source.reconcile_subscriptions(snapshot.as_ref()).await;
-    // The installed entry input persists only the author-supplied workspace
-    // id and authority in graph state. The durable workspace record is the
-    // owner of truth for the principal and seal that complete the tuple.
     let entry_route = &routes["recon"].0;
     let derived_entry = super::workspace_lineage::derive_graph_workspace(
         fx.node.as_ref(),
@@ -890,8 +870,6 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
         resolved_entry.lineage.workspace_seal_hash,
         expected_entry.workspace_seal_hash
     );
-    // Only the entry receives the operator's explicit tuple. Child input comes
-    // from the actual domain event and contains no copied workspace fields.
     let root_context = serde_json::to_string(&crate::lifecycle::TriggerExecutionContext {
         version: 1,
         source_fields: BTreeMap::from([
@@ -969,8 +947,6 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
     let context =
         crate::lifecycle::TriggerExecutionContext::parse(fire.trigger_context.as_deref()).unwrap();
     assert_eq!(context.source_fields["expected_total"], "1");
-    // Runtime-filled fields are durable on the emitted area, while EventSource
-    // carries only fields used by the destination prompt/tool surface.
     let area = execute(
         &fx.node,
         &format!(
