@@ -338,6 +338,7 @@ jobs:
           # The client-authored list-sync fence (#1123/#1125) must fail the
           # PR that drifts the surface, not the post-merge main run.
           cargo test -p gents --test misc client_authored_collections_fence::
+          cargo test -p gents --test misc ordered_read_plans::
           # DefraDB-free; the extraction's wasm claim is otherwise unenforced
           # on PRs (full -p gents-loop is main-only below).
           cargo test -p gents-loop --lib

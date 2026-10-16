@@ -143,6 +143,12 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+proc-macro2 = "1"
+oxc_allocator = "=0.127.0"
+oxc_ast = "=0.127.0"
+oxc_ast_visit = "=0.127.0"
+oxc_parser = "=0.127.0"
+oxc_span = "=0.127.0"
 acp.workspace = true
 axum = "0.8"
 db.workspace = true
