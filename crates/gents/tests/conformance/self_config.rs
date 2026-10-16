@@ -266,6 +266,7 @@ fn agent_operation(inputs: &LeanAgentDecisionInputs) -> AgentOperation {
     }
 }
 
+#[test]
 fn generated_agent_decision_cases_drive_production_agent_admission() {
     let cases = lean_agent_decision_cases();
     assert!(!cases.is_empty());

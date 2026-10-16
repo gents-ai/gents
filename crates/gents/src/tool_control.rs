@@ -401,11 +401,11 @@ mod tests {
         }
     }
 
+    #[tokio::test]
     async fn owned_cancel_persists_custom_completion_reason_for_redrive() {
         use crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
         use crate::identity::NodeIdentity;
         use crate::SIGNED_REQUEST_FIELDS;
-
         let data_path = std::env::temp_dir().join(format!(
             "agent-tool-control-custom-cancel-{}",
             uuid::Uuid::new_v4()
@@ -425,7 +425,6 @@ mod tests {
         );
         ensure_runtime_schemas(&node).await.unwrap();
         crate::test_support::install_test_agent(&node, identity.did(), "general").await;
-
         let node_did = identity.did().to_string();
         let mut request =
             claimed_request(&node, "request-custom", "session-custom", &node_did).await;
@@ -470,7 +469,6 @@ mod tests {
         )
         .unwrap();
         lifecycle.start_running().await.unwrap();
-
         assert!(
             lifecycle
                 .cancel_during_run_owned(CancelCause::UserCancelled, "operator requested drain")
@@ -478,10 +476,7 @@ mod tests {
                 .unwrap(),
             "owned cancel must win the durable running-state compare"
         );
-
-        let row_response = node.execute(
-            r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "custom-native-tool" } }, limit: 1) { _docID status lifecycle_state cancel_cause request_id request_doc_id session_id node_did } }"#,
-        ).await;
+        let row_response = node . execute (r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "custom-native-tool" } }, limit: 1) { _docID status lifecycle_state cancel_cause request_id request_doc_id session_id node_did } }"# ,) . await ;
         assert!(!row_response.has_errors(), "{:#?}", row_response.errors);
         let row = crate::graphql::first_row::<serde_json::Value>(&row_response, "AgentToolCall")
             .unwrap()
@@ -493,13 +488,11 @@ mod tests {
         );
         assert_eq!(row["request_id"].as_str(), Some("request-custom"));
         let tool_doc_id = row["_docID"].as_str().unwrap().to_owned();
-
         assert_eq!(
             row["status"].as_str(),
             Some("completionPending:operator requested drain"),
             "owned cancel must persist the custom completion reason as the redrive cursor"
         );
-
         let report =
             ToolCallLifecycle::reconcile_background_completion_side_effects(&node, &node_did)
                 .await
@@ -508,12 +501,9 @@ mod tests {
             report.side_effects_converged, 1,
             "the cancelled background row must redrive its completion side effects"
         );
-
         let message_key = format!("background-completion-notification:{tool_doc_id}:tool");
         let message_key = crate::graphql::escape_graphql_string(&message_key);
-        let notification_response = node.execute(&format!(
-            r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{message_key}" }} }}, limit: 2) {{ message_key session_id node_did requester_did role }} }}"#
-        )).await;
+        let notification_response = node . execute (& format ! (r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{message_key}" }} }}, limit: 2) {{ message_key session_id node_did requester_did role }} }}"#)) . await ;
         assert!(
             !notification_response.has_errors(),
             "{:#?}",
@@ -532,7 +522,6 @@ mod tests {
         assert_eq!(notification["node_did"].as_str(), Some(node_did.as_str()));
         assert!(notification["requester_did"].is_null());
         assert_eq!(notification["role"].as_str(), Some("user"));
-
         let escaped_session = crate::graphql::escape_graphql_string("session-custom");
         let escaped_agent = crate::graphql::escape_graphql_string(&node_did);
         let wake_response = node
@@ -580,7 +569,6 @@ mod tests {
             wake["content"].as_str(),
             Some(BACKGROUND_COMPLETION_WAKE_PROMPT)
         );
-
         let _ = std::fs::remove_dir_all(&data_path);
     }
 }

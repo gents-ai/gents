@@ -3530,25 +3530,20 @@ mod tests {
             "the next successful send must receive the session's first id"
         );
     }
+    #[tokio::test]
     async fn two_sessions_dispatch_through_the_production_entry_with_independent_event_ids() {
         let (_staging, service) = test_service().await;
         let service = Arc::new(service);
         for session in ["s-concurrent-a", "s-concurrent-b"] {
-            service
-                .handle_acp_payload(&request_payload(
-                    "session/new",
-                    json!({ "cwd": "/tmp", "mcpServers": [], "_meta": { "sessionId": session } }),
-                ))
-                .await;
+            service . handle_acp_payload (& request_payload ("session/new" , json ! ({ "cwd" : "/tmp" , "mcpServers" : [] , "_meta" : { "sessionId" : session } }) ,)) . await ;
         }
-
         let service_a = service.clone();
         let service_b = service.clone();
         let dispatch_a = tokio::spawn(async move {
             service_a
                 .handle_acp_payload(&request_payload(
                     "session/set_mode",
-                    json!({ "sessionId": "s-concurrent-a", "modeId": "yolo" }),
+                    json ! ({ "sessionId" : "s-concurrent-a" , "modeId" : "yolo" }),
                 ))
                 .await
         });
@@ -3556,7 +3551,7 @@ mod tests {
             service_b
                 .handle_acp_payload(&request_payload(
                     "session/set_mode",
-                    json!({ "sessionId": "s-concurrent-b", "modeId": "default" }),
+                    json ! ({ "sessionId" : "s-concurrent-b" , "modeId" : "default" }),
                 ))
                 .await
         });
@@ -3569,7 +3564,6 @@ mod tests {
         let b = b.expect("join b").notifications;
         assert_eq!(a.len(), 1, "session A streamed one mode update");
         assert_eq!(b.len(), 1, "session B streamed one mode update");
-
         let event_id = |line: &str| {
             parse_response(line)["params"]["_meta"]["eventId"]
                 .as_str()

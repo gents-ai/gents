@@ -1244,6 +1244,7 @@ fn call_state_for_request(rows: &[Value], request_id: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+#[tokio::test]
 async fn queued_persist_failure_releases_queue_capacity() {
     let node = test_node().await;
     let schemaless = Arc::new(EmbeddedNode::builder().build().await.unwrap());
@@ -1252,7 +1253,6 @@ async fn queued_persist_failure_releases_queue_capacity() {
         config("backend-queue-leak", 1, 1),
         super::controller::CapacityPool::open(1),
     );
-
     let held = controller
         .clone()
         .acquire(
@@ -1264,7 +1264,6 @@ async fn queued_persist_failure_releases_queue_capacity() {
         )
         .await
         .expect("first admission fills the only slot");
-
     let error = match controller
         .clone()
         .acquire(
@@ -1290,7 +1289,6 @@ async fn queued_persist_failure_releases_queue_capacity() {
         0,
         "persist failure leaked a queue-waiter unit (#1001)"
     );
-
     let queued = tokio::spawn(controller.clone().acquire(
         node.clone(),
         pending_call("req-leak-c", "backend-queue-leak"),
