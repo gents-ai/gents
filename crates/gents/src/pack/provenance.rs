@@ -42,12 +42,17 @@ pub(super) async fn apply_pack_documents(
     pack: &super::installation::PackIdentity,
     config: &PackConfig,
     policy: super::installation::DriftPolicy,
+    expected: Vec<crate::config_client::DesiredStateExpectation>,
 ) -> Result<super::installation::InstallReport> {
     let documents = super::installation::installable_documents(config)?;
+    let guard =
+        crate::config_client::DesiredStateApplyPlan::new(Vec::new())?.with_expected(expected)?;
     access
         .transact_write("pack.documents.install", |txn| {
             let documents = documents.clone();
+            let guard = &guard;
             Box::pin(async move {
+                crate::config_client::apply_desired_state_plan(txn, guard).await?;
                 super::installation::install_in_txn(txn, owner, pack, documents, policy).await
             })
         })

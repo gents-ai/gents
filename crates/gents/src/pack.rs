@@ -21,8 +21,8 @@ pub use home_install::{
 };
 pub use inference::{
     bind_pack_install_config, inference_profile_options, inspect_pack_inference_bindings,
-    install_pack_documents, preview_pack_inference_bindings, PackInferenceBindingPreview,
-    PackInferenceProfileOption,
+    install_pack_documents, install_pack_documents_with_expectations,
+    preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
 };
 pub use installation::{
     document_pack_schema_paths, install_prepared_document_pack, installed_packs,
