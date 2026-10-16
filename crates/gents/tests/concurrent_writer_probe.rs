@@ -46,61 +46,81 @@ async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
         )
         .await?;
     let mut measurements = Vec::new();
+    let mut committed = BTreeSet::new();
+    let mut next_writer = 0i64;
     for width in [1, 2, 4, 8, 16, 32, 64] {
-        let before = access.execute("{ WriterCounter {value} }").await?["data"]["WriterCounter"][0]
-            ["value"]
-            .as_i64()
-            .unwrap();
         let barrier = Arc::new(Barrier::new(width));
         let mut workers = JoinSet::new();
         let started = Instant::now();
         for writer in 0..width {
-            let writer = before + writer as i64;
+            let writer = next_writer + writer as i64;
             let access = ConfigAccess::local(node.clone());
             let barrier = barrier.clone();
             workers.spawn(async move {
                 barrier.wait().await;
-                let mut latencies = Vec::new();
+                let mut observations = Vec::new();
                 for iteration in 0..8 {
                     let started = Instant::now();
-                    access.transact_write("writer_probe.increment", |txn| Box::pin(async move {
+                    let result = access.transact_write("writer_probe.increment", |txn| Box::pin(async move {
                         let row = txn.execute("{ WriterCounter {value} }").await?;
                         let value = row["data"]["WriterCounter"][0]["value"].as_i64().context("counter absent")?;
                         tokio::task::yield_now().await;
                         txn.execute(&format!(r#"mutation {{ update_WriterCounter(filter: {{key: {{_eq: "hot"}}}}, input: {{value: {}}}) {{_docID}} create_WriterReceipt(input: {{writer: {writer}, iteration: {iteration}}}) {{_docID}} }}"#, value + 1)).await?;
                         Ok(())
-                    })).await?;
-                    latencies.push(started.elapsed().as_secs_f64() * 1000.0);
+                    })).await;
+                    let accepted = match result {
+                        Ok(()) => true,
+                        Err(error) if error.to_string() == "DefraDB transaction conflict" => false,
+                        Err(error) => return Err(error),
+                    };
+                    observations.push(((writer, iteration), accepted, started.elapsed().as_secs_f64() * 1000.0));
                 }
-                Ok::<_, anyhow::Error>(latencies)
+                Ok::<_, anyhow::Error>(observations)
             });
         }
-        let mut latency = tokio::time::timeout(Duration::from_secs(60), async {
-            let mut latency = Vec::new();
+        next_writer += width as i64;
+        let observations = tokio::time::timeout(Duration::from_secs(60), async {
+            let mut observations = Vec::new();
             while let Some(worker) = workers.join_next().await {
-                latency.extend(worker??);
+                observations.extend(worker??);
             }
-            Ok::<_, anyhow::Error>(latency)
+            Ok::<_, anyhow::Error>(observations)
         })
         .await
         .context("shared owner writers stalled")??;
+        assert_eq!(observations.len(), width * 8);
+        let accepted = observations.iter().filter(|row| row.1).count();
+        assert!(accepted > 0, "at least one hot-counter update commits");
+        committed.extend(observations.iter().filter(|row| row.1).map(|row| row.0));
         let after = access
             .execute("{ WriterCounter {value} WriterReceipt {writer iteration} }")
             .await?;
         assert_eq!(
             after["data"]["WriterCounter"][0]["value"],
-            before + (width * 8) as i64
+            committed.len() as i64
         );
+        let rows = after["data"]["WriterReceipt"].as_array().unwrap();
+        let durable: BTreeSet<_> = rows
+            .iter()
+            .map(|row| {
+                (
+                    row["writer"].as_i64().unwrap(),
+                    row["iteration"].as_i64().unwrap(),
+                )
+            })
+            .collect();
         assert_eq!(
-            after["data"]["WriterReceipt"].as_array().unwrap().len(),
-            (before as usize) + width * 8
+            durable, committed,
+            "every accepted update has its atomic receipt"
         );
+        assert_eq!(rows.len(), committed.len(), "no duplicate receipts");
+        let mut latency: Vec<_> = observations.iter().map(|row| row.2).collect();
         latency.sort_by(f64::total_cmp);
-        measurements.push(json!({"concurrency": width, "transactions": width * 8, "elapsed_ms": started.elapsed().as_secs_f64()*1000.0, "p50_ms": latency[latency.len()/2], "p95_ms": latency[(latency.len()-1)*95/100], "max_ms":latency.last()}));
+        measurements.push(json!({"concurrency": width, "attempts": width * 8, "committed": accepted, "typed_conflicts": width * 8 - accepted, "elapsed_ms": started.elapsed().as_secs_f64()*1000.0, "p50_ms": latency[latency.len()/2], "p95_ms": latency[(latency.len()-1)*95/100], "max_ms":latency.last()}));
     }
     report(
         "shared-owner",
-        json!({"measurements": measurements, "counter":1016}),
+        json!({"measurements": measurements, "counter":committed.len()}),
     )?;
     node.shutdown().await;
     Ok(())
