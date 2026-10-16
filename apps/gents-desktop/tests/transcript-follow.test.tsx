@@ -1,4 +1,4 @@
-import { act, fireEvent, renderHook, waitFor } from "@testing-library/react";
+import { act, fireEvent, renderHook } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -538,6 +538,11 @@ describe("a reader's place through their own scroll", () => {
 });
 
 describe("older transcript pages", () => {
+  beforeEach(() =>
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] }),
+  );
+  afterEach(() => vi.useRealTimers());
+
   /* the load queues the older rows as React state; they reach the screen in
      a commit before the load resolves (a store's synchronous update) or with
      the commit that ends loading (a batched one). The row is put back in that
@@ -588,9 +593,8 @@ describe("older transcript pages", () => {
       const content = fixture.viewport.firstElementChild as HTMLElement;
       expect(fixture.viewport.scrollTop).toBe(100);
       expect(content.style.marginTop).toBe("-400px");
-      await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500), {
-        timeout: 2500,
-      });
+      await act(async () => vi.advanceTimersByTimeAsync(2500));
+      expect(fixture.viewport.scrollTop).toBe(500);
       expect(content.style.marginTop).toBe("");
       /* the unhide came at rest, so the reader's move-up intent has
          expired: the next page follows only a further upward input, which
@@ -633,9 +637,8 @@ describe("older transcript pages", () => {
       fixture.viewport.dispatchEvent(new Event("scroll"));
       fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
     });
-    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(900), {
-      timeout: 2500,
-    });
+    await act(async () => vi.advanceTimersByTimeAsync(2500));
+    expect(fixture.viewport.scrollTop).toBe(900);
     expect(load).toHaveBeenCalledTimes(1);
     expect(result.current).toBe(false);
     unmount();
@@ -674,14 +677,13 @@ describe("older transcript pages", () => {
     for (let i = 0; i < 6; i += 1) {
       await act(async () => {
         fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -0.4 }));
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await vi.advanceTimersByTimeAsync(50);
       });
     }
     expect(fixture.content.style.marginTop).toBe("-400px");
     expect(fixture.viewport.scrollTop).toBe(100);
-    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500), {
-      timeout: 2500,
-    });
+    await act(async () => vi.advanceTimersByTimeAsync(2500));
+    expect(fixture.viewport.scrollTop).toBe(500);
     expect(fixture.content.style.marginTop).toBe("");
     unmount();
   });
@@ -720,15 +722,14 @@ describe("older transcript pages", () => {
       fixture.viewport.dispatchEvent(new Event("scroll"));
     });
     expect(fixture.content.style.marginTop).toBe("-400px");
-    await act(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    await act(async () => vi.advanceTimersByTimeAsync(300));
     expect(fixture.content.style.marginTop).toBe("-400px");
     expect(fixture.viewport.scrollTop).toBe(100);
     act(() => {
       touch("touchend", []);
     });
-    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500), {
-      timeout: 2500,
-    });
+    await act(async () => vi.advanceTimersByTimeAsync(2500));
+    expect(fixture.viewport.scrollTop).toBe(500);
     expect(fixture.content.style.marginTop).toBe("");
     unmount();
   });
@@ -766,13 +767,12 @@ describe("older transcript pages", () => {
     });
     expect(fixture.content.style.marginTop).toBe("-400px");
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await vi.advanceTimersByTimeAsync(400);
     });
     expect(fixture.content.style.marginTop).toBe("-400px");
     expect(fixture.viewport.scrollTop).toBe(100);
-    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500), {
-      timeout: 2500,
-    });
+    await act(async () => vi.advanceTimersByTimeAsync(2500));
+    expect(fixture.viewport.scrollTop).toBe(500);
     expect(fixture.content.style.marginTop).toBe("");
     unmount();
   });
@@ -808,13 +808,12 @@ describe("older transcript pages", () => {
     });
     expect(fixture.content.style.marginTop).toBe("-400px");
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await vi.advanceTimersByTimeAsync(300);
     });
     expect(fixture.content.style.marginTop).toBe("-400px");
     expect(fixture.viewport.scrollTop).toBe(300);
-    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(700), {
-      timeout: 2500,
-    });
+    await act(async () => vi.advanceTimersByTimeAsync(2500));
+    expect(fixture.viewport.scrollTop).toBe(700);
     expect(fixture.content.style.marginTop).toBe("");
     unmount();
   });
@@ -865,13 +864,12 @@ describe("older transcript pages", () => {
     expect(fixture.content.style.marginTop).toBe("-400px");
     dropWrites = 1;
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      await vi.advanceTimersByTimeAsync(1100);
     });
     expect(fixture.content.style.marginTop).toBe("-400px");
     expect(fixture.viewport.scrollTop).toBe(100);
-    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500), {
-      timeout: 2500,
-    });
+    await act(async () => vi.advanceTimersByTimeAsync(2500));
+    expect(fixture.viewport.scrollTop).toBe(500);
     expect(fixture.content.style.marginTop).toBe("");
     unmount();
   });
@@ -921,12 +919,11 @@ describe("older transcript pages", () => {
     });
     expect(fixture.content.style.marginTop).toBe("-400px");
     clientHeight = 600;
-    await waitFor(() => expect(fixture.content.style.marginTop).toBe(""), {
-      timeout: 2500,
-    });
+    await act(async () => vi.advanceTimersByTimeAsync(2500));
+    expect(fixture.content.style.marginTop).toBe("");
     expect(fixture.viewport.scrollTop).toBe(300);
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 1200));
+      await vi.advanceTimersByTimeAsync(1200);
     });
     expect(fixture.content.style.marginTop).toBe("");
     expect(fixture.viewport.scrollTop).toBe(300);
@@ -972,12 +969,11 @@ describe("older transcript pages", () => {
       fixture.viewport.dispatchEvent(new Event("scroll"));
     });
     expect(fixture.content.style.marginTop).toBe("-400.875px");
-    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(501), {
-      timeout: 2500,
-    });
+    await act(async () => vi.advanceTimersByTimeAsync(2500));
+    expect(fixture.viewport.scrollTop).toBe(501);
     expect(fixture.content.style.marginTop).toBe("");
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 1200));
+      await vi.advanceTimersByTimeAsync(1200);
     });
     expect(fixture.viewport.scrollTop).toBe(501);
     expect(fixture.content.style.marginTop).toBe("");
@@ -1015,9 +1011,8 @@ describe("older transcript pages", () => {
     });
     expect(fixture.content.style.marginTop).toBe("-400px");
     expect(fixture.viewport.scrollTop).toBe(300);
-    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(700), {
-      timeout: 2500,
-    });
+    await act(async () => vi.advanceTimersByTimeAsync(2500));
+    expect(fixture.viewport.scrollTop).toBe(700);
     expect(fixture.content.style.marginTop).toBe("");
     unmount();
   });
