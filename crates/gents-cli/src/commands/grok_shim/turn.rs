@@ -2089,7 +2089,7 @@ async fn wait_for_retry_or_cancel(
 }
 
 fn register_transient_read_retry(error: &anyhow::Error, consecutive: &mut usize) -> bool {
-    if !gents_protocol::graphql::graphql_error_is_retryable(error)
+    if !gents_protocol::graphql::graphql_transport_error_in_chain(error)
         || *consecutive >= MAX_TRANSIENT_GRAPHQL_READ_RETRIES
     {
         return false;
@@ -2454,10 +2454,23 @@ mod tests {
         assert!(text.contains("\"type\":\"image\""));
     }
 
-    #[test]
-    fn transient_read_retry_budget_is_consecutive_and_bounded() {
-        let transient = anyhow::anyhow!("database is locked");
+    #[tokio::test]
+    async fn transient_read_retry_budget_is_consecutive_and_bounded() {
+        let transient = anyhow::Error::new(
+            reqwest::Client::new()
+                .post("http://127.0.0.1:1/api/v0/graphql")
+                .send()
+                .await
+                .expect_err("nothing listens on port 1"),
+        )
+        .context("reading request terminal state");
         let fatal = anyhow::anyhow!("invalid query");
+        // DefraDB's HTTP handler already retried auto-commit read conflicts.
+        let mut fresh = 0;
+        assert!(!register_transient_read_retry(
+            &anyhow::anyhow!("transaction conflict. please retry"),
+            &mut fresh
+        ));
         let mut consecutive = 0;
         for expected in 1..=MAX_TRANSIENT_GRAPHQL_READ_RETRIES {
             assert!(register_transient_read_retry(&transient, &mut consecutive));

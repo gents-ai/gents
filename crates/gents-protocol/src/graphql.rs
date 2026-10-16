@@ -386,22 +386,8 @@ async fn execute_graphql_async_with_tx(
             }
         };
 
-        if let Some(error_message) = retryable_graphql_error_message(&value) {
-            if attempt + 1 < options.max_attempts {
-                tracing::warn!(
-                    attempt,
-                    graphql,
-                    error = %error_message,
-                    "retrying async GraphQL request after retryable GraphQL error"
-                );
-                last_error = Some(anyhow!(
-                    "graphql returned retryable errors from {graphql}: {error_message}"
-                ));
-                tokio::time::sleep(scale_backoff(options.retry_backoff, attempt)).await;
-                continue;
-            }
-        }
-
+        // DefraDB's HTTP handler already retries auto-commit conflicts up to
+        // its `max_txn_retries`; a conflict reaching here exhausted that loop.
         return finish_graphql_response(graphql, value);
     }
 
@@ -758,25 +744,10 @@ fn finish_graphql_response(graphql: &str, value: serde_json::Value) -> Result<se
     Ok(value)
 }
 
-#[cfg(feature = "native")]
-fn retryable_graphql_error_message(value: &serde_json::Value) -> Option<String> {
-    let errors = value
-        .get("errors")
-        .and_then(serde_json::Value::as_array)?
-        .clone();
-    if errors.is_empty() {
-        return None;
-    }
-    let rendered = serde_json::Value::Array(errors).to_string();
-    retryable_graphql_error_text(&rendered).then_some(rendered)
-}
-
 /// Whether GraphQL/DefraDB error text describes a retryable store conflict.
 pub fn retryable_graphql_error_text(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
-    message.contains("transaction conflict")
-        || message.contains("please retry")
-        || message.contains("database is locked")
+    message.contains("transaction conflict") || message.contains("please retry")
 }
 
 #[cfg(feature = "native")]
@@ -798,11 +769,22 @@ fn graphql_transport_error_is_retryable(error: &reqwest::Error) -> bool {
 /// Whether an anyhow error is retryable under the GraphQL transport policy.
 #[cfg(feature = "native")]
 pub fn graphql_error_is_retryable(error: &anyhow::Error) -> bool {
+    graphql_transport_error_in_chain(error)
+        || error
+            .chain()
+            .any(|cause| retryable_graphql_error_text(&cause.to_string()))
+}
+
+/// Whether an anyhow error wraps a retryable GraphQL transport failure.
+///
+/// Auto-commit reads must use this rather than [`graphql_error_is_retryable`]:
+/// DefraDB's HTTP handler already retried their store conflicts.
+#[cfg(feature = "native")]
+pub fn graphql_transport_error_in_chain(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
             .downcast_ref::<reqwest::Error>()
             .is_some_and(graphql_transport_error_is_retryable)
-            || retryable_graphql_error_text(&cause.to_string())
     })
 }
 
@@ -1024,36 +1006,6 @@ mod tx_tests {
         server.abort();
     }
 
-    async fn assert_execute_graphql_async_retries_error(first_error_message: &str) {
-        let state = RetryRecorder::new(first_error_message);
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let app = Router::new()
-            .route("/", post(retry_once_handler))
-            .with_state(state.clone());
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-        let endpoint = format!("http://{addr}/");
-        let options = GraphqlRequestOptions {
-            timeout: std::time::Duration::from_secs(2),
-            max_attempts: 2,
-            retry_backoff: std::time::Duration::from_millis(1),
-        };
-
-        let response = execute_graphql_async(&endpoint, None, "{ __typename }", options)
-            .await
-            .unwrap();
-
-        assert_eq!(
-            response
-                .pointer("/data/ok")
-                .and_then(|value| value.as_bool()),
-            Some(true)
-        );
-        assert_eq!(*state.attempts.lock().unwrap(), 2);
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn public_transport_rejects_mutations_before_network_io() {
         let error = execute_graphql_async(
@@ -1072,11 +1024,34 @@ mod tx_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn execute_graphql_async_retries_retryable_store_conflict_errors() {
-        assert_execute_graphql_async_retries_error(
+    async fn execute_graphql_async_leaves_conflict_retry_to_the_server() {
+        let state = RetryRecorder::new(
             "commit error: datastore error: storage error: transaction conflict. Please retry",
-        )
-        .await;
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/", post(retry_once_handler))
+            .with_state(state.clone());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let endpoint = format!("http://{addr}/");
+        let options = GraphqlRequestOptions {
+            timeout: std::time::Duration::from_secs(2),
+            max_attempts: 3,
+            retry_backoff: std::time::Duration::from_millis(1),
+        };
+
+        let error = execute_graphql_async(&endpoint, None, "{ __typename }", options)
+            .await
+            .expect_err("a conflict the server returned is final");
+
+        assert!(
+            error.to_string().contains("transaction conflict"),
+            "{error}"
+        );
+        assert_eq!(*state.attempts.lock().unwrap(), 1);
     }
 
     #[test]
@@ -1086,7 +1061,6 @@ mod tx_tests {
             "wrapped backend: PLEASE RETRY the TRANSACTION CONFLICT"
         ));
         assert!(retryable_graphql_error_text("please retry"));
-        assert!(retryable_graphql_error_text("database is locked"));
         assert!(!retryable_graphql_error_text(
             "validation error: unknown collection"
         ));
@@ -1098,5 +1072,6 @@ mod tx_tests {
             .context("request submit failed")
             .context("outer shim context");
         assert!(graphql_error_is_retryable(&error));
+        assert!(!graphql_transport_error_in_chain(&error));
     }
 }
