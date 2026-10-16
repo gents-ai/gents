@@ -4596,6 +4596,7 @@ dependencies = [
  "defra-http",
  "defra-node",
  "defra-p2p-adapter",
+ "events",
  "flate2",
  "futures",
  "futures-util",

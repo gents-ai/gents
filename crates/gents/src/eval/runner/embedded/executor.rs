@@ -46,6 +46,7 @@ use crate::toolset::CommandExecutionMode;
 use crate::{Collection, ConfigAccess, DocumentRuntimeOptions, RuntimeSnapshotObserver};
 
 const GRACE: Duration = Duration::from_secs(30);
+
 const POLL: Duration = Duration::from_millis(250);
 const LIVE_EVERY: Duration = Duration::from_secs(5);
 
@@ -876,7 +877,7 @@ async fn observe_stage_terminal(
     let watch_started = std::time::Instant::now();
     let stopped;
     let observed = tokio::select! {
-        observed = await_terminal(node, request_id, remaining, GRACE, POLL) => {
+        observed = await_terminal(node, request_id, remaining, GRACE) => {
             stopped = false;
             observed
         }
@@ -1145,7 +1146,7 @@ async fn continue_until_done(
         tokio::select! {
             biased;
             () = cancel.cancelled() => break,
-            _ = await_terminal(&home.node, &request_id, remaining, GRACE, POLL) => {}
+            _ = await_terminal(&home.node, &request_id, remaining, GRACE) => {}
         }
         let remaining = deadline.saturating_sub(started.elapsed());
         tokio::select! {
@@ -1360,7 +1361,7 @@ async fn interrupt_and_settle(
     crate::interrupt::interrupt_request(node, request_id)
         .await
         .context("interrupting a cancelled stage")?;
-    await_terminal(node, request_id, Duration::ZERO, GRACE, POLL).await
+    await_terminal(node, request_id, Duration::ZERO, GRACE).await
 }
 
 async fn submit_stage(
