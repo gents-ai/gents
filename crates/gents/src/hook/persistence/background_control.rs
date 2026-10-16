@@ -40,13 +40,8 @@ impl DefraSessionHook {
         caller_deadline_at: chrono::DateTime<chrono::Utc>,
         wait_deadline_at: chrono::DateTime<chrono::Utc>,
     ) -> anyhow::Result<String> {
-        let mut wakeup = crate::watcher::DocumentChangeWakeup::new(
-            &self.node,
-            Some(&["AgentToolCall", "AgentRequest", "AgentOutputSegment"]),
-            Duration::from_secs(1),
-        )
-        .with_minimum_interval(Duration::from_millis(100));
         loop {
+            let now = chrono::Utc::now();
             let lifecycle = self
                 .load_authorized_background_tool(caller, tool_call_id)
                 .await?;
@@ -76,7 +71,6 @@ impl DefraSessionHook {
                     .await;
             }
 
-            let now = chrono::Utc::now();
             if now >= caller_deadline_at {
                 return self
                     .background_tool_envelope(lifecycle, "caller_deadline_exceeded")
@@ -91,13 +85,10 @@ impl DefraSessionHook {
                     .await;
             }
 
-            let remaining = (caller_deadline_at.min(wait_deadline_at) - chrono::Utc::now())
+            let remaining = (caller_deadline_at.min(wait_deadline_at) - now)
                 .to_std()
                 .unwrap_or(Duration::from_millis(0));
-            tokio::select! {
-                _ = wakeup.wait() => {},
-                _ = tokio::time::sleep(remaining) => {},
-            }
+            tokio::time::sleep(remaining.min(Duration::from_millis(100))).await;
         }
     }
 

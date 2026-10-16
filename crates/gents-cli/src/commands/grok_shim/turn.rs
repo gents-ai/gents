@@ -21,7 +21,6 @@ fn transient_graphql_read_retry_delay(retry: usize) -> Duration {
 }
 
 const TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(200);
-const TERMINAL_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 
 pub(super) const SCREEN_MODES: [&str; 3] = ["fullscreen", "inline", "minimal"];
 
@@ -1453,25 +1452,6 @@ impl TurnManager {
         Ok(row)
     }
 
-    fn terminal_document_changes(
-        &self,
-        recovery_interval: Duration,
-    ) -> gents::watcher::DocumentChangeWakeup {
-        gents::watcher::DocumentChangeWakeup::new(
-            &self.node,
-            Some(&[
-                "AgentRequest",
-                "AgentSession",
-                "AgentMessage",
-                "AgentOutputSegment",
-                "AgentToolCall",
-                "InferenceCall",
-            ]),
-            recovery_interval,
-        )
-        .with_minimum_interval(TERMINAL_POLL_INTERVAL)
-    }
-
     #[allow(clippy::too_many_arguments)]
     async fn watch_terminal(
         &self,
@@ -1485,7 +1465,6 @@ impl TurnManager {
         progress: &mut ObservedRequest,
         mut response_rx: oneshot::Receiver<Result<Value>>,
     ) -> Result<TerminalOutcome> {
-        let mut wakeup = self.terminal_document_changes(TERMINAL_RESCAN_INTERVAL);
         let request_id = request.request_id.as_str();
         let ObservedRequest {
             cursor,
@@ -1602,7 +1581,7 @@ impl TurnManager {
                 return Ok(outcome);
             }
             tokio::select! {
-                _ = wakeup.wait() => {}
+                _ = tokio::time::sleep(TERMINAL_POLL_INTERVAL) => {}
                 result = &mut response_rx => {
                     if let Ok(result) = result {
                         let value = result?;
@@ -2249,9 +2228,6 @@ mod tests {
     use super::*;
     use gents::graphql::ensure_no_errors;
 
-    mod document_changes;
-    mod idle_queries;
-
     fn text_block(text: &str) -> Value {
         json!({"type": "text", "text": text})
     }
@@ -2896,25 +2872,6 @@ mod tests {
         child_request_id: &str,
         lifecycle_state: &str,
     ) -> gents_protocol::row::AgentRequestRow {
-        crate::commands::grok_shim::test_fixtures::seed_started_session(
-            node,
-            parent.node_did.as_deref().unwrap(),
-            "session-1-child",
-            parent.node_did.as_deref(),
-            parent.agent_id.as_deref().expect("fixture agent"),
-            parent.doc_id.as_deref().unwrap(),
-        )
-        .await;
-        seed_child_request_row(node, parent, tool_doc_id, child_request_id, lifecycle_state).await
-    }
-
-    async fn seed_child_request_row(
-        node: &Arc<EmbeddedNode>,
-        parent: &gents_protocol::row::AgentRequestRow,
-        tool_doc_id: &str,
-        child_request_id: &str,
-        lifecycle_state: &str,
-    ) -> gents_protocol::row::AgentRequestRow {
         let owner = escape_graphql_string(parent.node_did.as_deref().unwrap());
         let requester = format!("\"{owner}\"");
         let agent = escape_graphql_string(parent.agent_id.as_deref().expect("fixture agent"));
@@ -2924,6 +2881,15 @@ mod tests {
         let child = escape_graphql_string(child_request_id);
         let state = escape_graphql_string(lifecycle_state);
         let now = chrono::Utc::now().to_rfc3339();
+        crate::commands::grok_shim::test_fixtures::seed_started_session(
+            node,
+            parent.node_did.as_deref().unwrap(),
+            "session-1-child",
+            parent.node_did.as_deref(),
+            parent.agent_id.as_deref().expect("fixture agent"),
+            parent.doc_id.as_deref().unwrap(),
+        )
+        .await;
         let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
             request_id: "{child}", purpose: "normal", node_did: "{owner}", requester_did: {requester}, agent_id: "{agent}", session_id: "session-1-child",
             caused_by_parent_request_id: "{logical_parent}", caused_by_parent_request_doc_id: "{physical_parent}", caused_by_parent_tool_call_id: "call-1", caused_by_parent_tool_call_doc_id: "{tool}", content: "child work", lifecycle_state: "{state}", created_at: "{now}"
