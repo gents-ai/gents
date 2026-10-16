@@ -13,7 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
 import { toast } from "sonner";
-import { href, navigate } from "@/lib/router";
+import { href, leave, navigate, replace } from "@/lib/router";
 import { agentReadiness } from "@/lib/agent-readiness";
 import { shortAccess } from "../behavior";
 import { AgentInitials } from "../parts";
@@ -24,6 +24,7 @@ import { useApp } from "@/app/AppContext";
 import type { ShellActions } from "@/../hooks/shellActions";
 import { listNames, newAgentView } from "./behaviorDraft";
 import { AgentEditor } from "./BehaviorEditor";
+import { NEW_ITEM } from "./draftItems";
 
 export async function saveDefault(
   changeConfig: ShellActions["changeConfig"],
@@ -160,7 +161,6 @@ export function AgentsPanel({
     nodeDid: deployment.nodeDid,
     section: "agents",
   };
-  const [draft, setDraft] = useState<AgentView | null>(null);
   const inUse = new Set(deployment.agents.map((b) => b.contextId));
   const unusedContexts = deployment.contexts.filter(
     (c) => !inUse.has(c.context_id),
@@ -190,31 +190,11 @@ export function AgentsPanel({
         : []),
     ].join(" · ");
   };
-  if (draft)
+  /* a saved agent's id is not expected to be the draft's item, but nothing
+     stops another writer from using it; the saved one wins */
+  if (agentId === NEW_ITEM && !agentOf(deployment, NEW_ITEM))
     return (
-      <div>
-        <div className="mb-6 flex items-center justify-between gap-3">
-          <button
-            type="button"
-            onClick={() => setDraft(null)}
-            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <ArrowLeft className="size-3.5" /> Agents
-          </button>
-        </div>
-        <AgentEditor
-          key={draft.agentId}
-          deployment={deployment}
-          agent={draft}
-          draft={{
-            onSaved: (id) => {
-              setDraft(null);
-              navigate({ ...base, item: id });
-            },
-            onCancel: () => setDraft(null),
-          }}
-        />
-      </div>
+      <NewAgentPage key={deployment.nodeDid} deployment={deployment} base={base} />
     );
   return (
     <>
@@ -259,7 +239,7 @@ export function AgentsPanel({
           }))}
         createLabel="New agent"
         empty="No agents yet. An agent is what a session is told, what it may use, and what model runs it."
-        onCreate={() => setDraft(newAgentView(deployment))}
+        onCreate={() => navigate({ ...base, item: NEW_ITEM })}
         detail={(id) => {
           const agent = agentOf(deployment, id)!;
           return (
@@ -282,5 +262,39 @@ export function AgentsPanel({
         </p>
       )}
     </>
+  );
+}
+
+function NewAgentPage({
+  deployment,
+  base,
+}: {
+  deployment: NodeView;
+  base: { name: "agent"; nodeDid: string; section: string };
+}) {
+  const [draft] = useState(() => newAgentView(deployment));
+  const here = { ...base, item: NEW_ITEM };
+  const close = () => leave(here, base);
+  return (
+    <div>
+      <div className="mb-6 flex items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={close}
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft className="size-3.5" /> Agents
+        </button>
+      </div>
+      <AgentEditor
+        key={draft.agentId}
+        deployment={deployment}
+        agent={draft}
+        draft={{
+          onSaved: (id) => replace(here, { ...base, item: id }),
+          onCancel: close,
+        }}
+      />
+    </div>
   );
 }

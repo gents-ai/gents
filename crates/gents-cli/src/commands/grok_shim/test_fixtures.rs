@@ -128,7 +128,6 @@ pub(super) async fn configure_runtime_agent(
     .unwrap();
 }
 
-/// Publish one typed canonical assistant fixture.
 pub(super) async fn seed_canonical_assistant_message(
     node: &EmbeddedNode,
     request: &gents_protocol::row::AgentRequestRow,

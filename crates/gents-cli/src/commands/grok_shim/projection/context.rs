@@ -19,8 +19,8 @@ pub(super) async fn load(
         return Ok(None);
     };
     let context = observation.context;
-    // Without a real dispatch timestamp we cannot order this observation
-    // against another request's active context. Do not fabricate one.
+    // No real dispatch timestamp exists to order this observation against
+    // another request's active context.
     let Some(queued) = context
         .queued_at
         .as_deref()

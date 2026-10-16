@@ -13,7 +13,6 @@ use crate::defra_node::EmbeddedNode;
 use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry};
 use crate::run_timeline::{RunTimelineRows, TimelineToolCallRow};
 
-/// Progress and usage callbacks for one `await_terminal_with` poll.
 #[async_trait::async_trait]
 pub trait ObservationHook: Send + Sync {
     async fn on_state(&self, _state: &str, _session_id: Option<&str>) {}
@@ -81,10 +80,9 @@ pub struct RequestEvidence {
 }
 
 /// Poll `AgentRequest { lifecycle_state session_id }` until the request is
-/// terminal or the deadline-and-grace window ends.
-///
-/// Terminal evidence requires a durable terminal state; interrupt intent and
-/// an expired grace leave `terminal_state` absent.
+/// terminal or the deadline-and-grace window ends. Terminal evidence requires
+/// a durable terminal state; interrupt intent and an expired grace leave
+/// `terminal_state` absent.
 pub async fn await_terminal(
     node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
@@ -531,8 +529,6 @@ mod tests {
         let request_id = crate::graphql::escape_graphql_string(request_id);
         let node_did = crate::graphql::escape_graphql_string(home.did());
         let lifecycle_state = crate::graphql::escape_graphql_string(lifecycle_state);
-        // AgentRequest SDL fields are nillable. Supply the identity and state the
-        // observer reads; do not emit an empty list.
         let mutation = format!(
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "observe", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "{lifecycle_state}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
         );

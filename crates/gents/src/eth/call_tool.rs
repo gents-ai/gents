@@ -43,16 +43,6 @@ pub struct ResolvedEthCall {
     pub(crate) caps: GasCaps,
 }
 
-impl ResolvedEthCall {
-    #[cfg(test)]
-    pub(crate) fn is_signing(&self) -> bool {
-        matches!(
-            self.kind,
-            ResolvedCallKind::Write { .. } | ResolvedCallKind::SignTypedData { .. }
-        )
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResolvedCallKind {
     AnyRead,
@@ -602,9 +592,6 @@ fn write_idempotency_key(
     value: U256,
     data: &[u8],
 ) -> serde_json::Result<String> {
-    // Recovery may mint a fresh in-memory tool-call id. Bind durability to the
-    // request and exact Ethereum action instead; intentionally repeated,
-    // byte-identical transfers belong in separate agent requests.
     let semantic_action = serde_json::to_vec(&json!({
         "request_id": request_id,
         "tool_name": tool_name,
@@ -1053,7 +1040,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::calls::ParamDecl;
+
     use super::*;
 
     async fn signing_fixture() -> (

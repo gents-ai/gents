@@ -69,6 +69,10 @@ describe("managed runtime restart settings", () => {
       "user service manager unavailable",
     );
     expect(screen.queryByText("stopped")).not.toBeInTheDocument();
+    /* a message wraps under the description, not beside the state */
+    expect(
+      screen.getByRole("alert").closest("[data-slot=field-content]"),
+    ).not.toBeNull();
   });
 
   it("shows the runtime-confirmed authority even when later pairing polling fails", async () => {

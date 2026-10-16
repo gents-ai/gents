@@ -151,7 +151,7 @@ export function AgentsScreen() {
       <AddAgentDialog open={adding} onClose={() => setAdding(false)} />
       <RenameDialog
         key={renaming?.peerId ?? "none"}
-        title="Rename deployment"
+        title="Rename node"
         description="The saved label on this desktop; the node's own name does not change."
         value={renaming?.label ?? null}
         onSave={async (next) => {

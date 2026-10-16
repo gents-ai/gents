@@ -21,8 +21,6 @@ use crate::agent::{
 use crate::identity::RuntimeNode;
 use crate::tool_surface::AgentToolConfig;
 
-// A foreign record cannot satisfy a reference even in an independently
-// constructed view; ownership is rechecked at reference resolution.
 macro_rules! owned_doc {
     ($map:expr, $id:expr, $owner:expr) => {{
         (|| -> anyhow::Result<_> {

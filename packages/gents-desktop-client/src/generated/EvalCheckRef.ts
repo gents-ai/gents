@@ -5,8 +5,4 @@ export type EvalCheckRef = {
 /**
  * Builtin check registry name.
  */
-check: string,
-/**
- * Schema belongs to the named check.
- */
-params: unknown, tier: EvalTier, weight: number, };
+check: string, params: unknown, tier: EvalTier, weight: number, };

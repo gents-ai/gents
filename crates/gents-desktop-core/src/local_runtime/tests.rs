@@ -1,11 +1,10 @@
-use super::identity::{normalize_optional_string, resolve_p2p_peer_id};
+use super::identity::resolve_p2p_peer_id;
 use super::{
     augment_peer_status_payload_for_desktop, await_serving_runtime_within,
     dangerously_overwrite_desktop_home, graphql_endpoint_for_desktop_access,
     init_standard_local_runtime, load_operator_node_identity, load_standard_runtime_identity,
-    operator_signer, render_human_summary, reset_desktop_runtime_state, runtime_graphql_url,
-    runtime_status_url, serving_runtime, DesktopInitOptions, DesktopInitSummary,
-    StoredRuntimeState, LOCAL_STANDARD_SOURCE,
+    operator_signer, render_human_summary, reset_desktop_runtime_state, serving_runtime,
+    DesktopInitOptions, DesktopInitSummary, StoredRuntimeState, LOCAL_STANDARD_SOURCE,
 };
 use crate::client::DesktopPaths;
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;

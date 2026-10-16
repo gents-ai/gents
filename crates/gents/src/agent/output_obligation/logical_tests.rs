@@ -358,7 +358,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                 previous = Some((lifecycle, None));
                 continue;
             }
-            let mut writer = begin_writer(&mut lifecycle, &node).await;
+            let writer = begin_writer(&mut lifecycle, &node).await;
             let mut last_message_doc_id: Option<String> = None;
             for (turn, write) in writes.iter().enumerate() {
                 let call = write["call_doc"].as_u64().unwrap();
@@ -506,7 +506,7 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
             }],
         );
         let mut lifecycle = claimed(&node, &row, None).await;
-        let mut writer = begin_writer(&mut lifecycle, &node).await;
+        let writer = begin_writer(&mut lifecycle, &node).await;
         let (accepted, _) = publish_accepted_turn(
             &writer,
             &mut lifecycle,
@@ -554,7 +554,7 @@ async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
         .unwrap();
     let row = persist_request(&node, &create).await;
     let mut lifecycle = claimed(&node, &row, None).await;
-    let mut writer = begin_writer(&mut lifecycle, &node).await;
+    let writer = begin_writer(&mut lifecycle, &node).await;
     writer
         .start_provider_attempt(
             &lifecycle.request().doc_id,

@@ -6,8 +6,6 @@ use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use defra_node::EmbeddedNode;
 use gents_loop::provider_patches::patch_instructions_body;
-#[cfg(test)]
-use gents_loop::provider_patches::CHATGPT_CODEX_UNSUPPORTED_PARAMS;
 use rig::http_client::{
     self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, Request, ReqwestClient, Response,
 };
@@ -17,7 +15,7 @@ use rig::wasm_compat::WasmCompatSend;
 use serde_json::{json, Value};
 
 #[cfg(test)]
-use crate::oauth_credential::{classify_chatgpt_auth_error, BearerSource, OAuthAuthProblem};
+use crate::oauth_credential::BearerSource;
 use crate::oauth_credential::{
     oauth_credential_id, DbCredentialBearer, OAuthCredential, OAuthRefreshKind,
     CHATGPT_OAUTH_PRODUCT,
@@ -131,13 +129,6 @@ pub fn chatgpt_codex_client_version() -> String {
 const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.160.0";
 const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "GENTS_CHATGPT_CODEX_CLIENT_VERSION";
 
-/// [`crate::oauth_http::OAuthHttpPolicy`] policy for the ChatGPT Codex
-/// Responses transport: 401/403 kill the bearer, the `/responses` body needs
-/// the `instructions` hoist, and a buffered send must rewrite Codex's SSE
-/// body into the JSON `response.completed` shape rig expects. Codex's
-/// identity headers (`build_chatgpt_codex_headers`) ride as `http_headers`
-/// client-build defaults instead of a per-request merge, so this policy
-/// leaves `merge_identity_headers` at its no-op default.
 #[derive(Clone, Default)]
 pub struct ChatGptCodexPolicy;
 
@@ -259,9 +250,6 @@ fn retain_turn_state(headers: &HeaderMap) {
     }
 }
 
-/// Codex's Responses transport: bearer auth, the `instructions` hoist, and
-/// the SSE→JSON response rewrite, layered over `crate::oauth_http`'s shared
-/// bearer-auth wrapper.
 pub type ChatGptCodexHttpClient<S, H = ReqwestClient> =
     crate::oauth_http::BearerAuthHttpClient<S, ChatGptCodexPolicy, H>;
 
@@ -396,11 +384,6 @@ pub async fn build_responses_client(
     let headers =
         build_chatgpt_codex_headers(credential.account_id.as_deref(), credential.is_fedramp)?;
     let endpoint = normalize_endpoint(endpoint);
-    // The capture wrapper sits *below* the Codex wrapper, so it sees the body
-    // after `patch_instructions_body` has hoisted `instructions`, stripped
-    // system items, set `store`/`stream`, deleted the unsupported sampling
-    // params, and forced `strict:false`. Capturing above it would persist a
-    // request this backend never receives.
     let usage = crate::usage_observation::UsageReporter::new(
         node,
         crate::usage_observation::UsageAccount::for_credential(&credential),
@@ -549,8 +532,7 @@ mod tests {
         }
     }
 
-    /// Inner transport that yields a fixed HTTP status — `>= 400` becomes the rig status error the
-    /// reqwest transport would produce, `< 400` an empty success response.
+    /// Inner transport yielding a fixed HTTP status.
     #[derive(Clone, Debug)]
     struct StatusInjectingClient {
         status: u16,
@@ -685,22 +667,6 @@ mod tests {
         assert!(!unscoped.headers().contains_key("x-codex-turn-state"));
     }
 
-    fn status_error(status: &str) -> http_client::Error {
-        http_client::Error::InvalidStatusCodeWithMessage(
-            status.parse().expect("valid status"),
-            String::new(),
-        )
-    }
-
-    /// The reason the capture seam is a transport wrapper at all.
-    ///
-    /// `build_responses_client` puts the capture client *below* this one so the
-    /// durable row is the body ChatGPT actually receives. Nothing about the
-    /// types enforces that: both wrappers are generic over their inner client,
-    /// so hoisting the capture above the Codex wrapper compiles and streams
-    /// fine while persisting a request this backend never sees. This composes
-    /// the real stack — Codex over capture over a recording terminal — and
-    /// pins the row to the post-rewrite body.
     #[tokio::test]
     async fn the_captured_row_is_the_body_codex_rewrote_not_the_one_rig_serialized() {
         use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
@@ -1020,9 +986,6 @@ mod tests {
             assert_eq!(chatgpt_login(id_claims, access).provider_account_key, None);
         }
     }
-
-    // `ensure_event_stream_content_type` is single-owned and unit-tested in
-    // `crate::oauth_http` now (`event_stream_content_type_is_added_only_when_missing`).
 
     #[test]
     fn streamed_output_prefers_deltas_over_done_text() {

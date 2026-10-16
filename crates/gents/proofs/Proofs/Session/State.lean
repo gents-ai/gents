@@ -164,8 +164,6 @@ structure SessionQueueState where
   active : Option RequestId
   pending : List QueueEntry
   terminal : Finset RequestId
-  /-- Messages the active claim selected to answer, in queue order; they return
-  to the head of the queue if its turn ends without consuming them. -/
   folding : List QueueEntry := []
   deriving DecidableEq
 

@@ -1012,7 +1012,7 @@ mod tests {
     fn running_tool_call_has_no_update_and_stays_in_progress() {
         let row = tool_row("bash", Some("running"));
         let projection = project_tool_rows(&[row], &no_presentations());
-        assert_eq!(projection.updates.len(), 2); // tool_call + available_commands
+        assert_eq!(projection.updates.len(), 2);
         let ToolUpdate::ToolCall(call) = &projection.updates[0] else {
             panic!("first update should be a tool_call");
         };

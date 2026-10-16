@@ -13,7 +13,6 @@ use super::output::fetch_connected_peer_ids;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct PeerPairingDesiredRow {
-    /// Stable desired-state/directory key; never assumed to be an Iroh id.
     peer_id: String,
     transport_peer_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

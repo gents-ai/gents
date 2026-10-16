@@ -62,12 +62,6 @@ impl RootExecutionGuard {
 }
 
 impl WorkspaceRootPolicy {
-    pub(crate) fn published_strings(&self) -> impl Iterator<Item = String> + '_ {
-        self.published
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-    }
-
     pub(crate) fn admit(&self, candidate: &Path) -> Result<RootAdmission> {
         anyhow::ensure!(
             candidate.is_absolute(),
@@ -328,8 +322,6 @@ fn resolve_tool_root(path: &Path) -> Result<ResolvedToolRoot> {
     resolve_path_with_canonical_prefix(&absolute)
 }
 
-/// Resolve `candidate` and admit it only when it is equal to or below one of
-/// the supplied roots; an empty root iterator denies the candidate.
 pub(crate) fn resolve_admitted_tool_root<'a>(
     candidate: &Path,
     allowed_roots: impl IntoIterator<Item = &'a Path>,

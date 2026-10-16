@@ -42,7 +42,6 @@ pub enum ScheduleCadence {
     },
 }
 
-/// Runtime scheduling cursor, keyed by trigger rather than reusable schedule.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ScheduleObservation {
     pub trigger_id: String,

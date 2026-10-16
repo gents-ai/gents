@@ -1,6 +1,3 @@
-//! The executor seam: what one trial contains, what running it yields, and the
-//! trait the embedded and scripted executors implement.
-//!
 //! A serialized [`TrialSpec`] never carries checks, tiers, splits or other
 //! cases; the one field that names a case is [`TrialSpec::script_key`].
 
@@ -27,22 +24,18 @@ pub enum Isolation {
     Process,
 }
 
-/// Subject-visible inputs plus non-serialized harness handles.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrialSpec {
     pub trial_id: String,
     pub pack_dir: PathBuf,
     pub pack_digest: String,
     pub agent_id: String,
-    /// Copied verbatim so a later edit cannot change what a finished trial meant.
     pub inference: InferenceBinding,
     pub fixtures: TrialFixtures,
     #[serde(default)]
     pub host_bash: bool,
     pub stages: Vec<StageSpec>,
     pub trial_dir: PathBuf,
-    /// The one field that carries a `case_id`; populated only when
-    /// [`TrialExecutor::wants_script_key`].
     pub script_key: Option<ScriptKey>,
     #[serde(skip)]
     pub progress: StageProgress,
@@ -181,7 +174,6 @@ pub struct StageEvidence {
     pub stage_id: String,
     pub request_id: Option<String>,
     pub terminal_state: Option<RequestLifecycleState>,
-    /// `None` means the stage ran to `Completed`.
     pub failure_kind: Option<OutcomeKind>,
     pub provider_reason: Option<ProviderReason>,
     pub messages: Vec<MessageEvidence>,
@@ -228,8 +220,7 @@ pub struct TrialEvidence {
 }
 
 impl TrialEvidence {
-    /// SHA-256 over canonical JSON of `(stages, usage, anchor)`; the locator is
-    /// excluded.
+    /// SHA-256 over canonical JSON of `(stages, usage, anchor)`.
     pub fn digest(stages: &[StageEvidence], usage: &TrialUsage, anchor: &Anchor) -> String {
         #[derive(Serialize)]
         struct DigestInput<'a> {
@@ -278,7 +269,6 @@ impl TrialEvidence {
         }
     }
 
-    /// Evidence for a trial that never ran.
     pub fn infrastructure(locator: TrialLocator) -> Self {
         Self::new(
             locator,

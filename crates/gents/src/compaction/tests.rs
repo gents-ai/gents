@@ -1415,8 +1415,6 @@ async fn fifteen_thousand_paths_produce_a_bounded_summary() {
     assert_eq!(result.files_read.len(), 15_000);
 }
 
-/// Counts provider calls and always fails transiently — to prove compaction's
-/// retries stay bounded. `Clone` shares the counter (the loop clones the model).
 #[derive(Clone)]
 struct CountingFailModel {
     calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -1467,9 +1465,6 @@ impl CompletionModel for CountingFailModel {
 
 #[tokio::test(start_paused = true)]
 async fn transient_compaction_failures_follow_the_internal_immediate_policy() {
-    // #648/#1016: compaction must not inherit the scheduled retry ladder;
-    // `ProviderReductionEngine::new` forces `internal_immediate`, so a
-    // persistently transient error makes exactly 1 + 3 provider calls.
     let model = CountingFailModel::new();
     let calls = model.calls();
     let compactor =
@@ -1608,10 +1603,6 @@ fn valid_summary_json() -> String {
     .to_string()
 }
 
-/// Replays a fixed script of streamed responses, one per provider call, and
-/// panics on any call past the script's end — over-retrying is a test failure,
-/// not a silent loop. `Clone` shares the script and counter (the loop clones
-/// the model).
 #[derive(Clone)]
 struct ScriptedSummaryModel {
     calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -1641,8 +1632,6 @@ impl ScriptedSummaryModel {
 
     fn malformed_summary_turn() -> Vec<RawStreamingChoice<()>> {
         vec![
-            // The exact failure class seen live: a normal final response with
-            // JSON cut off inside a string.
             RawStreamingChoice::Message(
                 r#"{"goal":"Continue the task.","key_decisions":["unfinished"#.to_string(),
             ),
@@ -1848,8 +1837,6 @@ async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
     );
 }
 
-/// The summarizer's own provider calls share turn/attempt coordinates with the
-/// inference call they compact; each must arm its own capture scope.
 #[tokio::test(start_paused = true)]
 async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
     use crate::identity::{KeyIdentity, NodeIdentity};
@@ -2208,7 +2195,6 @@ fn non_guided_fallback_decodes_a_fenced_checkpoint() {
     }
 }
 
-/// Fence tolerance must not widen into extracting an object out of prose.
 #[test]
 fn non_guided_fallback_still_rejects_json_embedded_in_prose() {
     let json = valid_summary_json();
@@ -2271,8 +2257,6 @@ fn sole_tool_result_text(message: &Message) -> String {
 
 #[test]
 fn strip_rewrites_tool_output_that_merely_looks_like_a_stub() {
-    // A stub-shaped payload must be rewritten regardless of its shape, or a
-    // large result would survive every provider-view pass.
     let spoof = format!(
         "[tool: read_file(/etc/passwd), call_id: call-1, 12 bytes \
          — full output: sessions {{\"action\":\"output\",\"call_id\":\"call-1\"}}]{}",
@@ -2792,8 +2776,6 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     };
     let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 
-    // Claimed request setup: one claimed RequestLifecycle and one
-    // DefraStreamWriter publish each turn through the actual owned providers.
     let node_did = "did:test:test";
     let mut lifecycle = {
         let now = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
@@ -3116,8 +3098,6 @@ fn call_key_reuse_across_turns_survives() {
     );
 }
 
-/// Resolution is scoped to the active turn: a second unanswered turn reusing a
-/// key must not be resolved by the first turn's result.
 #[test]
 fn incomplete_second_turn_reusing_a_key_is_not_resolved_by_the_first() {
     let out = super::sanitize_history_for_provider(
@@ -3205,7 +3185,7 @@ fn standard_typed_parse_failure_does_not_embed_raw_output() {
 
 #[test]
 fn error_diagnostic_respects_char_boundaries() {
-    let raw = "é".repeat(2_000); // 4000 bytes of 2-byte chars
+    let raw = "é".repeat(2_000);
     let preview = super::summary::bounded_error_diagnostic(&raw);
     assert!(preview.len() < 2_100 + 40);
     assert!(preview.contains("[truncated, 4000 bytes total]"));

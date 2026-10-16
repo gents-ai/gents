@@ -1573,7 +1573,6 @@ pub struct DbCredentialBearer {
     credential_id: String,
     http: reqwest::Client,
     cache: Mutex<Option<OAuthCredential>>,
-    /// Serializes refreshes and retains the last failure during its cooldown.
     refresh_lock: Mutex<Option<(std::time::Instant, OAuthAuthProblem)>>,
     is_owner: bool,
     force_refresh: AtomicBool,
@@ -1675,7 +1674,6 @@ impl DbCredentialBearer {
         *self.cache.lock().await = Some(credential.clone());
     }
 
-    /// Replace cached tokens when this credential ID now refers to a different stored document.
     pub(crate) async fn adopt_document(&self, stored: &OAuthCredential) {
         let mut cache = self.cache.lock().await;
         if cache

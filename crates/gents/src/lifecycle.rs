@@ -75,10 +75,9 @@ pub use task_title::task_session_title;
 
 pub const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 
-/// Outcome of interpreting a persisted `valid_until` TTL against `now`.
-/// Single owner for the parse; the claim path and the watcher's pre-claim
-/// scans must both fail closed on `Malformed` — a request whose TTL cannot be
-/// interpreted must not be silently claimed as if `valid_until` were unset.
+/// The claim path and the watcher's pre-claim scans must both fail closed on
+/// `Malformed` — a request whose TTL cannot be interpreted must not be silently
+/// claimed as if `valid_until` were unset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TtlOutcome {
     NotSet,
@@ -575,10 +574,6 @@ impl RequestLifecycle {
 
     pub(crate) fn request_commit_cid(&self) -> Option<&str> {
         self.request_commit_cid.as_deref()
-    }
-
-    pub fn valid_until_at_claim_for_test(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.valid_until_at_claim
     }
 
     /// Last transcript sequence owned by this background-completion attempt

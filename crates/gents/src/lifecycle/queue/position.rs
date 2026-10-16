@@ -121,66 +121,6 @@ pub(crate) async fn effective_slots(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::KeyIdentity;
-    use crate::identity::NodeIdentity;
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
-    };
-    use gents_protocol::request_input::{QueueDelivery, QueuePosition};
-
-    async fn signed_row(
-        identity: &KeyIdentity,
-        id: &str,
-        position: Option<QueuePosition>,
-    ) -> AgentRequestRow {
-        let mut create = AgentRequestCreate::base(
-            RequestPurpose::Normal,
-            id,
-            identity.did(),
-            identity.did(),
-            "agent",
-            "session",
-            "text",
-            "interactive",
-            "2026-10-10T00:00:00Z",
-            AgentRequestAdmissionRecord::local_self(identity.did()),
-        );
-        create.input.queue = Some(RequestQueue {
-            source: QueueSource::User,
-            policy: QueuePolicy::Append,
-            delivery: QueueDelivery::Steer,
-            position,
-            key: None,
-            queued_after_request_id: None,
-            interrupted_request_id: None,
-            background_completion_wake_version: None,
-        });
-        crate::sign_agent_request_create(identity, &mut create)
-            .await
-            .unwrap();
-        AgentRequestRow {
-            doc_id: Some(id.into()),
-            request_id: create.request_id,
-            purpose: Some(create.purpose),
-            node_did: Some(create.node_did),
-            requester_did: Some(create.requester_did),
-            agent_id: Some(create.agent_id),
-            session_id: Some(create.session_id),
-            content: Some(create.content),
-            input: Some(create.input),
-            execution_origin: Some(create.execution_origin),
-            created_at: Some(create.created_at),
-            retry_root_request: create.retry_root_request,
-            retry_count: Some(create.retry_count),
-            max_retries: Some(create.max_retries),
-            request_hop: Some(i64::from(create.request_hop)),
-            admission_kind: Some(create.admission.kind.as_str().into()),
-            admission_signer_did: Some(create.admission.signer_did),
-            admission_signature: Some(bs58::encode(&create.admission.signature).into_string()),
-            lifecycle_state: Some(RequestLifecycleState::Pending),
-            ..Default::default()
-        }
-    }
 
     #[tokio::test]
     async fn effective_slot_batch_uses_only_found_physical_requests() {

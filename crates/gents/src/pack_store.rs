@@ -201,8 +201,6 @@ impl PackStore {
             .with_context(|| format!("{} is not a valid pack", file.display()))
     }
 
-    /// Rehashes the unpacked copy before mapping bytes, repairing any modified tree from the
-    /// content-addressed archive.
     pub fn open(&self, digest: &str) -> Result<PackArchive> {
         let hex = digest_hex(digest)?;
         let unpacked = self.unpacked_root().join(hex);
@@ -339,11 +337,11 @@ impl PackStore {
         for entry in entries {
             let entry = entry.with_context(|| format!("reading {}", dir.display()))?;
             let Some(version) = entry.file_name().to_str().and_then(decode_version) else {
-                continue; // never written by this store, or an in-flight write
+                continue;
             };
             let digest = match std::fs::read_to_string(entry.path()) {
                 Ok(digest) => digest.trim().to_owned(),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue, // raced with a release
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(error) => {
                     return Err(error)
                         .with_context(|| format!("reading {}", entry.path().display()))
@@ -610,8 +608,8 @@ impl PackStore {
         let hex = digest_hex(digest)?;
         let archive = self.path(digest)?;
         let unpacked = self.unpacked_root().join(hex);
-        // Read before deleting: once both copies are gone there is no cheap
-        // way left to name the one index entry this digest was filed under.
+        // Read before deleting: once both copies are gone there is no
+        // cheap way left to reconstruct this digest's name-index entry.
         let header = self.stored_header(&archive, &unpacked);
         let mut released = false;
         match std::fs::remove_file(&archive) {

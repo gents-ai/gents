@@ -1,5 +1,5 @@
-//! Grading: one [`VerdictRow`] per (stage, check) of a case, pure over the
-//! case and the trial's evidence.
+//! One [`VerdictRow`] per (stage, check) of a case, pure over the case and
+//! the trial's evidence.
 
 use serde_json::{json, Value};
 

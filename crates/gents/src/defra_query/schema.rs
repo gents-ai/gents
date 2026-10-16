@@ -226,7 +226,6 @@ pub fn discovery_payload(collection: &str, schema: &CollectionSchema) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     fn schema_from(names_and_types: &[(&str, &str)]) -> CollectionSchema {
         CollectionSchema {

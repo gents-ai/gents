@@ -365,9 +365,6 @@ pub async fn composite_commits(
         escape_graphql_string(doc_id),
     );
     let response = graphql_with_transaction_retry(node, &query, operation).await?;
-    // DefraDB applies this filter in memory and an invalid GraphQL filter can
-    // degrade to no filter. Fetch the field name and enforce the composite
-    // selection here instead of trusting that behavior.
     response_composite_commits(&response, "_commits")
 }
 

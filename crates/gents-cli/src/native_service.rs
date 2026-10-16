@@ -495,8 +495,8 @@ impl<R: CommandRunner> NativeServiceManager<R> {
         }
         atomic_write(&path, contents.as_bytes())
             .with_context(|| format!("writing native service definition {}", path.display()))?;
-        // Installation is intentionally non-starting and disabled. Enablement
-        // remains OS-native state rather than a second Gents preference file.
+        // Enablement remains OS-native state rather than a second Gents
+        // preference file.
         if self.platform == NativeServicePlatform::Linux {
             self.run_checked("systemctl", &["--user".into(), "daemon-reload".into()])?;
         }

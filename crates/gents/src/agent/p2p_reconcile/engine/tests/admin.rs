@@ -9,19 +9,13 @@ struct MockAdmin {
     delete_replicator_not_found: Mutex<bool>,
     active: Mutex<Vec<String>>,
     fail_active_peers: bool,
-    /// Barrier proving supervisor cancellation can drop an in-flight admin
-    /// wait instead of waiting for its per-RPC timeout.
     active_peers_started: Option<Arc<tokio::sync::Notify>>,
     active_peers_release: Option<Arc<tokio::sync::Notify>>,
     fail_connect: bool,
-    /// Address-specific barrier proving one stale peer's dial does not
-    /// head-of-line block a ready peer's sweep.
     blocked_connect_address: Option<String>,
     blocked_connect_started: Option<Arc<tokio::sync::Notify>>,
     blocked_connect_release: Option<Arc<tokio::sync::Notify>>,
     replicator_installed: Option<Arc<tokio::sync::Notify>>,
-    /// Upcoming replicator installs to fail, modeling the torn reconnect-replay
-    /// window (delete succeeds, reinstall transiently fails).
     fail_add_replicator_attempts: Mutex<usize>,
 }
 
@@ -88,8 +82,6 @@ impl RemoteP2pAdmin for MockAdmin {
         drop(remaining_failures);
         let resolved_filters = mock_live_filters(filters);
         for address in addresses {
-            // Transport records the carried collection set in *id* space like
-            // the real adapter; `read_actual` reverse-resolves it to names.
             self.replicators.lock().unwrap().insert(
                 address.clone(),
                 RemoteReplicator {
@@ -140,9 +132,6 @@ impl RemoteP2pAdmin for MockAdmin {
         Ok(())
     }
 
-    // The subscription set is stored in *id*-space, mirroring the real adapter:
-    // `add_p2p_collections` receives names and persists the resolved id;
-    // `list_p2p_collections` returns those ids.
     async fn list_p2p_collections(&self) -> RemoteP2pAdminResult<Vec<String>> {
         Ok(self.collections.lock().unwrap().iter().cloned().collect())
     }

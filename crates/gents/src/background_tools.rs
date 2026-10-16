@@ -44,9 +44,6 @@ impl ProcessControlScope {
     }
 }
 
-/// Decoded exactly as the advertised schema states; a wider decoder returns a
-/// running receipt for input the target cannot decode, surfacing the rejection
-/// to the model only later as a failed completion.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BackgroundToolArgs {
@@ -55,7 +52,7 @@ pub(crate) struct BackgroundToolArgs {
 }
 
 /// Default wait when neither the call nor the Tools group sets one; the
-/// timeout reports the process as still running without cancelling it (#985).
+/// timeout reports the process as still running without cancelling it.
 pub(crate) const DEFAULT_WAIT_PROCESS_TIMEOUT_SECS: u64 = 30;
 pub(crate) const MAX_WAIT_PROCESS_TIMEOUT_SECS: u64 = 600;
 
@@ -456,8 +453,8 @@ pub(crate) fn canonical_tool_output_from_rows(
 struct CombinedOutputSlice {
     output: String,
     next_offset: u64,
-    /// Earliest byte offset still readable; > 0 only when a live ring buffer
-    /// evicted a prefix, letting a caller detect dropped bytes.
+    /// Byte offset of the earliest still-readable byte; > 0 only when a live
+    /// ring buffer evicted a prefix.
     first_available_offset: u64,
     total_bytes: u64,
     has_more: bool,

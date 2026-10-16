@@ -605,21 +605,6 @@ impl StringUpdate {
     }
 }
 
-fn agent_edit_fields(args: &ConfigureAgentParams) -> Vec<String> {
-    [
-        ("display_name", &args.display_name),
-        ("description", &args.description),
-        ("system_prompt", &args.system_prompt),
-        ("root", &args.root),
-        ("preset", &args.preset),
-        ("profile_id", &args.profile_id),
-    ]
-    .into_iter()
-    .filter(|(_, value)| value.is_present())
-    .map(|(field, _)| field.to_owned())
-    .collect()
-}
-
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigureAgentParams {
@@ -889,7 +874,6 @@ struct PackInstallParams {
     pub expected_digest: Option<String>,
 }
 
-/// A resolved pack and where it came from.
 struct ConfigPackDistribution(crate::pack_resolve::ResolvedNamedPack);
 
 impl ConfigPackDistribution {

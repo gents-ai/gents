@@ -455,8 +455,6 @@ pub(crate) trait CanonicalExecutionAdapter {
     ) -> ExecutionFuture<'a, Result<LeanCanonicalExecutionObservation, Self::Error>>;
 }
 
-/// Initializes one native fixture and drives the entire generated script on
-/// that same handle. The adapter cannot inspect the Lean expectations.
 pub(crate) async fn assert_native_execution_case<A>(
     case: &LeanCanonicalExecutionCase,
     adapter: &mut A,

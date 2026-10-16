@@ -34,7 +34,6 @@ cleanup_new_projects() {
 
     container_ids=$(docker ps -aq --filter "label=com.docker.compose.project=${project}")
     if [ -n "${container_ids}" ]; then
-      # Selecting by the exact Compose label keeps unrelated services untouched.
       docker rm -f ${container_ids} >/dev/null 2>&1 || true
     fi
     network_ids=$(docker network ls -q --filter "label=com.docker.compose.project=${project}")

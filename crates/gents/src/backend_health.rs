@@ -870,8 +870,7 @@ mod tests {
     }
 
     /// Minimal /v1/models responder on a real socket, served on the ambient
-    /// Tokio runtime (#743: an independently scheduled blocking thread was
-    /// flaky under full-suite CPU contention).
+    /// Tokio runtime to avoid independently scheduled blocking threads.
     struct ModelsListener {
         port: u16,
         requests: Arc<AtomicUsize>,
@@ -1513,8 +1512,6 @@ mod tests {
         let health_map = BackendHealthMap::new();
         let node = test_node().await;
 
-        // OAuthCredential is agent-scoped, so the runtime-level prober must
-        // leave ChatGPT Codex untouched.
         let mut codex = backend("codex", "http://127.0.0.1:1/v1".to_string());
         codex.provider_kind = crate::backend_provider::BackendProviderKind::ChatGptCodex;
         codex.auth = crate::document_config::BackendAuth::NodeOAuth { account_ref: None };
@@ -1813,8 +1810,6 @@ mod tests {
         }
     }
 
-    /// Removes a process-global token-URL override when dropped, so a failing
-    /// assertion cannot leak it into sibling tests.
     struct TokenUrlOverrideGuard(&'static str);
 
     impl Drop for TokenUrlOverrideGuard {

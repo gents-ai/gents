@@ -1,38 +1,6 @@
 use super::*;
 use crate::config_client::write_tools_document;
 
-fn wide_open_tools_document(node_did: &str) -> Tools {
-    serde_json::from_value(serde_json::json!({
-        "tools_id": "wide-open",
-        "node_did": node_did,
-        "built_ins": {"enable_context_budget": true},
-        "datastore": {"enable_defra_query": true},
-    }))
-    .unwrap()
-}
-
-#[test]
-fn wide_open_preset_is_permissive_and_explicit() {
-    let did = "did:test:amy";
-    let preset = wide_open_tools_document(did);
-    assert_eq!(preset.tools_id, "wide-open");
-    assert_eq!(preset.node_did, did);
-    assert_eq!(
-        preset.built_ins.as_ref().unwrap().enable_context_budget,
-        Some(true)
-    );
-    assert_eq!(
-        preset.datastore.as_ref().unwrap().enable_defra_query,
-        Some(true)
-    );
-    assert!(preset.host.is_none());
-    assert!(preset.remote.is_none());
-    assert!(preset.agents.is_none());
-    assert!(preset.integrations.is_none());
-    assert!(preset.self_config.is_none());
-    assert!(preset.validate().is_ok());
-}
-
 #[test]
 fn tools_document_accepts_empty_string_arrays_and_null_groups() {
     let document: Tools = serde_json::from_value(serde_json::json!({

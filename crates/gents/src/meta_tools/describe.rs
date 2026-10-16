@@ -742,33 +742,6 @@ mod tests {
     use crate::health_checker::ServiceHealthMap;
     use crate::mcp_pool::McpPool;
 
-    fn x_data_search_tool() -> McpTool {
-        let schema = json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search text.",
-                    "examples": ["gents"]
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum results to return.",
-                    "default": 10,
-                    "minimum": 1,
-                    "maximum": 100
-                }
-            },
-            "required": ["query"]
-        })
-        .as_object()
-        .expect("schema object")
-        .clone();
-
-        McpTool::new("search_posts", "Search x-data posts.", Arc::new(schema))
-    }
-
     #[tokio::test]
     async fn disallowed_service_returns_before_registry_lookup() {
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());

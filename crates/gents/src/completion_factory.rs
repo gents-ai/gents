@@ -19,7 +19,6 @@ fn effective_max_tokens(max_output_tokens: usize, sampling_max_tokens: Option<u6
     sampling_max_tokens.or_else(|| u64::try_from(max_output_tokens).ok())
 }
 
-/// The backend connection an agent_config's provider client is built from.
 pub(crate) fn agent_connection_fingerprint(agent_config: &ResolvedAgent) -> String {
     crate::admission::backend_connection_fingerprint(&crate::backend_registry::BackendFields {
         backend_id: agent_config.backend_id.clone(),
@@ -57,7 +56,6 @@ pub(crate) fn build_admitted_model<C: crate::llm::rig_compat::ProviderClient>(
     )
 }
 
-/// Build a loop config for one completion loop.
 pub(crate) fn loop_config(
     agent_config: &ResolvedAgent,
     preamble: String,
@@ -223,7 +221,6 @@ struct PriorUsageRow {
     completion_tokens: Option<i64>,
 }
 
-/// Sum charged tokens already persisted for this physical request.
 async fn load_prior_charged_tokens(
     node: &EmbeddedNode,
     request_doc_id: &str,
@@ -263,8 +260,6 @@ async fn load_prior_charged_tokens(
     })
 }
 
-/// Decode the `InferenceCall` array from a GraphQL data payload.
-/// Missing/null → empty (no prior usage). Present but malformed → error.
 fn prior_usage_rows_from_response(
     value: Option<&serde_json::Value>,
 ) -> anyhow::Result<Vec<PriorUsageRow>> {

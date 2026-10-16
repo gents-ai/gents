@@ -1,4 +1,3 @@
-# Canonical request document. RequestInput (JSON) holds invocation facts.
 type AgentRequest @branchable {
     request_id: String @index @immutable
     purpose: String @index @immutable

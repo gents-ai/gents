@@ -627,8 +627,6 @@ private theorem goal_preserves (goal : GoalAutomation.OperatorResume.Snapshot)
   all_goals rcases h with ⟨_, ⟨_, rfl⟩⟩
   all_goals simpa [ClosureUnique, GoalContinuation.releaseGate, Gate.atTime] using unique
 
-/-- Closure uniqueness is preserved by the existing composed application
-trace. The trace itself carries no invariant assumptions or extra guards. -/
 theorem Trace.closureUnique {before after : World} (trace : Trace before after)
     (unique : ClosureUnique before) : ClosureUnique after := by
   induction trace with

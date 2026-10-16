@@ -30,7 +30,6 @@ pub fn endpoint_interval() -> Duration {
     env_ms("GENTS_ENDPOINT_HEARTBEAT_MS").unwrap_or_else(heartbeat_interval)
 }
 
-/// Renew unchanged leases three times inside the configured freshness window.
 pub fn lease_renewal_interval() -> Duration {
     (stale_after() / DEFAULT_STALE_MULTIPLE).max(Duration::from_millis(1))
 }

@@ -93,9 +93,6 @@ async fn set_default_agent_in_txn(
     Ok(())
 }
 
-/// PackConfig node must be scope-only (canonical defaults); node settings go
-/// through upsert_node. No deletes, interpolation, node creation, or graph
-/// compilation.
 #[cfg(test)]
 pub async fn apply_config_components(
     node: &Arc<EmbeddedNode>,

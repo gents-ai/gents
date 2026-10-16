@@ -66,8 +66,6 @@ async fn stage_reset_resume(
     let Some((_, backend)) = references.profile_with_backend(&profile)? else {
         return Ok(None);
     };
-    // The same sign-in: the account the backend names, enabled, connected
-    // before the limited call.
     let account_serves = backend.enabled
         && match &backend.auth {
             BackendAuth::NodeOAuth { account_ref } => {

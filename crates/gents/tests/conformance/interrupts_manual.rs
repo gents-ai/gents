@@ -1,6 +1,5 @@
 use super::*;
 use gents::lifecycle::RequestTerminalOutcome;
-use gents::StreamWriter;
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 

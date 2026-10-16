@@ -424,13 +424,11 @@ async fn show(ctx: &EvalContext, args: &OptimizationShowArgs, out: &mut dyn Writ
     }
 }
 
-/// Read the job's policy first, so a promotion that lands is never followed
 async fn promote(
     ctx: &EvalContext,
     args: &OptimizationDigestArgs,
     out: &mut dyn Write,
 ) -> Result<()> {
-    // Read first, so a promotion that lands is never followed by an error.
     let policy = load_job(&ctx.access, &ctx.owner, &args.job_id)
         .await?
         .map(|job| job.origin.policy);
@@ -490,7 +488,6 @@ async fn rm(ctx: &EvalContext, args: &OptimizationRmArgs, out: &mut dyn Write) -
         args.job_id,
         dir.display()
     );
-    // Another home's directory is never this home's to delete, --force or
     let dir = crate::commands::eval::manage::job_dir_in_this_home(ctx, &job)?;
     let state = derive_state(&job.journal);
     if !args.force && !removable(&state) {

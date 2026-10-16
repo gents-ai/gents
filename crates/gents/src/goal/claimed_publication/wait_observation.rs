@@ -7,7 +7,6 @@ use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
 use crate::tool_call_lifecycle::{query, ToolCallState};
 
-/// Goal wait evidence read inside the publication transaction.
 pub(super) enum WaitEvidence {
     Absent,
     Running,

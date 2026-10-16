@@ -12,7 +12,6 @@ use crate::Collection;
 
 use super::*;
 
-/// An ordinary reference to a document absent from the candidate snapshot.
 #[derive(Debug, thiserror::Error)]
 #[error(
     "{} {id} field {field} references missing {} {target_id:?} within node_did {node_did}",
@@ -40,8 +39,6 @@ impl ConfigReferences {
         self.documents.iter()
     }
 
-    /// Build the same closure check from canonical pack documents. Duplicates
-    /// and foreign roots are errors, including collections without references.
     pub fn from_documents(
         node_did: &str,
         documents: impl IntoIterator<Item = (Collection, Value)>,
@@ -105,9 +102,6 @@ impl ConfigReferences {
         Self::from_documents(node_did, documents)
     }
 
-    /// A profile and the backend it selects, decoded from this snapshot, for
-    /// admission against the backend's advertised catalog. `None` when the
-    /// profile is absent.
     pub(crate) fn profile_with_backend(
         &self,
         profile_id: &str,
@@ -126,7 +120,6 @@ impl ConfigReferences {
         Ok(Some((profile, decode(backend)?)))
     }
 
-    /// Profiles that select `backend_id` in this snapshot.
     pub(crate) fn profiles_on_backend(&self, backend_id: &str) -> Vec<String> {
         self.documents
             .iter()
@@ -138,7 +131,6 @@ impl ConfigReferences {
             .collect()
     }
 
-    /// The profile an agent's turns use and its context's compaction profile.
     pub(crate) fn agent_profiles(&self, agent_id: &str) -> Vec<String> {
         let get = |collection: Collection, id: Option<&str>| {
             self.documents.get(&(collection, id?.to_owned()))
@@ -160,7 +152,6 @@ impl ConfigReferences {
         profiles
     }
 
-    /// Agents that use `profile_id`, directly or as their compaction profile.
     pub(crate) fn agents_on_profile(&self, profile_id: &str) -> Vec<String> {
         self.documents
             .keys()
@@ -172,8 +163,8 @@ impl ConfigReferences {
             .collect()
     }
 
-    /// Triggers of this snapshot whose Task opts into `emit_outcome`.
-    /// Unresolvable links are omitted here.
+    /// Unresolvable links are omitted here; publication validates the full
+    /// retained candidate before this snapshot is read.
     pub(crate) fn outcome_event_deliveries(&self) -> Vec<(String, String, String, String, bool)> {
         self.documents
             .iter()

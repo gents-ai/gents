@@ -49,7 +49,6 @@ clone_dir() {
 clone_dir "$repo_root/target" "$dest/target" "cargo target/"
 rm -rf "$dest/target/debug/incremental" "$dest/target/release/incremental"
 
-# Reuse Lean build artifacts only when their dependency manifest matches.
 proofs="crates/gents/proofs"
 if cmp -s "$repo_root/$proofs/lake-manifest.json" "$dest/$proofs/lake-manifest.json" 2>/dev/null; then
     clone_dir "$repo_root/$proofs/.lake" "$dest/$proofs/.lake" "Lean proofs .lake/"

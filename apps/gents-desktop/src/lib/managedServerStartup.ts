@@ -58,7 +58,7 @@ export function describeManagedServerWait(
   if (wait.kind === "approval") {
     return {
       label: "Waiting for macOS to allow Gents in the background",
-      detail: `Gents runs its agent as a background item. Turn on Gents under ${LOGIN_ITEMS_PATH} › Allow in the Background. Startup continues by itself once it is allowed. Waiting ${elapsed}.`,
+      detail: `Gents runs its node as a background item. Turn on Gents under ${LOGIN_ITEMS_PATH} › Allow in the Background. Startup continues by itself once it is allowed. Waiting ${elapsed}.`,
     };
   }
   if (wait.kind === "updating") {

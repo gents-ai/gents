@@ -1,16 +1,8 @@
 //! The baseline subject pack and the candidate packs derived from it.
 //!
-//! A candidate is the baseline pack with exactly one field changed: the system
-//! prompt of the context the subject agent names, or the prompt template of
-//! a task of that agent. When the pack keeps that text in a sidecar asset —
-//! the shape every pack in this repository uses — the change is one file's
-//! bytes and nothing else, which is what makes the structural gate's "only the
-//! target moved" check a file comparison.
-//!
-//! Both packs are ordinary directory packs, so the runner takes them through
-//! `CellSource::Directory` with no special case. They are loaded and digested
-//! by the runner's own pack loader, so the digest the optimizer records is the
-//! digest the runner freezes.
+//! Both packs are ordinary directory packs loaded and digested by the runner's
+//! own pack loader, so the digest the optimizer records is the digest the
+//! runner freezes.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

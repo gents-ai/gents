@@ -554,7 +554,6 @@ impl<M: ProviderModel> ReductionEngine for ProviderReductionEngine<M> {
                     .sampling_seed
                     .map(|seed| serde_json::json!({ "seed": seed })),
             );
-            // Both deadlines are hard stops; recovery respects the earlier one.
             summary_config.deadline = match (options.deadline, summary_config.deadline) {
                 (Some(from_options), Some(from_config)) => Some(from_options.min(from_config)),
                 (from_options, from_config) => from_options.or(from_config),

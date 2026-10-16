@@ -1,5 +1,3 @@
-//! Opt-in qualification uses a fresh disposable embedded node and real HTTP
-//! inference endpoints; it never attaches to an operator's running node.
 #![cfg(feature = "live-e2e")]
 
 mod support;
@@ -231,9 +229,6 @@ async fn configure(
     Ok(())
 }
 
-/// Both URLs must name real, separately hosted GLM servers; provider traffic
-/// alone crosses the workstation link. This qualifies a 64-document burst, not
-/// 64 simultaneously running providers.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "real inference: GENTS_TRIGGER_DELIVERY_LIVE=1; GENTS_DELIVERY_ENDPOINT_1 and GENTS_DELIVERY_ENDPOINT_2"]
 async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> Result<()> {

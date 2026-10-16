@@ -59,6 +59,8 @@ export function LocalServer() {
     }
   };
   const running = status?.state === "running" || status?.state === "external";
+  const failure = statusError || status?.error;
+  const backgroundRefused = status?.state === "running" && status.approvalRequired;
   const updating =
     wait?.kind === "updating" ||
     (status ? managedServerWaitKind(status) === "updating" : false);
@@ -138,25 +140,32 @@ export function LocalServer() {
     >
       <Row
         label="State"
-        description="Node readiness is checked against the OS service and runtime endpoint. Pairing and desktop connectivity are observed separately."
+        description={
+          <>
+            Node readiness is checked against the OS service and runtime endpoint.
+            Pairing and desktop connectivity are observed separately.
+            {wait && (
+              <span role="status" className="mt-1 block">
+                {describeManagedServerWait(wait, Date.now()).label}
+              </span>
+            )}
+          </>
+        }
+        error={
+          (failure || backgroundRefused) && (
+            <>
+              {failure && <span className="block wrap-break-word">{failure}</span>}
+              {backgroundRefused && (
+                <span className="block">
+                  macOS no longer allows Gents in the background, so the node will not
+                  start again after it stops. Turn on Gents under {LOGIN_ITEMS_PATH}.
+                </span>
+              )}
+            </>
+          )
+        }
       >
         <span className="flex items-center gap-2">
-          {(statusError || status?.error) && (
-            <span role="alert" className="text-xs text-destructive">
-              {statusError || status?.error}
-            </span>
-          )}
-          {status?.state === "running" && status.approvalRequired && (
-            <span role="alert" className="text-xs text-destructive">
-              macOS no longer allows Gents in the background, so the node will not start
-              again after it stops. Turn on Gents under {LOGIN_ITEMS_PATH}.
-            </span>
-          )}
-          {wait && (
-            <span role="status" className="text-xs text-muted-foreground">
-              {describeManagedServerWait(wait, Date.now()).label}
-            </span>
-          )}
           <Badge
             variant={
               running

@@ -53,7 +53,6 @@ fn provider_display_name(kind: BackendProviderKind) -> &'static str {
 }
 
 const MODEL_DISCOVERY_PATH: &str = "/models";
-// The Grok CLI proxy's official client catalog path.
 const XAI_GROK_MODEL_DISCOVERY_PATH: &str = "/models-v2";
 const CLAUDE_MODELS_BASE: &str = crate::claude_subscription::ANTHROPIC_API_ENDPOINT;
 

@@ -534,7 +534,6 @@ pub struct RawResponseItemCompletedNotification {
     pub item: ResponseItem,
 }
 
-// Item-specific progress notifications
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentMessageDeltaNotification {

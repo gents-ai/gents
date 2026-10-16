@@ -1,6 +1,5 @@
-//! What a case expects a trial's home to hold, for a watcher to measure a
-//! running or finished trial against. The goal is derived from the checks, and
-//! the checks remain the only verdicts.
+//! The goal is derived from the checks, and the checks remain the only
+//! verdicts.
 
 use serde::{Deserialize, Serialize};
 
@@ -39,7 +38,6 @@ impl GoalEntry {
         observed >= self.min && self.max.is_none_or(|max| observed <= max)
     }
 
-    /// `7/9`, `2/≤4`, `3/2..5`: observed over expected, `?` when unobserved.
     pub fn label(&self, observed: Option<u64>) -> String {
         let observed = observed.map_or_else(|| "?".to_owned(), |count| count.to_string());
         let expected = match self.max {

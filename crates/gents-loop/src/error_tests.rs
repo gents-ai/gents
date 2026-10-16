@@ -122,7 +122,6 @@ fn openai_compatible_http_400_is_permanent_bad_request() {
 
 #[test]
 fn anthropic_account_rate_limit_is_a_non_retryable_usage_limit() {
-    // #1422: the subscription seat was capped for hours, not throttled.
     let error =
         rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
             r#"Claude Messages HTTP 429 Too Many Requests (request-id -) body={"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."}} [provider-limit reset-at=2026-09-25T18:40:00Z usage-exhausted]"#.into(),

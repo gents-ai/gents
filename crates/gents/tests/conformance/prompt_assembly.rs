@@ -1,6 +1,6 @@
 use gents::compaction::sanitize_history_for_provider;
 use gents::llm::message::{
-    AssistantContent, Image, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
+    AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,
 };
 use gents_loop::provider_input::ProviderInputProfile;

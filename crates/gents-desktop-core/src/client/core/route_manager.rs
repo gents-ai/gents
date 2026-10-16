@@ -999,6 +999,4 @@ fn ensure_pairing_status<'a>(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-}
+mod tests {}

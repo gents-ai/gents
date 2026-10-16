@@ -339,8 +339,7 @@ impl TimelineGoalVersionRow {
     }
 }
 
-/// One `RenderedRequest` capture row, as the timeline reads it. Never carries
-/// `request_json`: the fetch layer never selects the captured body.
+/// Never carries `request_json`: the fetch layer never selects the captured body.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineRenderedRequestRow {
     #[serde(default, rename = "_docID", skip_serializing)]

@@ -467,9 +467,6 @@ pub(crate) async fn fence_graph_root_request_in_txn(
     super::run::fence_root_workspace_in_txn(txn, request).await
 }
 
-/// Serialize publication with the caller's staged request/Goal writes in this
-/// same native transaction; rollback removes both publication and this
-/// generation change.
 pub(crate) async fn fence_graph_publication_in_txn(
     txn: &ConfigApplyTxn<'_>,
     run_id: &str,

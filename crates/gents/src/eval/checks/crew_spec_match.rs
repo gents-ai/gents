@@ -1,6 +1,3 @@
-//! `crew_spec_match`: how much of a declared configuration a subject built,
-//! graded per requirement and per category in `raw.categories`.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
@@ -13,13 +10,6 @@ use crate::eval::checks::{
 };
 use crate::eval::runner::executor::{CaptureResult, StageEvidence};
 
-/// Params (every list optional, at least one requirement overall):
-/// `present` row-count bounds; `rows` keyed rows with `captured_fields_match`
-/// expectations; `links` following a stored reference (optionally `via` hops)
-/// to the target row; `agents` agent/Context/Tools plus datastore-grant and
-/// delegate expectations; `templates` `doc.NAME` allow-lists; `receipt` id
-/// mentions; `continuation` prods. Expectations are `captured_fields_match`'s,
-/// and a declared `id` also matches a node-scoped `<DID>:<id>` stored agent ID.
 pub struct CrewSpecMatch;
 
 #[derive(Deserialize)]
@@ -73,7 +63,6 @@ struct RowSpec {
     expect: Vec<Expectation>,
 }
 
-/// Must match the reference the source row stores, not just any target row.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LinkSpec {
@@ -134,7 +123,6 @@ struct AgentSpec {
     delegates: Option<DelegateSpec>,
 }
 
-/// Exact-set comparison through the selected documents; extra grants fail.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DatastoreSpec {
@@ -184,7 +172,6 @@ struct Receipt {
     category: Option<String>,
 }
 
-/// Dotted path; a JSON string along the path is read as its JSON; a missing path reads as `null`.
 fn lookup(row: &Value, field: &str) -> Value {
     let mut current = row.clone();
     for key in field.split('.') {
@@ -201,7 +188,6 @@ fn lookup(row: &Value, field: &str) -> Value {
     current
 }
 
-/// A declared id also matches a node-scoped stored ID ending in `:<id>`.
 fn is_id(stored: &str, id: &str) -> bool {
     stored == id
         || stored

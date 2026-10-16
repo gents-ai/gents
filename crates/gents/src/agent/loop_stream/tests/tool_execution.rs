@@ -802,14 +802,6 @@ async fn dispatch_tool_types_unparseable_args_as_argument_invalid() {
     }
 }
 
-/// Loop-level fence: an unparseable-args tool call (a) does NOT run the tool,
-/// (b) surfaces a clean notice to the model (the internal marker stripped) so it
-/// can re-emit corrected arguments next turn, and (c) terminalizes the started
-/// `AgentToolCall` as `failed`/`argumentInvalid` via `on_tool_result`. This
-/// preserves the tool-call liveness invariant (Lean
-/// `ToolExecution.live_call_reaches_terminal`, T5: the started call reaches a
-/// terminal state) using the proven `Running → Failed` edge with the existing
-/// `FailureClass::ArgumentInvalid`.
 #[tokio::test]
 async fn missing_tool_args_notify_model_and_terminalize_failed() {
     use crate::llm::tool::{Tool, ToolDefinition};

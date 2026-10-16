@@ -158,8 +158,6 @@ pub fn validate_graphql_filter_fragment(filter: &str) -> Result<()> {
                 ));
             }
         }
-        // A depth-0 token after the object already closed means the value is
-        // not a single fragment — trailing text is someone else's query.
         if closed_at.is_some() && !ch.is_whitespace() {
             return Err(anyhow!(
                 "invalid filter: trailing content after the object literal"
@@ -184,7 +182,6 @@ pub fn validate_graphql_filter_fragment(filter: &str) -> Result<()> {
             }
             ':' | ',' => {}
             c if c.is_ascii_alphanumeric() || c == '_' => {}
-            // Numeric literals: -1, 1.5, 1e9, 1e+9.
             '-' | '+' | '.' => {}
             c if c.is_whitespace() => {}
             c => {
@@ -501,10 +498,6 @@ pub fn graphql_string_list_literal(values: &[String]) -> String {
 /// Converts a `serde_json::Value` into a GraphQL input literal for use in
 /// DefraDB document mutations (create/update/upsert payloads).
 ///
-/// This is the generic renderer used by the apply and import code paths
-/// (and direct canonical configuration writers) when
-/// materializing desired-state documents as GraphQL `input:` arguments.
-///
 /// # Empty list handling
 ///
 /// An empty `Value::Array` is rendered as the literal `null`, never `[]`.
@@ -513,15 +506,6 @@ pub fn graphql_string_list_literal(values: &[String]) -> String {
 /// agent target IDs, and similar canonical lists). A create may appear to
 /// succeed while storing the wrong type; any
 /// subsequent update then fails re-validation.
-///
-/// This behaviour matches the dedicated helpers (`string_list_field`,
-/// `graphql_string_list_field` etc.) introduced for the same quirk in #382.
-///
-/// The primary upstream defence lives in `sanitize_import_document` (and the
-/// filtering in `desired_from_value`), which omits empty lists on create and
-/// writes explicit `null` on update for most collections. `graphql_input_literal`
-/// acts as a defensive backstop for any path that reaches it with an explicit
-/// empty array value.
 ///
 /// All array fields that currently flow through this function for DefraDB
 /// collections are list-of-string columns. The blanket rule is therefore
@@ -546,10 +530,8 @@ pub fn graphql_input_literal(value: &Value) -> Result<String> {
             let rendered = map
                 .iter()
                 .map(|(key, value)| {
-                    // Keys render in identifier position, where escaping
-                    // cannot apply. Values reaching here are caller-supplied
-                    // (self-config patches are agent-authored), so an
-                    // unvalidated key is an injection into the mutation.
+                    // Keys are in identifier position, where escaping cannot
+                    // apply; an unvalidated key is an injection into the mutation.
                     validate_graphql_name(key)?;
                     Ok(format!("{key}: {}", graphql_input_literal(value)?))
                 })
@@ -626,13 +608,9 @@ pub fn optional_string_field(name: &str, value: Option<&str>) -> Option<String> 
 
 pub fn string_list_field(name: &str, values: &[String]) -> Option<String> {
     // Empty lists serialize as `null`, NOT `[]`. A bare `[]` GraphQL literal is
-    // typed by DefraDB as `JsonArray([])`, which is incompatible with a
+    // typed by DefraDB as `JsonArray([])`, incompatible with a
     // `NillableStringArray` (`[String]`) column: the create "succeeds" but
-    // stores a JsonArray, and every later update of that document fails
-    // re-validation ("expected ScalarArray(NillableStringArray), got
-    // JsonArray([])"). `null` is the NillableStringArray-faithful empty and
-    // round-trips back to an empty list, matching the `nullable_string_field`
-    // idiom used for scalar fields.
+    // stores a JsonArray, and every later update fails re-validation.
     if values.is_empty() {
         Some(format!("{name}: null"))
     } else {

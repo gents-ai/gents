@@ -1,5 +1,3 @@
-//! Generic document reads share scope, credential and GraphQL rendering owners.
-
 use std::sync::Arc;
 
 use crate::llm::tool::ToolDefinition;

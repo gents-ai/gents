@@ -58,9 +58,6 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
     }
 
     pub(super) fn spawn_conversation_title_generation(&self, request: &AgentRequest) {
-        // A generated title is optional presentation metadata; budgeted
-        // requests skip this out-of-band provider call rather than give it a
-        // second allowance.
         if !title_generation_allowed(request.max_total_tokens) {
             tracing::debug!(
                 request_id = %request.request_id,

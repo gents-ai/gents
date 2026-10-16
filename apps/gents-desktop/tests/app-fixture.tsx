@@ -1,5 +1,6 @@
 import { render } from "@testing-library/react";
-import type { ReactElement, ReactNode } from "react";
+import { MemoryNavProvider, useNav, type Nav } from "@gents/shell";
+import { useEffect, type ReactElement, type ReactNode } from "react";
 
 import type {
   DesktopApiAdapter,
@@ -12,6 +13,7 @@ import { applyFleetSnapshot } from "../src/hooks/fleetStore";
 import type { SelectionState } from "../src/hooks/selectionStore";
 import { writeSession } from "../src/hooks/sessionStore";
 import { AppProvider } from "../src/ui/app/AppContext";
+import { bindNav, type Route } from "../src/ui/lib/router";
 import { deployment } from "./config-panel-wiring/fixtures";
 
 export function node(overrides: Record<string, unknown> = {}) {
@@ -72,4 +74,29 @@ export function withApp(app: DesktopApp) {
 
 export function renderIn(app: DesktopApp, ui: ReactElement) {
   return render(ui, { wrapper: withApp(app) });
+}
+
+/** Renders `page` for the route shown, starting at `initial`, under `app`
+    and a memory nav that `navigate`, `back` and `replace` drive, as the
+    app does. `nav()` is the nav as last rendered. */
+export function renderRouted(
+  app: DesktopApp,
+  initial: Route,
+  page: (route: Route) => ReactElement | null,
+) {
+  let nav: Nav | null = null;
+  function Routed() {
+    nav = useNav();
+    bindNav(nav);
+    /* a later test's navigate must not drive this unmounted nav */
+    useEffect(() => () => bindNav(null), []);
+    return page(nav.route);
+  }
+  const view = renderIn(
+    app,
+    <MemoryNavProvider initial={initial}>
+      <Routed />
+    </MemoryNavProvider>,
+  );
+  return { ...view, nav: () => nav! };
 }

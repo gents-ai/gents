@@ -306,7 +306,7 @@ async fn stale_queue_snapshot_rejects_edit_without_mutating_signed_requests() {
 #[tokio::test]
 async fn signed_pending_replacement_authenticates_delivery_and_each_position_field() {
     let db = test_db("queue-signature-tampering").await;
-    let did = db.node_identity.did();
+    let _did = db.node_identity.did();
     let access = ConfigAccess::local(db.node.clone());
     let original = enqueue(
         &db,

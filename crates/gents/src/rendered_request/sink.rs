@@ -604,9 +604,8 @@ async fn stored_block_doc_ids_in_txn(
     Ok(stored)
 }
 
-/// Unique content-key conflicts are retried on a fresh transaction snapshot,
-/// where the existence read resolves the winner. DefraDB derives identical
-/// document IDs from identical block content across writers.
+/// Unique content-key conflicts resolve on a fresh transaction snapshot,
+/// where the existence read decides the winner.
 async fn create_blocks_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     blocks: &[&super::encoding::ChunkedBlock],

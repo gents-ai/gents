@@ -2,8 +2,6 @@ use defra_node::{LensConfig, LensModule};
 
 use crate::registry::LensSpec;
 
-/// [`LensModule::from_bytes`] keeps transform IDs stable across hosts
-/// (path-based modules hash differently).
 pub fn lens_config(spec: &LensSpec<'_>, source: &str, destination: &str) -> LensConfig {
     let mut module = LensModule::from_bytes(spec.wasm.to_vec());
     if let Some(args) = spec.args_json {

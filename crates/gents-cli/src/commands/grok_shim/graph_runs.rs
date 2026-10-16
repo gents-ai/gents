@@ -251,11 +251,10 @@ impl GraphRunCursor {
 }
 
 /// The stock pager keeps the highest revision it holds for a run, across
-/// leader reconnects, and drops a lower one (probed against v1.0.46). A fresh
-/// observer after resume or re-attach therefore starts from this count of
-/// facts that only grow over a run's life: stage, request and plugin-call
-/// totals, their terminal outcomes, and the run's own terminal status — so
-/// the revision never falls below what an earlier observer delivered for the
+/// leader reconnects, and drops a lower one (probed against v1.0.46). Counting
+/// only facts that grow over a run's life (stage, request and plugin-call
+/// totals, their terminal outcomes, and the run's terminal status) keeps the
+/// revision from falling below what an earlier observer delivered for the
 /// same durable state.
 fn durable_revision(view: &GraphRunView) -> u64 {
     let stages: usize = view

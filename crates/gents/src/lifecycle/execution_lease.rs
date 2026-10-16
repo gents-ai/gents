@@ -130,8 +130,6 @@ enum TerminalAuthority<'a> {
 }
 
 impl RequestExecutionLease {
-    /// `decide` over this execution's generation and the current request
-    /// row's lease, or `None` when the row is gone.
     async fn decide_lease(
         &self,
         node: &EmbeddedNode,
@@ -284,7 +282,6 @@ impl RequestLifecycle {
     }
 }
 
-#[cfg(test)]
 #[cfg(test)]
 pub(crate) async fn revoke_execution_generation(
     node: &std::sync::Arc<EmbeddedNode>,

@@ -2477,8 +2477,6 @@ mod tests {
         handle.await.expect("delegate task");
         seed_handle.await.expect("seed task");
 
-        // Wire order: the user echo streams first, then the assistant
-        // message chunk, and the response is last.
         let kinds: Vec<String> = frames
             .iter()
             .filter_map(|frame| {

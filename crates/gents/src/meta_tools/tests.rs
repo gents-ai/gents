@@ -1,4 +1,4 @@
-use super::shared::{extract_text, mcp_service_allowed, MetaToolError, StructuredToolError};
+use super::shared::{MetaToolError, StructuredToolError};
 
 fn make_call_result(texts: &[&str]) -> rmcp::model::CallToolResult {
     use rmcp::model::CallToolResult;

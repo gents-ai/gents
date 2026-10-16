@@ -185,9 +185,8 @@ pub fn raw_message_json(message: &Message) -> Result<Value> {
     serde_json::to_value(message).context("serializing canonical trace message")
 }
 
-/// Loads native messages through the public session history owner and renders
-/// each through `present_message`. Callers passing a physical request identity
-/// exclude its in-flight input row, which is owned by the request itself.
+/// Callers passing a physical request identity exclude its in-flight input row,
+/// which is owned by the request itself.
 #[allow(clippy::too_many_arguments)]
 pub async fn load_trace_transcript(
     node: &EmbeddedNode,

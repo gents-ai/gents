@@ -1,6 +1,3 @@
-//! `final_message_matches`: whether the stage's last assistant message says
-//! what it must.
-
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -11,15 +8,9 @@ use crate::eval::checks::{
 };
 use crate::eval::runner::executor::StageEvidence;
 
-/// Params: `{ "any": [<pattern>], "all": [<pattern>] }`, a pattern being a
-/// substring or `{ "matches": <regex> }`. Reads the last non-empty assistant
-/// message; scores the fraction of `all` found, and 0 when `any` is given and
-/// none of it is found. Feedback names the missing patterns and is written
-/// only on the train split; the held-out split catches a candidate that
-/// hard-codes them.
+/// Feedback names the missing patterns and is written only on the train split, so the held-out split catches a candidate that hard-codes them.
 pub struct FinalMessageMatches;
 
-/// Chars of the final message quoted in feedback.
 const MESSAGE_CHARS: usize = 400;
 
 #[derive(Deserialize)]

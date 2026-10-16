@@ -128,7 +128,6 @@ pub(super) fn close_streaming_turn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider_input::ProviderInputProfile;
 
     fn image_output(data_len: usize, response_len: usize) -> String {
         serde_json::json!({

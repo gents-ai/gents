@@ -147,14 +147,6 @@ where
     serde_json::from_slice(payload).map_err(ProtocolError::from)
 }
 
-#[cfg(test)]
-pub fn encode_frame<T>(value: &T) -> Result<Vec<u8>, ProtocolError>
-where
-    T: Serialize,
-{
-    serde_json::to_vec(value).map_err(ProtocolError::from)
-}
-
 pub async fn read_client_envelope<R>(reader: &mut R) -> Result<ClientEnvelope, ProtocolError>
 where
     R: AsyncRead + Unpin,

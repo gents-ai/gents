@@ -1576,6 +1576,7 @@ pub(crate) struct ProvisionArgs {
     pub(crate) secure_enclave_label: Option<String>,
     /// Keychain on macOS and a file elsewhere when omitted. Tests pass
     /// `file` so they never write login-keychain items.
+
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
 }
@@ -1653,6 +1654,7 @@ pub(crate) struct InitArgs {
     pub(crate) secure_enclave_label: Option<String>,
     /// Keychain on macOS and a file elsewhere when omitted. Tests pass
     /// `file` so they never write login-keychain items.
+
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
     #[arg(
@@ -4372,9 +4374,6 @@ pub(crate) struct EvalRmArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-/// `--interval`: at least 250 ms, so a watcher never spins, and at most an
-/// hour, so every wait the watch derives from it is representable. Takes
-/// `ms` as well as the `s`, `m` and `h` suffixes.
 pub(crate) fn parse_interval(raw: &str) -> Result<std::time::Duration, String> {
     let interval = match raw.trim().strip_suffix("ms") {
         Some(millis) => millis
@@ -4394,12 +4393,8 @@ pub(crate) fn parse_interval(raw: &str) -> Result<std::time::Duration, String> {
     Ok(interval)
 }
 
-/// `gents eval run` and `gents eval resume`'s exit statuses: scripts must
-/// not read a stopped run as a success.
 const EVAL_RUN_AFTER_HELP: &str = "Exit status: 0 when the run finished; 1 when it stopped with slots still owed (Ctrl-C, a cancel marker, or abandoned slots; `gents eval resume` continues it) or the command was refused; 2 on a usage error.";
 
-/// `gents eval watch`'s exit statuses: scripts must not read a stopped run
-/// as a success.
 const EVAL_WATCH_AFTER_HELP: &str = "Exit status: 0 when the run ends finished, or after the one render of --once; 1 when it ends stopped (slots still owed, as after a cancel, or the report unavailable) or the watch fails; 2 on a usage error.";
 
 #[derive(clap::Args)]
@@ -4419,9 +4414,6 @@ pub(crate) struct EvalWatchArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-/// `--older-than`: any duration, zero included, that a cutoff can be taken
-/// from: one that reaches back no further than the earliest representable
-/// time from the Unix epoch, so it does from any later now.
 pub(crate) fn parse_age(raw: &str) -> Result<std::time::Duration, String> {
     let age =
         crate::request_helpers::parse_duration_suffix(raw).map_err(|error| error.to_string())?;
@@ -4467,7 +4459,6 @@ pub(crate) struct EvalChecksArgs {
     pub(crate) validate_case: Option<String>,
 }
 
-/// `--policy defaults` or a path to a `PolicyV2` JSON document.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PolicyArg {
     Defaults,
@@ -4515,11 +4506,9 @@ pub(crate) struct EvalCompareArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-/// One `--cell <id>=<pack>[:<agent>]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CellArg {
     pub(crate) cell_id: String,
-    /// A directory, or a pack name resolved like `gents pack install`.
     pub(crate) pack: String,
     pub(crate) agent: Option<String>,
 }
@@ -4547,7 +4536,6 @@ pub(crate) fn parse_cell(raw: &str) -> Result<CellArg, String> {
     })
 }
 
-/// `<key>=<value>`, both non-empty.
 pub(crate) fn parse_assignment(raw: &str) -> Result<(String, String), String> {
     match raw.split_once('=') {
         Some((key, value)) if !key.trim().is_empty() && !value.trim().is_empty() => {
@@ -4557,8 +4545,6 @@ pub(crate) fn parse_assignment(raw: &str) -> Result<(String, String), String> {
     }
 }
 
-/// `gents eval run --purpose`: anything but `pilot`, which leaves a run out
-/// of exposure and so belongs to `gents eval init --pilot` alone.
 pub(crate) fn parse_run_purpose(raw: &str) -> Result<String, String> {
     let purpose = raw.trim();
     if purpose == gents::eval::scoring::PILOT_PURPOSE {
@@ -4576,6 +4562,7 @@ pub(crate) fn parse_split(raw: &str) -> Result<gents::document_config::EvalSplit
 
 /// A saved collection of existing `eval run` arguments. The shared ceiling
 /// counts complete trial attempts, not individual provider requests.
+
 #[derive(clap::Args)]
 pub(crate) struct EvalBatchArgs {
     /// JSON object with `runs: [{args: ["definition-id", "--cell", ...]}]`.
@@ -4695,7 +4682,6 @@ pub(crate) struct EvalResumeArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-/// `--subject <pack>[:<agent>]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SubjectArg {
     pub(crate) pack: String,
@@ -4716,9 +4702,6 @@ pub(crate) fn parse_subject(raw: &str) -> Result<SubjectArg, String> {
     })
 }
 
-/// `--target context` (the subject agent's system prompt) or
-/// `--target task:<task_id>` (the prompt template of that task of the
-/// subject agent).
 pub(crate) fn parse_target(raw: &str) -> Result<JobTarget, String> {
     match raw.trim() {
         "context" => Ok(JobTarget::Context),
@@ -4731,7 +4714,6 @@ pub(crate) fn parse_target(raw: &str) -> Result<JobTarget, String> {
     }
 }
 
-/// `--proposer scripted:<file>` or `--proposer agent:<pack>[:<agent>]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ProposerArg {
     /// A script of proposals, one per round.

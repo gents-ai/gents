@@ -13,13 +13,6 @@ import {
 } from "./tauri-driver-live/helpers";
 import { isTerminalTurnState } from "./live-bridge-runner/observations";
 
-/* Native e2e acceptance against the live fixture runtime, not the managed
-   backend product path. Requires GENTS_TAURI_LIVE=1 (set by
-   tests/run-live-test.mjs) and real inference. Run with:
-     npm run test:live:e2e-acceptance -- \
-       --inference-url http://workstation-1:8000/v1 \
-       --model-name GLM-5.3-Flash-NVFP4 */
-
 const E2E_NOTE_RELATIVE = "workspace/e2e-acceptance-note.md";
 const FIXTURE_DEFAULT_AGENT_DISPLAY_NAME = "Live Repo Audit Default";
 

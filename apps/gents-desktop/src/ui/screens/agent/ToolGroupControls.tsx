@@ -2,9 +2,10 @@ import type { NodeView } from "../../../hooks/fleetStore";
 import type { Tools } from "@source-inc/gents-desktop-client";
 import { AreaRow, ChoiceRow, NumberRow, SwitchRow } from "./editors";
 import { DocumentSelection } from "./DocumentSelection";
-import { Group } from "./rows";
-import { RemoteToolDiscovery } from "./RemoteToolDiscovery";
-import { useEffect, useState, type ReactNode } from "react";
+import { Group, Row } from "./rows";
+import { RemoteToolNames } from "./RemoteToolNames";
+import { Disclosure } from "../../components/Disclosure";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { useApp } from "@/app/AppContext";
 
 export const TOOL_LIMIT_DEFAULTS = {
@@ -21,6 +22,36 @@ export const FILE_LIMITS = {
   max_matches: { label: "File search match limit", max: 5_000, fallback: "200" },
 } as const;
 
+type RemoteService = NonNullable<NonNullable<Tools["remote"]>["services"]>[number];
+
+const REMOTE_TIMEOUTS = {
+  connect_timeout_secs: { label: "Connection timeout seconds", fallback: 15 },
+  discovery_timeout_secs: { label: "Discovery timeout seconds", fallback: 30 },
+  timeout_secs: { label: "Tool call timeout seconds", fallback: 300 },
+  stale_timeout_secs: { label: "Stale-health timeout seconds", fallback: 120 },
+  background_timeout_secs: { label: "Background lifetime seconds", fallback: 36000 },
+  wait_timeout_secs: {
+    label: "Background wait seconds",
+    fallback: TOOL_LIMIT_DEFAULTS.waitTimeout,
+  },
+  max_wait_timeout_secs: {
+    label: "Maximum background wait seconds",
+    fallback: TOOL_LIMIT_DEFAULTS.maxWaitTimeout,
+  },
+} as const;
+
+function advancedChanges(service: RemoteService) {
+  return (
+    (service.style === "flat" ? 1 : 0) +
+    (service.required === true ? 1 : 0) +
+    (Object.keys(REMOTE_TIMEOUTS) as (keyof typeof REMOTE_TIMEOUTS)[]).filter(
+      (field) =>
+        service[field] != null && service[field] !== REMOTE_TIMEOUTS[field].fallback,
+    ).length
+  );
+}
+
+/* a note that belongs to the group, set in the row's own padding */
 function Note({ children }: { children: ReactNode }) {
   return <p className="px-5 py-3 text-sm text-muted-foreground">{children}</p>;
 }
@@ -33,9 +64,11 @@ function WholeNumberRow({
   onInvalid,
   placeholder,
   max,
+  problemLabel = label,
 }: {
   id: string;
   label: string;
+  problemLabel?: string;
   value: number | null | undefined;
   onChange: (value: number | null) => void;
   onInvalid: (id: string, label: string | null) => void;
@@ -67,8 +100,8 @@ function WholeNumberRow({
           valid
             ? null
             : max === undefined
-              ? label
-              : `${label} (at most ${max.toLocaleString("en-US")})`,
+              ? problemLabel
+              : `${problemLabel} (at most ${max.toLocaleString("en-US")})`,
         );
         if (valid) onChange(text === "" ? null : Number(text));
       }}
@@ -183,10 +216,12 @@ export function ToolGroupControls({
     value: number | null | undefined,
     onValidChange: (value: number | null) => void,
     placeholder: string,
+    problemLabel?: string,
   ) => (
     <WholeNumberRow
       id={id}
       label={label}
+      problemLabel={problemLabel}
       value={value}
       placeholder={placeholder}
       onInvalid={onInvalid}
@@ -368,226 +403,106 @@ export function ToolGroupControls({
             })
           }
         />
-        {(groups.remote?.services ?? []).map((service, index) => (
-          <div key={service.mcp_service_id}>
-            <RemoteToolDiscovery
-              key={JSON.stringify(
-                deployment.toolServiceRegistries.find(
-                  (row) => row.service_id === service.mcp_service_id,
-                ),
-              )}
-              selected={service.tool_names ?? []}
-              onChange={(names) =>
-                update("remote", {
-                  services: groups.remote!.services!.map((row, i) =>
-                    i === index
-                      ? {
-                          ...row,
-                          tool_names: names.length ? names : null,
-                          ...(Object.prototype.hasOwnProperty.call(
-                            row,
-                            "background_tool_names",
-                          )
-                            ? {
-                                background_tool_names:
-                                  row.background_tool_names?.filter((name) =>
-                                    names.includes(name),
-                                  ) || null,
-                              }
-                            : {}),
-                        }
-                      : row,
-                  ),
-                })
-              }
-              discover={async () => {
-                const config = deployment.toolServiceRegistries.find(
-                  (row) => row.service_id === service.mcp_service_id,
-                );
-                if (!config) throw new Error("Remote service is unavailable");
-                const result = await testToolService({
-                  serviceId: config.service_id,
-                  hostname: config.hostname ?? null,
-                  tailscaleIp: config.tailscale_ip ?? null,
-                  lanIp: config.lan_ip ?? null,
-                  mcpPort: config.mcp_port ?? null,
-                  mcpPath: config.mcp_path ?? null,
-                });
-                if (result.error) throw new Error(result.error);
-                return result.tools;
-              }}
-            />
-            <AreaRow
-              id={`remote-tools-${index}`}
-              label={`${deployment.toolServiceRegistries.find((row) => row.service_id === service.mcp_service_id)?.display_name ?? service.mcp_service_id} tool names`}
-              description="Exact tool names, one per line. Empty grants no tools; discovery never grants new tools automatically."
-              value={(service.tool_names ?? []).join("\n")}
-              onChange={(value) => {
-                const names = value
-                  .split("\n")
-                  .map((name) => name.trim())
-                  .filter(Boolean);
-                update("remote", {
-                  services: groups.remote!.services!.map((row, i) =>
-                    i === index
-                      ? {
-                          ...row,
-                          tool_names: names.length ? names : null,
-                          ...(Object.prototype.hasOwnProperty.call(
-                            row,
-                            "background_tool_names",
-                          )
-                            ? {
-                                background_tool_names:
-                                  row.background_tool_names?.filter((name) =>
-                                    names.includes(name),
-                                  ) || null,
-                              }
-                            : {}),
-                        }
-                      : row,
-                  ),
-                });
-              }}
-              stacked
-            />
-            <DocumentSelection
-              label="Background remote tools"
-              options={(service.tool_names ?? []).map((name) => ({
-                value: name,
-                label: name,
-              }))}
-              selected={service.background_tool_names ?? []}
-              onChange={(names) =>
-                update("remote", {
-                  services: groups.remote!.services!.map((row, i) =>
-                    i === index
-                      ? {
-                          ...row,
-                          background_tool_names: names.length ? names : null,
-                        }
-                      : row,
-                  ),
-                })
-              }
-            />
-            <ChoiceRow
-              id={`remote-style-${index}`}
-              label="Remote tool presentation"
-              value={service.style ?? "discovery"}
-              items={[
-                { value: "discovery", label: "Discover tools on demand" },
-                { value: "flat", label: "Expose selected tools directly" },
-              ]}
-              onChange={(style) =>
-                update("remote", {
-                  services: groups.remote!.services!.map((row, i) =>
-                    i === index
-                      ? { ...row, style: style as "flat" | "discovery" }
-                      : row,
-                  ),
-                })
-              }
-            />
-            <SwitchRow
-              id={`remote-required-${index}`}
-              label="Required for admission"
-              description="Block new work while this selected service is unavailable."
-              checked={service.required === true}
-              onChange={(required) =>
-                update("remote", {
-                  services: groups.remote!.services!.map((row, i) =>
-                    i === index ? { ...row, required } : row,
-                  ),
-                })
-              }
-            />
-            {seconds(
-              `remote-connect-timeout-${index}`,
-              "Connection timeout seconds",
-              service.connect_timeout_secs,
-              (connect_timeout_secs) =>
-                update("remote", {
-                  services: groups.remote!.services!.map((row, i) =>
-                    i === index ? { ...row, connect_timeout_secs } : row,
-                  ),
-                }),
-              "15",
-            )}
-            {seconds(
-              `remote-discovery-timeout-${index}`,
-              "Discovery timeout seconds",
-              service.discovery_timeout_secs,
-              (discovery_timeout_secs) =>
-                update("remote", {
-                  services: groups.remote!.services!.map((row, i) =>
-                    i === index ? { ...row, discovery_timeout_secs } : row,
-                  ),
-                }),
-              "30",
-            )}
-            {seconds(
-              `remote-call-timeout-${index}`,
-              "Tool call timeout seconds",
-              service.timeout_secs,
-              (timeout_secs) =>
-                update("remote", {
-                  services: groups.remote!.services!.map((row, i) =>
-                    i === index ? { ...row, timeout_secs } : row,
-                  ),
-                }),
-              "300",
-            )}
-            {seconds(
-              `remote-stale-timeout-${index}`,
-              "Stale-health timeout seconds",
-              service.stale_timeout_secs,
-              (stale_timeout_secs) =>
-                update("remote", {
-                  services: groups.remote!.services!.map((row, i) =>
-                    i === index ? { ...row, stale_timeout_secs } : row,
-                  ),
-                }),
-              "120",
-            )}
-            {seconds(
-              `remote-background-timeout-${index}`,
-              "Background lifetime seconds",
-              service.background_timeout_secs,
-              (background_timeout_secs) =>
-                update("remote", {
-                  services: groups.remote!.services!.map((row, i) =>
-                    i === index ? { ...row, background_timeout_secs } : row,
-                  ),
-                }),
-              "36000",
-            )}
-            {seconds(
-              `remote-wait-timeout-${index}`,
-              "Background wait seconds",
-              service.wait_timeout_secs,
-              (wait_timeout_secs) =>
-                update("remote", {
-                  services: groups.remote!.services!.map((row, i) =>
-                    i === index ? { ...row, wait_timeout_secs } : row,
-                  ),
-                }),
-              String(TOOL_LIMIT_DEFAULTS.waitTimeout),
-            )}
-            {seconds(
-              `remote-max-wait-timeout-${index}`,
-              "Maximum background wait seconds",
-              service.max_wait_timeout_secs,
-              (max_wait_timeout_secs) =>
-                update("remote", {
-                  services: groups.remote!.services!.map((row, i) =>
-                    i === index ? { ...row, max_wait_timeout_secs } : row,
-                  ),
-                }),
-              String(TOOL_LIMIT_DEFAULTS.maxWaitTimeout),
-            )}
-          </div>
-        ))}
+        {(groups.remote?.services ?? []).map((service, index) => {
+          const registry = deployment.toolServiceRegistries.find(
+            (row) => row.service_id === service.mcp_service_id,
+          );
+          const name = registry?.display_name ?? service.mcp_service_id;
+          const patch = (change: Partial<RemoteService>) =>
+            update("remote", {
+              services: groups.remote!.services!.map((row, i) =>
+                i === index ? { ...row, ...change } : row,
+              ),
+            });
+          const timeout = (field: keyof typeof REMOTE_TIMEOUTS, id: string) =>
+            seconds(
+              `remote-${id}-${service.mcp_service_id}`,
+              REMOTE_TIMEOUTS[field].label,
+              service[field],
+              (value) => patch({ [field]: value }),
+              String(REMOTE_TIMEOUTS[field].fallback),
+              `${name}: ${REMOTE_TIMEOUTS[field].label.toLowerCase()}`,
+            );
+          const granted = service.tool_names?.length ?? 0;
+          const changed = advancedChanges(service);
+          /* rows, not a wrapper, so the group's dividers run between them */
+          return (
+            <Fragment key={service.mcp_service_id}>
+              <Row
+                label={<span className="font-medium">{name}</span>}
+                description={
+                  granted
+                    ? `${granted === 1 ? "1 tool" : `${granted} tools`} granted.`
+                    : "No tools granted yet. List or discover them below; until then this service gives the agent nothing."
+                }
+              />
+              <RemoteToolNames
+                key={JSON.stringify(registry)}
+                id={`remote-tools-${service.mcp_service_id}`}
+                label={`${name} tool names`}
+                selected={service.tool_names ?? []}
+                onChange={(names) => patch({ tool_names: names.length ? names : null })}
+                discover={async () => {
+                  if (!registry) throw new Error("Remote service is unavailable");
+                  const result = await testToolService({
+                    serviceId: registry.service_id,
+                    hostname: registry.hostname ?? null,
+                    tailscaleIp: registry.tailscale_ip ?? null,
+                    lanIp: registry.lan_ip ?? null,
+                    mcpPort: registry.mcp_port ?? null,
+                    mcpPath: registry.mcp_path ?? null,
+                  });
+                  if (result.error) throw new Error(result.error);
+                  return result.tools;
+                }}
+              />
+              <DocumentSelection
+                label={`${name} background tools`}
+                options={(service.tool_names ?? []).map((tool) => ({
+                  value: tool,
+                  label: tool,
+                }))}
+                selected={service.background_tool_names ?? []}
+                onChange={(names) =>
+                  patch({ background_tool_names: names.length ? names : null })
+                }
+              />
+              <Disclosure
+                summary={`${name}: presentation, admission and timeouts${changed ? ` · ${changed} changed from the defaults` : ""}`}
+                summaryClassName="px-5 py-4"
+              >
+                <div className="divide-y divide-border/60 border-t border-border/60">
+                  <ChoiceRow
+                    id={`remote-style-${service.mcp_service_id}`}
+                    label="Remote tool presentation"
+                    value={service.style ?? "discovery"}
+                    items={[
+                      { value: "discovery", label: "Discover tools on demand" },
+                      { value: "flat", label: "Expose selected tools directly" },
+                    ]}
+                    onChange={(style) =>
+                      patch({ style: style as "flat" | "discovery" })
+                    }
+                  />
+                  <SwitchRow
+                    id={`remote-required-${service.mcp_service_id}`}
+                    label="Required for admission"
+                    description="Block new work while this selected service is unavailable."
+                    checked={service.required === true}
+                    onChange={(required) => patch({ required })}
+                  />
+                  {timeout("connect_timeout_secs", "connect-timeout")}
+                  {timeout("discovery_timeout_secs", "discovery-timeout")}
+                  {timeout("timeout_secs", "call-timeout")}
+                  {timeout("stale_timeout_secs", "stale-timeout")}
+                  {timeout("background_timeout_secs", "background-timeout")}
+                  {timeout("wait_timeout_secs", "wait-timeout")}
+                  {timeout("max_wait_timeout_secs", "max-wait-timeout")}
+                </div>
+              </Disclosure>
+            </Fragment>
+          );
+        })}
       </Group>
       <Group title="Datastore">
         {flags("datastore", [["enable_defra_query", "Query datastore"]])}

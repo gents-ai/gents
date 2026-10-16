@@ -45,12 +45,9 @@ pub struct CellRequest {
 pub struct RunRequest {
     pub run_id: String,
     pub owner: String,
-    /// The DID of the home that launched the run, recorded on the `EvalRun`
-    /// unchanged; empty is refused rather than defaulted to [`Self::owner`].
     pub evaluator_did: String,
     pub definition_id: String,
     pub split: EvalSplit,
-    /// `None` selects every case on the split.
     pub case_ids: Option<Vec<String>>,
     pub cells: Vec<CellRequest>,
     pub trials_per_case: u32,
@@ -59,14 +56,10 @@ pub struct RunRequest {
     pub concurrency: u32,
     pub max_infra_retries: u32,
     pub breaker_threshold: u32,
-    /// `"eval"`, `"pilot"` or `"optimization:<job_id>"`.
     pub purpose: String,
     pub source_commit: String,
     pub source_dirty: bool,
-    /// Not comparability data, so they ride beside the run rather than in its
-    /// origin.
     pub captures: Vec<Capture>,
-    /// `<launching home>/eval/runs`.
     pub runs_dir: PathBuf,
 }
 
@@ -85,8 +78,6 @@ pub struct FrozenRun {
     pub definition: EvalDefinition,
     pub cells: Vec<FrozenCell>,
     pub captures: Vec<Capture>,
-    /// How many consecutive trials may produce no evidence before the loop
-    /// stops the run.
     pub breaker_threshold: u32,
 }
 
@@ -115,8 +106,6 @@ fn refused(reason: impl Into<String>) -> anyhow::Error {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct RunSidecar {
     breaker_threshold: u32,
-    /// Defaulted, so a `run.json` written by a run that captured nothing still
-    /// parses into the empty list it meant.
     #[serde(default)]
     captures: Vec<Capture>,
 }
@@ -208,11 +197,6 @@ pub async fn freeze(
     })
 }
 
-/// Rebuild the run `run_id` from its row and the directory it already wrote:
-/// resuming re-reads what freezing decided rather than deciding it again. The
-/// definition's digest, each materialized pack's digest, the named inference
-/// documents and `isolation` are checked again, because they could have
-/// changed underneath and would change what a trial means.
 pub(crate) async fn thaw(
     access: &ConfigAccess,
     owner: &str,
@@ -317,8 +301,6 @@ fn validate_purpose(purpose: &str) -> Result<()> {
     )))
 }
 
-/// The launching home's DID reaches the `EvalRun` row unchanged, so there is
-/// nothing sensible to record when the caller supplies nothing.
 fn validate_evaluator(evaluator_did: &str) -> Result<()> {
     if evaluator_did.trim().is_empty() {
         return Err(refused(
@@ -328,9 +310,6 @@ fn validate_evaluator(evaluator_did: &str) -> Result<()> {
     Ok(())
 }
 
-/// A run id and a cell id each name one directory the run owns, so each has to
-/// be one ordinary path component: anything else writes outside the run. An
-/// optimization job id names its job's directory under the same rule.
 pub(crate) fn directory_name(kind: &str, value: &str) -> Result<()> {
     let mut components = Path::new(value).components();
     let one_normal = matches!(components.next(), Some(std::path::Component::Normal(_)))
@@ -398,9 +377,6 @@ async fn read_document<T: serde::de::DeserializeOwned>(
         .transpose()
 }
 
-/// The installed definition `definition_id` of `owner`, validated. The one
-/// read of a definition: freezing a run and an optimization job both use it,
-/// so they agree on what a case is.
 pub(crate) async fn load_definition(
     access: &ConfigAccess,
     owner: &str,
@@ -419,8 +395,6 @@ pub(crate) async fn load_definition(
     Ok(definition)
 }
 
-/// A definition's identity as a run's origin records it, and as `thaw`
-/// checks it again. The one owner of a definition's digest.
 pub(crate) fn definition_ref(definition: &EvalDefinition) -> Result<DefinitionRef> {
     Ok(DefinitionRef {
         definition_id: definition.definition_id.clone(),
@@ -429,7 +403,6 @@ pub(crate) fn definition_ref(definition: &EvalDefinition) -> Result<DefinitionRe
     })
 }
 
-/// The cases this run compares, sorted, each once.
 fn select_cases(request: &RunRequest, definition: &EvalDefinition) -> Result<Vec<String>> {
     let mut selected = match &request.case_ids {
         Some(requested) => {
@@ -477,12 +450,9 @@ pub(crate) struct LoadedPack {
     pub(crate) digest: String,
     pub(crate) config: PackConfig,
     pub(crate) manifest: PackManifest,
-    /// Every declared asset, keyed by its path relative to the pack root.
     pub(crate) files: BTreeMap<String, Vec<u8>>,
 }
 
-/// Load a subject pack and digest its declared assets. This is the one owner
-/// of a pack's digest: the runner freezes it and the optimizer records it.
 pub(crate) fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> {
     let options = PackInstallOptions {
         node_did: owner.to_owned(),
@@ -506,8 +476,6 @@ pub(crate) fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> 
         &|path| asset(path).cloned(),
         &|name| std::env::var(name).ok(),
     )?;
-    // Only the declared assets travel: a trial must receive the bytes the
-    // digest covers.
     let files = declared_paths(&manifest)
         .into_iter()
         .map(|path| {
@@ -523,9 +491,6 @@ pub(crate) fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> 
     })
 }
 
-/// Every regular file under `root`, keyed by its path relative to `root`;
-/// [`load_pack`] narrows the result to the manifest's declared assets. A
-/// symlink is refused rather than followed: a pack carries its own bytes.
 fn copyable_files(root: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut files = BTreeMap::new();
     let mut pending = vec![root.to_path_buf()];
@@ -611,10 +576,6 @@ async fn validate_cell(
     ))
 }
 
-/// The inference documents one cell runs against, copied verbatim, and the
-/// guarantee that no run spends the launching principal's own subscription.
-/// Both freezing and resuming read them here, so a run that would now borrow a
-/// subscription credential is refused at either door.
 async fn inference_binding(
     access: &ConfigAccess,
     owner: &str,
@@ -753,10 +714,6 @@ fn unrestricted_bash(config: &PackConfig) -> Option<String> {
         .map(|tools| tools.tools_id.clone())
 }
 
-/// Copy the pack's declared assets under the run, once. The copy lands in a
-/// sibling `pack.tmp` and is renamed into place after its last byte: a crash
-/// mid-copy leaves a staging directory that the next freeze discards, never a
-/// half-written `pack/` that every later reader accepts as complete.
 fn materialize_pack(cell: &FrozenCell, pack: &LoadedPack) -> Result<()> {
     if cell.pack_dir.join("manifest.json").exists() {
         return Ok(());
@@ -783,7 +740,6 @@ fn materialize_pack(cell: &FrozenCell, pack: &LoadedPack) -> Result<()> {
     })
 }
 
-/// Write `files`, keyed by their path relative to `dir`, under `dir`.
 pub(crate) fn write_pack_files(dir: &Path, files: &BTreeMap<String, Vec<u8>>) -> Result<()> {
     for (path, bytes) in files {
         let destination = dir.join(path);
@@ -812,9 +768,6 @@ fn read_sidecar(run_dir: &Path) -> Result<Option<RunSidecar>> {
         .with_context(|| format!("parsing {}", path.display()))
 }
 
-/// The capture list a run froze beside itself, or `None` when `run_dir` holds
-/// no `run.json`. An optimization job reads it to refuse adopting a run frozen
-/// with a different list than the job's.
 pub(crate) fn frozen_captures(run_dir: &Path) -> Result<Option<Vec<Capture>>> {
     Ok(read_sidecar(run_dir)?.map(|sidecar| sidecar.captures))
 }
@@ -826,9 +779,6 @@ fn write_sidecar(run_dir: &Path, sidecar: &RunSidecar) -> Result<()> {
         .with_context(|| format!("writing {}", path.display()))
 }
 
-/// `<run dir>/definition.json`: the definition exactly as freezing loaded it.
-/// A report and a resume read this copy, so a later edit of the installed
-/// definition cannot change what a finished run means.
 pub const DEFINITION_FILE: &str = "definition.json";
 fn write_frozen_definition(run_dir: &Path, definition: &EvalDefinition) -> Result<()> {
     std::fs::create_dir_all(run_dir).with_context(|| format!("creating {}", run_dir.display()))?;
@@ -837,9 +787,6 @@ fn write_frozen_definition(run_dir: &Path, definition: &EvalDefinition) -> Resul
         .with_context(|| format!("writing {}", path.display()))
 }
 
-/// The definition `run_dir` froze, verified against the digest its run
-/// recorded. `Ok(None)` for a run frozen before the file existed; the caller
-/// then falls back to the installed definition while it still matches.
 pub fn read_frozen_definition(
     run_dir: &Path,
     frozen: &DefinitionRef,
@@ -1114,7 +1061,6 @@ pub(crate) mod tests {
         })
     }
 
-    /// The monitor behavior's system prompt in [`write_fixture_pack`].
     pub(crate) const FIXTURE_PROMPT: &str = "Watch the mailbox.\n";
 
     pub(crate) fn write_fixture_pack(root: &Path, bash_mode: &str) {

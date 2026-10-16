@@ -1,4 +1,3 @@
-/* One line per tool call. */
 import type {
   RenderedToolCallView,
   ToolDiffLineKind,
@@ -8,13 +7,8 @@ import type {
 import type { ToolStepStatus } from "@gents/ui/conversation";
 import { shortPath } from "../lib/paths";
 
-/* An absolute path inside a checkout is mostly the checkout: every row in a
-   real session began with the same forty characters of home directory and
-   repo. Keep the tail, which is what tells two rows apart, and let the
-   title carry the rest. The path is on the agent's host, so no `~`. */
 const toolPath = (path: string) => shortPath(path, { keep: 3 });
 
-/* leading VAR=value assignments before a command */
 const ASSIGNMENTS = /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)(?:\s+|$))+/;
 
 export const spoken = (command: string): string => {
@@ -25,7 +19,7 @@ export const spoken = (command: string): string => {
   return parts.length ? parts.join(" && ") : command.trim();
 };
 
-export const DIFF_MARK: Record<ToolDiffLineKind, string> = {
+const DIFF_MARK: Record<ToolDiffLineKind, string> = {
   added: "+",
   removed: "-",
   context: " ",
@@ -33,6 +27,21 @@ export const DIFF_MARK: Record<ToolDiffLineKind, string> = {
 
 export const diffText = (diff: ToolDiffLineView[]) =>
   diff.map((line) => `${DIFF_MARK[line.kind]}${line.text}`).join("\n");
+
+export type DiffShape = "addition" | "removal" | "replacement" | "unified";
+
+export function diffShape(diff: readonly { kind: ToolDiffLineKind }[]): DiffShape {
+  const kinds = diff.map((line) => line.kind);
+  if (kinds.includes("context")) return "unified";
+  const firstAdded = kinds.indexOf("added");
+  const lastRemoved = kinds.lastIndexOf("removed");
+
+  if (firstAdded !== -1 && lastRemoved !== -1 && firstAdded < lastRemoved)
+    return "unified";
+  if (lastRemoved === -1) return "addition";
+  if (firstAdded === -1) return "removal";
+  return "replacement";
+}
 
 export const lineCount = (text: string) =>
   text ? text.replace(/\r?\n$/, "").split("\n").length : 0;
@@ -69,11 +78,9 @@ const readCount = (p: Extract<ToolPresentationView, { kind: "fileRead" }>) => {
   return `${p.returnedCount}${total}${p.truncated ? " · truncated" : ""}`;
 };
 
-/* a policy denial is not a failed tool */
 export function toolSummary(t: RenderedToolCallView): {
   kind: string;
   primary: string;
-  /** the whole of what `primary` shortens, for its title */
   full?: string;
   secondary?: string | null;
   mono?: boolean;

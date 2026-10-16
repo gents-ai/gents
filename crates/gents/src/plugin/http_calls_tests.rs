@@ -418,7 +418,6 @@ async fn a_rebinding_name_is_checked_on_the_addresses_the_connection_uses() {
     assert!(server.hits().is_empty());
 }
 
-/// The host never follows a redirect: the plugin gets the 3xx and its
 #[tokio::test]
 async fn a_redirect_comes_back_to_the_plugin() {
     let server = Server::start().await;

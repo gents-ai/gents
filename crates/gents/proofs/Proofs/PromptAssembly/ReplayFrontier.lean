@@ -158,10 +158,6 @@ theorem leading_reasoning_removal_passes_checks (count : Nat)
   simp only [anchored, anchoredFrom_dropLeadingReasoning]
   exact List.drop_suffix count _
 
-/-! ## Maximal admissible suffix
-
-The kept set is always a suffix of the candidates, so removal is a leading run. -/
-
 section Chain
 
 variable {α : Type}
@@ -255,13 +251,11 @@ theorem admissible_split (ok : List α → α → Bool) (before : List α) (x : 
 
 end Chain
 
-/-! ## Accepted turns
-
-`captured` is the flattened body of the accepted request that produced the turn,
-`none` when that request or its capture is verifiably absent, out of scope or
-undecodable. A failed store read is not `none`: it says nothing about the turn,
-so the adapter forms no input and the request fails instead of cutting the
-frontier there. -/
+/-! `captured` is the flattened body of the accepted request that produced the
+turn, `none` only when that request or its capture is verifiably absent, out of
+scope or undecodable. A failed store read is not `none`: it says nothing about
+the turn, so the adapter forms no input and the request fails instead of cutting
+the frontier there. -/
 
 structure Turn (O W : Type) where
   base : Bool

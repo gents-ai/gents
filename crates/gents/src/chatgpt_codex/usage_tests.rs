@@ -5,7 +5,6 @@ const CODEX_USAGE_HEADERS: &[(&str, &str)] = &[
     ("x-codex-primary-window-minutes", "300"),
 ];
 
-/// A signed-in Codex account for `node_did`, keyed `key` when given.
 async fn seed_codex_account(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -36,7 +35,6 @@ async fn seed_codex_account(
     row
 }
 
-/// Usage keys stored for `node_did`, polled until `key` shows or 5 s pass.
 async fn usage_keys_until(node: &Arc<EmbeddedNode>, node_did: &str, key: &str) -> Vec<String> {
     let access = crate::config_client::ConfigAccess::local(node.clone());
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);

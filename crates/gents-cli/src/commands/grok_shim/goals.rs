@@ -138,7 +138,6 @@ pub(super) struct GoalCursor {
 }
 
 impl GoalCursor {
-    /// Observation must not mutate goals.
     pub(super) async fn refresh(
         &mut self,
         node: &Arc<EmbeddedNode>,

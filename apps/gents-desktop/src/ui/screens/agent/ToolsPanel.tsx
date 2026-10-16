@@ -11,7 +11,13 @@ import {
   TextRow,
   PathRow,
 } from "./editors";
-import { newId, optionalAbsolutePath, problemOf, useDraft } from "./draft";
+import {
+  focusFirstProblem,
+  newId,
+  optionalAbsolutePath,
+  problemOf,
+  useDraft,
+} from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import {
@@ -138,7 +144,8 @@ export function parseAdvancedTools(
             .filter(Boolean),
         ),
       ];
-      service.background_tool_names = backgroundNames.length ? backgroundNames : null;
+      const granted = backgroundNames.filter((name) => names.includes(name));
+      service.background_tool_names = granted.length ? granted : null;
     }
     if (
       !deployment.toolServiceRegistries.some(
@@ -148,10 +155,6 @@ export function parseAdvancedTools(
       throw new Error(`Unknown remote service: ${service.mcp_service_id}`);
     if (service.tool_names?.some((name) => /[*?]/.test(name)))
       throw new Error("Remote tool names must be exact names, not wildcards");
-    if (
-      service.background_tool_names?.some((name) => !service.tool_names?.includes(name))
-    )
-      throw new Error("Background remote tools must be selected tool names");
     for (const [label, value] of [
       ["Remote connection timeout", service.connect_timeout_secs],
       ["Remote discovery timeout", service.discovery_timeout_secs],
@@ -398,7 +401,13 @@ export function ToolsEditor({
         error={limitError ?? d.error}
         saveLabel={draftMode ? "Create" : undefined}
         onSave={() => {
-          if (limitError) return;
+          if (limitError) {
+            focusFirstProblem(
+              invalidLimits,
+              Object.fromEntries(Object.keys(invalidLimits).map((id) => [id, id])),
+            );
+            return;
+          }
           if (draftMode) {
             void d.save().then((ok) => ok && draftMode.onSaved(tools.tools_id));
             return;

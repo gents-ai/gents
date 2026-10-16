@@ -366,7 +366,6 @@ fn render_profile_table(rows: &[Value]) -> String {
         .collect()
 }
 
-/// Every lookup failure yields `None`: a warning never fails `show`.
 pub(super) async fn profile_effort_warning(
     access: &crate::config_writes::ConfigAccess,
     node_did: &str,

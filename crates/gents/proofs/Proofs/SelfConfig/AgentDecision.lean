@@ -211,7 +211,6 @@ theorem name_only_edit_does_not_require_profile (profiles : List String)
     agentEditFieldsOk, editNameOk, editPromptOk, editProfileOk,
     unprotected_edit_accepted c target hpresent hp, hname]
 
-/-- Default selection is part of the same admitted create/edit publication. -/
 def defaultAgentAfter (preDefault applied : String) (op : AgentOp)
     (makeDefault : Bool) : String :=
   if op ≠ .disable ∧ makeDefault = true then applied else preDefault

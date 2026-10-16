@@ -471,7 +471,7 @@ fn push_node_readiness_metrics_at(
     lines: &mut Vec<String>,
     node_did: &str,
     rows: &[NodeReadinessRow],
-    observed_at: chrono::DateTime<chrono::Utc>,
+    _observed_at: chrono::DateTime<chrono::Utc>,
 ) {
     let readiness = rows.iter().find(|row| row.node_did == node_did);
     let (ready, unavailable, observed) = match project_node_readiness_summary(readiness, node_did) {

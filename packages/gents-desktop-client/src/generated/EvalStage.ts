@@ -13,11 +13,7 @@ seed?: EvalFixtureDocument | null, deadline_secs: number,
  * Keep observing after the request ends, until the trial home is quiet;
  * evidence then covers every later request of the session.
  */
-settle?: boolean | null,
-/**
- * Continuation prods for a settling stage.
- */
-continuation?: EvalContinuation | null,
+settle?: boolean | null, continuation?: EvalContinuation | null,
 /**
  * Append previous stage check feedback to this prompt.
  */

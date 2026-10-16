@@ -1722,8 +1722,6 @@ mod tests {
 
     #[tokio::test]
     async fn the_engineer_sets_max_turns_on_a_freshly_initialized_home() {
-        use gents::llm::tool::ToolDyn;
-
         let temp = tempfile::tempdir().unwrap();
         let identity: Arc<dyn gents::NodeIdentity> =
             Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());

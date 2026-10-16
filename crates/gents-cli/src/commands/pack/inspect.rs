@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::json;
 
 use crate::cli::{PackDiffArgs, PackShowArgs, PackVerifyArgs};

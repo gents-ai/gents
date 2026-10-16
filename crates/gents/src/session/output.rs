@@ -133,22 +133,6 @@ pub(crate) async fn count_source_output_queries<F: std::future::Future>(
 
 #[cfg(test)]
 tokio::task_local! {
-    static REPLAY_REQUEST_FACT_BATCHES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
-}
-
-#[cfg(test)]
-pub(crate) async fn count_replay_request_fact_batches<F: std::future::Future>(
-    future: F,
-) -> (F::Output, usize) {
-    let batches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let output = REPLAY_REQUEST_FACT_BATCHES
-        .scope(batches.clone(), future)
-        .await;
-    (output, batches.load(std::sync::atomic::Ordering::Relaxed))
-}
-
-#[cfg(test)]
-tokio::task_local! {
     static CAPTURE_ROW_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
@@ -817,7 +801,6 @@ async fn load_header(
     }
 }
 
-/// Scoped headers sharing `header`'s key or sequence in its session.
 async fn coordinate_twins(
     access: ReadAccess<'_, '_>,
     header: &super::canonical_rows::TranscriptMessageRow,
@@ -1076,9 +1059,6 @@ async fn load_replay_request_facts_batch(
             ));
         }
         query.push_str(" }");
-        #[cfg(test)]
-        let _ = REPLAY_REQUEST_FACT_BATCHES
-            .try_with(|batches| batches.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         let response = ReadAccess::Node(node)
             .query(&query, "load_canonical_replay_request_facts")
             .await?;
@@ -1119,8 +1099,6 @@ async fn load_replay_request_facts_batch(
     Ok(facts)
 }
 
-/// Bulk readers reuse request snapshots; single transaction readers resolve
-/// physical closures and enumerate every observation of each selected source.
 async fn load_referenced_segments(
     access: ReadAccess<'_, '_>,
     header: &super::canonical_rows::TranscriptMessageRow,

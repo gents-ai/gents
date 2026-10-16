@@ -108,11 +108,8 @@ const O_NOFOLLOW: i32 = 0x0000_8000;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const O_NOFOLLOW: i32 = 0x0000_0040;
 
-/// Connection-scoped outbound handle for ACP payloads: the leader owns frame
-/// writing; the delegate only hands it finished JSON-RPC lines. Cheap to
-/// clone, so a delegate can keep one for a deferred response and push
-/// notifications while a turn streams. Sending after the connection closed is
-/// an error the caller may ignore.
+/// Connection-scoped outbound handle for ACP payloads; sending after the
+/// connection closed is an error the caller may ignore.
 #[derive(Clone)]
 pub(crate) struct AcpOutbound {
     frames: FrameSender,
@@ -169,8 +166,6 @@ impl AcpOutbound {
             frames: FrameSender::Unbounded(frames),
         }
     }
-
-    /// Queue one ACP JSON-RPC line for the pager client.
     pub(crate) async fn send(&self, payload: impl Into<String>) -> Result<()> {
         self.frames
             .send(ServerEnvelope::Acp {
@@ -192,8 +187,6 @@ impl AcpOutbound {
 /// connection keeps reading (a `session/cancel` frame must not wait behind
 /// the prompt it cancels).
 pub(crate) trait AcpDelegate: Send + Sync + 'static {
-    /// Handle one inbound ACP JSON-RPC line. Responses and notifications are
-    /// pushed through `outbound`; the leader never interprets ACP payloads.
     fn handle_acp<'a>(
         &'a self,
         payload: &'a str,
@@ -207,8 +200,6 @@ pub(crate) trait AcpDelegate: Send + Sync + 'static {
     }
 }
 
-/// A validated `register` frame: the registered client's identity for
-/// delegate construction.
 #[derive(Debug, Clone)]
 pub(crate) struct Registration {
     pub(crate) client_type: String,
@@ -216,10 +207,6 @@ pub(crate) struct Registration {
     pub(crate) capabilities: ClientCapabilities,
 }
 
-/// Constructs one [`AcpDelegate`] per *registered* connection. The factory is
-/// invoked only after a `register` frame validates, with the connection's
-/// generated `client_id` plus the registration's mode/capabilities; a
-/// connection that fails registration constructs zero delegates.
 pub(crate) trait AcpDelegateFactory: Send + Sync + 'static {
     fn create_delegate<'a>(
         &'a self,
@@ -241,7 +228,6 @@ where
     }
 }
 
-/// Configuration for one spawned leader.
 #[derive(Debug, Clone)]
 pub(crate) struct LeaderServerConfig {
     pub(crate) socket_path: PathBuf,
@@ -255,7 +241,6 @@ impl LeaderServerConfig {
     }
 }
 
-/// Handle to one spawned leader. Owns shutdown and the listener task.
 pub(crate) struct LeaderHandle {
     socket_path: PathBuf,
     shutdown_tx: watch::Sender<bool>,
@@ -273,10 +258,6 @@ impl LeaderHandle {
         self.socket_path.with_extension("lock")
     }
 
-    /// Request a clean stop and wait for the listener task to finish it: the
-    /// socket is removed and the exclusive leader lock released. The private
-    /// lock inode remains in place deliberately: unlinking a flock file
-    /// creates a split-lock race with a concurrent opener.
     pub(crate) async fn shutdown(&mut self) -> Result<()> {
         let _ = self.shutdown_tx.send(true);
         self.join().await
@@ -299,9 +280,6 @@ impl Drop for LeaderHandle {
             return;
         };
         task.abort();
-        // Emergency cleanup only: unlink the socket synchronously so no pager
-        // client can keep connecting to a dead leader. The lock file stays
-        // (see the module docs); `shutdown` is the clean lock-releasing path.
         if let Err(error) = std::fs::remove_file(&self.socket_path) {
             if error.kind() != std::io::ErrorKind::NotFound {
                 tracing::warn!(
@@ -331,8 +309,6 @@ pub(crate) fn spawn_leader(
 
     let lock = LeaderLock::acquire(&socket_path)?;
 
-    // Only reachable while we hold the exclusive lock, so this can never
-    // delete a live leader's socket.
     if let Err(error) = remove_stale_socket(&socket_path) {
         lock.release();
         return Err(error);
@@ -458,7 +434,6 @@ async fn accept_loop(
         }
     }
 
-    // Announce the stop to every live connection, then stop accepting.
     let _ = lifecycle.send(ServerEnvelope::ShuttingDown {
         reason: ShutdownReason::Manual,
         delay_ms: WIRE_SHUTDOWN_DELAY_MS,
@@ -466,9 +441,6 @@ async fn accept_loop(
     let _ = lifecycle.send(ServerEnvelope::Shutdown);
     drop(lifecycle);
 
-    // The pager-facing delay is zero, but clean server shutdown still owns
-    // every connection task until its delegate has run `on_disconnect` and
-    // its bounded per-connection cleanup has completed.
     let drain = async { while connections.join_next().await.is_some() {} };
     let cleanup_result = if tokio::time::timeout(CONNECTION_CLEANUP_GRACE, drain)
         .await
@@ -556,8 +528,6 @@ async fn handle_connection(
         }
     });
 
-    // The first frame must be a valid register; the connection's delegate is
-    // only constructed after it validates.
     let registration =
         match register_client(&mut client_frames_rx, &frames_tx, &mut lifecycle).await {
             Ok(registration) => registration,
@@ -606,8 +576,6 @@ async fn handle_connection(
         "grok shim leader registered a pager client"
     );
 
-    // Each ACP frame is dispatched on its own task so a long-running prompt
-    // cannot block reading the cancel that stops it.
     let outbound = AcpOutbound {
         frames: frames_tx.clone(),
     };
@@ -873,8 +841,6 @@ fn spawn_acp_dispatch(
     });
 }
 
-/// Build a JSON-RPC internal-error response for a failed request. Returns
-/// `None` for notifications and undecodable payloads, which expect no answer.
 fn internal_error_response(payload: &str) -> Option<String> {
     let value: Value = serde_json::from_str(payload).ok()?;
     let id = value.get("id")?;
@@ -898,7 +864,6 @@ fn leader_binary_version() -> String {
 }
 
 fn leader_capabilities() -> LeaderCapabilities {
-    // The shim implements none of the optional leader extensions.
     LeaderCapabilities {
         control_v1: false,
         runtime_cpu_profile: false,
@@ -945,7 +910,6 @@ fn ensure_socket_parent(parent: &Path) -> Result<()> {
                         current.display()
                     );
                 }
-                // Existing directories keep their mode.
                 continue;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -958,7 +922,6 @@ fn ensure_socket_parent(parent: &Path) -> Result<()> {
                 });
             }
         }
-        // Missing: create 0700.
         builder.create(&current).with_context(|| {
             format!("creating the grok shim socket parent {}", current.display())
         })?;
@@ -990,8 +953,6 @@ struct LeaderLock {
 impl LeaderLock {
     fn acquire(socket_path: &Path) -> Result<Self> {
         let path = socket_path.with_extension("lock");
-        // The lock file lives beside the published socket; create the parent
-        // (with the symlink-rejecting, no-chmod walk) here.
         if let Some(parent) = path.parent() {
             ensure_socket_parent(parent).with_context(|| {
                 format!(
@@ -1207,8 +1168,6 @@ fn bind_and_publish(staging_dir: &Path, socket_path: &Path) -> Result<UnixListen
         let _ = std::fs::remove_file(&staged_socket);
         return Err(error);
     }
-    // rename(2) publishes atomically: a pager client either sees no socket or
-    // the finished 0600 socket, never a partially published one.
     if let Err(error) = std::fs::rename(&staged_socket, socket_path) {
         let _ = std::fs::remove_file(&staged_socket);
         return Err(error).with_context(|| {
@@ -1261,8 +1220,6 @@ impl StagingDir {
     /// limit and the `rename(2)` stays on one filesystem.
     fn create(final_parent: &Path) -> Result<Self> {
         let mut last_error: Option<std::io::Error> = None;
-        // Mode rides `mkdir(2)` itself: no umask-derived group/world-readable
-        // window between create and chmod.
         let mut builder = std::fs::DirBuilder::new();
         builder.mode(STAGING_DIR_MODE);
         for ancestor in staging_candidate_ancestors(final_parent) {
@@ -1270,8 +1227,6 @@ impl StagingDir {
                 let candidate = ancestor.join(staging_dir_name());
                 match builder.create(&candidate) {
                     Ok(()) => {
-                        // Verify the mode applied; a filesystem that ignored
-                        // the request must not be published through.
                         let mode = std::fs::metadata(&candidate)
                             .with_context(|| {
                                 format!(
@@ -1369,9 +1324,6 @@ mod tests {
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
-    /// Test double for the ACP delegate: records payloads, capabilities, and
-    /// disconnects, echoes every ACP payload back, and can push one deferred
-    /// payload after `handle_acp` returns.
     struct RecordingDelegate {
         late_push: bool,
         payloads: Mutex<Vec<String>>,
@@ -1441,8 +1393,6 @@ mod tests {
         }
     }
 
-    /// Delegate whose disconnect hook parks until the test releases it, so
-    /// shutdown ordering is observable without sleeps.
     struct GatedDisconnectDelegate {
         started: tokio::sync::Notify,
         release: tokio::sync::Notify,
@@ -1477,9 +1427,6 @@ mod tests {
         }
     }
 
-    /// Construct a fresh [`RecordingDelegate`] per registered connection and
-    /// record what it observed; the instance id is unique per constructed
-    /// delegate (no two registered connections share a delegate).
     #[derive(Default)]
     struct RecordingFactory {
         late_push: bool,
@@ -1539,7 +1486,6 @@ mod tests {
         }
     }
 
-    /// A factory that always fails, for the zero-delegates-on-failure test.
     #[derive(Default)]
     struct FailingFactory {
         attempts: AtomicUsize,
@@ -1566,7 +1512,6 @@ mod tests {
         if is_short_writable_root(explicit) {
             return std::fs::canonicalize(explicit).unwrap_or_else(|_| explicit.to_path_buf());
         }
-        // Sandbox escape hatch: a caller-provided short root.
         if let Ok(override_root) = std::env::var("GENTS_TEST_ROOT") {
             if !override_root.trim().is_empty() {
                 let override_root = PathBuf::from(override_root);
@@ -1588,13 +1533,8 @@ mod tests {
         workspace
     }
 
-    /// Upper bound for an absolute short-root candidate so the near-limit
-    /// fixtures keep room to build deep parents and long filenames under it.
     const MAX_SHORT_ROOT_BYTES: usize = 64;
 
-    /// A root is usable only when it exists, is a directory, this process can
-    /// actually create entries inside it, and its canonical form is short
-    /// enough to leave room for the near-limit path exercises.
     fn is_short_writable_root(root: &Path) -> bool {
         let Ok(canonical) = std::fs::canonicalize(root) else {
             return false;
@@ -1701,8 +1641,6 @@ mod tests {
         }
     }
 
-    /// Connect, send a valid register, and assert the exact `registered`
-    /// shape the audited wire requires.
     async fn register(socket: &Path) -> (OwnedReadHalf, OwnedWriteHalf, u64) {
         let (mut reader, mut writer) = connect(socket).await;
         write_client_frame(&mut writer, &register_envelope()).await;
@@ -1829,8 +1767,6 @@ mod tests {
         Arc::new(RecordingFactory::default())
     }
 
-    /// The staging directory is created 0700 *from creation*: no create-then-
-    /// chmod window in which a group/world-readable directory is observable.
     #[cfg(unix)]
     #[test]
     fn the_staging_dir_is_0700_from_creation_and_rejects_unsafe_parents() {
@@ -1862,7 +1798,6 @@ mod tests {
             !target.join("leader.sock").exists(),
             "nothing may be published through the symlink"
         );
-        // The staging ancestors never leaked into the target directory.
         let leaked: Vec<_> = std::fs::read_dir(&target)
             .expect("target readable")
             .filter_map(std::result::Result::ok)
@@ -1909,7 +1844,6 @@ mod tests {
         let root = unique_test_root("parent-mode");
         let parent = root.join("owned");
         std::fs::create_dir(&parent).expect("creating the operator-owned parent");
-        // Deliberately not 0700: existing directories are never chmodmed.
         std::fs::set_permissions(&parent, Permissions::from_mode(0o755))
             .expect("loosening the parent mode");
         ensure_socket_parent(&parent).expect("an existing parent must be accepted");
@@ -2146,7 +2080,6 @@ mod tests {
             "the failed leader must not overwrite the holder pid"
         );
 
-        // The winner still serves traffic through the production path.
         exercise_leader(&socket, &first_factory).await;
         first.shutdown().await.expect("clean shutdown");
         assert_clean_stop(&first);
@@ -2276,8 +2209,6 @@ mod tests {
             }
             assert!(next_server_frame(&mut reader).await.is_none());
         }
-        // An unknown register mode is rejected as an undecodable frame; the
-        // wire narrows to "stdio" | "headless".
         {
             let (mut reader, mut writer) = connect(&socket).await;
             write_client_frame(
@@ -2503,7 +2434,6 @@ mod tests {
         let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), factory.clone())
             .expect("the leader should spawn");
 
-        // A blank client_type is rejected before any delegate is constructed.
         {
             let (mut reader, mut writer) = connect(&socket).await;
             write_client_frame(

@@ -52,10 +52,6 @@ pub(crate) fn build_plugin(
     gents::pack::authoring::build_plugin(dir, manifest, plugin, &CliPluginCompiler)
 }
 
-pub(crate) fn build_graph_plans(dir: &Path, manifest: &gents::pack::PackManifest) -> Result<()> {
-    gents::pack::authoring::build_graph_plans(dir, manifest)
-}
-
 pub(crate) fn plugin_entry(language: &str) -> Option<&'static str> {
     gents::pack::authoring::plugin_entry(language)
 }

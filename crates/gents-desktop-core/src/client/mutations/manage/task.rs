@@ -190,10 +190,9 @@ pub async fn delete_event_source_on(
     .await
 }
 
-/// Fire a task immediately using the shared manual-run helper. Desktop calls
-/// it in-process and the CLI writes the mutation remotely; both must produce
-/// the same manual lineage and `execution_origin = "interactive"` so observers
-/// treat them as one origin.
+/// Desktop calls this in-process and the CLI writes the mutation remotely;
+/// both must produce the same manual lineage and
+/// `execution_origin = "interactive"` so observers treat them as one origin.
 pub async fn fire_task_now(
     node: &Arc<EmbeddedNode>,
     actor: identity::Did,
@@ -663,8 +662,6 @@ pub async fn fire_schedule_now(
     fire_task_now(node, actor, &task_row, serde_json::json!({})).await
 }
 
-/// Resolve the schedule, enabled trigger, task, and agent from canonical
-/// operator access; submission stays owned by the client request path.
 pub async fn resolve_schedule_now_on(
     config_access: &ConfigAccess,
     node_did: &str,

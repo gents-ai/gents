@@ -408,9 +408,6 @@ pub(super) async fn enabled_mcp_service_ids(
         .collect())
 }
 
-/// MCP services whose registry row is enabled and whose measured health
-/// projects callable per `ToolServiceHealthState::project`, the single owner
-/// of the classification.
 pub(crate) async fn measured_available_mcp_service_ids(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
@@ -436,8 +433,7 @@ pub(crate) async fn measured_available_mcp_service_ids(
     project_measured_mcp_services(node_did, &services, &response, hostname.as_deref())
 }
 
-/// Explain the same measured availability for local or HTTP control-plane
-/// access. A remote server's loopback endpoint is never inferred from the CLI host.
+/// A remote server's loopback endpoint is never inferred from the CLI host.
 pub async fn measured_mcp_services_for_access(
     access: &crate::config_client::ConfigAccess,
     node_did: &str,

@@ -279,6 +279,24 @@ export function holdRow(el: Element | null) {
   el?.dispatchEvent(new CustomEvent("transcript:hold", { bubbles: true }));
 }
 
+export function jumpToRow(el: Element | null) {
+  el?.dispatchEvent(new CustomEvent("transcript:jump", { bubbles: true }));
+}
+
+const TURN = "[data-turn]";
+
+export function turnFrom(scroller: HTMLElement, way: -1 | 1): Element | null {
+  const line = scroller.getBoundingClientRect().top + READING_LINE_PX;
+  const turns = Array.from(scroller.querySelectorAll(TURN));
+
+  let at = -1;
+  for (let i = 0; i < turns.length; i += 1)
+    if (turns[i]!.getBoundingClientRect().top <= line + 0.5) at = i;
+  return turns[at + way] ?? null;
+}
+
+/** Holdable rows must stack in DOM order for the fallback search. Scroll
+ * writes wait for momentum to settle because browsers may discard them mid-scroll. */
 export function useFollowTail(scroller: HTMLElement | null, subject: string | null) {
   const following = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
@@ -324,11 +342,20 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       let el = holdable(
         document.elementFromPoint?.(box.left + box.width / 2, line) ?? null,
       );
-      if (!el)
-        el =
-          Array.from(scroller.querySelectorAll(HOLDABLE)).find(
-            (row) => holdable(row) === row && row.getBoundingClientRect().bottom > line,
-          ) ?? null;
+
+      if (!el) {
+        const rows = Array.from(scroller.querySelectorAll(HOLDABLE)).filter(
+          (row) => holdable(row) === row,
+        );
+        let lo = 0;
+        let hi = rows.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (rows[mid]!.getBoundingClientRect().bottom > line) hi = mid;
+          else lo = mid + 1;
+        }
+        el = rows[lo] ?? null;
+      }
       anchor = el
         ? { el, key: keyOf(el), offset: el.getBoundingClientRect().top - box.top }
         : null;
@@ -474,9 +501,41 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     window.addEventListener("keydown", onKey);
     area?.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("pointerup", onPointerUp);
+
+    let jumpTimer = 0;
+    let jumpTo: Element | null = null;
+    const jump = () => {
+      window.clearTimeout(jumpTimer);
+      jumpTimer = 0;
+      const el = jumpTo;
+      if (!el?.isConnected) return;
+      if (performance.now() - tailAt < TAIL_MS) {
+        jumpTimer = window.setTimeout(jump, TAIL_MS);
+        return;
+      }
+      jumpTo = null;
+      setFollowing(false);
+      const inset = insetAt(el);
+      setScroll(
+        scroller,
+        scroller.scrollTop + (el.getBoundingClientRect().top - top() - inset),
+      );
+      anchor = { el, key: keyOf(el), offset: el.getBoundingClientRect().top - top() };
+    };
+    const onJump = (event: Event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const el = holdable(target) ?? target;
+      if (!el) return;
+      jumpTo = el;
+      leaving.current = false;
+      jump();
+    };
     scroller.addEventListener("scroll", onScroll, { passive: true });
     scroller.addEventListener("transcript:hold", onHold);
+    scroller.addEventListener("transcript:jump", onJump);
     return () => {
+      window.clearTimeout(jumpTimer);
+      scroller.removeEventListener("transcript:jump", onJump);
       settleRef.current = null;
       position.release();
       sizes.disconnect();

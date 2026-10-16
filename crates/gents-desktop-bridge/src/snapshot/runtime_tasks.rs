@@ -348,9 +348,6 @@ mod trigger_recent_runs_tests {
     }
 }
 
-/// Resolve immutable creation provenance through the runtime lineage owner,
-/// including causing requests outside the bounded client request cache; on
-/// failure, starters stay absent for this snapshot.
 pub(super) async fn resolve_summary_starters<'a, R: gents::config_client::ConfigRead + ?Sized>(
     access: &R,
     summaries: impl IntoIterator<Item = &'a mut SessionSummary>,

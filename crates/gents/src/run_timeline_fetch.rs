@@ -17,6 +17,7 @@ use gents_protocol::graphql::graphql_rows_from_response;
 
 const MAX_RUN_ACTIVITY_ROWS: usize = 10_000;
 
+#[cfg(test)]
 pub(crate) async fn load_session_tool_calls(
     access: &ConfigAccess,
     node_did: &str,

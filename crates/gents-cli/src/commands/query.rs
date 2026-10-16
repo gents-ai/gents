@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+#[cfg(test)]
 use gents::config_client::GraphqlEndpoint;
 use gents::defra_query::{CollectionScope, DefraQueryParams};
 use serde_json::{json, Value};
@@ -6,6 +7,7 @@ use serde_json::{json, Value};
 use crate::cli::args::QueryArgs;
 use crate::print_json;
 
+#[cfg(test)]
 pub(crate) async fn run_defra_query(
     graphql: &GraphqlEndpoint,
     params: &DefraQueryParams,

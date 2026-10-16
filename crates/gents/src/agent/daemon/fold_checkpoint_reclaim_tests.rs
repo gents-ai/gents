@@ -71,9 +71,6 @@ async fn authored_user_entries(
     entries
 }
 
-/// Seeded replay: a folded turn stops after publishing part of its admitted
-/// input; the replayed request restores the first-turn reduction checkpoint
-/// without treating its provider tail as the prompt.
 #[tokio::test]
 async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_restore() {
     for (published_before_crash, persist_checkpoint) in [(0, false), (1, false), (2, true)] {
@@ -124,7 +121,6 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         .await;
         let folded_key = crate::lifecycle::queue::folded_input_key(&folded.doc_id);
 
-        // First execution: claim, publish part of the input, then crash.
         let writer = crate::streaming::DefraStreamWriter::new(
             node.clone(),
             agent_config.node_did(),

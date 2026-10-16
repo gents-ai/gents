@@ -175,8 +175,6 @@ export function Field({
   children,
 }: {
   label: string;
-  /** more about the field, behind an icon beside its label; it sits outside
-      the label, so the field needs its id here, and its name stays the label */
   info?: React.ReactNode;
   htmlFor?: string;
   children: React.ReactNode;

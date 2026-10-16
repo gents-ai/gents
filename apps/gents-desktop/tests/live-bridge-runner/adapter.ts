@@ -40,7 +40,6 @@ export function createRunnerAdapter(runner: LiveBridgeRunner): DesktopApiAdapter
   });
 }
 
-/* an operation the bridge runner serves no route for */
 const unsupported = (operation: string) => () =>
   Promise.reject(new Error(`the live bridge runner has no route for ${operation}`));
 

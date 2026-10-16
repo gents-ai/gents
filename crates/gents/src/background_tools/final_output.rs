@@ -10,7 +10,6 @@ use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 use crate::tool_call_lifecycle::CausedRequestTerminal;
 
-/// The durable terminal of one exact caused request.
 pub async fn load_caused_request_terminal(
     node: &std::sync::Arc<EmbeddedNode>,
     caused_request_doc_id: &str,

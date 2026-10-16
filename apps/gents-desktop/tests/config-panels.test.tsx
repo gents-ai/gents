@@ -2,8 +2,14 @@ import { act, renderHook, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { selection } from "../src/hooks/selectionStore";
-import { href } from "../src/ui/lib/router";
-import { publishSnapshot, renderIn, testApp, withApp } from "./app-fixture";
+import { href, type Route } from "../src/ui/lib/router";
+import {
+  publishSnapshot,
+  renderIn,
+  renderRouted,
+  testApp,
+  withApp,
+} from "./app-fixture";
 
 import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
 import { AgentPanel } from "../src/ui/screens/agent/AgentPanel";
@@ -30,6 +36,29 @@ import { TriggersPanel } from "../src/ui/screens/agent/TriggersPanel";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
 type MockApi = Record<string, ReturnType<typeof vi.fn>>;
+
+const nodeRoute = { name: "agent" as const, nodeDid: deployment.nodeDid };
+const agentsRoute = { ...nodeRoute, section: "agents" };
+const itemOf = (route: Route) => (route.name === "agent" ? route.item : undefined);
+const openAiCatalog = {
+  providers: [
+    {
+      id: "openai",
+      displayName: "OpenAI",
+      description: "OpenAI models",
+      authMethods: ["api_key"],
+      authOptions: [
+        {
+          method: "api_key",
+          displayName: "API key",
+          defaultEndpoint: "https://api.openai.com/v1",
+        },
+      ],
+      defaultAuthMethod: "api_key",
+      defaultEndpoint: "https://api.openai.com/v1",
+    },
+  ],
+};
 
 function harness() {
   const api: MockApi = {
@@ -1345,26 +1374,10 @@ describe("configuration panels", () => {
 
   it("opens shared provider setup without eagerly creating a blank backend", async () => {
     const { api, app } = harness();
-    api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
-      providers: [
-        {
-          id: "openai",
-          displayName: "OpenAI",
-          description: "OpenAI models",
-          authMethods: ["api_key"],
-          authOptions: [
-            {
-              method: "api_key",
-              displayName: "API key",
-              defaultEndpoint: "https://api.openai.com/v1",
-            },
-          ],
-          defaultAuthMethod: "api_key",
-          defaultEndpoint: "https://api.openai.com/v1",
-        },
-      ],
-    });
-    renderIn(app, <InferencePanel deployment={deployment} />);
+    api.getInferenceSetupCatalog = vi.fn().mockResolvedValue(openAiCatalog);
+    renderRouted(app, { ...nodeRoute, section: "inference" }, (route) => (
+      <InferencePanel deployment={deployment} item={itemOf(route)} />
+    ));
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "New backend" }));
     await user.click(await screen.findByRole("menuitem", { name: "OpenAI" }));
@@ -1372,6 +1385,40 @@ describe("configuration panels", () => {
     expect(api.getInferenceSetupCatalog).toHaveBeenCalled();
     expect(api.saveBackendConfig).not.toHaveBeenCalled();
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
+  });
+
+  it("opens setup only for a provider it knows, whatever the route names", () => {
+    const { app } = harness();
+    renderIn(app, <InferencePanel deployment={deployment} item="~add:constructor" />);
+    expect(screen.queryByTestId("inference-setup-panel")).toBeNull();
+  });
+
+  it("leaves a provider's setup with Back, to the providers it was opened from", async () => {
+    const { api, app } = harness();
+    api.getInferenceSetupCatalog = vi.fn().mockResolvedValue(openAiCatalog);
+    const providers = { ...nodeRoute, section: "profiles" };
+    const view = renderRouted(app, providers, (route) => (
+      <InferencePanel deployment={deployment} item={itemOf(route)} />
+    ));
+    const user = userEvent.setup();
+    const open = async () => {
+      await user.click(screen.getByRole("button", { name: "New backend" }));
+      await user.click(await screen.findByRole("menuitem", { name: "OpenAI" }));
+      await screen.findByRole("heading", { name: "Set up OpenAI" });
+    };
+
+    await open();
+    act(() => view.nav().back());
+    expect(view.nav().route).toEqual(providers);
+    expect(screen.queryByRole("heading", { name: "Set up OpenAI" })).toBeNull();
+    act(() => view.nav().forward());
+    expect(await screen.findByRole("heading", { name: "Set up OpenAI" })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(view.nav().route).toEqual(providers);
+    expect(view.nav().canBack).toBe(false);
+    await open();
+    expect(view.nav().canBack).toBe(true);
   });
 
   it("requires the node identity fields and saves editable node tags", async () => {
@@ -1419,7 +1466,9 @@ describe("configuration panels", () => {
 
   it("opens a new behavior as an unsaved, disabled draft until the operator saves it", async () => {
     const { api, app } = harness();
-    renderIn(app, <AgentsPanel deployment={deployment} />);
+    renderRouted(app, agentsRoute, (route) => (
+      <AgentsPanel deployment={deployment} agentId={itemOf(route)} />
+    ));
     const user = userEvent.setup();
 
     await user.click(screen.getByRole("button", { name: "New agent" }));
@@ -1440,6 +1489,39 @@ describe("configuration panels", () => {
       }),
     ]);
     expect(api.saveAgentConfig).not.toHaveBeenCalled();
+  });
+
+  it("keeps a new agent's draft in the history until it is saved", async () => {
+    const { app } = harness();
+    const view = renderRouted(app, agentsRoute, (route) => (
+      <AgentsPanel deployment={deployment} agentId={itemOf(route)} />
+    ));
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "New agent" }));
+    act(() => view.nav().back());
+    expect(view.nav().route).toEqual(agentsRoute);
+    expect(screen.queryByLabelText("Display name")).toBeNull();
+    act(() => view.nav().forward());
+    expect(screen.getByLabelText("Display name")).toHaveValue("");
+
+    await user.click(screen.getByRole("button", { name: "Agents" }));
+    expect(view.nav().route).toEqual(agentsRoute);
+    expect(view.nav().canBack).toBe(false);
+
+    /* once saved, Back skips the draft for the list it was opened from */
+    await user.click(screen.getByRole("button", { name: "New agent" }));
+    await user.type(screen.getByLabelText("Display name"), "Reviewer");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() =>
+      expect(view.nav().route).toEqual({
+        ...agentsRoute,
+        item: expect.not.stringMatching(/^~/),
+      }),
+    );
+    act(() => view.nav().back());
+    expect(view.nav().route).toEqual(agentsRoute);
+    expect(view.nav().canBack).toBe(false);
   });
 
   it("keeps a new behavior's draft open on a failed save and retries the same context", async () => {
@@ -1800,7 +1882,9 @@ describe("configuration panels", () => {
 
   it("creates only the new behavior's context and represents empty lists as null", async () => {
     const { api, app } = harness();
-    renderIn(app, <AgentsPanel deployment={deployment} />);
+    renderRouted(app, agentsRoute, (route) => (
+      <AgentsPanel deployment={deployment} agentId={itemOf(route)} />
+    ));
     const user = userEvent.setup();
 
     await user.click(screen.getByRole("button", { name: "New agent" }));
@@ -1844,7 +1928,7 @@ describe("configuration panels", () => {
     expect(api.patchConfigComponents).not.toHaveBeenCalled();
   });
 
-  it("requires an inline second action before disconnecting a subscription", async () => {
+  it("asks in the shared dialog before disconnecting a subscription from its account row", async () => {
     const { api, app } = harness();
     api.listProviderAccounts.mockResolvedValue([
       {
@@ -1856,6 +1940,8 @@ describe("configuration panels", () => {
         accessTokenExpiresAt: "2099-01-01T00:00:00Z",
         lastRefresh: null,
         enabled: true,
+        accountRef: null,
+        label: "Grok",
       },
     ]);
     const subscriptionDeployment = {
@@ -1874,11 +1960,18 @@ describe("configuration panels", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Disconnect" }));
     expect(api.disconnectProviderAccount).not.toHaveBeenCalled();
-    expect(screen.getByText("Disconnect Grok / xAI?")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Keep connected" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Disconnect Grok?");
+    /* the reason it is a dialog: it names what stops working */
+    expect(dialog).toHaveTextContent("fail their next turn");
+    await user.click(within(dialog).getByRole("button", { name: "Keep connected" }));
     expect(api.disconnectProviderAccount).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Disconnect" }));
-    await user.click(screen.getByRole("button", { name: "Disconnect now" }));
+    await user.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "Disconnect now",
+      }),
+    );
     expect(api.disconnectProviderAccount).toHaveBeenCalledWith(
       deployment.nodeDid,
       "credential-a",

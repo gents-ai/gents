@@ -5,11 +5,9 @@ use gents::eval::checks::CheckDescription;
 use super::dossier::Dossier;
 use super::validate::Floors;
 
-/// The first line of every turn that returns a failed draft to the author.
 pub(crate) const VALIDATION_PREFIX: &str =
     "The draft did not validate; revise and reply with a new draft.";
 
-/// Drafts that may fail validation before the interview gives up.
 pub(crate) const MAX_VALIDATION_ROUNDS: usize = 3;
 
 pub(crate) fn first_turn(

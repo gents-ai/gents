@@ -64,12 +64,12 @@ export function AllowedFoldersPanel() {
           <Row
             key={folder.path}
             label={
-              <span title={folder.path}>
+              <span className="break-all" title={folder.path}>
                 {shortPath(folder.path, { home, max: 48 })}
               </span>
             }
           >
-            <div className="flex gap-2">
+            <div className="flex shrink-0 gap-2">
               <Button
                 size="sm"
                 variant="outline"

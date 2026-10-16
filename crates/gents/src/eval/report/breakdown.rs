@@ -16,8 +16,7 @@ use crate::eval::report::compare::{CaseComparison, Comparison, PairedTrial};
 use crate::eval::report::refused;
 use crate::eval::scoring::SCORE_BP_MAX;
 
-/// One check's paired difference, candidate minus baseline, across cases,
-/// read from each side's verdicts for the check.
+/// One check's paired difference, candidate minus baseline, across cases.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct CheckDiff {
     pub check: String,
@@ -31,8 +30,7 @@ pub struct CheckDiff {
     pub worsened: u32,
 }
 
-/// One stage's paired difference, candidate minus baseline, across cases,
-/// read from each side's verdicts for the stage.
+/// One stage's paired difference, candidate minus baseline, across cases.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct StageDiff {
     pub stage_id: String,

@@ -346,7 +346,6 @@ pub struct LiveObservation<'a> {
     pub request_doc_id: &'a str,
     pub session_id: &'a str,
     pub target: LiveTarget<'a>,
-    /// Visible messages in scope for origin lookup and terminal resolution.
     pub messages: &'a [(&'a str, &'a TranscriptMessage)],
     pub node_did: &'a str,
     pub requester_did: Option<&'a str>,
@@ -492,7 +491,6 @@ fn observe_close<'a>(
             Some(SourceClose::Retracted) => Ok((Some(only), CloseObservation_::Retracted)),
             None => Ok((None, CloseObservation_::Conflict)),
         },
-        // Distinct closures of one source: conflict.
         _ => Err(()),
     }
 }

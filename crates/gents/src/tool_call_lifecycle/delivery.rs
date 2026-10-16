@@ -3177,7 +3177,6 @@ pub(crate) async fn start_running_in_txn(
     start: &DispatchStart,
     fixture_now: Option<DateTime<Utc>>,
 ) -> Result<Option<DateTime<Utc>>> {
-    // Sampled only after the transaction has acquired the mutation gate: a
     let now = fixture_now.unwrap_or_else(Utc::now);
     let started_at = now.to_rfc3339_opts(SecondsFormat::Nanos, true);
     let (message, _) = crate::session::load_canonical_message_in_txn(

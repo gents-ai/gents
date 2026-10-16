@@ -1,4 +1,3 @@
-// Included in inference.rs's test module to reuse its real daemon harness.
 use std::sync::atomic::AtomicBool;
 
 #[derive(Clone)]

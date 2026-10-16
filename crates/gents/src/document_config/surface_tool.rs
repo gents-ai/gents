@@ -15,7 +15,6 @@ use super::write_tool::{
     validate_write_tool_declarations, WriteToolDecl, WriteToolField, WriteToolFieldFill,
 };
 
-/// Create and query tools after expanding linked [`DatastoreToolSurfaceDocument`]s.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MergedSurfaceTools {
     pub write_tools: Vec<WriteToolDecl>,
@@ -23,9 +22,6 @@ pub struct MergedSurfaceTools {
     pub surface_of_tool: std::collections::BTreeMap<String, String>,
 }
 
-/// Expand the context's explicitly selected datastore surface documents,
-/// failing closed on missing, disabled, foreign-owned, malformed, duplicated,
-/// or colliding surfaces.
 pub fn merge_datastore_tool_surfaces<'a>(
     selection: &Tools,
     surfaces: impl IntoIterator<Item = &'a DatastoreToolSurfaceDocument>,
@@ -125,7 +121,6 @@ pub struct QueryToolDecl {
     /// Projection allowlist; omit `fields` at call time to return all of these.
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional))]
     pub fields: Vec<String>,
-    /// Runtime-filled entries are hidden from the model, applied as `_eq`.
     #[cfg_attr(
         feature = "typescript",
         ts(as = "Option<Vec<WriteToolField>>", optional)
@@ -178,7 +173,6 @@ impl QueryToolDecl {
     }
 }
 
-/// One `DatastoreToolSurface` entry: create (the original write decl) or query.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(tag = "kind", rename_all = "snake_case"))]

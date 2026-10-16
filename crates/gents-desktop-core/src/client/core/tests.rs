@@ -174,25 +174,11 @@ impl RecordingP2P {
         self.notify_calls.load(Ordering::SeqCst)
     }
 
-    fn set_local_peer_id_error(&self, error: Option<&str>) {
-        *self
-            .local_peer_id_error
-            .write()
-            .expect("local peer id error lock poisoned") = error.map(ToOwned::to_owned);
-    }
-
     fn set_listen_addresses(&self, addrs: Vec<String>) {
         *self
             .listen_addresses
             .write()
             .expect("listen addresses lock poisoned") = addrs;
-    }
-
-    fn set_listen_addresses_error(&self, error: Option<&str>) {
-        *self
-            .listen_addresses_error
-            .write()
-            .expect("listen addresses error lock poisoned") = error.map(ToOwned::to_owned);
     }
 
     fn set_connected_peers(&self, peers: Vec<String>) {
@@ -241,13 +227,6 @@ impl RecordingP2P {
             .expect("connect error lock poisoned") = error.map(ToOwned::to_owned);
     }
 
-    fn set_connect_gate(&self, gate: Arc<Notify>) {
-        *self
-            .connect_gate
-            .write()
-            .expect("connect gate lock poisoned") = Some(gate);
-    }
-
     fn add_replicator_calls(&self) -> Vec<String> {
         self.add_replicator_calls
             .read()
@@ -264,13 +243,6 @@ impl RecordingP2P {
 
     fn set_replicators(&self, replicators: Vec<ReplicatorInfo>) {
         *self.replicators.write().expect("replicators lock poisoned") = replicators;
-    }
-
-    fn set_replicators_error(&self, error: Option<&str>) {
-        *self
-            .replicators_error
-            .write()
-            .expect("replicators error lock poisoned") = error.map(ToOwned::to_owned);
     }
 }
 

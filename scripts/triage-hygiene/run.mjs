@@ -104,7 +104,6 @@ const listComments = async (api, repo, number) =>
     }),
   );
 
-// The identities this run may delete comments as.
 export const resolveBotLogins = async (api, warn = console.warn) => {
   const logins = new Set(DEFAULT_BOT_LOGINS);
   try {
@@ -141,7 +140,6 @@ export const run = async ({
       typeof l === "string" ? l : l.name,
     );
     const context = { number: issue.number, labels, state: issue.state };
-    // Fetch comments lazily; the pure module owns the condition.
     const comments = requiresCommentContext(context)
       ? await listComments(api, repo, issue.number)
       : [];
@@ -156,7 +154,6 @@ export const run = async ({
       return false;
     }
 
-    // Compute the budget in dry-run too, so a dry run predicts the truncation.
     let willComment = false;
     if (plan.comment) {
       if (stats.commentsPosted < MAX_COMMENTS_PER_RUN) {
@@ -262,6 +259,5 @@ if (isMain) {
     issueNumber: process.env.ISSUE_NUMBER,
     botLogins: await resolveBotLogins(api),
   });
-  // A partially-completed sweep or exhausted comment budget is a failure.
   if (stats.failed > 0 || stats.commentsSuppressed > 0) process.exitCode = 1;
 }

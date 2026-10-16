@@ -1,10 +1,19 @@
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
-import { Activity, CircleX, CornerDownRight, Play, User, X } from "lucide-react";
+import {
+  Activity,
+  Circle,
+  CircleMinus,
+  CircleX,
+  Clock,
+  CornerDownRight,
+  Play,
+  User,
+} from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import {
-  emptyFilter,
   hasFilter,
+  stateOf,
   type SessionFilter,
   type SessionSource,
   type SessionState,
@@ -30,11 +39,10 @@ import {
   ComboboxTrigger,
 } from "@gents/ui/components/combobox";
 import { cn } from "@gents/ui/lib/utils";
-import { isLive } from "@/lib/live";
 import { AgentInitials } from "./parts";
 
 const matchesState = (c: SessionSummary, state: SessionState) =>
-  state === "live" ? isLive(c.turnState) : c.turnState === "failed";
+  stateOf(c.turnState) === state;
 
 const matchesSource = (c: SessionSummary, source: SessionSource) =>
   source === "task"
@@ -48,16 +56,13 @@ const passes = (c: SessionSummary, f: SessionFilter) =>
   (f.sources.length === 0 || f.sources.some((s) => matchesSource(c, s))) &&
   (f.agents.length === 0 || f.agents.includes(c.agentId ?? ""));
 
-export const filterSessions = (
-  sessions: SessionSummary[],
+export const matchesView = (
+  c: SessionSummary,
   f: SessionFilter,
   query: string | null,
 ) =>
-  sessions.filter(
-    (c) =>
-      passes(c, f) &&
-      (!query || (c.title ?? "").toLowerCase().includes(query.toLowerCase())),
-  );
+  passes(c, f) &&
+  (!query || (c.title ?? "").toLowerCase().includes(query.toLowerCase()));
 
 export type Option<V extends string> = {
   value: V;
@@ -67,8 +72,11 @@ export type Option<V extends string> = {
 };
 
 const STATES: Option<SessionState>[] = [
-  { value: "live", label: "Live", icon: Activity },
+  { value: "working", label: "Working", icon: Activity },
+  { value: "waiting", label: "Waiting for node", icon: Clock },
   { value: "failed", label: "Failed", icon: CircleX, tint: "text-destructive" },
+  { value: "stopped", label: "Stopped", icon: CircleMinus },
+  { value: "finished", label: "Finished", icon: Circle },
 ];
 
 const SOURCES: Option<SessionSource>[] = [
@@ -253,13 +261,11 @@ export function SessionFilters({
   nodeDids,
   value,
   onChange,
-  nodes,
 }: {
   sessions: SessionSummary[];
   nodeDids: readonly string[];
   value: SessionFilter;
   onChange: (next: SessionFilter) => void;
-  nodes?: { picked: boolean; clear: () => void };
 }): ReactNode {
   const countFor = (axis: keyof SessionFilter, test: (c: SessionSummary) => boolean) =>
     sessions.filter((c) => passes(c, { ...value, [axis]: [] }) && test(c)).length;
@@ -288,7 +294,7 @@ export function SessionFilters({
     count: countFor("agents", (c) => c.agentId === id),
   }));
 
-  if (sessions.length === 0 && !nodes?.picked) return null;
+  if (sessions.length === 0 && !hasFilter(value)) return null;
 
   return (
     <div
@@ -320,21 +326,6 @@ export function SessionFilters({
         value={value.sources}
         onChange={(sources) => onChange({ ...value, sources })}
       />
-      {(hasFilter(value) || nodes?.picked) && (
-        <Button
-          variant="quiet"
-          size="icon-sm"
-          aria-label="Clear filters"
-          title="Clear filters"
-          className="shrink-0"
-          onClick={() => {
-            onChange(emptyFilter);
-            nodes?.clear();
-          }}
-        >
-          <X />
-        </Button>
-      )}
     </div>
   );
 }

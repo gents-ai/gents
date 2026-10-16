@@ -39,15 +39,6 @@ pub(crate) struct Written {
 pub(crate) struct Staged {
     dir: TempDir,
     pack_name: String,
-    #[cfg_attr(not(test), allow(dead_code))]
-    definition: EvalDefinition,
-}
-
-impl Staged {
-    #[cfg(test)]
-    pub(crate) fn definition(&self) -> &EvalDefinition {
-        &self.definition
-    }
 }
 
 pub(crate) async fn stage(
@@ -71,16 +62,12 @@ pub(crate) async fn stage(
         pilot,
     )
     .map_err(|error| vec![format!("writing the definition pack: {error:#}")])?;
-    let loaded = round_trip(dir.path(), definition).await.map_err(|error| {
+    round_trip(dir.path(), definition).await.map_err(|error| {
         vec![format!(
             "the definition pack does not load and install: {error:#}"
         )]
     })?;
-    Ok(Staged {
-        dir,
-        pack_name,
-        definition: loaded,
-    })
+    Ok(Staged { dir, pack_name })
 }
 
 pub(crate) fn commit(

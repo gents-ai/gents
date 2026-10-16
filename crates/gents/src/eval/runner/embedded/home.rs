@@ -436,11 +436,4 @@ mod tests {
         let response = home.node.execute("query { AgentRequest { _docID } }").await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
     }
-
-    #[tokio::test]
-    async fn create_retained_refuses_an_existing_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let error = EmbeddedHome::create_retained(dir.path()).await.unwrap_err();
-        assert!(error.to_string().contains("already exists"), "{error}");
-    }
 }

@@ -486,7 +486,7 @@ async fn interactive_input_drains_while_provider_is_held(
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(&graphql, &node, Duration::from_secs(30)).await?;
     wait_for_runtime_state_graphql(home.path(), &graphql, Duration::from_secs(30)).await?;
-    let mut child = Command::new(cli_bin())
+    let child = Command::new(cli_bin())
         .env("HOME", home.path())
         .env("RUST_LOG", "error")
         .args(["chat", "--poll-secs", "1"])

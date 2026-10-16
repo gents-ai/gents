@@ -86,10 +86,6 @@ async fn stale_applied_endpoint_absent_from_actual_is_torn_down_once() {
     );
 }
 
-/// `collections_change_forces_reinstall` (Lean): the carried collection set is
-/// part of the replicator identity. Covers the demo layer-order race where
-/// the data-plane desired lands before the control-plane layer; pre-fix the
-/// diff keyed replicators on address alone and converged falsely.
 #[tokio::test]
 async fn grown_replicator_collection_set_reinstalls_replicator() {
     let conversation_filter = one_filter("AgentRequest", "requester_did", "did:key:requester");
@@ -153,8 +149,6 @@ async fn grown_replicator_collection_set_reinstalls_replicator() {
     );
 }
 
-/// `active_peers` failure means "assume not connected" and dial as before
-/// (fail-open), never a wedged pairing.
 #[tokio::test]
 async fn active_peer_read_failure_still_dials() {
     let store = MockStore::with_desired(Some(PairingDesired {
@@ -193,7 +187,6 @@ async fn other_active_peer_does_not_suppress_dial() {
     assert_eq!(*admin.connects.lock().unwrap(), vec![vec!["addr1"]]);
 }
 
-/// Collection IDs are reverse-resolved before diffing against desired names.
 #[tokio::test]
 async fn second_tick_converges_across_name_and_id_spaces() {
     let store = MockStore::with_desired(Some(PairingDesired {
@@ -215,7 +208,6 @@ async fn second_tick_converges_across_name_and_id_spaces() {
         first.ops_applied
     );
 
-    // Applied persists the collection name, not the internal id.
     assert_eq!(
         store.applied.lock().unwrap().collections,
         set(&["AgentRequest"]),

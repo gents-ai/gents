@@ -1,13 +1,9 @@
-//! Regression fence for #984: a P2P merge that parks a unique-index-conflicting
-//! document unindexed must not brick the next boot. DefraDB's merge path keeps
-//! the index entry for the lexicographically smallest docID and persists the
-//! loser unindexed; boot's eager materialization must not die on that parked
-//! loser.
-//!
-//! The reopen retry on lock errors models a real process restart: node
-//! shutdown does not join the P2P pending-DAG sweep loops spawned in
-//! defra-node's `setup_p2p`, so the in-process storage lock can lag shutdown by
-//! up to one sweep interval; the OS drops the lock on real process exit.
+//! External premises: DefraDB's merge path keeps the unique-index entry for
+//! the lexicographically smallest docID and persists the loser unindexed; boot's
+//! eager materialization must tolerate that parked loser. Node shutdown does not
+//! join the P2P pending-DAG sweep loops spawned in defra-node's `setup_p2p`, so
+//! the in-process storage lock can lag shutdown by up to one sweep interval; the
+//! OS drops the lock on real process exit.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

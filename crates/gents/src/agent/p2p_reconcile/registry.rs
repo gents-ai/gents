@@ -351,7 +351,6 @@ mod tests {
         };
         let m = registry_upsert_mutation(&entry, "2026-06-13T01:00:00Z", UpsertKind::Heartbeat);
 
-        // The `add` branch (first-registration) IS allowed to set everything.
         assert!(
             m.contains(r#"display_name: "should-not-appear-in-update""#),
             "add branch must still set display_name on first registration: {m}"

@@ -118,8 +118,6 @@ pub(super) async fn requests(
     Ok(result)
 }
 
-/// Keep discovery's memory proportional to sessions, not transcript size.
-/// Replay explicitly collects rows above; listing folds each bounded page.
 async fn scan_requests(
     node: &EmbeddedNode,
     principal: &str,

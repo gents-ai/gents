@@ -8,6 +8,7 @@ import {
 } from "@gents/ui/components/dialog";
 import { Kbd } from "@gents/ui/components/kbd";
 import { navigate } from "@/lib/router";
+import { jumpToRow, turnFrom } from "@/lib/scroll";
 import { isMacTauriShell } from "../../lib/shellPlatform";
 import { useSelectedNodeDid } from "@/hooks/useClient";
 
@@ -21,15 +22,29 @@ const ROWS: [string, string][] = [
   [`${MOD}3`, "Configuration"],
   [`${MOD}N`, "New session"],
   [`${MOD}K`, "Focus the composer"],
+  [`${IS_MAC ? "⌥⌘↑ / ⌥⌘↓" : "Ctrl+Alt+↑ / ↓"}`, "Previous / next turn"],
   [`${MOD}/`, "Show this reference"],
 ];
+
+const transcriptScroller = () =>
+  document.querySelector<HTMLElement>(
+    '[data-slot="scroll-area-viewport"][data-following]',
+  );
 
 export function Shortcuts() {
   const nodeDid = useSelectedNodeDid();
   const [open, setOpen] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.altKey && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        const scroller = transcriptScroller();
+        if (!scroller) return;
+        e.preventDefault();
+        jumpToRow(turnFrom(scroller, e.key === "ArrowUp" ? -1 : 1));
+        return;
+      }
+      if (e.altKey || e.shiftKey) return;
       if (!IN_DESKTOP && DESKTOP_ONLY.has(e.key)) return;
       const go = (to: Parameters<typeof navigate>[0]) => {
         e.preventDefault();

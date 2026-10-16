@@ -500,7 +500,6 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
         74,
         "recovery must not discard observed usage on restart"
     );
-    // A replayed late write may not create an additional row or charge twice.
     super::super::persistence::persist_existing_call_terminal(
         node.clone(),
         &call,

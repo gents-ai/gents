@@ -383,12 +383,8 @@ impl super::ToolCallLifecycle {
         Ok(report)
     }
 
-    /// Explicit cancellation of a running native background row that has no
-    /// live worker in this runtime. The host process owner stops the process
-    /// only if a durable record proves ownership. An observed stop settles
-    /// the row as cancelled with `cause`; an unobserved one settles it as
-    /// lost; a group still observed running leaves the row running. Returns
-    /// the verdict and whether this call won the row's terminal compare.
+    /// The host process owner stops the process only if a durable record
+    /// proves ownership.
     pub(crate) async fn cancel_unowned_background_tool(
         node: &std::sync::Arc<EmbeddedNode>,
         lifecycle: &mut ToolCallLifecycle,
@@ -451,10 +447,9 @@ impl super::ToolCallLifecycle {
         Ok((process, won))
     }
 
-    /// Redrive the idempotent notification + session wake after the lifecycle
-    /// row is already terminal. Persisted `status=completionPending:<reason>`
-    /// advances to `completed` only after
-    /// both side effects converge, so transient failures remain discoverable.
+    /// Persisted `status=completionPending:<reason>` advances to
+    /// `completed` only after both side effects converge, so transient
+    /// failures remain discoverable.
     pub async fn reconcile_background_completion_side_effects(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
@@ -546,15 +541,6 @@ impl super::ToolCallLifecycle {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn timeout_recovery_persists_external_failure_class() {
-        assert_eq!(
-            RecoveryOutcome::TimedOut.failure_class(),
-            Some(FailureClass::External)
-        );
-        assert_eq!(RecoveryOutcome::Cancelled.failure_class(), None);
-    }
 
     /// The one deadline-expiry predicate (#1334), shared by tool-call
     /// recovery here and by `gents-cli`'s fleet-slot and liveness
@@ -838,7 +824,6 @@ async fn append_recovered_background_tool_completion(
     }
 }
 
-/// Running tool rows owned by `node_did` (immutable scope key on create).
 async fn load_running_tool_call_rows_for_agent(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,

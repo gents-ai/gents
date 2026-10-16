@@ -305,8 +305,6 @@ impl<M: ProviderModel> AgentDaemon<M> {
         self
     }
 
-    /// Attach the filesystem-policy observations assembled with a tool surface
-    /// so request-time root revalidation cannot be test-only wiring.
     pub(super) fn with_tool_surface_runtime_policy(
         self,
         guard: Option<crate::tool_surface::RootExecutionGuard>,
@@ -316,11 +314,6 @@ impl<M: ProviderModel> AgentDaemon<M> {
             .with_operator_tool_root(operator_root)
     }
 
-    /// Request-scoped compaction options: daemon-lifetime knobs plus the
-    /// claimed deadline of the request this compaction serves. The deadline is
-    /// a required argument because the stored daemon-lifetime config carries
-    /// none (#1016). Both entry points fire only after the caller established
-    /// the assembled input is over budget.
     pub(super) fn compaction_options_for_request(
         &self,
         deadline: Option<chrono::DateTime<chrono::Utc>>,
@@ -420,7 +413,6 @@ impl<M: ProviderModel> AgentDaemon<M> {
             let agent_id = self.agent_config.agent_id.clone();
             let backend_id = self.agent_config.backend_id.clone().unwrap_or_default();
 
-            // The unbound worker-capacity guard stays unbound until claim.
             let active_guard = if let Some(capacity) = current_slot_capacity() {
                 let cancellation = tokio_util::sync::CancellationToken::new();
                 let guard = tokio::select! {
@@ -1048,8 +1040,6 @@ impl<M: ProviderModel> AgentDaemon<M> {
         );
     }
 
-    /// The request's Task hooks, the admitted cwd they run from and the claim
-    /// on their host record; no cwd or record when the Task has no hooks.
     async fn prepare_task_hooks(
         &self,
         request: &AgentRequest,
@@ -1094,9 +1084,8 @@ impl<M: ProviderModel> AgentDaemon<M> {
             .map_err(|error| anyhow::anyhow!("resolving the runtime cwd for a task hook: {error}"))
     }
 
-    /// Runs the owned work and its workspace completion, returning the result
-    /// the task hook phases observe. Terminalization stays with the caller so
-    /// the after-phases can gate it.
+    /// Runs the owned work and its workspace completion; terminalization stays
+    /// with the caller so the task-hook after-phases can gate it.
     async fn observe_owned_work(
         &mut self,
         lifecycle: &mut RequestLifecycle,
@@ -1225,10 +1214,6 @@ async fn lost_execution_ownership(lifecycle: &RequestLifecycle, error: &anyhow::
     matches!(lifecycle.owns_execution().await, Ok(false))
 }
 
-/// What the owned work decided, before the task hook phases react to it. The
-/// integrate-failure arm retains its Active binding so a retry can observe the
-/// pending commit-tree; a drain failure leaves the durable execution to
-/// recovery and its error to the runtime.
 enum OwnedWorkOutcome {
     Interrupted(RequestInterruptionSource),
     Observed {

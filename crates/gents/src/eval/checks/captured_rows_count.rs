@@ -1,5 +1,3 @@
-//! `captured_rows_count`: how many rows a documents capture holds.
-
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -7,15 +5,8 @@ use crate::eval::checks::{Check, CheckDescription, CheckVerdict};
 use crate::eval::runner::executor::{CaptureResult, StageEvidence};
 use crate::eval::OutcomeKind;
 
-/// Params: `{ "name": "<capture name>", "min": <u64>, "max": <u64 | null | absent> }`;
-/// passes when `min <= rows <= max`. `raw.reason_code` is the contract: `in_range`,
-/// `below_min` or `above_max` are verdicts about the subject (with `capture`,
-/// `observed` and `expected` for [`crate::eval::checks::verdict_detail`]);
-/// `missing_capture` and `bad_params` are grader outcomes and carry no feedback.
 pub struct CapturedRowsCount;
 
-/// The capture a check ref's params name and the row range they require, or
-/// `None` when they do not parse or no count can satisfy them.
 pub fn required_rows(params: &Value) -> Option<(String, u64, Option<u64>)> {
     let params: Params = serde_json::from_value(params.clone()).ok()?;
     if params.max.is_some_and(|max| max < params.min) {
@@ -73,7 +64,6 @@ impl Check for CapturedRowsCount {
             Ok(params) => params,
             Err(error) => return grader("bad_params", error.to_string(), None),
         };
-        // A range no count can satisfy is a case-author mistake, not a subject failure.
         if let Some(max) = params.max.filter(|max| *max < params.min) {
             return grader(
                 "bad_params",
@@ -155,7 +145,6 @@ fn observed(mut raw: Value, params: &Params, rows: u64) -> Value {
     raw
 }
 
-/// Grader outcomes are no evidence about the subject, so they carry no feedback.
 fn grader(reason_code: &str, detail: String, rows: Option<u64>) -> CheckVerdict {
     CheckVerdict {
         kind: OutcomeKind::Grader,

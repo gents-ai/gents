@@ -11,9 +11,6 @@ fn display_json_token_estimate<T: serde::Serialize>(value: &T) -> usize {
         .unwrap_or_default()
 }
 
-/// The runtime inference resolution's context window. An error, or a window
-/// over the advertised maximum, is not a window in use; an unobserved backend
-/// yields only the profile's window or the default.
 fn configured_context_window(
     store: &gents_desktop_core::client::ClientStore,
     profile: Option<&gents::document_config::InferenceProfile>,

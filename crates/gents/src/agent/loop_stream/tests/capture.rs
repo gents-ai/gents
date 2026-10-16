@@ -667,7 +667,6 @@ const CAPTURE_SCOPE_SINK: &str = "inference.1";
 #[tokio::test]
 async fn codex_affinity_survives_retry_tool_continuation_and_nested_compaction() {
     use gents_loop::provider_input::routing_affinity::current;
-    use gents_loop::session_hook::SessionHook;
     let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let session = hook.session_id().await.unwrap();
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));

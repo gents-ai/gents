@@ -1963,7 +1963,7 @@ async fn terminal_repair_sweep_ignores_foreign_did_claims() {
     let expired =
         escape_graphql_string(&(chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
     for node_did in [NODE_DID, "did:test:foreign-scope-owner"] {
-        let (request_id, doc_id, session_id) = create_scoped_claim(&db, node_did).await;
+        let (_request_id, doc_id, _session_id) = create_scoped_claim(&db, node_did).await;
         let escaped_doc = escape_graphql_string(&doc_id);
         let mutation = format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc}" }} }}, input: {{ execution_lease_expires_at: "{expired}" }}) {{ _docID }} }}"#,

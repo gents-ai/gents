@@ -12,9 +12,6 @@ use gents_protocol::enrollment::authorization_lease_is_fresh_at;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[cfg(test)]
-use tokio::sync::Notify;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PeerRecord {
     pub peer_id: String,
@@ -194,8 +191,6 @@ pub(crate) struct PeerDirectory {
     retired_enrollments: Vec<RetiredEnrollment>,
     _lease: Arc<PeerDirectoryLease>,
     #[cfg(test)]
-    persist_barrier: Option<PersistBarrier>,
-    #[cfg(test)]
     fail_persist: bool,
 }
 
@@ -208,13 +203,6 @@ impl Drop for PeerDirectoryLease {
             tracing::warn!(%error, "failed to unlock peer directory lease");
         }
     }
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone)]
-pub(in crate::client) struct PersistBarrier {
-    pub written: Arc<Notify>,
-    pub release: Arc<Notify>,
 }
 
 impl PeerDirectory {
@@ -251,8 +239,6 @@ impl PeerDirectory {
                     retired_enrollments: stored.retired_enrollments,
                     _lease: lease,
                     #[cfg(test)]
-                    persist_barrier: None,
-                    #[cfg(test)]
                     fail_persist: false,
                 };
                 directory.sort_records();
@@ -266,11 +252,6 @@ impl PeerDirectory {
                 Err(error).with_context(|| format!("locking peer directory {}", path.display()))
             }
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.peers.is_empty()
     }
 
     pub(crate) fn records(&self) -> &[PeerRecord] {
@@ -557,20 +538,6 @@ impl PeerDirectory {
         record
     }
 
-    #[cfg(test)]
-    pub(in crate::client) async fn remove(&mut self, peer_id: &str) -> Result<Option<PeerRecord>> {
-        let mut candidate = self.clone();
-        let removed = candidate
-            .peers
-            .iter()
-            .position(|record| record.peer_id == peer_id)
-            .map(|index| candidate.peers.remove(index));
-
-        candidate.sort_records();
-        self.commit(candidate).await?;
-        Ok(removed)
-    }
-
     pub(in crate::client) async fn queue_removal(
         &mut self,
         expected: &PeerRecord,
@@ -640,11 +607,6 @@ impl PeerDirectory {
     }
 
     #[cfg(test)]
-    pub(in crate::client) fn set_persist_barrier(&mut self, barrier: Option<PersistBarrier>) {
-        self.persist_barrier = barrier;
-    }
-
-    #[cfg(test)]
     fn set_fail_persist(&mut self, fail: bool) {
         self.fail_persist = fail;
     }
@@ -666,11 +628,6 @@ impl PeerDirectory {
         staged
             .write_all(&bytes)
             .with_context(|| format!("writing staged peer directory in {}", parent.display()))?;
-        #[cfg(test)]
-        if let Some(barrier) = &self.persist_barrier {
-            barrier.written.notify_one();
-            barrier.release.notified().await;
-        }
         #[cfg(test)]
         if self.fail_persist {
             anyhow::bail!("injected peer-directory persistence failure");
@@ -706,14 +663,6 @@ pub async fn load_peer_records(path: &Path) -> Result<Vec<PeerRecord>> {
     let mut records = read_stored_directory(path).await?.peers;
     sort_peer_records(&mut records);
     Ok(records)
-}
-
-#[cfg(test)]
-pub(crate) async fn load_peer_directory_snapshot(
-    path: &Path,
-) -> Result<(Vec<PeerRecord>, Vec<PeerRecord>)> {
-    let stored = read_stored_directory(path).await?;
-    Ok((stored.peers, stored.pending_removals))
 }
 
 fn normalize_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a str> {

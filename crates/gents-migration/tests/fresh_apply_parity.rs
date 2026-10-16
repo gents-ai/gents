@@ -72,8 +72,6 @@ async fn client_authored_collections_stay_fresh_apply_compatible() {
         server
     };
     let client_arm = async {
-        // A fresh node standing in for a paired client: single-call add_schema
-        // genesis path per collection (see module doc).
         let client = fresh_node().await;
         for &name in CLIENT_AUTHORED_COLLECTIONS {
             client

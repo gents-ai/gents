@@ -254,7 +254,6 @@ fn enrollment_owned_base_route_has_explicit_runtime_to_client_direction() {
 
 #[tokio::test]
 async fn committed_revocation_between_desired_load_and_apply_tears_down_stale_route() {
-    // Second check models a committed revoke between desired load and apply.
     let store = enrolled_live_route_store([Ok(true), Ok(false)]);
     let admin = admin_with_live_enrolled_route();
 

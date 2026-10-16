@@ -133,7 +133,6 @@ pub struct TrialCompletion {
     pub stages: Vec<StageCompletion>,
     pub usage: TrialUsage,
     pub anchor: Anchor,
-    /// Digest of the trial's captured evidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_digest: Option<String>,
 }
@@ -208,8 +207,6 @@ fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-/// Every value travels as a GraphQL variable; no value is interpolated into
-/// the document.
 async fn create(
     access: &ConfigAccess,
     operation: &'static str,

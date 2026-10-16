@@ -3,6 +3,8 @@ import type {
   RenderedToolCallView,
 } from "@source-inc/gents-desktop-client";
 
+import { stepStatus } from "./tool-summary";
+
 export type GroupMember =
   | { kind: "tool"; key: string; tool: RenderedToolCallView }
   | { kind: "thought"; key: string; text: string };
@@ -63,6 +65,9 @@ export function groupTranscript(items: RenderedTimelineItem[]): TranscriptEntry[
   return out;
 }
 
+export const groupFailures = (members: GroupMember[]) =>
+  members.filter((m) => m.kind === "tool" && stepStatus(m.tool) === "failed").length;
+
 export function groupLabel(members: GroupMember[]): string {
   const counts = new Map<string, number>();
   for (const m of members) {
@@ -90,6 +95,8 @@ export function groupLabel(members: GroupMember[]): string {
     n("worker") && `made ${plural(n("worker"), "session call", "session calls")}`,
     n("other") && `used ${plural(n("other"), "tool", "tools")}`,
   ].filter(Boolean) as string[];
+  const failed = groupFailures(members);
+  if (failed) parts.push(`${failed} failed`);
   const text = parts.join(", ") || "thought";
   return text[0]!.toUpperCase() + text.slice(1);
 }

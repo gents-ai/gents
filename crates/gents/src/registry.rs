@@ -18,8 +18,6 @@ where
 #[cfg(test)]
 mod tests;
 
-/// Duplicate logical names fail closed rather than selecting an arbitrary
-/// route.
 pub(crate) async fn configured_mcp_services(
     node: &defra_node::EmbeddedNode,
     node_did: &str,

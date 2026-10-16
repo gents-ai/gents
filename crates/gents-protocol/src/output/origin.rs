@@ -31,8 +31,6 @@ impl std::fmt::Display for OriginError {
 
 impl std::error::Error for OriginError {}
 
-/// Forking may change identity, key and session, but not native order/content
-/// or creation provenance.
 pub fn validate_fork_metadata(
     child: ObservedMessage<'_>,
     origin: ObservedMessage<'_>,

@@ -88,25 +88,20 @@ pub enum StreamPayload {
     },
 }
 
-/// One record of a source. Stored as `AgentOutputSegment`. A record carries a
-/// flush of bytes, the source's closure, or both: a **flush** (`ordinal` and
-/// `runs` present) holds the bytes since the last flush, a stream's content
-/// being the concatenation of its runs across the source's flushes in
-/// `(ordinal, run)` order; a **final flush** also carries `close`; a
-/// **terminal-only** record (`close` alone) is written when there are no new
-/// bytes.
-///
-/// Flush and closure coordinates can never collide: a flush is
-/// `(request_doc_id, source, ordinal)` dense from zero, closure is
-/// `(request_doc_id, source)` with no ordinal, so a late flush landing beyond
-/// a closed extent is inert, not a twin. Repeated delivery of the same
-/// coordinate and content is idempotent; two visible flushes sharing an
-/// ordinal but differing in writer, runs or payload, or two visible closures,
-/// are an integrity conflict every reader must surface. The storage index is
-/// ordinary, not unique, because a unique index can hide the losing twin of a
-/// remote conflict (#1073). A replay reuses the persisted document, including
-/// its creation timestamp; an already-existing create is accepted only after
-/// verifying the stored fact.
+/// One record of a source. Stored as `AgentOutputSegment`. A **flush**
+/// (`ordinal` and `runs` present) holds the bytes since the last flush; a
+/// **final flush** also carries `close`; a **terminal-only** record (`close`
+/// alone) is written when there are no new bytes. Flush and closure
+/// coordinates can never collide: a flush is `(request_doc_id, source,
+/// ordinal)` dense from zero, closure is `(request_doc_id, source)` with no
+/// ordinal, so a late flush landing beyond a closed extent is inert, not a
+/// twin. Repeated delivery of the same coordinate and content is idempotent;
+/// two visible flushes sharing an ordinal but differing in writer, runs or
+/// payload, or two visible closures, are an integrity conflict every reader
+/// must surface. The storage index is ordinary, not unique, because a unique
+/// index can hide the losing twin of a remote conflict (#1073). A replay
+/// reuses the persisted document, including its creation timestamp; an
+/// already-existing create is accepted only after verifying the stored fact.
 ///
 /// A flush records output, not lease liveness, and never renews the request
 /// lease. It commits inside the existing `config_client::txn::MutationWriteGate`;
@@ -270,11 +265,10 @@ pub enum TerminalOutput {
 }
 
 /// The single durable transcript message. Stored as `AgentMessage`. Create-only:
-/// written once, after every closing record it references, and never updated;
-/// there is no in-flight message row. `sequence` is the order coordinate within
-/// the session and keeps its existing durable allocator. Two visible messages
-/// sharing `message_key` or `(session_id, sequence)` with different content are
-/// an integrity conflict, surfaced the same way as segment twins.
+/// written once, after every closing record it references, and never updated.
+/// Two visible messages sharing `message_key` or `(session_id, sequence)` with
+/// different content are an integrity conflict, surfaced the same way as
+/// segment twins.
 ///
 /// A successfully accepted provider turn atomically publishes its Complete
 /// closing record, assistant header and pending `AgentToolCall` rows before any
@@ -331,7 +325,7 @@ pub struct TranscriptMessage {
 
 impl TranscriptMessage {
     /// Every sealed payload dependency named by this header, in native block
-    /// order; deliberately shared by all readers.
+    /// order.
     pub fn payload_references(&self) -> Vec<&PayloadRef> {
         let mut references = Vec::new();
         for block in &self.blocks {
@@ -564,8 +558,8 @@ pub enum ReconstructionError {
 }
 
 impl ReconstructionError {
-    /// Errors that can become reconstructable when immutable dependencies
-    /// replicate; all other variants are authorization or integrity failures.
+    /// Recoverable when immutable dependencies replicate; authorization and
+    /// integrity failures are terminal.
     pub fn is_incomplete(&self) -> bool {
         matches!(
             self,
@@ -653,11 +647,11 @@ impl std::fmt::Display for ReconstructionError {
 impl std::error::Error for ReconstructionError {}
 
 /// Output for a request that no message references yet, grouped by declared
-/// native position. Retracted sources are excluded. Built from the same
-/// segments the transcript will reference, so there is no rollover, overlap or
-/// repair step. Headers, closing records and segments may replicate in any
-/// order and are projected together: a header whose segments have not arrived
-/// is incomplete, never a second live copy. Unclosed request-owned output is
+/// native position; retracted sources excluded. Built from the same segments
+/// the transcript will reference, so there is no rollover, overlap or repair
+/// step. Headers, closing records and segments may replicate in any order and
+/// are projected together: a header whose segments have not arrived is
+/// incomplete, never a second live copy. Unclosed request-owned output is
 /// eligible only for the current generation of a nonterminal request; tool-owned
 /// output follows the tool lifecycle. Authored sources are never shown live:
 /// they appear only with their header. This projection is an observation for

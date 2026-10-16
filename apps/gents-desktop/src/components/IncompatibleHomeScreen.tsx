@@ -152,8 +152,7 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
                 ))}
               </p>
             ) : null}
-            {/* one list for the choice in hand: confirming a delete shows
-                what it deletes, not this beside it */}
+            {/* one list for the choice in hand */}
             {confirmingDelete ? null : (
               <div className="grid gap-1 text-sm">
                 <p>Starting fresh moves or deletes exactly these:</p>

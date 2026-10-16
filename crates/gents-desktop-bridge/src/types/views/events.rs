@@ -42,7 +42,6 @@ pub struct ChatSendResult {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientUpdateEvent {
-    /// Coarse ping reason for the webview.
     #[ts(type = "string")]
     pub reason: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]

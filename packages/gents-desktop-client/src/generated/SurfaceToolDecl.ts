@@ -2,7 +2,4 @@
 import type { QueryToolDecl } from "./QueryToolDecl.js";
 import type { WriteToolDecl } from "./WriteToolDecl.js";
 
-/**
- * One `DatastoreToolSurface` entry: create (the original write decl) or query.
- */
 export type SurfaceToolDecl = WriteToolDecl | { "kind": "query" } & QueryToolDecl;

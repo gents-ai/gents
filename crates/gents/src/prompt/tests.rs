@@ -23,15 +23,6 @@ fn user_msg(text: &str) -> Message {
     }
 }
 
-fn assistant_msg(text: &str) -> Message {
-    Message::Assistant {
-        id: None,
-        content: vec![AssistantContent::Text(Text {
-            text: text.to_string(),
-        })],
-    }
-}
-
 #[test]
 fn preamble_strips_title_generation_suffix() {
     let preamble = build_preamble(

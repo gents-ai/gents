@@ -1776,7 +1776,6 @@ async fn rust_analyzer_starts_and_reports_ready() {
     );
 }
 
-/// rust-analyzer against this crate — the same facts the live e2e checks.
 #[tokio::test]
 #[ignore = "rust-analyzer on the gents crate graph; run with --ignored"]
 async fn rust_analyzer_hover_on_gents_crate() {
@@ -1924,10 +1923,6 @@ fn code_action_query_selects_title_or_index() {
     assert_eq!(unresolved["title"], "Need resolve");
 }
 
-// Action caps (MAX_DIAGNOSTICS / MAX_WORKSPACE_SYMBOLS / …) are owned by
-// `actions.rs` constants; their application at truncation sites is pinned by
-// `document_symbol_cap_is_global_and_output_is_qualified` — restating the
-// numeric values here added no guarantee.
 #[test]
 fn redacts_single_location_workspace_symbol_and_nested_diagnostics() {
     let root = tempfile::tempdir().unwrap();

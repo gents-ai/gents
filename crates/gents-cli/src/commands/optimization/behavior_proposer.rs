@@ -12,14 +12,6 @@ pub(crate) struct AgentProposer<T> {
 }
 
 impl<T: Turn + Send> AgentProposer<T> {
-    #[cfg(test)]
-    pub(crate) fn new(turn: T) -> Self {
-        Self {
-            turn: Mutex::new(turn),
-            preamble: Mutex::new(None),
-        }
-    }
-
     pub(crate) fn with_preamble(turn: T, preamble: String) -> Self {
         Self {
             turn: Mutex::new(turn),

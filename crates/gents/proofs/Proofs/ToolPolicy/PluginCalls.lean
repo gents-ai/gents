@@ -88,7 +88,7 @@ inductive ConsentRoute where
   | deny
   deriving DecidableEq, Repr
 
-def consentRoute (interactive composed : Bool) : ConsentRoute :=
+def consentRoute (interactive _composed : Bool) : ConsentRoute :=
   if interactive then .ask else .deny
 
 theorem composed_child_waits_like_a_direct_call (interactive : Bool) :

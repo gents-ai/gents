@@ -1,8 +1,3 @@
-//! Client stores can merge only collections whose fresh-applied schema identity
-//! matches the server. Keep the derived client push set aligned with the
-//! migration guard, including owner-scoped enrollment pushes and excluding
-//! shared config collections.
-
 use std::collections::BTreeSet;
 
 use gents::agent::p2p_reconcile::templates::{resolve_template, Scope, MACHINE_TEMPLATE};

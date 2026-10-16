@@ -24,8 +24,6 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
 class GentsAgent(BaseAgent):
-    """Run one Harbor instruction through a durable Gents request."""
-
     SUPPORTS_ATIF = True
     _REMOTE_BINARY = "/usr/local/bin/gents"
     _REMOTE_REAL_BINARY = "/usr/local/libexec/gents"

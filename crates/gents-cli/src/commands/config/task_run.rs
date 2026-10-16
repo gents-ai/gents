@@ -355,52 +355,6 @@ pub(crate) fn resolve_task_id_for(
 mod tests {
     use super::*;
 
-    fn test_manual_mutation(input: RequestInput) -> String {
-        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            "req-1",
-            "did:test:test",
-            "did:test:test",
-            "agent-1",
-            "sess-1",
-            "hello Amy",
-            "interactive",
-            "2026-04-21T00:00:00Z",
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                "did:test:test",
-            ),
-        );
-        create.admission.signature = vec![0; 64];
-        create.input = input;
-        create.caused_by_trigger_kind = Some("manual".to_string());
-        create.graphql_mutation().unwrap()
-    }
-
-    #[test]
-    fn build_mutation_uses_signed_local_self_and_omits_trigger_id() {
-        let mutation = test_manual_mutation(RequestInput::default());
-        assert!(mutation.contains("admission_kind: \"local-self\""));
-        assert!(mutation.contains("caused_by_trigger_kind: \"manual\""));
-        assert!(
-            !mutation.contains("caused_by_trigger_id:"),
-            "caused_by_trigger_id must be omitted so it stays null for manual runs"
-        );
-        assert!(mutation.contains("execution_origin: \"interactive\""));
-        assert!(mutation.contains("lifecycle_state: \"pending\""));
-        assert!(mutation.contains("content: \"hello Amy\""));
-    }
-
-    #[test]
-    fn build_mutation_includes_selected_skill_input_when_present() {
-        let mutation = test_manual_mutation(RequestInput {
-            selected_skill_ids: vec!["vuln-scan".into()],
-            ..Default::default()
-        });
-
-        assert!(mutation.contains("input:"));
-        assert!(mutation.contains(r#"selected_skill_ids: ["vuln-scan"]"#));
-    }
-
     #[test]
     fn goal_task_requires_a_stable_invocation_key() {
         assert!(resolve_invocation_key("task", true, None).is_err());

@@ -74,8 +74,6 @@ impl ToolCallLifecycle {
             .doc_id
             .as_ref()
             .ok_or_else(|| anyhow!("foreground called before start_running persisted a row"))?;
-        // DefraDB requires DateTime fields to be re-supplied on update to
-        // avoid a type-mismatch error when re-validating the document.
         let started_at = self
             .started_at
             .ok_or_else(|| anyhow!("foreground called without started_at set"))?;

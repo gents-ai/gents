@@ -17,10 +17,12 @@ pub(crate) async fn apply_control_update(
     if Collection::ALL
         .iter()
         .any(|c| c.graphql_type() == collection_name)
-        // Pack installation also changes plugin-store state observed on the reconciler wake.
         || matches!(
             collection_name,
-            "OAuthCredential" | "ToolServiceHealthState" | "GraphRevision" | "GraphRun"
+            "OAuthCredential"
+                | "ToolServiceHealthState"
+                | "GraphRevision"
+                | "GraphRun"
                 | "PackInstallation"
         )
     {
