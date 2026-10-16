@@ -345,6 +345,9 @@ const ItemRow = memo(function ItemRow({
       rowKey={rowKey}
       drawn={drawn}
       data-timeline-key={timelineKey}
+      data-turn={
+        item.kind === "userMessage" || item.kind === "pendingUserTurn" ? "" : undefined
+      }
       className="group/response"
     >
       <TranscriptItem item={item} final={final} />

@@ -311,6 +311,28 @@ export function holdRow(el: Element | null) {
   el?.dispatchEvent(new CustomEvent("transcript:hold", { bubbles: true }));
 }
 
+/** Brings `el` to the reading line in one write, made at rest, and holds it
+    there: a jump is the reader's own move, so following stops. A row drawn
+    as a box is brought by its box; the window draws it in the same frame. */
+export function jumpToRow(el: Element | null) {
+  el?.dispatchEvent(new CustomEvent("transcript:jump", { bubbles: true }));
+}
+
+/* the rows a reader moves between: the turns they sent */
+const TURN = "[data-turn]";
+
+/** The turn before or after the one on the reading line, or null at either
+    end. Decided from the rows as laid out when asked, never kept. */
+export function turnFrom(scroller: HTMLElement, way: -1 | 1): Element | null {
+  const line = scroller.getBoundingClientRect().top + READING_LINE_PX;
+  const turns = Array.from(scroller.querySelectorAll(TURN));
+  /* the turn the reader is in: the last one whose top is on or above the line */
+  let at = -1;
+  for (let i = 0; i < turns.length; i += 1)
+    if (turns[i]!.getBoundingClientRect().top <= line + 0.5) at = i;
+  return turns[at + way] ?? null;
+}
+
 /**
  * The reader's place in a scroller, held. Two modes, and the reader chooses
  * between them: at the foot, the view follows whatever grows; anywhere else
@@ -567,9 +589,44 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     window.addEventListener("keydown", onKey);
     area?.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("pointerup", onPointerUp);
+    /* A jump is one write, to put the row at the reading inset; made while
+       the reader's own scroll is under way it would be dropped or would
+       stop that scroll, so it waits for rest the way an older page's rows
+       do. The row is then held like any other the reader opened. */
+    let jumpTimer = 0;
+    let jumpTo: Element | null = null;
+    const jump = () => {
+      window.clearTimeout(jumpTimer);
+      jumpTimer = 0;
+      const el = jumpTo;
+      if (!el?.isConnected) return;
+      if (performance.now() - tailAt < TAIL_MS) {
+        jumpTimer = window.setTimeout(jump, TAIL_MS);
+        return;
+      }
+      jumpTo = null;
+      setFollowing(false);
+      const inset = insetAt(el);
+      setScroll(
+        scroller,
+        scroller.scrollTop + (el.getBoundingClientRect().top - top() - inset),
+      );
+      anchor = { el, key: keyOf(el), offset: el.getBoundingClientRect().top - top() };
+    };
+    const onJump = (event: Event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const el = holdable(target) ?? target;
+      if (!el) return;
+      jumpTo = el;
+      leaving.current = false;
+      jump();
+    };
     scroller.addEventListener("scroll", onScroll, { passive: true });
     scroller.addEventListener("transcript:hold", onHold);
+    scroller.addEventListener("transcript:jump", onJump);
     return () => {
+      window.clearTimeout(jumpTimer);
+      scroller.removeEventListener("transcript:jump", onJump);
       settleRef.current = null;
       position.release();
       sizes.disconnect();

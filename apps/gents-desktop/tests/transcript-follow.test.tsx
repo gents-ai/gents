@@ -2,7 +2,13 @@ import { act, fireEvent, renderHook } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { holdRow, useFollowTail, useOlderPages } from "../src/ui/lib/scroll";
+import {
+  holdRow,
+  jumpToRow,
+  turnFrom,
+  useFollowTail,
+  useOlderPages,
+} from "../src/ui/lib/scroll";
 
 /* jsdom has no ResizeObserver: these stand in for the content box growing */
 const observers = new Set<() => void>();
@@ -417,6 +423,58 @@ describe("a reader's place through their own scroll", () => {
     await act(async () => vi.advanceTimersByTimeAsync(1000));
     expect(fixture.viewport.scrollTop).toBe(900);
     expect(result.current.atBottom).toBe(true);
+  });
+
+  /* a jump is the reader's own move: one write at rest, then the row held */
+  it("brings a row to the reading inset in one write and holds it there", async () => {
+    const fixture = readingFixture();
+    const { result } = renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    expect(result.current.atBottom).toBe(true);
+    const middle = fixture.viewport.querySelector('[data-timeline-key="middle"]')!;
+    act(() => jumpToRow(middle));
+    /* the row's top at the inset below the view's top (8px with no chrome) */
+    expect(fixture.viewport.scrollTop).toBe(292);
+    expect(middle.getBoundingClientRect().top).toBe(8);
+    expect(fixture.viewport.dataset.following).toBe("false");
+    fixture.growAbove(100);
+    expect(fixture.viewport.scrollTop).toBe(392);
+    expect(middle.getBoundingClientRect().top).toBe(8);
+  });
+
+  /* asked during the reader's own animated scroll, the jump waits for it */
+  it("makes the jump's write once the reader's scroll has rested", async () => {
+    const fixture = readingFixture();
+    renderHook(() => useFollowTail(fixture.viewport, "session-1"));
+    act(() => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -400 }));
+    });
+    await fixture.animate(800, 600, 200);
+    const middle = fixture.viewport.querySelector('[data-timeline-key="middle"]')!;
+    act(() => jumpToRow(middle));
+    expect(fixture.viewport.scrollTop).toBe(600);
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(fixture.viewport.scrollTop).toBe(292);
+    expect(middle.getBoundingClientRect().top).toBe(8);
+  });
+
+  it("moves between the turns the reader sent, from the one on the reading line", () => {
+    const fixture = readingFixture();
+    for (const row of fixture.viewport.querySelectorAll<HTMLElement>(
+      "[data-timeline-key]",
+    ))
+      row.dataset.turn = "";
+    fixture.viewport.scrollTop = 0;
+    expect(turnFrom(fixture.viewport, 1)?.getAttribute("data-timeline-key")).toBe(
+      "middle",
+    );
+    expect(turnFrom(fixture.viewport, -1)).toBeNull();
+    fixture.viewport.scrollTop = 300;
+    expect(turnFrom(fixture.viewport, -1)?.getAttribute("data-timeline-key")).toBe(
+      "above",
+    );
+    expect(turnFrom(fixture.viewport, 1)?.getAttribute("data-timeline-key")).toBe(
+      "last",
+    );
   });
 
   it("holds where an animated scroll that outlasts its input window rests", async () => {
