@@ -277,6 +277,8 @@ def snapshotJson : String :=
       ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
     ++ "\"eval_outcome_cases\":"
       ++ Conformance.Eval.evalOutcomeCasesJson ++ ","
+    ++ "\"eval_document_capture_cases\":"
+      ++ Conformance.Eval.evalDocumentCaptureCasesJson ++ ","
     ++ "\"optimization_cases\":"
       ++ Conformance.Optimization.optimizationCasesJson ++ ","
     ++ "\"publish_if_cases\":"
