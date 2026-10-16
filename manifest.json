@@ -2,8 +2,26 @@
   "assets": [
     "README.md",
     "agent_behaviors/web_researcher/system_prompt.md",
+    "browser.md",
+    "evals/README.md",
+    "evals/cases/error_recovery.json",
+    "evals/cases/form_tabs.json",
+    "evals/cases/native_help.json",
+    "evals/cases/pagination.json",
+    "evals/cases/timeout_recovery.json",
+    "evals/cases/upload.json",
+    "evals/manifest.json",
+    "evals/oracle.py",
+    "evals/pack_config.json",
+    "evals/subject/README.md",
+    "evals/subject/manifest.json",
+    "evals/subject/pack_config.json",
+    "evals/subject/system_prompt.txt",
+    "evals/test_oracle.py",
     "license.txt",
     "pack_config.json",
+    "plugins/browser_exec.afb",
+    "plugins/browser_exec/TOOL.md",
     "plugins/web_crawl.afb",
     "plugins/web_crawl/TOOL.md",
     "plugins/web_fetch.afb",
@@ -54,20 +72,37 @@
     "plugins/web_runtime/donsetch_core/tests/fixtures/mojeek_captcha.html",
     "plugins/web_runtime/donsetch_core/upstream.md",
     "plugins/web_runtime/source/main.rs",
+    "plugins/web_runtime/src/browser.rs",
+    "plugins/web_runtime/src/browser_help.json",
     "plugins/web_runtime/src/compact.rs",
     "plugins/web_runtime/src/lib.rs",
     "plugins/web_runtime/tests/review.rs",
     "plugins/web_search.afb",
     "plugins/web_search/TOOL.md",
     "tests/content.json",
-    "tests/install.json"
+    "tests/install.json",
+    "worker/browser_connection.py",
+    "worker/browser_worker.py",
+    "worker/managed_run.py",
+    "worker/pyproject.toml",
+    "worker/tests/live_browser.py",
+    "worker/tests/live_fallback.py",
+    "worker/tests/live_gents.py",
+    "worker/tests/live_model.py",
+    "worker/tests/live_regressions.py",
+    "worker/tests/live_service.py",
+    "worker/tests/model_fixture.py",
+    "worker/tests/test_connection.py",
+    "worker/tests/test_managed_run.py",
+    "worker/tests/test_worker.py",
+    "worker/uv.lock"
   ],
   "authors": [
     "gents contributors"
   ],
   "config": "pack_config.json",
   "dependencies": [],
-  "description": "A Web researcher agent with self-contained host-HTTP search, fetch, and bounded crawl tools.",
+  "description": "Web research and browser interaction: Rust search, extraction and crawl, with managed or user-connected Chrome sessions.",
   "inference_slots": [
     {
       "agents": [
@@ -368,13 +403,155 @@
         "child_process": false,
         "http_timeout_ms": 10000
       }
+    },
+    {
+      "name": "browser_exec",
+      "description": "Operate websites or connect to the user's running Chrome. For \"my browser\": discover, tell the user to approve Chrome's Allow dialog, then connect and select a returned target_id. For a public URL: exec Python goto_url(url), wait for content, then read in the same session. read never navigates. Print observations; reuse a task session. op=help provides recipes.",
+      "artifact": "plugins/browser_exec.afb",
+      "source": "plugins/web_runtime",
+      "language": "rust",
+      "instructions": "plugins/browser_exec/TOOL.md",
+      "bind_dir": {
+        "input_field": "connection",
+        "access": "read",
+        "description": "Private connection.json written by browser worker setup; grants access to host Python execution in that operator environment."
+      },
+      "manifold": {
+        "fs": "None",
+        "net": {
+          "OutboundHttp": [
+            "http://127.0.0.1:18765"
+          ]
+        },
+        "env": "None",
+        "crypto": false,
+        "child_process": true,
+        "http_timeout_ms": 20000
+      },
+      "limits": {
+        "memory_mib": 256,
+        "wall_clock_secs": 600,
+        "max_output_mib": 2
+      },
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "connection": {
+            "type": "string",
+            "description": "Optional external worker connection.json. Omit for the native Gents-managed worker."
+          },
+          "code": {
+            "type": "string",
+            "description": "Python with preloaded browser helpers; print observations. 1\u201365536 UTF-8 bytes; required for exec.",
+            "maxLength": 65536
+          },
+          "session": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "description": "Unique task name, reused across calls. Default is for sequential use only.",
+            "default": "default"
+          },
+          "timeout_s": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 300,
+            "default": 120
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "exec",
+              "doctor",
+              "close",
+              "help",
+              "discover",
+              "connect",
+              "status",
+              "tabs",
+              "disconnect",
+              "read"
+            ],
+            "default": "exec",
+            "description": "discover checks local browser setup without connecting; connect requests access to running Chrome and lists tabs; tabs refreshes tabs; status shows binding; disconnect releases it; exec runs Python; help is offline. read extracts the current rendered page with the shared Rust reader."
+          },
+          "topic": {
+            "type": "string",
+            "enum": [
+              "overview",
+              "interaction",
+              "tabs",
+              "files",
+              "recovery",
+              "setup",
+              "connection"
+            ],
+            "description": "Help topic; used only with op=help. Omit connection for help."
+          },
+          "browser": {
+            "type": "string",
+            "description": "Browser ID from discover, e.g. chrome. Used by connect; never a profile name. Default chrome."
+          },
+          "target_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "description": "Existing tab ID from connect/tabs, required for the first live exec or read. Supplying another ID changes the session pin."
+          },
+          "max_chars": {
+            "type": "integer",
+            "minimum": 200,
+            "maximum": 100000,
+            "default": 16000,
+            "description": "read: maximum extracted UTF-8 bytes."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000000,
+            "default": 0,
+            "description": "read: extraction byte offset. Page is read live on each call."
+          },
+          "focus": {
+            "type": "string",
+            "description": "read: focus phrase for extraction."
+          },
+          "selector": {
+            "type": "string",
+            "description": "read: CSS selector to scope extracted content."
+          }
+        }
+      },
+      "service": {
+        "argv": [
+          "uv",
+          "run",
+          "--python",
+          "3.13",
+          "--locked",
+          "--project",
+          "{pack}/worker",
+          "python",
+          "{pack}/worker/browser_worker.py",
+          "managed",
+          "--state",
+          "{state}/worker",
+          "--allow-host-execution"
+        ],
+        "startup_timeout_secs": 120,
+        "skip_when": {
+          "op": "help"
+        },
+        "optional": true
+      }
     }
   ],
   "tags": [
     "web",
     "research",
     "search",
-    "plugin"
+    "plugin",
+    "browser",
+    "automation"
   ],
-  "version": "1.0.0"
+  "version": "1.1.0"
 }

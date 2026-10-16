@@ -1,0 +1,35 @@
+{
+  "node": {},
+  "agents": [
+    {
+      "agent_id": "browser",
+      "display_name": "Browser eval subject",
+      "context_id": "browser",
+      "inference_profile_id": "gents:inference-slot:browser"
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "browser",
+      "display_name": "Browser eval context",
+      "system_prompt": "./system_prompt.txt",
+      "tools_id": "browser"
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "browser",
+      "display_name": "Browser only",
+      "integrations": {
+        "plugins": [
+          {
+            "plugin": "gents/browser_exec"
+          }
+        ]
+      },
+      "built_ins": {
+        "enable_context_budget": true
+      }
+    }
+  ]
+}

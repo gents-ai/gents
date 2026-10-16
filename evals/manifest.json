@@ -1,0 +1,32 @@
+{
+  "manifest_version": 1,
+  "name": "browser_use_evals",
+  "namespace": "gents",
+  "version": "0.1.0",
+  "description": "Native browser-use acceptance definitions; requires browser trial provisioning and trusted fixture observations.",
+  "authors": [
+    "gents contributors"
+  ],
+  "tags": [
+    "eval",
+    "browser"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "cases/error_recovery.json",
+    "cases/form_tabs.json",
+    "cases/native_help.json",
+    "cases/pagination.json",
+    "cases/timeout_recovery.json",
+    "cases/upload.json",
+    "oracle.py",
+    "pack_config.json",
+    "subject/README.md",
+    "subject/manifest.json",
+    "subject/pack_config.json",
+    "subject/system_prompt.txt",
+    "test_oracle.py"
+  ],
+  "config": "pack_config.json"
+}

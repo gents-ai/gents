@@ -1,0 +1,137 @@
+{
+  "case_id": "error_recovery",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "prepare",
+      "prompt": "Open http://127.0.0.1:19472/invoices and inspect the page title. Leave this browser session open for subsequent turns.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "browser_exec"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ],
+            "max_calls": 20
+          },
+          "tier": "acceptance"
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "response.status",
+                "equals": "completed"
+              },
+              {
+                "field": "response.stdout",
+                "contains": "Gents browser practice desk"
+              }
+            ]
+          },
+          "tier": "acceptance"
+        }
+      ]
+    },
+    {
+      "stage_id": "exception",
+      "prompt": "In the same browser session deliberately execute Python raise RuntimeError('browser-recovery-probe'). Report the tool error status, phase, whether code_executed is known or unknown, and the recommended next step. Do not retry the code.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "browser_exec"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ],
+            "max_calls": 20
+          },
+          "tier": "acceptance"
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "response.status",
+                "equals": "failed"
+              },
+              {
+                "field": "response.phase",
+                "equals": "execution"
+              },
+              {
+                "field": "response.code_executed",
+                "equals": null
+              },
+              {
+                "field": "response.stderr",
+                "contains": "browser-recovery-probe"
+              },
+              {
+                "field": "response.next",
+                "matches": ".+"
+              }
+            ]
+          },
+          "tier": "acceptance"
+        }
+      ]
+    },
+    {
+      "stage_id": "recover",
+      "prompt": "Using the SAME browser session, inspect the current page title and visible invoice content. Do not navigate, reload, or submit anything. Report whether the page survived.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "browser_exec"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ],
+            "max_calls": 20
+          },
+          "tier": "acceptance"
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "response.status",
+                "equals": "completed"
+              },
+              {
+                "field": "response.stdout",
+                "contains": "Gents browser practice desk"
+              },
+              {
+                "field": "response.stdout",
+                "contains": "INV-101"
+              }
+            ]
+          },
+          "tier": "acceptance"
+        }
+      ]
+    }
+  ]
+}

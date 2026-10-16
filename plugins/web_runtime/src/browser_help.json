@@ -1,0 +1,86 @@
+{
+  "overview": {
+    "usage": "browser_exec(code, session?, timeout_s?). Gents starts the worker automatically; omit connection. Python helpers are imported. Print observations. Browser/files persist; variables do not.",
+    "helpers": "goto_url(url), page_info(), js(expression), fill_input(selector,text), click_at_xy(x,y), type_text(text), press_key(key), scroll(x,y,dy=-300), wait_for_element(selector,timeout=10), list_tabs(), new_tab(url), switch_tab(target), capture_screenshot(), upload_file(selector,path)",
+    "start": "goto_url('https://example.com')\nassert wait_for_element('body')\nprint(page_info())\nprint(js('document.body.innerText.slice(0,6000)'))",
+    "important": "Navigation and clicks can return before page data appears. Wait for the content you need, not just document load. For screenshots use capture_screenshot(), not screenshot().",
+    "topics": [
+      "interaction",
+      "tabs",
+      "files",
+      "recovery",
+      "setup",
+      "connection"
+    ],
+    "next": "For recipes call op=help, topic=<topic>, omitting connection. Help never needs the worker."
+  },
+  "interaction": {
+    "waits": "wait_for_element returns True when found and False on timeout; it does not raise. Check the result before accessing the element, e.g. assert wait_for_element('#result'), 'Result did not appear'. After False, inspect the current URL/content and adjust the selector or report an access failure.",
+    "research": "Discover destinations from observed page links before navigating. Do not invent repository paths or paper IDs. A completed execution may display a 404, CAPTCHA or unrelated search results: inspect the page before citing it. If search is blocked, use observed official project links and report the access limitation. Save source URL, title and a short supporting passage as you go.",
+    "read": "Use js() to inspect live DOM text, links, labels, roles and attributes. It returns Python values, including lists and dictionaries; print the relevant subset.",
+    "inspect": "print(js(\"Array.from(document.querySelectorAll('input,select,button')).map(e=>({tag:e.tagName,id:e.id,name:e.name,type:e.type,text:e.innerText,disabled:e.disabled}))\"))",
+    "form": "fill_input('#name','Ada')\njs(\"document.querySelector('#region').value='west'; document.querySelector('#region').dispatchEvent(new Event('change',{bubbles:true}))\")\nassert wait_for_element('#service:not([disabled])')",
+    "click": "js(\"document.querySelector('#submit').click()\")\nassert wait_for_element('[data-confirmation]')\nprint(js(\"document.querySelector('[data-confirmation]').textContent\"))",
+    "pagination": "js(\"document.querySelector('#next').click()\")\nassert wait_for_element('tbody tr')\nprint(js(\"document.querySelector('table').innerText\"))",
+    "selects": "Inspect select.options and use the exact option.value, which may differ from its visible label or capitalization. After setting a value and dispatching change, verify the selected value before submitting. For dependent fields, wait until enabled and inspect the newly loaded options.",
+    "notes": "Inspect actual selectors first. Dispatch input/change for programmatically changed controls. Check disabled states. wait_for_load only waits document readiness; it does not wait for delayed app data. Use a selector identifying the NEW page or expected state. Python controls loops; js() runs inside the current page.",
+    "rendered_read": "After navigation and waiting for content, call op=read in the same session. This uses the same Rust Donsetch extraction as web_fetch, including focus, selector, max_chars and offset. On live connections supply target_id for the first read. HTTP fetch does not inherit browser cookies; use read for logged-in/rendered content. Live DOM pagination is not a frozen snapshot; check for page changes. Example: exec(code=\"goto_url('https://example.com'); assert wait_for_element('body')\",session=\"research\"), then read(session=\"research\"). There is no url argument on browser_exec; read never navigates. It serializes top-level HTML, not iframe/shadow DOM or live form-control properties; inspect those with exec. focus_omitted and partial indicate incomplete extraction. Capture is limited to 1 MB of top-level HTML before max_chars/selector apply; larger pages need scoped exec inspection."
+  },
+  "tabs": {
+    "helpers": "list_tabs(), current_tab(), new_tab(url), switch_tab(target, activate=False), close_tab(target=None)",
+    "recipe": "print(list_tabs())\nnew_tab('https://example.com')\nassert wait_for_element('body')\nprint(current_tab())",
+    "ownership": "Isolated sessions own their browser. Environment-configured CDP sessions create a task tab. Explicit connect sessions list existing tabs without opening a task tab; select target_id before first exec or read. Reuse session; disconnect/close never kills borrowed Chrome or closes user tabs."
+  },
+  "files": {
+    "upload": "from pathlib import Path\np=Path('items.csv').resolve()\np.write_text('name,quantity\\napples,3\\npears,5\\n')\nupload_file('#csv',str(p))\nprint(js(\"document.querySelector('#csv').files[0].name\"))",
+    "images": "capture_screenshot() saves an image and returns image parts to supported Gents providers. Use page DOM text if the provider cannot receive tool images. Full output files are named in response.artifacts.",
+    "workspace": "Python runs in the named session workspace. Relative task files persist between calls. Save reusable functions in agent_helpers.py there; the harness imports them on subsequent calls. Other Python variables and imports must be recreated each call.",
+    "extraction": "For multi-page work, append each completed batch to a JSON/CSV file in the workspace. Read it back and deduplicate, count, sort and total in Python (Decimal for money). Verify the collected count before answering. Use bounded batches so completed work survives timeouts.",
+    "discovery": "For additional upstream helpers: import inspect; print(inspect.signature(upload_file)). Do not guess Playwright/Selenium methods: this is Browser Use, with preloaded Python helpers and js/CDP."
+  },
+  "recovery": {
+    "errors": "Read response.status, error, phase, code_executed and next, plus stdout/stderr. code_executed=false means this call's code did not run; null means unknown, so earlier actions may have completed. Follow next before retrying. stderr preserves the final 4000 characters, including the exception; artifacts contain full bounded logs. Tool transport success is not task success.",
+    "timeout": "Actions before a timeout may have completed. Inspect the page in the same session before repeating a submit. Prefer smaller bounded batches.",
+    "startup": "startup_failed with code_executed=false means no model code ran. Managed Chrome startup is polled separately for up to 60 seconds and requires a responding CDP endpoint. Inspect the returned chrome_log path and host process-launch health. A dead previously started browser requires explicit close/reopen; it is never silently replaced.",
+    "binding": "A cannot-read-connection error occurs BEFORE the worker is contacted. It means Gents needs read permission for the connection FILE, not that the worker is offline. Run setup with --gents-home or gents plugin dirs add <connection.json> --home <home>. Do not try alternate spellings of the same path.",
+    "help": "Call {op:help,topic:setup} WITHOUT connection to diagnose offline. Doctor requires an admitted connection and checks the worker.",
+    "missing": "If an element is absent, inspect current page and wait for the relevant content. If the browser died, report it or close/reopen the session; do not silently change identity."
+  },
+  "setup": {
+    "command": "uv run --locked --project <pack>/worker python <pack>/worker/browser_worker.py setup --state <private-state-directory> --allow-host-execution --gents-home <gents-home>",
+    "authority": "The worker runs Python as its OS user. --allow-host-execution acknowledges that already-authorized capability; WASM does not sandbox the worker. --gents-home grants read access to the connection file so model calls work without a human prompt.",
+    "next": "Use the returned connection path, never its contents. Install gents/web with --grant-authority and bind its web_researcher inference slot and add gents/browser_exec to Tools.integrations.plugins. op=doctor confirms worker availability.",
+    "options": "Use --gents /path/to/current/gents when needed; --headed for visible managed Chromium; --cdp <endpoint> for an explicitly attached browser. A healthy worker is reused; stop it before changing modes.",
+    "stop": "uv run --locked --project <pack>/worker python <pack>/worker/browser_worker.py stop --state <private-state-directory>",
+    "native": "On Gents with managed pack services, install with --grant-authority and omit connection. Gents launches the pack service on demand and owns its process group. uv, Python 3.13 and Chrome/Chromium are still required; this pack does not bundle runtime binaries. Call op=doctor without connection. A startup failure names the retained state directory and stderr; fix that cause before trying again.",
+    "availability": "Browser support is optional. doctor reports capabilities: public_http, browser and, when ready, isolated_browser. Without native service support or worker dependencies, public search/fetch/crawl remain usable; browser calls return unavailable without executing code. An explicitly configured external worker also works on runtimes without managed services. Do not retry unavailable browser operations until setup changes. The runtime must still understand this pack schema and support plugin HTTP rounds; optional browser support cannot make an incompatible pack format installable."
+  },
+  "connection": {
+    "workflow": "Connect to the user's running browser only when they ask to use it. For public browsing, use an isolated session. When live access is requested, first call discover. If an endpoint is available, tell the user you are requesting a connection and they may need to click Allow in Chrome; then call connect with that browser ID and a task session. If setup_required, guide the user to chrome://inspect/#remote-debugging (Chrome 144+) and ask them to enable it; retry discovery after they confirm. access_denied means OS privacy settings block Gents, not missing Chrome setup. Never click the approval yourself, copy cookies, or launch a replacement browser. After connect succeeds, summarize the tabs and choose the tab the user requested; ask if ambiguous. Supply target_id with exec/read and reuse the session.",
+    "example": [
+      {
+        "op": "discover"
+      },
+      {
+        "op": "connect",
+        "browser": "chrome",
+        "session": "user-task"
+      },
+      {
+        "op": "exec",
+        "session": "user-task",
+        "target_id": "<ID from connect>",
+        "code": "print(page_info())\nprint(js(\"document.body.innerText.slice(0,6000)\"))"
+      },
+      {
+        "op": "disconnect",
+        "session": "user-task"
+      }
+    ],
+    "ownership": "Connecting does not launch Chrome, copy a profile or navigate existing tabs. Disconnect stops only our driver. Read and act only on the requested tab. Helper switch_tab changes the tab only within the current call; never close unrelated tabs. Live calls remain pinned to the selected target_id; to change that pin supply another target_id. A stale or closed selected tab fails without automatic command replay. Earlier actions in the same call may have completed; inspect before retrying writes. phase=target with code_executed=false means selection failed before model code ran and the prior pin is unchanged.",
+    "identity": "Browser IDs identify installations, not signed-in Chrome profiles. CDP exposes tabs but does not reliably map them to profile names or reveal which tab the user means. Ask for the intended tab when ambiguous. Do not claim profile grouping or active-tab discovery.",
+    "recovery": "If access is missing, denied or times out, report response.next. Never silently switch to isolated browsing. A timeout does not mean Chrome approval succeeded. Disconnect failed sessions before reconnecting when the user is ready.",
+    "custom": "Operators may set GENTS_BROWSER_ROOTS to a JSON object mapping browser IDs to user-data directories. This replaces default discovery. Discovery only reads DevToolsActivePort, never credential databases.",
+    "outcomes": "connected means Chrome accepted the connection and tabs were read. connection_required means no live access was established. For denied or timed-out attempts, explain next and wait for user readiness before disconnecting/reconnecting. Never say connected based only on discover or status. Empty tabs do not establish that the user's browser is empty; explain the exposed scope. A fresh CLI plugin run ends its driver after returning; a running Gents server keeps it for follow-up."
+  }
+}

@@ -25,7 +25,10 @@ fn main() {
         "web_fetch".to_owned()
     };
     assert!(
-        matches!(tool.as_str(), "web_search" | "web_fetch" | "web_crawl"),
+        matches!(
+            tool.as_str(),
+            "web_search" | "web_fetch" | "web_crawl" | "browser_exec"
+        ),
         "unexpected web plugin name: {tool}"
     );
     println!("cargo:rustc-env=WEB_TOOL={tool}");

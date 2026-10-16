@@ -18,12 +18,21 @@
   ],
   "tools": [
     {
-      "display_name": "Web search and reading",
+      "display_name": "Web search, reading and browser interaction",
       "integrations": {
         "plugins": [
-          { "plugin": "gents/web_search" },
-          { "plugin": "gents/web_fetch" },
-          { "plugin": "gents/web_crawl" }
+          {
+            "plugin": "gents/web_search"
+          },
+          {
+            "plugin": "gents/web_fetch"
+          },
+          {
+            "plugin": "gents/web_crawl"
+          },
+          {
+            "plugin": "gents/browser_exec"
+          }
         ]
       },
       "tools_id": "web-researcher-tools"

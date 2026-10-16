@@ -1,0 +1,76 @@
+{
+  "case_id": "upload",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "import",
+      "prompt": "Open http://127.0.0.1:19472/upload. Create quantities.csv with columns name,quantity and exactly these rows: bolts=7, nuts=11, washers=4. Upload through the file input, click Import exactly once, and report the receipt from the page. Consult tool help if needed.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "browser_exec"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ],
+            "max_calls": 20
+          },
+          "tier": "acceptance"
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "22",
+              "3"
+            ]
+          },
+          "tier": "acceptance"
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "website_state",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "passed",
+                "equals": true
+              }
+            ]
+          },
+          "tier": "acceptance"
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "website_state",
+          "collection": "BrowserEvalObservation",
+          "filter": {
+            "trial_id": {
+              "_eq": "$trial"
+            },
+            "case_id": {
+              "_eq": "upload"
+            },
+            "stage_id": {
+              "_eq": "import"
+            }
+          },
+          "fields": [
+            "passed",
+            "details"
+          ]
+        }
+      ]
+    }
+  ]
+}

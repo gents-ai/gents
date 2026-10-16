@@ -19,6 +19,7 @@ use donsetch_core::{
 use serde_json::{Value, json};
 use url::Url;
 
+pub mod browser;
 mod compact;
 
 const MAX_ROUND_REQUESTS: usize = 16;

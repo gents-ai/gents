@@ -1,10 +1,13 @@
 # Web
 
-`gents/web` is a self-contained web research pack. It installs a ready-to-use
-Web researcher and three direct tools: `gents/web_search`, `gents/web_fetch`,
-and `gents/web_crawl`. The tools make bounded HTTPS requests through the Gents
-host; the pack does not require a SearXNG server, Firecrawl, API keys, or a
-browser. A prebuilt pack does not require Rust or native tools on the machine.
+`gents/web` combines Rust search, page extraction and bounded crawl with browser
+interaction. It installs a Web researcher and four tools: `web_search`,
+`web_fetch`, `web_crawl`, and `browser_exec`.
+
+Public HTTP research needs no browser, Python service, API key or search server.
+Browser interaction starts a pack-owned worker only when needed; that backend
+currently requires `uv`, Python 3.13 and Chrome/Chromium on macOS or Linux.
+The Rust WASM browser adapter shares Donsetch extraction with the HTTP tools.
 
 ## Install and use
 
@@ -17,11 +20,10 @@ gents pack install ./gents.web.pack --grant-authority --inference-slot web_resea
 gents chat --agent-id web-researcher "Find the current official guidance on ..."
 ```
 
-Use a current Gents build with plugin HTTP support (validated with commit
-`8f2e34af`). To install a prebuilt artifact, skip the build command. After
+Use a Gents build with plugin HTTP rounds and native pack services. To install a prebuilt artifact, skip the build command. After
 publication, use `gents/web` in place of the archive path. Source builds
 need the repository's Rust toolchain and `wasm32-wasip1` target. The explicit
-`--grant-authority` accepts the plugins' outbound HTTP authority. The profile
+`--grant-authority` accepts outbound HTTP and the browser worker's host process authority. The profile
 is not created or configured by this pack. Use a profile capable of following
 links and distinguishing source statements from synthesis.
 
@@ -38,6 +40,7 @@ the research task.
 | `gents/web_search` | Search the supported keyless search sources and return ranked results | `query` |
 | `gents/web_fetch` | Extract readable text from one URL or a batch of up to 12 | `url` |
 | `gents/web_crawl` | Follow links within a bounded site scope and return page records | `url` |
+| `gents/browser_exec` | Operate an isolated browser or connect to existing Chrome tabs; read rendered pages with the shared Rust extractor | `op`, `session`, `code` |
 
 The schemas in the pack manifest are the accepted interface. `web_search`
 requires `query` and accepts up to two `query_variants`, `max_results`,
@@ -83,9 +86,9 @@ gents plugin run gents/web_search --input '{"query":"official HTTP status code r
 gents plugin run gents/web_fetch --input '{"url":"https://www.rfc-editor.org/rfc/rfc9110","mode":"read","max_chars":4000}'
 ```
 
-Each plugin declares `OutboundHttp` through the host. The guest rejects local
+The three HTTP research plugins declare `OutboundHttp` through the host. The guest rejects local
 hostnames and private IP literals; Gents' host HTTP resolver blocks private
-resolved addresses and disables automatic redirects and proxies. The plugins
+resolved addresses and disables automatic redirects and proxies. Those plugins
 have no filesystem, environment-variable, child-process, or crypto authority. Requests are not constrained to an
 operator-provided domain allow-list, so only install the pack when its internet
 access is appropriate for the node. No website credentials are configured by
@@ -93,13 +96,27 @@ the pack.
 
 ## Boundaries
 
-These tools retrieve HTTPS responses and extract text or links from responses.
-They can extract text from text-based PDFs; scanned pages receive no OCR.
-They do not run page JavaScript, use a browser, take screenshots, or turn
-images into text. The pack has no guest-native TLS, ONNX, or browser support;
-network requests use Gents' host HTTP service. It is not a replacement for a
-browser-based workflow or for every Firecrawl feature. The planned browser
-escalation and screenshots follow-up is tracked in [issue #26](https://github.com/gents-ai/packs/issues/26).
+The HTTP tools retrieve HTTPS responses, including text-based PDFs; scanned pages
+receive no OCR. They do not execute page JavaScript or inherit browser cookies.
+For rendered or authenticated content, use `browser_exec` and `op=read`. Its
+rendered DOM passes through the same Donsetch Rust extraction core. Browser
+interaction still uses the pinned Python harness; a native Rust CDP backend is
+not part of this version.
+
+To use your running Chrome, ask the model to connect. It calls `discover`, then
+`connect`, lists existing tabs, and selects the requested tab before acting.
+On Chrome 144+, enable `chrome://inspect/#remote-debugging` once and approve
+Chrome's connection dialog. No extension, relaunch, profile copying or manual
+endpoint configuration is required on supported installations. Missing setup,
+OS access denial and failed connections produce recovery instructions. The model
+must not silently substitute an isolated browser. `disconnect` releases our
+driver and leaves your browser and tabs open.
+
+Browser discovery identifies installations; it does **not** reliably group tabs
+by signed-in Chrome profile or identify the foreground tab. Choose the intended
+tab when ambiguous. Browser Python runs with the operator's host authority.
+See [browser setup and lifecycle](browser.md) for dependencies, advanced CDP
+attachment and integration tests. Browser approval must be performed by the user.
 
 This replaces the former `gents/web_deep_research` pack in this repository.
 Existing installations are not automatically migrated or removed.
@@ -107,7 +124,7 @@ Existing installations are not automatically migrated or removed.
 ## Development
 
 `tests/install.json` checks installation, reinstall, and removal of the agent,
-slot, and three plugins. `tests/content.json` checks the tool schemas, access
+slot, and four plugins. `tests/content.json` checks the tool schemas, access
 grants, and inference binding contract.
 
 Run the full build, native workspace tests, and installation lifecycle with:
@@ -121,3 +138,12 @@ carries the corresponding source and license. See the [upstream modification
 record](plugins/web_runtime/donsetch_core/upstream.md). The tools keep no
 persistent crawl database or cache; Gents retains tool results in its session
 history.
+
+Browser support is optional: search, fetch and crawl do not launch the native
+worker. `browser_exec` with `op=doctor` reports available capabilities. A runtime
+without managed services, or a host missing worker dependencies, keeps HTTP
+research available; browser operations return `unavailable` without running code.
+An external worker can enable browser use without native process management.
+Installation still requires the current pack/agent schema, plugin HTTP support
+and the declared authority grants; this is feature fallback, not compatibility
+with arbitrary older pack formats.

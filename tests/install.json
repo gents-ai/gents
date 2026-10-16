@@ -8,7 +8,8 @@
     "plugins": [
       "web_crawl",
       "web_fetch",
-      "web_search"
+      "web_search",
+      "browser_exec"
     ],
     "slots": [
       "web_researcher"

@@ -1,0 +1,78 @@
+{
+  "case_id": "pagination",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "paginate",
+      "prompt": "Open http://127.0.0.1:19472/invoices. Inspect all three pages using the UI. Which Approved invoices are due strictly before 2026-10-15? Give their IDs and exact total in USD. Do not submit any forms.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "browser_exec"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ],
+            "max_calls": 20
+          },
+          "tier": "acceptance"
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "INV-101",
+              "INV-104",
+              "INV-107",
+              "500.00"
+            ]
+          },
+          "tier": "acceptance"
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "website_state",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "passed",
+                "equals": true
+              }
+            ]
+          },
+          "tier": "acceptance"
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "website_state",
+          "collection": "BrowserEvalObservation",
+          "filter": {
+            "trial_id": {
+              "_eq": "$trial"
+            },
+            "case_id": {
+              "_eq": "pagination"
+            },
+            "stage_id": {
+              "_eq": "paginate"
+            }
+          },
+          "fields": [
+            "passed",
+            "details"
+          ]
+        }
+      ]
+    }
+  ]
+}

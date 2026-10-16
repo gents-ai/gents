@@ -1,0 +1,30 @@
+{
+  "manifest_version": 1,
+  "name": "browser_use_eval_subject",
+  "namespace": "gents",
+  "version": "0.1.0",
+  "description": "Browser-only agent for browser-use eval trials; plugin must be provisioned in each trial home.",
+  "authors": [
+    "gents contributors"
+  ],
+  "tags": [
+    "eval",
+    "browser"
+  ],
+  "kind": "documents",
+  "assets": [
+    "pack_config.json",
+    "system_prompt.txt",
+    "README.md"
+  ],
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "browser",
+      "description": "Model evaluated on browser tasks.",
+      "agents": [
+        "browser"
+      ]
+    }
+  ]
+}

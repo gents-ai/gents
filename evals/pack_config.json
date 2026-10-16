@@ -1,0 +1,29 @@
+{
+  "node": {},
+  "eval_definitions": [
+    {
+      "definition_id": "browser-use-core",
+      "comparability_version": 1,
+      "title": "Browser use: interaction and recovery",
+      "subject": {
+        "kind": "agent",
+        "inference_slots": [
+          "browser"
+        ]
+      },
+      "fixtures": {
+        "schemas": [
+          "type BrowserEvalObservation { trial_id: String! case_id: String! stage_id: String! passed: Boolean! details: String! }"
+        ]
+      },
+      "cases": [
+        "./cases/native_help.json",
+        "./cases/pagination.json",
+        "./cases/form_tabs.json",
+        "./cases/upload.json",
+        "./cases/timeout_recovery.json",
+        "./cases/error_recovery.json"
+      ]
+    }
+  ]
+}
