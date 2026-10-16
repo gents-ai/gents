@@ -494,6 +494,9 @@ async fn exact_compaction_redelivery_is_idempotent() {
 async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
     let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
+    // Exercise selection over received facts, including an out-of-scope
+    // middle header. This does not authorize a requester to change the owner
+    // of an existing session; publication authority is tested separately.
     let turns = [
         ("request-cursor-old", None, "sparse-old"),
         (
@@ -518,6 +521,8 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
         .await;
     }
 
+    // Full owner-local history keeps the sparse sequence selection: the
+    // remote turn occupies sequence 2 and must not appear.
     let local = history::load_sequenced_history_projection(
         &node,
         "session-cursor",
@@ -534,6 +539,8 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
         vec![1, 3]
     );
 
+    // The sequence cursor loads only the suffix after sequence 1: sequence 3,
+    // never the compacted prefix and never the out-of-scope remote sequence.
     let rows = history::load_sequenced_history_projection(
         &node,
         "session-cursor",
@@ -904,6 +911,12 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     node.shutdown().await;
 }
 
+/// Insert canonical replica observations for reader filtering tests. These
+/// tests intentionally place foreign facts beside local ones; they establish
+/// no claim about admission or publication authority. The writer tests below
+/// use the claimed execution owner instead.
+/// Seed an already-published canonical observation for reader/claim tests.
+/// This does not exercise publication authorization or producer transitions.
 pub(crate) async fn import_history_observation(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     request_id: &str,

@@ -18,12 +18,20 @@ pub(crate) struct LivenessToolCallRow {
     pub(crate) await_mode: Option<String>,
 }
 
+/// Durable activity for one processing request: a tool call (`started_at`,
+/// `completed_at`) or an inference call (`started_at`, `ended_at`), including
+/// finished ones. The newest of these timestamps and `claimed_at` is the
+/// request's progress. Rows are never deleted and timestamps are written once,
+/// so while the activity reads succeed that maximum cannot move back in time.
+/// A failed activity read deliberately falls back to `claimed_at` for that
+/// sample, so monotonicity holds only across successful observations.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct LivenessActivityRow {
     #[serde(default)]
     pub(crate) request_doc_id: Option<String>,
-    /// Only rows written by the request's own agent count; another
-    /// principal's row can name the same request document.
+    /// Principal that wrote the row. Only rows written by the request's own
+    /// agent count: another principal's row can name the same request
+    /// document without being this request's progress.
     #[serde(default)]
     pub(crate) node_did: Option<String>,
     #[serde(default)]
@@ -237,6 +245,25 @@ mod tests {
         .expect("canonical AgentRequest liveness row")
     }
 
+    fn tool_call(
+        request_id: &str,
+        tool_call_id: &str,
+        tool_name: &str,
+        started_offset_secs: i64,
+        deadline_offset_secs: Option<i64>,
+        await_mode: Option<&str>,
+    ) -> LivenessToolCallRow {
+        LivenessToolCallRow {
+            request_id: request_id.to_string(),
+            node_did: "did:test:local".to_string(),
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: tool_name.to_string(),
+            started_at: Some(iso(started_offset_secs)),
+            deadline_at: deadline_offset_secs.map(iso),
+            await_mode: await_mode.map(str::to_string),
+        }
+    }
+
     #[test]
     fn expired_processing_count_counts_requests_with_past_deadline() {
         let requests = vec![
@@ -275,6 +302,10 @@ mod tests {
             "fresh deadline must not be flagged"
         );
     }
+
+
+
+
 
     fn tool_activity(
         request_id: &str,
@@ -338,7 +369,7 @@ mod tests {
         let age = progress_age_ms(now(), Vec::new(), activity);
         assert_eq!(
             age, 4_000,
-            "newest completion is progress, not claimed_at"
+            "newest completion (4s ago) is progress, not claimed_at (300s ago)"
         );
     }
 
@@ -379,12 +410,19 @@ mod tests {
         );
     }
 
+    /// #1782: a tool call leaving the running set must not move progress
+    /// back to `claimed_at`. Across samples of an advancing request, progress
+    /// time never decreases and the age never exceeds the gap since the last
+    /// durable event.
     #[test]
     fn progress_never_moves_back_in_time_across_samples() {
         let running_read = || vec![tool_call("req-1", "tc-1", "read_file", -1, None, None)];
+        // (sample offset secs, running tool calls, durable activity)
         let samples = vec![
             (0, running_read(), vec![tool_activity("req-1", -1, None)]),
+            // tc-1 completed: it left the running set.
             (5, Vec::new(), vec![tool_activity("req-1", -1, Some(2))]),
+            // Waiting on the model between tool batches.
             (
                 10,
                 Vec::new(),

@@ -385,6 +385,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
 #[tokio::test(start_paused = true)]
 async fn tool_does_not_execute_when_provider_stalls_before_turn_closure() {
     let calls = Arc::new(AtomicUsize::new(0));
+    let model = ScriptedModel::new_stalling(vec![RawStreamingChoice::ToolCall(
         RawStreamingToolCall::new(
             "call-1".to_string(),
             "echo".to_string(),

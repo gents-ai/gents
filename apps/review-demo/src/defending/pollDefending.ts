@@ -118,7 +118,9 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
           : [],
       ),
     );
-  } catch {}
+  } catch {
+    // Older live runs predate adjudicated verdict classifications.
+  }
   try {
     const optional = await postGraphql<{
       DefenseVerificationAssignment?: DefenseSnapshot["verificationAssignments"];
@@ -135,7 +137,9 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
     }`);
     verificationAssignments = optional.DefenseVerificationAssignment ?? [];
     verificationCompletions = optional.DefenseVerificationCompletion ?? [];
-  } catch {}
+  } catch {
+    // Older live runs predate the assignment schema. Keep their visualizer usable.
+  }
   try {
     const optional = await postGraphql<{
       DefenseVerificationAssignment?: Array<{
@@ -161,7 +165,9 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
       ...row,
       ...assignmentProvenance.get(row.assignment_id),
     }));
-  } catch {}
+  } catch {
+    // Older live runs predate assignment-carried source provenance.
+  }
   try {
     const optional = await postGraphql<{
       DefenseVerificationCompletion?: Array<{
@@ -180,7 +186,9 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
       ...row,
       reason: completionReasons.get(row.assignment_id) ?? row.reason,
     }));
-  } catch {}
+  } catch {
+    // Older live runs predate structured verification completion reasons.
+  }
   try {
     const optional = await postGraphql<{
       DefenseRootCauseCluster?: DefenseSnapshot["clusters"];
@@ -217,7 +225,9 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
     validations = optional.DefensePatchValidation ?? [];
     securityReviews = optional.DefensePatchSecurityReview ?? [];
     contractPipelineAvailable = true;
-  } catch {}
+  } catch {
+    // Older live runs predate the contract-aware patch pipeline.
+  }
   return {
     contractPipelineAvailable,
     jobs: data.DefendingCodeJob ?? [],

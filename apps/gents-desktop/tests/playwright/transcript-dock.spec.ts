@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { expect, gotoHarness, test } from "./desktopTest";
 
-const widthsDuring = (page: Page, act: () => Promise<void>) => {
+async function widthsDuring(page: Page, act: () => Promise<void>) {
   await page.evaluate(() => {
     const widths: { pane: number; dock: number }[] = [];
     const surface = () =>

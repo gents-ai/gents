@@ -541,6 +541,7 @@ mod tests {
                 planned: 1,
             }
         );
+    }
 
     use crate::document_config::EvalSplit;
     use crate::eval::report::evidence::CellUsage;

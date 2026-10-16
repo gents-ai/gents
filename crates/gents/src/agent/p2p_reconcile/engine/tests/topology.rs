@@ -46,6 +46,7 @@ async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
         replicator_filter: conversation_filter.clone(),
         ..Default::default()
     }));
+    *store.applied.lock().unwrap() = PairingApplied {
         collections: set(&["Network"]),
         replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_filter: PairingFilters::new(),

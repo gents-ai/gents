@@ -1,5 +1,15 @@
 import Proofs.CanonicalOutput.Execution.SessionComposition
 
+/-!
+# Closure uniqueness across composed execution
+
+Closure uniqueness is a property of the durable segment collection, rather
+than an admission premise on the application trace. Exact duplicate delivery
+is permitted: every pair of visible closure records at a source coordinate
+must denote the same immutable record.
+-/
+namespace CanonicalOutput.Execution.SessionComposition
+
 def ClosureUnique (state : World) : Prop :=
   ∀ coordinate left, left ∈ closures state.segments coordinate →
     ∀ right, right ∈ closures state.segments coordinate → left = right
@@ -617,6 +627,8 @@ private theorem goal_preserves (goal : GoalAutomation.OperatorResume.Snapshot)
   all_goals rcases h with ⟨_, ⟨_, rfl⟩⟩
   all_goals simpa [ClosureUnique, GoalContinuation.releaseGate, Gate.atTime] using unique
 
+/-- Closure uniqueness is preserved by the existing composed application
+trace. The trace itself carries no invariant assumptions or extra guards. -/
 theorem Trace.closureUnique {before after : World} (trace : Trace before after)
     (unique : ClosureUnique before) : ClosureUnique after := by
   induction trace with

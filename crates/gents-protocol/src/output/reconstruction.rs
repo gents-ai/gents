@@ -1,6 +1,6 @@
 //! Sealed source reconstruction, refining CanonicalOutput/Reconstruction.lean.
-//! Absence never implies denial, and missing bytes never produce a shortened
-//! message.
+//! Callers supply authorized observations and explicit denial evidence. Absence
+//! never implies denial, and missing bytes never produce a shortened message.
 
 use super::{
     MediaData, MediaKind, MediaType, MessageBlock, MessagePublication, MessageRole, OutputSegment,
@@ -24,6 +24,8 @@ pub struct ObservedSegment<'a> {
     pub segment: &'a OutputSegment,
 }
 
+/// Dependency membership AND denial established by the hydration/ACP owner.
+/// A bare denied ID is insufficient to link an absent dependency to a closure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DependencyDenial {
     pub root_close_id: String,
@@ -33,11 +35,12 @@ pub struct DependencyDenial {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReconstructedStream {
     pub declaration: StreamDeclaration,
-    /// Exact UTF-8 payload.
+    /// Exact UTF-8 payload; use `as_bytes()` for byte-oriented consumers.
     pub text: String,
 }
 
-/// Require one exact fact; twins conflict.
+/// Require one exact fact. Duplicate arrival is harmless; distinct physical
+/// identities or contents conflict. No winner is selected from twins.
 fn unique<'a>(
     mut records: impl Iterator<Item = ObservedSegment<'a>>,
     missing: ReconstructionError,
@@ -76,7 +79,8 @@ fn invalid_extent(reference: &PayloadRef, bytes: u64) -> ReconstructionError {
 }
 
 /// Reconstruct a header's selected text without retaining a second payload
-/// copy.
+/// copy. Ranges are byte offsets in the sealed UTF-8 stream; literals are the
+/// only small runtime-owned bytes allowed between selected output ranges.
 pub fn reconstruct_presented_payload(
     records: &[ObservedSegment<'_>],
     denied: &[String],
@@ -129,6 +133,7 @@ fn closing_for_reference<'a>(
     dependency_denials: &[DependencyDenial],
     reference: &PayloadRef,
 ) -> Result<ObservedSegment<'a>, ReconstructionError> {
+    // Keep authorization behavior identical to the stream primitive.
     if let Some(doc_id) = dependency_denials
         .iter()
         .filter(|d| d.root_close_id == reference.close_doc_id)
@@ -239,7 +244,7 @@ fn validate_reference_source(
 }
 
 /// A successfully reconstructed sealed extent with its reasoning signature
-/// streams indexed by native (block, part) position.
+/// streams indexed by native (block, part) position, in stream order.
 struct SealedExtent {
     streams: Vec<ReconstructedStream>,
     signatures: HashMap<(u32, u32), Vec<usize>>,
@@ -269,7 +274,10 @@ impl SealedExtent {
     }
 }
 
-/// Observations grouped by exact document identity and by (request, source).
+/// The observations grouped once, each group in observation order: by exact
+/// document identity (closing lookup) and by (request, source) (extent sweep).
+/// Both owners filter on exactly these keys, so a group is the subsequence
+/// they would select from the whole observation set.
 struct ObservationIndex<'a> {
     by_doc: HashMap<&'a str, Vec<ObservedSegment<'a>>>,
     by_source: HashMap<(&'a str, &'a OutputSource), Vec<ObservedSegment<'a>>>,
@@ -293,15 +301,26 @@ impl<'a> ObservationIndex<'a> {
     }
 }
 
-/// One reconstruction invocation over a fixed observation set; a success is
-/// reused for every reference through the same close.
+/// One reconstruction invocation over a fixed observation set. Closing lookup
+/// and extent reconstruction depend on a reference only through its close
+/// document, except for the stream bound and error attribution, so a success
+/// is reused for every reference through the same close. Failures are never
+/// retained: each failing reference re-runs the per-reference definition and
+/// reports its own error. Nothing outlives the invocation.
 struct Extents<'s, 'a> {
     records: &'s [ObservedSegment<'a>],
     denied: &'s [String],
     dependency_denials: &'s [DependencyDenial],
+    /// Tests disable reuse to evaluate the per-reference definition.
+    #[cfg(test)]
+    reuse: bool,
     index: OnceCell<ObservationIndex<'a>>,
     closings: RefCell<HashMap<&'a str, ObservedSegment<'a>>>,
     extents: RefCell<HashMap<&'a str, Rc<SealedExtent>>>,
+    #[cfg(test)]
+    closing_scans: std::cell::Cell<usize>,
+    #[cfg(test)]
+    extent_builds: std::cell::Cell<usize>,
 }
 
 impl<'s, 'a> Extents<'s, 'a> {
@@ -314,10 +333,23 @@ impl<'s, 'a> Extents<'s, 'a> {
             records,
             denied,
             dependency_denials,
+            #[cfg(test)]
+            reuse: true,
             index: OnceCell::new(),
             closings: RefCell::default(),
             extents: RefCell::default(),
+            #[cfg(test)]
+            closing_scans: Default::default(),
+            #[cfg(test)]
+            extent_builds: Default::default(),
         }
+    }
+
+    fn reuses(&self) -> bool {
+        #[cfg(test)]
+        return self.reuse;
+        #[cfg(not(test))]
+        true
     }
 
     fn index(&self) -> &ObservationIndex<'a> {
@@ -326,49 +358,68 @@ impl<'s, 'a> Extents<'s, 'a> {
     }
 
     fn closing(&self, reference: &PayloadRef) -> Result<ObservedSegment<'a>, ReconstructionError> {
-        if let Some(closing) = self.closings.borrow().get(reference.close_doc_id.as_str()) {
-            return Ok(*closing);
+        if self.reuses() {
+            if let Some(closing) = self.closings.borrow().get(reference.close_doc_id.as_str()) {
+                return Ok(*closing);
+            }
         }
-        let candidates = self
-            .index()
-            .by_doc
-            .get(reference.close_doc_id.as_str())
-            .map_or(&[][..], Vec::as_slice);
+        #[cfg(test)]
+        self.closing_scans.set(self.closing_scans.get() + 1);
+        let candidates = if self.reuses() {
+            self.index()
+                .by_doc
+                .get(reference.close_doc_id.as_str())
+                .map_or(&[][..], Vec::as_slice)
+        } else {
+            self.records
+        };
         let closing =
             closing_for_reference(candidates, self.denied, self.dependency_denials, reference)?;
-        self.closings.borrow_mut().insert(closing.doc_id, closing);
+        if self.reuses() {
+            self.closings.borrow_mut().insert(closing.doc_id, closing);
+        }
         Ok(closing)
     }
 
-    /// Equal to `reconstruct_extent_streams(.., reference)` with the stream
+    /// Equal to `reconstruct_extent_streams(.., reference)`, with `reference.stream`
     /// guaranteed in bounds on success.
     fn extent(&self, reference: &PayloadRef) -> Result<Rc<SealedExtent>, ReconstructionError> {
-        let reused = self
-            .extents
-            .borrow()
-            .get(reference.close_doc_id.as_str())
-            .cloned();
+        let reused = if self.reuses() {
+            self.extents
+                .borrow()
+                .get(reference.close_doc_id.as_str())
+                .cloned()
+        } else {
+            None
+        };
         let extent = match reused {
             Some(extent) => extent,
             None => {
                 let closing = self.closing(reference)?;
-                let same_source = self
-                    .index()
-                    .by_source
-                    .get(&(
-                        closing.segment.request_doc_id.as_str(),
-                        &closing.segment.source,
-                    ))
-                    .map_or(&[][..], Vec::as_slice);
+                #[cfg(test)]
+                self.extent_builds.set(self.extent_builds.get() + 1);
+                let same_source = if self.reuses() {
+                    self.index()
+                        .by_source
+                        .get(&(
+                            closing.segment.request_doc_id.as_str(),
+                            &closing.segment.source,
+                        ))
+                        .map_or(&[][..], Vec::as_slice)
+                } else {
+                    self.records
+                };
                 let extent = Rc::new(SealedExtent::new(extent_streams_from_closing(
                     same_source,
                     self.denied,
                     closing,
                     reference,
                 )?));
-                self.extents
-                    .borrow_mut()
-                    .insert(closing.doc_id, Rc::clone(&extent));
+                if self.reuses() {
+                    self.extents
+                        .borrow_mut()
+                        .insert(closing.doc_id, Rc::clone(&extent));
+                }
                 extent
             }
         };
@@ -438,7 +489,7 @@ fn extent_streams_from_closing(
     }
 
     // Index once, excluding out-of-extent raw facts BEFORE twin checks. Never
-    // allocate from an untrusted declared count.
+    // allocate from an untrusted declared count or scan all records per ordinal.
     let mut slots: BTreeMap<u32, Vec<ObservedSegment<'_>>> = BTreeMap::new();
     let mut denied_in_extent = BTreeSet::new();
     for record in records.iter().copied().filter(same_source) {
@@ -470,6 +521,7 @@ fn extent_streams_from_closing(
             return Err(malformed());
         }
     } else if !closing.segment.runs.is_empty() || !closing.segment.payload.is_empty() {
+        // Native shape check: Lean's Option Flush cannot represent this record.
         return Err(malformed());
     }
     let mut streams: Vec<ReconstructedStream> = Vec::new();
@@ -502,6 +554,7 @@ fn extent_streams_from_closing(
             let end = offset
                 .checked_add(usize::try_from(run.bytes).map_err(|_| malformed())?)
                 .ok_or_else(malformed)?;
+            // str::get rejects both out-of-bounds runs and split UTF-8 scalars.
             let part = record
                 .segment
                 .payload
@@ -783,9 +836,9 @@ fn validate_reasoning_signature(
     Ok(())
 }
 
-/// Reconstruct one complete canonical transcript header into its native
-/// message: the sole protocol-level path for history, provider input, forks
-/// and exports.
+/// Reconstruct one complete canonical transcript header into its native message.
+/// This is the sole protocol-level path for history, provider input, forks and
+/// exports: it validates immutable provenance before exposing any bytes.
 pub fn reconstruct_message(
     records: &[ObservedSegment<'_>],
     denied: &[String],
@@ -800,8 +853,10 @@ fn reconstruct_message_with(
     message: &TranscriptMessage,
 ) -> Result<Message, ReconstructionError> {
     validate_native_shape(message)?;
+
     let validate_reference =
         |reference: &PayloadRef| validate_reference_source(extents, message, reference);
+    // Closures/source provenance are validated before native decoding.
     let mut provenance_failure = None;
     for reference in message.payload_references() {
         if provenance_failure.is_none() {

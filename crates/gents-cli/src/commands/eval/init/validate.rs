@@ -11,17 +11,20 @@ use serde_json::{json, Value};
 use super::dossier::{runtime_collections, Dossier};
 use super::draft::Draft;
 
+/// A draft the CLI completed into a definition: its id, owner, version and
+/// subject are the CLI's, its cases the author's.
 #[derive(Clone, Debug)]
 pub(crate) struct Assembled {
     pub(crate) definition: EvalDefinition,
 }
 
+/// Minimums the interview settled.
 pub(crate) struct Floors {
     pub(crate) validation_min: usize,
 }
 
-/// The definition the draft describes: the CLI owns the subject and the
-/// comparability version, whatever the draft carried is ignored.
+/// Step 2: the definition the draft describes. The author sets neither the
+/// subject nor the comparability version; whatever it carried is ignored.
 pub(crate) fn assemble(
     draft: &Draft,
     definition_id_flag: Option<&str>,
@@ -49,6 +52,7 @@ pub(crate) fn assemble(
         .map_err(|error| vec![format!("the draft is not an eval definition: {error}")])
 }
 
+/// Steps 3 to 6, in order, stopping at the first step with messages.
 pub(crate) fn validate(
     assembled: &Assembled,
     registry: &CheckRegistry,
@@ -60,11 +64,7 @@ pub(crate) fn validate(
         .validate()
         .map_err(|error| vec![format!("{error:#}")])?;
     for step in [
-        definition
-            .cases
-            .iter()
-            .flat_map(|case| case_catalog_conformance(case, registry))
-            .collect(),
+        catalog_conformance(definition, registry),
         capture_conformance(definition, dossier),
         split_shape(definition, floors),
     ] {
@@ -75,9 +75,18 @@ pub(crate) fn validate(
     Ok(())
 }
 
-/// The single owner of the rule, so `gents eval checks --validate-case`
-/// (a pack's own contract tests) and the author's draft validation cannot
-/// disagree on what the catalog admits.
+/// Step 4: every check is registered and its params satisfy its schema.
+fn catalog_conformance(definition: &EvalDefinition, registry: &CheckRegistry) -> BTreeSet<String> {
+    definition
+        .cases
+        .iter()
+        .flat_map(|case| case_catalog_conformance(case, registry))
+        .collect()
+}
+
+/// Step 4 for one case: the single owner of the rule, so `gents eval checks
+/// --validate-case` (a pack's own contract tests) and the author's draft
+/// validation cannot disagree on what the catalog admits.
 pub(crate) fn case_catalog_conformance(
     case: &EvalCase,
     registry: &CheckRegistry,
@@ -204,7 +213,8 @@ fn known_collections(dossier: &Dossier) -> String {
 }
 
 /// The field names a DefraDB filter object tests: its keys, through the
-/// `_and`, `_or` and `_not` combinators; `_docID` names the document itself.
+/// `_and`, `_or` and `_not` combinators. A field's own value holds operators
+/// (`_eq`, `_in`, …), not fields, and `_docID` names the document itself.
 fn filter_fields<'a>(filter: &'a Value, keys: &mut BTreeSet<&'a str>) {
     let Some(object) = filter.as_object() else {
         return;
@@ -225,6 +235,7 @@ fn filter_fields<'a>(filter: &'a Value, keys: &mut BTreeSet<&'a str>) {
     }
 }
 
+/// Step 6: every split is populated and validation meets its floor.
 fn split_shape(definition: &EvalDefinition, floors: &Floors) -> BTreeSet<String> {
     let mut messages = BTreeSet::new();
     let count = |split: EvalSplit| {

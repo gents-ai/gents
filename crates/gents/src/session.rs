@@ -89,6 +89,9 @@ pub(crate) use sessions::{
     ensure_session_in_txn, max_sequence, reopen_session_in_txn, touch_session_in_txn,
 };
 
+/// Render an immutable requester route key for a document create branch.
+/// Ordinary local lineage leaves the field null by omitting it; remote child
+/// lineage stamps the normalized coordinator DID exactly once.
 pub(crate) fn requester_did_create_field(requester_did: Option<&str>) -> String {
     requester_did
         .map(str::trim)
@@ -105,6 +108,9 @@ pub struct CompactionEntry {
     pub files_read: Vec<String>,
     pub files_modified: Vec<String>,
     pub messages_compacted: u32,
+    /// Inclusive canonical `AgentMessage.sequence` cursor for the cumulative
+    /// compacted provider prefix. Storage decoding remains nullable so missing
+    /// cursors can be rejected explicitly at the validation boundary.
     pub compacted_through_sequence: Option<u32>,
     pub original_tokens: usize,
     pub compacted_tokens: usize,
@@ -116,14 +122,24 @@ pub(crate) struct PromptCompactionState {
     pub summaries: Vec<String>,
     pub total_messages_compacted: usize,
     pub compacted_through_sequence: Option<u32>,
+    /// Canonical fingerprint of the complete ordered compaction generation
+    /// used to build this prompt. Writers compare it transactionally before
+    /// appending so two reductions of the same generation cannot both land.
     pub generation: String,
+    /// False when a background transcript cutoff selected an older compatible
+    /// compaction generation. Such a request may read that generation but must
+    /// not append a new compaction to the live session chain.
     pub is_latest_generation: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SequencedMessage {
+    /// Provider source derived from this header's exact reconstructed closes,
+    /// never its native bytes or provider-generated message ID.
     pub provider_source: Option<gents_loop::claude_messages_body::ReplayTag>,
+    /// The validated origin header for forks; never a provider-assigned ID.
     pub canonical_header_doc_id: Option<String>,
+    /// Original native block positions, before any provider-view rewrite.
     pub block_indices: Vec<usize>,
     pub sequence: u32,
     pub message: Message,

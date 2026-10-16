@@ -38,6 +38,7 @@ pub(crate) fn log_relay_mode_diagnostics(mode: P2pRelayModeArg) {
                 tracing::warn!(
                     ?non_production,
                     "default iroh relay set includes non-production (canary/staging) endpoints; \
+                     these are expected to be unstable and can trigger relay connect churn — \
                      the pinned iroh version likely needs updating (see #588)"
                 );
             }

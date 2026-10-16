@@ -1,7 +1,10 @@
 //! Authorized canonical transcript reads.
 //!
-//! A fork header may resolve segments from its origin session, so segment
-//! reads are scoped by node/requester, not by the child session label.
+//! Headers carry no body bytes.  This module is the one session reader that
+//! obtains strict header/segment documents and hands the facts to the protocol
+//! reconstruction owner.  In particular, a fork header may resolve segments
+//! from its origin session, so segment reads are scoped by node/requester,
+//! not by the child session label.
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
@@ -44,6 +47,8 @@ pub enum CanonicalOutputReadError {
     AmbiguousCanonicalHeader { header_doc_id: String },
 }
 
+/// The physical request and node scope supplied by the owned restore.
+/// Its commit CID is a historical request version, not the latest lease write.
 #[derive(Clone, Copy)]
 pub(crate) struct CanonicalReplayScope<'a> {
     pub(crate) node_did: &'a str,
@@ -55,9 +60,12 @@ pub(crate) struct CanonicalReplayScope<'a> {
     pub(crate) expected_scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
 }
 
+/// One canonical assistant, retaining physical identity even
+/// when another row happens to reconstruct to equal native bytes.
 pub(crate) struct CanonicalAssistantCandidate {
     pub(crate) header_doc_id: String,
     pub(crate) request_doc_id: String,
+    /// Read only by tests that pin the candidate's transcript position.
     #[cfg(test)]
     pub(crate) sequence: u32,
     pub(crate) message: gents_protocol::message::Message,
@@ -78,6 +86,8 @@ struct CanonicalReplayCapture {
     body: serde_json::Value,
 }
 
+/// Exact source of a provider-owned assistant, established by its physical
+/// referenced closes rather than by message bytes or a message-key suffix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CanonicalProviderCoordinate {
     pub(crate) scope: gents_protocol::rendered_request::CaptureScope,
@@ -161,6 +171,7 @@ enum ReadAccess<'a, 'txn> {
     Config(&'a ConfigAccess),
 }
 
+/// One scoped read only, never a replacement for an authoritative transaction.
 /// Cache positive immutable facts, not missing dependencies: a later node query
 /// can observe replication filling a gap. The caller fixes agent/requester scope.
 #[derive(Default)]
@@ -190,6 +201,8 @@ struct RequestOutputRows {
     by_source: HashMap<OutputSource, Vec<usize>>,
 }
 
+/// Unrelated malformed headers remain undecoded. Coordinate matches retain
+/// their original order and every physical occurrence, even identical IDs.
 struct SessionHeaderRows {
     rows: Vec<serde_json::Value>,
     by_key: HashMap<String, Vec<usize>>,
@@ -327,9 +340,9 @@ impl ReadAccess<'_, '_> {
     }
 }
 
-/// Resolve one exact header inside an existing authoritative transaction;
-/// terminal selection and recovery must never fall back to a latest
-/// session message.
+/// Resolve one exact header inside an existing authoritative transaction.  This
+/// is deliberately keyed by physical document identity: terminal selection and
+/// recovery must never fall back to a latest session message.
 pub(crate) async fn load_canonical_message_in_txn(
     txn: &ConfigApplyTxn<'_>,
     header_doc_id: &str,
@@ -352,14 +365,16 @@ pub(crate) async fn load_canonical_message_in_txn(
     .await
 }
 
-/// One authoritative transaction reader over one canonical request snapshot.
-/// Each request-wide segment scan and resolved header is read once per reader:
-/// terminalization holds the process-wide write gate while it validates every
-/// accepted tool reply, and a fresh read per header scans the request's whole
-/// output once per tool, starving lease renewal. A publication that appends
-/// exactly one segment and header may consume the snapshot through
-/// `load_created_message`; every other canonical mutation requires a new
-/// reader. No facts survive a retry.
+/// Exact reconstruction of many headers of one scope in one authoritative
+/// transaction. Each request-wide segment scan and resolved header is read
+/// once per reader: terminalization holds the process-wide write gate while
+/// it validates every accepted tool reply, and a fresh read per header scans
+/// the request's whole output once per tool, starving lease renewal.
+///
+/// Its cache is a transaction snapshot. A publication that appends exactly
+/// one segment and header may consume it through `load_created_message`,
+/// which reads the two new rows under ACP and invalidates coordinate checks.
+/// Every other canonical mutation requires a new reader. No facts survive a retry.
 pub(crate) struct TxnCanonicalReader<'a, 'txn> {
     txn: &'a ConfigApplyTxn<'txn>,
     node_did: &'a str,
@@ -400,6 +415,9 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
         }
     }
 
+    /// Reuse headers from an exact scoped batch read. A separate `_docID`
+    /// equality is a point lookup, but reusing the rows avoids another read
+    /// per header in this transaction.
     pub(crate) fn observe_headers(
         &mut self,
         headers: &[super::canonical_rows::TranscriptMessageRow],
@@ -439,11 +457,12 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
             .collect())
     }
 
-    /// Only these two creates may have changed canonical output since this
-    /// reader's last use. Read both exact rows through ACP before extending
-    /// the complete request snapshot; mutation receipts and prepared inputs
-    /// are not read authorization. Consume the reader so the extended
-    /// snapshot cannot escape this publication.
+    /// DefraDB transaction reads are snapshots with read-your-writes. Only
+    /// these two creates may have changed canonical output since this reader's
+    /// last use. Read both exact rows through ACP before extending the complete
+    /// request snapshot; mutation receipts and prepared inputs are not read
+    /// authorization. Consume the reader so the extended snapshot cannot escape
+    /// this publication.
     pub(crate) async fn load_created_message(
         mut self,
         header_doc_id: &str,
@@ -529,7 +548,8 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
 }
 
 /// Resolve an exact authorized canonical header through either the local or
-/// HTTP read adapter; there is no serialized-content fallback.
+/// HTTP read adapter. Exports and clients share the same dependency owner as
+/// transaction-backed runtime readers; there is no serialized-content fallback.
 pub async fn load_canonical_message(
     access: &ConfigAccess,
     header_doc_id: &str,
@@ -552,6 +572,7 @@ pub async fn load_canonical_message(
     .await
 }
 
+/// Borrowed-node form of the same exact, scoped reconstruction boundary.
 pub async fn load_canonical_message_from_node(
     node: &EmbeddedNode,
     header_doc_id: &str,
@@ -676,8 +697,10 @@ async fn load_canonical_payload(
         .map_err(anyhow::Error::from)
 }
 
-/// Load only canonical headers bound to one exact request. Duplicate
-/// sequences are an integrity failure.
+/// Load only canonical headers bound to one exact request.  Callers that make
+/// lifecycle decisions can inspect immutable publication membership without
+/// accidentally triggering a "latest message" projection or reading payload
+/// bytes.  Duplicate sequences are an integrity failure.
 pub(crate) async fn load_request_headers_in_txn(
     txn: &ConfigApplyTxn<'_>,
     session_id: &str,
@@ -772,6 +795,9 @@ async fn load_header(
                     && header.message.requester_did.as_deref() == requester_did,
                 "canonical header scope mismatch"
             );
+            // A pinned physical ID does not make a second header at the same
+            // logical coordinate harmless. Include visible key/sequence twins
+            // in the shared identity validator before caching the observation.
             let mut observed =
                 coordinate_twins(access, &header, node_did, requester_did, cache).await?;
             observed.push(header.clone());
@@ -801,6 +827,9 @@ async fn load_header(
     }
 }
 
+/// Scoped headers sharing `header`'s key or sequence in its session. A
+/// bulk transaction reader reads its session once: validating each of a request's
+/// headers by its own query costs the session size per header.
 async fn coordinate_twins(
     access: ReadAccess<'_, '_>,
     header: &super::canonical_rows::TranscriptMessageRow,
@@ -903,6 +932,7 @@ async fn validate_origin_chain(
     }
 }
 
+/// Scoped segments of one request, read once per reader in a transaction.
 async fn request_rows(
     access: ReadAccess<'_, '_>,
     request_doc_id: &str,
@@ -1059,6 +1089,9 @@ async fn load_replay_request_facts_batch(
             ));
         }
         query.push_str(" }");
+        #[cfg(test)]
+        let _ = REPLAY_REQUEST_FACT_BATCHES
+            .try_with(|batches| batches.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         let response = ReadAccess::Node(node)
             .query(&query, "load_canonical_replay_request_facts")
             .await?;
@@ -1168,6 +1201,9 @@ async fn load_referenced_segments(
             ));
         }
     }
+    // Do not key these observations by document ID: contradictory observations
+    // of one physical ID must reach the shared integrity checker, not become
+    // last-writer-wins here. Exact duplicates are harmless to reconstruction.
     let mut records = Vec::new();
     for (request_doc_id, source) in sources {
         if cache.source_reads {
@@ -1239,7 +1275,8 @@ async fn reconstruct_scoped_message_with_facts(
             })
             .collect::<Vec<_>>();
         if origin.doc_id != header.doc_id {
-            // Fork publication relaxes the origin's publication/source
+            // Fork equality alone is insufficient: the origin's publication/source
+            // constraints must hold too. Fork publication deliberately relaxes those
             // constraints on the child, not on the original authored message.
             reconstruct_message(&observed, &[], &[], &origin.message).map_err(|error| {
                 (
@@ -1318,8 +1355,10 @@ pub(crate) async fn load_canonical_assistant_candidates(
     load_canonical_assistant_candidates_with(node, node, scope, boundary, None).await
 }
 
-/// Physical-request reads for replay. A failed store read is an error, never
-/// empty rows, so it cannot pass for a missing request.
+/// Physical-request reads for replay. Implementations read a bounded batch so
+/// replay does not issue one request and commit query per historical turn. A
+/// failed store read is an error, never empty rows, so it cannot pass for a
+/// missing request.
 #[async_trait::async_trait]
 pub(crate) trait ReplayRequestReader: Sync {
     async fn request_facts(
@@ -1353,6 +1392,8 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
     let (request_commits, high_water) =
         validated_canonical_replay_boundary(node, requests, scope, boundary).await?;
+    // None records the empty canonical view at capture time. A later current
+    // read cannot turn that historical empty boundary into an unbounded scan.
     let Some(high_water) = high_water else {
         return Ok(Vec::new());
     };
@@ -1457,6 +1498,9 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
                 }
             };
         let Some(coordinate) = coordinate else {
+            // An authored assistant belongs in permissive history, but is not
+            // a provider continuation candidate merely because its role and
+            // publication match a provider-owned assistant.
             continue;
         };
         let request_doc_id = origin_header
@@ -1544,9 +1588,10 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         };
         let (request_id, request_commits) = match loaded {
             Ok(request) => request,
-            // A failed store read of a historical request says nothing about
-            // the request and must not silently strip reasoning, so it
-            // propagates.
+            // A historical request that is verifiably missing or out of scope
+            // makes only its turn non-replayable; the current request is
+            // validated above. A failed store read says nothing about the
+            // request and must not silently strip reasoning, so it propagates.
             Err(error)
                 if candidate.request_doc_id != scope.request_doc_id
                     && error
@@ -1580,8 +1625,11 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             message: candidate.message,
         });
     }
+    // Capture reads are the pass's dominant per-candidate store cost; they
+    // stay batched across the pass.
     let capture_rows = load_replay_capture_rows(node, &selected).await?;
     preload_replay_capture_blocks(node, &capture_rows, &mut capture_cache).await?;
+
     let mut candidates = Vec::new();
     for item in selected {
         let capture = replay_capture_from_row(
@@ -1625,7 +1673,8 @@ struct PendingReplayCandidate {
 }
 
 /// One assistant of the bounded canonical view that passed every check a
-/// capture read does not participate in.
+/// capture read does not participate in: bounded-header, coordinate, tag
+/// selection and physical-request validation.
 struct SelectedReplayCandidate {
     capture_key: String,
     header_doc_id: String,
@@ -1662,9 +1711,11 @@ fn replay_capture_key(
     )
 }
 
-/// Batched `capture_key` read for the pass's selected coordinates: rows are
-/// queried by the exact key only, so a contradictory row under a key is
-/// detected, not filtered away.
+/// Batched `capture_key` read for the pass's selected coordinates: one chunked
+/// `_in` statement instead of one per candidate, with rows grouped per key so
+/// a key with zero or multiple rows still leaves its turn without evidence,
+/// never an error. Rows are queried by the exact key only: a contradictory row
+/// under a key must be detected, not filtered away.
 async fn load_replay_capture_rows(
     node: &EmbeddedNode,
     selected: &[SelectedReplayCandidate],
@@ -1692,6 +1743,8 @@ async fn load_replay_capture_rows(
             .query(&query, "load_canonical_replay_captures")
             .await?;
         for row in rows_value(&response, "RenderedRequest")? {
+            // An `_in` on capture_key only returns rows carrying that field;
+            // a row without one is attributable to no requested key.
             let Some(key) = row.get("capture_key").and_then(serde_json::Value::as_str) else {
                 continue;
             };
@@ -1701,6 +1754,12 @@ async fn load_replay_capture_rows(
     Ok(rows)
 }
 
+/// Read every manifest block the pass's unambiguous captures name in one
+/// shared batched pass, so per-candidate verification resolves from positive
+/// cache observations only. A capture whose record does not decode locally is
+/// left to its verifier, which reports it per capture exactly as an unbatched
+/// read would; the shared block read isolates a verification failure per
+/// manifest the same way.
 async fn preload_replay_capture_blocks(
     node: &EmbeddedNode,
     capture_rows: &BTreeMap<String, Vec<serde_json::Value>>,
@@ -1736,7 +1795,8 @@ async fn preload_replay_capture_blocks(
     crate::rendered_request::preload_manifest_blocks(node, &manifests, cache).await
 }
 
-/// Validate a restored replay's physical request and bounded transcript view.
+/// Validate a restored replay's physical request and bounded transcript view
+/// even when no current assistant needs provider evidence.
 pub(crate) async fn validate_canonical_replay_boundary(
     node: &EmbeddedNode,
     scope: CanonicalReplayScope<'_>,
@@ -1813,8 +1873,9 @@ async fn validated_canonical_replay_boundary(
 }
 
 /// Resolve all requested tags from one physically bounded canonical candidate
-/// view. Preserve input order and every physical match for the replay owner
-/// to reject.
+/// view. Preserve input order and every physical match (including zero or
+/// multiple matches) for the replay owner to reject, without a cross-boundary
+/// cache or a coordinate-to-single-winner map.
 pub(crate) async fn resolve_canonical_replay_tags(
     node: &EmbeddedNode,
     scope: CanonicalReplayScope<'_>,
@@ -1864,6 +1925,8 @@ pub(crate) async fn resolve_canonical_replay_tags(
                         ));
                     };
                     let capture = candidate.capture.as_ref().expect("capture filtered above");
+                    // An undecodable capture leaves the turn without evidence
+                    // of its producing prefix, which makes it non-replayable.
                     let captured = gents_loop::provider_input::replay_frontier::flatten(
                         &capture.body,
                         capture.wire,
@@ -1925,7 +1988,7 @@ async fn validate_replay_request(
 }
 
 /// A missing, ambiguous or out-of-scope request is a `ReplayEvidenceViolation`;
-/// a failed store read keeps its own error.
+/// a failed store read keeps its own error so callers cannot mistake it for one.
 async fn load_replay_physical_request(
     requests: &impl ReplayRequestReader,
     request_doc_id: &str,
@@ -2005,8 +2068,9 @@ fn provider_coordinate_for_candidate_inner(
         .into_iter()
         .map(|reference| reference.close_doc_id.clone())
         .collect::<BTreeSet<_>>();
-    // An accepted empty assistant's message key is not independent provider
-    // evidence; never parse it to manufacture an issuer or select a capture.
+    // An accepted empty assistant has no payload reference to a close. Its
+    // message key is not independent provider evidence; never parse it to
+    // manufacture an issuer or select a capture.
     if close_ids.is_empty() {
         return Ok(None);
     }
@@ -2073,7 +2137,8 @@ fn provider_coordinate_for_candidate_inner(
 }
 
 /// Verify the one capture row the pass's batched read returned under
-/// `capture_key`: zero or multiple rows leave the turn without evidence.
+/// `capture_key`. Zero rows (no capture) and multiple rows (an ambiguous key)
+/// both leave the turn without evidence, never an error.
 #[allow(clippy::too_many_arguments)]
 async fn replay_capture_from_row(
     node: &EmbeddedNode,
@@ -2091,6 +2156,8 @@ async fn replay_capture_from_row(
     let Some([capture]) = capture_rows.get(capture_key).map(Vec::as_slice) else {
         return Ok(None);
     };
+    // An unverifiable capture makes only this turn non-replayable; it must not
+    // fail every later request in the session.
     match verify_replay_capture(
         node,
         capture,
@@ -2121,8 +2188,8 @@ async fn replay_capture_from_row(
     }
 }
 
-/// A bad capture is re-read on every request of its session; rate-limit its
-/// warning so it stays visible without flooding.
+/// A bad capture is re-read on every request of its session; one warning a
+/// minute, with the suppressed count, keeps it visible without flooding.
 fn warn_unverifiable_replay_capture(capture_key: &str, error: &anyhow::Error) {
     use crate::log_rate::{CallsiteRateLimiter, Decision, RateLimitConfig};
     static LIMITER: std::sync::LazyLock<std::sync::Mutex<CallsiteRateLimiter<()>>> =
@@ -2150,7 +2217,8 @@ fn warn_unverifiable_replay_capture(capture_key: &str, error: &anyhow::Error) {
 }
 
 /// Capture versions whose stored request body can be decoded for reasoning
-/// replay. v1 rows never carry a replayable provenance manifest.
+/// replay. v1 rows keep their own readers and never carry a replayable
+/// provenance manifest; later versions decode through the versioned container.
 const REPLAY_CAPTURE_VERSIONS: &[u32] = &[2, 3];
 
 #[allow(clippy::too_many_arguments)]
@@ -2173,6 +2241,10 @@ async fn verify_replay_capture(
         attempt,
     } = coordinate;
     let capture_scope_label = capture_scope.to_string();
+    // Rows are immutable, so every container version ever written stays in the
+    // store; replay accepts the ones whose request body decodes through the
+    // versioned container. A v1 row never carries a replayable provenance
+    // manifest, and an unknown version is reported rather than reinterpreted.
     let capture_version = capture["capture_version"]
         .as_u64()
         .and_then(|value| u32::try_from(value).ok())
@@ -2253,8 +2325,9 @@ async fn verify_replay_capture(
 }
 
 /// The owned loop rebuilds context, prompt and folded messages from admission
-/// input; other publications of that request remain history. This binds
-/// PromptAssembly.CurrentInput.
+/// input. Other publications belonging to that request (notably tool results
+/// and background notifications) remain history. This binds PromptAssembly.CurrentInput;
+/// request membership alone is not an input classification.
 fn is_current_admission_input(
     header: &gents_protocol::output::TranscriptMessage,
     request_doc_id: &str,

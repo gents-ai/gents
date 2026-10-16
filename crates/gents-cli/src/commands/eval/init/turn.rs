@@ -83,6 +83,12 @@ impl Turn for LiveTurn {
 /// Replies stated up front, and every turn sent, for the loop's tests.
 #[cfg(test)]
 pub(crate) struct ScriptedTurn {
+    replies: std::collections::VecDeque<String>,
+    pub(crate) sent: Vec<String>,
+}
+
+#[cfg(test)]
+impl ScriptedTurn {
     pub(crate) fn new<S: Into<String>>(replies: impl IntoIterator<Item = S>) -> Self {
         Self {
             replies: replies.into_iter().map(Into::into).collect(),

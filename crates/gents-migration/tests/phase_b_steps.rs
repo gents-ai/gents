@@ -309,6 +309,7 @@ async fn crash_resume_after_inactive_patch_before_activate() {
     assert!(!patched.is_active);
 
     let registry = DynamicRegistry {
+        baseline: vec![BaselineCollectionOwned {
             name: "FixtureDoc".into(),
             sdl: FIXTURE_SDL.into(),
             expected_version: Some(v0.clone()),

@@ -1,5 +1,9 @@
 //! Tool-call lifecycle state machine.
 //!
+//! Mirrors `crates/gents/src/lifecycle.rs` (`RequestLifecycle`) for tool
+//! calls. Defines the persisted vocabulary, failure-class enum, and the
+//! `ToolCallLifecycle` struct that owns every persistence write.
+//!
 //! Lifecycle is daemon-visible only; subprocess kill mechanics, output
 //! streaming, and persistent processes are out of scope.
 
@@ -55,7 +59,10 @@ impl ToolCallState {
     }
 }
 
-// FailureClass and ToolOutcome moved to gents-loop; re-exported below.
+// FailureClass and ToolOutcome moved to gents-loop (G-1): the loop's tool
+// dispatch classifies outcomes with no DefraDB dependency. Re-exported below
+// (with the rest of this module's `pub use` block) so `crate::tool_call_lifecycle`
+// keeps every symbol this crate's callers already use.
 
 /// Whether the parent's narrative is blocked on this tool's terminal state.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -85,10 +92,13 @@ impl AwaitMode {
 }
 
 /// What interrupting a request does to one of its owned tool calls
-/// (Lean `Background.Interrupt.disposition`).
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+/// (Lean `Background.Interrupt.disposition`). An interrupt never reaches
+/// background work, including an `agent_new`/`agent_message` row.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum InterruptDisposition {
+    /// Never-dispatched intents and running foreground calls.
     Cancel,
+    /// Background work and terminal rows.
     Retain,
 }
 
@@ -191,30 +201,36 @@ pub use recovery::{
 pub use transition::CausedRequestTerminal;
 pub use transition::IllegalToolCallTransition;
 
-/// State machine struct for an individual tool call.
+/// State machine struct for an individual tool call. Mirrors `RequestLifecycle`
+/// from `lifecycle.rs:189-204`. Owns every persistence write for a single
+/// AgentToolCall row.
 #[derive(Clone)]
 pub struct ToolCallLifecycle {
     node: Arc<EmbeddedNode>,
     request_id: String,
     request_doc_id: Option<String>,
     session_id: String,
-    /// DID of the agent that owns the session this tool call belongs to;
-    /// `@immutable` scope key for filtered replication.
+    /// DID of the agent that owns the session this tool call belongs to. Stamped
+    /// onto the AgentToolCall row at create so filtered replication can scope the
+    /// collection to one agent (`@immutable` scope key).
     node_did: String,
     requester_did: Option<String>,
     tool_call_id: String,
-    /// The provider's optional secondary call identity; immutable
-    /// accepted-header provenance used to pair the native result.
+    /// The provider's optional secondary call identity.  This is immutable
+    /// accepted-header provenance and is used to pair the native result.
     call_id: Option<String>,
     message_sequence: u32,
     tool_name: String,
     /// Exact accepted assistant header that introduced this physical call.
+    /// It is intentionally absent only on old in-memory constructors that can
+    /// no longer dispatch under the canonical schema.
     accepted_header_doc_id: Option<String>,
     arguments: Option<gents_protocol::output::PayloadRef>,
     execution_generation: Option<String>,
     plugin_receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
     /// A native background execution is admitted by an already accepted
-    /// `spawn_process` call; immutable physical provenance for dispatch,
+    /// `spawn_process` call.  It is deliberately not an `AcceptedToolCall` of
+    /// its own: this is the immutable physical provenance used for dispatch,
     /// recovery and completion notification routing.
     spawned_by_tool_call_doc_id: Option<String>,
     plugin_effect: Option<PluginEffectBinding>,
@@ -228,8 +244,9 @@ pub struct ToolCallLifecycle {
     pub(crate) await_mode: AwaitMode,
 }
 
-/// Persisted provenance of one plugin child; [`Self::decode`] is the only
-/// constructor for stored rows.
+/// Persisted provenance of one plugin child. [`Self::decode`] is the only
+/// constructor for stored rows, so a binding in hand is already bounded,
+/// unspawned and bound to its derived stable identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PluginEffectBinding {
     pub(crate) parent_tool_call_doc_id: String,
@@ -271,8 +288,10 @@ struct SelectedToolIdentity {
     tool_name: String,
 }
 
-/// Input to the one `spawn_process` admission transaction; the returned
-/// lifecycle carries the newly-created child's physical document ID.
+/// Input to the one `spawn_process` admission transaction.  The stable
+/// `tool_call_id` is derived from the accepted parent document, not generated
+/// by a retrying hook invocation; the returned lifecycle always carries the
+/// newly-created child's physical document ID separately.
 #[derive(Clone, Debug)]
 pub(crate) struct SpawnedBackgroundToolAdmission {
     pub(crate) tool_name: String,
@@ -284,7 +303,8 @@ pub(crate) struct SpawnedBackgroundToolAdmission {
 
 impl ToolCallLifecycle {
     /// Adopt a pending row that was atomically published with an accepted
-    /// provider header.
+    /// provider header.  This is the only constructor for direct canonical
+    /// dispatch: it deliberately has no create transition.
     pub(crate) fn from_accepted(
         node: Arc<EmbeddedNode>,
         node_did: String,
@@ -344,8 +364,9 @@ impl ToolCallLifecycle {
         self.doc_id.as_deref()
     }
 
-    /// Construct an unbound lifecycle value; it cannot dispatch. Remaining
-    /// callers are being migrated off this legacy constructor.
+    /// Construct an unbound lifecycle value. It cannot dispatch: canonical
+    /// dispatch requires `from_accepted` with an already-published tool row.
+    /// Remaining callers are being migrated off this legacy constructor.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         node: Arc<EmbeddedNode>,
@@ -416,8 +437,9 @@ impl ToolCallLifecycle {
         self
     }
 
-    /// Construct an unbound legacy background lifecycle value; it does not
-    /// create a tool row.
+    /// Construct an unbound legacy background lifecycle value. Canonical
+    /// background processes use `admit_spawned_background` on their accepted
+    /// spawn invocation instead; this constructor does not create a tool row.
     #[allow(clippy::too_many_arguments)]
     pub fn new_background_tool(
         node: Arc<EmbeddedNode>,
@@ -463,20 +485,23 @@ impl ToolCallLifecycle {
         self.doc_id = doc_id;
     }
 
-    /// True once `deadline_at` has passed (inclusive) relative to `now`.
-    /// Single owner for the deadline-expiry check shared by the parent-deadline
-    /// sweep and the `wait_process` deadline check; fresh output admission
-    /// instead follows `ToolExecution.ToolCallContext.deadlineExceeded`
-    /// (`now > deadline`).
+    /// True once `deadline_at` has passed (inclusive) relative to `now`. Single
+    /// owner for the deadline-expiry check shared by the parent-deadline sweep
+    /// (`hook.rs::timeout_expired_tool_calls`) and the `wait_process` deadline
+    /// check (`hook/persistence/background_tools.rs::persist_wait_tool_call`).
+    /// Sweep eligibility is inclusive; fresh output admission instead follows
+    /// `ToolExecution.ToolCallContext.deadlineExceeded` (`now > deadline`).
+    /// At equality, output is admissible only until the sweep terminalizes the row.
     pub(crate) fn is_deadline_expired(&self, now: chrono::DateTime<chrono::Utc>) -> bool {
         self.deadline_at <= now
     }
 
     /// An `agent_new`/`agent_message` row (Lean
-    /// `ToolOperation.sessionMessage`): its terminal is the terminal output of
-    /// the request it caused, and it has no deadline (Lean
-    /// `session_message_row_left_running`): the stored `deadline_at` is the
-    /// accepted dispatch deadline, never a terminal cause.
+    /// `ToolOperation.sessionMessage`): no host process backs it, and its
+    /// terminal is the terminal output of the request it caused. It has no
+    /// deadline (Lean `session_message_row_left_running`): the stored
+    /// `deadline_at` is the accepted dispatch deadline, never a terminal cause,
+    /// so the caused request's result always reaches the calling session.
     pub(crate) fn is_session_message(&self) -> bool {
         crate::toolset::is_session_message_tool(&self.tool_name)
     }

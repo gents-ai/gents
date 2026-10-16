@@ -485,5 +485,4 @@ mod tests {
         assert_eq!(calls.load(Ordering::Relaxed), 2);
     }
 
-    #[test]
-    fn git_info_cache_resolves_once_per_unique_workspace_including_misses() {
+}

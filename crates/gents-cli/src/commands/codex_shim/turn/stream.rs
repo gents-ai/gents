@@ -307,6 +307,8 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             }
             _ => None,
         };
+        // Only translate the owner's presentation for the existing wire delta
+        // helpers. Never clone admission input into an output-shaped object.
         let rendered_output = presentation.map(|value| {
             json!({
                 "content": value.body_markdown,
@@ -379,6 +381,10 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 }
             }
         }
+        // A published provider-turn header closes its selected source before
+        // the request settles: complete that reasoning item at publication
+        // with the header's durable text. Completion is idempotent per item,
+        // so the later terminal pass does not replay it.
         if !projection_settled {
             if let gents::session::CanonicalRequestOutput::Published {
                 header,
@@ -477,6 +483,11 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 tokio::time::sleep(state.poll_interval).await;
                 continue;
             }
+            // Terminal content comes only from the shared typed owner: it
+            // classifies Loading/Denied/Conflicted/Invalid, distinguishes a
+            // terminal NoMessage from missing dependencies, and never promotes
+            // a retained partial attempt into the current answer. Request JSON
+            // (admission prompt included) is never overlaid as response text.
             let terminal_presentation = match &canonical_output {
                 gents::session::CanonicalRequestOutput::TerminalMessage {
                     presentation, ..
@@ -493,7 +504,12 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                     tokio::time::sleep(state.poll_interval).await;
                     continue;
                 }
-                gents::session::CanonicalRequestOutput::TerminalNoMessage => None,
+                gents::session::CanonicalRequestOutput::TerminalNoMessage => {
+                    // Terminal without a selected message: no answer to catch
+                    // up on; downstream projection surfaces the failure/empty
+                    // turn honestly.
+                    None
+                }
                 gents::session::CanonicalRequestOutput::Denied
                 | gents::session::CanonicalRequestOutput::Conflicted
                 | gents::session::CanonicalRequestOutput::Invalid
@@ -703,6 +719,9 @@ fn nonempty_timestamp_field<'a>(row: &'a Value, field: &str) -> Option<&'a str> 
         .filter(|value| !value.is_empty())
 }
 
+/// When the owner-selected output began: the first segment of the selected
+/// live source, or the selected header's creation for a native terminal
+/// message. Request admission time is not response start.
 async fn canonical_output_started_at_ms(
     state: &ShimState,
     output: &gents::session::CanonicalRequestOutput,

@@ -1,6 +1,13 @@
-//! The durable fact record for one provider call: the DefraDB-backed sink
-//! (`sink`, `commits`) and the admission-controller provenance lookup; the
-//! capture mechanism itself is re-exported from `gents-loop`.
+//! The durable fact record for one provider call (#840): DefraDB-backed
+//! pieces only.
+//!
+//! The capture mechanism itself (the arm/claim scope, the capturing
+//! transport, the pure DTO builder) moved to `gents-loop` (G-1); this module
+//! re-exports it so `crate::rendered_request` keeps every symbol this crate's
+//! callers already use, and keeps the two pieces that cannot move: the
+//! DefraDB-backed sink (`sink`, `commits`) and the admission-controller
+//! provenance lookup, since a guest has neither a database nor an admission
+//! controller.
 
 pub mod commits;
 pub(crate) mod encoding;
@@ -22,9 +29,13 @@ pub use gents_loop::rendered_request::{
 pub(crate) use sink::defra_rendered_request_capture_factory;
 pub use sink::DefraRenderedRequestSink;
 
-/// Stamp the admission identity into this capture's provenance only when the
-/// call in flight on this task legitimately produces the capture's scope kind;
-/// a wrong join would be worse than none.
+/// The admission identity to stamp into this capture's provenance, if the call
+/// in flight on this task belongs to the loop the capture describes.
+///
+/// The kind guard keeps the task-local admission join honest if a caller wires
+/// the wrong capture scope. One-shot captures never join because no admission
+/// scope exists there. Installed onto every production `RequestCaptureScope`
+/// via `scope_from_factory` below; the loop's own default is `|_| None`.
 fn admission_join_for_scope(capture_scope: &str) -> Option<AdmissionJoin> {
     let join = crate::admission::current_call_join()?;
     let scope_kind = capture_scope.parse::<CaptureScope>().ok()?.kind;
@@ -34,8 +45,10 @@ fn admission_join_for_scope(capture_scope: &str) -> Option<AdmissionJoin> {
     })
 }
 
-/// `OneShot` maps to nothing: a join observed under a oneshot capture could
-/// only be another loop's call.
+/// Which admission [`CallKind`](crate::admission::CallKind) legitimately
+/// produces captures of which [`CaptureScopeKind`]. `OneShot` maps to nothing:
+/// one-shot runs have no admission scope at all, so a join observed under a
+/// oneshot capture could only be another loop's call.
 pub(crate) fn admission_kind_matches_scope(
     call_kind: crate::admission::CallKind,
     scope_kind: CaptureScopeKind,
@@ -51,7 +64,9 @@ pub(crate) fn admission_kind_matches_scope(
     )
 }
 
-/// `RenderedRequestContext` for a claimed durable request.
+/// `RenderedRequestContext` for a claimed durable request. The loop-side
+/// struct dropped this constructor (it names the native `AgentRequest`
+/// document type); this is its native replacement.
 pub(crate) fn context_for_claimed_request(
     request: &crate::watcher::AgentRequest,
     request_commit_cid: &str,
@@ -90,6 +105,9 @@ pub(crate) fn scope_from_factory(
 mod tests {
     use super::*;
 
+    /// A v2 delta capture whose base must be read from the store. Deltas are no
+    /// longer written (#2333) but rows stored as deltas must keep decoding, so
+    /// this fixture pins that decode against version 2 explicitly.
     fn delta_capture() -> String {
         let mut value = serde_json::json!({"model": "m", "stream": true});
         value["padding"] = serde_json::json!("x".repeat(4096));
@@ -325,6 +343,8 @@ mod tests {
         node.shutdown().await;
     }
 
+    /// Replay drops a turn only for a capture that fails verification; a store
+    /// read failure while resolving its base is typed so it propagates.
     #[tokio::test]
     async fn base_resolution_distinguishes_store_reads_from_missing_bases() {
         let stored = delta_capture();
@@ -347,6 +367,9 @@ mod tests {
         );
     }
 
+    /// Deterministic pseudo-text: a fixed-seed xorshift64 stream mapped onto
+    /// `a..z`. Uniform text almost never hits a content-defined boundary, so a
+    /// body meant to span several blocks has to vary.
     fn capture_text(len: usize) -> String {
         let mut state = 0x243F_6A88_85A3_08D3_u64;
         let mut out = String::with_capacity(len);
@@ -359,6 +382,8 @@ mod tests {
         out
     }
 
+    /// A v3 manifest capture over two blocks, with a store that can serve its
+    /// rows and witnesses, break either, or fail outright.
     fn manifest_capture() -> (String, Vec<(String, String, Vec<u8>)>) {
         let mut body = serde_json::json!({"model": "m", "stream": true});
         body["padding"] = serde_json::json!(capture_text(6000));
@@ -385,8 +410,12 @@ mod tests {
         (stored, blocks)
     }
 
+    /// What one block document answers with: its payload bytes and the payload
+    /// field commit the store reports for it.
     type BlockAnswer = Option<(Vec<u8>, String)>;
 
+    /// The `(alias, docID)` pairs of a batched `_commits` query, so the fake
+    /// stores can answer the commit read for every block document it names.
     fn commit_query_aliases(query: &str) -> Vec<(String, String)> {
         let parts = query.split(": _commits(docID: \"").collect::<Vec<_>>();
         parts
@@ -399,6 +428,7 @@ mod tests {
             .collect()
     }
 
+    /// Answer a batched `_commits` query with one payload commit per alias.
     fn commit_response(
         aliases: Vec<(String, String)>,
         cid_of: impl Fn(&str) -> Option<String>,
@@ -415,6 +445,9 @@ mod tests {
         serde_json::json!({ "data": data })
     }
 
+    /// A block store whose failures the test selects: `fail_queries` turns every
+    /// read into a store error, `None` reports no row for a block, and a pair
+    /// reports a payload and commit the manifest may disagree with.
     struct ManifestStore {
         fail_queries: bool,
         blocks: Vec<(String, String, Vec<u8>)>,
@@ -488,6 +521,11 @@ mod tests {
         }
     }
 
+    /// The manifest arm of the split `base_resolution_distinguishes_store_reads
+    /// _from_missing_bases` pin: a store read failure while fetching blocks is
+    /// typed so replay propagates it, while an absent block, a block rewritten
+    /// under another commit and a short block read are verification failures
+    /// that drop only the affected turn.
     #[tokio::test]
     async fn manifest_resolution_distinguishes_store_reads_from_broken_blocks() {
         use std::collections::BTreeMap;
@@ -547,6 +585,9 @@ mod tests {
         }
     }
 
+    /// A block store that answers every named document with a fixed payload
+    /// and commit, so one manifest entry can name a wrong-content document
+    /// under a content key another manifest references correctly.
     struct MisreferencingBlockStore {
         docs: Vec<(String, String, String)>,
     }
@@ -581,6 +622,11 @@ mod tests {
         }
     }
 
+    /// The cache-poisoning regression: a manifest entry naming a wrong-content
+    /// document under a content key must fail as that capture's own
+    /// verification error without ever entering the block cache — a cached
+    /// mismatch would fail the witness check of a later, correct capture of
+    /// the same content and drop a turn nothing is wrong with.
     #[tokio::test]
     async fn a_misreferenced_block_entry_drops_only_its_own_turn() {
         let mut body = serde_json::json!({"model": "m", "stream": true});
@@ -618,6 +664,8 @@ mod tests {
             .collect::<Vec<_>>();
         let store = MisreferencingBlockStore { docs };
 
+        // Turn N's first entry names the wrong-content document under the
+        // correct content key; turn M references the same key correctly.
         let mut misreferenced = entries.clone();
         misreferenced[0].doc_id = "block-wrong".into();
         misreferenced[0].field_commit_cid = "wrong-commit".into();
@@ -662,6 +710,9 @@ mod tests {
         .expect("the neighboring turn must still replay through the shared cache");
         assert_eq!(replayed, body);
 
+        // The cache now holds every correct block. A manifest naming an absent
+        // document under a cached block's content key, witness and length
+        // still fails: the cache answers documents, not content.
         let mut absent = entries.clone();
         absent[0].doc_id = "block-absent".into();
         let error = decode_capture_json_from_cached(
@@ -728,6 +779,9 @@ mod tests {
         assert_eq!(context.requester_did, "did:key:requester");
     }
 
+    /// The kind guard: a join is stamped only when the admitted call's kind
+    /// legitimately produces the capture's loop. A wrong join would be worse
+    /// than none.
     #[test]
     fn admission_kinds_map_to_their_capture_scopes() {
         use crate::admission::CallKind;
@@ -771,7 +825,9 @@ pub fn decode_inline_capture_json(capture_version: u32, stored: &str) -> Result<
     )
 }
 
-/// A store read failure is not a verification failure; replay propagates it.
+/// A store read that failed while resolving a capture's delta chain or block
+/// manifest. It says nothing about the capture itself, so replay must not
+/// treat it as an unverifiable capture.
 #[derive(Debug, thiserror::Error)]
 #[error("reading a rendered-request capture dependency from the store: {0:#}")]
 pub struct CaptureStoreReadError(pub anyhow::Error);
@@ -804,15 +860,20 @@ impl CaptureBaseReader for defra_node::EmbeddedNode {
 
 type CaptureBaseCache = std::collections::BTreeMap<String, (Value, String)>;
 
-/// One block document already read and witnessed, keyed by its document id.
+/// One block document already read and witnessed, keyed by its document id:
+/// the manifest pins a document, so a cached observation answers only entries
+/// naming that document, and each entry still checks the content key it was
+/// read under. Blocks are immutable, so a positive observation stays valid for
+/// the life of the cache.
 struct CachedCaptureBlock {
     content_key: String,
     bytes: Vec<u8>,
     field_commit_cid: String,
 }
 
-/// Witnessed positive base and block observations for one replay resolution;
-/// discard between resolutions.
+/// Witnessed positive base and block observations for one replay resolution.
+/// Discard between resolutions: a later read must observe edited or replicated
+/// dependencies.
 #[derive(Default)]
 pub(crate) struct CaptureReadCache {
     bases: CaptureBaseCache,
@@ -932,12 +993,18 @@ async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
 }
 
 /// Read the block documents a manifest names that are not cached yet: one
-/// batched row query plus batched field-commit reads. DefraDB's collection
-/// `docIDs` argument fetches physical documents directly and still applies
-/// app-read and ACP checks to the rows; a failed query is a
-/// [`CaptureStoreReadError`], an absent block stays uncached so resolution
-/// drops only the affected turn, and a payload not hashing to its content key
-/// is refused before the cache.
+/// batched row query plus batched field-commit reads.
+///
+/// DefraDB's collection `docIDs` argument fetches physical documents directly;
+/// `_docID: {_in: ...}` remains a collection predicate. The query plan still
+/// applies app-read and ACP checks to these rows.
+///
+/// A failed query is a [`CaptureStoreReadError`]: it says the store is broken,
+/// not that the capture is unverifiable. A block document that is simply
+/// absent is left uncached, so resolution reports it as a verification failure
+/// and replay drops only the affected turn. A document whose payload does not
+/// hash to the entry's content key is the same kind of verification failure
+/// for the capture that named it, and is refused before the cache.
 async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
     reader: &R,
     entries: &[encoding::ManifestEntry],
@@ -990,6 +1057,8 @@ async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
             .get("payload")
             .and_then(Value::as_str)
             .context("capture manifest block row lacks payload")?;
+        // `byte_len` is optional on block documents; resolution checks the
+        // manifest's pinned length either way.
         if let Some(byte_len) = row.get("byte_len").and_then(Value::as_u64) {
             anyhow::ensure!(
                 byte_len == entry.byte_len,
@@ -1033,9 +1102,12 @@ async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
     Ok(())
 }
 
-/// Batch-read the manifest blocks of many captures into one shared cache; only
-/// positive observations enter the cache. A manifest beyond the reader ceiling,
-/// or one whose blocks fail verification, fails in its own capture's
+/// Read the manifest blocks of many captures into one shared cache: the block
+/// rows and their field-commit witnesses batch across every manifest of the
+/// pass instead of one statement set per capture. Only positive observations
+/// enter the cache, so each capture still re-checks every entry's content key
+/// at resolution; a manifest beyond the reader ceiling, and a manifest whose
+/// blocks fail verification, are left to fail in their own capture's
 /// resolution rather than failing the whole pass here, while a
 /// [`CaptureStoreReadError`] stays fatal.
 pub(crate) async fn preload_manifest_blocks<R: CaptureBaseReader + Sync>(
@@ -1063,10 +1135,12 @@ pub(crate) async fn preload_manifest_blocks<R: CaptureBaseReader + Sync>(
     Ok(())
 }
 
-/// Re-read per manifest after a batched verification failure: the batch aborts
-/// before anything is cached, so the offending manifest fails in its own
-/// capture's resolution while healthy manifests keep their blocks; a
-/// [`CaptureStoreReadError`] stays fatal.
+/// A verification failure in the shared batched read names one manifest's
+/// pinned blocks but aborts the batch before anything is cached, so it cannot
+/// be attributed there. Re-read per manifest: the offending manifest stays
+/// uncached and fails verification in its own capture's resolution, every
+/// healthy manifest keeps its blocks. A [`CaptureStoreReadError`] says the
+/// store is broken, not that one capture is unverifiable, and stays fatal.
 async fn preload_isolate_verification_failures<R: CaptureBaseReader + Sync>(
     reader: &R,
     manifests: &[Vec<encoding::ManifestEntry>],
@@ -1185,6 +1259,8 @@ pub async fn decode_capture_pair_embedded(
     decode_capture_pair_from(node, capture_version, stored).await
 }
 
+/// Decode one capture payload through the same witnessed resolver used by the
+/// sink, for callers that already own the embedded DefraDB node.
 pub async fn decode_capture_json_embedded(
     node: &defra_node::EmbeddedNode,
     capture_version: u32,

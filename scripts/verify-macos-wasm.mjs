@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+// Exercise Wasmtime in the signed shipping CLI, not an unsigned test executable.
 const binary = resolve(process.argv[2]);
 const signature = spawnSync(
   "codesign",
@@ -90,9 +91,10 @@ const artifact = join(root, "echo.afb");
 run("plugin", "build", source, "--out", artifact);
 const bytes = readFileSync(artifact);
 const digest = createHash("sha256").update(bytes).digest("hex");
+// Seed the same installed-plugin fixture used by plugin::run tests, offline.
 mkdirSync(join(home, "plugins/store"), { recursive: true });
-writeFileSync(join(home, `plugins/store/${digest}.afb`), bytes);
 mkdirSync(join(home, "plugins/installed/gents"), { recursive: true });
+writeFileSync(join(home, `plugins/store/${digest}.afb`), bytes);
 writeFileSync(
   join(home, "plugins/installed/gents/release-echo.json"),
   JSON.stringify({

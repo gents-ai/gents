@@ -1,3 +1,13 @@
+//! Claude subscription over Anthropic Messages HTTP — the only wire.
+//!
+//! Every turn (tool-capable or not) is `POST /v1/messages` with the agent's
+//! `OAuthCredential` bearer, `system[0]` = [`CLAUDE_CODE_IDENTITY`], Gents
+//! preamble and `Message::System` rows after it, and `tools` only when the
+//! surface is non-empty. The SSE body is parsed incrementally by
+//! [`MessagesSseState`]; `tool_use` blocks map onto the gents surface or fail
+//! closed. Lean model: `Proofs/PromptAssembly/ClaudeMap.lean` (system
+//! assembly, accumulation).
+
 use std::collections::HashSet;
 #[cfg(test)]
 use std::collections::VecDeque;
@@ -28,8 +38,9 @@ pub const MESSAGES_URI: &str = "https://api.anthropic.com/v1/messages";
 pub(crate) const ANTHROPIC_VERSION: &str = "2023-06-01";
 pub(crate) const OAUTH_BETA: &str = "oauth-2025-04-20";
 
-// Re-exported from gents-loop (G-1): the live transport here must build the
-// byte-identical body that provider_input projects for token accounting.
+// Body assembly moved to gents-loop (G-1): provider_input projects the exact
+// wire body for token accounting, and this crate's live transport builds the
+// identical body to send. Re-exported so this module's callers are unchanged.
 pub use gents_loop::claude_messages_body::{
     apply_reasoning_parameters, build_messages_body, build_messages_body_native,
     ADVERTISED_REASONING_EFFORTS_PARAM, CLAUDE_CODE_IDENTITY,
@@ -120,9 +131,12 @@ pub(crate) fn lock_fixtures_for_test() -> std::sync::MutexGuard<'static, ()> {
     guard
 }
 
-/// Incremental SSE parser for one Messages response: feed lines with
-/// [`push_line`]; [`finish`] flushes an unterminated `tool_use` block and
-/// guarantees exactly one `FinalResponse`. Lean: `ClaudeMap.runStream`.
+/// Incremental SSE parser for one Messages response.
+///
+/// Feed lines with [`push_line`]; each completed event (terminated by a blank
+/// line) may yield zero or more `RawStreamingChoice`s. [`finish`] flushes an
+/// unterminated `tool_use` block and guarantees exactly one `FinalResponse`.
+/// Lean: `ClaudeMap.runStream` (`step` / `flush`).
 ///
 /// [`push_line`]: MessagesSseState::push_line
 /// [`finish`]: MessagesSseState::finish
@@ -188,13 +202,11 @@ impl MessagesSseState {
             self.data.push_str(rest.trim());
             return Ok(Vec::new());
         }
-        if line.is_empty() {
-            // Blank line: dispatch the accumulated `data:` payload.
-            self.dispatch_pending_data()
-        } else {
-            // `event:`/`id:` lines and comments are ignored; the payload's `type` wins.
-            Ok(Vec::new())
+        if !line.is_empty() {
+            // `event:`, `id:`, comments — the payload's own `type` is authoritative.
+            return Ok(Vec::new());
         }
+        self.dispatch_pending_data()
     }
 
     /// End of body: flush an open block and emit `FinalResponse` if none seen.
@@ -202,6 +214,7 @@ impl MessagesSseState {
         self.finish_typed().map_err(Into::into)
     }
 
+    /// End of body with the parser's typed cause retained.
     pub fn finish_typed(
         mut self,
     ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, MessagesParseError> {
@@ -616,6 +629,7 @@ pub fn parse_messages_sse(
 }
 
 /// Parse the same SSE body while retaining the parser's exact error cause.
+/// The live transport uses `parse_messages_sse`'s Rig-facing conversion.
 pub fn parse_messages_sse_typed(
     sse: &str,
     surface: &HashSet<String>,
@@ -663,13 +677,16 @@ fn audit_index(payload: &Value) -> Result<u32, MessagesParseError> {
 struct PendingTool {
     id: String,
     name: String,
-    /// `content_block.input` from `content_block_start` (Anthropic sends `{}`).
+    /// `content_block.input` from `content_block_start`, serialized. Anthropic
+    /// sends `{}` here and streams the real arguments as deltas.
     start_input: Option<String>,
     /// Concatenated `input_json_delta.partial_json` fragments, in order.
     deltas: String,
 }
 
 impl PendingTool {
+    /// Lean `ClaudeMap.accumulate`: deltas win when any arrived; otherwise the
+    /// start input; otherwise `{}`.
     fn arguments_json(&self) -> String {
         if !self.deltas.is_empty() {
             self.deltas.clone()
@@ -949,8 +966,8 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
     let response = match client.send_streaming(http_request).await {
         Ok(response) => response,
         // The transport pre-checks the status and hands back the body text
-        // with its rate-limit header marker; bound the body like the streamed
-        // path and keep the marker whole.
+        // with its rate-limit header marker; bound the body the same way as
+        // the streamed path and keep the marker whole.
         Err(http_client::Error::InvalidStatusCodeWithMessage(status, message)) => {
             if status.as_u16() == 401 {
                 bearer.invalidate().await;

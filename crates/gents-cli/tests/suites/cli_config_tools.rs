@@ -164,7 +164,8 @@ fn explained_tool_names(explanation: &Value, agent_id: &str) -> Result<Vec<Strin
         })
 }
 
-fn explained_tool_names -> Result<()> {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let home = tempdir.path().join("home");
     let elsewhere = tempdir.path().join("elsewhere");

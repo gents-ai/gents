@@ -226,7 +226,7 @@ mod tests {
             skill.instructions.as_deref(),
             Some("Read references/checklist.md.")
         );
-        );
+        assert!(skill.tool_refs.is_empty());
         assert!(skill.interface_json.is_none());
     }
 

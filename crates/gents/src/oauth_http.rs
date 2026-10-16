@@ -159,6 +159,15 @@ impl<S: BearerSource, P: OAuthHttpPolicy, T> BearerAuthHttpClient<S, P, T> {
             Err(error) if is_bearer_rejection(P::REJECTION_STATUSES, error) => self.bearer.clone(),
             _ => None,
         }
+    }
+
+    #[cfg(test)]
+    pub async fn prepare_for_test(
+        &self,
+        req: Request<Bytes>,
+    ) -> http_client::Result<Request<Bytes>> {
+        self.prepare(req).await
+    }
 }
 
 impl<S, P, T> HttpClientExt for BearerAuthHttpClient<S, P, T>

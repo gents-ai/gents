@@ -1,7 +1,16 @@
-//! The baseline subject pack and the candidate packs derived from it: the
-//! baseline pack with exactly one field changed. Both are ordinary directory
-//! packs loaded and digested by the runner's own pack loader, so the digest
-//! the optimizer records is the digest the runner freezes.
+//! The baseline subject pack and the candidate packs derived from it.
+//!
+//! A candidate is the baseline pack with exactly one field changed: the system
+//! prompt of the context the subject agent names, or the prompt template of
+//! a task of that agent. When the pack keeps that text in a sidecar asset —
+//! the shape every pack in this repository uses — the change is one file's
+//! bytes and nothing else, which is what makes the structural gate's "only the
+//! target moved" check a file comparison.
+//!
+//! Both packs are ordinary directory packs, so the runner takes them through
+//! `CellSource::Directory` with no special case. They are loaded and digested
+//! by the runner's own pack loader, so the digest the optimizer records is the
+//! digest the runner freezes.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -28,11 +37,14 @@ pub struct MaterializedPack {
     pub digest: String,
     pub config: PackConfig,
     pub manifest: PackManifest,
+    /// Every declared asset, keyed by its path relative to `dir`.
     pub files: BTreeMap<String, Vec<u8>>,
     pub agent_id: String,
     pub target: TargetField,
+    /// The context the subject agent names, or the task being optimized.
     pub target_id: String,
-    /// The declared asset the target field reads its text from, when inline.
+    /// The declared asset the target document reads its text from, when the
+    /// pack stores it as a sidecar rather than inline.
     pub prompt_asset: Option<String>,
 }
 
@@ -159,10 +171,7 @@ fn raw_target<'a>(
 
 /// A target sidecar another config field also reads would change that
 /// document too in a trial, while promotion writes only the target.
-fn reject_shared_sidecar(
-    files: &BTreeMap<String, Vec<u8>>,
-    asset: &str,
-) -> Result<()> {
+fn reject_shared_sidecar(files: &BTreeMap<String, Vec<u8>>, asset: &str) -> Result<()> {
     fn uses(value: &Value, asset: &str) -> usize {
         match value {
             Value::String(text) => {
@@ -241,7 +250,9 @@ pub fn baseline_text(pack: &MaterializedPack) -> Result<String> {
 /// A sidecar asset holds `text` byte for byte, since sidecars are never
 /// interpolated. An inline prompt is written in its escaped form
 /// ([`interpolate::escape`]) so that the loader reads back exactly `text`.
-/// `dir` is created; an existing one is refused rather than written over.
+///
+/// `dir` is created; an existing one is refused rather than written over, so a
+/// round can never evaluate a directory another round left behind.
 pub fn materialize_candidate(
     baseline: &MaterializedPack,
     owner: &str,
@@ -272,6 +283,8 @@ pub fn materialize_candidate(
                         baseline.target_id
                     )
                 })?;
+            // The loader interpolates every string in pack_config.json, so
+            // the text is written escaped to be read back as exactly itself.
             *field = Value::String(interpolate::escape(text));
             files.insert(CONFIG_ASSET.to_owned(), serde_json::to_vec_pretty(&raw)?);
         }

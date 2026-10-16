@@ -235,4 +235,5 @@ fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {
     .fold(filter, |filter, directive| {
         filter.add_directive(directive.parse().expect("valid tracing directive"))
     })
+}
 

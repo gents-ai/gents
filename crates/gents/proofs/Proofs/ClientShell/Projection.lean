@@ -61,6 +61,11 @@ inductive RecoveryStatusKind where
   | blocked
   deriving DecidableEq, Repr
 
+/-- Transport and route readiness are observations of automatic native recovery.
+Enrolled peers are reconciled automatically by the existing native owner.
+Waiting neither promises a recovery deadline nor grants enrollment authority.
+These observations do not establish that a user command is required; explicit
+credential or configuration errors retain their separate action owners. -/
 structure RecoveryStatus where
   kind : RecoveryStatusKind
   action : Option Unit
@@ -72,6 +77,8 @@ def projectTransportRecovery (connected : Bool) : RecoveryStatus :=
 def projectRouteRecovery (routeReady : Bool) (_pairingPending : Bool) : RecoveryStatus :=
   { kind := if routeReady then .ready else .waiting, action := none }
 
+/-- Failed P2P observations remain visible blockers. Recovery is automatic;
+operator remediation for credentials or configuration belongs to its own action. -/
 def projectConnectionFailure : RecoveryStatus :=
   { kind := .blocked, action := none }
 
@@ -95,6 +102,9 @@ theorem unready_route_waits (pairingPending : Bool) :
     (projectRouteRecovery false pairingPending).kind = .waiting := by
   rfl
 
+/-- Request progress is projected directly from the persisted request
+lifecycle. Clients may choose presentation, but must not collapse the active
+states into one generic spinner. -/
 inductive RequestProgressIndicator where
   | queued
   | claimed
@@ -136,6 +146,15 @@ theorem projectRequestProgress_active_animated (state : RequestState)
     (projectRequestProgress state).animated = true := by
   rcases h with rfl | rfl | rfl <;> rfl
 
+/-- The request document owns the pending user projection until the durable
+user message for that exact request arrives. Unrelated messages and their
+relative replication order are deliberately irrelevant.
+
+A request its author retired from the queue (`Session.replacePendingGroup?`:
+removed, or replaced by an edit or a move) is never shown. It was never
+delivered, so no durable message will ever own it, and what the author meant
+is its replacement or nothing; showing it would put text in the transcript
+that the agent never read. -/
 def projectPendingUserTurn (hasDurableUserOwner : Bool) (retiredByAuthor : Bool := false) :
     Bool :=
   !hasDurableUserOwner && !retiredByAuthor
@@ -198,4 +217,11 @@ theorem projectActiveOverlay_terminal_hides
   cases liveOutputAvailable <;> cases hasDurableOwner <;>
     simp [projectActiveOverlay, h]
 
+/-- A live preview is hidden once the same request already has a durable
+assistant turn owning that content. -/
 theorem projectActiveOverlay_durable_owner_hides
+    (liveOutputAvailable : Bool)
+    (turn : Option ClientTurnState)
+    (hasContent hasReasoning : Bool) :
+    projectActiveOverlay liveOutputAvailable turn true hasContent hasReasoning = none := by
+  cases liveOutputAvailable <;> rfl

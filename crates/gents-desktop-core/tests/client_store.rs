@@ -3,9 +3,38 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents_desktop_core::client::{
-    load_session_transcript_page, ClientCore, ClientCoreOptions, DesktopPaths,
+    load_session_transcript_page, ClientCore, ClientCoreOptions, ClientStore, ClientStoreRows,
+    DesktopPaths,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use tokio::time::{sleep, timeout};
+
+#[test]
+fn focused_request_id_defaults_to_none() {
+    let (store, _) = gents_desktop_core::client::ObservedStore::new(ClientStore::default());
+    assert!(store.focused_request_id().is_none());
+}
+
+#[test]
+fn request_lifecycle_is_the_only_turn_state_owner() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        requests: vec![AgentRequestRow {
+            doc_id: Some("request-doc".into()),
+            request_id: "request".into(),
+            node_did: Some("did:test:amy".into()),
+            session_id: Some("session".into()),
+            lifecycle_state: Some(RequestLifecycleState::Completed),
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    assert_eq!(
+        store.requests[0].lifecycle_state,
+        Some(RequestLifecycleState::Completed)
+    );
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn local_request_refresh_preserves_projection_boundaries_and_database_truth() -> Result<()> {
@@ -119,6 +148,8 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     )
     .await?;
 
+    // Keep the replica's node config stale. Only the operator endpoint knows
+    // the completed request and the new default agent.
     let response = core
         .node()
         .execute(

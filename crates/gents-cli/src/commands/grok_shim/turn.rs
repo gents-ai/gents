@@ -1,17 +1,61 @@
-//! Grok shim prompt/cancel turn manager: `session/prompt` submits the durable
-//! request, streams the durable projection live, and defers the JSON-RPC
-//! response until the request terminalizes; `session/cancel` interrupts the
-//! pending request through [`gents::interrupt_request`] (a session interrupt
-//! stops only that session's request, so `_meta.cancelSubagents` is not read).
+//! Grok shim prompt/cancel turn manager.
 //!
-//! Ordering: the returned Gents request id is registered on the pending entry
-//! before the first fallible outbound send, so a send failure interrupts the
-//! durable request instead of leaking it. Cancel/disconnect in the
-//! before-request-id window drain the entry, latch `cancel_before_id`, and
-//! resolve the prompt as cancelled. Entry cleanup is guarded by an Arc
-//! generation token: a peer may reuse the exact `(session id, prompt id)` key
-//! after a cancel, so key equality alone never authorizes submitter-owned
-//! cleanup.
+//! This leaf owns the connection-scoped pending prompt lifecycle for the Grok
+//! pager's `session/prompt` and `session/cancel` wire methods.
+//!
+//! `session/prompt` parses the audited wire shape (sessionId, prompt blocks
+//! with per-block `meta.skillTokenRanges` / PromptBlockMeta::bash, and
+//! `_meta.promptId` / `_meta.screenMode` / `_meta.sendNow`), echoes the user
+//! message back as a `user_message_chunk` `session/update` notification, and
+//! then defers the JSON-RPC response until the durable request terminalizes.
+//! The response result is a `stopReason` projection of the durable lifecycle —
+//! never a persisted field. A turn that ended in error is a JSON-RPC error
+//! carrying the request's `failure_reason`: ACP has no `error` stop reason, and
+//! a result the pager cannot decode hides the real failure.
+//!
+//! `session/cancel` parses the audited notification shape (sessionId plus
+//! `_meta.cancelTrigger` / `_meta.rewindIfNoOutput` / `_meta.rewindIfPristine`
+//! / `_meta.promptId`), is a notification (never responded to), and
+//! interrupts the pending request through [`gents::interrupt_request`]. A
+//! session interrupt stops only that session's request: sessions it caused
+//! keep running, so `_meta.cancelSubagents` is not read. Static `Task`
+//! configuration rows are never queried or mutated as runtime state.
+//!
+//! Ordering contract: the returned Gents request id is registered on the
+//! pending entry *before* the first fallible outbound send, so a send failure
+//! after submission interrupts the durable request instead of leaking it.
+//! Cancel/disconnect may fire before the request id is even known — in that
+//! window they drain the pending entry, resolve the connected prompt with
+//! `stopReason="cancelled"`, and cancel any future submission of that prompt,
+//! so the session immediately accepts the next prompt. Submission failures
+//! are classified in the same critical section that observes connection
+//! closure and the pending entry, so a disconnect that has already published
+//! its closed+drained state always resolves `stopReason="cancelled"` — even
+//! before the disconnect has published the drained entry's cancel-before-id
+//! latch. While `submit_request` is awaited, only an explicit cancel or a
+//! disconnect can remove the pending entry (every other removal happens in
+//! the submitter's own task after the request id is known), so a submission
+//! failure that observes its entry already removed also resolves
+//! `stopReason="cancelled"` — even before the cancel has published the
+//! drained entry's latch.
+//!
+//! One pending prompt per session: a second `session/prompt` for the same
+//! session while one is live is rejected and does not disturb the live turn.
+//! Pending prompts are keyed by (session id, prompt id) inside this
+//! connection-scoped manager.
+//!
+//! All durable reads go through `gents::graphql::graphql_with_transaction_retry`
+//! and writes through `ConfigAccess`, with every interpolated value escaped by
+//! `gents::graphql::escape_graphql_string`; no HTTP GraphQL helper is used
+//! except the `create_agent_request` seam, which takes the bound GraphQL
+//! endpoint. The turn streams durable `AgentMessage`/`AgentToolCall`/
+//! agent projection live: each watch cycle runs the projection engine's
+//! request-scoped poll and sends every novel `session/update` through the
+//! sender (deterministic tools → agents → messages order), with a final
+//! flush before the deferred response. The payload shapes are owned by the
+//! projection leaves; the turn only polls, dedupes by durable identity
+//! (advancing the request-local cursor only after a successful send), and
+//! delivers.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -35,10 +79,20 @@ fn transient_graphql_read_retry_delay(retry: usize) -> Duration {
     Duration::from_millis(50 * retry.max(1) as u64)
 }
 
+/// Poll cadence for watching the durable request terminalize. The embedded
+/// node exposes no subscription seam to the shim, so terminalization is
+/// observed by bounded polling; the pager expects the deferred response
+/// promptly after terminalization, so the interval is short.
 const TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
+/// Wire values for `screenMode` accepted on `session/prompt` `_meta`.
 pub(super) const SCREEN_MODES: [&str; 3] = ["fullscreen", "inline", "minimal"];
 
+/// A single prompt content block as sent by the pager.
+///
+/// The audited wire carries `prompt: [{"type":"text","text":"...", ...}]` with
+/// an optional block `meta` containing `skillTokenRanges` (array of
+/// [start,end] pairs) or a PromptBlockMeta::bash command stamp.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct PromptBlock {
     pub kind: String,
@@ -46,6 +100,33 @@ pub(super) struct PromptBlock {
     pub meta: Option<Value>,
 }
 
+impl PromptBlock {
+    /// The `meta.bash.command` stamp of the bash variant, when present.
+    /// Test observation helper: the echo loop forwards the whole block
+    /// verbatim and never discriminates by bash meta.
+    #[cfg(test)]
+    pub(super) fn bash_command(&self) -> Option<String> {
+        let meta = self.meta.as_ref()?;
+        let command = meta
+            .get("bash")
+            .and_then(|bash| bash.get("command"))
+            .and_then(Value::as_str)?;
+        (!command.is_empty()).then(|| command.to_string())
+    }
+
+    /// Whether this block carries non-empty `skillTokenRanges`. Test
+    /// observation helper: the echo loop forwards block meta verbatim.
+    #[cfg(test)]
+    pub(super) fn has_skill_token_ranges(&self) -> bool {
+        self.meta
+            .as_ref()
+            .and_then(|meta| meta.get("skillTokenRanges"))
+            .and_then(Value::as_array)
+            .is_some_and(|ranges| !ranges.is_empty())
+    }
+}
+
+/// The audited `session/prompt` request shape.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct PromptRequest {
     pub session_id: String,
@@ -56,6 +137,7 @@ pub(super) struct PromptRequest {
     pub id: Option<Value>,
 }
 
+/// The audited `session/cancel` notification shape.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct CancelNotification {
     pub session_id: String,
@@ -66,6 +148,9 @@ pub(super) struct CancelNotification {
 }
 
 impl CancelNotification {
+    /// Build the audited `_meta` payload the pager sends with a cancel.
+    /// Test observation helper: the cancel handler reads the notification
+    /// fields directly and never re-serializes the meta.
     #[cfg(test)]
     pub(super) fn meta(&self) -> Value {
         let mut meta = json!({
@@ -82,6 +167,12 @@ impl CancelNotification {
     }
 }
 
+/// Projection of the durable terminal state into a wire `stopReason`.
+///
+/// `stopReason` is an adapter projection, not a persisted field: the durable
+/// source is `AgentRequest.lifecycle_state` plus its interrupt intent marker
+/// (`interrupt_requested_at`). No modeled refusal signal exists on the
+/// request, so a refusal stop reason is not derivable here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StopReason {
     EndTurn,
@@ -101,9 +192,11 @@ impl StopReason {
     }
 }
 
+/// Terminal state of a submitted request, as the pager's response needs it.
 #[derive(Debug)]
 struct TerminalOutcome {
     stop_reason: StopReason,
+    /// `AgentRequest.failure_reason` when the turn ended in error.
     error_message: Option<String>,
 }
 
@@ -116,6 +209,9 @@ impl From<StopReason> for TerminalOutcome {
     }
 }
 
+/// The deferred `session/prompt` response. ACP has no `error` stop reason, so
+/// an errored turn is a JSON-RPC error carrying the runtime's message rather
+/// than a result the pager cannot decode.
 fn prompt_result(outcome: TerminalOutcome) -> Result<Value> {
     if outcome.stop_reason == StopReason::Error {
         let message = outcome
@@ -127,15 +223,38 @@ fn prompt_result(outcome: TerminalOutcome) -> Result<Value> {
     Ok(json!({"stopReason": outcome.stop_reason.wire_name()}))
 }
 
+/// How a turn sends notifications to the connected client.
+///
+/// Cloning shares the underlying channel/buffer, which lets a caller keep a
+/// copy while a spawned task drives one turn. Every variant carries the
+/// connection's common session-update send path: all three `session/update`
+/// families (set-mode updates, the user echo, and the durable projected
+/// updates) allocate and enqueue their event ids through it, so per-session
+/// allocation order equals enqueue order.
 #[derive(Clone)]
 pub(super) enum PromptSender {
+    /// Sends one JSON-RPC notification line to the live client through the
+    /// connection's [`AcpOutbound`]. The sender is fallible: a closed
+    /// channel must interrupt the submitted request. Live turns send every
+    /// notification through this handle as it is produced — the user echo,
+    /// then each novel durable projection line — so the pager sees the turn
+    /// stream in real time; only the deferred `session/prompt` response is
+    /// written by the dispatcher after the turn resolves.
     Live { outbound: AcpOutbound },
+    /// Historical delivery through the same send-success path. This only
+    /// marks wire observations; it never changes persisted runtime state.
     Replay { inner: Arc<PromptSender> },
+    /// Collects serialized notification lines in memory (tests, headless
+    /// capture). The buffer never fails, so a test can simulate a send
+    /// failure only through the Live variant.
     #[cfg(test)]
     Buffer { buffer: Arc<Mutex<Vec<String>>> },
 }
 
 impl PromptSender {
+    /// Send one already-serialized JSON-RPC line. The first fallible send
+    /// after the request id is registered; a failure here must interrupt
+    /// the submitted request.
     pub(super) async fn send_line(&self, line: String) -> Result<()> {
         match self {
             PromptSender::Live { outbound } => outbound.send(line).await,
@@ -152,6 +271,10 @@ impl PromptSender {
         }
     }
 
+    /// Drain every notification line collected so far. A `Buffer` yields
+    /// its lines (the headless/test path converts them into dispatch
+    /// notifications); a `Live` sender yields nothing — every line was
+    /// already delivered to the client as it was produced.
     pub(super) async fn take_lines(&self) -> Vec<String> {
         match self {
             PromptSender::Live { .. } => Vec::new(),
@@ -164,6 +287,13 @@ impl PromptSender {
         }
     }
 
+    /// Send the synthetic `user_message_chunk` echo of one prompt block
+    /// through the connection's common session-update send path: the
+    /// per-session send lock is held across reserve → stamp → send → commit,
+    /// so a failed echo does not consume an id and the echo shares the
+    /// pager's `"{sessionId}-{counter}"` dedup space with the projected
+    /// updates. `totalTokens` is the last known context occupancy read under the
+    /// same lock (zero before any projected observation has applied).
     pub(super) async fn send_user_message_chunk(
         &self,
         session_updates: &SessionUpdateChannel,
@@ -215,6 +345,8 @@ impl PromptSender {
     }
 }
 
+/// Adapter that lets a borrowed [`PromptSender`] drive the common send
+/// path's enqueue step.
 pub(super) struct PromptSenderLine<'a>(pub(super) &'a PromptSender);
 
 impl AsyncSendLine for PromptSenderLine<'_> {
@@ -223,11 +355,17 @@ impl AsyncSendLine for PromptSenderLine<'_> {
     }
 }
 
+/// Commit one projection cursor advance inside the common session send
+/// critical section, immediately after the corresponding line is enqueued.
 struct ProjectionCursorCommit<'a> {
     cursor: &'a tokio::sync::Mutex<RequestCursor>,
     advance: CursorAdvance,
 }
 
+/// Request-local realization of projection segment identities into the
+/// pager's timestamp vocabulary. Segment starts remain stable across polls
+/// and retries, and are forced strictly increasing because the pager uses
+/// `streamStartMs` inequality as the model-generation boundary signal.
 struct RequestUpdateTiming {
     turn_start_ms: i64,
     active_segment: Option<String>,
@@ -290,14 +428,23 @@ impl AsyncCommit for ProjectionCursorCommit<'_> {
     }
 }
 
+/// Configuration the ACP service binds into the turn manager.
 #[derive(Clone, Debug)]
 pub(super) struct TurnManagerConfig {
+    /// Authenticated server node used as DefraDB's transaction actor.
     pub actor: identity::Did,
+    /// The node DID every request is submitted under.
     pub node_did: String,
+    /// The agent id the serving shim is bound to.
     pub agent_id: String,
+    /// GraphQL endpoint string accepted by `create_agent_request`; the
+    /// in-process embedded node is authoritative for reads.
     pub graphql: String,
 }
 
+/// Shared latch recorded the moment a prompt is cancelled before its Gents
+/// request id is known. The submitter checks it after registration so the
+/// cancel-before-id race resolves deterministically.
 #[derive(Debug, Default)]
 struct CancelBeforeIdLatch {
     cancelled: bool,
@@ -315,10 +462,18 @@ impl CancelBeforeIdLatch {
     }
 }
 
+/// State of one connection-scoped pending prompt. The (session id, prompt id)
+/// key carries the correlation ids; this struct carries only the response
+/// plumbing and the submission state.
 struct PendingPrompt {
+    /// Resolves the deferred `session/prompt` response.
     response_tx: Option<oneshot::Sender<Result<Value>>>,
+    /// The Gents request id once submission succeeded; registered here
+    /// *before* the first fallible outbound send.
     request: Option<gents_protocol::row::AgentRequestRow>,
+    /// Latch for the cancel-before-request-id window.
     cancel_before_id: Arc<Mutex<CancelBeforeIdLatch>>,
+    /// Whether cancel/disconnect already drained this entry.
     drained: bool,
 }
 
@@ -331,12 +486,21 @@ impl PendingPrompt {
     }
 }
 
+/// Connection-scoped turn state under a single mutex: the irreversible
+/// `closed` latch set by disconnect, and the connection's pending prompts.
+/// The latch is checked in the same critical section as insertion, so no
+/// prompt task spawned before a disconnect can insert (and therefore submit)
+/// after the disconnect drained. There is no reopen: a `TurnManager` belongs
+/// to exactly one connection lifetime.
 #[derive(Default)]
 struct ConnectionState {
     closed: bool,
     entries: HashMap<(String, String), PendingPrompt>,
 }
 
+/// Delivery progress only. Lifecycle and content are always re-read from the
+/// database. The foreground watcher holds this lock until its final flush;
+/// afterwards the session observer continues with the very same cursor.
 struct ObservedRequest {
     prompt_id: Option<String>,
     cursor: Mutex<RequestCursor>,
@@ -361,6 +525,8 @@ type ObservedRequests = BTreeMap<(String, String), Arc<Mutex<ObservedRequest>>>;
 
 type ForegroundDeliveries = Arc<std::sync::Mutex<HashMap<String, usize>>>;
 
+/// Holds observer output until the foreground response has been enqueued.
+/// Synchronous Drop also releases it on an outbound error or task abort.
 pub(super) struct ForegroundDelivery {
     sessions: ForegroundDeliveries,
     session_id: String,
@@ -387,21 +553,31 @@ impl ConnectionState {
     }
 }
 
+/// Owns the connection-scoped pending prompts and exposes the prompt, cancel,
+/// and disconnect operations.
 pub(super) struct TurnManager {
     node: Arc<EmbeddedNode>,
     config: TurnManagerConfig,
     state: Mutex<ConnectionState>,
+    /// Serializes observer sends with foreground admission. Disconnect never
+    /// acquires this gate, so a blocked outbound send cannot block shutdown.
     delivery_gate: Mutex<()>,
     foreground_deliveries: ForegroundDeliveries,
+    /// Current autonomous wire turn, retained until its terminal notification
+    /// is delivered. This is a transport boundary, not a runtime lifecycle.
     autonomous_delivery: Mutex<HashMap<String, String>>,
     observed: Mutex<ObservedRequests>,
     observers: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+    /// Parks `handle_prompt` before the insertion critical section.
     #[cfg(test)]
     insertion_gate: Mutex<Option<TestGate>>,
+    /// Parks disconnect after publishing closed+drained state.
     #[cfg(test)]
     disconnect_gate: Mutex<Option<TestGate>>,
+    /// Parks explicit cancel after removing the pending entry.
     #[cfg(test)]
     cancel_drain_gate: Mutex<Option<TestGate>>,
+    /// Parks cancel after snapshotting matching entry generations.
     #[cfg(test)]
     cancel_selection_gate: Mutex<Option<TestGate>>,
 }
@@ -449,6 +625,10 @@ impl TurnManager {
         }
     }
 
+    /// Observe this connection's session after the foreground RPC completes.
+    /// Each tick discovers one bounded page, then advances retained delivery
+    /// cursors. A new sweep revisits IDs below the previous page, so concurrent
+    /// inserts cannot fall permanently behind a pagination watermark.
     pub(super) async fn observe_session(
         self: &Arc<Self>,
         session_id: &str,
@@ -464,6 +644,8 @@ impl TurnManager {
         .await;
     }
 
+    /// Resume uses the attachment time captured before reading history, so
+    /// requests created during replay cannot fall into a discovery gap.
     pub(super) async fn observe_session_since(
         self: &Arc<Self>,
         session_id: &str,
@@ -494,6 +676,8 @@ impl TurnManager {
                     if manager.state.lock().await.closed {
                         break;
                     }
+                    // Goal accounting scans the runtime ledger. Its panel
+                    // does not require token-stream polling frequency.
                     if tokio::time::Instant::now() >= goal_refresh_at {
                         goal_refresh_at = tokio::time::Instant::now() + Duration::from_secs(1);
                         if let Err(error) = goal_cursor
@@ -534,6 +718,9 @@ impl TurnManager {
                         )
                         .await
                     {
+                        // Observation failures never change durable execution.
+                        // The cursor commits only delivered events, so retrying
+                        // after a database read conflict cannot lose an update.
                         tracing::warn!(%error, session_id = %observed_session,
                         "Grok shim session observation failed; retrying");
                     }
@@ -542,6 +729,9 @@ impl TurnManager {
         );
     }
 
+    /// Reuse the live projection and its delivery cursors for persisted
+    /// history. The caller starts observation only after the load response
+    /// has been enqueued. No new request is submitted by this operation.
     pub(super) async fn replay_session(
         &self,
         session_id: &str,
@@ -561,6 +751,9 @@ impl TurnManager {
                 .map(|time| time.timestamp_millis())
                 .unwrap_or(0);
             let live_prompt_id = format!("notifications-{}", row.request_id);
+            // The stock client hides auto-wake prompts by their ID family.
+            // Preserve the submitted identity when replaying a human turn;
+            // labeling every historical prompt notifications-* hides history.
             let prompt_id = if row.runtime_source_kind.is_some() {
                 live_prompt_id.clone()
             } else {
@@ -578,6 +771,8 @@ impl TurnManager {
                     ))
                 }, PromptSenderLine(&replay)).await?;
             }
+            // Read terminal state before flushing, as in live delivery:
+            // completion must never overtake final persisted output.
             let terminal = self.request_stop_reason(row).await?;
             self.stream_projection_updates(
                 session_id,
@@ -627,8 +822,14 @@ impl TurnManager {
         projections: &ProjectionEngine,
     ) -> Result<()> {
         const PAGE_SIZE: usize = 128;
+        // Request submission persists second-precision timestamps. An
+        // attachment with fractional seconds must include its whole second
+        // or it can miss a request submitted later in that same second.
         let attached_at = chrono::DateTime::parse_from_rfc3339(attached_at)?
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        // Session IDs are grouping keys, not authorization. Root sessions
+        // use the bound node as requester, just like submission and
+        // AgentSession creation; foreign rows must never become UI turns.
         let node = escape_graphql_string(&self.config.node_did);
         let scope = gents::session::public_request_filter(&format!(
             r#"session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{node}" }}, requester_did: {{ _eq: "{node}" }}, created_at: {{ _gte: "{}" }}, request_id: {{ _gt: "{}" }}"#,
@@ -667,6 +868,9 @@ impl TurnManager {
                 .get("request_id")
                 .and_then(Value::as_str)
                 .context("session request missing request_id")?;
+            // Submission installs its pending entry before the DB mutation.
+            // Keep this check and registration in one critical section: even
+            // a request whose ID has not returned yet cannot be double-owned.
             let state = self.state.lock().await;
             if state.entries.iter().any(|((session, _), pending)| {
                 session == session_id
@@ -709,6 +913,9 @@ impl TurnManager {
             String::new()
         };
 
+        // Retain cursors for the connection lifetime: a durable wake notice
+        // may be appended even after its tool and parent have terminalized.
+        // Bound database work per tick while sweeping those cursors fairly.
         const DELIVERY_PAGE_SIZE: usize = 32;
         let mut candidates: Vec<_> = self
             .observed
@@ -739,6 +946,8 @@ impl TurnManager {
         } else {
             String::new()
         };
+        // Sweep all root notices before admitting the next autonomous turn,
+        // including sessions larger than one delivery page.
         let mut requests: Vec<_> = candidates
             .into_iter()
             .map(|(_, id, progress)| (id, progress))
@@ -769,9 +978,14 @@ impl TurnManager {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .contains_key(session_id);
+            // The foreground owns this lock through its final flush. Never
+            // wait behind it: other completed requests may have late events.
             let Ok(mut progress) = progress.try_lock() else {
                 continue;
             };
+            // The pager treats a user notification as a turn boundary and
+            // accepts autonomous prompts only while idle. Leave all cursors
+            // untouched while a foreground request owns the session.
             let request_busy = {
                 let state = self.state.lock().await;
                 if state.closed {
@@ -814,6 +1028,8 @@ impl TurnManager {
                 continue;
             }
             let continuing_autonomous = active.is_some();
+            // Install the cancellation target before any visible echo can
+            // let a viewer adopt (and immediately cancel) this request.
             if progress.prompt_id.is_some() && !continuing_autonomous {
                 self.autonomous_delivery
                     .lock()
@@ -837,6 +1053,8 @@ impl TurnManager {
                 }
                 progress.echo_sent = true;
             }
+            // Read terminal state first, then flush. Completion must never
+            // overtake the final content persisted before terminalization.
             let projected = self
                 .pinned_projection_request(&progress.cursor, session_id, &request_id, true)
                 .await?;
@@ -877,6 +1095,8 @@ impl TurnManager {
                     progress.completion_sent = true;
                     progress.prompt_id = None;
                     self.autonomous_delivery.lock().await.remove(session_id);
+                    // The next tick first delivers deferred notices, then
+                    // admits the next wake. Do not jump over that boundary.
                     delivery_after.clear();
                     break;
                 }
@@ -885,6 +1105,19 @@ impl TurnManager {
         Ok(())
     }
 
+    /// Handle a `session/prompt` request.
+    ///
+    /// Returns the deferred `session/prompt` result value (`stopReason`).
+    /// The ACP service wraps it in the JSON-RPC response envelope.
+    ///
+    /// `projections` is the connection's projection engine; it is passed per
+    /// prompt (rather than held by the manager) so the assembly slice
+    /// constructs the `TurnManager` and `ProjectionEngine` independently and
+    /// the two are joined exactly where the live turn needs them. A
+    /// `Buffer`-sender headless turn still runs the same projection pass —
+    /// the poll is what streams novel durable events, and the sender only
+    /// decides where they go — so there is no code path that skips
+    /// projection semantics.
     pub(super) async fn handle_prompt(
         &self,
         request: PromptRequest,
@@ -904,6 +1137,9 @@ impl TurnManager {
         let cancel_before_id = Arc::new(Mutex::new(CancelBeforeIdLatch::default()));
         #[cfg(test)]
         {
+            // Test seam: park deterministically right before the insertion
+            // critical section so a concurrent disconnect can be observed in
+            // the exact race window that used to leak requests.
             let gate = self.insertion_gate.lock().await.clone();
             if let Some(gate) = gate {
                 gate.arrived.notify_one();
@@ -914,6 +1150,9 @@ impl TurnManager {
             let _admission = self.delivery_gate.lock().await;
             let mut state = self.state.lock().await;
             if state.is_closed() {
+                // The connection already disconnected. Reject before any
+                // durable submission: the disconnected connection must never
+                // mint another request.
                 anyhow::bail!("connection already disconnected");
             }
             if state
@@ -934,6 +1173,10 @@ impl TurnManager {
             );
         }
 
+        // Submit the durable request first. The returned request id is
+        // registered on the pending entry *before* the first fallible
+        // outbound send (the user echo below), so a send failure after
+        // submission interrupts the request rather than leaking it.
         tracing::debug!(session_id = %request.session_id, prompt_id = %prompt_id, "Grok shim submitting prompt request");
         let progress = Arc::new(Mutex::new(ObservedRequest::new(
             prompt_id.clone(),
@@ -951,6 +1194,9 @@ impl TurnManager {
                     match state.entries.get_mut(&key) {
                         Some(entry) if Arc::ptr_eq(&entry.cancel_before_id, &cancel_before_id) => {
                             entry.request = Some(row.clone());
+                            // Install delivery ownership before cancellation
+                            // can remove the pending entry or the first echo
+                            // can yield. Discovery checks under this same lock.
                             self.observed.lock().await.insert(
                                 (request.session_id.clone(), request_id.clone()),
                                 progress.clone(),
@@ -962,6 +1208,12 @@ impl TurnManager {
                 };
                 let cancelled_before_id = cancel_before_id.lock().await.is_cancelled();
                 if !registered_own_entry || cancelled_before_id {
+                    // The original entry was drained while submission was in
+                    // flight. A later prompt may already have reused the same
+                    // peer-supplied (session, promptId) key, so entry presence
+                    // alone is not proof that this submission still owns it.
+                    // The per-instance latch/Arc identity is the generation
+                    // token: never stamp or stream through a replacement.
                     self.interrupt_submitted(&row).await;
                     drop(response_rx);
                     tracing::info!(
@@ -977,6 +1229,24 @@ impl TurnManager {
                 (request_id, row)
             }
             Err(error) => {
+                // Submission failed before any request id existed. The
+                // classification must linearize with connection closure:
+                // observe `closed` and remove/check the entry in the same
+                // critical section, then combine that with the explicit
+                // cancel-before-id latch. A disconnect that has already
+                // published its closed+drained state must always resolve
+                // cancelled — even when it has not published the drained
+                // entry's latch yet — and so must an explicit cancel: while
+                // `submit_request` is awaited, only cancel or disconnect can
+                // remove this generation (every other removal runs in the
+                // submitter's own task after the request id is known), so a
+                // missing or replacement generation means this turn was
+                // cancelled. Removal is guarded by the Arc generation token:
+                // a peer may already have reused the exact key, and the old
+                // failed submitter must never delete that replacement.
+                // Ordinary
+                // non-disconnect GraphQL failures (state open, entry present,
+                // latch unset) stay surfaced as errors.
                 let (own_entry, state_closed) =
                     self.take_entry_if_generation(&key, &cancel_before_id).await;
                 let own_entry_was_present = own_entry.is_some();
@@ -1006,6 +1276,9 @@ impl TurnManager {
             }
         };
 
+        // First fallible outbound send after registration: the user echo. If
+        // cancel/disconnect drained the entry in the meantime, or the send
+        // itself fails, interrupt immediately and resolve cancelled.
         let drained_during_submission = {
             let state = self.state.lock().await;
             state.entries.get(&key).is_none_or(|entry| {
@@ -1024,6 +1297,11 @@ impl TurnManager {
             return Ok(json!({"stopReason": StopReason::Cancelled.wire_name()}));
         }
         for (index, block) in request.prompt.iter().enumerate() {
+            // The echo rides the connection's common session-update send
+            // path: the per-session lock, the reserve/send/commit envelope,
+            // and the shared event-id space are all owned by that path, so
+            // a failed echo never consumes an id and can never reorder
+            // against a concurrent session update on the same session.
             if let Err(error) = sender
                 .send_user_message_chunk(
                     projections.session_updates(),
@@ -1034,6 +1312,10 @@ impl TurnManager {
                 )
                 .await
             {
+                // Send failure after submission: interrupt the durable
+                // request, drain the entry, and surface the failure. The
+                // common send path already rolled the reservation back, so
+                // the failed echo consumed no event id.
                 self.interrupt_and_drain(&key, &submitted_request, &cancel_before_id)
                     .await;
                 drop(response_rx);
@@ -1048,6 +1330,11 @@ impl TurnManager {
             }
         }
 
+        // Deferred response: watch the durable request until it terminalizes
+        // or the pending entry is drained by cancel/disconnect. Each watch
+        // cycle runs the durable projection pass first, so novel
+        // tool/agent/message updates stream live and the final pass
+        // precedes the terminal response.
         let outcome = self
             .watch_terminal(
                 &key,
@@ -1061,10 +1348,15 @@ impl TurnManager {
                 response_rx,
             )
             .await;
+        // Transfer ownership while holding the delivery lock. Late updates
+        // refine existing tool/child cards without opening another prompt;
+        // actual durable continuation requests receive their own identity.
         let outcome = outcome?;
         prompt_result(outcome)
     }
 
+    /// Re-read immutable submission data for an observed human turn. No
+    /// prompt/content cache or request ownership is created by the viewer.
     async fn observed_human_prompt(
         &self,
         session: &str,
@@ -1100,6 +1392,7 @@ impl TurnManager {
         )))
     }
 
+    /// Handle a `session/cancel` notification. Never sends a response.
     pub(super) async fn handle_cancel(&self, notification: CancelNotification) -> Result<()> {
         tracing::info!(
             session_id = %notification.session_id,
@@ -1170,6 +1463,10 @@ impl TurnManager {
             None => None,
         };
         if let Some(request_id) = autonomous_target.as_deref() {
+            // Autonomous prompt identities are transport projections of a
+            // durable request already observed in this session. Cancellation
+            // uses the runtime's ordinary interrupt transition, never cursor
+            // state, and cannot block behind an outbound projection send.
             let observed = self
                 .observed
                 .lock()
@@ -1199,6 +1496,15 @@ impl TurnManager {
         Ok(())
     }
 
+    /// Handle connection teardown: atomically latch `closed` and drain every
+    /// pending prompt under the same lock, then interrupt their submitted
+    /// requests outside it. No response is ever sent (the channel is gone);
+    /// the deferred response is resolved so a concurrently awaited prompt
+    /// future observes the drain. The latch makes duplicate/concurrent
+    /// disconnects idempotent: the second one finds no entries (the first
+    /// already drained them) and a closed state, so it does nothing, and any
+    /// prompt that arrives after the first disconnect is rejected before it
+    /// can insert or submit a durable request.
     pub(super) async fn handle_disconnect(&self) -> Result<()> {
         let mut state = self.state.lock().await;
         state.closed = true;
@@ -1225,6 +1531,11 @@ impl TurnManager {
         }
         #[cfg(test)]
         {
+            // Test seam: park deterministically after the closed+drained
+            // state is published but before the drained entries are
+            // latched, so a concurrent submission failure can be observed
+            // in the exact window where the disconnect has not published
+            // the cancel-before-id latch yet.
             let gate = self.disconnect_gate.lock().await.clone();
             if let Some(gate) = gate {
                 gate.arrived.notify_one();
@@ -1240,6 +1551,11 @@ impl TurnManager {
         Ok(())
     }
 
+    /// Drain one pending entry only when it still belongs to the generation
+    /// selected by the caller: resolve its deferred response with the given
+    /// stop reason and return the submitted request id (if any) so the caller
+    /// can interrupt it. A cancel that fires before the request id is known
+    /// still latches `cancel_before_id`, which the submitter observes.
     async fn drain_entry(
         &self,
         key: &(String, String),
@@ -1250,6 +1566,11 @@ impl TurnManager {
         let mut entry = entry?;
         #[cfg(test)]
         {
+            // Test seam: park deterministically after the entry is removed
+            // from the connection state but before its cancel-before-id
+            // latch is set, so a concurrently failing submission can be
+            // observed in the exact race window where the entry is gone and
+            // the latch is not published yet.
             let gate = self.cancel_drain_gate.lock().await.clone();
             if let Some(gate) = gate {
                 gate.arrived.notify_one();
@@ -1263,6 +1584,7 @@ impl TurnManager {
         entry.request.clone()
     }
 
+    /// Interrupt the submitted request and drain only its pending generation.
     async fn interrupt_and_drain(
         &self,
         key: &(String, String),
@@ -1278,6 +1600,10 @@ impl TurnManager {
         self.interrupt_submitted(request).await;
     }
 
+    /// Atomically take only the caller's pending-entry generation and observe
+    /// the connection latch under the same state lock. A peer can reuse an
+    /// exact `(sessionId, promptId)` key immediately after cancel, so key
+    /// equality alone is never authority for submitter-owned cleanup.
     async fn take_entry_if_generation(
         &self,
         key: &(String, String),
@@ -1317,6 +1643,9 @@ impl TurnManager {
         }
     }
 
+    /// Submit the durable Gents request for the prompt and return its request
+    /// id. The caller registers the id on the pending entry before the first
+    /// fallible outbound send.
     async fn submit_request(
         &self,
         request: &PromptRequest,
@@ -1372,6 +1701,8 @@ impl TurnManager {
             }
             result
         };
+        // Goal publication retains the existing atomic goal/request owner. An
+        // error without a committed receipt grants no request to interrupt.
         let submitted = submitted?;
         let row = self
             .load_projection_request(
@@ -1440,6 +1771,23 @@ impl TurnManager {
         Ok(row)
     }
 
+    /// Watch the durable request until it terminalizes or the pending entry
+    /// is drained by cancel/disconnect. The drain resolves `response_rx`
+    /// first, so the watch returns `cancelled` without another poll.
+    ///
+    /// Each cycle first polls the request's terminal state, then runs the
+    /// durable projection pass and streams every novel event live (tools,
+    /// then agents, then messages), and only then sleeps. When the
+    /// request has terminalized, the final projection pass still runs —
+    /// and its sends complete — before the pending entry is removed and the
+    /// terminal `stopReason` response is produced, so the pager observes
+    /// the full stream strictly before the response.
+    ///
+    /// Outbound failures and non-transient read failures interrupt and drain
+    /// the submitted request. DefraDB contention errors from the terminal or
+    /// projection reads receive a bounded number of consecutive retries; a
+    /// complete successful poll resets that budget, so an otherwise healthy
+    /// request is never interrupted by an isolated read conflict.
     #[allow(clippy::too_many_arguments)]
     async fn watch_terminal(
         &self,
@@ -1454,6 +1802,10 @@ impl TurnManager {
         mut response_rx: oneshot::Receiver<Result<Value>>,
     ) -> Result<TerminalOutcome> {
         let request_id = request.request_id.as_str();
+        // Request-local token-observation high-water: one per pending
+        // request, so sequential requests accumulate per-request deltas into
+        // the session total without double-counting and a retry-replaced
+        // (smaller) observation can never decrease it.
         let ObservedRequest {
             cursor,
             timing: update_timing,
@@ -1461,7 +1813,11 @@ impl TurnManager {
         } = progress;
         let mut consecutive_transient_read_failures = 0usize;
         loop {
+            // A cancel/disconnect that drained the entry resolves the
+            // response before (or between) terminalization polls.
             if let Ok(result) = response_rx.try_recv() {
+                // The drain always resolves `cancelled` today; keep the
+                // branch total in case future drains resolve other reasons.
                 let value = result?;
                 let stop_reason = value
                     .get("stopReason")
@@ -1499,6 +1855,8 @@ impl TurnManager {
                     continue;
                 }
                 Err(error) => {
+                    // A terminal query failure after submission must not
+                    // leak the submitted request.
                     self.interrupt_and_drain(key, request, generation).await;
                     drop(response_rx);
                     tracing::warn!(
@@ -1511,6 +1869,9 @@ impl TurnManager {
                     return Err(error);
                 }
             };
+            // The projection pass runs every cycle, including the terminal
+            // one: novel durable events stream live, and the final pass
+            // flushes everything before the response below.
             match self
                 .stream_projection_updates(
                     session_id,
@@ -1551,6 +1912,8 @@ impl TurnManager {
                     continue;
                 }
                 Err(error) => {
+                    // A send failure or projection query failure after
+                    // submission must not leak the submitted request.
                     self.interrupt_and_drain(key, request, generation).await;
                     drop(response_rx);
                     tracing::warn!(
@@ -1565,6 +1928,9 @@ impl TurnManager {
             }
             consecutive_transient_read_failures = 0;
             if let Some(outcome) = terminal {
+                // Terminalized: the final projection pass above already
+                // flushed the stream. Remove the pending entry; the response
+                // value is built by the caller from the returned outcome.
                 self.take_entry_if_generation(key, generation).await;
                 return Ok(outcome);
             }
@@ -1579,12 +1945,20 @@ impl TurnManager {
                             .unwrap_or(StopReason::Cancelled.wire_name());
                         return Ok(stop_reason_from_wire(stop_reason).into());
                     }
+                    // Sender dropped without resolving: treat as cancelled.
                     return Ok(StopReason::Cancelled.into());
                 }
             }
         }
     }
 
+    /// Run one durable projection pass and stream every novel event through
+    /// the connection's common session-update send path. Each send holds the
+    /// session's send lock across reserve → stamp → send → commit, so the
+    /// event id is consumed only by a successful enqueue. The cursor
+    /// likewise advances only after each line was successfully sent, so a
+    /// send failure replays the same events on the next poll and never
+    /// duplicates an id.
     async fn stream_projection_updates(
         &self,
         session_id: &str,
@@ -1612,6 +1986,9 @@ impl TurnManager {
         .await
     }
 
+    /// Background activity is independent of parent conversation delivery.
+    /// Suppressed text and its cursor advances stay pending until that lane
+    /// is free; children retain their own session-scoped delivery cursors.
     async fn stream_projection_updates_mode(
         &self,
         session_id: &str,
@@ -1625,6 +2002,8 @@ impl TurnManager {
         child_depth: usize,
         activity_only: bool,
     ) -> Result<()> {
+        // An old prompt ID on parent activity makes the stock pager adopt
+        // that old turn as a viewer. Activity has no conversation ownership.
         let prompt_id = if activity_only { None } else { prompt_id };
         let request = self
             .pinned_projection_request(cursor, session_id, request_id, child_depth == 0)
@@ -1656,6 +2035,8 @@ impl TurnManager {
                 && event.payload.get("sessionUpdate").and_then(Value::as_str)
                     == Some("user_message_chunk")
             {
+                // Do not commit this advance: the session observer delivers
+                // the notice after the foreground RPC has finished.
                 deferred_notifications = true;
                 continue;
             }
@@ -1671,6 +2052,8 @@ impl TurnManager {
             )
             .await?;
         }
+        // The pager creates child panes on spawned and finalizes them on
+        // finished. Deliver their transcript/tools between those boundaries.
         let deferred_children = self
             .stream_readable_child_updates(session_id, sender, projections, cursor, child_depth)
             .await?;
@@ -1695,12 +2078,17 @@ impl TurnManager {
             )
             .await?;
         }
+        // No-wire observations (tail resets/no-op commits) form the suffix
+        // of the same delivery prefix. They become durable cursor state only
+        // after every byte-carrying event above was enqueued successfully.
         if !activity_only && !batch.trailing_advances.is_empty() {
             let mut cursor = cursor.lock().await;
             for advance in batch.trailing_advances {
                 if deferred_notifications
                     && matches!(advance, CursorAdvance::MessageHighWater { .. })
                 {
+                    // Keep incremental discovery behind the undelivered
+                    // notice, while other event cursors still deduplicate.
                     continue;
                 }
                 cursor.record(advance);
@@ -1770,6 +2158,8 @@ impl TurnManager {
             .request
             .clone()
             .context("parent projection identity missing")?;
+        // A session is caused by the request that caused its first request,
+        // and that request is older, so this recursion follows a tree.
         for child in
             super::projection::caused_sessions::caused_by_request(&self.node, &parent).await?
         {
@@ -1803,6 +2193,8 @@ impl TurnManager {
                         )))
                     })
                     .clone();
+                // Ownership contention must defer the parent's finish too:
+                // another sender may still be flushing the child's tail.
                 let Ok(mut progress) = progress.try_lock() else {
                     deferred.insert(session_id.to_owned());
                     continue;
@@ -1849,6 +2241,9 @@ impl TurnManager {
         Ok(deferred)
     }
 
+    /// A caused session's scope authorizes its requests, but not foreign
+    /// node rows sharing that label. Followups must preserve the exact
+    /// node/requester identity, including absent requester identity.
     async fn readable_child_session_requests(
         &self,
         child: &crate::caused_sessions::SessionScope,
@@ -1938,6 +2333,8 @@ impl TurnManager {
         Ok(request)
     }
 
+    /// Query the durable request's terminal state and project a `stopReason`.
+    /// Returns `None` while the request is still non-terminal.
     async fn request_stop_reason(
         &self,
         request: &gents_protocol::row::AgentRequestRow,
@@ -1948,6 +2345,8 @@ impl TurnManager {
             .map(|outcome| outcome.stop_reason))
     }
 
+    /// Terminal projection plus the runtime's error text, scoped to the exact
+    /// physical request that the pager already pinned.
     async fn request_terminal(
         &self,
         request: &gents_protocol::row::AgentRequestRow,
@@ -2013,6 +2412,8 @@ impl TurnManager {
     }
 }
 
+/// Wait between transient read attempts without delaying an explicit cancel
+/// or disconnect that already resolved the pending turn.
 async fn wait_for_retry_or_cancel(
     response_rx: &mut oneshot::Receiver<Result<Value>>,
     delay: Duration,
@@ -2043,6 +2444,7 @@ fn register_transient_read_retry(error: &anyhow::Error, consecutive: &mut usize)
     true
 }
 
+/// Map a wire `stopReason` back onto the enum (used by the drain branch).
 fn stop_reason_from_wire(name: &str) -> StopReason {
     match name {
         "end_turn" => StopReason::EndTurn,
@@ -2052,6 +2454,7 @@ fn stop_reason_from_wire(name: &str) -> StopReason {
     }
 }
 
+/// Whether a durable request lifecycle state is terminal.
 fn is_background_activity(payload: &Value) -> bool {
     matches!(
         payload["sessionUpdate"].as_str(),
@@ -2068,6 +2471,17 @@ fn is_background_activity(payload: &Value) -> bool {
     )
 }
 
+
+
+/// Project the durable terminal state into a wire `stopReason`.
+///
+/// The durable source is `AgentRequest.lifecycle_state`; an `interrupted`
+/// request projects `cancelled`, and a `superseded`/`dead` request projects
+/// `cancelled` only when the request itself carries interrupt intent
+/// (`interrupt_requested_at`), otherwise `error`. There is no modeled refusal
+/// signal on the request: the runtime drain path may still deliver a wire
+/// `refusal`, but the durable rows cannot derive one, so none is invented
+/// from arbitrary error text.
 pub(super) fn stop_reason_from_rows(
     lifecycle_state: &str,
     interrupt_requested_at: Option<&str>,
@@ -2090,7 +2504,10 @@ pub(super) fn stop_reason_from_rows(
     }
 }
 
-fn prompt_text(request: &PromptRequest) -> String {
+/// Flatten the prompt blocks into the single text content submitted to the
+/// Gents runtime. Text blocks are joined with newlines; non-text blocks are
+/// serialized so their payload is preserved verbatim in the request content.
+pub(super) fn prompt_text(request: &PromptRequest) -> String {
     request
         .prompt
         .iter()
@@ -2110,6 +2527,7 @@ fn prompt_text(request: &PromptRequest) -> String {
         .join("\n")
 }
 
+/// Parse the audited `session/prompt` params.
 pub(super) fn parse_prompt_request(params: &Value, id: Option<Value>) -> Result<PromptRequest> {
     let session_id = params
         .get("sessionId")
@@ -2172,6 +2590,7 @@ pub(super) fn parse_prompt_request(params: &Value, id: Option<Value>) -> Result<
     })
 }
 
+/// Parse the audited `session/cancel` notification params.
 pub(super) fn parse_cancel_notification(params: &Value) -> Result<CancelNotification> {
     let session_id = params
         .get("sessionId")

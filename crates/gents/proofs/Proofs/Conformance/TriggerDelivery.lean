@@ -282,6 +282,9 @@ def cursorCases : List String :=
    { name := "latest_only_busy_requires_receipt", mode := .latestOnly, busy := true, checkpointCommit := some true },
    { name := "latest_only_later_receipt_cannot_skip_gap", mode := .latestOnly, entry := arrival 3 "c", admissionCommit := some true, checkpointCommit := some true }].map cursorCase
 
+/-- Drives a callback-binding consumer through the shared cursor owner. Its
+receipts are `CallbackInvocation`s; `editAfterAdmission` edits the admitted
+document and admits it again under the new source version. -/
 structure CallbackCursorScenario where
   name : String
   seedHead : Nat := 1
@@ -443,5 +446,9 @@ def casesJson : String := object [
   ("delivery_options", jsonArray deliveryOptionCases),
   ("latest_admissions", jsonArray latestAdmissionCases),
   ("self_sessions", jsonArray selfCases)]
+
+example : (admit (admit {} (fire "a")) (fire "a")).requests.length = 1 := by native_decide
+example : outcomeDue {} { fire := { fire "a" with goalBacked := true }, terminal := false } = false := by
+  native_decide
 
 end Conformance.TriggerDelivery

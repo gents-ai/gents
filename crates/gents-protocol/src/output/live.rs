@@ -711,6 +711,7 @@ fn loading_or_settling(
         Ok(mut streams) => {
             for stream in &mut streams {
                 if stream.state == LiveStreamState::Unclosed {
+                    stream.state = LiveStreamState::PendingPublication {
                         outcome: outcome.unwrap_or(OutputOutcome::Complete),
                     };
                 }

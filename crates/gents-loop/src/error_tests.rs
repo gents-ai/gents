@@ -1,6 +1,8 @@
 use super::*;
 use crate::rig_compat::classify_completion_error;
 
+
+
 #[test]
 fn tool_streaming_errors_are_permanent_until_retry_metadata_exists() {
     let error = rig::agent::StreamingError::Tool(rig::tool::ToolSetError::ToolNotFoundError(
@@ -13,8 +15,13 @@ fn tool_streaming_errors_are_permanent_until_retry_metadata_exists() {
         classified,
         InferenceError::PermanentFailure { .. }
     ));
-    assert!(!classified.is_retryable());
+    assert!(
+        !classified.is_retryable(),
+        "tool failures stay permanent until tools expose retry-safe health/idempotency metadata"
+    );
 }
+
+
 
 #[test]
 fn provider_transport_send_failure_is_retryable_even_with_status_like_url_digits() {
@@ -31,8 +38,13 @@ fn provider_transport_send_failure_is_retryable_even_with_status_like_url_digits
         classified,
         InferenceError::TransientFailure { .. }
     ));
-    assert!(classified.is_retryable());
+    assert!(
+        classified.is_retryable(),
+        "transport send failures should retry even when the URL contains 400-like digits"
+    );
 }
+
+
 
 #[test]
 fn provider_error_uses_precise_status_matching_for_permanent_statuses() {
@@ -47,11 +59,18 @@ fn provider_error_uses_precise_status_matching_for_permanent_statuses() {
         classified,
         InferenceError::PermanentFailure { .. }
     ));
-    assert!(!classified.is_retryable());
+    assert!(
+        !classified.is_retryable(),
+        "precise provider 400 statuses are still permanent request-shape failures"
+    );
 }
+
+
 
 #[test]
 fn vllm_tool_call_invalid_escape_400_is_retryable() {
+    // The `Invalid \escape` variant — the wire body double-escapes the backslash, which
+    // is why the matcher keys off the line/column/(char ...) signature, not the phrase.
     let error =
         rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
             "Invalid status code 400 Bad Request with message: {\"error\":{\"message\":\
@@ -68,6 +87,8 @@ fn vllm_tool_call_invalid_escape_400_is_retryable() {
     assert!(classified.is_retryable());
 }
 
+
+
 #[test]
 fn provider_error_loose_status_digits_do_not_force_permanent_failure() {
     let error =
@@ -81,9 +102,15 @@ fn provider_error_loose_status_digits_do_not_force_permanent_failure() {
         classified,
         InferenceError::TransientFailure { .. }
     ));
-    assert!(classified.is_retryable());
+    assert!(
+        classified.is_retryable(),
+        "plain numeric substrings must not be treated as HTTP status codes"
+    );
 }
 
+
+
+#[test]
 fn openai_compatible_http_400_is_permanent_bad_request() {
     let error =
         rig::agent::StreamingError::Completion(rig::completion::CompletionError::HttpError(
@@ -99,11 +126,23 @@ fn openai_compatible_http_400_is_permanent_bad_request() {
         classified,
         InferenceError::PermanentFailure { .. }
     ));
-    assert!(!classified.is_retryable());
+    assert!(
+        !classified.is_retryable(),
+        "bad OpenAI-compatible request bodies should fail fast instead of retrying"
+    );
 }
+
+
+
+
+
+
+
+
 
 #[test]
 fn anthropic_account_rate_limit_is_a_non_retryable_usage_limit() {
+    // #1422: the subscription seat was capped for hours, not throttled.
     let error =
         rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
             r#"Claude Messages HTTP 429 Too Many Requests (request-id -) body={"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."}} [provider-limit reset-at=2026-09-25T18:40:00Z usage-exhausted]"#.into(),
@@ -119,6 +158,8 @@ fn anthropic_account_rate_limit_is_a_non_retryable_usage_limit() {
     );
 }
 
+
+
 fn http_402(body: String) -> InferenceError {
     classify_completion_error(&rig::agent::StreamingError::Completion(
         rig::completion::CompletionError::HttpError(
@@ -132,6 +173,7 @@ fn http_402(body: String) -> InferenceError {
 
 #[test]
 fn openrouter_credits_402_is_a_non_retryable_usage_limit() {
+    use crate::completion_retry::{failure_class, FailureClass};
     use crate::provider_limit::tests::{
         OPENROUTER_INSUFFICIENT_CREDITS, OPENROUTER_KEY_LIMIT, OPENROUTER_WEIGHT_EXCEEDS_BUDGET,
     };
@@ -146,11 +188,16 @@ fn openrouter_credits_402_is_a_non_retryable_usage_limit() {
             "{body}: {error:?}"
         );
         assert!(!error.is_retryable());
+        assert_eq!(
+            failure_class(&error, &error.to_string()),
+            FailureClass::Permanent
+        );
     }
 }
 
 #[test]
 fn openrouter_in_flight_402_waits_for_retry_after() {
+    use crate::completion_retry::{failure_class, FailureClass};
     let retry_at = (chrono::Utc::now() + chrono::Duration::seconds(20))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let error = http_402(format!(
@@ -167,4 +214,8 @@ fn openrouter_in_flight_402_waits_for_retry_after() {
         ),
         other => panic!("expected throttle, got {other:?}"),
     }
+    assert_eq!(
+        failure_class(&error, &error.to_string()),
+        FailureClass::Transport
+    );
 }

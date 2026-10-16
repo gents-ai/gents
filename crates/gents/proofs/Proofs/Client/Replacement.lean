@@ -1,5 +1,11 @@
 import Proofs.Client.Terminal
 
+theorem turn_replacement_derives_new_tip
+    (attempts : List AttemptView)
+    (newTip : AttemptView) :
+    deriveTurn (attempts ++ [newTip]) = some (deriveAttempt newTip) :=
+  deriveTurn_append_singleton attempts newTip
+
 theorem supersession_rank
     (view : AttemptView)
     (h_super : view.request.isSuperseded = true) :
@@ -82,7 +88,7 @@ private def retryFixture
   }
 
 /-- The keyed resolver is insensitive to observation order for a simple retry
-chain: parenthood, not list position, selects the tip. -/
+    chain because parenthood, rather than list position, selects the tip. -/
 theorem unordered_retry_chain_resolves_tip_in_both_orders :
     let root := retryFixture "authorized-session" "root" none .failed
     let retry := retryFixture "authorized-session" "retry" (some "root") .pending

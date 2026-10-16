@@ -60,6 +60,7 @@ pub struct GraphqlSessionShape {
     pub request_id: String,
     pub turn_state: Option<String>,
     pub request: Option<AgentRequestRow>,
+    /// Headers only. Payload readiness is resolved separately by reconstruction.
     pub messages: Vec<TranscriptMessage>,
     pub tool_calls: Vec<AgentToolCallRow>,
 }
@@ -106,10 +107,18 @@ pub fn validate_collection_identifier(name: &str) -> Result<()> {
 }
 
 /// Validate a caller-supplied GraphQL **filter-object fragment** — a value
-/// spliced into a query whole, as an event-source filter is. Neither escaping
-/// nor the Name grammar reaches this interpolation position; a break-out must
-/// unbalance the fragment, so one balanced object literal built from filter
-/// tokens is required. `(`, `)` and `#` are load-bearing for attacks and are
+/// spliced into a query whole, as an event-source filter is.
+///
+/// This is the third interpolation position, and neither of the other two
+/// defenses reaches it: escaping would destroy the object syntax, and the
+/// value is not an identifier. What makes it checkable is that a break-out
+/// must unbalance the fragment — to escape it has to close a `]`, `}` or
+/// `)` it never opened. So: require one balanced object literal, built only
+/// from the tokens a filter legitimately needs.
+///
+/// Deliberately strict. `(`, `)` and `#` never appear in a filter object,
+/// but each is load-bearing for an attack (`)` closes the enclosing field's
+/// argument list, `#` comments out the query's own tail), so they are
 /// rejected outright rather than balance-tracked.
 pub fn validate_graphql_filter_fragment(filter: &str) -> Result<()> {
     let trimmed = filter.trim();
@@ -139,6 +148,8 @@ pub fn validate_graphql_filter_fragment(filter: &str) -> Result<()> {
             }
             continue;
         }
+        // GraphQL object keys are names; a JSON-style quoted key parses as a
+        // string here but fails when the runtime queries with the filter.
         if after_string && !ch.is_whitespace() {
             after_string = false;
             if ch == ':' {
@@ -147,6 +158,8 @@ pub fn validate_graphql_filter_fragment(filter: &str) -> Result<()> {
                 ));
             }
         }
+        // A depth-0 token after the object already closed means the value is
+        // not a single fragment — trailing text is someone else's query.
         if closed_at.is_some() && !ch.is_whitespace() {
             return Err(anyhow!(
                 "invalid filter: trailing content after the object literal"
@@ -171,6 +184,7 @@ pub fn validate_graphql_filter_fragment(filter: &str) -> Result<()> {
             }
             ':' | ',' => {}
             c if c.is_ascii_alphanumeric() || c == '_' => {}
+            // Numeric literals: -1, 1.5, 1e9, 1e+9.
             '-' | '+' | '.' => {}
             c if c.is_whitespace() => {}
             c => {
@@ -231,7 +245,7 @@ async fn graphql_http_client() -> Result<&'static reqwest::Client> {
     static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
     CLIENT
         .get_or_try_init(|| async {
-            // Native certificate loading can block the async executor.
+            // Native certificate loading can block; initialize once off the executor.
             tokio::task::spawn_blocking(|| reqwest::Client::builder().build())
                 .await?
                 .map_err(anyhow::Error::from)
@@ -257,7 +271,7 @@ pub async fn graphql_endpoint_available(graphql: &str, options: GraphqlRequestOp
     }
 }
 
-/// Execute a GraphQL read. Mutation documents are rejected before network I/O;
+/// Execute a GraphQL read. Mutation documents are rejected before network I/O.
 /// `authorization` is sent verbatim as the `Authorization` header.
 #[cfg(feature = "native")]
 pub async fn execute_graphql_async(
@@ -462,8 +476,9 @@ pub fn graphql_rows_from_response(response: &Value, collection_name: &str) -> Ve
 }
 
 /// Returns true only when GraphQL reports that the collection's root field is
-/// absent. A missing column on an existing collection must remain an error so
-/// schema/query drift stays visible.
+/// absent. A missing column on an existing collection must remain an error;
+/// treating every `Cannot query field` mentioning the collection type as a
+/// missing collection hides schema/query drift.
 pub fn is_collection_missing_error_message(collection_name: &str, message: &str) -> bool {
     let missing_root_double_quoted = format!(r#"Cannot query field \"{collection_name}\""#);
     let missing_root_single_quoted = format!("Cannot query field '{collection_name}'");
@@ -483,14 +498,34 @@ pub fn graphql_string_list_literal(values: &[String]) -> String {
     )
 }
 
-/// Converts a `serde_json::Value` into a GraphQL input literal for DefraDB
-/// document mutations.
+/// Converts a `serde_json::Value` into a GraphQL input literal for use in
+/// DefraDB document mutations (create/update/upsert payloads).
 ///
-/// An empty `Value::Array` renders as `null`, never `[]`: DefraDB types a bare
-/// `[]` as `JsonArray([])`, incompatible with `NillableStringArray` columns —
-/// the create appears to succeed while storing the wrong type, and any later
-/// update fails re-validation. The primary defence lives in
-/// `sanitize_import_document`/`desired_from_value`; this is the backstop.
+/// This is the generic renderer used by the apply and import code paths
+/// (and direct canonical configuration writers) when
+/// materializing desired-state documents as GraphQL `input:` arguments.
+///
+/// # Empty list handling
+///
+/// An empty `Value::Array` is rendered as the literal `null`, never `[]`.
+/// DefraDB types a bare `[]` as `JsonArray([])`. This is incompatible with
+/// `NillableStringArray` (`[String]`) columns (used for tags, skill IDs,
+/// agent target IDs, and similar canonical lists). A create may appear to
+/// succeed while storing the wrong type; any
+/// subsequent update then fails re-validation.
+///
+/// This behaviour matches the dedicated helpers (`string_list_field`,
+/// `graphql_string_list_field` etc.) introduced for the same quirk in #382.
+///
+/// The primary upstream defence lives in `sanitize_import_document` (and the
+/// filtering in `desired_from_value`), which omits empty lists on create and
+/// writes explicit `null` on update for most collections. `graphql_input_literal`
+/// acts as a defensive backstop for any path that reaches it with an explicit
+/// empty array value.
+///
+/// All array fields that currently flow through this function for DefraDB
+/// collections are list-of-string columns. The blanket rule is therefore
+/// safe for the documented use cases in the apply/desired-state machinery.
 pub fn graphql_input_literal(value: &Value) -> Result<String> {
     match value {
         Value::Null => Ok("null".to_string()),
@@ -512,7 +547,9 @@ pub fn graphql_input_literal(value: &Value) -> Result<String> {
                 .iter()
                 .map(|(key, value)| {
                     // Keys render in identifier position, where escaping
-                    // cannot apply; values here are agent-authored.
+                    // cannot apply. Values reaching here are caller-supplied
+                    // (self-config patches are agent-authored), so an
+                    // unvalidated key is an injection into the mutation.
                     validate_graphql_name(key)?;
                     Ok(format!("{key}: {}", graphql_input_literal(value)?))
                 })
@@ -588,8 +625,14 @@ pub fn optional_string_field(name: &str, value: Option<&str>) -> Option<String> 
 }
 
 pub fn string_list_field(name: &str, values: &[String]) -> Option<String> {
-    // Empty lists serialize as `null`, NOT `[]`: a bare `[]` is typed by
-    // DefraDB as JsonArray and corrupts a NillableStringArray column.
+    // Empty lists serialize as `null`, NOT `[]`. A bare `[]` GraphQL literal is
+    // typed by DefraDB as `JsonArray([])`, which is incompatible with a
+    // `NillableStringArray` (`[String]`) column: the create "succeeds" but
+    // stores a JsonArray, and every later update of that document fails
+    // re-validation ("expected ScalarArray(NillableStringArray), got
+    // JsonArray([])"). `null` is the NillableStringArray-faithful empty and
+    // round-trips back to an empty list, matching the `nullable_string_field`
+    // idiom used for scalar fields.
     if values.is_empty() {
         Some(format!("{name}: null"))
     } else {
@@ -750,9 +793,10 @@ fn retryable_graphql_error_message(value: &serde_json::Value) -> Option<String> 
     retryable_graphql_error_text(&rendered).then_some(rendered)
 }
 
-/// Whether GraphQL/DefraDB error text describes a retryable store conflict
-/// (case-insensitive; shared with callers that reconcile ambiguous mutations
-/// before retrying them).
+/// Whether GraphQL/DefraDB error text describes a retryable store conflict.
+///
+/// This is intentionally case-insensitive and is shared with callers that
+/// must reconcile an ambiguous mutation before retrying it themselves.
 pub fn retryable_graphql_error_text(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     message.contains("transaction conflict")
@@ -777,9 +821,10 @@ fn graphql_transport_error_is_retryable(error: &reqwest::Error) -> bool {
 }
 
 /// Whether an anyhow error, including any wrapped cause, is retryable under
-/// the canonical GraphQL transport and DefraDB-conflict policy. The cause chain
-/// is inspected because callers attach endpoint context above the original
-/// `reqwest::Error`.
+/// the canonical GraphQL transport and DefraDB-conflict policy.
+///
+/// Inspecting the full cause chain matters because callers normally attach
+/// endpoint/operation context above the original `reqwest::Error`.
 #[cfg(feature = "native")]
 pub fn graphql_error_is_retryable(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
@@ -811,6 +856,20 @@ fn graphql_string_literal(value: &str) -> String {
 mod tests {
     use super::*;
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     #[test]
     fn validate_graphql_filter_fragment_accepts_real_filters() {
         for filter in [
@@ -830,16 +889,24 @@ mod tests {
     #[test]
     fn validate_graphql_filter_fragment_rejects_break_outs() {
         for filter in [
+            // The confirmed #1038 payload: closes the enclosing _and array,
+            // object and paren, then appends its own selection.
             r#"{} ] }, limit: 1) { _docID } Agent(filter: { _and: [ {} ] }, limit: 1) { system_prompt } PocEvent(filter: { _and: [ {}"#,
+            // Unbalanced / stray delimiters.
             "{ a: 1 } }",
             "{ a: 1 ]",
             "{ a: 1 }) { x } (",
+            // Two top-level values.
             "{ a: 1 } { b: 2 }",
+            // A comment can hide the rest of a line.
             "{ a: 1 } # trailing",
+            // Not an object at all.
             "kind",
             "",
             "   ",
+            // Unterminated string literal.
             r#"{ a: { _eq: "open } }"#,
+            // JSON-style quoted keys.
             r#"{"instructions": {"_eq": "b"}}"#,
         ] {
             assert!(
@@ -851,6 +918,9 @@ mod tests {
 
     #[test]
     fn graphql_input_literal_rejects_object_keys_that_are_not_graphql_names() {
+        // Object keys land in identifier position in the rendered literal,
+        // where escaping does not apply. A self-config patch value is
+        // agent-controlled, so a non-Name key is an injection, not a typo.
         let hostile = serde_json::json!({
             "endpoint": {
                 r#"x: 1 }, api_key: "leaked" }) { _docID } #"#: 1
@@ -863,6 +933,7 @@ mod tests {
             "error should name the identifier rule: {err}"
         );
 
+        // Well-formed nested keys still render.
         let ok = serde_json::json!({ "outer": { "inner_1": "v" } });
         assert!(graphql_input_literal(&ok)
             .expect("valid Name keys render")
@@ -886,6 +957,8 @@ mod tests {
             "rendered: {rendered}"
         );
         assert!(rendered.contains("skill_ids: null"), "rendered: {rendered}");
+        // Field-specific checks are stronger than a generic !contains("[]")
+        // (the latter could be defeated by unrelated substrings in complex values).
         assert!(!rendered.contains("target_ids: []"), "rendered: {rendered}");
         assert!(!rendered.contains("skill_ids: []"), "rendered: {rendered}");
     }
@@ -903,6 +976,21 @@ mod tx_tests {
         last_tx_header: Arc<Mutex<Option<String>>>,
     }
 
+    #[derive(Clone)]
+    struct RetryRecorder {
+        attempts: Arc<Mutex<usize>>,
+        first_error_message: Arc<String>,
+    }
+
+    impl RetryRecorder {
+        fn new(first_error_message: impl Into<String>) -> Self {
+            Self {
+                attempts: Arc::new(Mutex::new(0)),
+                first_error_message: Arc::new(first_error_message.into()),
+            }
+        }
+    }
+
     async fn capture_handler(
         State(state): State<HeaderRecorder>,
         headers: HeaderMap,
@@ -913,6 +1001,22 @@ mod tx_tests {
             .and_then(|v| v.to_str().ok())
             .map(str::to_string);
         Json(serde_json::json!({ "data": {} }))
+    }
+
+    async fn retry_once_handler(
+        State(state): State<RetryRecorder>,
+        Json(_body): Json<serde_json::Value>,
+    ) -> Json<serde_json::Value> {
+        let mut attempts = state.attempts.lock().unwrap();
+        *attempts += 1;
+        if *attempts == 1 {
+            return Json(serde_json::json!({
+                "errors": [{
+                    "message": state.first_error_message.as_str()
+                }]
+            }));
+        }
+        Json(serde_json::json!({ "data": { "ok": true } }))
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -977,6 +1081,36 @@ mod tx_tests {
         server.abort();
     }
 
+    async fn assert_execute_graphql_async_retries_error(first_error_message: &str) {
+        let state = RetryRecorder::new(first_error_message);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/", post(retry_once_handler))
+            .with_state(state.clone());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let endpoint = format!("http://{addr}/");
+        let options = GraphqlRequestOptions {
+            timeout: std::time::Duration::from_secs(2),
+            max_attempts: 2,
+            retry_backoff: std::time::Duration::from_millis(1),
+        };
+
+        let response = execute_graphql_async(&endpoint, None, "{ __typename }", options)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response
+                .pointer("/data/ok")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(*state.attempts.lock().unwrap(), 2);
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn public_transport_rejects_mutations_before_network_io() {
         let error = execute_graphql_async(
@@ -994,6 +1128,12 @@ mod tx_tests {
         );
     }
 
+    // One transport-level retry proof: a wrapped retryable error text triggers a
+    // second attempt. Both store-conflict strings ("transaction conflict",
+    // "database is locked") are pinned as retryable by
+    // `retryable_graphql_error_text_matches_store_conflict_variants`; the
+    // wrapped-cause-chain walk is pinned by
+    // `retryable_graphql_error_walks_wrapped_cause_chain_case_insensitively`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn execute_graphql_async_retries_retryable_store_conflict_errors() {
         assert_execute_graphql_async_retries_error(

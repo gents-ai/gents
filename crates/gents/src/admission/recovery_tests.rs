@@ -36,15 +36,8 @@ async fn stored_call(node: &EmbeddedNode) -> Value {
         .remove(0)
 }
 
-fn stored_call(node: &EmbeddedNode) -> Value {
-    let response = node.execute(
-        r#"{ InferenceCall { call_state failure_reason ended_at prompt_tokens completion_tokens } }"#,
-    ).await;
-    crate::graphql::rows::<Value>(&response, "InferenceCall")
-        .unwrap()
-        .remove(0)
-}
-
+/// Lean InferenceCall's terminal states have no outgoing transitions. A sweep
+/// that observed running before the owner completed must preserve that outcome.
 #[tokio::test]
 async fn stale_recovery_preserves_concurrent_completion_and_usage() {
     let (node, snapshot) = fixture("running").await;
@@ -122,6 +115,7 @@ fn pending_call(call_id: &str) -> super::super::controller::PendingCallMetadata 
     }
 }
 
+/// Lean: InferenceCall.Persistence.recovery_winner_cannot_be_reopened.
 #[tokio::test]
 async fn recovery_winner_rejects_late_running_persistence() {
     let (node, snapshot) = fixture("queued").await;
@@ -210,6 +204,8 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
     }
 }
 
+/// Exercise the real queued acquisition path: losing the durable start must
+/// return its semaphore/bookkeeping and never hand provider code a permit.
 #[tokio::test]
 async fn recovered_queued_call_cannot_acquire_provider_permit() {
     use super::super::controller::BackendAdmissionController;
@@ -330,6 +326,10 @@ impl super::super::stream_guard::StreamGuardLifecycle for SignalledPermitFinaliz
     }
 }
 
+/// Dropping a stream while its independently scheduled terminal persistence is
+/// waiting for the canonical gate must still return real admission ownership.
+/// Once the existing gate owner exits, AdmissionPermit's Drop repair installs
+/// exactly one terminal outcome on the already-created call.
 #[tokio::test]
 async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once() {
     use super::super::controller::BackendAdmissionController;
@@ -449,6 +449,8 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
     assert_eq!(rows[0]["call_state"], "completed");
 }
 
+/// Lean namespace InferenceCall.Persistence: terminal_winner_preserves_outcome_and_stamp and
+/// late_usage_preserves_terminal_projection / late_usage_is_recorded.
 #[tokio::test]
 async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     let (node, snapshot) = fixture("running").await;

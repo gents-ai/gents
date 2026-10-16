@@ -153,18 +153,10 @@ impl Display for RequestLifecycleState {
     }
 }
 
-impl<'de> Deserialize<'de> for RequestLifecycleState {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Self::parse(&value).map_err(serde::de::Error::custom)
-    }
-}
-
 /// Strict: an unknown value is a hard deserialization error naming the
-/// offending value, not a silent `None`.
+/// offending value, not a silent `None`. Wire code that wants leniency
+/// should deserialize into `Option<RequestLifecycleState>` and rely on the
+/// field being absent/null, not on this succeeding for garbage strings.
 impl Serialize for RequestLifecycleState {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -174,4 +166,12 @@ impl Serialize for RequestLifecycleState {
     }
 }
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+impl<'de> Deserialize<'de> for RequestLifecycleState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(serde::de::Error::custom)
+    }
+}

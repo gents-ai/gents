@@ -120,6 +120,7 @@ pub(crate) async fn effective_slots(
 
 #[cfg(test)]
 mod tests {
+    use crate::identity::NodeIdentity;
     use super::*;
     use crate::identity::KeyIdentity;
     use gents_protocol::request_admission::{

@@ -10,7 +10,8 @@ use std::collections::BTreeMap;
 const REQUEST_FACT_SESSION_BATCH_SIZE: usize =
     crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH;
 
-/// Pure mirror of Lean `AgentSession.RequestFact`, read from `AgentRequest` rows.
+/// Authoritative request fact read from `AgentRequest` rows for observation
+/// advancement. The pure mirror of Lean `AgentSession.RequestFact`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRequestFact {
     pub node_did: String,
@@ -19,10 +20,14 @@ pub struct SessionRequestFact {
     pub requester_did: Option<String>,
     pub agent_id: String,
     pub created_at: String,
+    /// The signed causal hop (`request_hop`).
     pub hop: u32,
     pub observed: gents_protocol::session::SessionRequestObservation,
 }
 
+/// Canonical newest ordering: `created_at` then logical `request_id`, both
+/// descending. The physical `_docID` is exact identity for refresh/retry and
+/// is never an extra sort key.
 fn request_fact_newer(a: &SessionRequestFact, b: &SessionRequestFact) -> bool {
     let (a_created, b_created) = match (
         chrono::DateTime::parse_from_rfc3339(&a.created_at),
@@ -35,6 +40,9 @@ fn request_fact_newer(a: &SessionRequestFact, b: &SessionRequestFact) -> bool {
         || (a_created == b_created && a.observed.request_id > b.observed.request_id)
 }
 
+/// Whether `incoming` is the canonical latest request across `rows` under the
+/// session's exact requester scope, including the currently observed row.
+/// Duplicate logical roots fail instead of a limit-1 silent pick.
 fn incoming_is_canonical_latest(
     session: &gents_protocol::session::AgentSession,
     rows: &[SessionRequestFact],
@@ -96,11 +104,15 @@ fn requester_filter(requester_scope: Option<Option<&str>>) -> String {
             escape_graphql_string(requester_did)
         )
     } else {
+        // Exact absent scope: requester_did must be null.
         r#", requester_did: { _eq: null }"#.to_string()
     };
     requester_filter
 }
 
+/// Read the complete scoped request facts (created_at + identity + state)
+/// inside the caller's transaction. `all_requesters` selects the explicit
+/// background/all-requester scope; the ordinary route never widens.
 pub(crate) async fn load_scoped_request_facts_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     session: &gents_protocol::session::AgentSession,
@@ -211,6 +223,11 @@ fn decode_request_facts(response: &serde_json::Value) -> Result<Vec<SessionReque
         .collect()
 }
 
+/// Lean `CausalHop.sessionCurrentHop`: the hop of the session's latest
+/// request under the canonical order. `created_at` has whole-second
+/// precision, so the requests sharing the latest second have no order between
+/// them; the current hop is the highest hop among them, which errs toward
+/// refusing a continuation, never toward running one below a refusal.
 pub(crate) fn session_current_hop(facts: &[SessionRequestFact]) -> u32 {
     let at =
         |fact: &SessionRequestFact| chrono::DateTime::parse_from_rfc3339(&fact.created_at).ok();
@@ -225,6 +242,9 @@ pub(crate) fn session_current_hop(facts: &[SessionRequestFact]) -> u32 {
         .unwrap_or(0)
 }
 
+/// [`session_current_hop`] over every requester of a session, in a caller's
+/// transaction. Every same-session continuation copies it and every
+/// cross-session cause climbs past it.
 pub(crate) async fn load_session_current_hop_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -235,6 +255,7 @@ pub(crate) async fn load_session_current_hop_in_txn(
     ))
 }
 
+/// [`load_session_current_hop_in_txn`] in its own read transaction.
 pub(crate) async fn load_session_current_hop(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
@@ -255,6 +276,9 @@ pub(crate) async fn load_session_current_hop(
     .await
 }
 
+/// Read the actual request head, never the session's presentation cache.
+/// Outer `None` explicitly selects all requesters; `Some(None)` is the exact
+/// absent requester scope. Ordering uses parsed time then logical request ID.
 pub async fn load_latest_request_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -265,6 +289,9 @@ pub async fn load_latest_request_in_txn(
     latest_request_fact(rows)
 }
 
+/// Read complete request histories for several sessions in bounded statements
+/// inside the caller's transaction, then select each head with the same
+/// identity and parsed-time ordering as [`load_latest_request_in_txn`].
 pub(crate) async fn load_latest_requests_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -278,6 +305,8 @@ pub(crate) async fn load_latest_requests_in_txn(
             batch,
             requester_scope,
         ));
+        #[cfg(test)]
+        record_request_fact_batch_query();
         let rows = decode_request_facts(&txn.execute(&query).await?)?;
         let mut rows_by_session = BTreeMap::<String, Vec<SessionRequestFact>>::new();
         for row in rows {
@@ -313,6 +342,28 @@ fn latest_request_fact(rows: Vec<SessionRequestFact>) -> Result<Option<SessionRe
     Ok(latest)
 }
 
+#[cfg(test)]
+tokio::task_local! {
+    static REQUEST_FACT_BATCH_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+}
+
+#[cfg(test)]
+fn record_request_fact_batch_query() {
+    let _ = REQUEST_FACT_BATCH_QUERIES
+        .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+}
+
+#[cfg(test)]
+async fn count_request_fact_batch_queries<F: std::future::Future>(future: F) -> (F::Output, usize) {
+    let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let output = REQUEST_FACT_BATCH_QUERIES
+        .scope(queries.clone(), future)
+        .await;
+    (output, queries.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Validate that `incoming` matches the session owner's scope and agent,
+/// mirroring the Lean `advance` guard.
 fn validate_incoming_scope(
     session: &gents_protocol::session::AgentSession,
     incoming: &SessionRequestFact,
@@ -337,10 +388,12 @@ fn normalize_preview(content: &str) -> String {
         .join(" ")
 }
 
-/// Publish the observation patch inside the caller's transaction. The incoming
-/// request must match the session owner's exact scope, be present in the
-/// complete scoped request facts, and be the canonical latest; anything else
-/// is a no-op rejection.
+/// Publish the physical `_docID`, logical `request_id`, observed state and
+/// normalized preview as one atomic observation patch inside the caller's
+/// transaction. The incoming request must match the session owner's exact
+/// scope, be present in the complete scoped request facts (including the
+/// currently observed row), and be the canonical latest by
+/// (created_at DESC, request_id DESC); anything else is a no-op rejection.
 pub(crate) async fn advance_session_request_observation_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     incoming: &SessionRequestFact,
@@ -362,9 +415,12 @@ pub(crate) async fn advance_session_request_observation_in_txn(
 /// `test_support::CAPTURED_EVENT_TARGETS`.
 pub(crate) const REFUSAL_PROJECTION_EVENT_TARGET: &str = "gents::refusal_projection";
 
-/// Refusal-boundary variant: read-side ambiguity warns and leaves the
-/// observation untouched so the refusal in this transaction persists; write
-/// failures still propagate and roll the refusal back.
+/// Refusal-boundary variant: a row this owner cannot read — an invalid
+/// scoped request fact, duplicate `request_id` roots, an incoming row missing
+/// from its session scope — warns and leaves the observation untouched
+/// instead of erroring, so the refusal sharing this transaction persists.
+/// Write failures still propagate; they roll the refusal back with every
+/// other mutation it owns.
 pub(crate) async fn advance_refused_request_observation_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     incoming: &SessionRequestFact,
@@ -381,8 +437,10 @@ pub(crate) async fn advance_refused_request_observation_in_txn(
     .await
 }
 
-/// Which boundary the observation owner serves: `Claim` errors on read-side
-/// ambiguity; `Refusal` no-ops on it (Lean `AgentSession.advance`).
+/// Which boundary the observation owner serves: read-side ambiguity errors on
+/// `Claim` (an ambiguous session refuses the claim) and no-ops on `Refusal`
+/// (Lean `AgentSession.advance` leaves the session untouched unless the
+/// incoming row is provably its canonical latest).
 #[derive(Clone, Copy)]
 enum ObservationBoundary {
     Claim,
@@ -450,6 +508,12 @@ async fn advance_observation_in_txn(
     Ok(true)
 }
 
+/// Lifecycle/preview refresh inside the caller's transaction: reread the
+/// authoritative row by its exact physical `_docID` **and** logical
+/// `request_id`, validate the session scope/agent and stored-observation
+/// identity, and copy the observed state from the authoritative row. Event
+/// lifecycle payloads have no influence; a missing or mismatched row is a
+/// no-op, never an older-local-request fallback.
 pub(crate) async fn refresh_session_request_observation_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -497,6 +561,8 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
         "session observation refresh found duplicate authoritative request rows"
     );
     let Some(row) = rows.first() else {
+        // Missing exact rows remain unknown; never fall back to an older
+        // local request.
         return Ok(false);
     };
     let current = gents_protocol::session::SessionRequestObservation {
@@ -576,6 +642,11 @@ pub(crate) async fn update_session_title_with_source(
     .await
 }
 
+/// In-transaction title replacement: generated titles replace only an absent
+/// or placeholder title; an explicit user rename (including clear) always applies.
+/// Automatic task/placeholder titles never overwrite an existing title. Identity, creation
+/// time, closure, provenance, tags, preview and the latest request identity
+/// are preserved; activity advances monotonically.
 pub async fn apply_title_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -633,8 +704,8 @@ pub(crate) async fn load_recent_titles_for_agent(
 ) -> Result<Vec<String>> {
     let escaped_node_did = escape_graphql_string(node_did);
     let escaped_session_id = escape_graphql_string(exclude_session_id);
-    // Rank the complete owner scope before limiting; a creation-time window
-    // can omit recently active sessions.
+    // Activity lives in the observation JSON. Rank the complete owner scope
+    // before limiting; a creation-time window can omit recently active sessions.
     let query = format!(
         r#"{{
             AgentSession(
@@ -936,6 +1007,9 @@ mod observation_refresh_tests {
                 assert_eq!(reopened.tags, vec!["review"]);
                 assert_eq!(reopened.observation.unwrap().latest_request.unwrap().lifecycle_state,
                     RequestLifecycleState::Completed);
+                // A malformed/stale observation must not import state from a
+                // different immutable request scope, even when its logical
+                // request label matches.
                 txn.execute_with_variables(
                     "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
                     &serde_json::json!({"input": {
@@ -992,12 +1066,8 @@ mod observation_refresh_tests {
 mod session_hop_tests {
     use super::{session_current_hop, SessionRequestFact};
 
-    /// Lean `CausalHop.same_second_tie_takes_the_highest_hop`: a refused
-    /// over-bound wake and a native wake written in the same second read as
-    /// the refused hop, whatever their request ids.
-    #[test]
-    fn a_same_second_tie_takes_the_highest_hop() {
-        let fact = |request_id: &str, created_at: &str, hop: u32| SessionRequestFact {
+    fn fact(request_id: &str, created_at: &str, hop: u32) -> SessionRequestFact {
+        SessionRequestFact {
             node_did: "did:test:agent".into(),
             session_id: "session".into(),
             requester_did: None,
@@ -1009,7 +1079,14 @@ mod session_hop_tests {
                 request_id: request_id.into(),
                 lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
             },
-        };
+        }
+    }
+
+    /// Lean `CausalHop.same_second_tie_takes_the_highest_hop`: a refused
+    /// over-bound wake and a native wake written in the same second read as
+    /// the refused hop, whatever their request ids.
+    #[test]
+    fn a_same_second_tie_takes_the_highest_hop() {
         let facts = [
             fact("parent", "2026-09-27T05:12:04Z", 0),
             fact("a-refused-wake", "2026-09-27T05:12:05Z", 9),
@@ -1022,6 +1099,7 @@ mod session_hop_tests {
             fact("a-native-wake", "2026-09-27T05:12:05Z", 3),
         ];
         assert_eq!(session_current_hop(&reversed), 9);
+        // An earlier second never counts, however high its hop.
         let later_root = [
             fact("refused-wake", "2026-09-27T05:12:04Z", 9),
             fact("user-root", "2026-09-27T05:12:05Z", 0),
@@ -1030,4 +1108,3 @@ mod session_hop_tests {
         assert_eq!(session_current_hop(&[]), 0);
     }
 }
-

@@ -1332,6 +1332,8 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
     Arc::new(core).shutdown().await.expect("shutdown");
 }
 
+/// A new client store is recorded before its first write and reopens with
+/// its key; a removed key is the typed missing-key refusal, not a new store.
 #[tokio::test]
 async fn the_client_store_is_encrypted_with_its_recorded_key() {
     use crate::client::paths::DesktopPaths;

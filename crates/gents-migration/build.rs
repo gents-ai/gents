@@ -77,6 +77,11 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
     let artifact = lens_target_dir
         .join("wasm32-unknown-unknown")
         .join("debug")
+        .join(artifact_name);
+
+    let alt = lens_target_dir
+        .join("wasm32-unknown-unknown")
+        .join("debug")
         .join(format!("{}.wasm", pkg.replace('-', "_")));
 
     let path = if artifact.exists() {

@@ -177,6 +177,11 @@ pub fn transcript_message_create_variables(
     )])))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gents_protocol::output::{OutputOutcome, SourceClose};
+
     fn terminal_only_segment_row() -> serde_json::Value {
         serde_json::json!({
             "_docID": "seg-1",

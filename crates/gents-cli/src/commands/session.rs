@@ -101,7 +101,6 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
         return Ok(());
     }
 
-async fn session_fork(args: SessionForkArgs) -> Result<()> {
     let home = resolve_home_dir(args.home.as_deref());
     let data_dir = default_data_dir(&home);
 

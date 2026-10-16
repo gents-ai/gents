@@ -1,20 +1,28 @@
 //! The per-store at-rest encryption key: creation, custody and loading.
 //!
-//! Every persistent Gents store is opened through DefraDB's `EncryptedStore`
-//! with the 32-byte key this module owns. New stores start encrypted; a
-//! recorded encrypted store is never reopened without its key. At-rest
-//! encryption protects the disk and its backups, never a query the node
+//! Every persistent Gents store (a gents home's data directory and the
+//! desktop client's store) is opened through DefraDB's `EncryptedStore`
+//! (AES-256-GCM over values; keys stay plaintext) with the 32-byte key this
+//! module owns. New stores start encrypted. An existing plaintext store is
+//! copied and verified before replacement; a recorded encrypted store is
+//! never reopened without its key.
+//!
+//! At-rest encryption protects the disk and its backups. The process that
+//! opens the store holds the key, so it never protects a query that node
 //! answers; credential fields stay behind the query guards for that.
 //!
 //! Custody: on macOS the key is a generic password in the user's login
-//! keychain, whose access list is bound to the creating binary's signature, so
-//! a rebuilt or re-signed binary is prompted for access. This-device-only
-//! accessibility needs the data-protection keychain, which refuses unentitled
-//! binaries (`errSecMissingEntitlement`); it waits on a
-//! `keychain-access-groups` entitlement and Developer ID signing. Elsewhere,
-//! and whenever [`StoreKeyCustodyChoice::File`] is requested, the key is an
-//! owner-only file created like a file identity key. Tests request file
-//! custody so they never write login-keychain items.
+//! keychain, created and read the way the `macos-keychain` identity is. That
+//! keychain never syncs through iCloud, but it moves with the login keychain
+//! (Migration Assistant, restored backups), and its access list is bound to
+//! the creating binary's signature, so a rebuilt or re-signed binary is
+//! prompted for access. This-device-only accessibility needs the
+//! data-protection keychain, which refuses unentitled binaries
+//! (`errSecMissingEntitlement`); it waits on a `keychain-access-groups`
+//! entitlement and Developer ID signing. Elsewhere, and whenever
+//! [`StoreKeyCustodyChoice::File`] is requested, the key is an owner-only
+//! file created like a file identity key. Tests request file custody so they
+//! never write login-keychain items.
 
 use std::path::{Path, PathBuf};
 
@@ -62,7 +70,9 @@ pub struct StoreEncryption {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "custody", rename_all = "kebab-case")]
 pub enum StoreKeyCustody {
+    /// Login-keychain generic password under this label.
     MacosKeychain { keychain_label: String },
+    /// Owner-only key file at the store owner's key-file path.
     File,
 }
 
@@ -203,7 +213,8 @@ impl StoreEncryption {
     }
 }
 
-/// Refuses a store that holds data but has no recorded key.
+/// Refuses a store that holds data but has no recorded key: it was written
+/// unencrypted by an earlier release, or by an interrupted initialization.
 pub fn reject_unrecorded_store(data_path: &Path) -> Result<()> {
     if data_path.join("MANIFEST").exists() {
         return Err(unencrypted(data_path));
@@ -292,10 +303,7 @@ pub async fn open_home_store_key_with_custody(
 
 /// The DefraDB builder for a persistent store at `data_path` encrypted with
 /// `key`.
-pub fn persistent_builder(
-    data_path: &Path,
-    key: &StoreKey,
-) -> Result<defra_node::NodeBuilder> {
+pub fn persistent_builder(data_path: &Path, key: &StoreKey) -> Result<defra_node::NodeBuilder> {
     crate::storage_backend::reject_legacy_store(data_path)?;
     Ok(key.encrypt(
         defra_node::EmbeddedNode::builder()

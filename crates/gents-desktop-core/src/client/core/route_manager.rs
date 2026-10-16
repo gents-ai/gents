@@ -1,3 +1,5 @@
+//! Single owner for directional desktop-to-runtime route lifecycle.
+
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -32,7 +34,9 @@ pub(super) struct ClientRouteManager {
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
     actor: Arc<PrincipalIdentity>,
-    /// Serialization gate for route intent and effects.
+    /// The one serialization boundary for desktop route intent and effects.
+    /// Directory generations, transport changes, desired/applied documents,
+    /// remote return routes, and status publication must move under this gate.
     lifecycle: Mutex<()>,
 }
 
@@ -216,8 +220,8 @@ impl ClientRouteManager {
         updated
     }
 
-    /// Repair both directional routes; `None` preserves the last known value
-    /// across transient admin/store errors.
+    /// Repair both directional routes and return a durable readiness update.
+    /// `None` preserves the last known value across transient admin/store errors.
     async fn reconcile(
         &self,
         record: &PeerRecord,
@@ -454,15 +458,6 @@ impl ClientRouteManager {
         }
     }
 
-    #[cfg(test)]
-    pub(super) async fn upsert_desired(
-        &self,
-        _route: &ClientRouteIdentity,
-        _direction: PairingDirection,
-    ) -> Result<()> {
-        anyhow::bail!("manual PeerPairingDesired authoring is disabled")
-    }
-
     async fn upsert_desired(
         &self,
         route: &ClientRouteIdentity,
@@ -522,7 +517,8 @@ impl ClientRouteManager {
         Ok(())
     }
 
-    /// HTTP P2P admin for a runtime's management endpoint.
+    /// HTTP P2P admin for a runtime's management endpoint, acting as the
+    /// runtime's node identity exactly when the operator endpoint does.
     fn remote_admin(
         &self,
         record: &PeerRecord,
@@ -537,6 +533,9 @@ impl ClientRouteManager {
 
     async fn teardown_remote(&self, record: &PeerRecord) -> Result<()> {
         if is_enrollment_peer(record) {
+            // The runtime enrollment owner retracts its own return route from
+            // the authorization revision. This client only tears down its
+            // locally owned outbound route.
             return Ok(());
         }
         let route_id = client_route_id(&record.peer_id, PairingDirection::RuntimeToClient);
@@ -549,8 +548,9 @@ impl ClientRouteManager {
         if let Ok(applied) = store.load_applied(&route_id).await {
             addresses.extend(applied.state.replicator_addresses);
         }
-        // The live desktop transport endpoint remains the removal target when
-        // desired state is missing after a partial local write.
+        // Desired state can be missing after a partial local write. The live
+        // desktop transport endpoint is still the authoritative target of the
+        // remote return route and lets removal prove absence before committing.
         addresses.insert(
             current_local_endpoint(&self.p2p, self.actor.as_ref())
                 .await?
@@ -711,6 +711,14 @@ impl ClientRouteLifecycle<'_> {
         Ok(PendingRemovalCleanup::Completed)
     }
 
+    #[cfg(test)]
+    pub(super) async fn upsert_desired(
+        &self,
+        _route: &ClientRouteIdentity,
+        _direction: PairingDirection,
+    ) -> Result<()> {
+        anyhow::bail!("manual PeerPairingDesired authoring is disabled")
+    }
 }
 
 pub(super) async fn cleanup_saved_peer_p2p(
@@ -857,8 +865,10 @@ fn replacement_endpoint(
                 gents::agent::p2p_reconcile::TransportEndpoint::parse(address.clone()).ok()?;
             (endpoint.peer_id() == current.peer_id()).then_some((address, endpoint))
         })
-        // `/p2p/info` may contain equivalent spellings of the same ticket; pick
-        // one authoritative candidate or an old spelling can mask a rotated ticket.
+        // `/p2p/info` may contain both a canonical shareable ticket and an
+        // equivalent listen-address spelling. Pick one authoritative
+        // candidate before comparing it with persisted state; otherwise an
+        // old equivalent spelling can mask a newly rotated ticket.
         .max_by_key(|(address, endpoint)| {
             (
                 address.starts_with("endpoint"),
@@ -1005,4 +1015,23 @@ fn ensure_pairing_status<'a>(
             .push(PairingCollectionStatus::new(collection));
         status.pairing.last_mut().expect("pairing status inserted")
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 }

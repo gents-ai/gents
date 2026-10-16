@@ -1,5 +1,10 @@
-//! Rust transcription of `Proofs/Eval.lean`; conformance drives generated cases
-//! through [`classify`] and [`subject_causable`].
+//! The eval outcome vocabulary and its projection onto evidence classes.
+//!
+//! `Proofs/Eval.lean` owns the rule; this module is its transcription, and
+//! `conformance::rust_eval_outcome_vocabulary_and_projection_match_lean` drives
+//! every generated case through [`classify`] and [`subject_causable`]. The
+//! governing rule: anything the subject under evaluation could cause counts
+//! against it; only what it cannot cause is excluded.
 
 use serde::{Deserialize, Serialize};
 
@@ -60,7 +65,8 @@ impl OutcomeKind {
 }
 
 /// `Proofs/Eval.lean` `ProviderReason`: why a provider call did not produce a
-/// usable answer. A `provider` outcome requires one.
+/// usable answer. A `provider` outcome needs one, because a candidate prompt
+/// can cause a context overflow but not an outage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderReason {
@@ -126,17 +132,29 @@ pub fn classify(kind: OutcomeKind, reason: Option<ProviderReason>) -> EvidenceCl
     }
 }
 
-/// `Eval.subjectCausable`. Exhaustive with no wildcard arm, so a new kind or
-/// reason must be decided here rather than silently defaulting to "not the
-/// subject's fault".
+/// `Eval.subjectCausable`.
+///
+/// Exhaustive by construction, with no wildcard arm: adding an outcome kind or a
+/// provider reason must not silently default to "not the subject's fault", so
+/// the compiler is what forces the new case to be decided here.
 pub fn subject_causable(kind: OutcomeKind, reason: Option<ProviderReason>) -> bool {
     use OutcomeKind::*;
     use ProviderReason::{Rejected, Unavailable};
     match (kind, reason) {
-        (ModelAcceptance | Deadline | Tool | Runtime | SkippedPrerequisite, None | Some(Rejected | Unavailable)) => true,
+        // Failures the subject under evaluation can itself produce.
+        (
+            ModelAcceptance | Deadline | Tool | Runtime | SkippedPrerequisite,
+            None | Some(Rejected | Unavailable),
+        ) => true,
+        // A candidate prompt can cause a 4xx; it cannot cause an outage, and a
+        // provider outcome with no reason says nothing about the subject.
         (Provider, Some(Rejected)) => true,
         (Provider, Some(Unavailable) | None) => false,
-        (Passed | Infrastructure | Inconclusive | Grader | Unknown, None | Some(Rejected | Unavailable)) => false,
+        // A pass is not a failure; the rest are not evidence about the subject.
+        (
+            Passed | Infrastructure | Inconclusive | Grader | Unknown,
+            None | Some(Rejected | Unavailable),
+        ) => false,
     }
 }
 

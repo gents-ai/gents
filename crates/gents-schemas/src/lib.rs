@@ -353,3 +353,11 @@ pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] = &[
 pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] =
     &[NETWORK_ADMIN_PIN_NAME, ENROLLMENT_OPERATOR_NONCE_NAME];
 
+pub fn is_local_audit_collection(name: &str) -> bool {
+    LOCAL_AUDIT_COLLECTION_NAMES.contains(&name)
+}
+
+pub fn is_local_only_collection(name: &str) -> bool {
+    LOCAL_ONLY_COLLECTION_NAMES.contains(&name)
+}
+

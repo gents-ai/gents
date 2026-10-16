@@ -1,19 +1,25 @@
 import Proofs.ConfigDefaults
 import Mathlib.Data.Rat.Defs
 
-namespace Configuration
+/-!
+# Configuration: canonical reference chain and install ownership
 
-/-- Canonical reference chain and install ownership. Install scope fills omitted
-owners and rejects mismatched owners while preserving explicit foreign delegation
-identities verbatim; owners are string DIDs (`node_did`). An Agent composes
-context and inference into one session configuration; `Task -> Agent ->
-{Context, InferenceProfile -> Backend}` resolution fails closed on missing or
-foreign references and disabled executable documents. `resolveTask` is the
-single Task resolver (owner-checked Task record); graph invocation reuses
-exactly this resolver. Discovery observations cannot rewrite the selected
-model/effort. Absent context means no instructions, no skills, no tools, and
-runtime-default compaction; absent compaction selection means
-`StripThenSummarize` at 3/4. -/
+Executable formal model of the configuration refactor contracts:
+
+* Install scope fills omitted owners and rejects mismatched owners, while
+  preserving explicit foreign delegation identities verbatim. Owners are
+  string DIDs (`node_did`); no separate node schema is introduced.
+* A agent composes context and inference into one session configuration.
+  `Task -> Agent -> {Context, InferenceProfile -> Backend}` resolution fails
+  closed on missing or foreign references and disabled executable documents.
+  `resolveTask` is the single Task resolver (owner-checked Task record); graph
+  invocation reuses exactly this resolver.
+* Discovery observations cannot rewrite the selected model/effort.
+* Absent context means no instructions, no skills, no tools, and runtime-default
+  compaction; absent compaction selection means `StripThenSummarize` at 3/4.
+-/
+
+namespace Configuration
 
 /-- JSON parser details are outside the model. Preserve the distinction needed
 for compact authoring contracts; strict required fields have no default. -/
@@ -43,8 +49,12 @@ inductive ReasoningEffort where
   | none | minimal | low | medium | high | xhigh | max | ultra
   deriving DecidableEq, Repr
 
-/-- Filling install scope: an omitted owner is filled from the install scope; an
-explicit owner must match or installation fails. No rewriting of foreign ids. -/
+/-! ## Owners and install scope -/
+
+/--
+Filling install scope: an omitted owner is filled from the install scope; an
+explicit owner must match or installation fails. No rewriting of foreign ids.
+-/
 def fillOwner (scope : String) (declared : Option String) : Option String :=
   match declared with
   | none => some scope
@@ -88,7 +98,7 @@ structure SelectedModel where
   effort : Option ReasoningEffort
 deriving DecidableEq, Repr
 
-/-- Discovery is credential-scoped observation, never selection. -/
+/-! ## Discovery is credential-scoped observation, never selection -/
 
 /-- Capability projection of one advertised model. Unknown efforts and a known
 empty effort catalog remain distinct, matching AdvertisedModel. -/
@@ -130,7 +140,7 @@ theorem catalogFor_some_iff (owner backendId : String) (scope : Option String)
         by_cases hb : value.backendId = backendId <;>
         simp_all [catalogFor, Option.filter, Owned.mk.injEq] <;> aesop
 
-/-- Absent context and compaction defaults. -/
+/-! ## Absent context and compaction defaults -/
 
 /-- Durable strategies; internal reduction modes stay in the compaction owner. -/
 inductive CompactionStrategy where
@@ -179,7 +189,7 @@ structure ResolvedSessionConfig where
   inference : SelectedModel
   deriving DecidableEq, Repr
 
-/-- One owned reference resolver, one composed session configuration. -/
+/-! ## One owned reference resolver, one composed session configuration -/
 
 structure Agent where
   contextId : Option String
@@ -347,10 +357,10 @@ def defaultAgentPublishable (reg : Registry) (scope : String) : Option String �
     | .ok agent => agent.enabled
     | .error _ => false
 
-/-- Bootstrap may publish a node before selecting its first agent. Once
-configured, clearing that selection prevents runtime readiness on the next
-start. Full replacements must name a default explicitly; omission is not a
-patch. Reference validity remains with `defaultAgentPublishable`. -/
+/-- Bootstrap may publish a node before selecting its first agent.
+Once configured, clearing that selection prevents runtime readiness on the next
+start. Full replacements must name a default explicitly; omission is not a patch.
+Reference validity remains with `defaultAgentPublishable`. -/
 def defaultAgentReplacementAllowed (current candidate : Option String) : Bool :=
   current.isNone || candidate.isSome
 
@@ -481,6 +491,8 @@ theorem oauth_resolve_sound {scope kind : String} {account : Option String}
   have hp := List.find?_some h
   simp only [Bool.and_eq_true, beq_iff_eq] at hp
   exact ⟨List.mem_of_find?_eq_some h, hp.1.1.1, hp.1.1.2, hp.1.2, hp.2⟩
+
+/-! ## Backend capacity defaults -/
 
 /-- Resolved backend limits; authored optional signed integers are validated below. -/
 structure BackendControls where

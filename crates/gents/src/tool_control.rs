@@ -165,6 +165,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
 
+    async fn claimed_request(
         node: &Arc<EmbeddedNode>,
         request_id: &str,
         session_id: &str,

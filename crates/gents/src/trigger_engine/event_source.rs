@@ -1,4 +1,19 @@
 //! Event-trigger `TriggerSource`.
+//!
+//! Subscribes to DefraDB document events and emits `FireIntent`s whenever an
+//! event from a `source_collection` referenced by the active runtime
+//! snapshot's `active_event_triggers` lands. The subscription set is kept in
+//! sync with the snapshot generation — see `reconcile_subscriptions` (Task 19).
+//!
+//! This file lands in staged tasks:
+//! - Task 18: skeleton only — struct, constructor, no-op `next_fire` stub.
+//! - Task 19: `reconcile_subscriptions` drives the desired-collections set
+//!   from the snapshot at each generation bump.
+//! - Task 20: full `next_fire` loop (poll subscription, filter by desired
+//!   collections, build `FireIntent`).
+//! - Task 21 (this file): filter probe + doc-var hydration via an
+//!   introspected source-doc projection cached per source collection.
+//! - Task 22: `on_result` callback body for bookkeeping writes.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 #[cfg(test)]
@@ -79,6 +94,8 @@ fn take_due_group_batch(
     batch
 }
 
+
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct GroupTrackingKey {
     consumer_key: String,
@@ -104,12 +121,16 @@ struct DeliveryBuild {
     intents: Vec<FireIntent>,
     correlation_pending: bool,
     settled_trigger_ids: Vec<String>,
+    /// `(trigger_id, correlation_field)` of each delivery deferred because
+    /// the source document has not set its correlation field yet.
     deferred: Vec<(String, String)>,
 }
 
 pub struct EventSource {
     durable_checkpoint: Option<durable::PendingCheckpoint>,
     durable_ready: bool,
+    /// Per-trigger arrivals whose last fire was not acknowledged; see
+    /// [`durable::ParkedArrival`].
     parked_arrivals: HashMap<String, durable::ParkedArrival>,
     last_refusal_scan: Option<Instant>,
     durable_after_trigger: Option<String>,
@@ -121,15 +142,20 @@ pub struct EventSource {
     desired_collections: HashSet<String>,
     subscription_seed_failures: BTreeMap<String, String>,
     reconciled_generation: u64,
+    #[allow(dead_code)]
+    reconcile_debounce: Duration,
     cancel: CancellationToken,
     source_schema_cache: SourceSchemaCache,
     collection_id_to_name: HashMap<String, String>,
+    // Fast path for documents whose matching trigger deliveries have all
+    // settled. Incomplete correlation keeps a document out of this set.
     seen_docs: HashMap<String, HashSet<String>>,
-    // Settled deliveries for a doc with an incomplete-correlation sibling:
-    // prevents a ready sibling from refiring on a follow-up update.
+    // Settled delivery identities for a document that still has at least one
+    // correlation-incomplete sibling. This prevents a ready sibling from
+    // firing again when a follow-up update supplies the missing correlation.
     partially_seen_triggers: HashMap<SourceDocumentKey, HashSet<String>>,
-    /// Startup reconstructions predating the registration cursor keep the
-    /// existing deferred-delivery owner.
+    /// Startup reconstructs incomplete correlations/live graph rows that predate
+    /// the registration cursor; these retain the existing deferred-delivery owner.
     startup_deferred_documents: HashSet<SourceDocumentKey>,
     pub(super) deferrals: super::deferred_delivery::DeferralWatch,
     pending_intents: Mutex<VecDeque<FireIntent>>,
@@ -142,10 +168,31 @@ pub struct EventSource {
     group_recovery_page_queries: AtomicUsize,
     #[cfg(test)]
     group_membership_queries: AtomicUsize,
+    /// Periodic live rescan that closes the lossy-subscription gap. The
+    /// interval is stored on the source so a busy stream of `next_fire()` calls
+    /// does not reset the cadence.
     rescan_tick: tokio::time::Interval,
     rescan_interval: Duration,
 }
 
+/// Per-source-collection schema cache.
+///
+/// `fields_for(collection, node)` runs a one-shot GraphQL introspection
+/// (`__type(name: "<collection>") { fields { name } }`) the first time a
+/// given source collection is seen, then memoizes the resulting projectable
+/// field list. Subsequent hydrations for the same collection are a pure
+/// cache hit. Entries are never invalidated — the active schema for a
+/// collection is stable across the runtime's lifetime, and any schema
+/// migration produces a new collection version whose identity the fire
+/// path treats as a distinct source.
+///
+/// Filtering: DefraDB's GraphQL introspection exposes several auto-
+/// generated fields on every collection (aggregates like `_count`,
+/// `_sum`, and per-field wrappers). These are not direct scalars and
+/// cannot be included in a plain projection — selecting them without
+/// required arguments produces a parse error. We filter aggressively:
+/// drop anything starting with `_` (GraphQL meta / DefraDB aggregate) and
+/// anything whose name is an upper-case aggregate keyword.
 #[derive(Default)]
 pub(crate) struct SourceSchemaCache {
     by_collection: tokio::sync::Mutex<HashMap<String, Vec<String>>>,
@@ -293,7 +340,9 @@ impl SourceSchemaCache {
     }
 }
 
-/// `collection` must be a validated collection identifier before splicing.
+/// The introspection query for a collection's own fields. `collection` names
+/// a live document collection, not an arbitrary string, so it is validated
+/// before being spliced in and escaped as the string literal it fills.
 pub(crate) fn source_fields_query(collection: &str) -> anyhow::Result<String> {
     crate::graphql::validate_collection_identifier(collection)?;
     Ok(format!(
@@ -306,6 +355,8 @@ pub(crate) fn source_fields_query(collection: &str) -> anyhow::Result<String> {
     ))
 }
 
+/// A collection's own fields from [`source_fields_query`]'s data: no system
+/// fields and no aggregates.
 pub(crate) fn source_fields_from(
     data: Option<&serde_json::Value>,
     collection: &str,
@@ -360,6 +411,7 @@ impl EventSource {
             desired_collections: HashSet::new(),
             subscription_seed_failures: BTreeMap::new(),
             reconciled_generation: 0,
+            reconcile_debounce: Duration::from_millis(250),
             cancel,
             source_schema_cache: SourceSchemaCache::default(),
             collection_id_to_name: HashMap::new(),
@@ -404,6 +456,17 @@ impl EventSource {
         self
     }
 
+    /// Override the reconciliation debounce. Test-only hook mirroring
+    /// `ScheduleSource::with_tick_every`.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn with_reconcile_debounce(mut self, debounce: Duration) -> Self {
+        self.reconcile_debounce = debounce;
+        self
+    }
+
+    /// Snapshot of the source-collection names the event source is currently
+    /// filtering on. Test-only accessor.
     #[cfg(test)]
     pub(crate) fn subscribed_collections(&self) -> Vec<String> {
         let mut v: Vec<String> = self.desired_collections.iter().cloned().collect();
@@ -411,6 +474,8 @@ impl EventSource {
         v
     }
 
+    /// Lose every buffered and future notification until the source
+    /// resubscribes on its next rescan tick. Test-only.
     #[cfg(test)]
     pub(crate) fn drop_subscription(&mut self) {
         self.subscription = None;
@@ -427,8 +492,11 @@ impl EventSource {
     }
 
     pub(crate) async fn reconcile_subscriptions(&mut self, snapshot: &ActiveRuntimeSnapshot) {
-        // Defense in depth: don't trust upstream validation; invalid names
-        // never enter query-building code paths.
+        // Resolve-time quarantine keeps identifier-invalid source
+        // collections out of active_event_triggers, but this source must
+        // not trust that another code path assembled the snapshot the same
+        // way: names that fail the collection-identifier check never enter
+        // the desired set, so no seed/rescan/probe query is built from them.
         let desired: HashSet<String> = snapshot
             .active_event_triggers()
             .values()
@@ -576,8 +644,11 @@ impl EventSource {
             }
         }
 
-        // Budget: at most one page of changed group membership per generation
-        // bump; the rotating sweep covers the rest.
+        // A snapshot generation bump is not permission to full-scan every
+        // source collection. Admit at most one page of changed group
+        // membership here; the existing rotating sweep eventually covers the
+        // remaining pages and triggers. Unrelated task/config updates do no
+        // startup recovery I/O at all.
         for trigger in group_triggers
             .iter()
             .filter(|trigger| changed_group_trigger_ids.contains(&trigger.trigger_id))
@@ -669,8 +740,9 @@ impl EventSource {
             ids = super::event_delivery::source_scan::load_doc_ids(&self.node, collection) => ids?,
         };
         let mut doc_ids: HashSet<String> = ids.into_iter().collect();
-        // Graph-run documents on the trigger's own revision are live work,
-        // not history, even when they predate this engine noticing the trigger.
+        // Documents of a graph run already underway on a trigger's own
+        // revision are live work, never history, even when they predate this
+        // engine noticing the trigger.
         let live = match snapshot.node.as_ref() {
             Some(node) => {
                 crate::graph_pipeline::live_run_correlations(
@@ -886,11 +958,23 @@ impl EventSource {
         self.collection_id_to_name.get(collection_id).cloned()
     }
 
-    /// Filter probe with error semantics the caller relies on: errors skip
-    /// this fire so a transient GraphQL failure can't brick the source.
-    /// Injection defense: validated collection identifier, escaped `_docID`,
-    /// and `trigger.filter` checked as a balanced object fragment (the CLI
-    /// apply probe executes rather than validates and is not a substitute).
+    /// Run the trigger's `filter` against the source doc, narrowed by
+    /// `_docID`, via a `limit: 1` probe. Returns `Ok(true)` when the doc
+    /// matches (so the fire should proceed), `Ok(false)` when it doesn't
+    /// (so the dispatch loop should skip), and `Err` when the probe query
+    /// itself errored — the caller treats errors as "skip this fire" so a
+    /// transient GraphQL failure doesn't brick the source.
+    ///
+    /// Trust boundary, one defense per interpolation position:
+    /// `source_collection` is validated as a collection identifier, the
+    /// `_docID` from the event payload is escaped, and `trigger.filter` —
+    /// spliced in whole as an object fragment, where escaping would break
+    /// the syntax — is checked as a balanced filter object. A break-out has
+    /// to close an `]`, `}` or `)` it never opened, which is what that
+    /// check rejects.
+    ///
+    /// Note the CLI apply probe is not a substitute: it executes the filter
+    /// rather than validating it, in a different embedding than this one.
     async fn probe_filter(
         &self,
         source_doc_id: &str,
@@ -922,7 +1006,8 @@ impl EventSource {
         collection: &str,
         source_doc_id: &str,
     ) -> anyhow::Result<Option<serde_json::Value>> {
-        // `fields_for` validates and `?`-propagates before the query is built.
+        // `fields_for` validates this same binding and `?`-propagates before
+        // the query below is built, so it is the one gate for both sites.
         let fields = self
             .source_schema_cache
             .fields_for(collection, &self.node)
@@ -968,8 +1053,10 @@ impl EventSource {
             .unwrap_or_default();
         let mut source_fields = std::collections::BTreeMap::new();
         for field in fields {
-            // Mailbox-capable stages capture an owner when present; ownerless
-            // automation still runs (the mailbox tool fails closed).
+            // Mailbox-capable stages capture an owner when the source has
+            // one. Ownerless automation still runs; the stamped mailbox tool
+            // itself fails closed if that stage tries to file without owner
+            // lineage.
             if let Some(canonical) = captured_source_field(doc, &field)? {
                 source_fields.insert(field, canonical);
             }
@@ -1598,6 +1685,11 @@ impl EventSource {
         });
     }
 
+    /// A fire whose result never reached the acknowledgment channel has no
+    /// `on_result` writer of its own, so its park would otherwise leave no
+    /// durable reason and a seed wait would spend its whole deadline on it.
+    /// The caller may be an unwinding or aborting task, so the spawn is
+    /// best-effort: outside a runtime it does nothing rather than panic.
     fn spawn_unacknowledged_field_write(
         node: Arc<EmbeddedNode>,
         node_did: String,
@@ -1636,8 +1728,22 @@ impl EventSource {
         });
     }
 
-    /// Failure isolation: candidates that miss the filter or error are
-    /// skipped without preventing other matching triggers from firing.
+    /// Build a `FireIntent` for every active event-source trigger whose
+    /// `source_collection` matches `collection_name` AND `event_kind` matches
+    /// `kind`. Each candidate's operator-authored filter is probed against
+    /// `source_doc_id`; candidates that miss the filter or whose probe errors
+    /// are skipped (those failures are isolated to the one candidate — they
+    /// must not prevent the other matching triggers from firing). A
+    /// successful candidate is hydrated via `fetch_source_doc` and wrapped in
+    /// a `FireIntent` with a bookkeeping `on_result` callback identical to
+    /// the single-trigger path.
+    ///
+    /// Candidates are ordered by `trigger_id` for determinism so tests and
+    /// dispatch order are stable across ticks.
+    ///
+    /// Replaces the former `first_matching_trigger` helper, which silently
+    /// dropped all but one matching trigger per event (and, worse, dropped
+    /// the whole event when that one trigger's filter missed).
     async fn build_intents_for_all_matching(
         &self,
         snapshot: &ActiveRuntimeSnapshot,
@@ -1936,8 +2042,11 @@ impl EventSource {
     }
 }
 
-/// Dropping without acknowledging records the loss on the Trigger so a seed
-/// wait can distinguish a lost fire from a configuration error.
+/// A durable fire's acknowledgment. Dropping the guard without acknowledging
+/// means the driver died between emitting the intent and seeing it answered —
+/// a panic or abort inside dispatch — which is the one loss mode no live owner
+/// can report; Drop records it on the Trigger so a seed wait can tell a lost
+/// fire from a configuration error.
 pub(super) struct UnacknowledgedGuard {
     node: Arc<EmbeddedNode>,
     node_did: String,
@@ -2034,8 +2143,9 @@ impl TriggerSource for EventSource {
                     }
                 }
 
-                // Subscription is Some here, allowing a &mut borrow for the
-                // recv poll below.
+                // Step 3: race the subscription against snapshot changes and
+                // cancel. Subscription is guaranteed Some here by the check
+                // above, so we can take a &mut borrow for the recv poll.
                 let mut message = None;
                 let mut dropped = 0;
                 let mut subscription_closed = false;
@@ -2086,8 +2196,9 @@ impl TriggerSource for EventSource {
                 let message = message.expect("subscription recv branch sets message");
 
                 if dropped > 0 {
-                    // Dropped events are a correctness hazard; the periodic
-                    // rescan only closes the gap for created docs.
+                    // Dropped events are a correctness hazard. The periodic
+                    // rescan closes the gap for created docs, and this log
+                    // keeps the lossy event visible operationally.
                     tracing::warn!(
                         dropped = dropped,
                         "event source dropped messages; periodic rescan will recover created docs",
@@ -2098,8 +2209,9 @@ impl TriggerSource for EventSource {
                     continue;
                 };
 
-                // `@branchable` collections publish a second, collection-level
-                // update per write with an empty doc id; skip it.
+                // A `@branchable` collection publishes a second, collection-level
+                // update per write with an empty doc id. The document-level update
+                // of the same write carries the document; this one names none.
                 if update.doc_id.is_empty() {
                     continue;
                 }

@@ -1,5 +1,15 @@
 import Proofs.GraphPipeline
 
+/-!
+# GraphRun failure-attribution refinement (#1375)
+
+Projection of the EXISTING GraphRun owner: `run` is GraphPipeline.Run,
+`primary` is its error's abstract cause ID, and `generation` is update_generation.
+A `witness` is supplied only after the owner reloads durable failure evidence
+inside its transaction. It is not an arbitrary caller assertion. This refinement
+adds no lifecycle status, request writer, scheduler, or failure-discovery policy.
+CAS conflict/retry is represented by an unchanged snapshot on generation loss.
+-/
 namespace GraphPipeline.FailureAttribution
 
 abbrev Cause := Nat
@@ -10,7 +20,7 @@ structure Snapshot where
   primary : Option Cause
   deriving DecidableEq, Repr
 
-/-- The first cause is committed before sibling interrupts. -/
+/-- Commit the first fail-fast cause before performing sibling interrupts. -/
 def capture (s : Snapshot) (expected : Nat) (witness : Option Cause) : Snapshot :=
   if s.run.status = .running ∧ s.run.cancellationRequested = false ∧
       s.generation = expected then
@@ -19,16 +29,21 @@ def capture (s : Snapshot) (expected : Nat) (witness : Option Cause) : Snapshot 
     | _, _ => s
   else s
 
+/-- This is only failure-driven interruption; user cancellation has its own intent. -/
 def mayInterruptForFailure (s : Snapshot) : Bool :=
   s.run.status == .running && !s.run.cancellationRequested && s.primary.isSome
 
+/-- Existing durable cancellation intent. It takes priority over a pinned failure. -/
 def requestCancel (s : Snapshot) : Snapshot :=
   if s.run.status = .running ∧ s.run.cancellationRequested = false then
     { s with run := { s.run with cancellationRequested := true }
              generation := s.generation + 1 }
   else s
 
-/-- `allTerminal` is reloaded inside the terminal transaction. -/
+/-- Existing terminal CAS, restricted to failure/cancellation projection.
+Success and failure-discovery eligibility remain in the parent GraphPipeline
+contract. `allTerminal` is reloaded in the terminal transaction. A direct failure
+with no active work may install its first cause atomically with failed status. -/
 def finish (s : Snapshot) (expected : Nat) (allTerminal : Bool)
     (witness : Option Cause) : Snapshot :=
   if s.run.status = .running ∧ s.generation = expected ∧ allTerminal = true then
@@ -59,6 +74,8 @@ theorem losing_capture_is_noop (s : Snapshot) (expected : Nat) (witness : Option
     (h : s.generation ≠ expected) : capture s expected witness = s := by
   simp [capture, h]
 
+/-- Compose the actual generation-fenced capture with its ensuing interruption
+projection. The snapshot supplied here is the durable transaction/reload view. -/
 def captureAndObserve (s : Snapshot) (expected : Nat) (witness : Option Cause) :
     Snapshot × Bool :=
   let next := capture s expected witness
@@ -123,8 +140,12 @@ theorem terminal_snapshot_cannot_change (s : Snapshot)
   simp [capture, requestCancel, finish, h]
 
 inductive Event where
+  /-- Another durable request failed; observing it does not write the GraphRun latch. -/
   | observedFailure (cause : Cause)
   | capture (expected : Nat) (witness : Option Cause)
+  | cancel
+  | finish (expected : Nat) (allTerminal : Bool) (witness : Option Cause)
+  deriving DecidableEq, Repr
 
 def step (s : Snapshot) : Event → Snapshot
   | .observedFailure _ => s
@@ -132,6 +153,7 @@ def step (s : Snapshot) : Event → Snapshot
   | .cancel => requestCancel s
   | .finish expected allTerminal witness => finish s expected allTerminal witness
 
+/-- Includes every post-event snapshot so Rust can fence order and CAS losers. -/
 def trace (s : Snapshot) : List Event → List Snapshot
   | [] => []
   | event :: rest => let next := step s event; next :: trace next rest

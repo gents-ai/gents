@@ -1,3 +1,5 @@
+//! Generated EthTool call tools: reads, writes, native transfer, and EIP-712.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -39,6 +41,16 @@ pub struct ResolvedEthCall {
     pub(crate) principal_did: String,
     pub(crate) binding_id: Option<String>,
     pub(crate) caps: GasCaps,
+}
+
+impl ResolvedEthCall {
+    #[cfg(test)]
+    pub(crate) fn is_signing(&self) -> bool {
+        matches!(
+            self.kind,
+            ResolvedCallKind::Write { .. } | ResolvedCallKind::SignTypedData { .. }
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -590,8 +602,9 @@ fn write_idempotency_key(
     value: U256,
     data: &[u8],
 ) -> serde_json::Result<String> {
-    // Recovery may mint a fresh in-memory tool-call id; bind durability to the
-    // request and exact Ethereum action instead.
+    // Recovery may mint a fresh in-memory tool-call id. Bind durability to the
+    // request and exact Ethereum action instead; intentionally repeated,
+    // byte-identical transfers belong in separate agent requests.
     let semantic_action = serde_json::to_vec(&json!({
         "request_id": request_id,
         "tool_name": tool_name,

@@ -6,6 +6,8 @@ use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use defra_node::EmbeddedNode;
 use gents_loop::provider_patches::patch_instructions_body;
+#[cfg(test)]
+use gents_loop::provider_patches::CHATGPT_CODEX_UNSUPPORTED_PARAMS;
 use rig::http_client::{
     self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, Request, ReqwestClient, Response,
 };
@@ -15,12 +17,11 @@ use rig::wasm_compat::WasmCompatSend;
 use serde_json::{json, Value};
 
 #[cfg(test)]
+use crate::oauth_credential::{classify_chatgpt_auth_error, BearerSource, OAuthAuthProblem};
 use crate::oauth_credential::{
     oauth_credential_id, DbCredentialBearer, OAuthCredential, OAuthRefreshKind,
     CHATGPT_OAUTH_PRODUCT,
 };
-#[cfg(test)]
-use crate::oauth_credential::BearerSource;
 
 pub const CHATGPT_CODEX_PROVIDER: &str = "chatgpt-codex";
 const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
@@ -552,6 +553,8 @@ mod tests {
         }
     }
 
+    /// Inner transport that yields a fixed HTTP status — `>= 400` becomes the rig status error the
+    /// reqwest transport would produce, `< 400` an empty success response.
     #[derive(Clone, Debug)]
     struct StatusInjectingClient {
         status: u16,
@@ -686,6 +689,22 @@ mod tests {
         assert!(!unscoped.headers().contains_key("x-codex-turn-state"));
     }
 
+    fn status_error(status: &str) -> http_client::Error {
+        http_client::Error::InvalidStatusCodeWithMessage(
+            status.parse().expect("valid status"),
+            String::new(),
+        )
+    }
+
+    /// The reason the capture seam is a transport wrapper at all.
+    ///
+    /// `build_responses_client` puts the capture client *below* this one so the
+    /// durable row is the body ChatGPT actually receives. Nothing about the
+    /// types enforces that: both wrappers are generic over their inner client,
+    /// so hoisting the capture above the Codex wrapper compiles and streams
+    /// fine while persisting a request this backend never sees. This composes
+    /// the real stack — Codex over capture over a recording terminal — and
+    /// pins the row to the post-rewrite body.
     #[tokio::test]
     async fn the_captured_row_is_the_body_codex_rewrote_not_the_one_rig_serialized() {
         use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
@@ -794,6 +813,8 @@ mod tests {
         assert_eq!(terminal.send_count(), 1);
     }
 
+
+
     async fn send_through(status: u16) -> Arc<CountingBearer> {
         let bearer = CountingBearer::new("tok");
         let client =
@@ -827,6 +848,12 @@ mod tests {
         );
     }
 
+
+
+
+
+
+
     #[tokio::test]
     async fn injects_fresh_bearer_on_each_request() {
         let bearer = CountingBearer::new("tok-123");
@@ -854,6 +881,8 @@ mod tests {
             "refreshed once per request"
         );
     }
+
+
 
     #[test]
     fn chatgpt_codex_headers_advertise_codex_version_and_sse_accept() {
@@ -896,7 +925,8 @@ mod tests {
                 .collect()
         };
         assert_eq!(CHATGPT_CODEX_CLIENT_VERSION, "0.160.0");
-        // Codex rust-v0.160.0 gates gpt-6.1-sol at 0.153.0.
+        // Codex rust-v0.160.0, a956835d020762cb2b570053af06f643a11c0ecc:
+        // models-manager/models.json gates gpt-6.1-sol at 0.153.0.
         assert!(parse(CHATGPT_CODEX_CLIENT_VERSION) >= parse("0.153.0"));
     }
 

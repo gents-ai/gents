@@ -1,3 +1,7 @@
+/* How the inference step connects to the chosen provider: its connection
+   method, then a sign-in for a subscription or a key and endpoint, and the
+   way on to its models. */
+import type { Dispatch } from "react";
 import type {
   InferenceAuthMethod,
   InferenceProviderOption,
@@ -47,6 +51,7 @@ export function ConnectionFields({
   connection: ConnectionDraft | undefined;
   option: InferenceProviderOption | undefined;
   purpose: "onboarding" | "add-backend";
+  /** the bridge can retry saving a sign-in it holds */
   canRetrySave: boolean;
   ops: {
     updateConnection: (
@@ -55,6 +60,7 @@ export function ConnectionFields({
     ) => void;
     signIn: () => void;
     cancelSignIn: () => void;
+    /** set the connected account aside to sign in with another */
     useAnotherAccount: () => void;
     retrySave: () => void;
     discover: () => void;
@@ -118,12 +124,17 @@ export function ConnectionFields({
         {oauthProvider ? (
           <div className="grid gap-3">
             {signedIn[provider] ? (
+              /* the action sits where Sign in does before connecting, so
+                 the row keeps its shape across the two states */
               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                {/* no mark of its own: the provider's selected mark above says it */}
                 <p className="min-w-0 truncate">
                   {connectedAccount?.accountId || connectedAccount?.label
                     ? `Connected as ${connectedAccount.accountId || connectedAccount.label}`
                     : "Account connected"}
                 </p>
+                {/* a way to a different login, not account management: that
+                    lives on the agent's account rows */}
                 <button
                   type="button"
                   disabled={busy}

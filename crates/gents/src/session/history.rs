@@ -1,6 +1,8 @@
 use super::*;
 use anyhow::Context;
 
+/// Injective key for a sequence within one canonical session scope.
+/// Explicit caller-owned keys keep their own vocabulary (steering, receipts).
 pub fn sequence_message_key(
     node_did: &str,
     session_id: &str,
@@ -146,6 +148,30 @@ pub(crate) async fn retry_has_published_input(
             None => return Ok(false),
         }
     }
+}
+
+#[cfg(test)]
+pub(super) async fn load_history_projection(
+    node: &EmbeddedNode,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    through_sequence: Option<u32>,
+    current_input_request_doc_id: Option<&str>,
+) -> Result<Vec<Message>> {
+    Ok(load_sequenced_history_projection(
+        node,
+        session_id,
+        node_did,
+        requester_did,
+        through_sequence,
+        None,
+        current_input_request_doc_id,
+    )
+    .await?
+    .into_iter()
+    .map(|row| row.message)
+    .collect())
 }
 
 pub(crate) async fn load_sequenced_history_projection(

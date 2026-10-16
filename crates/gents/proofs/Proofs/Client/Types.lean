@@ -42,10 +42,11 @@ structure AttemptView where
   request : RequestSnapshot
   deriving DecidableEq, Repr
 
-/-- `observationScope` names the caller's already authorized agent/requester/
-session observation scope, not a request document ID: every retry has its own
-physical request document. Lineage and graph validity remain premises
-established by the owner. -/
+/-- Retry identity is carried beside the request-only projection so the latter
+    remains an exact lifecycle snapshot. `observationScope` names the caller's
+    already authorized agent/requester/session observation scope. It is not a
+    request document ID: every retry has its own physical request document.
+    Lineage and graph validity remain premises established by the owner. -/
 structure KeyedAttemptView where
   observationScope : String
   requestId : String
@@ -65,6 +66,9 @@ def deriveAttempt : AttemptView → ClientTurnState
     | .workspaceBindingPending | .pending => .waitingForClaim
     | .claimed | .processing => .running
 
+/-- Generic client projection for a session/request head.  The effective turn
+    state is derived only from the request, while the exact request state remains
+    available for thin clients that present claim distinctions. -/
 structure ClientHeadProjection where
   turnState : ClientTurnState
   requestState : RequestState
@@ -81,8 +85,18 @@ def ClientHeadProjection.isTerminal (head : ClientHeadProjection) : Bool :=
 def ClientHeadProjection.isActive (head : ClientHeadProjection) : Bool :=
   !head.isTerminal
 
-/-- `attempts` is an already validated retry chain in oldest-to-newest order;
-selection from that ordered chain only, not store-level retry-tip uniqueness. -/
+theorem projectHead_turnState (view : AttemptView) :
+    (projectHead view).turnState = deriveAttempt view := rfl
+
+theorem projectHead_requestState (view : AttemptView) :
+    (projectHead view).requestState = view.request.lifecycleState := rfl
+
+theorem projectHead_terminal (view : AttemptView) :
+    (projectHead view).isTerminal = (deriveAttempt view).isTerminal := rfl
+
+/-- `attempts` is an already validated retry chain in oldest-to-newest order.
+    This function deliberately models only selection from that ordered chain: it
+    does not prove the store-level uniqueness of the retry tip. -/
 def deriveTurn : List AttemptView → Option ClientTurnState
   | []          => none
   | [a]         => some (deriveAttempt a)
@@ -109,6 +123,8 @@ def attemptsInObservationScope
 def retryParentIds (attempts : List KeyedAttemptView) : List String :=
   attempts.filterMap fun attempt => attempt.retryParentRequest
 
+/-- Candidate tips are exactly the scoped attempts whose ID is not named as a
+    retry parent by another scoped observation. -/
 def retryTips
     (observationScope : String)
     (attempts : List KeyedAttemptView) : List KeyedAttemptView :=
@@ -117,8 +133,8 @@ def retryTips
   scopedAttempts.filter fun attempt => !(parents.contains attempt.requestId)
 
 /-- Resolve an unordered observation set only when its parent-ID filter has one
-candidate tip; zero-tip sets (including a closed cycle) and multiple-tip
-ambiguity are rejected. Graph topology is not independently validated here. -/
+    candidate tip. Zero-tip sets (including a closed cycle) and multiple-tip
+    ambiguity are rejected. This does not independently validate graph topology. -/
 def resolveRetryTip
     (observationScope : String)
     (attempts : List KeyedAttemptView) : Option KeyedAttemptView :=
