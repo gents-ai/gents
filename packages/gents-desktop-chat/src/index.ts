@@ -6,3 +6,7 @@ export * from "./components/cancelUx/index.js";
 export * from "./components/commandDenial/index.js";
 export * from "./interruptRequest.js";
 export { useMasterDetail } from "./useMasterDetail.js";
+export {
+  TranscriptNavigationProvider,
+  type TranscriptNavigation,
+} from "./components/transcript/TranscriptNavigation.js";
