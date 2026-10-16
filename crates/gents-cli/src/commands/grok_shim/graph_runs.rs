@@ -4,12 +4,12 @@
 //! run itself is the canonical `GraphRunView`. Only the last delivered
 //! observation per run is connection-local. Observation never writes: a
 //! failed read only defers or ends this connection's display of one run.
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::Result;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents::config_client::ConfigAccess;
 use gents::graph_pipeline::{
@@ -18,95 +18,19 @@ use gents::graph_pipeline::{
 };
 use serde_json::{json, Value};
 
+use super::observation_cursor::{
+    observe_due, Backoff, ObservationSet, Observed, ObservedView, Sink,
+};
 use super::projection::tools::session_tool_results;
-use super::projection::{ProjectionEngine, UpdateTimestamps};
-use super::turn::{PromptSender, PromptSenderLine};
-
-/// Run views loaded per observation tick. Each load is several queries on
-/// the session observer's shared loop, so a session that resumes with many
-/// runs is covered round-robin instead of delaying its token stream.
-const VIEW_LOADS_PER_TICK: usize = 4;
-
-/// The revision of the terminal frame sent when observation stops. The pager
-/// keeps the highest revision it holds across leader reconnects (see
-/// [`durable_revision`]), so this frame must outrank anything an earlier
-/// observer delivered. Stopping is final for this actor, so no frame follows
-/// it. 2^53 - 1 is the largest integer a JSON number keeps exactly as an
-/// IEEE double.
-const ABANDONED_REVISION: u64 = (1 << 53) - 1;
-
-/// Upper bound on the delay before re-reading a run or `run_graph` reply
-/// whose last read failed.
-const MAX_RETRY_DELAY_SECS: i64 = 30;
-
-/// The display-only failure streak of one observed subject. It defers the
-/// subject's next read; it never repeats a read.
-#[derive(Default)]
-struct Backoff {
-    failures: u32,
-    retry_at: Option<DateTime<Utc>>,
-}
-
-impl Backoff {
-    fn ready(&self, now: DateTime<Utc>) -> bool {
-        self.retry_at.is_none_or(|at| now >= at)
-    }
-
-    /// Defers the next read exponentially. Returns the error worth
-    /// reporting: only a streak's first, so a lasting failure is not logged
-    /// on every read.
-    fn fail(
-        &mut self,
-        now: DateTime<Utc>,
-        error: anyhow::Error,
-        subject: &str,
-    ) -> Option<anyhow::Error> {
-        self.failures += 1;
-        let delay = (1_i64 << (self.failures - 1).min(5)).min(MAX_RETRY_DELAY_SECS);
-        self.retry_at = Some(now + Duration::seconds(delay));
-        (self.failures == 1).then(|| error.context(format!("{subject}: retrying")))
-    }
-}
-
-struct Delivered {
-    update: Value,
-    at: DateTime<Utc>,
-}
-
-struct RunObservation {
-    graph_id: String,
-    revision: u64,
-    delivered: Option<Delivered>,
-    finished: bool,
-    backoff: Backoff,
-}
-
-impl RunObservation {
-    fn new(graph_id: impl Into<String>) -> Self {
-        Self {
-            graph_id: graph_id.into(),
-            revision: 0,
-            delivered: None,
-            finished: false,
-            backoff: Backoff::default(),
-        }
-    }
-}
+use super::projection::ProjectionEngine;
+use super::turn::PromptSender;
 
 #[derive(Default)]
 pub(super) struct GraphRunCursor {
     scanned: HashSet<String>,
     replies: HashMap<String, Backoff>,
     discovery_failures: u32,
-    runs: BTreeMap<String, RunObservation>,
-    /// The last run loaded; the next tick's loads continue after it.
-    loaded_through: Option<String>,
-}
-
-enum ObservationError {
-    /// Repeating the same read by the same actor fails the same way.
-    Permanent(anyhow::Error),
-    Transient(anyhow::Error),
+    runs: ObservationSet,
 }
 
 impl GraphRunCursor {
@@ -180,8 +104,7 @@ impl GraphRunCursor {
                 Ok(Some(result)) => {
                     if let Some(receipt) = run_receipt_from_tool_result(&result) {
                         self.runs
-                            .entry(receipt.run_id)
-                            .or_insert_with(|| RunObservation::new(receipt.graph_id));
+                            .insert(receipt.run_id, Observed::new(receipt.graph_id));
                     }
                     self.replies.remove(&call.doc_id);
                     self.scanned.insert(call.doc_id);
@@ -202,146 +125,57 @@ impl GraphRunCursor {
         sender: &PromptSender,
         projections: &ProjectionEngine,
         now: DateTime<Utc>,
-        mut load: F,
+        load: F,
     ) -> Vec<anyhow::Error>
     where
         F: FnMut(String) -> Fut,
         Fut: Future<Output = Result<GraphRunView>>,
     {
-        let mut reports = Vec::new();
-        for run_id in self.due(now) {
-            let Some(run) = self.runs.get_mut(&run_id) else {
-                continue;
-            };
-            let outcome = async {
-                let view = load(run_id.clone()).await.map_err(|error| {
-                    if error.downcast_ref::<GraphRunUnobservable>().is_some() {
-                        ObservationError::Permanent(error)
-                    } else {
-                        ObservationError::Transient(error)
-                    }
-                })?;
-                let status = view.status().map_err(ObservationError::Permanent)?;
-                let revision = durable_revision(&view).max(run.revision + 1);
-                let update = project(&view, status, revision, now);
-                let shape = without_clock(&update);
-                if run
-                    .delivered
-                    .as_ref()
-                    .is_none_or(|delivered| without_clock(&delivered.update) != shape)
-                {
-                    send(session, update.clone(), sender, projections)
-                        .await
-                        .map_err(ObservationError::Transient)?;
-                    run.revision = revision;
-                    run.delivered = Some(Delivered { update, at: now });
-                }
-                run.finished = status.is_terminal();
-                Ok(())
-            }
-            .await;
-            let subject = format!("graph run {run_id}");
-            match outcome {
-                Ok(()) => run.backoff = Backoff::default(),
-                Err(ObservationError::Transient(error)) => {
-                    reports.extend(run.backoff.fail(now, error, &subject));
-                }
-                Err(ObservationError::Permanent(error)) => {
-                    run.finished = true;
-                    run.revision = ABANDONED_REVISION;
-                    let update = abandoned(&run_id, run, &error, now);
-                    reports.push(error.context(format!("{subject}: observation stopped")));
-                    if let Err(error) = send(session, update, sender, projections).await {
-                        reports.push(error.context(format!("{subject}: final update")));
-                    }
-                }
-            }
-        }
-        reports
-    }
-
-    /// Up to [`VIEW_LOADS_PER_TICK`] runs that are neither finished nor
-    /// waiting out a failure, continuing after the last run loaded.
-    fn due(&mut self, now: DateTime<Utc>) -> Vec<String> {
-        let after = self.loaded_through.as_deref();
-        let (later, earlier): (Vec<&String>, Vec<&String>) = self
-            .runs
-            .iter()
-            .filter(|(_, run)| !run.finished && run.backoff.ready(now))
-            .map(|(run_id, _)| run_id)
-            .partition(|run_id| after.is_some_and(|after| run_id.as_str() > after));
-        let due = later
-            .into_iter()
-            .chain(earlier)
-            .take(VIEW_LOADS_PER_TICK)
-            .cloned()
-            .collect::<Vec<_>>();
-        if let Some(last) = due.last() {
-            self.loaded_through = Some(last.clone());
-        }
-        due
-    }
-}
-
-/// The stock pager keeps the highest revision it holds for a run, across
-/// leader reconnects, and drops a lower one (probed against v1.0.46). A fresh
-/// observer after resume or re-attach therefore starts from this count of
-/// facts that only grow over a run's life: stage, request and plugin-call
-/// totals, their terminal outcomes, and the run's own terminal status. It
-/// increases with every change the projection can show, so it never falls
-/// below what an earlier observer delivered for the same durable state.
-fn durable_revision(view: &GraphRunView) -> u64 {
-    let stages: usize = view
-        .stages
-        .iter()
-        .map(|stage| stage.total + stage.succeeded + stage.failed)
-        .sum();
-    let calls: usize = [&view.requests, &view.plugin_calls]
-        .into_iter()
-        .map(|calls| calls.len() + calls.iter().filter(|call| call.terminal).count())
-        .sum();
-    1 + (stages + calls + usize::from(view.is_terminal())) as u64
-}
-
-async fn send(
-    session: &str,
-    update: Value,
-    sender: &PromptSender,
-    projections: &ProjectionEngine,
-) -> Result<()> {
-    projections
-        .session_updates()
-        .send(
+        let sink = Sink {
             session,
-            |event_id, total_tokens| {
-                Ok(super::projection::session_notification_for_method(
-                    "x.ai/session_notification",
-                    session,
-                    update,
-                    super::projection::stamp_update_meta(
-                        event_id,
-                        total_tokens,
-                        None,
-                        None,
-                        UpdateTimestamps::default(),
-                    ),
-                ))
-            },
-            PromptSenderLine(sender),
+            sender,
+            projections,
+        };
+        observe_due(
+            &mut self.runs,
+            &sink,
+            now,
+            load,
+            |error| error.downcast_ref::<GraphRunUnobservable>().is_some(),
+            unobserved,
+            "graph run",
         )
         .await
-        .map(drop)
+    }
 }
 
-/// The pager ticks a running run's clock itself; elapsed time and the
-/// delivery counter alone never justify another update.
-fn without_clock(update: &Value) -> Value {
-    let mut shape = update.clone();
-    if let Some(object) = shape.as_object_mut() {
-        object.remove("revision");
-        object.remove("elapsed_ms");
+impl ObservedView for GraphRunView {
+    fn is_terminal(&self) -> Result<bool> {
+        self.status().map(GraphRunStatus::is_terminal)
     }
-    shape
+
+    /// Counts the facts that only grow over a run's life: stage, request and
+    /// plugin-call totals, their terminal outcomes, and the run's own
+    /// terminal status. It increases with every change the projection can
+    /// show, so it never falls below what an earlier observer delivered for
+    /// the same durable state.
+    fn durable_revision(&self) -> u64 {
+        let stages: usize = self
+            .stages
+            .iter()
+            .map(|stage| stage.total + stage.succeeded + stage.failed)
+            .sum();
+        let calls: usize = [&self.requests, &self.plugin_calls]
+            .into_iter()
+            .map(|calls| calls.len() + calls.iter().filter(|call| call.terminal).count())
+            .sum();
+        1 + (stages + calls + usize::from(GraphRunView::is_terminal(self))) as u64
+    }
+
+    fn project(&self, revision: u64, now: DateTime<Utc>) -> Value {
+        let status = self.status().unwrap_or(GraphRunStatus::Failed);
+        project(self, status, revision, now)
+    }
 }
 
 fn elapsed_ms(view: &GraphRunView, now: DateTime<Utc>) -> u64 {
@@ -448,43 +282,25 @@ fn project(
     update
 }
 
-/// The one terminal update for a run this connection stops observing, so
-/// the pager does not keep ticking a run nothing reports on. It continues
-/// the last delivered update when there is one.
-fn abandoned(
-    run_id: &str,
-    run: &RunObservation,
-    error: &anyhow::Error,
-    now: DateTime<Utc>,
-) -> Value {
-    let mut update = match &run.delivered {
-        Some(delivered) => {
-            let mut update = delivered.update.clone();
-            let shown = update["elapsed_ms"].as_u64().unwrap_or_default();
-            let since = (now - delivered.at).num_milliseconds().max(0) as u64;
-            update["elapsed_ms"] = json!(shown + since);
-            update
-        }
-        None => json!({
-            "sessionUpdate": "workflow_updated",
-            "run_id": run_id,
-            "name": run.graph_id,
-            "objective": objective(&run.graph_id),
-            "foreground": false,
-            "phases": [],
-            "elapsed_ms": 0,
-            "agents": [],
-        }),
-    };
-    update["revision"] = json!(run.revision);
-    update["status"] = json!("failed");
-    update["active_agents"] = json!(0);
-    update["pause_message"] = json!(format!("Gents stopped observing this graph run: {error}"));
-    update
+fn unobserved(run_id: &str, run: &Observed) -> Value {
+    json!({
+        "sessionUpdate": "workflow_updated",
+        "run_id": run_id,
+        "name": run.name,
+        "objective": objective(&run.name),
+        "foreground": false,
+        "phases": [],
+        "elapsed_ms": 0,
+        "agents": [],
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use chrono::Duration;
+    use std::collections::BTreeMap;
+
+    use super::super::observation_cursor::{ABANDONED_REVISION, MAX_RETRY_DELAY_SECS};
     use super::super::projection::BoundModelContext;
     use super::super::test_fixtures::seed_canonical_tool_call;
     use super::*;
@@ -765,7 +581,7 @@ mod tests {
         let mut cursor = GraphRunCursor::default();
         cursor
             .runs
-            .insert("run-1".into(), RunObservation::new("research-graph"));
+            .insert("run-1".into(), Observed::new("research-graph"));
         let loads = AtomicUsize::new(0);
         macro_rules! step {
             ($view:expr, $at:expr) => {
@@ -827,7 +643,7 @@ mod tests {
         let mut first = GraphRunCursor::default();
         first
             .runs
-            .insert("run-1".into(), RunObservation::new("research-graph"));
+            .insert("run-1".into(), Observed::new("research-graph"));
         observe_view(
             &mut first,
             &sender,
@@ -850,7 +666,7 @@ mod tests {
             let mut fresh = GraphRunCursor::default();
             fresh
                 .runs
-                .insert("run-1".into(), RunObservation::new("research-graph"));
+                .insert("run-1".into(), Observed::new("research-graph"));
             observe_view(&mut fresh, &sender, &projections, &loads, view, now()).await;
         }
         let revisions = updates(&buffer)
@@ -871,7 +687,7 @@ mod tests {
         let mut cursor = GraphRunCursor::default();
         cursor
             .runs
-            .insert("run-1".into(), RunObservation::new("research-graph"));
+            .insert("run-1".into(), Observed::new("research-graph"));
         let loads = AtomicUsize::new(0);
         let mut reports = Vec::new();
         let mut delays = Vec::new();
@@ -886,7 +702,7 @@ mod tests {
                     .observe("session", &sender, &projections, at, failing)
                     .await,
             );
-            let retry_at = cursor.runs["run-1"].backoff.retry_at.unwrap();
+            let retry_at = cursor.runs.subjects["run-1"].backoff.retry_at.unwrap();
             delays.push((retry_at - at).num_seconds());
             // Not read again before its delay has passed.
             let reads = loads.load(Ordering::SeqCst);
@@ -906,7 +722,7 @@ mod tests {
             .map(|error| format!("{error:#}"))
             .collect::<Vec<_>>();
         assert_eq!(reports, ["graph run run-1: retrying: storage unavailable"]);
-        assert!(!cursor.runs["run-1"].finished);
+        assert!(!cursor.runs.subjects["run-1"].finished);
         assert!(buffer.lock().await.is_empty());
 
         let reports = cursor
@@ -915,7 +731,7 @@ mod tests {
             })
             .await;
         assert!(reports.is_empty(), "{reports:?}");
-        assert_eq!(cursor.runs["run-1"].backoff.failures, 0);
+        assert_eq!(cursor.runs.subjects["run-1"].backoff.failures, 0);
         let sent = updates(&buffer).await;
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0]["revision"], 11);
@@ -937,7 +753,7 @@ mod tests {
         ] {
             cursor
                 .runs
-                .insert(run.into(), RunObservation::new("research-graph"));
+                .insert(run.into(), Observed::new("research-graph"));
         }
         let loads = std::sync::Mutex::new(BTreeMap::<String, u32>::new());
         let mut reports = Vec::new();
@@ -996,8 +812,8 @@ mod tests {
         );
         assert!(["missing-run", "shown-then-denied", "unknown-status"]
             .iter()
-            .all(|run| cursor.runs[*run].finished));
-        assert!(!cursor.runs["run-1"].finished);
+            .all(|run| cursor.runs.subjects[*run].finished));
+        assert!(!cursor.runs.subjects["run-1"].finished);
 
         let sent = updates(&buffer).await;
         let for_run = |run: &str| {
@@ -1042,7 +858,7 @@ mod tests {
         for run in &runs {
             cursor
                 .runs
-                .insert(run.clone(), RunObservation::new("research-graph"));
+                .insert(run.clone(), Observed::new("research-graph"));
         }
         let mut ticks = Vec::new();
         for _ in 0..3 {
@@ -1156,7 +972,7 @@ mod tests {
         let mut cursor = GraphRunCursor::default();
         let reports = cursor.discover(&node, principal, "session", now()).await;
         assert!(reports.is_empty(), "{reports:?}");
-        assert!(cursor.runs.is_empty());
+        assert!(cursor.runs.subjects.is_empty());
         let loads = AtomicUsize::new(0);
         let reports = cursor
             .observe("session", &sender, &projections, now(), |_| {
@@ -1192,7 +1008,7 @@ mod tests {
             .discover(&node, principal, "session", now())
             .await
             .is_empty());
-        assert!(cursor.runs.is_empty() && cursor.scanned.is_empty());
+        assert!(cursor.runs.subjects.is_empty() && cursor.scanned.is_empty());
         let delivered = run_graph_result("run-late");
         seed_canonical_tool_call(
             &node,
@@ -1211,8 +1027,11 @@ mod tests {
             .discover(&node, principal, "session", now())
             .await
             .is_empty());
-        assert_eq!(cursor.runs.keys().collect::<Vec<_>>(), ["run-late"]);
-        assert_eq!(cursor.runs["run-late"].graph_id, "research-graph");
+        assert_eq!(
+            cursor.runs.subjects.keys().collect::<Vec<_>>(),
+            ["run-late"]
+        );
+        assert_eq!(cursor.runs.subjects["run-late"].name, "research-graph");
         assert_eq!(cursor.scanned.len(), 1);
     }
 
@@ -1500,9 +1319,7 @@ mod tests {
         // has no row: each is read once and ends with one terminal update.
         let mut intruder = GraphRunCursor::default();
         for run in [receipt.run_id.as_str(), "missing-run"] {
-            intruder
-                .runs
-                .insert(run.into(), RunObservation::new("pipeline"));
+            intruder.runs.insert(run.into(), Observed::new("pipeline"));
         }
         let loads = AtomicUsize::new(0);
         let mut denied = Vec::new();
@@ -1530,7 +1347,7 @@ mod tests {
         assert!(denied
             .iter()
             .any(|report| report.ends_with(r#"GraphRun "missing-run" does not exist"#)));
-        assert!(intruder.runs.values().all(|run| run.finished));
+        assert!(intruder.runs.subjects.values().all(|run| run.finished));
         let sent = updates(&buffer).await;
         assert_eq!(sent.len(), 3);
         // A fresh cursor's stop frame must outrank what the first delivered.
@@ -1556,7 +1373,7 @@ mod tests {
         let mut cursor = GraphRunCursor::default();
         cursor
             .runs
-            .insert(receipt.run_id.clone(), RunObservation::new("pipeline"));
+            .insert(receipt.run_id.clone(), Observed::new("pipeline"));
         let mut steps = Vec::<(&str, u64, u64, u64)>::new();
         macro_rules! step {
             ($name:expr) => {{
@@ -1573,7 +1390,7 @@ mod tests {
                 let mut fresh = GraphRunCursor::default();
                 fresh
                     .runs
-                    .insert(receipt.run_id.clone(), RunObservation::new("pipeline"));
+                    .insert(receipt.run_id.clone(), Observed::new("pipeline"));
                 let silent = PromptSender::Buffer {
                     buffer: Arc::new(tokio::sync::Mutex::new(Vec::new())),
                 };
@@ -1586,9 +1403,9 @@ mod tests {
                 assert!(reports.is_empty(), "{reports:?}");
                 steps.push((
                     $name,
-                    durable_revision(&view),
-                    cursor.runs[&receipt.run_id].revision,
-                    fresh.runs[&receipt.run_id].revision,
+                    view.durable_revision(),
+                    cursor.runs.subjects[&receipt.run_id].revision,
+                    fresh.runs.subjects[&receipt.run_id].revision,
                 ));
                 view
             }};
