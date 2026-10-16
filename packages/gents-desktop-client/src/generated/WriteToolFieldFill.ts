@@ -4,9 +4,8 @@
  * One field of a [`WriteToolDecl`]: a named slot the bound write tool exposes,
  * and whether the agent must provide it.
  *
- * `name` is trimmed at deserialization so the stored value, the runtime
- * [`crate::defra_write::BoundedWriteTool`], and `config validate` all agree on
- * the same canonical identifier (the field name is interpolated verbatim as a
- * GraphQL input key, so stray whitespace would otherwise corrupt the mutation).
+ * `name` is trimmed at deserialization; the field name is interpolated verbatim
+ * as a GraphQL input key, so stray whitespace would otherwise corrupt the
+ * mutation.
  */
 export type WriteToolFieldFill = "correlation" | { "source_field": string };

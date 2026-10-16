@@ -2,6 +2,6 @@
 
 export type ClientUpdateEvent = {
 /**
- * Coarse ping reason: store | health | lifecycle | config.
+ * Coarse ping reason for the webview.
  */
 reason: string, storeVersion: number | null, };

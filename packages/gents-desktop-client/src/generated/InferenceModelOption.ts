@@ -4,10 +4,10 @@ import type { InferenceModelRecommendation } from "./InferenceModelRecommendatio
 
 export type InferenceModelOption = {
 /**
- * Facts returned by the provider. Unknown facts stay `None`.
+ * Provider-advertised facts; unknown facts stay `None`.
  */
 advertised: AdvertisedModel,
 /**
- * Versioned Gents guidance, never presented as provider-advertised data.
+ * Gents guidance, never presented as provider-advertised data.
  */
 recommendation: InferenceModelRecommendation, };

@@ -3,11 +3,7 @@
 /**
  * Existing self-configuration controls, grouped for a separate design review.
  */
-export type SelfConfigTools = {
-/**
- * Self-configuration gate (#654): opt-in, never backfilled true.
- */
-enable_self_config?: boolean | null,
+export type SelfConfigTools = { enable_self_config?: boolean | null,
 /**
  * Self-config category allowlist; unset means the core spine
  * (agent, tools, profile). See `config_client::patch`.

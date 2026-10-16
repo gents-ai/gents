@@ -2,25 +2,4 @@
 import type { BuiltInCallback } from "./BuiltInCallback.js";
 import type { PortSpec } from "./PortSpec.js";
 
-export type CallbackHandler = { "kind": "built_in", emitter: BuiltInCallback, } | { "kind": "module", module_id: string, } | { "kind": "plugin",
-/**
- * `namespace/name` of the installed plugin.
- */
-plugin: string,
-/**
- * `sha256:<hex>` of the artifact to run; any other installed artifact
- * is refused.
- */
-digest: string,
-/**
- * Source field whose value is written to each output's correlation field.
- */
-correlation_field?: string | null,
-/**
- * How many times a failed call may run in all; absent is once.
- */
-max_attempts?: number | null,
-/**
- * Where the result is written. Empty writes nothing.
- */
-outputs?: Array<PortSpec> | null, };
+export type CallbackHandler = { "kind": "built_in", emitter: BuiltInCallback, } | { "kind": "module", module_id: string, } | { "kind": "plugin", plugin: string, digest: string, correlation_field?: string | null, max_attempts?: number | null, outputs?: Array<PortSpec> | null, };

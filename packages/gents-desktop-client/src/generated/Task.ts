@@ -2,24 +2,16 @@
 import type { TaskHook } from "./TaskHook.js";
 
 /**
- * Reusable task definition; firing a trigger does not create a Task document.
- *
- * The trigger engine renders these templates into an AgentRequest before the
- * owned request loop executes it. Manual invocation uses the same definition.
- * All fields are desired configuration; execution state belongs to requests.
+ * Reusable task definition; the trigger engine renders templates into an
+ * AgentRequest before the owned loop executes it.
  */
 export type Task = { node_did: string, task_id: string, display_name?: string | null, description?: string | null, agent_id: string, prompt_template: string,
 /**
- * Emit one durable FireOutcome at the request or Goal terminal boundary.
- * Outcome consumers must leave this disabled.
+ * Emit one durable FireOutcome at the terminal boundary.
  */
 emit_outcome: boolean, goal_objective_template?: string | null, goal_token_budget?: number | null,
 /**
  * Explicit host commands, in list order within each phase.
  * No hooks means ordinary agent execution.
  */
-hooks?: Array<TaskHook> | null, enabled?: boolean | null, output_schema_ref?: string | null, created_at?: string | null, updated_at?: string | null,
-/**
- * Optional UI/discovery labels. References, never tags, determine execution.
- */
-tags?: Array<string> | null, };
+hooks?: Array<TaskHook> | null, enabled?: boolean | null, output_schema_ref?: string | null, created_at?: string | null, updated_at?: string | null, tags?: Array<string> | null, };

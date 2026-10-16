@@ -2,7 +2,7 @@
 import type { DerivedCancelCauseView } from "./DerivedCancelCauseView.js";
 
 /**
- * Read-only presentation of the latest request's terminal facts. The request
- * remains the owner; this is not response storage or a second lifecycle.
+ * Read-only presentation of the latest request's terminal facts; the
+ * request remains the owner.
  */
 export type RequestOutcomeView = { stoppedBeforeRunning?: boolean | null, failureReason: string | null, cancelCause?: DerivedCancelCauseView | null, };

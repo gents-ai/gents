@@ -3,19 +3,17 @@ import type { SessionCompactionView } from "./SessionCompactionView.js";
 import type { SessionRequestContextView } from "./SessionRequestContextView.js";
 
 /**
- * Observable context pressure for the session. `last_request` is the exact,
- * prompt-free accounting captured at the most recent provider boundary; the
- * remaining fields are estimates computed directly from the durable rows.
+ * Observable context pressure for the session; `last_request` is exact,
+ * prompt-free accounting at the most recent provider boundary.
  */
 export type SessionContextView = {
 /**
- * True when the durable transcript/context rows were read to exhaustion.
- * False means the remaining fields describe only the bounded visible page.
+ * True when durable rows were read to exhaustion; false means only the
+ * bounded page.
  */
 transcriptTotalsExact?: boolean | null, estimatedDurableTokens: number, estimatedConversationTokens: number, contextWindow: number,
 /**
- * Why the configured window cannot be what the next request runs with,
- * e.g. the profile exceeds the model's advertised maximum. When set,
- * `context_window` is only the runtime default, not a usable window.
+ * Why the configured window is not usable; `context_window` is the
+ * runtime default only.
  */
 contextWindowError?: string | null, compactionThreshold: number, compactionThresholdTokens: number, compactionStrategy: string, durableMessageCount: number, providerMessageCount: number, totalCompactedMessages: number, compactions: Array<SessionCompactionView>, lastRequest: SessionRequestContextView | null, };

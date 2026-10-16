@@ -2,9 +2,8 @@
 import type { PackConfig } from "./PackConfig.js";
 
 /**
- * Atomic component edits for an existing node, not pack installation.
- * Supply node with only node_did/default-valued fields. Node settings use
- * NodeConfigSaveRequest. Omitted documents remain untouched;
- * graph_intents/graph_capabilities are rejected, not compiled or ignored.
+ * Atomic edits for an existing node, not pack installation; node settings
+ * use NodeConfigSaveRequest. Omitted documents stay untouched;
+ * graph_intents/graph_capabilities are rejected.
  */
 export type ConfigComponentsApplyRequest = { document: PackConfig, };

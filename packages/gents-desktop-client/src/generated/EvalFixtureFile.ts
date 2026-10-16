@@ -2,10 +2,6 @@
 
 export type EvalFixtureFile = {
 /**
- * Relative to the trial workspace; it may not leave it.
+ * Trial-workspace-relative; may not leave it.
  */
-path: string,
-/**
- * The file's UTF-8 text.
- */
-contents: string, };
+path: string, contents: string, };

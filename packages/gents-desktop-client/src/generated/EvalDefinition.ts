@@ -4,13 +4,12 @@ import type { EvalFixtures } from "./EvalFixtures.js";
 import type { EvalSubject } from "./EvalSubject.js";
 
 /**
- * A pack-carried eval definition. Identity is `(definition_id,
+ * A pack-carried eval definition; identity is `(definition_id,
  * comparability_version, desired_state_document_digest)`.
  */
 export type EvalDefinition = { definition_id: string, node_did: string,
 /**
- * Bumped by the author when cases, checks, reducers or judge settings
- * change. Runs never compare across different values.
+ * Bumped on semantic change; runs never compare across values.
  */
 comparability_version: number, title?: string | null, subject: EvalSubject,
 /**
@@ -18,11 +17,6 @@ comparability_version: number, title?: string | null, subject: EvalSubject,
  */
 fixtures?: EvalFixtures | null, cases: Array<EvalCase>,
 /**
- * Written by the mutation owner, including the recreate-identity nonce on
- * create. Observation metadata, never part of the identity digest.
+ * Written by the mutation owner; never part of the identity digest.
  */
-updated_at?: string | null,
-/**
- * Optional UI/discovery labels. References, never tags, determine execution.
- */
-tags?: Array<string> | null, };
+updated_at?: string | null, tags?: Array<string> | null, };
